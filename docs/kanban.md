@@ -1091,6 +1091,23 @@ State machine вокруг Symphonia:
 - [ ] Define `ResourceHash` rules (+ tests)
 - [ ] Define shared error scaffolding
 
+## `kithara-core` — Port legacy identity scenarios (tests)
+- [ ] Canonicalization invariants for `AssetId` (URL without query/fragment) + tests:
+  - ignores query
+  - ignores fragment
+  - stable across repeated parsing/formatting
+- [ ] Canonicalization invariants for `ResourceHash` (URL with query, without fragment) + tests:
+  - includes query
+  - ignores fragment
+  - differs when query differs (same base URL)
+- [ ] (Prereq if missing) Add explicit error type(s) for invalid canonicalization inputs + tests:
+  - invalid/unsupported URL shapes produce typed errors (no panics)
+
+## `kithara-core` — Refactor (module boundaries; keep public contract)
+- [ ] Split into small modules if file grows: `asset_id`, `resource_hash`, `errors` (no behavior change) + keep tests green
+- [ ] Ensure no “settings creep”: options must remain outside `kithara-core` + add compile-time/doc guard (short comment or doc test)
+- [ ] Add crate-level docs: “what belongs here / what must not” (short, contract-level)
+
 ## `kithara-cache` MVP
 - [ ] FS layout + safe `CachePath`
 - [ ] `put_atomic` temp+rename + tests
@@ -1098,6 +1115,13 @@ State machine вокруг Symphonia:
 - [ ] `state.json` index load/save atomic + tests
 - [ ] `max_bytes` eviction loop (multi-asset) + tests
 - [ ] pin/lease + tests
+
+## `kithara-cache` — Port legacy HLS persistence semantics (tests)
+- [ ] Persistent cache warmup: after first run that reads at least N bytes from an HLS VOD session, the persistent cache root is non-empty; after second run (same root), it remains non-empty (do NOT assert “no network refetch”) + tests
+- [ ] Persistent mode should create on-disk files after reading some bytes (smoke: read >0 then assert cache root has files) + tests
+- [ ] Memory/offline-only resource caching should NOT create many on-disk segment files:
+  - after reading >0 bytes, number of files on disk stays within a small bound (playlists/keys allowed, but not segment explosion) + tests
+- [ ] (Prereq if missing) Add test utilities to count files recursively and assert non-empty dirs (test-only helpers) + tests
 
 ## `kithara-cache` — Layered architecture (decorators/generics; keep public contract)
 - [ ] Refactor internals into explicit layers/modules (base/index/lease/evict/policy) without changing the public API
@@ -1112,11 +1136,23 @@ State machine вокруг Symphonia:
 - [ ] Wire `AssetCache` facade to compose layers (Fs + Index + Lease + Evict) while preserving the existing public contract and tests
 - [ ] Add crate-level docs (`crates/kithara-cache/README.md`): layering, invariants, and what is source of truth
 
+## `kithara-cache` — Refactor (layering-ready; keep public contract)
+- [ ] Split internal modules to match responsibilities (base/index/lease/evict/policy) without changing public API + keep tests green
+- [ ] Remove “misc utils dumping-ground”: move helpers into focused modules (e.g. `fs_layout`, `atomic_write`, `lru_index`) + keep tests green
+- [ ] Add crate-level docs: invariants + “FS is source of truth” + what is stored in `state.json`
+
 ## `kithara-net` MVP
 - [ ] `NetClient` wrapper + options
 - [ ] stream GET bytes + tests with local server
 - [ ] range GET + tests
 - [ ] header support (key requests) + tests
+
+## `kithara-net` — HLS key request semantics (tests)
+- [ ] Headers passthrough for key fetches (client sends required headers; server validates and otherwise fails) + tests
+- [ ] Query params passthrough for key fetches (client appends required query params; server validates and otherwise fails) + tests
+- [ ] (Prereq if missing) Add a small local server fixture that can:
+  - require specific headers/query params for a path
+  - record per-path request counts for assertions
 
 ## `kithara-net` — Full client (retry/timeout; layered; generics-first)
 - [ ] Refactor: split `kithara-net` into modules `base/traits/types/retry/timeout/builder` without changing current behavior
@@ -1136,11 +1172,38 @@ State machine вокруг Symphonia:
 - [ ] Ensure existing behavior stays covered: header passthrough + range semantics (tests must remain green after refactor)
 - [ ] Add short crate-level docs (`crates/kithara-net/README.md`): layering, retry semantics, timeout semantics
 
+## `kithara-net` — Refactor (layering-ready; keep public contract)
+- [ ] Split into `base/traits/types` modules without behavior change; keep tests green
+- [ ] Centralize error mapping (reqwest/status/timeout) into one place to avoid duplication + keep tests green
+- [ ] Add crate-level docs: what is considered retriable, what timeout means (contract-level)
+
+## `kithara-net` — Port legacy “key cached / not fetched per segment” support (prereq tasks)
+- [ ] Expose a way for upper layers (`kithara-hls`) to reuse fetched bytes without re-requesting:
+  - define a minimal cache interface or hook point at the HLS layer (NOT inside net)
+  - ensure net itself stays stateless by default
+- [ ] Add server-side request counting utilities in tests so `kithara-hls` can assert “key requested <= N times” deterministically
+
 ## `kithara-file` MVP
 - [ ] open session + asset_id from URL + tests
 - [ ] stream bytes from net + tests
 - [ ] cache-through write (optional) + offline reopen test
 - [ ] seek via Range (not cached) + tests
+
+## `kithara-file` — Port legacy “read/seek correctness” scenarios (tests)
+- [ ] Seek roundtrip correctness:
+  - read first N bytes, seek to 0, read again, bytes match reference (no corruption, no deadlock) + tests
+- [ ] Seek variants:
+  - `SeekFrom::Start`, `SeekFrom::Current`, `SeekFrom::End` produce expected slices on a known static resource + tests
+- [ ] Cancel/stop behavior:
+  - after reading some bytes, send `Stop` (or drop session) and ensure the stream terminates promptly without hanging + tests
+- [ ] (Prereq if missing) Define precise seek contract for `kithara-file` session:
+  - what happens when seeking beyond cached/buffered range
+  - what errors are returned (typed) + tests
+
+## `kithara-file` — Refactor (driver/session separation; keep public contract)
+- [ ] Ensure `FileDriver` loop, session handle, and options are in separate modules when the crate grows (no behavior change) + keep tests green
+- [ ] Isolate “range/seek policy” code into a dedicated module (no behavior change) + keep tests green
+- [ ] Add crate-level docs: seek contract + offline/cache interaction (short)
 
 ## `kithara-hls` MVP
 - [ ] parse master/media playlists (VOD) + tests with local fixture
@@ -1149,10 +1212,93 @@ State machine вокруг Symphonia:
 - [ ] keys + processed keys caching + test scenario with wrapped key
 - [ ] stream bytes for a variant + basic read smoke test
 
+## `kithara-hls` — Port legacy DRM scenarios (tests)
+- [ ] AES-128 DRM decrypts media segments (smoke):
+  - fixture serves encrypted segments + key endpoint
+  - output bytes include expected plaintext prefixes for at least first segment
+- [ ] AES-128 DRM with fixed zero IV decrypts correctly
+- [ ] Key fetch applies query params + headers + key_processor:
+  - server requires specific query params and headers to return a wrapped key
+  - client applies `key_processor_cb` to unwrap
+  - decrypted segment payload is correct
+- [ ] Key is cached and not fetched per segment:
+  - read enough bytes to span multiple segments
+  - assert key endpoint request count is low (<=2)
+- [ ] Required key headers missing => fatal error:
+  - when server requires header and client does not send it, session fails deterministically
+- [ ] (Prereq if missing) Ensure decrypted output can be validated deterministically:
+  - segment payloads contain stable prefixes per (variant, segment)
+
+## `kithara-hls` — Port legacy base_url and URL resolution scenarios (tests)
+- [ ] base_url override:
+  - when segments are remapped under a path prefix, default resolution fails (404)
+  - configuring base_url makes it succeed for varying prefix depths (`a/`, `a/b/`, `a/b/c/`)
+- [ ] (Prereq if missing) Ensure URL resolution rules are explicitly testable:
+  - base URL override applied for variant playlists, segments, and keys as per contract
+
+## `kithara-hls` — Port legacy VOD completion + caching surface scenarios (tests)
+- [ ] VOD completes and closes stream:
+  - drain until stream ends; assert all segments for selected variant were requested at least once
+- [ ] Manual variant selection emits only selected variant data:
+  - start in manual mode for different variant ids
+  - verify output “belongs” to that variant (by deterministic payload prefixes)
+- [ ] AUTO startup begins on variant 0 by default
+- [ ] AUTO startup respects `abr_initial_variant_index`
+
+## `kithara-hls` — Port legacy ABR + switching scenarios (tests)
+- [ ] ABR downswitch after low throughput sample:
+  - feed throughput sample that should force downswitch
+  - assert next descriptor targets lower variant and begins with init
+- [ ] ABR upswitch continues from current segment index (no restart)
+- [ ] Worker auto upswitches mid-stream without restarting:
+  - observe VariantChanged + SegmentStart events and ensure sequence is non-decreasing across switch
+- [ ] (Prereq if missing) Expose a deterministic ABR controller surface for tests:
+  - feed throughput samples
+  - obtain/apply decisions
+  - observe selected variant and next segment descriptors
+
+## `kithara-hls` — Port legacy seek scenarios (tests)
+- [ ] Seek correctness (best-effort, absolute) across segment boundary:
+  - seek to offset that straddles end of segment N and beginning of segment N+1
+  - read contiguous bytes and assert they match expected concatenation
+- [ ] Seek known offsets return expected bytes:
+  - after a warmup read, seek to known offsets and read exact prefixes (init/segment slices)
+- [ ] (Prereq if missing) Define/confirm seek contract for HLS:
+  - absolute seek by time or bytes (as per current public API)
+  - behavior across segment boundaries is contiguous and deterministic within fixture constraints
+
+## `kithara-hls` — Prerequisite tasks for ported scenarios (only if missing in plan)
+- [ ] Add test fixture utilities for HLS:
+  - local server that can serve master/media playlists, init segments, media segments
+  - deterministic payload prefixes per variant/segment (e.g. `V{v}-SEG-{i}`)
+  - request counters per path
+- [ ] Add event surface needed by tests:
+  - expose best-effort `SegmentStart` / `VariantChanged` events (or equivalent) in a stable way for tests
+- [ ] Ensure `HlsOptions` includes:
+  - `base_url` override
+  - `abr_initial_variant_index`
+  - key request headers/query params and `key_processor_cb`
+  - offline_mode behavior (cache miss => fatal)
+
+## `kithara-hls` — Refactor (manager/worker/policies; keep public contract)
+- [ ] Split into modules for `fixture` (test-only), `playlist`, `fetch`, `keys`, `abr`, `driver/worker`, `events` as size grows (no behavior change) + keep tests green
+- [ ] Ensure ordered control-plane/data-plane semantics remain explicit (avoid out-of-band surprises) + add focused tests
+- [ ] Add crate-level docs: URL resolution rules (`base_url`), DRM key processing/caching, ABR switching invariants
+
 ## `kithara-io` MVP
 - [ ] bounded bridge (writer/reader) + tests for EOF semantics
 - [ ] backpressure behavior + tests
 - [ ] initial seek contract decision (explicit errors if unsupported) + tests
+
+## `kithara-io` — Port legacy backpressure/seek edge cases (tests)
+- [ ] Backpressure: writer blocks when buffer full; reader unblocks it by draining (bounded by bytes) + tests
+- [ ] Seek contract: seeking beyond available buffered data returns a typed error (no silent success) + tests
+- [ ] EOS correctness: `Read::read()` returns `Ok(0)` only after finish/EOS; never earlier + tests
+
+## `kithara-io` — Refactor (small modules; keep public contract)
+- [ ] Split into `bridge`, `reader`, `writer`, `errors` modules when code grows (no behavior change) + keep tests green
+- [ ] Consolidate synchronization/backpressure primitives into one place to avoid duplicated invariants + keep tests green
+- [ ] Add crate-level docs: EOF semantics and seek contract (short, normative)
 
 ## `kithara-decode` MVP
 - [ ] generic sample plumbing (choose trait bounds, like decal) + unit tests
@@ -1160,30 +1306,59 @@ State machine вокруг Symphonia:
 - [ ] seek(Duration) best-effort
 - [ ] integration test: bridge->decode for a small audio asset
 
+## `kithara-decode` — Port legacy audio pipeline scenarios (tests)
+- [ ] PCM invariants:
+  - emitted `PcmChunk<T>` is interleaved and frame-aligned (`len % channels == 0`)
+  - `channels > 0`, sample_rate > 0 + tests
+- [ ] Full drain closes stream:
+  - decode a finite HTTP MP3-like asset and ensure PCM stream terminates (EOS) + tests
+- [ ] HLS VOD decode drains sequentially without repeats (variant-independent):
+  - run with manual variant selection (or AUTO) and ensure PCM drain ends + tests
+- [ ] Codec switch reinitializes decoder and PCM continues:
+  - fixture switches codec between segments/variants
+  - decoder resets/reopens and continues producing PCM + tests
+- [ ] Seek scrubbing:
+  - multiple forward/backward `Seek(Duration)` commands do not deadlock and result in continued PCM production + tests
+- [ ] Ordered boundaries (best-effort):
+  - optionally expose best-effort “init boundary” / “segment boundary” events to validate ordering + tests
+
+## `kithara-decode` — Prerequisites for ported audio scenarios (only if missing in plan)
+- [ ] Ensure `kithara-decode` exposes a bounded PCM queue stream API (`AudioStream<T>`):
+  - producer waits, consumer non-blocking
+  - fatal error emits one Err item then terminates
+- [ ] Ensure decode worker can accept commands (`DecodeCommand::Seek`) and apply them best-effort
+- [ ] Provide deterministic local fixtures for decode tests (no external network):
+  - tiny MP3/AAC test assets embedded or served by local server
+
 ## `kithara-decode` — Audio pipeline (bounded PCM queue; stream-download-audio-inspired)
 - [ ] Define PCM public types: `PcmSpec`, `PcmChunk<T>` (interleaved, frame-aligned) + tests
 - [ ] Define `DecodeCommand` (at least `Seek(Duration)`) and `AudioSource<T>` synchronous trait + tests with a fake source
 - [ ] Implement `DecodeEngine` (Symphonia glue) with “reset/reopen” hooks to be codec-switch-safe + unit tests
 - [ ] Implement `AudioStream<T>`:
-+  - producer waits when queue full (bounded backpressure)
-+  - consumer non-blocking (`poll_next` => Pending when empty)
-+  - EOS and fatal error termination semantics
+  - producer waits when queue full (bounded backpressure)
+  - consumer non-blocking (`poll_next` => Pending when empty)
+  - EOS and fatal error termination semantics
 - [ ] Implement worker loop that drives `AudioSource<T>` and pushes chunks into bounded queue (thread or `spawn_blocking`) + tests
 - [ ] Add seek plumbing: `AudioStream` forwards `DecodeCommand::Seek` into worker/source; ensure no deadlocks + tests
 - [ ] (Optional, later) Add `rodio` adapter in `kithara-examples` crate (not inside `kithara-decode`) to keep decode crate minimal
-+
-+## `kithara-decode` — Decoder upgrade (decal-style `Decoder<T>` + Source contract)
-+- [ ] Add `Source` trait (MediaSource + `file_ext()` hint) + tests
-+- [ ] Add `DecoderSettings` (gapless toggle as baseline) + tests
-+- [ ] Implement `Decoder<T>` core state machine:
-+  - probe with hint/extension
-+  - pick default audio track
-+  - decode packets for selected track id
-+  - convert to interleaved `PcmChunk<T>`
-+- [ ] Fix multi-channel support (not stereo-only) + tests
-+- [ ] Implement `seek(Duration)` via Symphonia seek + `decoder.reset()` + tests
-+- [ ] Add reset/reopen hooks to be codec-switch-safe (format/codec changes) + tests
-+- [ ] Wire `Decoder<T>` into `AudioStream<T>` worker (bounded queue semantics preserved) + integration tests
+
+## `kithara-decode` — Decoder upgrade (decal-style `Decoder<T>` + Source contract)
+- [ ] Add `Source` trait (MediaSource + `file_ext()` hint) + tests
+- [ ] Add `DecoderSettings` (gapless toggle as baseline) + tests
+- [ ] Implement `Decoder<T>` core state machine:
+  - probe with hint/extension
+  - pick default audio track
+  - decode packets for selected track id
+  - convert to interleaved `PcmChunk<T>`
+- [ ] Fix multi-channel support (not stereo-only) + tests
+- [ ] Implement `seek(Duration)` via Symphonia seek + `decoder.reset()` + tests
+- [ ] Add reset/reopen hooks to be codec-switch-safe (format/codec changes) + tests
+- [ ] Wire `Decoder<T>` into `AudioStream<T>` worker (bounded queue semantics preserved) + integration tests
+
+## `kithara-decode` — Refactor (decoder vs pipeline; keep public contract)
+- [ ] Separate low-level `Decoder<T>` (state machine) from high-level `AudioStream<T>` pipeline modules (no behavior change) + keep tests green
+- [ ] Centralize Symphonia glue (probe/track selection/seek/reset) to avoid duplicated logic + keep tests green
+- [ ] Add crate-level docs: sample type `T`, invariants on `PcmChunk`, and command semantics
 
 ---
 
