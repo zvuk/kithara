@@ -51,8 +51,9 @@ bytes = "1.11.0"
 ringbuf = "0.4.8"
 
 # http/url
-reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls"] }
+reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls", "stream"] }
 url = "2.5.7"
+axum = "0.8.1"
 
 # hls parsing
 hls_m3u8 = "0.5.1"
@@ -68,5 +69,6 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 # misc
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10.8"
+tower = "0.5.2"
 
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
