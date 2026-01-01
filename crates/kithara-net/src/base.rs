@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
 use thiserror::Error;
@@ -91,6 +92,7 @@ impl ReqwestNet {
     }
 }
 
+#[async_trait]
 impl Net for ReqwestNet {
     async fn get_bytes(&self, url: url::Url) -> Result<Bytes, NetError> {
         let request = self.build_request(url, None, None);

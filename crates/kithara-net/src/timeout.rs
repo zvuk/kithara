@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::time::Duration;
 
 use crate::traits::Net;
@@ -16,6 +17,7 @@ impl<N: Net> TimeoutNet<N> {
     }
 }
 
+#[async_trait]
 impl<N: Net> Net for TimeoutNet<N> {
     async fn get_bytes(&self, url: url::Url) -> Result<bytes::Bytes, NetError> {
         tokio::time::timeout(self.timeout, self.inner.get_bytes(url))

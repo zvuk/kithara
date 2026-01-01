@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
 use std::pin::Pin;
@@ -7,6 +8,7 @@ use crate::types::{Headers, RangeSpec};
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>;
 
+#[async_trait]
 pub trait Net: Send + Sync {
     /// Get all bytes from a URL
     async fn get_bytes(&self, url: url::Url) -> Result<Bytes, NetError>;

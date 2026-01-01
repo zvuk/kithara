@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::time::Duration;
 
 use crate::traits::Net;
@@ -93,6 +94,7 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
     }
 }
 
+#[async_trait]
 impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
     async fn get_bytes(&self, url: url::Url) -> Result<bytes::Bytes, NetError> {
         let mut last_error = None;
