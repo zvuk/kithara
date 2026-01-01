@@ -1,0 +1,25 @@
+[package]
+name = "kithara-file"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+kithara-core = { workspace = true }
+kithara-net = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+
+# Optional dependency for caching.
+# When enabled, the file source can persist downloaded bytes for offline reuse.
+kithara-cache = { workspace = true, optional = true }
+
+[features]
+default = []
+cache = ["dep:kithara-cache"]
+
+[dev-dependencies]
+# Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].

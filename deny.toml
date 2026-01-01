@@ -1,0 +1,97 @@
+# cargo-deny configuration for kithara
+#
+# This file is intentionally conservative and focused on:
+# - license allow/deny
+# - duplicate dependencies visibility
+# - basic advisories
+#
+# Run examples:
+#   cargo deny check
+#   cargo deny check licenses
+#   cargo deny check advisories
+
+[graph]
+all-features = true
+targets = []
+exclude = []
+
+[advisories]
+db-urls = ["https://github.com/RustSec/advisory-db"]
+db-path = "advisory-db"
+unmaintained = "warn"
+yanked = "warn"
+ignore = []
+
+# If you ever need to temporarily allow a vulnerable crate version, add it here with a comment
+# explaining why and what the upgrade plan is.
+[advisories.ignore]
+# "RUSTSEC-0000-0000" = "reason"
+
+[licenses]
+# kithara is MIT OR Apache-2.0, so allow common permissive licenses.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "CC0-1.0",
+]
+deny = [
+  # copyleft / viral licenses (explicitly deny)
+  "GPL-2.0",
+  "GPL-3.0",
+  "AGPL-3.0",
+  "LGPL-2.1",
+  "LGPL-3.0",
+]
+# When we can't confidently determine the license, fail the check.
+unlicensed = "deny"
+unknown = "deny"
+
+# Enforce that every crate has a license we understand (no "LicenseRef-..." surprises).
+confidence-threshold = 0.93
+
+# Allow exceptions by crate if needed (keep this list small).
+# Each exception should include a justification comment and ideally a link to upstream.
+exceptions = []
+
+# Clarify how to treat multi-licensed crates.
+# "Either" means any one of the licenses is allowed.
+# "All" means all detected licenses must be allowed.
+[licenses.private]
+ignore = false
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+deny = []
+skip = []
+skip-tree = []
+
+# You can use this to deny specific crate names (or versions) across the workspace.
+# Example:
+# deny = [{ name = "openssl" }]
+#
+# Or to force a single version of a crate:
+# [[bans.deny]]
+# name = "some-crate"
+# version = "*"
+# reason = "..."
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "warn"
+
+# We allow crates.io by default.
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+
+# Git dependencies are allowed but should be scrutinized.
+# If you need to allow specific git sources only, list them here and set unknown-git = "deny".
+allow-git = []
+
+# Extra safety: reject insecure registries or local paths in published contexts.
+# (Path deps are fine during development; cargo-deny treats them as local sources.)

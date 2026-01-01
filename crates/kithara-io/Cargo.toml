@@ -1,0 +1,16 @@
+[package]
+name = "kithara-io"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+bytes = { workspace = true }
+kanal = { workspace = true }
+thiserror = { workspace = true }
+
+[features]
+default = []
+
+[dev-dependencies]
+# Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
