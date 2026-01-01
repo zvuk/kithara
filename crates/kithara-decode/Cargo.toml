@@ -11,6 +11,7 @@ thiserror = { workspace = true }
 kanal = { workspace = true }
 symphonia = { workspace = true }
 dasp = { workspace = true }
+tokio = { workspace = true }
 
 [features]
 default = []
