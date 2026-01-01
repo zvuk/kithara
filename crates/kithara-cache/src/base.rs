@@ -1,6 +1,6 @@
+use crate::{CachePath, CacheResult, PutResult, store::Store};
 use kithara_core::AssetId;
 use std::path::PathBuf;
-use crate::{store::Store, CachePath, CacheResult, PutResult};
 
 /// Base filesystem store implementation.
 /// Provides tree-friendly layout and atomic write operations.
@@ -45,7 +45,12 @@ impl Store for FsStore {
         }
     }
 
-    fn put_atomic(&self, asset: AssetId, rel_path: &CachePath, bytes: &[u8]) -> CacheResult<PutResult> {
+    fn put_atomic(
+        &self,
+        asset: AssetId,
+        rel_path: &CachePath,
+        bytes: &[u8],
+    ) -> CacheResult<PutResult> {
         let asset_dir = self.asset_dir(asset);
         std::fs::create_dir_all(&asset_dir)?;
 
@@ -76,7 +81,8 @@ mod tests {
     use std::env;
 
     fn create_temp_store() -> FsStore {
-        let temp_dir = env::temp_dir().join(format!("kithara-fsstore-test-{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            env::temp_dir().join(format!("kithara-fsstore-test-{}", uuid::Uuid::new_v4()));
         FsStore::new(temp_dir).unwrap()
     }
 

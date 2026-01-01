@@ -1,5 +1,5 @@
-use kithara_core::AssetId;
 use crate::{CachePath, CacheResult, PutResult};
+use kithara_core::AssetId;
 
 /// Minimal storage contract for blob operations.
 /// This is the foundational interface that all cache layers must implement.
@@ -12,7 +12,12 @@ pub trait Store {
 
     /// Atomically write data to a resource.
     /// Returns the number of bytes written.
-    fn put_atomic(&self, asset: AssetId, rel_path: &CachePath, bytes: &[u8]) -> CacheResult<PutResult>;
+    fn put_atomic(
+        &self,
+        asset: AssetId,
+        rel_path: &CachePath,
+        bytes: &[u8],
+    ) -> CacheResult<PutResult>;
 
     /// Remove all resources for an asset.
     fn remove_all(&self, asset: AssetId) -> CacheResult<()>;

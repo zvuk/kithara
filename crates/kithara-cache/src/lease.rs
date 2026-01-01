@@ -1,5 +1,5 @@
+use crate::{CachePath, CacheResult, PutResult, store::Store};
 use kithara_core::AssetId;
-use crate::{store::Store, CacheResult, PutResult, CachePath};
 
 /// Trait that extends Store with pin/unpin operations.
 pub trait PinStore: Store {
@@ -10,7 +10,7 @@ pub trait PinStore: Store {
 
 /// RAII guard that keeps an asset pinned while alive.
 /// When dropped, asset is unpinned.
-pub struct LeaseGuard<'a, S> 
+pub struct LeaseGuard<'a, S>
 where
     S: PinStore,
 {
@@ -84,7 +84,12 @@ where
         self.inner.open(asset, rel_path)
     }
 
-    fn put_atomic(&self, asset: AssetId, rel_path: &CachePath, bytes: &[u8]) -> CacheResult<PutResult> {
+    fn put_atomic(
+        &self,
+        asset: AssetId,
+        rel_path: &CachePath,
+        bytes: &[u8],
+    ) -> CacheResult<PutResult> {
         self.inner.put_atomic(asset, rel_path, bytes)
     }
 
@@ -100,7 +105,8 @@ mod tests {
     use std::env;
 
     fn create_temp_lease_store() -> LeaseStore<FsStore> {
-        let temp_dir = env::temp_dir().join(format!("kithara-leasestore-test-{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            env::temp_dir().join(format!("kithara-leasestore-test-{}", uuid::Uuid::new_v4()));
         let fs_store = FsStore::new(temp_dir).unwrap();
         // Note: FsStore doesn't implement PinStore, so this would need IndexStore
         // For testing, we'll just test the delegation pattern

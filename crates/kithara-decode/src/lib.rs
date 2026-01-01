@@ -210,8 +210,11 @@ where
         // MVP implementation - extract basic spec from extension
         let sample_rate = 44100;
         let channels = 2;
-        
-        let spec = PcmSpec { sample_rate, channels };
+
+        let spec = PcmSpec {
+            sample_rate,
+            channels,
+        };
 
         Ok(Self {
             spec: Some(spec),
@@ -537,10 +540,10 @@ mod tests {
     fn test_media_source_adapter_integration() {
         let source = TestMediaSource::new("mp3");
         let media_source = source.as_media_source();
-        
+
         // Should be seekable
         assert!(media_source.is_seekable());
-        
+
         // Byte len might be None for test source
         // This tests the integration works without panicking
     }
@@ -549,12 +552,12 @@ mod tests {
     fn test_source_reader_returns_valid_read_seek() {
         let source = TestMediaSource::new("wav");
         let mut reader = source.reader();
-        
+
         // Should be able to read without panicking (even if empty)
         let mut buf = [0u8; 10];
         let result = reader.read(&mut buf);
         assert!(result.is_ok()); // Should not error
-        
+
         // Should be able to seek without panicking
         let seek_result = reader.seek(std::io::SeekFrom::Start(0));
         assert!(seek_result.is_ok()); // Should not error
@@ -695,9 +698,18 @@ mod tests {
     #[test]
     fn test_multichannel_support() {
         // Test that our implementation supports more than stereo (2 channels)
-        let mono_spec = PcmSpec { sample_rate: 48000, channels: 1 };
-        let stereo_spec = PcmSpec { sample_rate: 44100, channels: 2 };
-        let surround_spec = PcmSpec { sample_rate: 48000, channels: 6 };
+        let mono_spec = PcmSpec {
+            sample_rate: 48000,
+            channels: 1,
+        };
+        let stereo_spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let surround_spec = PcmSpec {
+            sample_rate: 48000,
+            channels: 6,
+        };
 
         // Test mono
         let mut mono_source = FakeAudioSource::new(mono_spec);
@@ -705,7 +717,7 @@ mod tests {
         assert_eq!(mono_chunk.spec.channels, 1);
         assert!(mono_chunk.is_frame_aligned());
 
-        // Test stereo  
+        // Test stereo
         let mut stereo_source = FakeAudioSource::new(stereo_spec);
         let stereo_chunk = stereo_source.next_chunk().unwrap().unwrap();
         assert_eq!(stereo_chunk.spec.channels, 2);
@@ -726,8 +738,14 @@ mod tests {
     #[test]
     fn test_multichannel_frame_alignment() {
         // Test that frame alignment logic works correctly for different channel counts
-        let odd_channels_spec = PcmSpec { sample_rate: 44100, channels: 3 };
-        let even_channels_spec = PcmSpec { sample_rate: 44100, channels: 4 };
+        let odd_channels_spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 3,
+        };
+        let even_channels_spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 4,
+        };
 
         // Test odd number of channels
         let mut odd_source = FakeAudioSource::new(odd_channels_spec);
@@ -739,7 +757,10 @@ mod tests {
         let mut even_source = FakeAudioSource::new(even_channels_spec);
         let even_chunk = even_source.next_chunk().unwrap().unwrap();
         assert!(even_chunk.is_frame_aligned());
-        assert_eq!(even_chunk.pcm.len() % even_channels_spec.channels as usize, 0);
+        assert_eq!(
+            even_chunk.pcm.len() % even_channels_spec.channels as usize,
+            0
+        );
     }
 
     #[test]
@@ -792,8 +813,9 @@ mod tests {
             channels: 2,
         });
 
-        let mut decoder = Decoder::<f32>::new(Box::new(source), DecoderSettings::default()).unwrap();
-        
+        let mut decoder =
+            Decoder::<f32>::new(Box::new(source), DecoderSettings::default()).unwrap();
+
         // Get initial position
         let initial_pos = decoder.current_pos_secs;
         assert_eq!(initial_pos, 0);
@@ -821,9 +843,7 @@ impl TestMediaSource {
     }
 
     fn new_with_none() -> Self {
-        Self {
-            file_ext: None,
-        }
+        Self { file_ext: None }
     }
 
     fn into_box(self) -> Box<dyn MediaSource> {

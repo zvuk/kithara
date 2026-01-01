@@ -1,6 +1,8 @@
+use crate::{
+    AssetState, CachePath, CacheResult, CacheState, PutResult, lease::PinStore, store::Store,
+};
 use kithara_core::AssetId;
 use std::path::PathBuf;
-use crate::{store::Store, lease::PinStore, CacheState, AssetState, CacheResult, PutResult, CachePath};
 
 /// Indexing decorator that maintains state.json with metadata.
 /// Provides total_bytes tracking and per-asset metadata.
@@ -11,8 +13,8 @@ pub struct IndexStore<S> {
     max_bytes: u64,
 }
 
-impl<S> IndexStore<S> 
-where 
+impl<S> IndexStore<S>
+where
     S: Store,
 {
     pub fn new(inner: S, root_dir: PathBuf, max_bytes: u64) -> Self {
@@ -59,7 +61,7 @@ where
         for entry in std::fs::read_dir(&self.root_dir)? {
             let entry = entry?;
             let path = entry.path();
-            
+
             if !path.is_dir() {
                 continue;
             }
@@ -71,17 +73,20 @@ where
                     for subdir_entry in std::fs::read_dir(&path)? {
                         let subdir_entry = subdir_entry?;
                         let subdir_path = subdir_entry.path();
-                        
+
                         if !subdir_path.is_dir() {
                             continue;
                         }
 
-                        if let Some(subdir_name) = subdir_path.file_name().and_then(|n| n.to_str()) {
-                            if subdir_name.len() == 2 && subdir_name.chars().all(|c| c.is_ascii_hexdigit()) {
+                        if let Some(subdir_name) = subdir_path.file_name().and_then(|n| n.to_str())
+                        {
+                            if subdir_name.len() == 2
+                                && subdir_name.chars().all(|c| c.is_ascii_hexdigit())
+                            {
                                 // This is the asset directory
                                 let asset_key = format!("{}{}", dir_name, subdir_name);
                                 found_assets.insert(asset_key.clone());
-                                
+
                                 // Calculate total size of this asset
                                 let mut asset_size = 0u64;
                                 for file_entry in std::fs::read_dir(&subdir_path)? {
@@ -91,23 +96,28 @@ where
                                         asset_size += file_entry.metadata()?.len();
                                     }
                                 }
-                                
+
                                 total_bytes += asset_size;
-                                
+
                                 // Update or create asset state
-                                let asset_state = state.assets.entry(asset_key.clone()).or_insert_with(|| AssetState {
-                                    size_bytes: 0,
-                                    last_access_ms: std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_millis() as u64,
-                                    created_ms: std::time::SystemTime::now()
-                                        .duration_since(std::time::UNIX_EPOCH)
-                                        .unwrap()
-                                        .as_millis() as u64,
-                                    pinned: false,
-                                });
-                                
+                                let asset_state = state
+                                    .assets
+                                    .entry(asset_key.clone())
+                                    .or_insert_with(|| AssetState {
+                                        size_bytes: 0,
+                                        last_access_ms: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap()
+                                            .as_millis()
+                                            as u64,
+                                        created_ms: std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap()
+                                            .as_millis()
+                                            as u64,
+                                        pinned: false,
+                                    });
+
                                 // Update size from filesystem (source of truth)
                                 asset_state.size_bytes = asset_size;
                             }
@@ -120,7 +130,7 @@ where
         // Remove assets that no longer exist on filesystem
         state.assets.retain(|key, _| found_assets.contains(key));
         state.total_bytes = total_bytes;
-        
+
         Ok(())
     }
 
@@ -202,7 +212,11 @@ where
     fn is_pinned(&self, asset: AssetId) -> CacheResult<bool> {
         let asset_key = hex::encode(asset.as_bytes());
         let state = self.load_state()?;
-        Ok(state.assets.get(&asset_key).map(|s| s.pinned).unwrap_or(false))
+        Ok(state
+            .assets
+            .get(&asset_key)
+            .map(|s| s.pinned)
+            .unwrap_or(false))
     }
 }
 
@@ -218,7 +232,12 @@ where
         self.inner.open(asset, rel_path)
     }
 
-    fn put_atomic(&self, asset: AssetId, rel_path: &CachePath, bytes: &[u8]) -> CacheResult<PutResult> {
+    fn put_atomic(
+        &self,
+        asset: AssetId,
+        rel_path: &CachePath,
+        bytes: &[u8],
+    ) -> CacheResult<PutResult> {
         // Calculate size change
         let old_size = if self.exists(asset, rel_path) {
             if let Ok(Some(file)) = self.open(asset, rel_path) {
@@ -261,11 +280,15 @@ where
 
     fn remove_all(&self, asset: AssetId) -> CacheResult<()> {
         let asset_key = hex::encode(asset.as_bytes());
-        
+
         // Get current size for state update
         let current_size = {
             let state = self.load_state()?;
-            state.assets.get(&asset_key).map(|s| s.size_bytes).unwrap_or(0)
+            state
+                .assets
+                .get(&asset_key)
+                .map(|s| s.size_bytes)
+                .unwrap_or(0)
         };
 
         self.inner.remove_all(asset)?;
@@ -292,7 +315,7 @@ where
     fn get_all_assets(&self) -> CacheResult<Vec<(String, AssetState)>> {
         let state = self.load_state()?;
         let assets: Vec<_> = state.assets.into_iter().collect();
-        
+
         // Sync with filesystem to ensure accuracy
         let mut temp_state = CacheState {
             max_bytes: state.max_bytes,
@@ -300,21 +323,21 @@ where
             assets: std::collections::HashMap::new(),
         };
         self.sync_with_fs(&mut temp_state)?;
-        
+
         Ok(assets)
     }
 
     fn remove_assets_from_state(&self, keys: &[String]) -> CacheResult<()> {
         let mut state = self.load_state()?;
         let mut total_removed = 0u64;
-        
+
         for key in keys {
             if let Some(asset_state) = state.assets.get(key) {
                 total_removed += asset_state.size_bytes;
             }
             state.assets.remove(key);
         }
-        
+
         state.total_bytes -= total_removed;
         self.save_state(&state)?;
         Ok(())
@@ -328,7 +351,8 @@ mod tests {
     use std::env;
 
     fn create_temp_index_store() -> IndexStore<FsStore> {
-        let temp_dir = env::temp_dir().join(format!("kithara-indexstore-test-{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            env::temp_dir().join(format!("kithara-indexstore-test-{}", uuid::Uuid::new_v4()));
         let fs_store = FsStore::new(temp_dir.clone()).unwrap();
         IndexStore::new(fs_store, temp_dir, 1024 * 1024)
     }
@@ -352,7 +376,7 @@ mod tests {
         let state = store.load_state().unwrap();
         assert_eq!(state.total_bytes, "test data".len() as u64);
         assert_eq!(state.assets.len(), 1);
-        
+
         let asset_key = hex::encode(asset_id.as_bytes());
         let asset_state = state.assets.get(&asset_key).unwrap();
         assert_eq!(asset_state.size_bytes, "test data".len() as u64);
@@ -361,7 +385,8 @@ mod tests {
     #[test]
     fn indexstore_atomic_state_save_is_crash_safe() {
         let store = create_temp_index_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/atomic.mp3").unwrap());
+        let asset_id =
+            AssetId::from_url(&url::Url::parse("https://example.com/atomic.mp3").unwrap());
         let path = CachePath::from_single("atomic.txt").unwrap();
 
         store.put_atomic(asset_id, &path, b"atomic test").unwrap();
@@ -382,7 +407,8 @@ mod tests {
     #[test]
     fn indexstore_touch_updates_access_time() {
         let store = create_temp_index_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/touch.mp3").unwrap());
+        let asset_id =
+            AssetId::from_url(&url::Url::parse("https://example.com/touch.mp3").unwrap());
         let path = CachePath::from_single("touch.txt").unwrap();
 
         // Put data to create asset state

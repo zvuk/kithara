@@ -1,5 +1,8 @@
+use crate::{
+    AssetState, CachePath, CacheResult, PutResult, evict::EvictionPolicy, lease::PinStore,
+    store::Store,
+};
 use kithara_core::AssetId;
-use crate::{store::Store, lease::PinStore, evict::EvictionPolicy, CacheResult, PutResult, CachePath, AssetState};
 
 /// Evicting decorator that provides LRU eviction with configurable policy.
 /// Handles space management and never evicts pinned assets.
@@ -28,7 +31,7 @@ where
     pub fn ensure_space(&self, incoming_bytes: u64, pinned: Option<AssetId>) -> CacheResult<u64> {
         // Get current state from inner store (should be IndexStore)
         let current_total = self.get_total_bytes()?;
-        
+
         if current_total + incoming_bytes <= self.max_bytes {
             return Ok(0);
         }
@@ -44,7 +47,7 @@ where
             let pinned_key = hex::encode(pinned_id.as_bytes());
             assets_to_evict.retain(|(key, _)| key != &pinned_key);
         }
-        
+
         // Remove any assets that are already pinned
         assets_to_evict.retain(|(_, asset_state)| !asset_state.pinned);
 
@@ -108,7 +111,7 @@ where
         // Convert hex key back to AssetId by reconstructing from bytes
         // AssetId is 32 bytes, so we need to create it from the hex string
         let bytes = hex::decode(key)?;
-        
+
         // Create a mock URL with the bytes encoded somehow
         // This is a limitation of the current AssetId design
         // For now, we'll use a placeholder URL approach
@@ -131,10 +134,15 @@ where
         self.inner.open(asset, rel_path)
     }
 
-    fn put_atomic(&self, asset: AssetId, rel_path: &CachePath, bytes: &[u8]) -> CacheResult<PutResult> {
+    fn put_atomic(
+        &self,
+        asset: AssetId,
+        rel_path: &CachePath,
+        bytes: &[u8],
+    ) -> CacheResult<PutResult> {
         // Ensure space before putting
         let incoming_size = bytes.len() as u64;
-        
+
         // Calculate if this is an overwrite
         let old_size = if self.exists(asset, rel_path) {
             if let Ok(Some(file)) = self.open(asset, rel_path) {
@@ -188,7 +196,10 @@ mod tests {
     use std::env;
 
     fn create_temp_evicting_store() -> EvictingStore<IndexStore<FsStore>, crate::evict::LruPolicy> {
-        let temp_dir = env::temp_dir().join(format!("kithara-evictingstore-test-{}", uuid::Uuid::new_v4()));
+        let temp_dir = env::temp_dir().join(format!(
+            "kithara-evictingstore-test-{}",
+            uuid::Uuid::new_v4()
+        ));
         let fs_store = FsStore::new(temp_dir.clone()).unwrap();
         let index_store = IndexStore::new(fs_store, temp_dir.clone(), 1000); // 1KB limit for testing
         EvictingStore::with_lru(index_store, 1000)

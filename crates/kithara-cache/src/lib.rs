@@ -5,12 +5,12 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
 
-pub mod store;
 pub mod base;
 pub mod evict;
-pub mod store_impl;
-pub mod lease;
 pub mod evicting_store;
+pub mod lease;
+pub mod store;
+pub mod store_impl;
 
 #[derive(Debug, Error)]
 pub enum CacheError {
@@ -105,11 +105,7 @@ pub struct AssetState {
 pub struct AssetCache {
     // Composed layers: FsStore -> IndexStore -> LeaseStore -> EvictingStore
     store: crate::evicting_store::EvictingStore<
-        crate::lease::LeaseStore<
-            crate::store_impl::IndexStore<
-                crate::base::FsStore
-            >
-        >,
+        crate::lease::LeaseStore<crate::store_impl::IndexStore<crate::base::FsStore>>,
         crate::evict::LruPolicy,
     >,
 }
@@ -144,16 +140,16 @@ impl AssetCache {
 
         // Compose the layers: FsStore -> IndexStore -> LeaseStore -> EvictingStore
         let fs_store = crate::base::FsStore::new(root_dir.clone())?;
-        let index_store = crate::store_impl::IndexStore::new(fs_store, root_dir.clone(), opts.max_bytes);
+        let index_store =
+            crate::store_impl::IndexStore::new(fs_store, root_dir.clone(), opts.max_bytes);
         let lease_store = crate::lease::LeaseStore::new(index_store);
-        let evicting_store = crate::evicting_store::EvictingStore::with_lru(lease_store, opts.max_bytes);
+        let evicting_store =
+            crate::evicting_store::EvictingStore::with_lru(lease_store, opts.max_bytes);
 
         Ok(AssetCache {
             store: evicting_store,
         })
     }
-
-
 
     pub fn asset(&self, asset: AssetId) -> AssetHandle<'_> {
         AssetHandle {
@@ -169,12 +165,12 @@ impl AssetCache {
     pub fn touch(&self, asset: AssetId) -> CacheResult<()> {
         // Delegate to inner IndexStore for touch functionality
         use crate::store_impl::IndexStore;
-        
+
         // We need to access the inner IndexStore somehow
         // For now, this is a limitation - the touch functionality is in IndexStore
         // but we only have EvictingStore access from here
         // TODO: We need to make the layered architecture more accessible
-        
+
         // As a temporary solution, we can access through the EvictionSupport trait
         use crate::evicting_store::EvictionSupport;
         let assets = self.store.inner.get_all_assets()?;
@@ -195,12 +191,12 @@ impl AssetCache {
     pub fn stats(&self) -> CacheResult<CacheStats> {
         // Delegate to inner layers
         use crate::evicting_store::EvictionSupport;
-        
+
         if let Ok(assets) = self.store.inner.get_all_assets() {
             let total_bytes: u64 = assets.iter().map(|(_, state)| state.size_bytes).sum();
             let asset_count = assets.len();
             let pinned_assets = assets.iter().filter(|(_, state)| state.pinned).count();
-            
+
             Ok(CacheStats {
                 total_bytes,
                 asset_count,
@@ -233,8 +229,6 @@ impl<'a> AssetHandle<'a> {
         self.cache.store.remove_all(self.asset_id)
     }
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -361,8 +355,6 @@ mod tests {
         file.read_to_string(&mut content).unwrap();
         assert_eq!(content, "test data");
     }
-
-
 
     #[test]
     fn state_json_persists_across_cache_instances() {
