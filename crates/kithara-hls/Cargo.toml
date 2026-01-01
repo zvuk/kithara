@@ -14,6 +14,8 @@ hls_m3u8 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
+axum = { workspace = true }
+async-stream = { workspace = true }
 
 [features]
 default = []
