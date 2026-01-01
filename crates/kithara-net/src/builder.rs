@@ -33,7 +33,7 @@ impl NetBuilder {
             self.options.retry_base_delay,
             self.options.max_retry_delay,
         );
-        
+
         Ok(base.with_retry(retry_policy))
     }
 }

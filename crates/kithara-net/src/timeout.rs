@@ -23,7 +23,11 @@ impl<N: Net> Net for TimeoutNet<N> {
             .map_err(|_| NetError::Timeout)?
     }
 
-    async fn stream(&self, url: url::Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
+    async fn stream(
+        &self,
+        url: url::Url,
+        headers: Option<Headers>,
+    ) -> Result<ByteStream, NetError> {
         // For streaming, we only timeout the request/response phase, not the entire stream
         tokio::time::timeout(self.timeout, self.inner.stream(url, headers))
             .await

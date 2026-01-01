@@ -15,28 +15,28 @@ use url::Url;
 pub enum HlsError {
     #[error("Network error: {0}")]
     Net(#[from] kithara_net::NetError),
-    
+
     #[error("Cache error: {0}")]
     Cache(#[from] kithara_cache::CacheError),
-    
+
     #[error("Playlist parsing error: {0}")]
     PlaylistParse(String),
-    
+
     #[error("Variant not found: {0}")]
     VariantNotFound(String),
-    
+
     #[error("No suitable variant found")]
     NoSuitableVariant,
-    
+
     #[error("Key processing failed: {0}")]
     KeyProcessing(String),
-    
+
     #[error("Offline mode: resource not cached")]
     OfflineMiss,
-    
+
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
-    
+
     #[error("not implemented")]
     Unimplemented,
 }
@@ -46,7 +46,8 @@ pub type HlsResult<T> = Result<T, HlsError>;
 #[derive(Clone)]
 pub struct HlsOptions {
     pub base_url: Option<Url>,
-    pub variant_stream_selector: Option<Arc<dyn Fn(&hls_m3u8::MasterPlaylist) -> Option<usize> + Send + Sync>>,
+    pub variant_stream_selector:
+        Option<Arc<dyn Fn(&hls_m3u8::MasterPlaylist) -> Option<usize> + Send + Sync>>,
     pub abr_initial_variant_index: Option<usize>,
     pub abr_min_buffer_for_up_switch: f32,
     pub abr_down_switch_buffer: f32,
@@ -120,11 +121,11 @@ impl HlsSource {
     ) -> HlsResult<HlsSession> {
         let asset_id = AssetId::from_url(&url);
         let (cmd_sender, _cmd_receiver) = mpsc::channel(16);
-        
+
         // TODO: Start HLS driver task
         // let driver = HlsDriver::new(url, opts, cache, net, cmd_receiver, bytes_sender);
         // tokio::spawn(driver.run());
-        
+
         Ok(HlsSession {
             asset_id,
             cmd_sender,
@@ -154,7 +155,7 @@ impl HlsSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{routing::get, Router};
+    use axum::{Router, routing::get};
     use kithara_cache::CacheOptions;
     use kithara_net::NetOptions;
     use tokio::net::TcpListener;
@@ -247,9 +248,18 @@ segment_2.ts
         assert_eq!(variants[2].bandwidth(), 5120000);
 
         // Check resolutions
-        assert_eq!(variants[0].resolution(), Some(hls_m3u8::types::Resolution::new(854, 480)));
-        assert_eq!(variants[1].resolution(), Some(hls_m3u8::types::Resolution::new(1280, 720)));
-        assert_eq!(variants[2].resolution(), Some(hls_m3u8::types::Resolution::new(1920, 1080)));
+        assert_eq!(
+            variants[0].resolution(),
+            Some(hls_m3u8::types::Resolution::new(854, 480))
+        );
+        assert_eq!(
+            variants[1].resolution(),
+            Some(hls_m3u8::types::Resolution::new(1280, 720))
+        );
+        assert_eq!(
+            variants[2].resolution(),
+            Some(hls_m3u8::types::Resolution::new(1920, 1080))
+        );
 
         Ok(())
     }
@@ -257,7 +267,9 @@ segment_2.ts
     #[tokio::test]
     async fn parse_media_playlist_from_network() -> HlsResult<()> {
         let server_url = run_test_server().await;
-        let media_url = format!("{}/video/480p/playlist.m3u8", server_url).parse().unwrap();
+        let media_url = format!("{}/video/480p/playlist.m3u8", server_url)
+            .parse()
+            .unwrap();
 
         let _opts = HlsOptions::default();
         let cache_opts = CacheOptions {
@@ -329,7 +341,7 @@ segment_2.ts
         // Apply variant selection
         let selected_index = (opts.variant_stream_selector.unwrap())(&master_playlist)
             .expect("Should return a variant index");
-        
+
         // Should select the highest bandwidth variant (index 2)
         assert_eq!(selected_index, 2);
 
@@ -343,7 +355,7 @@ segment_2.ts
 
         // Create options with no selector (auto ABR)
         let opts = HlsOptions {
-            variant_stream_selector: None, // Auto ABR
+            variant_stream_selector: None,      // Auto ABR
             abr_initial_variant_index: Some(1), // Start with medium quality
             ..HlsOptions::default()
         };
@@ -399,7 +411,7 @@ segment_2.ts
             let cache_path = CachePath::new(vec!["master.m3u8".to_string()]).unwrap();
             let handle = cache.asset(asset_id);
             assert!(handle.exists(&cache_path));
-            
+
             // Read from cache
             let mut cached_file = handle.open(&cache_path).unwrap().unwrap();
             let mut cached_bytes = Vec::new();
@@ -438,7 +450,7 @@ segment_2.ts
 
         // In offline mode, accessing uncached resource should use cache miss logic
         let cache_path = CachePath::new(vec!["missing.m3u8".to_string()]).unwrap();
-        
+
         // File should not exist (not cached)
         assert!(!handle.exists(&cache_path));
 

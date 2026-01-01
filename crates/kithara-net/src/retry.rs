@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crate::traits::Net;
-use crate::types::{RetryPolicy, Headers, RangeSpec};
+use crate::types::{Headers, RangeSpec, RetryPolicy};
 use crate::{ByteStream, NetError};
 
 pub trait RetryClassifier {
@@ -64,15 +64,15 @@ impl DefaultRetryPolicy {
             policy,
         }
     }
-    
+
     pub fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
         if attempt >= self.policy.max_retries {
             return false;
         }
-        
+
         self.classifier.should_retry(error)
     }
-    
+
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         self.policy.delay_for_attempt(attempt)
     }
@@ -86,14 +86,17 @@ pub struct RetryNet<N, P> {
 
 impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
     pub fn new(inner: N, retry_policy: P) -> Self {
-        Self { inner, retry_policy }
+        Self {
+            inner,
+            retry_policy,
+        }
     }
 }
 
 impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
     async fn get_bytes(&self, url: url::Url) -> Result<bytes::Bytes, NetError> {
         let mut last_error = None;
-        
+
         for attempt in 0..=self.retry_policy.max_attempts() {
             match self.inner.get_bytes(url.clone()).await {
                 Ok(bytes) => return Ok(bytes),
@@ -102,7 +105,7 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
                         return Err(error);
                     }
                     last_error = Some(error.clone());
-                    
+
                     if attempt < self.retry_policy.max_attempts() {
                         let delay = self.retry_policy.delay_for_attempt(attempt);
                         tokio::time::sleep(delay).await;
@@ -110,16 +113,20 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
                 }
             }
         }
-        
+
         Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
             max_retries: self.retry_policy.max_attempts(),
             source: Box::new(NetError::Unimplemented),
         }))
     }
 
-    async fn stream(&self, url: url::Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
+    async fn stream(
+        &self,
+        url: url::Url,
+        headers: Option<Headers>,
+    ) -> Result<ByteStream, NetError> {
         let mut last_error = None;
-        
+
         for attempt in 0..=self.retry_policy.max_attempts() {
             match self.inner.stream(url.clone(), headers.clone()).await {
                 Ok(stream) => return Ok(stream),
@@ -128,7 +135,7 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
                         return Err(error);
                     }
                     last_error = Some(error.clone());
-                    
+
                     if attempt < self.retry_policy.max_attempts() {
                         let delay = self.retry_policy.delay_for_attempt(attempt);
                         tokio::time::sleep(delay).await;
@@ -136,7 +143,7 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
                 }
             }
         }
-        
+
         Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
             max_retries: self.retry_policy.max_attempts(),
             source: Box::new(NetError::Unimplemented),
@@ -150,16 +157,20 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
         headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
         let mut last_error = None;
-        
+
         for attempt in 0..=self.retry_policy.max_attempts() {
-            match self.inner.get_range(url.clone(), range.clone(), headers.clone()).await {
+            match self
+                .inner
+                .get_range(url.clone(), range.clone(), headers.clone())
+                .await
+            {
                 Ok(stream) => return Ok(stream),
                 Err(error) => {
                     if !self.retry_policy.should_retry(&error, attempt) {
                         return Err(error);
                     }
                     last_error = Some(error.clone());
-                    
+
                     if attempt < self.retry_policy.max_attempts() {
                         let delay = self.retry_policy.delay_for_attempt(attempt);
                         tokio::time::sleep(delay).await;
@@ -167,7 +178,7 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
                 }
             }
         }
-        
+
         Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
             max_retries: self.retry_policy.max_attempts(),
             source: Box::new(NetError::Unimplemented),

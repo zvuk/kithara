@@ -1,4 +1,3 @@
-
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -116,7 +115,7 @@ impl RetryPolicy {
         if attempt == 0 {
             return Duration::ZERO;
         }
-        
+
         let exponential_delay = self.base_delay * 2_u32.pow(attempt.saturating_sub(1));
         std::cmp::min(exponential_delay, self.max_delay)
     }

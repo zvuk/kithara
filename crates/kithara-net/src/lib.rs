@@ -14,7 +14,7 @@ use std::time::Duration;
 
 // Re-export main types
 pub use base::ReqwestNet;
-pub use builder::{create_default_client, NetBuilder};
+pub use builder::{NetBuilder, create_default_client};
 pub use retry::{DefaultRetryClassifier, DefaultRetryPolicy, RetryNet, RetryPolicyTrait};
 pub use timeout::TimeoutNet;
 pub use traits::{Net, NetExt};
@@ -39,7 +39,7 @@ impl NetClient {
             opts.retry_base_delay,
             opts.max_retry_delay,
         );
-        
+
         // For simplicity in legacy client, just use the base client without decorators
         // Users should migrate to NetBuilder for full functionality
         let base = ReqwestNet::with_timeout(opts.request_timeout)?;
@@ -57,7 +57,7 @@ impl NetClient {
     ) -> NetResult<impl Stream<Item = NetResult<Bytes>>> {
         let headers = headers.map(Headers::from);
         let stream = self.inner.stream(url, headers).await?;
-        
+
         // Convert ByteStream to concrete stream type for compatibility
         Ok(Box::pin(stream))
     }
@@ -71,7 +71,7 @@ impl NetClient {
         let range_spec = RangeSpec::new(range.0, range.1);
         let headers = headers.map(Headers::from);
         let stream = self.inner.get_range(url, range_spec, headers).await?;
-        
+
         // Convert ByteStream to concrete stream type for compatibility
         Ok(Box::pin(stream))
     }
@@ -271,7 +271,7 @@ mod tests {
         let result = client.get_bytes(url).await;
         assert!(result.is_err());
         match result.unwrap_err() {
-            NetError::HttpStatus { status, .. } =>         assert_eq!(status, 500),
+            NetError::HttpStatus { status, .. } => assert_eq!(status, 500),
             _ => panic!("Expected HttpStatus error"),
         }
     }
@@ -282,9 +282,9 @@ mod tests {
         let base = ReqwestNet::new().unwrap();
         let timeout_duration = std::time::Duration::from_millis(10);
         let timeout_client = base.with_timeout(timeout_duration);
-        
+
         let url = format!("{}/test", server_url).parse().unwrap();
-        
+
         // This should succeed quickly since the server is fast
         let result = timeout_client.get_bytes(url).await;
         assert!(result.is_ok(), "Request should succeed within timeout");
@@ -293,13 +293,13 @@ mod tests {
     #[tokio::test]
     async fn test_retry_policy_exponential_backoff() {
         let policy = RetryPolicy::new(3, Duration::from_millis(10), Duration::from_millis(100));
-        
+
         // Test exponential backoff calculation
         assert_eq!(policy.delay_for_attempt(0), Duration::from_millis(0));
         assert_eq!(policy.delay_for_attempt(1), Duration::from_millis(10));
         assert_eq!(policy.delay_for_attempt(2), Duration::from_millis(20));
         assert_eq!(policy.delay_for_attempt(3), Duration::from_millis(40));
-        
+
         // Test cap at max_delay
         assert_eq!(policy.delay_for_attempt(10), Duration::from_millis(100));
     }
@@ -311,22 +311,29 @@ mod tests {
         let url = format!("{}/test", server_url).parse().unwrap();
 
         let result = client.get_bytes(url).await;
-        assert!(result.is_ok(), "NetBuilder client should work like regular client");
+        assert!(
+            result.is_ok(),
+            "NetBuilder client should work like regular client"
+        );
     }
 
     #[tokio::test]
     async fn test_net_builder_with_custom_options() {
-        let retry_policy = RetryPolicy::new(2, Duration::from_millis(50), Duration::from_millis(200));
+        let retry_policy =
+            RetryPolicy::new(2, Duration::from_millis(50), Duration::from_millis(200));
         let client = NetBuilder::new()
             .with_request_timeout(Duration::from_millis(100))
             .with_retry_policy(retry_policy)
             .build()
             .unwrap();
-        
+
         let server_url = run_test_server().await;
         let url = format!("{}/test", server_url).parse().unwrap();
 
         let result = client.get_bytes(url).await;
-        assert!(result.is_ok(), "NetBuilder client with custom options should work");
+        assert!(
+            result.is_ok(),
+            "NetBuilder client with custom options should work"
+        );
     }
 }

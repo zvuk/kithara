@@ -14,7 +14,10 @@ pub enum NetError {
     #[error("Timeout")]
     Timeout,
     #[error("Request failed after {max_retries} retries: {source}")]
-    RetryExhausted { max_retries: u32, source: Box<NetError> },
+    RetryExhausted {
+        max_retries: u32,
+        source: Box<NetError>,
+    },
     #[error("HTTP {status} for URL: {url}")]
     HttpStatus { status: u16, url: String },
     #[error("not implemented")]
@@ -39,11 +42,9 @@ impl ReqwestNet {
         if let Some(timeout) = timeout {
             builder = builder.timeout(timeout);
         }
-        
-        let client = builder
-            .build()
-            .map_err(|e| NetError::Http(e.to_string()))?;
-        
+
+        let client = builder.build().map_err(|e| NetError::Http(e.to_string()))?;
+
         Ok(Self { client })
     }
 
@@ -72,9 +73,12 @@ impl ReqwestNet {
         request
     }
 
-    async fn handle_response(&self, response: reqwest::Response) -> Result<reqwest::Response, NetError> {
+    async fn handle_response(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<reqwest::Response, NetError> {
         let status = response.status();
-        
+
         if status.is_success() || status == reqwest::StatusCode::PARTIAL_CONTENT {
             Ok(response)
         } else {
@@ -95,15 +99,19 @@ impl Net for ReqwestNet {
         Ok(response.bytes().await?)
     }
 
-    async fn stream(&self, url: url::Url, headers: Option<Headers>) -> Result<crate::ByteStream, NetError> {
+    async fn stream(
+        &self,
+        url: url::Url,
+        headers: Option<Headers>,
+    ) -> Result<crate::ByteStream, NetError> {
         let request = self.build_request(url, headers, None);
         let response = request.send().await?;
         let response = self.handle_response(response).await?;
-        
+
         let stream = response
             .bytes_stream()
             .map(|result| result.map_err(NetError::from));
-        
+
         Ok(Box::pin(stream))
     }
 
@@ -116,11 +124,11 @@ impl Net for ReqwestNet {
         let request = self.build_request(url, headers, Some(range));
         let response = request.send().await?;
         let response = self.handle_response(response).await?;
-        
+
         let stream = response
             .bytes_stream()
             .map(|result| result.map_err(NetError::from));
-        
+
         Ok(Box::pin(stream))
     }
 }
