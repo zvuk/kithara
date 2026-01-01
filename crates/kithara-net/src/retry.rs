@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use std::time::Duration;
 
+use crate::ByteStream;
+use crate::error::NetError;
 use crate::traits::Net;
 use crate::types::{Headers, RangeSpec, RetryPolicy};
-use crate::{ByteStream, NetError};
 
 pub trait RetryClassifier {
     fn should_retry(&self, error: &NetError) -> bool;
@@ -25,31 +26,7 @@ impl Default for DefaultRetryClassifier {
 
 impl RetryClassifier for DefaultRetryClassifier {
     fn should_retry(&self, error: &NetError) -> bool {
-        match error {
-            NetError::Http(http_err_str) => {
-                // For string-based HTTP errors, we check if the error string contains
-                // indicators of retryable HTTP status codes
-                // This is a simplified approach - a production implementation might
-                // parse status codes more precisely
-                http_err_str.contains("500") ||  // Server errors
-                http_err_str.contains("502") ||  // Bad Gateway
-                http_err_str.contains("503") ||  // Service Unavailable
-                http_err_str.contains("504") ||  // Gateway Timeout
-                http_err_str.contains("429") ||  // Too Many Requests
-                http_err_str.contains("408") ||  // Request Timeout
-                // Check for common network error patterns
-                http_err_str.contains("timeout") ||
-                http_err_str.contains("connection") ||
-                http_err_str.contains("network")
-            }
-            NetError::Timeout => true,
-            NetError::RetryExhausted { .. } => false,
-            NetError::HttpStatus { status, .. } => {
-                // Retry on 5xx server errors and 429 Too Many Requests
-                *status >= 500 || *status == 429 || *status == 408
-            }
-            NetError::InvalidRange(_) | NetError::Unimplemented => false,
-        }
+        error.is_retryable()
     }
 }
 

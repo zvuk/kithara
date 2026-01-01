@@ -3,7 +3,7 @@ use bytes::Bytes;
 use futures::Stream;
 use std::pin::Pin;
 
-use crate::NetError;
+use crate::error::NetError;
 use crate::types::{Headers, RangeSpec};
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>;

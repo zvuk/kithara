@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 use std::time::Duration;
 
+use crate::ByteStream;
+use crate::error::NetError;
 use crate::traits::Net;
 use crate::types::{Headers, RangeSpec};
-use crate::{ByteStream, NetError};
 
 /// Timeout decorator for Net implementations
 pub struct TimeoutNet<N> {
@@ -22,7 +23,7 @@ impl<N: Net> Net for TimeoutNet<N> {
     async fn get_bytes(&self, url: url::Url) -> Result<bytes::Bytes, NetError> {
         tokio::time::timeout(self.timeout, self.inner.get_bytes(url))
             .await
-            .map_err(|_| NetError::Timeout)?
+            .map_err(|_| NetError::timeout())?
     }
 
     async fn stream(
@@ -30,10 +31,10 @@ impl<N: Net> Net for TimeoutNet<N> {
         url: url::Url,
         headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
-        // For streaming, we only timeout the request/response phase, not the entire stream
+        // For streaming, we only timeout request/response phase, not entire stream
         tokio::time::timeout(self.timeout, self.inner.stream(url, headers))
             .await
-            .map_err(|_| NetError::Timeout)?
+            .map_err(|_| NetError::timeout())?
     }
 
     async fn get_range(
@@ -42,9 +43,9 @@ impl<N: Net> Net for TimeoutNet<N> {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
-        // For range requests, we only timeout the request/response phase, not the entire stream
+        // For range requests, we only timeout request/response phase, not entire stream
         tokio::time::timeout(self.timeout, self.inner.get_range(url, range, headers))
             .await
-            .map_err(|_| NetError::Timeout)?
+            .map_err(|_| NetError::timeout())?
     }
 }

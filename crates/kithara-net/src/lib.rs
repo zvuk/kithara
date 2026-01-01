@@ -2,6 +2,7 @@
 
 pub mod base;
 pub mod builder;
+pub mod error;
 pub mod retry;
 pub mod timeout;
 pub mod traits;
@@ -15,15 +16,11 @@ use std::time::Duration;
 // Re-export main types
 pub use base::ReqwestNet;
 pub use builder::{NetBuilder, create_default_client};
+pub use error::{NetError, NetResult};
 pub use retry::{DefaultRetryClassifier, DefaultRetryPolicy, RetryNet, RetryPolicyTrait};
 pub use timeout::TimeoutNet;
 pub use traits::{Net, NetExt};
 pub use types::{Headers, NetOptions, RangeSpec, RetryPolicy};
-
-// Re-export error type from base
-pub use base::NetError;
-
-pub type NetResult<T> = Result<T, NetError>;
 pub type ByteStream = crate::traits::ByteStream;
 
 // Legacy NetClient for backward compatibility
@@ -183,7 +180,6 @@ mod tests {
     #[tokio::test]
     async fn test_stream_get_returns_expected_bytes() {
         let server_url = run_test_server().await;
-        let client = NetClient::new(NetOptions::default());
         let url = format!("{}/test", server_url).parse().unwrap();
 
         let client = NetClient::new(NetOptions::default()).unwrap();

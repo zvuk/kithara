@@ -93,12 +93,22 @@ The retry layer follows these rules:
 - Capped at `max_delay`
 - Zero delay for first attempt
 
+**Contract-level guarantees:**
+- All retry decisions are centralized in `NetError::is_retryable()`
+- Retry logic is applied only before streaming begins (mid-stream retries are not supported in v1)
+- Classification respects HTTP status codes and network error patterns consistently across layers
+
 ## Timeout Semantics
 
 The timeout layer applies timeouts as follows:
 - `get_bytes()`: Timeout for entire operation
 - `stream()` and `get_range()`: Timeout for request/response phase only
   (Not applied to the entire stream to avoid interrupting active downloads)
+
+**Contract-level guarantees:**
+- All timeout creation is centralized in `NetError::timeout()` for consistency
+- Timeout errors are distinguishable via `NetError::is_timeout()`
+- Timeout applies to connection establishment and HTTP response headers, not to ongoing stream data transfer
 
 ## Error Handling
 

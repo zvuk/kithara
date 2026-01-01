@@ -1,31 +1,10 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
-use thiserror::Error;
 
+use crate::error::NetError;
 use crate::traits::Net;
 use crate::types::{Headers, RangeSpec};
-
-#[derive(Debug, Error, Clone)]
-pub enum NetError {
-    #[error("HTTP request failed: {0}")]
-    Http(String),
-    #[error("Invalid range header: {0}")]
-    InvalidRange(String),
-    #[error("Timeout")]
-    Timeout,
-    #[error("Request failed after {max_retries} retries: {source}")]
-    RetryExhausted {
-        max_retries: u32,
-        source: Box<NetError>,
-    },
-    #[error("HTTP {status} for URL: {url}")]
-    HttpStatus { status: u16, url: String },
-    #[error("not implemented")]
-    Unimplemented,
-}
-
-pub type NetResult<T> = Result<T, NetError>;
 
 /// Base HTTP client implementation using reqwest
 #[derive(Clone, Debug)]
@@ -84,10 +63,7 @@ impl ReqwestNet {
             Ok(response)
         } else {
             let url = response.url().to_string();
-            Err(NetError::HttpStatus {
-                status: status.as_u16(),
-                url,
-            })
+            Err(NetError::http_status(status.as_u16(), url))
         }
     }
 }
@@ -132,12 +108,6 @@ impl Net for ReqwestNet {
             .map(|result| result.map_err(NetError::from));
 
         Ok(Box::pin(stream))
-    }
-}
-
-impl From<reqwest::Error> for NetError {
-    fn from(error: reqwest::Error) -> Self {
-        NetError::Http(error.to_string())
     }
 }
 

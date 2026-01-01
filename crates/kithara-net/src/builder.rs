@@ -1,4 +1,5 @@
 use crate::base::ReqwestNet;
+use crate::error::NetError;
 use crate::traits::{Net, NetExt};
 use crate::types::{NetOptions, RetryPolicy};
 
@@ -26,7 +27,7 @@ impl NetBuilder {
         self
     }
 
-    pub fn build(self) -> Result<impl Net, crate::NetError> {
+    pub fn build(self) -> Result<impl Net, NetError> {
         let base = ReqwestNet::with_timeout(self.options.request_timeout)?;
         let retry_policy = RetryPolicy::new(
             self.options.max_retries,
@@ -45,6 +46,6 @@ impl Default for NetBuilder {
 }
 
 /// Convenience function to create a default client with retry and timeout
-pub fn create_default_client() -> Result<impl Net, crate::NetError> {
+pub fn create_default_client() -> Result<impl Net, NetError> {
     NetBuilder::new().build()
 }
