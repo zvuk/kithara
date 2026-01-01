@@ -67,6 +67,13 @@ thiserror = "2.0.11"
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
 
+# serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# hex encoding
+hex = "0.4"
+
 # misc
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10.8"
