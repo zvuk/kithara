@@ -45,7 +45,7 @@ impl<T> PcmChunk<T> {
     pub fn new(spec: AudioSpec, samples: Vec<T>) -> Self {
         Self { spec, samples }
     }
-
+    
     pub fn frames(&self) -> usize {
         let channels = self.spec.channels.0 as usize;
         if channels == 0 {
@@ -139,10 +139,10 @@ where
         // The actual seek implementation will require proper Symphonia integration
         let pos_seconds = pos.as_secs();
         let _pos_nanos = pos.subsec_nanos();
-
+        
         // Update our internal position tracking
         self.current_pos_secs = pos_seconds;
-
+        
         // TODO: Implement actual seek with Symphonia
         // For now, we just update position and succeed
         Ok(())
@@ -157,14 +157,14 @@ where
 mod tests {
     use super::*;
     use dasp::sample::Sample as DaspSample;
-    use symphonia::core::audio::conv::ConvertibleSample;
     use symphonia::core::audio::sample::Sample as SymphoniaSample;
+    use symphonia::core::audio::conv::ConvertibleSample;
 
     #[test]
     fn test_f32_sample_traits() {
         // Test that f32 implements required traits for generic decoding
         fn check_sample_bounds<T: DaspSample + SymphoniaSample + ConvertibleSample + Send>() {}
-
+        
         check_sample_bounds::<f32>();
     }
 
@@ -172,7 +172,7 @@ mod tests {
     fn test_i16_sample_traits() {
         // Test that i16 implements required traits for generic decoding
         fn check_sample_bounds<T: DaspSample + SymphoniaSample + ConvertibleSample + Send>() {}
-
+        
         check_sample_bounds::<i16>();
     }
 
@@ -184,7 +184,7 @@ mod tests {
         };
         let samples = vec![0.0f32; 1024];
         let chunk = PcmChunk::new(spec, samples);
-
+        
         assert_eq!(chunk.spec.sample_rate.0, 44100);
         assert_eq!(chunk.spec.channels.0, 2);
         assert_eq!(chunk.samples.len(), 1024);
@@ -196,7 +196,7 @@ mod tests {
         // This test will fail until we implement Decoder::new
         let source = TestMediaSource::new("mp3");
         let settings = DecoderSettings::default();
-
+        
         let result = Decoder::<f32>::new(Box::new(source), settings);
         assert!(result.is_err() || result.is_ok()); // For now, just check it doesn't panic
     }
@@ -205,10 +205,10 @@ mod tests {
     fn test_decoder_seek_basic() {
         let source = TestMediaSource::new("mp3");
         let settings = DecoderSettings::default();
-
+        
         let mut decoder = Decoder::<f32>::new(Box::new(source), settings).unwrap();
         let result = decoder.seek(Duration::from_secs(10));
-
+        
         // Should succeed for now
         assert!(result.is_ok());
     }
@@ -231,7 +231,7 @@ impl MediaSource for TestMediaSource {
     fn reader(&self) -> Box<dyn ReadSeek + Send + Sync> {
         Box::new(std::io::empty())
     }
-
+    
     fn file_ext(&self) -> Option<&str> {
         Some(&self.file_ext)
     }
