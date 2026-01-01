@@ -378,10 +378,11 @@ impl<'a> Drop for LeaseGuard<'a> {
     fn drop(&mut self) {
         let asset_key = hex::encode(self.asset_id.as_bytes());
         if let Ok(mut state) = self.cache.load_state()
-            && let Some(asset_state) = state.assets.get_mut(&asset_key) {
-                asset_state.pinned = false;
-                let _ = self.cache.save_state(&state);
-            }
+            && let Some(asset_state) = state.assets.get_mut(&asset_key)
+        {
+            asset_state.pinned = false;
+            let _ = self.cache.save_state(&state);
+        }
     }
 }
 
