@@ -1,188 +1,54 @@
+//! # Kithara I/O Bridge
+//!
+//! This crate provides a bridge between async byte sources and synchronous I/O consumers.
+//! It's designed to connect components like `kithara-file` and `kithara-hls` (async sources)
+//! to `kithara-decode` (synchronous consumer) through a bounded buffer with backpressure.
+//!
+//! ## Core Components
+//!
+//! - `BridgeWriter`: Async producer interface for pushing bytes
+//! - `BridgeReader`: Sync consumer interface implementing `Read` and `Seek`
+//! - `BufferTracker`: Manages memory limits and backpressure
+//!
+//! ## EOF Semantics (Critical Contract)
+//!
+//! **MUST NEVER return `Ok(0)` before proven End-of-Stream:**
+//! - `Read::read()` only returns `Ok(0)` after `BridgeWriter::finish()` is called AND buffer is fully drained
+//! - No "false EOFs" - when no data is available, reader should block
+//! - This ensures decode threads don't prematurely terminate
+//!
+//! ## Seek Contract
+//!
+//! **All seek operations return `Unsupported`:**
+//! - `BridgeReader` implements `Seek` but always returns `ErrorKind::Unsupported`
+//! - This is explicit behavior, not an omission
+//! - Streaming data sources typically don't support random access
+//!
+//! ## Backpressure
+//!
+//! The bridge enforces memory limits via `max_buffer_bytes`:
+//! - `push()` fails with `BufferFull` when limit exceeded
+//! - Memory is released when data is consumed from reader
+//! - Prevents unlimited memory accumulation
+
 #![forbid(unsafe_code)]
 
-use std::io::{Read, Seek};
+pub mod bridge;
+pub mod errors;
+pub mod reader;
+pub mod sync;
+pub mod writer;
 
-use bytes::Bytes;
-use kanal::{Receiver, Sender};
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum IoError {
-    #[error("not implemented")]
-    Unimplemented,
-    #[error("communication channel closed")]
-    ChannelClosed,
-    #[error("buffer is full")]
-    BufferFull,
-}
-
-pub type IoResult<T> = Result<T, IoError>;
-
-#[derive(Clone, Debug)]
-pub struct BridgeOptions {
-    pub max_buffer_bytes: usize,
-}
-
-impl Default for BridgeOptions {
-    fn default() -> Self {
-        Self {
-            max_buffer_bytes: 1024 * 1024,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub struct BridgeWriter {
-    tx: Sender<BridgeMsg>,
-    max_buffer_bytes: usize,
-    current_buffer_bytes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl BridgeWriter {
-    pub fn push(&self, bytes: Bytes) -> IoResult<()> {
-        let bytes_len = bytes.len();
-
-        // Check if adding this would exceed buffer limit
-        let current = self
-            .current_buffer_bytes
-            .load(std::sync::atomic::Ordering::Acquire);
-        if current + bytes_len > self.max_buffer_bytes {
-            return Err(IoError::BufferFull);
-        }
-
-        // Reserve space
-        self.current_buffer_bytes
-            .fetch_add(bytes_len, std::sync::atomic::Ordering::AcqRel);
-
-        // Send message with size tracking
-        let msg = BridgeMsg::DataWithSize(bytes, bytes_len);
-        self.tx.send(msg).map_err(|_| {
-            // If send fails, release the reserved space
-            self.current_buffer_bytes
-                .fetch_sub(bytes_len, std::sync::atomic::Ordering::AcqRel);
-            IoError::ChannelClosed
-        })
-    }
-
-    pub fn finish(&self) -> IoResult<()> {
-        self.tx
-            .send(BridgeMsg::EndOfStream)
-            .map_err(|_| IoError::ChannelClosed)
-    }
-}
-
-#[derive(Debug)]
-pub struct BridgeReader {
-    rx: Receiver<BridgeMsg>,
-    current_data: Option<Bytes>,
-    read_pos: usize,
-    eos_received: bool,
-    current_data_size: usize,
-    buffer_bytes_used: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl BridgeReader {
-    fn new(
-        rx: Receiver<BridgeMsg>,
-        buffer_bytes_used: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    ) -> Self {
-        Self {
-            rx,
-            current_data: None,
-            read_pos: 0,
-            eos_received: false,
-            current_data_size: 0,
-            buffer_bytes_used,
-        }
-    }
-}
-
-impl Read for BridgeReader {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-
-        // If we have current data, try to read from it
-        if let Some(ref data) = self.current_data {
-            let remaining = data.len() - self.read_pos;
-            if remaining > 0 {
-                let to_copy = std::cmp::min(remaining, buf.len());
-                buf[..to_copy].copy_from_slice(&data[self.read_pos..self.read_pos + to_copy]);
-                self.read_pos += to_copy;
-
-                if self.read_pos == data.len() {
-                    // Release bytes from buffer tracking
-                    self.buffer_bytes_used
-                        .fetch_sub(self.current_data_size, std::sync::atomic::Ordering::AcqRel);
-                    self.current_data = None;
-                    self.read_pos = 0;
-                    self.current_data_size = 0;
-                }
-
-                return Ok(to_copy);
-            }
-        }
-
-        // If we've received EOS and no more data, return 0 (EOF)
-        if self.eos_received {
-            return Ok(0);
-        }
-
-        // Block waiting for next message
-        match self.rx.recv() {
-            Ok(BridgeMsg::DataWithSize(bytes, size)) => {
-                self.current_data = Some(bytes);
-                self.current_data_size = size;
-                self.read_pos = 0;
-                // Recurse to read from the new data
-                self.read(buf)
-            }
-            Ok(BridgeMsg::EndOfStream) => {
-                self.eos_received = true;
-                // No more data, return EOF
-                Ok(0)
-            }
-            Err(_) => {
-                // Channel closed - treat as EOF
-                self.eos_received = true;
-                Ok(0)
-            }
-        }
-    }
-}
-
-impl Seek for BridgeReader {
-    fn seek(&mut self, _pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "seek is not supported in kithara-io bridge",
-        ))
-    }
-}
-
-#[derive(Debug)]
-enum BridgeMsg {
-    DataWithSize(Bytes, usize),
-    EndOfStream,
-}
-
-pub fn new_bridge(opts: BridgeOptions) -> (BridgeWriter, BridgeReader) {
-    let (tx, rx) = kanal::bounded(1000); // Large enough for messages, we handle byte limiting ourselves
-    let buffer_bytes_used = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let writer = BridgeWriter {
-        tx,
-        max_buffer_bytes: opts.max_buffer_bytes,
-        current_buffer_bytes: buffer_bytes_used.clone(),
-    };
-    let reader = BridgeReader::new(rx, buffer_bytes_used);
-    (writer, reader)
-}
+// Re-export public API
+pub use bridge::{BridgeMsg, BridgeOptions, new_bridge};
+pub use errors::{IoError, IoResult};
+pub use reader::BridgeReader;
+pub use writer::BridgeWriter;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, SeekFrom};
+    use std::io::{Read, Seek, SeekFrom};
     use std::thread;
     use std::time::Duration;
 
@@ -215,6 +81,7 @@ mod tests {
         thread::sleep(Duration::from_millis(10));
 
         // Push data - this should unblock the reader
+        use bytes::Bytes;
         let data = Bytes::from("hello world");
         writer.push(data).expect("push should succeed");
 
@@ -229,6 +96,7 @@ mod tests {
         let (writer, mut reader) = new_bridge(opts);
 
         // Push some data first
+        use bytes::Bytes;
         writer
             .push(Bytes::from("test"))
             .expect("push should succeed");
@@ -271,6 +139,7 @@ mod tests {
         let (writer, mut reader) = new_bridge(opts);
 
         // Push data larger than one read
+        use bytes::Bytes;
         let data = Bytes::from("hello world, this is a longer message");
         writer.push(data).expect("push should succeed");
         writer.finish().expect("finish should succeed");
@@ -312,6 +181,7 @@ mod tests {
         let (writer, _reader) = new_bridge(opts);
 
         // Push data up to the limit
+        use bytes::Bytes;
         assert!(
             writer.push(Bytes::from("10 bytes__")).is_ok(),
             "first push should succeed"
@@ -338,6 +208,7 @@ mod tests {
         let (writer, mut reader) = new_bridge(opts);
 
         // Fill the buffer
+        use bytes::Bytes;
         assert!(writer.push(Bytes::from("message1__")).is_ok());
         assert!(writer.push(Bytes::from("message2__")).is_ok());
 
