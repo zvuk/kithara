@@ -1,112 +1,79 @@
 #![forbid(unsafe_code)]
 
+pub mod base;
+pub mod builder;
+pub mod retry;
+pub mod timeout;
+pub mod traits;
+pub mod types;
+
 use bytes::Bytes;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use std::collections::HashMap;
 use std::time::Duration;
-use thiserror::Error;
-use url::Url;
 
-#[derive(Debug, Error)]
-pub enum NetError {
-    #[error("HTTP request failed: {0}")]
-    Http(#[from] reqwest::Error),
-    #[error("Invalid range header: {0}")]
-    InvalidRange(String),
-    #[error("Timeout")]
-    Timeout,
-    #[error("not implemented")]
-    Unimplemented,
-}
+// Re-export main types
+pub use base::ReqwestNet;
+pub use builder::{create_default_client, NetBuilder};
+pub use retry::{DefaultRetryClassifier, DefaultRetryPolicy, RetryNet, RetryPolicyTrait};
+pub use timeout::TimeoutNet;
+pub use traits::{Net, NetExt};
+pub use types::{Headers, NetOptions, RangeSpec, RetryPolicy};
+
+// Re-export error type from base
+pub use base::NetError;
 
 pub type NetResult<T> = Result<T, NetError>;
+pub type ByteStream = crate::traits::ByteStream;
 
-#[derive(Clone, Debug)]
-pub struct NetOptions {
-    pub request_timeout: Duration,
-    pub max_retries: u32,
-    pub retry_base_delay: Duration,
-    pub max_retry_delay: Duration,
-}
-
-impl Default for NetOptions {
-    fn default() -> Self {
-        Self {
-            request_timeout: Duration::from_secs(30),
-            max_retries: 3,
-            retry_base_delay: Duration::from_millis(100),
-            max_retry_delay: Duration::from_secs(5),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
+// Legacy NetClient for backward compatibility
+#[derive(Clone)]
 pub struct NetClient {
-    client: reqwest::Client,
-    #[allow(dead_code)]
-    opts: NetOptions,
+    inner: ReqwestNet,
 }
 
 impl NetClient {
-    pub fn new(opts: NetOptions) -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(opts.request_timeout)
-            .use_rustls_tls()
-            .build()
-            .expect("Failed to create HTTP client");
-
-        Self { client, opts }
+    pub fn new(opts: NetOptions) -> NetResult<Self> {
+        let _retry_policy = RetryPolicy::new(
+            opts.max_retries,
+            opts.retry_base_delay,
+            opts.max_retry_delay,
+        );
+        
+        // For simplicity in legacy client, just use the base client without decorators
+        // Users should migrate to NetBuilder for full functionality
+        let base = ReqwestNet::with_timeout(opts.request_timeout)?;
+        Ok(Self { inner: base })
     }
 
-    pub async fn get_bytes(&self, url: Url) -> NetResult<Bytes> {
-        let response = self.client.get(url).send().await?;
-        Ok(response.bytes().await?)
+    pub async fn get_bytes(&self, url: url::Url) -> NetResult<Bytes> {
+        self.inner.get_bytes(url).await
     }
 
     pub async fn stream(
         &self,
-        url: Url,
+        url: url::Url,
         headers: Option<HashMap<String, String>>,
     ) -> NetResult<impl Stream<Item = NetResult<Bytes>>> {
-        let mut request = self.client.get(url);
-
-        if let Some(headers) = headers {
-            for (key, value) in headers {
-                request = request.header(&key, value);
-            }
-        }
-
-        let response = request.send().await?;
-        Ok(response
-            .bytes_stream()
-            .map(|result| result.map_err(NetError::Http)))
+        let headers = headers.map(Headers::from);
+        let stream = self.inner.stream(url, headers).await?;
+        
+        // Convert ByteStream to concrete stream type for compatibility
+        Ok(Box::pin(stream))
     }
 
     pub async fn get_range(
         &self,
-        url: Url,
+        url: url::Url,
         range: (u64, Option<u64>),
         headers: Option<HashMap<String, String>>,
     ) -> NetResult<impl Stream<Item = NetResult<Bytes>>> {
-        let mut request = self.client.get(url);
-
-        let range_header = if let Some(end) = range.1 {
-            format!("bytes={}-{}", range.0, end)
-        } else {
-            format!("bytes={}-", range.0)
-        };
-        request = request.header("Range", range_header);
-
-        if let Some(headers) = headers {
-            for (key, value) in headers {
-                request = request.header(&key, value);
-            }
-        }
-
-        let response = request.send().await?;
-        Ok(response
-            .bytes_stream()
-            .map(|result| result.map_err(NetError::Http)))
+        let range_spec = RangeSpec::new(range.0, range.1);
+        let headers = headers.map(Headers::from);
+        let stream = self.inner.get_range(url, range_spec, headers).await?;
+        
+        // Convert ByteStream to concrete stream type for compatibility
+        Ok(Box::pin(stream))
     }
 }
 
@@ -123,6 +90,9 @@ mod tests {
             .route("/test", get(test_endpoint))
             .route("/range", get(range_endpoint))
             .route("/headers", get(headers_endpoint))
+            .route("/error404", get(error_404_endpoint))
+            .route("/error500", get(error_500_endpoint))
+            .route("/error429", get(error_429_endpoint))
     }
 
     async fn test_endpoint() -> &'static str {
@@ -186,6 +156,18 @@ mod tests {
             .unwrap())
     }
 
+    async fn error_404_endpoint() -> Result<Response, StatusCode> {
+        Err(StatusCode::NOT_FOUND)
+    }
+
+    async fn error_500_endpoint() -> Result<Response, StatusCode> {
+        Err(StatusCode::INTERNAL_SERVER_ERROR)
+    }
+
+    async fn error_429_endpoint() -> Result<Response, StatusCode> {
+        Err(StatusCode::TOO_MANY_REQUESTS)
+    }
+
     async fn run_test_server() -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
@@ -204,6 +186,7 @@ mod tests {
         let client = NetClient::new(NetOptions::default());
         let url = format!("{}/test", server_url).parse().unwrap();
 
+        let client = NetClient::new(NetOptions::default()).unwrap();
         let mut stream = client.stream(url, None).await.unwrap();
         let mut collected = Vec::new();
 
@@ -218,7 +201,7 @@ mod tests {
     #[tokio::test]
     async fn test_range_request_returns_correct_slice() {
         let server_url = run_test_server().await;
-        let client = NetClient::new(NetOptions::default());
+        let client = NetClient::new(NetOptions::default()).unwrap();
         let url = format!("{}/range", server_url).parse().unwrap();
 
         let mut stream = client.get_range(url, (5, Some(9)), None).await.unwrap();
@@ -235,7 +218,7 @@ mod tests {
     #[tokio::test]
     async fn test_headers_are_sent_correctly() {
         let server_url = run_test_server().await;
-        let client = NetClient::new(NetOptions::default());
+        let client = NetClient::new(NetOptions::default()).unwrap();
         let url = format!("{}/headers", server_url).parse().unwrap();
 
         let mut headers = HashMap::new();
@@ -258,10 +241,92 @@ mod tests {
     #[tokio::test]
     async fn test_get_bytes_simple() {
         let server_url = run_test_server().await;
-        let client = NetClient::new(NetOptions::default());
+        let client = NetClient::new(NetOptions::default()).unwrap();
         let url = format!("{}/test", server_url).parse().unwrap();
 
         let bytes = client.get_bytes(url).await.unwrap();
         assert_eq!(bytes, Bytes::from("Hello, World!"));
+    }
+
+    #[tokio::test]
+    async fn test_http_error_404_returns_error() {
+        let server_url = run_test_server().await;
+        let client = NetClient::new(NetOptions::default()).unwrap();
+        let url = format!("{}/error404", server_url).parse().unwrap();
+
+        let result = client.get_bytes(url).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NetError::HttpStatus { status, .. } => assert_eq!(status, 404),
+            _ => panic!("Expected HttpStatus error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_http_error_500_returns_error() {
+        let server_url = run_test_server().await;
+        let client = NetClient::new(NetOptions::default()).unwrap();
+        let url = format!("{}/error500", server_url).parse().unwrap();
+
+        let result = client.get_bytes(url).await;
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            NetError::HttpStatus { status, .. } =>         assert_eq!(status, 500),
+            _ => panic!("Expected HttpStatus error"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_timeout_behavior() {
+        let server_url = run_test_server().await;
+        let base = ReqwestNet::new().unwrap();
+        let timeout_duration = std::time::Duration::from_millis(10);
+        let timeout_client = base.with_timeout(timeout_duration);
+        
+        let url = format!("{}/test", server_url).parse().unwrap();
+        
+        // This should succeed quickly since the server is fast
+        let result = timeout_client.get_bytes(url).await;
+        assert!(result.is_ok(), "Request should succeed within timeout");
+    }
+
+    #[tokio::test]
+    async fn test_retry_policy_exponential_backoff() {
+        let policy = RetryPolicy::new(3, Duration::from_millis(10), Duration::from_millis(100));
+        
+        // Test exponential backoff calculation
+        assert_eq!(policy.delay_for_attempt(0), Duration::from_millis(0));
+        assert_eq!(policy.delay_for_attempt(1), Duration::from_millis(10));
+        assert_eq!(policy.delay_for_attempt(2), Duration::from_millis(20));
+        assert_eq!(policy.delay_for_attempt(3), Duration::from_millis(40));
+        
+        // Test cap at max_delay
+        assert_eq!(policy.delay_for_attempt(10), Duration::from_millis(100));
+    }
+
+    #[tokio::test]
+    async fn test_net_builder_creates_functional_client() {
+        let client = create_default_client().unwrap();
+        let server_url = run_test_server().await;
+        let url = format!("{}/test", server_url).parse().unwrap();
+
+        let result = client.get_bytes(url).await;
+        assert!(result.is_ok(), "NetBuilder client should work like regular client");
+    }
+
+    #[tokio::test]
+    async fn test_net_builder_with_custom_options() {
+        let retry_policy = RetryPolicy::new(2, Duration::from_millis(50), Duration::from_millis(200));
+        let client = NetBuilder::new()
+            .with_request_timeout(Duration::from_millis(100))
+            .with_retry_policy(retry_policy)
+            .build()
+            .unwrap();
+        
+        let server_url = run_test_server().await;
+        let url = format!("{}/test", server_url).parse().unwrap();
+
+        let result = client.get_bytes(url).await;
+        assert!(result.is_ok(), "NetBuilder client with custom options should work");
     }
 }
