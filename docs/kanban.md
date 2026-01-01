@@ -385,6 +385,97 @@
 ### Цель
 Persistent disk cache, tree-friendly, crash-safe writes, bytes-based global limit, LRU eviction, pin/lease.
 
+---
+
+## 2.a) `kithara-cache` — Layered architecture (decorators/generics; по мотивам `stream-download-storage-ext`)
+
+### Цель
+Расширить внутреннюю архитектуру `kithara-cache` так, чтобы:
+- базовый слой умел минимум (FS layout + atomic write + open/exists),
+- “умные” фичи (lease/pin, index/state.json, eviction/LRU, observability) добавлялись слоями через generics/decorator pattern,
+- при этом **не ломать** существующий публичный контракт из раздела выше (`AssetCache`, `AssetHandle`, `CachePath`, `LeaseGuard`, `ensure_space`, `stats`).
+
+Эта секция фиксирует план рефакторинга/расширения, вдохновлённый подходом из `stream-download-storage-ext`:
+- базовые примитивы (`BlobCache`/`KVStore`)
+- дерево ключей
+- lease-aware слой
+- компоновка через обобщённые типы
+
+### Компоненты (контракт и ответственность)
+
+#### `CachePath`
+Остаётся публичным безопасным относительным путём. Используется всеми слоями как “ключ” внутри asset.
+
+#### `Store` / `KV` базовый интерфейс (internal)
+Внутренний (не обязательно публичный) минимальный контракт хранения blob’ов по ключу:
+- `exists(asset, path) -> bool`
+- `open(asset, path) -> Option<File>`
+- `put_atomic(asset, path, bytes) -> PutResult`
+- `remove_all(asset)`
+
+Это “низ” (аналог `BlobCache`/`KVStore` идеи), который не знает про eviction, leases и индекс.
+
+#### `FsStore` (base layer)
+Базовая реализация на filesystem:
+- tree-friendly layout внутри `assets/<asset_id>/...`
+- `put_atomic` через temp+rename
+- `exists/open` как прямые операции на FS (источник истины)
+- не содержит LRU/eviction/lease/index логики
+
+#### `LeaseStore<S>`
+Декоратор над `S`:
+- pin/lease семантика (RAII guard) для asset
+- гарантирует “pinned assets are not evicted” на уровне higher-level policy
+- сам по себе не решает eviction — только предоставляет механизм “is_pinned(asset)”
+
+#### `IndexStore<S>`
+Декоратор над `S`:
+- ведёт `state.json` (atomic rewrite)
+- поддерживает `total_bytes`, per-asset метаданные (`size_bytes`, `last_access_ms`, `created_ms`)
+- синхронизирует индекс с FS (best-effort) и никогда не делает индекс источником истины для существования файла
+
+#### `EvictingStore<S, P>`
+Декоратор над `S`:
+- `ensure_space(incoming_bytes, pinned)` реализует eviction loop по политике `P` (LRU)
+- удаляет несколько asset’ов пока не влезем в `max_bytes`
+- никогда не удаляет pinned (использует слой lease/pin, если он присутствует)
+
+`P` — policy (generics-first):
+- сортировка кандидатов (LRU по last_access)
+- правила исключений (pinned)
+- стратегия удаления (batch vs one-by-one)
+
+#### Facade: `AssetCache`
+Публичный `AssetCache` остаётся фасадом, который внутри собирает слои:
+- base `FsStore`
+- + индекс
+- + lease/pin
+- + eviction policy
+
+Важно: внешнее API остаётся прежним, а расширяемость достигается заменой/композицией внутренних слоёв.
+
+### Инварианты (обязательные)
+- FS остаётся источником истины для “exists/open”.
+- `put_atomic` crash-safe-like: tmp не считается hit.
+- pin/lease не допускает eviction активного asset’а.
+- eviction считает bytes глобально (на весь кэш), а не по-ресурсно.
+
+### Тесты (TDD)
+Дополняем существующие MVP тесты тестами на слои (unit):
+- base layer: `put_atomic_is_crash_safe_like` (уже есть в контракте)
+- index layer: “after put -> state.json updated”, “restart loads state”
+- eviction layer: “evicts until fit”, “skips pinned”, “removes multiple assets”
+- lease layer: “touch updates lease age”, “drop guard releases pin”
+
+> Важно: тесты не должны зависеть от внешней сети и должны быть быстрыми (tempdir, маленькие файлы).
+
+### Потоки данных
+- `kithara-hls`/`kithara-file` используют cache как “KV по пути внутри asset”.
+- слои не должны знать про HLS/HTTP/DRM — только про asset/path/bytes.
+
+### Зависимости
+- не добавлять тяжёлые зависимости без необходимости; придерживаться текущего набора (`kithara-core`, `uuid`, `thiserror`) и std.
+
 ### Публичный контракт (экспорт)
 
 **Основные типы**
@@ -790,17 +881,17 @@ Bridge: async bytes source -> sync `Read+Seek` для decode.
 
 **Decoder**
 - `Decoder<T>`
-  - `fn new(source: Box<dyn MediaSource>, settings: DecoderSettings) -> Result<Decoder<T>, DecodeError>`
+  - `fn new(source: Box<dyn Source>, settings: DecoderSettings) -> Result<Decoder<T>, DecodeError>`
   - `fn seek(&mut self, pos: Duration) -> Result<(), DecodeError>` (best-effort)
   - `fn next(&mut self) -> Result<Option<PcmChunk<T>>, DecodeError>` (pull API)
   - (или `DecoderStream<T>` с каналом `kanal` — push API; выбрать один для v1)
 
-**MediaSource**
-- абстракция “что Symphonia читает”:
-  - `fn reader(&self) -> Box<dyn Read + Seek + Send>` (или другой контракт)
-  - `fn file_ext(&self) -> Option<&str>` (как Hint, как у decal `get_file_ext()`)
+**Source**
+- абстракция “что Symphonia читает” (по мотивам `decal`):
+  - предоставляет `MediaSource`/`MediaSourceStream` для Symphonia
+  - `fn file_ext(&self) -> Option<&str>` как Hint для probe (важно для стабильного определения формата)
 
-> Это ключ: `kithara-io` предоставляет sync reader, а `kithara-decode` потребляет его без знания про HLS/HTTP.
+> Это ключ: `kithara-io` предоставляет sync `Read+Seek`, а `kithara-decode` потребляет его через `Source` без знания про HLS/HTTP.
 
 **PCM**
 - `PcmChunk<T>`
@@ -1007,6 +1098,19 @@ State machine вокруг Symphonia:
 - [ ] `state.json` index load/save atomic + tests
 - [ ] `max_bytes` eviction loop (multi-asset) + tests
 - [ ] pin/lease + tests
+
+## `kithara-cache` — Layered architecture (decorators/generics; keep public contract)
+- [ ] Refactor internals into explicit layers/modules (base/index/lease/evict/policy) without changing the public API
+- [ ] Define internal minimal “store” contract for blob ops (exists/open/put_atomic/remove_all) + unit tests with a temp dir
+- [ ] Implement `FsStore` base layer (tree-friendly layout + atomic write) and make it pass the existing MVP tests
+- [ ] Implement `IndexStore<S>`: `state.json` atomic load/save + total_bytes/per-asset metadata; ensure FS remains source of truth
+- [ ] Implement `LeaseStore<S>`: `LeaseGuard`/pin semantics and lease file/touch behavior + tests
+- [ ] Implement `EvictingStore<S, P>` with policy trait `P` (LRU default) + tests:
+  - evicts multiple assets until fit
+  - never evicts pinned
+  - updates index consistently
+- [ ] Wire `AssetCache` facade to compose layers (Fs + Index + Lease + Evict) while preserving the existing public contract and tests
+- [ ] Add crate-level docs (`crates/kithara-cache/README.md`): layering, invariants, and what is source of truth
 
 ## `kithara-net` MVP
 - [ ] `NetClient` wrapper + options
