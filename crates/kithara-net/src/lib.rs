@@ -11,6 +11,8 @@ pub mod types;
 use bytes::Bytes;
 use futures::Stream;
 use std::collections::HashMap;
+use std::sync::Arc;
+
 use std::time::Duration;
 
 // Re-export main types
@@ -177,6 +179,151 @@ mod tests {
         format!("http://127.0.0.1:{}", addr.port())
     }
 
+    // Request counter for test assertions
+    #[derive(Clone)]
+    struct RequestCounter {
+        counts: Arc<std::sync::RwLock<HashMap<String, usize>>>,
+    }
+
+    impl RequestCounter {
+        fn new() -> Self {
+            Self {
+                counts: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            }
+        }
+
+        fn increment(&self, path: &str) {
+            let mut counts = self.counts.write().unwrap();
+            *counts.entry(path.to_string()).or_insert(0) += 1;
+        }
+    }
+
+    async fn key_request_server() -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let counter = RequestCounter::new();
+
+        let app = axum::Router::new()
+            .route("/key", get(key_endpoint))
+            .route("/key-with-auth", get(key_with_auth_endpoint))
+            .route("/key-with-params", get(key_with_params_endpoint))
+            .with_state(counter);
+
+        let port = addr.port();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        format!("http://127.0.0.1:{}", port)
+    }
+
+    async fn key_endpoint(
+        axum::extract::State(counter): axum::extract::State<RequestCounter>,
+        _request: Request,
+    ) -> Result<Response, StatusCode> {
+        counter.increment("/key");
+
+        // Key endpoint that returns a mock key
+        let key_bytes = vec![
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54,
+            0x32, 0x10,
+        ];
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/octet-stream")
+            .body(axum::body::Body::from(Bytes::from(key_bytes)))
+            .unwrap())
+    }
+
+    async fn key_with_auth_endpoint(
+        axum::extract::State(counter): axum::extract::State<RequestCounter>,
+        request: Request,
+    ) -> Result<Response, StatusCode> {
+        counter.increment("/key-with-auth");
+
+        let headers = request.headers();
+        let auth_header = headers.get("Authorization").and_then(|h| h.to_str().ok());
+
+        // Require Authorization header
+        match auth_header {
+            Some(token) if token == "Bearer secret-key-token" => {
+                let key_bytes = vec![
+                    0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xfe, 0xdc, 0xba, 0x98, 0x76,
+                    0x54, 0x32, 0x10,
+                ];
+
+                // Check for range header
+                let range_header = headers.get("Range").and_then(|h| h.to_str().ok());
+
+                if let Some(range) = range_header {
+                    if let Some(range_str) = range.strip_prefix("bytes=") {
+                        if let Some((start_str, end_str)) = range_str.split_once('-') {
+                            let start: usize = start_str.parse().unwrap_or(0);
+                            let end = if end_str.is_empty() {
+                                key_bytes.len() - 1
+                            } else {
+                                end_str.parse().unwrap_or(key_bytes.len() - 1)
+                            };
+
+                            if start < key_bytes.len() && end < key_bytes.len() && start <= end {
+                                let slice = &key_bytes[start..=end];
+                                return Ok(Response::builder()
+                                    .status(StatusCode::PARTIAL_CONTENT)
+                                    .header("Content-Type", "application/octet-stream")
+                                    .header(
+                                        "Content-Range",
+                                        format!("bytes {}-{}/{}", start, end, key_bytes.len()),
+                                    )
+                                    .body(axum::body::Body::from(Bytes::copy_from_slice(slice)))
+                                    .unwrap());
+                            }
+                        }
+                    }
+                    Err(StatusCode::BAD_REQUEST)
+                } else {
+                    Ok(Response::builder()
+                        .status(StatusCode::OK)
+                        .header("Content-Type", "application/octet-stream")
+                        .body(axum::body::Body::from(Bytes::from(key_bytes)))
+                        .unwrap())
+                }
+            }
+            _ => {
+                // Missing or invalid auth header - fail as expected
+                Err(StatusCode::UNAUTHORIZED)
+            }
+        }
+    }
+
+    async fn key_with_params_endpoint(
+        axum::extract::State(counter): axum::extract::State<RequestCounter>,
+        request: Request,
+    ) -> Result<Response, StatusCode> {
+        counter.increment("/key-with-params");
+
+        let uri = request.uri();
+        let query_params = uri.query().unwrap_or("");
+
+        // Require specific query parameters
+        let has_required_params =
+            query_params.contains("drm_id=test123") && query_params.contains("version=1.0");
+
+        if has_required_params {
+            let key_bytes = vec![
+                0xfe, 0xed, 0xfa, 0xce, 0xde, 0xad, 0xbe, 0xef, 0xca, 0xfe, 0xba, 0xbe, 0x12, 0x34,
+                0x56, 0x78,
+            ];
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header("Content-Type", "application/octet-stream")
+                .body(axum::body::Body::from(Bytes::from(key_bytes)))
+                .unwrap())
+        } else {
+            // Missing required query parameters - fail as expected
+            Err(StatusCode::BAD_REQUEST)
+        }
+    }
+
     #[tokio::test]
     async fn test_stream_get_returns_expected_bytes() {
         let server_url = run_test_server().await;
@@ -331,5 +478,190 @@ mod tests {
             result.is_ok(),
             "NetBuilder client with custom options should work"
         );
+    }
+
+    #[tokio::test]
+    async fn test_key_request_headers_passthrough() {
+        let server_url = key_request_server().await;
+        let client = NetClient::new(NetOptions::default()).unwrap();
+        let url = format!("{}/key-with-auth", server_url).parse().unwrap();
+
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Authorization".to_string(),
+            "Bearer secret-key-token".to_string(),
+        );
+
+        let mut stream = client.stream(url, Some(headers)).await.unwrap();
+        let mut collected = Vec::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.unwrap();
+            collected.extend_from_slice(&chunk);
+        }
+
+        assert_eq!(collected.len(), 16);
+        assert_eq!(collected[0], 0xab); // Verify we got the authenticated key
+    }
+
+    #[tokio::test]
+    async fn test_key_request_missing_required_headers_fails() {
+        let server_url = key_request_server().await;
+        let client = NetClient::new(NetOptions::default()).unwrap();
+        let url = format!("{}/key-with-auth", server_url).parse().unwrap();
+
+        // Request without required Authorization header should fail during stream creation
+        let stream_result = client.stream(url, None).await;
+        assert!(
+            stream_result.is_err(),
+            "Stream creation should fail when auth header is missing"
+        );
+
+        match stream_result {
+            Ok(_) => panic!("Expected error but got success"),
+            Err(NetError::HttpStatus { status, .. }) => assert_eq!(status, 401),
+            Err(_) => panic!("Expected HttpStatus error with 401 status"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_key_request_wrong_auth_header_fails() {
+        let server_url = key_request_server().await;
+        let client = NetClient::new(NetOptions::default()).unwrap();
+        let url = format!("{}/key-with-auth", server_url).parse().unwrap();
+
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Authorization".to_string(),
+            "Bearer wrong-token".to_string(),
+        );
+
+        let stream_result = client.stream(url, Some(headers)).await;
+        assert!(
+            stream_result.is_err(),
+            "Stream creation should fail when auth header is wrong"
+        );
+
+        match stream_result {
+            Ok(_) => panic!("Expected error but got success"),
+            Err(NetError::HttpStatus { status, .. }) => assert_eq!(status, 401),
+            Err(_) => panic!("Expected HttpStatus error with 401 status"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_key_request_query_params_passthrough() {
+        let server_url = key_request_server().await;
+        let client = NetClient::new(NetOptions::default()).unwrap();
+        let url = format!(
+            "{}/key-with-params?drm_id=test123&version=1.0&extra=ignored",
+            server_url
+        )
+        .parse()
+        .unwrap();
+
+        let mut stream = client.stream(url, None).await.unwrap();
+        let mut collected = Vec::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.unwrap();
+            collected.extend_from_slice(&chunk);
+        }
+
+        assert_eq!(collected.len(), 16);
+        assert_eq!(collected[0], 0xfe); // Verify we got param-authenticated key
+    }
+
+    #[tokio::test]
+    async fn test_key_request_missing_required_query_params_fails() {
+        let server_url = key_request_server().await;
+        let client = NetClient::new(NetOptions::default()).unwrap();
+        let url = format!("{}/key-with-params?drm_id=test123", server_url)
+            .parse()
+            .unwrap(); // Missing version
+
+        let stream_result = client.stream(url, None).await;
+        assert!(
+            stream_result.is_err(),
+            "Stream creation should fail when query params are missing"
+        );
+
+        match stream_result {
+            Ok(_) => panic!("Expected error but got success"),
+            Err(NetError::HttpStatus { status, .. }) => assert_eq!(status, 400),
+            Err(_) => panic!("Expected HttpStatus error with 400 status"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_key_request_wrong_query_params_fails() {
+        let server_url = key_request_server().await;
+        let client = NetClient::new(NetOptions::default()).unwrap();
+        let url = format!("{}/key-with-params?drm_id=wrong&version=1.0", server_url)
+            .parse()
+            .unwrap();
+
+        let stream_result = client.stream(url, None).await;
+        assert!(
+            stream_result.is_err(),
+            "Stream creation should fail when query params are wrong"
+        );
+
+        match stream_result {
+            Ok(_) => panic!("Expected error but got success"),
+            Err(NetError::HttpStatus { status, .. }) => assert_eq!(status, 400),
+            Err(_) => panic!("Expected HttpStatus error with 400 status"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_key_request_stream_with_headers() {
+        let server_url = key_request_server().await;
+        let client = NetClient::new(NetOptions::default()).unwrap();
+        let url = format!("{}/key-with-auth", server_url).parse().unwrap();
+
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Authorization".to_string(),
+            "Bearer secret-key-token".to_string(),
+        );
+
+        let mut stream = client.stream(url, Some(headers)).await.unwrap();
+        let mut collected = Vec::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.unwrap();
+            collected.extend_from_slice(&chunk);
+        }
+
+        assert_eq!(collected.len(), 16);
+        assert_eq!(collected[0], 0xab); // Verify we got the authenticated key
+    }
+
+    #[tokio::test]
+    async fn test_key_request_range_with_headers() {
+        let server_url = key_request_server().await;
+        let client = NetClient::new(NetOptions::default()).unwrap();
+        let url = format!("{}/key-with-auth", server_url).parse().unwrap();
+
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Authorization".to_string(),
+            "Bearer secret-key-token".to_string(),
+        );
+
+        let mut stream = client
+            .get_range(url, (0, Some(7)), Some(headers))
+            .await
+            .unwrap();
+        let mut collected = Vec::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.unwrap();
+            collected.extend_from_slice(&chunk);
+        }
+
+        assert_eq!(collected.len(), 8); // Got first 8 bytes
+        assert_eq!(collected[0], 0xab);
     }
 }
