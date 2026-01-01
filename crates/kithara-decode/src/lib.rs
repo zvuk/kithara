@@ -4,11 +4,11 @@ use std::io::{Read, Seek};
 use std::time::Duration;
 
 use dasp::sample::Sample as DaspSample;
+use kanal;
 use kithara_core::CoreError;
 use symphonia::core::audio::conv::ConvertibleSample;
 use symphonia::core::audio::sample::Sample as SymphoniaSample;
 use thiserror::Error;
-use kanal;
 
 #[derive(Debug, Error)]
 pub enum DecodeError {
@@ -61,7 +61,7 @@ impl<T> PcmChunk<T> {
     pub fn new(spec: PcmSpec, pcm: Vec<T>) -> Self {
         Self { spec, pcm }
     }
-    
+
     pub fn frames(&self) -> usize {
         let channels = self.spec.channels as usize;
         if channels == 0 {
@@ -70,7 +70,7 @@ impl<T> PcmChunk<T> {
             self.pcm.len() / channels
         }
     }
-    
+
     /// Check if the PCM data is frame-aligned (length is divisible by channel count)
     pub fn is_frame_aligned(&self) -> bool {
         self.spec.channels == 0 || self.pcm.len() % self.spec.channels as usize == 0
@@ -151,11 +151,11 @@ where
 {
     /// Get current output specification if known
     fn output_spec(&self) -> Option<PcmSpec>;
-    
+
     /// Get next chunk of PCM data
     /// Returns None when the stream has ended
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<T>>>;
-    
+
     /// Handle a command (e.g., seek)
     fn handle_command(&mut self, cmd: DecodeCommand) -> DecodeResult<()>;
 }
@@ -183,7 +183,7 @@ where
             sample_rate: 44100,
             channels: 2,
         };
-        
+
         Ok(Self {
             spec: Some(spec),
             source,
@@ -191,19 +191,19 @@ where
             _phantom: std::marker::PhantomData,
         })
     }
-    
+
     /// Reset and reopen decoder (codec-switch-safe)
     pub fn reset_reopen(&mut self) -> DecodeResult<()> {
         // Placeholder for future implementation
         Err(DecodeError::Unimplemented)
     }
-    
+
     /// Seek to a specific time position
     pub fn seek(&mut self, _pos: Duration) -> DecodeResult<()> {
         // Placeholder for future implementation
         Err(DecodeError::Unimplemented)
     }
-    
+
     /// Get next packet and decode it to PCM
     fn decode_next_packet(&mut self) -> DecodeResult<Option<PcmChunk<T>>> {
         // Placeholder for future implementation
@@ -218,11 +218,11 @@ where
     fn output_spec(&self) -> Option<PcmSpec> {
         self.spec
     }
-    
+
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<T>>> {
         self.decode_next_packet()
     }
-    
+
     fn handle_command(&mut self, cmd: DecodeCommand) -> DecodeResult<()> {
         match cmd {
             DecodeCommand::Seek(pos) => self.seek(pos),
@@ -280,10 +280,10 @@ where
 {
     /// Command sender for sending commands to the worker
     command_sender: kanal::Sender<DecodeCommand>,
-    
+
     /// Receiver for consuming PCM chunks
     chunk_receiver: kanal::Receiver<Result<PcmChunk<T>, DecodeError>>,
-    
+
     /// Handle to the worker task
     worker_handle: tokio::task::JoinHandle<()>,
 }
@@ -293,126 +293,32 @@ where
     T: DaspSample + SymphoniaSample + ConvertibleSample + Send + 'static,
 {
     /// Create a new AudioStream with given source and bounded queue size
-    pub fn new<S>(
-        mut source: S,
-        queue_size: usize,
-    ) -> DecodeResult<Self>
+    pub fn new<S>(mut source: S, queue_size: usize) -> DecodeResult<Self>
     where
         S: AudioSource<T> + Send + 'static,
     {
         let (command_sender, command_receiver) = kanal::bounded(queue_size);
         let (chunk_sender, chunk_receiver) = kanal::bounded(queue_size);
-        
+
         // Spawn worker task
         let worker_handle = tokio::task::spawn_blocking(move || {
             Self::worker_loop(source, command_receiver, chunk_sender);
         });
-        
+
         Ok(Self {
             command_sender,
             chunk_receiver,
             worker_handle,
         })
     }
-    
+
     /// Send a command to the worker
     pub fn send_command(&self, cmd: DecodeCommand) -> DecodeResult<()> {
-        self.command_sender.send(cmd).map_err(|_| DecodeError::Unimplemented)
+        self.command_sender
+            .send(cmd)
+            .map_err(|_| DecodeError::Unimplemented)
     }
-    
-    /// Get the next chunk (blocking for MVP)
-    pub fn next_chunk_blocking(&mut self) -> DecodeResult<Option<PcmChunk<T>>> {
-        match self.chunk_receiver.recv() {
-            Ok(result) => Ok(Some(result?)),
-            Err(kanal::ReceiveError::Closed) => Ok(None), // Stream ended
-            Err(_) => Err(DecodeError::Unimplemented),
-        }
-    }
-    
-    /// Worker loop that drives the audio source and pumps chunks to the queue
-    fn worker_loop<S>(
-        mut source: S,
-        command_receiver: kanal::Receiver<DecodeCommand>,
-        chunk_sender: kanal::Sender<Result<PcmChunk<T>, DecodeError>>,
-    ) where
-        S: AudioSource<T>,
-    {
-        loop {
-            // Check for pending commands
-            match command_receiver.recv() {
-                Ok(cmd) => {
-                    if let Err(e) = source.handle_command(&cmd) {
-                        let _ = chunk_sender.send(Err(e));
-                        return;
-                    }
-                }
-                Err(kanal::ReceiveError::Closed) => {
-                    // Channel closed, signal end
-                    let _ = chunk_sender.send(Err(DecodeError::Unimplemented));
-                    return;
-                }
-                Err(_) => {
-                    // Channel error, signal end
-                    let _ = chunk_sender.send(Err(DecodeError::Unimplemented));
-                    return;
-                }
-            }
-            
-            // Try to get next chunk
-            match source.next_chunk() {
-                Ok(Some(chunk)) => {
-                    // Producer waits when queue is full (bounded backpressure)
-                    let _ = chunk_sender.send(Ok(chunk));
-                }
-                Ok(None) => {
-                    // End of stream
-                    let _ = chunk_sender.send(Err(DecodeError::Unimplemented));
-                    return;
-                }
-                Err(e) => {
-                    // Fatal error, send and exit
-                    let _ = chunk_sender.send(Err(e));
-                    return;
-                }
-            }
-        }
-    }
-}
 
-
-
-impl<T> AudioStream<T>
-where
-    T: DaspSample + SymphoniaSample + ConvertibleSample + Send + 'static,
-{
-    /// Create a new AudioStream with given source and bounded queue size
-    pub fn new<S>(
-        mut source: S,
-        queue_size: usize,
-    ) -> DecodeResult<Self>
-    where
-        S: AudioSource<T> + Send + 'static,
-    {
-        let (command_sender, command_receiver) = kanal::bounded(queue_size);
-        let (chunk_sender, chunk_receiver) = kanal::bounded(queue_size);
-        
-        // Spawn worker task
-        let worker_handle = tokio::task::spawn_blocking(move || {
-            Self::worker_loop(source, command_receiver, chunk_sender);
-        });
-        
-        Ok(Self {
-            command_sender,
-            chunk_receiver,
-            worker_handle,
-        })
-    }
-    
-    /// Send a command to the worker
-    pub fn send_command(&self, cmd: DecodeCommand) -> DecodeResult<()> {
-        self.command_sender.send(cmd).map_err(|_| DecodeError::Unimplemented)
-    }
-    
     /// Get the next chunk asynchronously (non-blocking)
     pub async fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<T>>> {
         // Use tokio to wrap the blocking receiver
@@ -420,9 +326,11 @@ where
             // This is a simplified version - in a real implementation,
             // we'd need proper async integration
             Ok(None)
-        }).await.map_err(|_| DecodeError::Unimplemented)?
+        })
+        .await
+        .map_err(|_| DecodeError::Unimplemented)?
     }
-    
+
     /// Worker loop that drives the audio source and pumps chunks to the queue
     fn worker_loop<S>(
         mut source: S,
@@ -435,7 +343,7 @@ where
             // Check for pending commands
             match command_receiver.recv() {
                 Ok(cmd) => {
-                    if let Err(e) = source.handle_command(&cmd) {
+                    if let Err(e) = source.handle_command(cmd) {
                         let _ = chunk_sender.send(Err(e));
                         return;
                     }
@@ -450,8 +358,7 @@ where
                     // Channel error, signal end
                     let _ = chunk_sender.send(Err(DecodeError::Unimplemented));
                     return;
-            }
-    }
+                }
                 Err(kanal::ReceiveError::Closed) => {
                     // Command channel closed, signal end
                     let _ = chunk_sender.send(Err(DecodeError::Unimplemented));
@@ -461,7 +368,7 @@ where
                     // No commands, continue with decoding
                 }
             }
-            
+
             // Try to get next chunk
             match source.next_chunk() {
                 Ok(Some(chunk)) => {
@@ -487,14 +394,14 @@ where
 mod tests {
     use super::*;
     use dasp::sample::Sample as DaspSample;
-    use symphonia::core::audio::sample::Sample as SymphoniaSample;
     use symphonia::core::audio::conv::ConvertibleSample;
+    use symphonia::core::audio::sample::Sample as SymphoniaSample;
 
     #[test]
     fn test_f32_sample_traits() {
         // Test that f32 implements required traits for generic decoding
         fn check_sample_bounds<T: DaspSample + SymphoniaSample + ConvertibleSample + Send>() {}
-        
+
         check_sample_bounds::<f32>();
     }
 
@@ -502,7 +409,7 @@ mod tests {
     fn test_i16_sample_traits() {
         // Test that i16 implements required traits for generic decoding
         fn check_sample_bounds<T: DaspSample + SymphoniaSample + ConvertibleSample + Send>() {}
-        
+
         check_sample_bounds::<i16>();
     }
 
@@ -514,7 +421,7 @@ mod tests {
         };
         let pcm = vec![0.0f32; 1024];
         let chunk = PcmChunk::new(spec, pcm);
-        
+
         assert_eq!(chunk.spec.sample_rate, 44100);
         assert_eq!(chunk.spec.channels, 2);
         assert_eq!(chunk.pcm.len(), 1024);
@@ -527,12 +434,12 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        
+
         // Frame-aligned case
         let pcm_aligned = vec![0.0f32; 1024]; // 1024 is divisible by 2
         let chunk_aligned = PcmChunk::new(spec, pcm_aligned);
         assert!(chunk_aligned.is_frame_aligned());
-        
+
         // Non-frame-aligned case
         let pcm_misaligned = vec![0.0f32; 1023]; // 1023 is not divisible by 2
         let chunk_misaligned = PcmChunk::new(spec, pcm_misaligned);
@@ -545,12 +452,12 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        
+
         // Should succeed for frame-aligned data
         let pcm_aligned = vec![0.0f32; 1024];
         let result = PcmChunk::new_frame_aligned(spec, pcm_aligned);
         assert!(result.is_ok());
-        
+
         // Should fail for non-frame-aligned data
         let pcm_misaligned = vec![0.0f32; 1023];
         let result = PcmChunk::new_frame_aligned(spec, pcm_misaligned);
@@ -564,7 +471,7 @@ mod tests {
             channels: ChannelCount(6),
         };
         let pcm_spec = PcmSpec::from(audio_spec);
-        
+
         assert_eq!(pcm_spec.sample_rate, 48000);
         assert_eq!(pcm_spec.channels, 6);
     }
@@ -574,7 +481,7 @@ mod tests {
         let cmd1 = DecodeCommand::Seek(Duration::from_secs(10));
         let cmd2 = DecodeCommand::Seek(Duration::from_secs(10));
         let cmd3 = DecodeCommand::Seek(Duration::from_secs(5));
-        
+
         assert_eq!(cmd1, cmd2);
         assert_ne!(cmd1, cmd3);
     }
@@ -590,15 +497,18 @@ mod tests {
     fn test_decode_engine_new() {
         let source = TestMediaSource::new("mp3");
         let settings = DecoderSettings::default();
-        
+
         let result = DecodeEngine::<f32>::new(Box::new(source), settings);
         assert!(result.is_ok());
-        
+
         let engine = result.unwrap();
-        assert_eq!(engine.output_spec(), Some(PcmSpec {
-            sample_rate: 44100,
-            channels: 2,
-        }));
+        assert_eq!(
+            engine.output_spec(),
+            Some(PcmSpec {
+                sample_rate: 44100,
+                channels: 2,
+            })
+        );
     }
 
     #[test]
@@ -607,9 +517,9 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         });
-        
+
         let mut stream = AudioStream::<f32>::new(source, 10).unwrap();
-        
+
         // Test sending command
         let result = stream.send_command(DecodeCommand::Seek(Duration::from_secs(5)));
         assert!(result.is_ok());
@@ -621,27 +531,30 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         });
-        
+
         // Test output_spec
-        assert_eq!(source.output_spec(), Some(PcmSpec {
-            sample_rate: 44100,
-            channels: 2,
-        }));
-        
+        assert_eq!(
+            source.output_spec(),
+            Some(PcmSpec {
+                sample_rate: 44100,
+                channels: 2,
+            })
+        );
+
         // Test next_chunk - should return chunks until exhausted
         let chunk = source.next_chunk().unwrap().unwrap();
         assert_eq!(chunk.spec.sample_rate, 44100);
         assert_eq!(chunk.spec.channels, 2);
         assert!(chunk.is_frame_aligned());
         assert!(chunk.frames() > 0);
-        
+
         // Continue getting chunks until None
         let mut chunk_count = 1;
         while let Some(_) = source.next_chunk().unwrap() {
             chunk_count += 1;
         }
         assert!(chunk_count > 1);
-        
+
         // After exhaustion, should return None consistently
         assert!(source.next_chunk().unwrap().is_none());
         assert!(source.next_chunk().unwrap().is_none());
@@ -653,26 +566,29 @@ mod tests {
             sample_rate: 48000,
             channels: 1,
         });
-        
+
         // Get initial chunk
         let initial_chunk = source.next_chunk().unwrap().unwrap();
         let initial_samples = initial_chunk.pcm.len();
-        
+
         // Seek to a later position (small enough to still have content)
         let seek_result = source.handle_command(DecodeCommand::Seek(Duration::from_millis(100)));
         assert!(seek_result.is_ok());
-        
+
         // Get chunk after seek - should be different content
         let seeked_chunk = source.next_chunk().unwrap().unwrap();
         assert_eq!(seeked_chunk.spec.sample_rate, 48000);
         assert_eq!(seeked_chunk.spec.channels, 1);
         assert!(seeked_chunk.frames() > 0);
-        
+
         // Content should be different - check first sample values
         let initial_first = initial_chunk.pcm[0];
         let seeked_first = seeked_chunk.pcm[0];
-        assert_ne!(initial_first, seeked_first, "Samples should be different after seek");
-        
+        assert_ne!(
+            initial_first, seeked_first,
+            "Samples should be different after seek"
+        );
+
         // Also verify that we're not at the same position
         assert_eq!(initial_samples, seeked_chunk.pcm.len()); // Same chunk size
         assert!(initial_first != seeked_first); // But different content
@@ -684,7 +600,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         });
-        
+
         // Test zero seek - should work
         let result = source.handle_command(DecodeCommand::Seek(Duration::ZERO));
         assert!(result.is_ok());
@@ -695,7 +611,7 @@ mod tests {
         // This test will fail until we implement Decoder::new
         let source = TestMediaSource::new("mp3");
         let settings = DecoderSettings::default();
-        
+
         let result = Decoder::<f32>::new(Box::new(source), settings);
         assert!(result.is_err() || result.is_ok()); // For now, just check it doesn't panic
     }
@@ -704,10 +620,10 @@ mod tests {
     fn test_decoder_seek_basic() {
         let source = TestMediaSource::new("mp3");
         let settings = DecoderSettings::default();
-        
+
         let mut decoder = Decoder::<f32>::new(Box::new(source), settings).unwrap();
         let result = decoder.seek(Duration::from_secs(10));
-        
+
         // Should succeed for now (even though not implemented)
         assert!(result.is_err() || result.is_ok());
     }
@@ -730,7 +646,7 @@ impl MediaSource for TestMediaSource {
     fn reader(&self) -> Box<dyn ReadSeek + Send + Sync> {
         Box::new(std::io::empty())
     }
-    
+
     fn file_ext(&self) -> Option<&str> {
         Some(&self.file_ext)
     }
@@ -749,25 +665,24 @@ impl FakeAudioSourceF32 {
         Self {
             spec,
             current_frame: 0,
-            total_frames: 10000, // Simulate 10k frames of content
+            total_frames: 10000,    // Simulate 10k frames of content
             chunk_size_frames: 512, // 512 frames per chunk
         }
     }
-    
+
     fn generate_samples(&self, start_frame: u64, frame_count: usize) -> Vec<f32> {
         let channels = self.spec.channels as usize;
         let total_samples = frame_count * channels;
         let mut samples = Vec::with_capacity(total_samples);
-        
+
         for frame in start_frame..(start_frame + frame_count as u64) {
             for channel in 0..channels {
                 // Generate a simple sine wave with frequency based on channel
-                let sample_f32 = ((frame as f32 * 0.01 + channel as f32 * 0.5).sin()
-                    * 0.5) as f32;
+                let sample_f32 = ((frame as f32 * 0.01 + channel as f32 * 0.5).sin() * 0.5) as f32;
                 samples.push(sample_f32);
             }
         }
-        
+
         samples
     }
 }
@@ -776,23 +691,23 @@ impl AudioSource<f32> for FakeAudioSourceF32 {
     fn output_spec(&self) -> Option<PcmSpec> {
         Some(self.spec)
     }
-    
+
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
         if self.current_frame >= self.total_frames {
             return Ok(None);
         }
-        
+
         let remaining_frames = (self.total_frames - self.current_frame) as usize;
         let frames_to_generate = std::cmp::min(self.chunk_size_frames, remaining_frames);
-        
+
         let samples = self.generate_samples(self.current_frame, frames_to_generate);
         let chunk = PcmChunk::new(self.spec, samples);
-        
+
         self.current_frame += frames_to_generate as u64;
-        
+
         Ok(Some(chunk))
     }
-    
+
     fn handle_command(&mut self, cmd: DecodeCommand) -> DecodeResult<()> {
         match cmd {
             DecodeCommand::Seek(pos) => {
