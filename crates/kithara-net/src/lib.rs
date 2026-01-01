@@ -27,7 +27,7 @@ pub type NetResult<T> = Result<T, NetError>;
 pub type ByteStream = crate::traits::ByteStream;
 
 // Legacy NetClient for backward compatibility
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NetClient {
     inner: ReqwestNet,
 }

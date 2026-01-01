@@ -27,7 +27,7 @@ pub enum NetError {
 pub type NetResult<T> = Result<T, NetError>;
 
 /// Base HTTP client implementation using reqwest
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ReqwestNet {
     client: reqwest::Client,
 }
