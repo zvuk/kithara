@@ -11,7 +11,9 @@ bytes = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
 url = { workspace = true }
+async-stream = { workspace = true }
 
 # Optional dependency for caching.
 # When enabled, the file source can persist downloaded bytes for offline reuse.
@@ -23,3 +25,4 @@ cache = ["dep:kithara-cache"]
 
 [dev-dependencies]
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
+axum = { workspace = true }
