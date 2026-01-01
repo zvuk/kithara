@@ -2,6 +2,14 @@ use crate::errors::{CoreError, CoreResult};
 use url::Url;
 
 pub fn canonicalize_for_asset(url: &Url) -> CoreResult<String> {
+    // Validate that URL has required components for asset identification
+    if url.scheme().is_empty() {
+        return Err(CoreError::MissingComponent("scheme".to_string()));
+    }
+    if url.host().is_none() {
+        return Err(CoreError::MissingComponent("host".to_string()));
+    }
+
     let mut canonical = url.clone();
 
     // Remove fragment and query
@@ -37,6 +45,14 @@ pub fn canonicalize_for_asset(url: &Url) -> CoreResult<String> {
 }
 
 pub fn canonicalize_for_resource(url: &Url) -> CoreResult<String> {
+    // Validate that URL has required components for resource identification
+    if url.scheme().is_empty() {
+        return Err(CoreError::MissingComponent("scheme".to_string()));
+    }
+    if url.host().is_none() {
+        return Err(CoreError::MissingComponent("host".to_string()));
+    }
+
     let mut canonical = url.clone();
 
     // Remove fragment but keep query
@@ -68,4 +84,32 @@ pub fn canonicalize_for_resource(url: &Url) -> CoreResult<String> {
         .to_string()
         .parse::<String>()
         .map_err(|e| CoreError::Canonicalization(e.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use url::Url;
+
+
+
+    #[test]
+    fn canonicalize_for_asset_errors_on_missing_host() {
+        let url = Url::parse("file:///path/to/audio.mp3").unwrap();
+
+        let result = canonicalize_for_asset(&url);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(CoreError::MissingComponent(host)) if host == "host"));
+    }
+
+
+
+    #[test]
+    fn canonicalize_for_resource_errors_on_missing_host() {
+        let url = Url::parse("file:///path/to/audio.mp3?token=123").unwrap();
+
+        let result = canonicalize_for_resource(&url);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(CoreError::MissingComponent(host)) if host == "host"));
+    }
 }
