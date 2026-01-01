@@ -1,0 +1,13 @@
+[package]
+name = "kithara-core"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+url = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+# Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].

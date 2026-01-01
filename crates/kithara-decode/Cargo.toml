@@ -1,0 +1,21 @@
+[package]
+name = "kithara-decode"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+kithara-core = { workspace = true }
+kithara-io = { workspace = true }
+thiserror = { workspace = true }
+kanal = { workspace = true }
+symphonia = { workspace = true }
+dasp = { workspace = true }
+
+[features]
+default = []
+# Future: optional resampling support can be gated behind a feature.
+# resample = []
+
+[dev-dependencies]
+# Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].

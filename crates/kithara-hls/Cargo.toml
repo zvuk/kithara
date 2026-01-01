@@ -1,0 +1,24 @@
+[package]
+name = "kithara-hls"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+kithara-core = { workspace = true }
+kithara-cache = { workspace = true }
+kithara-net = { workspace = true }
+bytes = { workspace = true }
+futures = { workspace = true }
+hls_m3u8 = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+url = { workspace = true }
+
+[features]
+default = []
+# Future: gate decryption/crypto dependencies behind a feature.
+# aes-decrypt = []
+
+[dev-dependencies]
+# Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].

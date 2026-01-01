@@ -1,0 +1,42 @@
+# Rust / Cargo
+/target/
+**/target/
+/Cargo.lock
+
+# Rustfmt / Clippy / IDE noise
+**/*.rs.bk
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# JetBrains
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+
+# Zed
+.zed/
+
+# Editor swap/backup files
+*~
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Coverage / profiling artifacts
+**/*.profraw
+**/*.profdata
+coverage/
+lcov.info
+
+# Temporary / local environment files
+.env
+.env.*
