@@ -1,5 +1,115 @@
 # Kithara — Kanban plans (per subcrate)
 
+## Недосказанности и обязательные “player-grade” инварианты (прочитать перед реализацией)
+
+Этот блок фиксирует поведение, которое в прошлых итерациях было источником регрессий/флапов/неочевидных багов. Если что-то из этого не отражено в конкретном сабкрейт-разделе ниже — этот блок имеет приоритет как часть контракта.
+
+### A) Где живёт бесконечный цикл загрузки (driver loop)
+- **Ровно один** основной async цикл “скачивай дальше” живёт в источнике:
+  - `kithara-file` (FileDriver)
+  - `kithara-hls` (HlsDriver)
+- `kithara-net` не держит бесконечных циклов: он предоставляет примитивы fetch/stream/range.
+- `kithara-cache` не держит бесконечных циклов: он хранит/эвиктит.
+- `kithara-io` не держит бесконечных циклов загрузки: он только буфер/bridge.
+- `kithara-decode` держит blocking decode loop, но он не скачивает данные.
+
+### A.1) Стандартные транспорты между потоками/абстракциями (обязательный выбор)
+- Основной транспорт для сообщений/команд/событий/чанков PCM между потоками и компонентами: `kanal`.
+  - Если нужен bounded канал — используем bounded API `kanal`.
+  - Если нужен blocking receive в decode/worker thread — используем blocking API `kanal`.
+  - Не вводить параллельный “зоопарк” каналов без причины (например, не смешивать `std::mpsc`/`tokio::mpsc`/`flume` одновременно).
+- Для аудио-очередей (PCM) в режиме “consumer в отдельном потоке” стандартный выбор: `ringbuf`:
+  - если требуется async-API: использовать `async_ringbuf`
+  - если требуется blocking-API: использовать `ringbuf-blocking`
+
+### B) Backpressure обязательна
+- Любой “driver loop” обязан уважать backpressure со стороны `kithara-io`.
+- Нельзя бесконечно накапливать память: буфер bounded по bytes.
+- Нельзя “ронять” медиаданные (drop bytes/samples) ради того, чтобы “продолжало играть” — это разрушает PCM/канальные границы и порождает артефакты.
+
+### B.1) Где реализуется backpressure
+- На bytes уровне:
+  - `kithara-io` обеспечивает bounded buffering по bytes.
+  - источники (`kithara-file`, `kithara-hls`) обязаны блокироваться/await на push, когда буфер заполнен.
+- На PCM уровне (если/когда появится поток PCM между decode и хостом):
+  - использовать `ringbuf` (async_ringbuf или ringbuf-blocking) для корректной очереди без drop семплов.
+  - при переполнении — backpressure/ожидание, не drop.
+
+### C) EOF семантика (критично)
+- Для sync `Read`:
+  - `Read::read()` **никогда** не возвращает `Ok(0)` до доказанного EOS.
+  - `Ok(0)` допускается только после того, как источник завершился, `BridgeWriter::finish()` вызван и буфер полностью выдренажен.
+- Никаких in-band magic bytes.
+- При ошибке:
+  - даже если data-plane возвращает `Err`, bridge всё равно должен завершаться предсказуемо (через `finish()`), чтобы decode loop не завис.
+
+### D) Ошибки: различать recoverable и fatal
+- Источники должны различать:
+  - **recoverable** ошибки (временный сетевой сбой, retry/backoff) — driver продолжает работать.
+  - **fatal** ошибки (offline miss в offline_mode, невозможный формат, некорректный ключ/DRM, постоянный 404 на обязательный ресурс) — driver завершает сессию.
+- На fatal ошибке:
+  - driver должен прекратить работу,
+  - вызвать `BridgeWriter::finish()` (чтобы decode loop не зависал),
+  - и отдать ошибку наружу предсказуемым образом.
+
+### D.1) Контракт распространения ошибок (обязательный)
+- Для источников (`kithara-file`, `kithara-hls`) основной контракт ошибок: **через data-plane stream**:
+  - `stream: Stream<Item = Result<Bytes, SourceError>>`
+  - при fatal ошибке stream должен вернуть `Err(...)` и затем завершиться (`None`).
+  - после fatal ошибки driver обязан вызвать `BridgeWriter::finish()` (или эквивалент), чтобы decode не повис в ожидании данных.
+- Для decode слоя (`kithara-decode`) основной контракт ошибок:
+  - `Decoder::next()` возвращает `Result<Option<PcmChunk<T>>, DecodeError>`.
+  - при fatal decode error: вернуть `Err` и завершить дальнейшую выдачу PCM предсказуемо (без зависаний).
+- UI/telemetry события (если будут) не должны быть единственным источником истины об ошибке.
+
+### E) Seek — “player-grade”, best-effort, абсолютный
+- Seek инициируется пользователем/движком (DJ use-case):
+  - Для `kithara-decode`: `seek(Duration)` best-effort, не должен приводить к зависаниям.
+  - Для источников:
+    - `kithara-file`: seek по байтам (range) как базовый механизм.
+    - `kithara-hls`: seek по времени в рамках VOD (по playlist) как базовый механизм.
+- При seek допускается reset/реинициализация decode state (это ожидаемо для плеера).
+
+### E.1) Контракт seek (обязательные детали)
+- Seek — **абсолютный** (не “относительный к текущей позиции”) и best-effort.
+- Seek должен быть безопасен при повторных вызовах и при конкурентных командах (минимум: корректная сериализация команд в driver loop).
+- Поведение при seek вне диапазона:
+  - seek < 0: clamp to 0
+  - seek > duration (если duration известен): clamp to end и завершить (или вернуть error) — выбрать один вариант и зафиксировать в реализации.
+- Поведение data-plane при seek:
+  - допустим “reset потока”: driver может сбросить незаконченные загрузки и начать эмитить bytes с новой позиции.
+  - bridge должен корректно обработать смену потока данных (не выдавать ложный EOF).
+
+### F) DRM / keys
+- DRM (AES-128 baseline) обязателен как часть контракта HLS:
+  - ключи могут быть “wrapped”, `key_processor_cb` может раскрывать их.
+  - в кэш должны сохраняться **processed keys**, пригодные для offline расшифровки.
+  - поддержать `key_query_params` и `key_request_headers`.
+- Никогда не логировать ключевые байты/секреты.
+- Политика ошибок DRM:
+  - если сегмент требует key, но key не доступен (offline miss / fetch failed / processor failed) — это **fatal** для текущей сессии.
+
+### G) Кэш обязателен и “tree-friendly”
+- Кэш должен переживать перезапуски.
+- HLS кэширует **всё** (playlists, init, segments, keys) для offline.
+- Eviction:
+  - лимит по общему размеру (bytes),
+  - LRU по asset,
+  - может удалить несколько asset перед записью нового,
+  - pinned asset не эвиктится.
+- Политика cache miss:
+  - в `offline_mode = true` любой miss на обязательный ресурс => **fatal error**
+  - в online режиме miss => network fetch + cache put (если есть место, иначе eviction перед put).
+
+### H) DJ/engine базовый use-case
+- `kithara` — часть networking/decoding базы для DJ engine:
+  - сеть и оркестрация async,
+  - декодирование в отдельном blocking потоке,
+  - аудиовывод/микшер вне `kithara`,
+  - стабильное поведение при seek/stop/reopen и при повторном использовании кэша.
+
+---
+
 Этот документ — **contract-first** план реализации в стиле канбана. Он предназначен для автономных агентов, которые будут разрабатывать сабкрейты **параллельно и независимо**, при этом сохраняя совместимость через зафиксированные публичные контракты.
 
 Перед началом работы над любой задачей агент **обязан прочитать**:
@@ -30,6 +140,12 @@
 
 # Общая модель системы (абстракции, воркеры, многопоточность, потоки данных)
 
+Эта секция отвечает на вопросы:
+- какие компоненты существуют,
+- кто создаёт какие воркеры,
+- как данные текут из сети в декодер,
+- как закрывается сессия и как обрабатываются ошибки.
+
 ## Термины: Asset vs Resource
 
 - **Asset** — “трек/контент” как единица кэша и eviction (LRU).
@@ -43,12 +159,31 @@
 
 ## Многопоточность и воркеры (high-level)
 
+### Жизненный цикл сессии (в общих чертах)
+- `*_Source::open(...)` создаёт:
+  - control-plane (команды) для driver loop,
+  - data-plane (bytes stream) для feeding `kithara-io`,
+  - и запускает driver loop (см. ниже).
+- `kithara-io` создаёт `BridgeWriter/BridgeReader`.
+- `kithara-decode` запускается отдельным blocking worker (явно или через helper) и читает `BridgeReader`.
+
 ### Потоки/задачи
 - **Tokio runtime threads**: async задачи сети и оркестрации (file/hls). Количество потоков задаёт хост (обычно multi-thread runtime).
 - **Decode thread (blocking)**: отдельный поток (или `spawn_blocking`), который синхронно читает `Read + Seek` и декодирует через Symphonia.
 - **Audio output thread** (вне `kithara`): в хосте/движке; читает PCM из очереди/канала. `kithara` не делает I/O с устройством.
 
 ### Воркеры и циклы обработки
+
+#### Контракт: кто запускает loop
+- `kithara-file::FileSource::open(...)` **обязан** запустить ровно один async `FileDriver` loop (через tokio runtime) и вернуть handle/session, через который можно:
+  - посылать команды (Stop/SeekBytes),
+  - получать bytes stream (для feeding bridge),
+  - корректно завершить сессию (drop/Stop).
+- `kithara-hls::HlsSource::open(...)` **обязан** запустить ровно один async `HlsDriver` loop и вернуть handle/session, через который можно:
+  - посылать команды (Stop/SeekTime/SetVariant/ClearVariantOverride),
+  - получать bytes stream.
+
+`kithara-io` и `kithara-net` не владеют жизненным циклом этих циклов и не запускают их.
 
 #### File worker
 `kithara-file` поднимает один async воркер (условно `FileDriver`), который:
@@ -79,6 +214,8 @@
 ### Инварианты
 - Никаких in-band magic bytes в медиапотоке.
 - `Read::read()` не возвращает `Ok(0)` до доказанного EOS (только после `finish()` и полного дренажа).
+- Backpressure обязателен: bounded буфер по bytes, никаких бесконтрольных аллокаций.
+- Любой fatal error должен приводить к корректному завершению сессии (без зависаний decode loop).
 
 ## Потоки данных (end-to-end)
 
@@ -126,8 +263,19 @@
 ## Command contract (control plane)
 
 Каждый источник должен поддерживать базовые команды:
-- `Stop`
-- `Seek` (best-effort, абсолютный)
+- `Stop`:
+  - завершает driver loop,
+  - завершает bytes stream,
+  - вызывает `BridgeWriter::finish()` (или эквивалентный путь завершения).
+- `Seek` (best-effort, абсолютный):
+  - `kithara-file`: `SeekBytes(u64)` как базовый механизм (Range).
+  - `kithara-hls`: `SeekTime(Duration)` как базовый механизм (по playlist).
+- расширение: HLS-specific команды (variant override) и т.п.
+
+Команды должны быть “player-grade”:
+- не приводить к дедлокам,
+- не зависеть от out-of-band событий,
+- быть безопасными при повторном вызове (best-effort idempotency).
 - “source-specific commands” расширяем через enum/trait-политику.
 
 ---
@@ -292,6 +440,18 @@ HTTP fetcher слой на reqwest/rustls: streaming + range. Без HLS и бе
 ### Цель
 Источник “один файл по HTTP” (mp3) с lazy caching и возможностью seek через range.
 
+### Компоненты и воркеры (контракт)
+- `FileSource::open(...)`:
+  - создаёт control-plane (sender/receiver команд),
+  - создаёт bytes stream (data-plane),
+  - запускает **ровно один** async `FileDriver` loop,
+  - возвращает `FileSession` как handle на живой pipeline.
+- `FileDriver` обязан:
+  - уважать backpressure `kithara-io`,
+  - на `Stop` завершать stream и вызывать `finish()`,
+  - на fatal error завершать stream и вызывать `finish()` (без зависаний),
+  - не возвращать “ложный EOF” через `Read` (это обязанность bridge + корректное завершение).
+
 ### Публичный контракт (экспорт)
 
 - `FileSource`
@@ -334,6 +494,18 @@ HTTP fetcher слой на reqwest/rustls: streaming + range. Без HLS и бе
 
 ### Цель
 HLS VOD orchestration + caching everything (playlists, segments, keys, processed keys), ABR policy parameter.
+
+### Компоненты и воркеры (контракт)
+- `HlsSource::open(...)`:
+  - создаёт control-plane (sender/receiver команд),
+  - создаёт bytes stream (data-plane),
+  - запускает **ровно один** async `HlsDriver` loop,
+  - возвращает `HlsSession` как handle на живой pipeline.
+- `HlsDriver` обязан:
+  - уважать backpressure `kithara-io`,
+  - корректно завершать сессию (`finish()`) при успехе и при fatal error,
+  - поддерживать offline_mode (cache miss => fatal),
+  - поддерживать DRM keys (query params, headers, processor) и caching processed keys.
 
 ### Публичный контракт (экспорт)
 
@@ -410,9 +582,13 @@ HLS VOD orchestration + caching everything (playlists, segments, keys, processed
 - для каждого ресурса используем hash URL с query (для динамики/DRM).
 - segment key учитывает byterange (если понадобится).
 
-**DRM keys**
-- кэшировать processed keys после `key_processor_cb`.
-- никогда не логировать key bytes.
+**DRM keys (контракт)**
+- поддержать:
+  - `key_query_params` (добавляются к key URL запросам),
+  - `key_request_headers` (добавляются к key requests),
+  - `key_processor_cb` (unwrap/transform key bytes).
+- кэшировать **processed keys** после `key_processor_cb` (именно они должны быть доступны offline для расшифровки).
+- никогда не логировать key bytes/секреты (допустим только fingerprint/hash).
 
 ### Тесты (TDD)
 - локальная HLS fixture (axum) без внешней сети:
@@ -439,6 +615,15 @@ HLS VOD orchestration + caching everything (playlists, segments, keys, processed
 
 ### Цель
 Bridge: async bytes source -> sync `Read+Seek` для decode.
+
+### Компоненты и потоки (контракт)
+- `BridgeWriter` используется источниками (async drivers) для записи bytes.
+- `BridgeReader` используется decode worker (blocking) для чтения bytes.
+- `kithara-io` отвечает за:
+  - bounded buffering (backpressure),
+  - корректную семантику EOF,
+  - отсутствие “ложных EOF” (`Ok(0)` до EOS),
+  - минимальную блокировку только там, где она допустима (decode thread).
 
 ### Публичный контракт (экспорт)
 
@@ -490,6 +675,16 @@ Bridge: async bytes source -> sync `Read+Seek` для decode.
 
 ### Цель
 Декодирование в PCM, generic по типу сэмпла `T`. Не привязано к HLS/HTTP.
+
+### Компоненты и потоки (контракт)
+- Decode выполняется в blocking worker (отдельный поток или `spawn_blocking`), чтобы:
+  - не блокировать tokio runtime,
+  - не лезть в audio thread хоста.
+- Декодер читает `Read + Seek` из `kithara-io`.
+- Ошибки decode делятся на:
+  - recoverable (если применимо: например, “конец эпохи/сегмента” в будущем),
+  - fatal (unsupported format/codec, повреждённый поток).
+- На fatal decode error pipeline должен завершаться предсказуемо (без зависаний).
 
 ### Публичный контракт (экспорт)
 
