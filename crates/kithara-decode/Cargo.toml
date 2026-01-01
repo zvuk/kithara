@@ -10,6 +10,7 @@ kithara-io = { workspace = true }
 thiserror = { workspace = true }
 kanal = { workspace = true }
 symphonia = { workspace = true }
+dasp = { workspace = true }
 
 [features]
 default = []
