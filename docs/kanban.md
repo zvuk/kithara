@@ -451,6 +451,63 @@ Persistent disk cache, tree-friendly, crash-safe writes, bytes-based global limi
 ### Цель
 HTTP fetcher слой на reqwest/rustls: streaming + range. Без HLS и без кэша.
 
+---
+
+## 3.a) `kithara-net` — Full client (retry/timeout + слои, generics-first)
+
+### Цель
+Сделать из `kithara-net` полноценный клиент, построенный из независимых слоёв (decorator pattern), по аналогии с архитектурой `stream-download`:
+- базовый HTTP слой (reqwest)
+- `timeout` слой
+- `retry` слой с политикой/backoff
+- builder/facade для “дефолтной” сборки
+
+### Компоненты (контракт и ответственность)
+
+#### `traits`
+- `Net` (core trait) — минимальный контракт клиента:
+  - `get_bytes(...) -> NetResult<Bytes>`
+  - `stream(...) -> NetResult<ByteStream>`
+  - `get_range(...) -> NetResult<ByteStream>`
+- `NetExt` — удобные методы композиции (например `.with_retry(...)`, `.with_timeout(...)`), без скрытой магии.
+
+#### `types`
+- `ByteStream = BoxStream<'static, NetResult<Bytes>>`
+- типы запросов (минимальные, без избыточности):
+  - `Headers` (map строка->строка или типизированный header map)
+  - `RangeSpec` (start, end option)
+- Никакого HLS-контекста внутри `kithara-net`.
+
+#### `base` (`ReqwestNet`)
+Базовая реализация `Net` на `reqwest`:
+- сборка и отправка запроса
+- единая обработка HTTP status:
+  - успешные ответы -> bytes/stream
+  - неуспешные -> типизированная ошибка, содержащая status и URL (без логирования секретов)
+- поддержка headers passthrough
+- поддержка Range запросов
+
+#### `timeout` (`TimeoutNet<N>`)
+Декоратор над `N: Net`:
+- реализует timeout-ограничение операций:
+  - для `get_bytes`: timeout на всю операцию
+  - для `stream/get_range`: timeout на фазу “request + response headers” (mid-stream stall timeout не входит в v1)
+- при срабатывании возвращает `NetError::Timeout`.
+
+#### `retry` (`RetryNet<N, P>`)
+Декоратор над `N: Net`:
+- retries применяются только к операциям “до начала чтения body”:
+  - retry при ошибке запроса/соединения
+  - retry по статусам (например 5xx, 429; решение про 408 фиксируется тестами)
+- не делает mid-stream retry в v1 (нельзя корректно без строгого range/offset контракта)
+- использует `RetryPolicy`:
+  - max retries
+  - backoff strategy (exponential + cap; без jitter в тестах)
+
+#### `builder`
+- `NetBuilder` / `create_default_client()`:
+  - собирает “base + retry + timeout” в удобный фасадный тип для потребителей (`kithara-hls`, `kithara-file`).
+
 ### Публичный контракт (экспорт)
 
 - `NetClient`
@@ -772,6 +829,159 @@ Bridge: async bytes source -> sync `Read+Seek` для decode.
 
 ---
 
+## 7.a) `kithara-decode` — Audio pipeline (generic base + bounded PCM queue; по мотивам `stream-download-audio`)
+
+### Цель
+Добавить поверх декодера “аудио-пайплайн” уровня плеера:
+- bounded backpressure на уровне PCM (producer waits; consumer non-blocking)
+- стабильный контракт chunk’ов (frame-aligned, interleaved)
+- командный канал (seek; а HLS-специфичные команды остаются на уровне source/driver и не “протекают” в decoder)
+
+Эта секция фиксирует план и контракт, вдохновлённый `stream-download-audio` и общей идеологией `decal` (generic + слабая связанность).
+
+### Компоненты (контракт и ответственность)
+
+#### `PcmSpec` / `PcmChunk<T>`
+- `PcmSpec { sample_rate: u32, channels: u16 }`
+- `PcmChunk<T> { spec: PcmSpec, pcm: Vec<T> }`
+  - interleaved
+  - `pcm.len() % channels == 0` (frame aligned)
+  - `T` для v1: минимум `f32`, опционально `i16`
+
+#### `DecodeCommand`
+- `Seek(Duration)`
+- (дальше по мере надобности) `Stop` если потребуется “раньше EOS” на decode-уровне.
+> HLS-variant switching не часть `kithara-decode`: это source/driver concern.
+
+#### `AudioSource<T>` (синхронный trait)
+Синхронный интерфейс, который можно гонять в worker’е (как в `stream-download-audio`):
+- `fn output_spec(&self) -> Option<PcmSpec>`
+- `fn next_chunk(&mut self) -> Result<Option<PcmChunk<T>>, DecodeError>`
+- `fn handle_command(&mut self, cmd: DecodeCommand) -> Result<(), DecodeError>`
+
+Это позволяет:
+- пересоздавать внутренний Symphonia decoder при “смене эпохи/формата”
+- реализовать seek как best-effort без привязки к runtime.
+
+#### `DecodeEngine` (Symphonia glue)
+Внутренний компонент (не обязательно публичный), который:
+- открывает `FormatReader + Decoder` по `MediaSource`
+- читает packets, декодирует в PCM
+- умеет `reset/reopen` (для смены codec/track/epoch)
+- реализует time-based `seek(Duration)` через Symphonia, если доступно.
+
+#### `AudioStream<T>` (high-level, async consumer API)
+Async-стрим PCM chunks с bounded queue:
+- producer (worker) блокируется при переполнении (no drops)
+- consumer non-blocking: если нет данных, `poll_next => Pending`
+- EOS: `Ready(None)`
+- Fatal: `Some(Err(..))` и завершение потока
+
+Очередь/каналы:
+- использовать `kanal` (как принято в workspace) для bounded semantics.
+
+#### Worker model
+- один worker на `AudioStream`:
+  - либо dedicated thread
+  - либо `tokio::task::spawn_blocking`
+- выбор реализации не влияет на контракт: важно, что decode не блокирует tokio runtime.
+
+### Инварианты (обязательные)
+- Никаких silent drops PCM из-за переполнения: producer ждёт.
+- Chunk’и всегда frame-aligned.
+- `output_spec()` может меняться при смене decoder’а/формата; каждый `PcmChunk` несёт актуальный `spec`.
+- Ошибки различать:
+  - `EndOfStream` (или `Ok(None)`) как нормальное завершение
+  - fatal decode/io как ошибка и затем завершение.
+
+### Тесты (TDD)
+- `pcm_chunks_are_frame_aligned`
+- `producer_waits_when_queue_full` (bounded backpressure)
+- `consumer_is_non_blocking_when_empty` (Pending, без busy loop)
+- `fatal_error_terminates_stream_after_error_item`
+- `seek_best_effort_does_not_deadlock`
+- unit: маленький встроенный аудио asset (mp3/aac/flac) → produces >0 frames
+
+### Потоки данных
+- `kithara-io::BridgeReader (Read+Seek)` -> `kithara-decode::DecodeEngine` -> bounded PCM queue -> consumer (rodio/examples)
+
+### Зависимости
+- `symphonia`, `kanal`, `thiserror`
+- (опционально) `dasp` / sample-traits если решим унифицировать `T` как в `decal`
+
+---
+
+## 7.b) `kithara-decode` — Decoder upgrade (generic `Decoder<T>` как в `decal` + contracts из `stream-download-audio`)
+
+### Цель
+Усилить декодерный слой до “базы”, похожей на `decal::Decoder<T>`:
+- generic выходной sample type `T` (минимум `f32`, опционально `i16`)
+- корректная multi-channel обработка (не только mono/stereo)
+- явный `Source` контракт (media source + file extension hint), чтобы Symphonia probe был стабильным и тестируемым
+- предсказуемые семантики seek/reset (codec-switch-safe)
+
+### Компоненты (контракт и ответственность)
+
+#### `Source` (по мотивам `decal::decoder::source`)
+Абстракция над входом Symphonia:
+- отдаёт `MediaSource` (или `Read+Seek` через `MediaSourceStream`)
+- предоставляет `file_ext()` / hint для probe (в отличие от старого `Hint::new()` без extension)
+
+Контракт:
+- `kithara-io` даёт `Read+Seek` reader; `kithara-decode` не знает про HLS/HTTP.
+
+#### `DecoderSettings`
+Минимальный набор настроек Symphonia:
+- `enable_gapless: bool` (как в decal)
+- (опционально позже) дополнительные knobs
+
+#### `Decoder<T>`
+State machine вокруг Symphonia:
+- `new(source, settings)`:
+  - строит `Hint` с extension (если есть)
+  - делает probe -> `FormatReader`
+  - выбирает audio track
+  - создаёт `AudioDecoder`
+  - извлекает `sample_rate`, `channels`, `time_base`, `num_frames` (если есть)
+- `next()`:
+  - читает packet’ы до нужного track_id
+  - декодирует
+  - конвертирует sample format в `T`
+  - возвращает `PcmChunk<T>` (interleaved, frame-aligned)
+- `seek(Duration)`:
+  - `FormatReader::seek(SeekMode::Accurate, SeekTo::Time{...})`
+  - `AudioDecoder::reset()`
+- `reset/reopen`:
+  - сбрасывает decoder/reader и переинициализирует, чтобы переживать смену формата/кодека (codec-switch-safe)
+
+#### `AudioStream<T>`
+Высокоуровневый async API остаётся как в 7.a:
+- bounded queue
+- consumer non-blocking
+- команды (минимум seek) прокидываются в worker, который вызывает `Decoder<T>::seek`
+
+### Инварианты (обязательные)
+- `PcmChunk<T>` всегда interleaved и frame-aligned.
+- Не допускать “stereo-only” логики: корректно обрабатывать N каналов.
+- Ошибки:
+  - recoverable (если Symphonia возвращает recoverable) не должны валить весь поток без причины
+  - fatal => один `Err` item и завершение.
+- Seek best-effort: не deadlock, не “тихий успех” при невозможности (возвращаем ошибку).
+
+### Тесты (TDD)
+- `probe_uses_file_extension_hint` (через fake Source, где extension влияет на hint)
+- `decodes_multichannel_frame_alignment` (на fixture с >2 каналов, либо синтетический формат если доступен)
+- `decode_produces_pcm_f32` (минимум)
+- `seek_resets_decoder_and_continues`
+- `stream_contract_pending_when_empty` (на уровне AudioStream)
+- integration: `kithara-io` bridge -> decode produces samples (маленький встроенный mp3/aac)
+
+### Зависимости
+- `symphonia`, `thiserror`, `kanal`
+- `dasp` (если берём sample conversion/bounds как в `decal`)
+
+---
+
 # Канбан-борды (задачи) по сабкрейтам
 
 Ниже — примерная структура колонок. Агенты могут вести задачи по этому документу.
@@ -804,6 +1014,24 @@ Bridge: async bytes source -> sync `Read+Seek` для decode.
 - [ ] range GET + tests
 - [ ] header support (key requests) + tests
 
+## `kithara-net` — Full client (retry/timeout; layered; generics-first)
+- [ ] Refactor: split `kithara-net` into modules `base/traits/types/retry/timeout/builder` without changing current behavior
+- [ ] Add `ByteStream` alias and core trait `Net` (+ `NetExt` for composition)
+- [ ] Implement `ReqwestNet` base layer with explicit status handling (no silent success on 4xx/5xx) + tests
+- [ ] Remove `expect/unwrap` from prod code: client construction returns `Result` with typed error + tests
+- [ ] Implement `TimeoutNet<N>` decorator:
+  - `get_bytes`: whole-op timeout
+  - `stream/get_range`: timeout only for request + response headers
+  - deterministic tests (no flaky sleeps)
+- [ ] Implement `RetryNet<N, P>` decorator with `RetryPolicy`:
+  - exponential backoff with cap
+  - retry only before body streaming (no mid-stream retry in v1)
+  - tests with local axum fixture: N failures then success
+- [ ] Define retry classification rules (network errors + HTTP 5xx + 429; decision about 408 фиксируется тестами) + tests per status
+- [ ] Provide `NetBuilder` / `create_default_client()` that composes base+retry+timeout into a convenient facade
+- [ ] Ensure existing behavior stays covered: header passthrough + range semantics (tests must remain green after refactor)
+- [ ] Add short crate-level docs (`crates/kithara-net/README.md`): layering, retry semantics, timeout semantics
+
 ## `kithara-file` MVP
 - [ ] open session + asset_id from URL + tests
 - [ ] stream bytes from net + tests
@@ -827,6 +1055,31 @@ Bridge: async bytes source -> sync `Read+Seek` для decode.
 - [ ] minimal Symphonia wrapper: open -> decode -> PCM chunk
 - [ ] seek(Duration) best-effort
 - [ ] integration test: bridge->decode for a small audio asset
+
+## `kithara-decode` — Audio pipeline (bounded PCM queue; stream-download-audio-inspired)
+- [ ] Define PCM public types: `PcmSpec`, `PcmChunk<T>` (interleaved, frame-aligned) + tests
+- [ ] Define `DecodeCommand` (at least `Seek(Duration)`) and `AudioSource<T>` synchronous trait + tests with a fake source
+- [ ] Implement `DecodeEngine` (Symphonia glue) with “reset/reopen” hooks to be codec-switch-safe + unit tests
+- [ ] Implement `AudioStream<T>`:
++  - producer waits when queue full (bounded backpressure)
++  - consumer non-blocking (`poll_next` => Pending when empty)
++  - EOS and fatal error termination semantics
+- [ ] Implement worker loop that drives `AudioSource<T>` and pushes chunks into bounded queue (thread or `spawn_blocking`) + tests
+- [ ] Add seek plumbing: `AudioStream` forwards `DecodeCommand::Seek` into worker/source; ensure no deadlocks + tests
+- [ ] (Optional, later) Add `rodio` adapter in `kithara-examples` crate (not inside `kithara-decode`) to keep decode crate minimal
++
++## `kithara-decode` — Decoder upgrade (decal-style `Decoder<T>` + Source contract)
++- [ ] Add `Source` trait (MediaSource + `file_ext()` hint) + tests
++- [ ] Add `DecoderSettings` (gapless toggle as baseline) + tests
++- [ ] Implement `Decoder<T>` core state machine:
++  - probe with hint/extension
++  - pick default audio track
++  - decode packets for selected track id
++  - convert to interleaved `PcmChunk<T>`
++- [ ] Fix multi-channel support (not stereo-only) + tests
++- [ ] Implement `seek(Duration)` via Symphonia seek + `decoder.reset()` + tests
++- [ ] Add reset/reopen hooks to be codec-switch-safe (format/codec changes) + tests
++- [ ] Wire `Decoder<T>` into `AudioStream<T>` worker (bounded queue semantics preserved) + integration tests
 
 ---
 
