@@ -207,29 +207,29 @@ Reference: `docs/porting/drm-reference.md`
 Reference: `docs/porting/abr-reference.md`
 
 ### Unit-ish (ABR in isolation)
-- [ ] Estimator ignores cache hits:
+- [x] Estimator ignores cache hits:
   - introduce `ThroughputSampleSource { Network, Cache }` (или эквивалент)
   - update estimator only on `Network`
   - test: `cache_hit_does_not_affect_throughput`
-- [ ] Controller downswitch after low throughput sample:
+- [x] Controller downswitch after low throughput sample:
   - feed throughput estimate/sample that should force downswitch
   - assert decision targets lower variant, reason фиксируется
-- [ ] Controller upswitch respects buffer gating + hysteresis:
+- [x] Controller upswitch respects buffer gating + hysteresis:
   - low buffer => no upswitch
   - sufficient buffer + enough throughput => upswitch
-- [ ] Controller min_switch_interval prevents oscillation:
+- [x] Controller min_switch_interval prevents oscillation:
   - decision suppressed when interval not elapsed
 
 ### Integration-ish (ABR apply in worker)
-- [ ] Decision vs applied semantics are explicit:
+- [x] Decision vs applied semantics are explicit:
   - expose/emit `VariantApplied` (или эквивалент) only after actual switch is applied
   - tests must not rely on out-of-band telemetry ordering
-- [ ] ABR upswitch continues from current segment index (no restart)
-- [ ] ABR downswitch begins correctly (init segment behavior fixed by contract):
+- [x] ABR upswitch continues from current segment index (no restart)
+- [x] ABR downswitch begins correctly (init segment behavior fixed by contract):
   - if switching requires init, ensure next output begins with init for new variant
-- [ ] Worker auto switches mid-stream without restarting:
+- [x] Worker auto switches mid-stream without restarting:
   - observe events + deterministic payload prefixes and ensure segment index sequence is non-decreasing across switch
-- [ ] (Prereq if missing) Expose a deterministic ABR controller surface for tests:
+- [x] (Prereq if missing) Expose a deterministic ABR controller surface for tests:
   - feed throughput samples (explicit source Network/Cache)
   - obtain decisions
   - apply decisions in worker at segment boundaries

@@ -1,15 +1,22 @@
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt};
+use hls_m3u8::MediaPlaylist;
+use hls_m3u8::tags::ExtXMap;
 use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::Instant;
 use thiserror::Error;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, broadcast};
 use url::Url;
 
 use crate::{
-    HlsOptions, HlsResult, abr::AbrController, events::EventEmitter, fetch::FetchManager,
-    keys::KeyManager, playlist::PlaylistManager,
+    HlsOptions, HlsResult,
+    abr::{AbrController, variants_from_master},
+    events::{EventEmitter, HlsEvent},
+    fetch::FetchManager,
+    keys::KeyManager,
+    playlist::PlaylistManager,
 };
 
 pub type HlsByteStream = Pin<Box<dyn FuturesStream<Item = HlsResult<Bytes>> + Send>>;
@@ -37,6 +44,21 @@ pub struct HlsDriver {
     key_manager: Arc<KeyManager>,
     abr_controller: Arc<Mutex<AbrController>>,
     event_emitter: Arc<EventEmitter>,
+}
+
+fn media_playlist_init_uri(media: &MediaPlaylist<'_>) -> Option<String> {
+    media
+        .segments
+        .iter()
+        .find_map(|(_, seg)| seg.map.as_ref().and_then(ext_x_map_uri))
+}
+
+fn ext_x_map_uri(map: &ExtXMap<'_>) -> Option<String> {
+    let s = map.to_string();
+    let start = s.find("URI=\"")? + "URI=\"".len();
+    let rest = s.get(start..)?;
+    let end = rest.find('\"')?;
+    Some(rest[..end].to_string())
 }
 
 impl HlsDriver {
@@ -83,6 +105,10 @@ impl HlsDriver {
             })
         }))
     }
+
+    pub fn events(&self) -> broadcast::Receiver<HlsEvent> {
+        self.event_emitter.subscribe()
+    }
 }
 
 struct HlsStream {
@@ -106,6 +132,7 @@ impl Source for HlsStream {
         let playlist_manager = Arc::clone(&self.playlist_manager);
         let fetch_manager = Arc::clone(&self.fetch_manager);
         let abr_controller = Arc::clone(&self.abr_controller);
+        let event_emitter = Arc::clone(&self.event_emitter);
 
         let offline_mode = params.offline_mode;
 
@@ -120,52 +147,177 @@ impl Source for HlsStream {
                 .await
                 .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
 
-            let variant = {
-                let mut abr = abr_controller.lock().await;
-                abr.select_variant(&master_playlist)
-                    .map_err(|e| StreamError::Source(SourceError::Hls(e)))?
+            let variants = variants_from_master(&master_playlist);
+
+            let mut buffer_level_secs: f64 = 0.0;
+            let mut pending_applied: Option<(usize, usize, crate::abr::AbrReason)> = None;
+
+            let mut current_variant = {
+                let abr = abr_controller.lock().await;
+                abr.current_variant()
             };
+
+            let now = Instant::now();
+            let initial_decision = {
+                let abr = abr_controller.lock().await;
+                abr.decide_for_master(&master_playlist, &variants, buffer_level_secs, now)
+            };
+            if initial_decision.changed && initial_decision.target_variant_index != current_variant {
+                event_emitter.emit_variant_decision(
+                    current_variant,
+                    initial_decision.target_variant_index,
+                    initial_decision.reason,
+                );
+                pending_applied = Some((
+                    current_variant,
+                    initial_decision.target_variant_index,
+                    initial_decision.reason,
+                ));
+
+                {
+                    let mut abr = abr_controller.lock().await;
+                    abr.apply(&initial_decision, now);
+                }
+                current_variant = initial_decision.target_variant_index;
+            }
 
             // NOTE: variant URI resolution is still the responsibility of the HLS crate;
             // this is intentionally minimal until we TDD the full implementation.
-            let variant_uri = match variant {
+            let mut variant_uri = match current_variant {
                 0 => "v0.m3u8",
                 1 => "v1.m3u8",
                 2 => "v2.m3u8",
                 _ => {
                     yield Err(StreamError::Source(SourceError::Hls(crate::HlsError::VariantNotFound(format!(
                         "Variant index {}",
-                        variant
+                        current_variant
                     )))));
                     return;
                 }
             };
 
-            let media_url = playlist_manager
+            let mut media_url = playlist_manager
                 .resolve_url(&master_url, variant_uri)
                 .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
 
-            let media_playlist = playlist_manager
+            let mut media_playlist = playlist_manager
                 .fetch_media_playlist(&media_url)
                 .await
                 .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
 
-            let key_context = None;
-            let mut segs = fetch_manager.stream_segment_sequence(
-                media_playlist,
-                &media_url,
-                key_context.as_ref(),
-            );
+            let mut current_init_uri = media_playlist_init_uri(&media_playlist);
+            let mut pending_init_uri: Option<String> = None;
+            if let Some(init_uri) = current_init_uri.as_deref() {
+                let init_url = playlist_manager
+                    .resolve_url(&media_url, init_uri)
+                    .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
+                let bytes = fetch_manager
+                    .fetch_init_segment(&init_url)
+                    .await
+                    .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
+                yield Ok(Message::Data(bytes));
+            }
 
-            while let Some(item) = segs.next().await {
-                match item {
-                    Ok(bytes) => yield Ok(Message::Data(bytes)),
+            let segment_count = media_playlist.segments.iter().count();
+            for segment_index in 0..segment_count {
+                let now = Instant::now();
+                let decision = {
+                    let abr = abr_controller.lock().await;
+                    abr.decide_for_master(&master_playlist, &variants, buffer_level_secs, now)
+                };
+
+                if decision.changed && decision.target_variant_index != current_variant {
+                    event_emitter.emit_variant_decision(
+                        current_variant,
+                        decision.target_variant_index,
+                        decision.reason,
+                    );
+                    pending_applied = Some((current_variant, decision.target_variant_index, decision.reason));
+
+                    {
+                        let mut abr = abr_controller.lock().await;
+                        abr.apply(&decision, now);
+                    }
+
+                    current_variant = decision.target_variant_index;
+                    variant_uri = match current_variant {
+                        0 => "v0.m3u8",
+                        1 => "v1.m3u8",
+                        2 => "v2.m3u8",
+                        _ => {
+                            yield Err(StreamError::Source(SourceError::Hls(crate::HlsError::VariantNotFound(format!(
+                                "Variant index {}",
+                                current_variant
+                            )))));
+                            return;
+                        }
+                    };
+
+                    media_url = playlist_manager
+                        .resolve_url(&master_url, variant_uri)
+                        .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
+
+                    media_playlist = playlist_manager
+                        .fetch_media_playlist(&media_url)
+                        .await
+                        .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
+
+                    let new_init_uri = media_playlist_init_uri(&media_playlist);
+                    if new_init_uri != current_init_uri {
+                        pending_init_uri = new_init_uri.clone();
+                        current_init_uri = new_init_uri;
+                    }
+                }
+
+                if let Some((from, to, reason)) = pending_applied.take() {
+                    event_emitter.emit_variant_applied(from, to, reason);
+                    if let Some(init_uri) = pending_init_uri.take() {
+                        let init_url = playlist_manager
+                            .resolve_url(&media_url, &init_uri)
+                            .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
+                        let init = fetch_manager
+                            .fetch_init_segment(&init_url)
+                            .await
+                            .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
+                        yield Ok(Message::Data(init));
+                    }
+                }
+
+                let fetch = fetch_manager
+                    .fetch_segment_with_meta(&media_playlist, segment_index, &media_url, None)
+                    .await;
+                match fetch {
+                    Ok(fetch) => {
+                        let at = Instant::now();
+                        if fetch.duration != std::time::Duration::ZERO {
+                            let bytes_per_second = fetch.bytes.len() as f64 / fetch.duration.as_secs_f64();
+                            event_emitter.emit_throughput_sample(bytes_per_second);
+                        }
+
+                        {
+                            let mut abr = abr_controller.lock().await;
+                            abr.push_throughput_sample(crate::abr::ThroughputSample {
+                                bytes: fetch.bytes.len() as u64,
+                                duration: fetch.duration,
+                                at,
+                                source: fetch.source,
+                            });
+                        }
+
+                        if let Some(seg) = media_playlist.segments.get(segment_index) {
+                            buffer_level_secs += seg.duration.duration().as_secs_f64();
+                        }
+
+                        yield Ok(Message::Data(fetch.bytes));
+                    }
                     Err(e) => {
                         yield Err(StreamError::Source(SourceError::Hls(e)));
                         return;
                     }
                 }
             }
+
+            event_emitter.emit_end_of_stream();
         }))
     }
 

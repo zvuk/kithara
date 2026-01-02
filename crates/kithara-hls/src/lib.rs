@@ -21,6 +21,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
+use tokio::sync::broadcast;
 use url::Url;
 
 // Public modules
@@ -34,9 +35,11 @@ pub mod playlist;
 mod driver;
 
 // Re-export key types
-pub use abr::{AbrConfig, AbrController, ThroughputSample};
+pub use abr::{
+    AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
+};
 pub use driver::{DriverError, SourceError};
-pub use events::{EventEmitter, EventError, HlsEvent, VariantChangeReason};
+pub use events::{EventEmitter, HlsEvent};
 pub use fetch::{FetchError, FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
 pub use playlist::{PlaylistError, PlaylistManager};
@@ -177,13 +180,14 @@ impl HlsSource {
         );
 
         let abr_config = abr::AbrConfig {
-            min_buffer_for_up_switch: opts.abr_min_buffer_for_up_switch,
-            down_switch_buffer: opts.abr_down_switch_buffer,
-            throughput_safety_factor: opts.abr_throughput_safety_factor,
-            up_hysteresis_ratio: opts.abr_up_hysteresis_ratio,
-            down_hysteresis_ratio: opts.abr_down_hysteresis_ratio,
+            min_buffer_for_up_switch_secs: f64::from(opts.abr_min_buffer_for_up_switch),
+            down_switch_buffer_secs: f64::from(opts.abr_down_switch_buffer),
+            throughput_safety_factor: f64::from(opts.abr_throughput_safety_factor),
+            up_hysteresis_ratio: f64::from(opts.abr_up_hysteresis_ratio),
+            down_hysteresis_ratio: f64::from(opts.abr_down_hysteresis_ratio),
             min_switch_interval: opts.abr_min_switch_interval,
             initial_variant_index: opts.abr_initial_variant_index,
+            sample_window: std::time::Duration::from_secs(30),
         };
 
         let abr_controller = abr::AbrController::new(
@@ -220,5 +224,9 @@ impl HlsSession {
 
     pub fn stream(&self) -> Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + '_>> {
         Box::pin(self.driver.stream())
+    }
+
+    pub fn events(&self) -> broadcast::Receiver<HlsEvent> {
+        self.driver.events()
     }
 }

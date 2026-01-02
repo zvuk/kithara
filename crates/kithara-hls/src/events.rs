@@ -1,21 +1,19 @@
 use std::time::Duration;
-use thiserror::Error;
 
-#[derive(Debug, Error)]
-pub enum EventError {
-    #[error("Event channel closed")]
-    ChannelClosed,
-
-    #[error("Invalid event data")]
-    InvalidData,
-}
+use tokio::sync::broadcast;
 
 #[derive(Clone, Debug)]
 pub enum HlsEvent {
-    VariantChanged {
-        old_variant: usize,
-        new_variant: usize,
-        reason: VariantChangeReason,
+    VariantDecision {
+        from_variant: usize,
+        to_variant: usize,
+        reason: crate::abr::AbrReason,
+    },
+
+    VariantApplied {
+        from_variant: usize,
+        to_variant: usize,
+        reason: crate::abr::AbrReason,
     },
 
     SegmentStart {
@@ -53,41 +51,43 @@ pub enum HlsEvent {
     EndOfStream,
 }
 
-#[derive(Clone, Debug)]
-pub enum VariantChangeReason {
-    Manual,
-    AbrUpSwitch,
-    AbrDownSwitch,
-    ErrorRecovery,
-}
-
+#[derive(Clone)]
 pub struct EventEmitter {
-    // In real implementation, this would hold a channel or similar
-    // For now, placeholder structure
+    tx: broadcast::Sender<HlsEvent>,
 }
 
 impl EventEmitter {
     pub fn new() -> Self {
-        Self {}
+        let (tx, _) = broadcast::channel(128);
+        Self { tx }
     }
 
-    pub fn emit_variant_changed(&self, old: usize, new: usize, reason: VariantChangeReason) {
-        // In real implementation, this would send to a channel
-        tracing::debug!(
-            "Variant changed from {} to {} (reason: {:?}",
-            old,
-            new,
-            reason
-        );
+    pub fn subscribe(&self) -> broadcast::Receiver<HlsEvent> {
+        self.tx.subscribe()
+    }
+
+    pub fn emit_variant_decision(&self, from: usize, to: usize, reason: crate::abr::AbrReason) {
+        let _ = self.tx.send(HlsEvent::VariantDecision {
+            from_variant: from,
+            to_variant: to,
+            reason,
+        });
+    }
+
+    pub fn emit_variant_applied(&self, from: usize, to: usize, reason: crate::abr::AbrReason) {
+        let _ = self.tx.send(HlsEvent::VariantApplied {
+            from_variant: from,
+            to_variant: to,
+            reason,
+        });
     }
 
     pub fn emit_segment_start(&self, variant: usize, segment: usize, offset: u64) {
-        tracing::debug!(
-            "Segment start: variant {}, segment {}, offset {}",
+        let _ = self.tx.send(HlsEvent::SegmentStart {
             variant,
-            segment,
-            offset
-        );
+            segment_index: segment,
+            byte_offset: offset,
+        });
     }
 
     pub fn emit_segment_complete(
@@ -97,38 +97,43 @@ impl EventEmitter {
         bytes: u64,
         duration: Duration,
     ) {
-        tracing::debug!(
-            "Segment complete: variant {}, segment {}, {} bytes in {:?}",
+        let _ = self.tx.send(HlsEvent::SegmentComplete {
             variant,
-            segment,
-            bytes,
-            duration
-        );
+            segment_index: segment,
+            bytes_transferred: bytes,
+            duration,
+        });
     }
 
     pub fn emit_key_fetch(&self, key_url: &str, success: bool, cached: bool) {
-        tracing::debug!(
-            "Key fetch: {} (success: {}, cached: {})",
-            key_url,
+        let _ = self.tx.send(HlsEvent::KeyFetch {
+            key_url: key_url.to_string(),
             success,
-            cached
-        );
+            cached,
+        });
     }
 
     pub fn emit_buffer_level(&self, level: f32) {
-        tracing::debug!("Buffer level: {:.2}s", level);
+        let _ = self.tx.send(HlsEvent::BufferLevel {
+            level_seconds: level,
+        });
     }
 
-    pub fn emit_throughput_sample(&self, bps: f64) {
-        tracing::debug!("Throughput: {:.2} bytes/s", bps);
+    pub fn emit_throughput_sample(&self, bytes_per_second: f64) {
+        let _ = self
+            .tx
+            .send(HlsEvent::ThroughputSample { bytes_per_second });
     }
 
     pub fn emit_error(&self, error: &str, recoverable: bool) {
-        tracing::error!("HLS error: {} (recoverable: {})", error, recoverable);
+        let _ = self.tx.send(HlsEvent::Error {
+            error: error.to_string(),
+            recoverable,
+        });
     }
 
     pub fn emit_end_of_stream(&self) {
-        tracing::debug!("End of stream");
+        let _ = self.tx.send(HlsEvent::EndOfStream);
     }
 }
 
@@ -138,54 +143,33 @@ mod tests {
 
     #[test]
     fn test_event_creation() {
-        let event = HlsEvent::VariantChanged {
-            old_variant: 0,
-            new_variant: 1,
-            reason: VariantChangeReason::AbrUpSwitch,
+        let event = HlsEvent::VariantApplied {
+            from_variant: 0,
+            to_variant: 1,
+            reason: crate::abr::AbrReason::UpSwitch,
         };
 
         match event {
-            HlsEvent::VariantChanged {
-                old_variant,
-                new_variant,
+            HlsEvent::VariantApplied {
+                from_variant,
+                to_variant,
                 reason,
             } => {
-                assert_eq!(old_variant, 0);
-                assert_eq!(new_variant, 1);
-                assert!(matches!(reason, VariantChangeReason::AbrUpSwitch));
+                assert_eq!(from_variant, 0);
+                assert_eq!(to_variant, 1);
+                assert!(matches!(reason, crate::abr::AbrReason::UpSwitch));
             }
             _ => panic!("Unexpected event type"),
         }
     }
 
     #[test]
-    fn test_event_emitter() {
+    fn test_subscribe() {
         let emitter = EventEmitter::new();
-
-        // These should not panic
-        emitter.emit_variant_changed(0, 1, VariantChangeReason::Manual);
-        emitter.emit_segment_start(1, 5, 1000);
-        emitter.emit_segment_complete(1, 5, 5000, Duration::from_secs(2));
-        emitter.emit_key_fetch("http://example.com/key.bin", true, false);
-        emitter.emit_buffer_level(15.5);
-        emitter.emit_throughput_sample(1000000.0);
-        emitter.emit_error("Test error", true);
+        let mut rx = emitter.subscribe();
         emitter.emit_end_of_stream();
-    }
 
-    #[test]
-    fn test_variant_change_reasons() {
-        let reasons = vec![
-            VariantChangeReason::Manual,
-            VariantChangeReason::AbrUpSwitch,
-            VariantChangeReason::AbrDownSwitch,
-            VariantChangeReason::ErrorRecovery,
-        ];
-
-        for reason in reasons {
-            // Verify all reasons can be cloned and debug printed
-            let _cloned = reason.clone();
-            let _debug = format!("{:?}", reason);
-        }
+        let event = rx.try_recv().ok();
+        assert!(matches!(event, Some(HlsEvent::EndOfStream)));
     }
 }
