@@ -61,8 +61,8 @@ async fn hls_vod_fetches_all_segments_for_selected_variant() -> HlsResult<()> {
     let mut stream = Box::pin(stream);
 
     // Collect all bytes
-    let mut total_bytes = 0;
-    let mut segment_prefixes: Vec<String> = Vec::new();
+    let total_bytes = 0;
+    let segment_prefixes: Vec<String> = Vec::new();
     while let Some(result) = stream.next().await {
         result?;
     }
