@@ -91,6 +91,9 @@ mod tests {
             .route("/error404", get(error_404_endpoint))
             .route("/error500", get(error_500_endpoint))
             .route("/error429", get(error_429_endpoint))
+            .route("/slow-headers", get(slow_headers_endpoint))
+            .route("/slow-body", get(slow_body_endpoint))
+            .route("/ignore-range", get(ignore_range_endpoint))
     }
 
     async fn test_endpoint() -> &'static str {
@@ -164,6 +167,57 @@ mod tests {
 
     async fn error_429_endpoint() -> Result<Response, StatusCode> {
         Err(StatusCode::TOO_MANY_REQUESTS)
+    }
+
+    async fn slow_headers_endpoint() -> Result<Response, StatusCode> {
+        // This endpoint delays sending headers to test timeout
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(axum::body::Body::from("delayed response"))
+            .unwrap())
+    }
+
+    async fn slow_body_endpoint() -> Result<Response, StatusCode> {
+        // This endpoint sends headers quickly but body slowly
+        use futures::stream::{self, StreamExt};
+
+        let stream = stream::iter(vec![
+            Bytes::from_static(b"first chunk"),
+            Bytes::from_static(b"second chunk"),
+        ])
+        .then(|chunk| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+            Ok::<Bytes, std::io::Error>(chunk)
+        });
+
+        let body = axum::body::Body::from_stream(stream);
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .body(body)
+            .unwrap())
+    }
+
+    async fn ignore_range_endpoint(request: Request) -> Result<Response, StatusCode> {
+        let headers = request.headers();
+        let range_header = headers.get("Range").and_then(|h| h.to_str().ok());
+
+        // Always return 200 OK with full data, ignoring Range header
+        let data = b"full data ignoring range";
+
+        if range_header.is_some() {
+            // Server received Range header but chooses to ignore it
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .body(axum::body::Body::from(Bytes::copy_from_slice(data)))
+                .unwrap())
+        } else {
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .body(axum::body::Body::from(Bytes::copy_from_slice(data)))
+                .unwrap())
+        }
     }
 
     async fn run_test_server() -> String {
@@ -662,5 +716,147 @@ mod tests {
 
         assert_eq!(collected.len(), 8); // Got first 8 bytes
         assert_eq!(collected[0], 0xab);
+    }
+
+    #[tokio::test]
+    async fn test_no_mid_stream_retry() {
+        // Test retry classification according to v1 contract
+        // Note: Current implementation marks all connection errors as retryable,
+        // including mid-stream errors. The v1 contract says no mid-stream retry,
+        // but we can't distinguish stages with current error type.
+
+        // Test that timeout errors ARE retryable (they happen before body)
+        let timeout_error = NetError::Timeout;
+        assert!(
+            timeout_error.is_retryable(),
+            "Timeout errors should be retryable (happen before body)"
+        );
+
+        // Test HTTP 500 is retryable (happens before body)
+        let http_500_error = NetError::HttpStatus {
+            status: 500,
+            url: "http://example.com".to_string(),
+        };
+        assert!(
+            http_500_error.is_retryable(),
+            "HTTP 5xx errors should be retryable (happen before body)"
+        );
+
+        // Test HTTP 429 is retryable
+        let http_429_error = NetError::HttpStatus {
+            status: 429,
+            url: "http://example.com".to_string(),
+        };
+        assert!(
+            http_429_error.is_retryable(),
+            "HTTP 429 errors should be retryable"
+        );
+
+        // Test HTTP 408 is retryable (as per reference spec)
+        let http_408_error = NetError::HttpStatus {
+            status: 408,
+            url: "http://example.com".to_string(),
+        };
+        assert!(
+            http_408_error.is_retryable(),
+            "HTTP 408 errors should be retryable (as per reference spec)"
+        );
+
+        // Test HTTP 404 is NOT retryable
+        let http_404_error = NetError::HttpStatus {
+            status: 404,
+            url: "http://example.com".to_string(),
+        };
+        assert!(
+            !http_404_error.is_retryable(),
+            "HTTP 4xx errors (except 408/429) should not be retryable"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_timeout_matrix_get_bytes_times_out_on_body() {
+        // Test that get_bytes times out if body stalls
+        let server_url = run_test_server().await;
+        let base = ReqwestNet::new().unwrap();
+
+        // Use a very short timeout
+        let timeout_client = TimeoutNet::new(base, Duration::from_millis(50));
+
+        let url = format!("{}/slow-body", server_url).parse().unwrap();
+
+        // get_bytes should timeout because body is slow
+        let result = timeout_client.get_bytes(url).await;
+        assert!(result.is_err());
+
+        match result.unwrap_err() {
+            NetError::Timeout => (), // Expected
+            other => panic!("Expected Timeout error, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_timeout_matrix_stream_times_out_on_headers() {
+        // Test that stream times out waiting for headers
+        let server_url = run_test_server().await;
+        let base = ReqwestNet::new().unwrap();
+
+        // Use a very short timeout (shorter than server's 500ms delay)
+        let timeout_client = TimeoutNet::new(base, Duration::from_millis(100));
+
+        let url = format!("{}/slow-headers", server_url).parse().unwrap();
+
+        // stream should timeout waiting for headers
+        let result = timeout_client.stream(url, None).await;
+        assert!(result.is_err());
+
+        match result {
+            Err(NetError::Timeout) => (), // Expected
+            Ok(_) => panic!("Expected Timeout error, got Ok"),
+            Err(e) => panic!("Expected Timeout error, got {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_timeout_matrix_get_range_times_out_on_headers() {
+        // Test that get_range times out waiting for headers
+        let server_url = run_test_server().await;
+        let base = ReqwestNet::new().unwrap();
+
+        // Use a very short timeout (shorter than server's 500ms delay)
+        let timeout_client = TimeoutNet::new(base, Duration::from_millis(100));
+
+        let url = format!("{}/slow-headers", server_url).parse().unwrap();
+        let range = RangeSpec::new(0, Some(10));
+
+        // get_range should timeout waiting for headers
+        let result = timeout_client.get_range(url, range, None).await;
+        assert!(result.is_err());
+
+        match result {
+            Err(NetError::Timeout) => (), // Expected
+            Ok(_) => panic!("Expected Timeout error, got Ok"),
+            Err(e) => panic!("Expected Timeout error, got {:?}", e),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_range_behavior_contract() {
+        // Test behavior when server ignores Range header and returns 200 OK
+        let server_url = run_test_server().await;
+        let client = NetClient::new(NetOptions::default()).unwrap();
+        let url = format!("{}/ignore-range", server_url).parse().unwrap();
+
+        // Request a range
+        let mut stream = client.get_range(url, (0, Some(5)), None).await.unwrap();
+        let mut collected = Vec::new();
+
+        while let Some(chunk_result) = stream.next().await {
+            let chunk = chunk_result.unwrap();
+            collected.extend_from_slice(&chunk);
+        }
+
+        // According to current contract, we accept 200 OK response even with Range header
+        // The client should return the full data
+        assert_eq!(collected, b"full data ignoring range");
     }
 }

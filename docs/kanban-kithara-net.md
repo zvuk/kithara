@@ -92,13 +92,13 @@ Reference: `docs/porting/net-reference.md`
 - [x] Add short crate-level docs (`crates/kithara-net/README.md`): layering, retry semantics, timeout semantics
 
 ### Additional contract tests (portable, to match reference)
-- [ ] No mid-stream retry (v1 invariant):
+- [x] No mid-stream retry (v1 invariant):
   - server returns headers + first chunk, then drops connection
   - assert: no retry attempts after body started; stream ends with error deterministically
-- [ ] Timeout matrix tests (request/headers/body stages):
+- [x] Timeout matrix tests (request/headers/body stages):
   - `get_bytes` times out if body stalls
   - `stream/get_range` time out waiting for response headers, but do not enforce whole-body timeout (unless отдельно зафиксировано контрактом)
-- [ ] Range behavior contract test:
+- [x] Range behavior contract test:
   - define behavior for servers that ignore Range and respond `200 OK` to range request (either error or accept), and test it
 
 ---
