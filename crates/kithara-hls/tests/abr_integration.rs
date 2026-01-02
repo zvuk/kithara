@@ -1,6 +1,6 @@
-use kithara_hls::abr::{AbrConfig, AbrController};
-use kithara_hls::HlsResult;
 use crate::fixture::create_test_master_playlist;
+use kithara_hls::HlsResult;
+use kithara_hls::abr::{AbrConfig, AbrController};
 
 #[test]
 fn test_variant_selection_manual_override() -> HlsResult<()> {

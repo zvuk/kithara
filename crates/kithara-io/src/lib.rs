@@ -1,35 +1,34 @@
 //! # Kithara I/O Bridge
 //!
-//! This crate provides a bridge between async byte sources and synchronous I/O consumers.
-//! It's designed to connect components like `kithara-file` and `kithara-hls` (async sources)
-//! to `kithara-decode` (synchronous consumer) through a bounded buffer with backpressure.
+//! Bridge between async byte sources and synchronous I/O consumers.
+//! Connects async sources (`kithara-file`, `kithara-hls`) to sync consumers (`kithara-decode`)
+//! through a bounded buffer with backpressure.
 //!
 //! ## Core Components
 //!
-//! - `BridgeWriter`: Async producer interface for pushing bytes
-//! - `BridgeReader`: Sync consumer interface implementing `Read` and `Seek`
-//! - `BufferTracker`: Manages memory limits and backpressure
+//! - `BridgeWriter`: Async producer interface
+//! - `BridgeReader`: Sync consumer implementing `Read` + `Seek`
+//! - `BufferTracker`: Centralized buffer management
 //!
-//! ## EOF Semantics (Critical Contract)
+//! ## EOF Semantics (Normative)
 //!
-//! **MUST NEVER return `Ok(0)` before proven End-of-Stream:**
-//! - `Read::read()` only returns `Ok(0)` after `BridgeWriter::finish()` is called AND buffer is fully drained
-//! - No "false EOFs" - when no data is available, reader should block
-//! - This ensures decode threads don't prematurely terminate
+//! **Contract:** `Read::read()` returns `Ok(0)` **only** after:
+//! 1. `BridgeWriter::finish()` is called, AND
+//! 2. All buffered data has been consumed.
 //!
-//! ## Seek Contract
+//! No "false EOFs". When data is unavailable, the reader blocks.
 //!
-//! **All seek operations return `Unsupported`:**
-//! - `BridgeReader` implements `Seek` but always returns `ErrorKind::Unsupported`
-//! - This is explicit behavior, not an omission
-//! - Streaming data sources typically don't support random access
+//! ## Seek Contract (Normative)
+//!
+//! **Contract:** All `Seek` operations return `ErrorKind::Unsupported`.
+//! This is explicit behavior for streaming sources that lack random access.
 //!
 //! ## Backpressure
 //!
-//! The bridge enforces memory limits via `max_buffer_bytes`:
-//! - `push()` fails with `BufferFull` when limit exceeded
-//! - Memory is released when data is consumed from reader
-//! - Prevents unlimited memory accumulation
+//! Memory is bounded by `max_buffer_bytes`:
+//! - `push()` fails with `BufferFull` at limit
+//! - Memory released when data consumed
+//! - Prevents unbounded memory growth
 
 #![forbid(unsafe_code)]
 

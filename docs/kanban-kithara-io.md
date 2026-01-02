@@ -63,14 +63,14 @@
 ## `kithara-io` — Refactor (small modules; keep public contract)
 
 - [x] Split into `bridge`, `reader`, `writer`, `errors` modules when code grows (no behavior change) + keep tests green
-- [ ] Consolidate synchronization/backpressure primitives into one place to avoid duplicated invariants + keep tests green
-- [ ] Add crate-level docs: EOF semantics and seek contract (short, normative)
+- [x] Consolidate synchronization/backpressure primitives into one place to avoid duplicated invariants + keep tests green
+- [x] Add crate-level docs: EOF semantics and seek contract (short, normative)
 
 ---
 
 ## Sanity check (после ужесточения fmt+clippy)
 
-- [ ] Remove new clippy warnings/errors introduced by stricter workspace lints
-- [ ] Run `cargo fmt` and ensure no formatting diffs remain
-- [ ] Run `cargo test -p kithara-io`
-- [ ] Run `cargo clippy -p kithara-io` and make it clean (no warnings/errors) under workspace lints
+- [x] Remove new clippy warnings/errors introduced by stricter workspace lints
+- [x] Run `cargo fmt` and ensure no formatting diffs remain
+- [x] Run `cargo test -p kithara-io`
+- [x] Run `cargo clippy -p kithara-io` and make it clean (no warnings/errors) under workspace lints

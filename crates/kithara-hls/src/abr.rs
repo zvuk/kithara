@@ -202,8 +202,6 @@ mod tests {
         assert_eq!(throughput.unwrap(), 10000.0); // 1000 bytes / 0.1 sec
     }
 
-
-
     #[test]
     fn test_buffer_level_updates() {
         let mut state = AbrState::new(0);

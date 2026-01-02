@@ -19,13 +19,12 @@ impl Default for BridgeOptions {
 
 pub fn new_bridge(opts: BridgeOptions) -> (BridgeWriter, BridgeReader) {
     let (tx, rx) = kanal::bounded(1000); // Large enough for messages, we handle byte limiting ourselves
-    let buffer_tracker = BufferTracker::new(opts.max_buffer_bytes);
+    let buffer_tracker = std::sync::Arc::new(BufferTracker::new(opts.max_buffer_bytes));
     let writer = BridgeWriter {
         tx,
-        max_buffer_bytes: opts.max_buffer_bytes,
-        current_buffer_bytes: buffer_tracker.tracker(),
+        buffer_tracker: buffer_tracker.clone(),
     };
-    let reader = BridgeReader::new(rx, buffer_tracker.tracker());
+    let reader = BridgeReader::new(rx, buffer_tracker);
     (writer, reader)
 }
 

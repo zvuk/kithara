@@ -7,21 +7,18 @@ pub struct BridgeReader {
     read_pos: usize,
     eos_received: bool,
     current_data_size: usize,
-    buffer_bytes_used: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    buffer_tracker: std::sync::Arc<BufferTracker>,
 }
 
 impl BridgeReader {
-    pub fn new(
-        rx: Receiver<BridgeMsg>,
-        buffer_bytes_used: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    ) -> Self {
+    pub fn new(rx: Receiver<BridgeMsg>, buffer_tracker: std::sync::Arc<BufferTracker>) -> Self {
         Self {
             rx,
             current_data: None,
             read_pos: 0,
             eos_received: false,
             current_data_size: 0,
-            buffer_bytes_used,
+            buffer_tracker,
         }
     }
 }
@@ -42,8 +39,7 @@ impl Read for BridgeReader {
 
                 if self.read_pos == data.len() {
                     // Release bytes from buffer tracking
-                    self.buffer_bytes_used
-                        .fetch_sub(self.current_data_size, std::sync::atomic::Ordering::AcqRel);
+                    self.buffer_tracker.release(self.current_data_size);
                     self.current_data = None;
                     self.read_pos = 0;
                     self.current_data_size = 0;
@@ -94,3 +90,4 @@ use bytes::Bytes;
 use kanal::Receiver;
 
 use crate::bridge::BridgeMsg;
+use crate::sync::BufferTracker;

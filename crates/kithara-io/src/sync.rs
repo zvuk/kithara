@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+#[derive(Debug)]
 pub struct BufferTracker {
     current_buffer_bytes: Arc<AtomicUsize>,
     max_buffer_bytes: usize,
