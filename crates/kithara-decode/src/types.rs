@@ -121,7 +121,7 @@ impl<T> PcmChunk<T> {
 
     /// Check if PCM data is frame-aligned (length divisible by channel count)
     pub fn is_frame_aligned(&self) -> bool {
-        self.spec.channels == 0 || self.pcm.len() % self.spec.channels as usize == 0
+        self.spec.channels == 0 || self.pcm.len().is_multiple_of(self.spec.channels as usize)
     }
 
     /// Duration of this chunk in seconds
@@ -135,18 +135,10 @@ impl<T> PcmChunk<T> {
 }
 
 /// Decoder settings for Symphonia integration
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct DecoderSettings {
     /// Enable gapless playback when supported by format
     pub enable_gapless: bool,
-}
-
-impl Default for DecoderSettings {
-    fn default() -> Self {
-        Self {
-            enable_gapless: false, // Default to disabled for compatibility
-        }
-    }
 }
 
 /// Commands that can be sent to the decoder/pipeline

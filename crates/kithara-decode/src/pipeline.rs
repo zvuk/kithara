@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use dasp::sample::Sample as DaspSample;
 use symphonia::core::audio::conv::ConvertibleSample;
 use symphonia::core::audio::sample::Sample as SymphoniaSample;
@@ -22,6 +20,7 @@ where
     command_sender: kanal::Sender<DecodeCommand>,
 
     /// Receiver for consuming PCM chunks
+    #[allow(dead_code)]
     chunk_receiver: kanal::Receiver<Result<PcmChunk<T>, DecodeError>>,
 
     /// Handle to worker task
@@ -103,7 +102,7 @@ where
             match source.next_chunk() {
                 Ok(Some(chunk)) => {
                     // Producer waits when queue is full (bounded backpressure)
-                    if let Err(_) = chunk_sender.send(Ok(chunk)) {
+                    if chunk_sender.send(Ok(chunk)).is_err() {
                         // Queue closed, exit
                         return;
                     }
@@ -162,7 +161,7 @@ mod tests {
 
         let stream = AudioStream::new(source, 10).unwrap();
 
-        let result = stream.send_command(DecodeCommand::Seek(Duration::from_secs(5)));
+        let result = stream.send_command(DecodeCommand::Seek(std::time::Duration::from_secs(5)));
         assert!(result.is_ok());
     }
 }

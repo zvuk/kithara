@@ -4,7 +4,6 @@ use crate::{DecodeError, DecodeResult, MediaSource, PcmSpec};
 ///
 /// This module consolidates all Symphonia-specific logic to avoid duplication
 /// across decoder and pipeline components.
-
 /// Symphonia session containing format reader and decoder state
 pub struct SymphoniaSession {
     // TODO: Add actual Symphonia fields when fully implemented
@@ -63,7 +62,7 @@ impl SymphoniaSession {
     /// Create a new Symphonia session from a media source
     pub fn new_session(source: Box<dyn MediaSource>) -> DecodeResult<Self> {
         let track_id = Self::find_audio_track()?;
-        let _ = Self::probe(&*source)?;
+        Self::probe(&*source)?;
 
         Ok(Self {
             track_id,

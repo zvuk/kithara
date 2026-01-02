@@ -29,9 +29,11 @@ where
     spec: Option<PcmSpec>,
 
     /// Original media source for reopening
+    #[allow(dead_code)]
     source: Box<dyn MediaSource>,
 
     /// Decoder settings
+    #[allow(dead_code)]
     settings: DecoderSettings,
 
     /// Phantom data for generic parameter

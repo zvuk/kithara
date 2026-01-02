@@ -24,7 +24,7 @@ impl MediaSource for TestMediaSource {
     }
 
     fn file_ext(&self) -> Option<&str> {
-        self.file_ext.as_ref().map(|s| s.as_str())
+        self.file_ext.as_deref()
     }
 }
 
@@ -54,7 +54,7 @@ impl FakeAudioSourceF32 {
         for frame in start_frame..(start_frame + frame_count as u64) {
             for channel in 0..channels {
                 // Generate a simple sine wave with frequency based on channel
-                let sample_f32 = ((frame as f32 * 0.01 + channel as f32 * 0.5).sin() * 0.5) as f32;
+                let sample_f32 = (frame as f32 * 0.01 + channel as f32 * 0.5).sin() * 0.5;
                 samples.push(sample_f32);
             }
         }

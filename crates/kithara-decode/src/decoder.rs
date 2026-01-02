@@ -69,7 +69,7 @@ where
     /// Decode next chunk of PCM data
     ///
     /// Returns None when the stream has ended naturally
-    pub fn next(&mut self) -> DecodeResult<Option<crate::PcmChunk<T>>> {
+    pub fn decode_next(&mut self) -> DecodeResult<Option<crate::PcmChunk<T>>> {
         self.engine.next_chunk()
     }
 
@@ -93,7 +93,7 @@ where
     }
 
     fn next_chunk(&mut self) -> DecodeResult<Option<crate::PcmChunk<T>>> {
-        self.next()
+        self.decode_next()
     }
 
     fn handle_command(&mut self, cmd: DecodeCommand) -> DecodeResult<()> {
