@@ -11,20 +11,3 @@
 `kithara-core` intentionally minimal: только identity и базовые ошибки. Никаких настроек кэша/ABR/HLS/сети — это живёт в соответствующих крейтах.
 
 ---
-
-## Выполненные задачи (по git истории)
-
-Сопоставление сделано по коммитам:
-- `132f181` — `kithara-core` (vibe-kanban 828a28a9)
-- `a767617` — `kithara-core — порт сценариев идентичности (tests)` (vibe-kanban f8a79d17)
-- `a6995f9` — `kithara-core — refactor (module boundaries; keep public contract)` (vibe-kanban ab2a7beb)
-
----
-
-## Sanity check (после ужесточения fmt+clippy)
-
-- [x] Run `cargo fmt` and ensure no formatting diffs remain
-- [x] Run `cargo test -p kithara-core`
-- [x] Run `cargo clippy -p kithara-core` and make it clean (no warnings/errors) under workspace lints
-
----
