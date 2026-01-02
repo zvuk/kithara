@@ -45,10 +45,12 @@
 //! use kithara_cache::{AssetCache, CacheOptions, CachePath};
 //! use kithara_core::AssetId;
 //! use url::Url;
+//! use std::env;
 //!
+//! let temp_dir = env::temp_dir().join("kithara-cache-example");
 //! let cache = AssetCache::open(CacheOptions {
 //!     max_bytes: 1024 * 1024, // 1GB
-//!     root_dir: Some("/path/to/cache".into()),
+//!     root_dir: Some(temp_dir),
 //! })?;
 //!
 //! let url = Url::parse("https://example.com/test.mp3")?;
@@ -330,7 +332,7 @@ mod tests {
             max_bytes: 1024 * 1024,
             root_dir: None,
         };
-        let cache = AssetCache::open(opts).unwrap();
+        let _cache = AssetCache::open(opts).unwrap();
         // Since root_dir is private, we can't test this directly
         // This test just ensures cache creation works
         assert!(true);

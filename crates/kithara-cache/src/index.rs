@@ -68,61 +68,59 @@ where
             }
 
             // Check if this looks like an asset directory (hex naming)
-            if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
-                if dir_name.len() == 2 && dir_name.chars().all(|c| c.is_ascii_hexdigit()) {
-                    // This is a 2-char prefix directory
-                    for subdir_entry in std::fs::read_dir(&path)? {
-                        let subdir_entry = subdir_entry?;
-                        let subdir_path = subdir_entry.path();
+            if let Some(dir_name) = path.file_name().and_then(|n| n.to_str())
+                && dir_name.len() == 2 && dir_name.chars().all(|c| c.is_ascii_hexdigit())
+            {
+                // This is a 2-char prefix directory
+                for subdir_entry in std::fs::read_dir(&path)? {
+                    let subdir_entry = subdir_entry?;
+                    let subdir_path = subdir_entry.path();
 
-                        if !subdir_path.is_dir() {
-                            continue;
-                        }
+                    if !subdir_path.is_dir() {
+                        continue;
+                    }
 
-                        if let Some(subdir_name) = subdir_path.file_name().and_then(|n| n.to_str())
-                        {
-                            if subdir_name.len() == 2
-                                && subdir_name.chars().all(|c| c.is_ascii_hexdigit())
-                            {
-                                // This is the asset directory
-                                let asset_key = format!("{}{}", dir_name, subdir_name);
-                                found_assets.insert(asset_key.clone());
+                    if let Some(subdir_name) = subdir_path.file_name().and_then(|n| n.to_str())
+                        && subdir_name.len() == 2
+                        && subdir_name.chars().all(|c| c.is_ascii_hexdigit())
+                    {
+                        // This is the asset directory
+                        let asset_key = format!("{}{}", dir_name, subdir_name);
+                        found_assets.insert(asset_key.clone());
 
-                                // Calculate total size of this asset
-                                let mut asset_size = 0u64;
-                                for file_entry in std::fs::read_dir(&subdir_path)? {
-                                    let file_entry = file_entry?;
-                                    let file_path = file_entry.path();
-                                    if file_path.is_file() {
-                                        asset_size += file_entry.metadata()?.len();
-                                    }
-                                }
-
-                                total_bytes += asset_size;
-
-                                // Update or create asset state
-                                let asset_state = state
-                                    .assets
-                                    .entry(asset_key.clone())
-                                    .or_insert_with(|| AssetState {
-                                        size_bytes: 0,
-                                        last_access_ms: std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap()
-                                            .as_millis()
-                                            as u64,
-                                        created_ms: std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .unwrap()
-                                            .as_millis()
-                                            as u64,
-                                        pinned: false,
-                                    });
-
-                                // Update size from filesystem (source of truth)
-                                asset_state.size_bytes = asset_size;
+                        // Calculate total size of this asset
+                        let mut asset_size = 0u64;
+                        for file_entry in std::fs::read_dir(&subdir_path)? {
+                            let file_entry = file_entry?;
+                            let file_path = file_entry.path();
+                            if file_path.is_file() {
+                                asset_size += file_entry.metadata()?.len();
                             }
                         }
+
+                        total_bytes += asset_size;
+
+                        // Update or create asset state
+                        let asset_state = state
+                            .assets
+                            .entry(asset_key.clone())
+                            .or_insert_with(|| AssetState {
+                                size_bytes: 0,
+                                last_access_ms: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis()
+                                    as u64,
+                                created_ms: std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis()
+                                    as u64,
+                                pinned: false,
+                            });
+
+                        // Update size from filesystem (source of truth)
+                        asset_state.size_bytes = asset_size;
                     }
                 }
             }
@@ -361,7 +359,8 @@ mod tests {
     #[test]
     fn indexstore_creates_state_file_on_first_put() {
         let store = create_temp_index_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap()).unwrap();
+        let asset_id =
+            AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap()).unwrap();
         let path = CachePath::from_single("test.txt").unwrap();
 
         // Initially no state file
@@ -386,7 +385,8 @@ mod tests {
     #[test]
     fn indexstore_atomic_state_save_is_crash_safe() {
         let store = create_temp_index_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/atomic.mp3").unwrap()).unwrap();
+        let asset_id =
+            AssetId::from_url(&url::Url::parse("https://example.com/atomic.mp3").unwrap()).unwrap();
         let path = CachePath::from_single("atomic.txt").unwrap();
 
         store.put_atomic(asset_id, &path, b"atomic test").unwrap();
@@ -407,7 +407,8 @@ mod tests {
     #[test]
     fn indexstore_touch_updates_access_time() {
         let store = create_temp_index_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/touch.mp3").unwrap()).unwrap();
+        let asset_id =
+            AssetId::from_url(&url::Url::parse("https://example.com/touch.mp3").unwrap()).unwrap();
         let path = CachePath::from_single("touch.txt").unwrap();
 
         // Put data to create asset state
@@ -439,8 +440,10 @@ mod tests {
     #[test]
     fn indexstore_stats_are_accurate() {
         let store = create_temp_index_store();
-        let asset1 = AssetId::from_url(&url::Url::parse("https://example.com/asset1.mp3").unwrap()).unwrap();
-        let asset2 = AssetId::from_url(&url::Url::parse("https://example.com/asset2.mp3").unwrap()).unwrap();
+        let asset1 =
+            AssetId::from_url(&url::Url::parse("https://example.com/asset1.mp3").unwrap()).unwrap();
+        let asset2 =
+            AssetId::from_url(&url::Url::parse("https://example.com/asset2.mp3").unwrap()).unwrap();
         let path = CachePath::from_single("data.txt").unwrap();
 
         // Add two assets

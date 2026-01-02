@@ -139,10 +139,10 @@ mod tests {
     use crate::base::FsStore;
     use std::env;
 
-    fn create_temp_lease_store() -> LeaseStore<FsStore> {
+    fn _create_temp_lease_store() -> LeaseStore<FsStore> {
         let temp_dir =
             env::temp_dir().join(format!("kithara-leasestore-test-{}", uuid::Uuid::new_v4()));
-        let fs_store = FsStore::new(temp_dir).unwrap();
+        let _fs_store = FsStore::new(temp_dir).unwrap();
         // Note: FsStore doesn't implement PinStore, so this would need IndexStore
         // For testing, we'll just test the delegation pattern
         // In practice, this would be used with IndexStore< FsStore >

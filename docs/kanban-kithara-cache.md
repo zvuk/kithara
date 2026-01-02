@@ -82,7 +82,7 @@
 
 ## Sanity check + починка после ужесточения fmt+clippy
 
-- [ ] Fix compilation errors in `kithara-cache` (duplicates, missing modules/symbols, broken impls)
-- [ ] Run `cargo fmt` and ensure no formatting diffs remain
-- [ ] Run `cargo test -p kithara-cache`
-- [ ] Run `cargo clippy -p kithara-cache` and make it clean (no warnings/errors) under workspace lints
+- [x] Fix compilation errors in `kithara-cache` (duplicates, missing modules/symbols, broken impls)
+- [x] Run `cargo fmt` and ensure no formatting diffs remain
+- [x] Run `cargo test -p kithara-cache`
+- [x] Run `cargo clippy -p kithara-cache` and make it clean (no warnings/errors) under workspace lints

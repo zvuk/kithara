@@ -154,11 +154,7 @@ where
             0
         };
 
-        let additional_space_needed = if incoming_size > old_size {
-            incoming_size - old_size
-        } else {
-            0
-        };
+        let additional_space_needed = incoming_size.saturating_sub(old_size);
 
         if additional_space_needed > 0 {
             self.ensure_space(additional_space_needed, Some(asset))?;
