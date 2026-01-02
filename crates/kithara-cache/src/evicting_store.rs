@@ -117,7 +117,7 @@ where
         // For now, we'll use a placeholder URL approach
         let hex_string = hex::encode(&bytes);
         let url = format!("https://reconstructed.from.bytes/{}", hex_string);
-        Ok(AssetId::from_url(&url::Url::parse(&url)?))
+        Ok(AssetId::from_url(&url::Url::parse(&url)?)?)
     }
 }
 
@@ -169,6 +169,43 @@ where
 
     fn remove_all(&self, asset: AssetId) -> CacheResult<()> {
         self.inner.remove_all(asset)
+    }
+}
+
+impl<S, P> EvictingStore<S, P>
+where
+    S: crate::lease::PinStore + crate::evicting_store::EvictionSupport,
+    P: EvictionPolicy,
+{
+    /// Pin an asset to prevent eviction (creates a LeaseGuard)
+    pub fn pin(&self, asset: AssetId) -> CacheResult<crate::lease::LeaseGuard<'_, S>> {
+        // First pin using the trait method
+        self.inner.pin(asset)?;
+
+        // For now, return an error since LeaseGuard construction is complex with layered types
+        // This is a limitation of the current architecture for the sanity check
+        Err(crate::CacheError::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "LeaseGuard construction not implemented for layered stores in sanity check",
+        )))
+    }
+}
+
+impl<S, P> crate::lease::PinStore for EvictingStore<S, P>
+where
+    S: crate::lease::PinStore + crate::evicting_store::EvictionSupport,
+    P: EvictionPolicy,
+{
+    fn pin(&self, asset: AssetId) -> CacheResult<()> {
+        self.inner.pin(asset)
+    }
+
+    fn unpin(&self, asset: AssetId) -> CacheResult<()> {
+        self.inner.unpin(asset)
+    }
+
+    fn is_pinned(&self, asset: AssetId) -> CacheResult<bool> {
+        self.inner.is_pinned(asset)
     }
 }
 

@@ -88,13 +88,11 @@ mod tests {
         assert_eq!(asset1, asset2);
     }
 
-
-
     #[test]
     fn asset_id_errors_on_missing_host() {
         // Create URL without host (file URL)
         let url = url::Url::parse("file:///path/to/audio.mp3").unwrap();
-        
+
         let result = AssetId::from_url(&url);
         assert!(result.is_err());
         assert!(matches!(result, Err(crate::CoreError::MissingComponent(_))));

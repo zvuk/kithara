@@ -8,6 +8,7 @@ pub trait EvictionPolicy {
 }
 
 /// Default LRU (Least Recently Used) eviction policy.
+#[derive(Clone, Debug)]
 pub struct LruPolicy;
 
 impl EvictionPolicy for LruPolicy {

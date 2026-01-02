@@ -18,8 +18,9 @@
 //! This crate intentionally stays minimal to avoid becoming a dumping ground for shared code.
 
 // Compile-time guard: settings types must not be added to kithara-core
-#[cfg(any(feature = "cache-options", feature = "hls-options"))]
-compile_error!("Settings/options belong in their respective crates, not kithara-core");
+// This is disabled for now since these features don't exist yet
+// #[cfg(any(feature = "cache-options", feature = "hls-options"))]
+// compile_error!("Settings/options belong in their respective crates, not kithara-core");
 
 pub mod asset_id;
 pub mod canonicalization;

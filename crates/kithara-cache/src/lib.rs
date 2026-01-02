@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use thiserror::Error;
 
+// Import Store trait for method calls
+use crate::store::Store;
+
 pub mod base;
 pub mod evict;
 pub mod evicting_store;
@@ -158,13 +161,20 @@ impl AssetCache {
         }
     }
 
-    pub fn pin(&self, asset: AssetId) -> CacheResult<crate::lease::LeaseGuard<'_, _>> {
+    pub fn pin(
+        &self,
+        asset: AssetId,
+    ) -> CacheResult<
+        crate::lease::LeaseGuard<
+            '_,
+            crate::lease::LeaseStore<crate::store_impl::IndexStore<crate::base::FsStore>>,
+        >,
+    > {
         self.store.pin(asset)
     }
 
     pub fn touch(&self, asset: AssetId) -> CacheResult<()> {
         // Delegate to inner IndexStore for touch functionality
-        use crate::store_impl::IndexStore;
 
         // We need to access the inner IndexStore somehow
         // For now, this is a limitation - the touch functionality is in IndexStore

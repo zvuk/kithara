@@ -91,8 +91,6 @@ mod tests {
     use super::*;
     use url::Url;
 
-
-
     #[test]
     fn canonicalize_for_asset_errors_on_missing_host() {
         let url = Url::parse("file:///path/to/audio.mp3").unwrap();
@@ -101,8 +99,6 @@ mod tests {
         assert!(result.is_err());
         assert!(matches!(result, Err(CoreError::MissingComponent(host)) if host == "host"));
     }
-
-
 
     #[test]
     fn canonicalize_for_resource_errors_on_missing_host() {

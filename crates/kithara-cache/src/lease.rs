@@ -22,7 +22,7 @@ impl<'a, S> LeaseGuard<'a, S>
 where
     S: PinStore,
 {
-    fn new(store: &'a LeaseStore<S>, asset_id: AssetId) -> Self {
+    pub fn new(store: &'a LeaseStore<S>, asset_id: AssetId) -> Self {
         LeaseGuard { store, asset_id }
     }
 
@@ -42,7 +42,8 @@ where
 
 /// Lease decorator that provides pin/lease semantics.
 /// Assets can be pinned to prevent eviction.
-/// Uses the wrapped store's indexing mechanism for tracking pins.
+/// Uses wrapped store's indexing mechanism for tracking pins.
+#[derive(Clone, Debug)]
 pub struct LeaseStore<S> {
     inner: S,
 }
@@ -74,7 +75,7 @@ where
 
 impl<S> Store for LeaseStore<S>
 where
-    S: PinStore,
+    S: Store,
 {
     fn exists(&self, asset: AssetId, rel_path: &CachePath) -> bool {
         self.inner.exists(asset, rel_path)
@@ -95,6 +96,40 @@ where
 
     fn remove_all(&self, asset: AssetId) -> CacheResult<()> {
         self.inner.remove_all(asset)
+    }
+}
+
+impl<S> PinStore for LeaseStore<S>
+where
+    S: PinStore,
+{
+    fn pin(&self, asset: AssetId) -> CacheResult<()> {
+        self.inner.pin(asset)
+    }
+
+    fn unpin(&self, asset: AssetId) -> CacheResult<()> {
+        self.inner.unpin(asset)
+    }
+
+    fn is_pinned(&self, asset: AssetId) -> CacheResult<bool> {
+        self.inner.is_pinned(asset)
+    }
+}
+
+impl<S> crate::evicting_store::EvictionSupport for LeaseStore<S>
+where
+    S: crate::evicting_store::EvictionSupport,
+{
+    fn get_total_bytes(&self) -> CacheResult<u64> {
+        self.inner.get_total_bytes()
+    }
+
+    fn get_all_assets(&self) -> CacheResult<Vec<(String, crate::AssetState)>> {
+        self.inner.get_all_assets()
+    }
+
+    fn remove_assets_from_state(&self, keys: &[String]) -> CacheResult<()> {
+        self.inner.remove_assets_from_state(keys)
     }
 }
 

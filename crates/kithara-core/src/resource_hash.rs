@@ -71,8 +71,6 @@ mod tests {
         assert_ne!(hash1, hash2);
     }
 
-
-
     #[test]
     fn resource_hash_errors_on_missing_host() {
         // Create URL without host

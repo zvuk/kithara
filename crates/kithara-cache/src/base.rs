@@ -5,6 +5,7 @@ use std::path::PathBuf;
 /// Base filesystem store implementation.
 /// Provides tree-friendly layout and atomic write operations.
 /// This layer doesn't know about eviction, leases, or indexing.
+#[derive(Clone, Debug)]
 pub struct FsStore {
     root_dir: PathBuf,
 }

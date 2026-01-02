@@ -7,6 +7,7 @@ use std::path::PathBuf;
 /// Indexing decorator that maintains state.json with metadata.
 /// Provides total_bytes tracking and per-asset metadata.
 /// FS remains the source of truth for file existence.
+#[derive(Clone, Debug)]
 pub struct IndexStore<S> {
     inner: S,
     root_dir: PathBuf,
