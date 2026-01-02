@@ -126,7 +126,7 @@ stream-download-hls downloader (decorator/layered pattern: base → timeout → 
 
 **Ожидаемый подход**:
 - trait `Net` + `NetExt`.
-- `ReqwestNet` (base) + `TimeoutNet<N>` + `RetryNet<N,P>` + `NetBuilder`.
+- `ReqwestNet` (base) + `TimeoutNet<N>` + `RetryNet<N,P>`.
 - Retry только до начала body streaming (v1), нет mid-stream retry.
 - Никаких stateful caches в net.
 

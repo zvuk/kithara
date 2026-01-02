@@ -50,7 +50,6 @@
 - `ReqwestNet` (или другой HTTP backend) — базовый слой
 - `TimeoutNet<N>` — декоратор таймаутов
 - `RetryNet<N, P>` — декоратор ретраев + `RetryPolicy`
-- `NetBuilder` / `create_default_client()` — сборка дефолтной композиции
 
 ### 1.1 `Net` trait: минимальная поверхность
 

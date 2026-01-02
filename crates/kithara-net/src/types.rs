@@ -1,3 +1,4 @@
+use std::cmp::min;
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -67,25 +68,6 @@ impl RangeSpec {
 }
 
 #[derive(Clone, Debug)]
-pub struct NetOptions {
-    pub request_timeout: Duration,
-    pub max_retries: u32,
-    pub retry_base_delay: Duration,
-    pub max_retry_delay: Duration,
-}
-
-impl Default for NetOptions {
-    fn default() -> Self {
-        Self {
-            request_timeout: Duration::from_secs(30),
-            max_retries: 3,
-            retry_base_delay: Duration::from_millis(100),
-            max_retry_delay: Duration::from_secs(5),
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
 pub struct RetryPolicy {
     pub max_retries: u32,
     pub base_delay: Duration,
@@ -117,6 +99,21 @@ impl RetryPolicy {
         }
 
         let exponential_delay = self.base_delay * 2_u32.pow(attempt.saturating_sub(1));
-        std::cmp::min(exponential_delay, self.max_delay)
+        min(exponential_delay, self.max_delay)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct NetOptions {
+    pub request_timeout: Duration,
+    pub retry_policy: RetryPolicy,
+}
+
+impl Default for NetOptions {
+    fn default() -> Self {
+        Self {
+            request_timeout: Duration::from_secs(30),
+            retry_policy: RetryPolicy::default(),
+        }
     }
 }

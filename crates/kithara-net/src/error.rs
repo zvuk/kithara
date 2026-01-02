@@ -1,4 +1,8 @@
+use reqwest::Error as ReqwestError;
+use reqwest::Url;
 use thiserror::Error;
+
+pub type NetResult<T> = Result<T, NetError>;
 
 /// Centralized error type for kithara-net
 #[derive(Debug, Error, Clone)]
@@ -14,18 +18,17 @@ pub enum NetError {
         max_retries: u32,
         source: Box<NetError>,
     },
-    #[error("HTTP {status} for URL: {url}")]
-    HttpStatus { status: u16, url: String },
+    #[error("HTTP {status}: {body:?} for URL: {url:?}")]
+    HttpError {
+        status: u16,
+        url: Url,
+        body: Option<String>,
+    },
     #[error("not implemented")]
     Unimplemented,
 }
 
 impl NetError {
-    /// Creates an HTTP status error
-    pub fn http_status(status: u16, url: String) -> Self {
-        Self::HttpStatus { status, url }
-    }
-
     /// Creates a timeout error
     pub fn timeout() -> Self {
         Self::Timeout
@@ -34,6 +37,11 @@ impl NetError {
     /// Creates an HTTP error from a reqwest error
     pub fn from_reqwest(error: reqwest::Error) -> Self {
         Self::Http(error.to_string())
+    }
+
+    /// Creates a structured HTTP error with status and (optional) response body
+    pub fn http_error(status: u16, url: Url, body: Option<String>) -> Self {
+        Self::HttpError { status, url, body }
     }
 
     /// Creates an HTTP error from a generic string
@@ -59,7 +67,7 @@ impl NetError {
             }
             NetError::Timeout => true,
             NetError::RetryExhausted { .. } => false,
-            NetError::HttpStatus { status, .. } => {
+            NetError::HttpError { status, .. } => {
                 // Retry on 5xx server errors and 429 Too Many Requests
                 *status >= 500 || *status == 429 || *status == 408
             }
@@ -75,16 +83,14 @@ impl NetError {
     /// Gets the HTTP status code if this is an HTTP status error
     pub fn status_code(&self) -> Option<u16> {
         match self {
-            NetError::HttpStatus { status, .. } => Some(*status),
+            NetError::HttpError { status, .. } => Some(*status),
             _ => None,
         }
     }
 }
 
-impl From<reqwest::Error> for NetError {
-    fn from(error: reqwest::Error) -> Self {
-        Self::from_reqwest(error)
+impl From<ReqwestError> for NetError {
+    fn from(e: ReqwestError) -> Self {
+        NetError::Http(e.to_string())
     }
 }
-
-pub type NetResult<T> = Result<T, NetError>;

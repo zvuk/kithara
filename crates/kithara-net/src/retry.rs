@@ -1,5 +1,8 @@
 use async_trait::async_trait;
+use bytes::Bytes;
 use std::time::Duration;
+use tokio::time::sleep;
+use url::Url;
 
 use crate::ByteStream;
 use crate::error::NetError;
@@ -73,11 +76,12 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
 
 #[async_trait]
 impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
-    async fn get_bytes(&self, url: url::Url) -> Result<bytes::Bytes, NetError> {
+    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
+        // Updated for HttpClient compatibility: no major changes needed as it decorates Net
         let mut last_error = None;
 
         for attempt in 0..=self.retry_policy.max_attempts() {
-            match self.inner.get_bytes(url.clone()).await {
+            match self.inner.get_bytes(url.clone(), headers.clone()).await {
                 Ok(bytes) => return Ok(bytes),
                 Err(error) => {
                     if !self.retry_policy.should_retry(&error, attempt) {
@@ -87,7 +91,7 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
 
                     if attempt < self.retry_policy.max_attempts() {
                         let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::time::sleep(delay).await;
+                        sleep(delay).await;
                     }
                 }
             }
@@ -99,11 +103,8 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
         }))
     }
 
-    async fn stream(
-        &self,
-        url: url::Url,
-        headers: Option<Headers>,
-    ) -> Result<ByteStream, NetError> {
+    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
+        // Ensured short names are used
         let mut last_error = None;
 
         for attempt in 0..=self.retry_policy.max_attempts() {
@@ -117,7 +118,7 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
 
                     if attempt < self.retry_policy.max_attempts() {
                         let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::time::sleep(delay).await;
+                        sleep(delay).await;
                     }
                 }
             }
@@ -131,10 +132,11 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
 
     async fn get_range(
         &self,
-        url: url::Url,
+        url: Url,
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
+        // Compatible with HttpClient via Net trait
         let mut last_error = None;
 
         for attempt in 0..=self.retry_policy.max_attempts() {
@@ -152,7 +154,7 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
 
                     if attempt < self.retry_policy.max_attempts() {
                         let delay = self.retry_policy.delay_for_attempt(attempt);
-                        tokio::time::sleep(delay).await;
+                        sleep(delay).await;
                     }
                 }
             }
