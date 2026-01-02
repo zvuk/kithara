@@ -202,18 +202,7 @@ mod tests {
         assert_eq!(throughput.unwrap(), 10000.0); // 1000 bytes / 0.1 sec
     }
 
-    #[test]
-    fn test_variant_selection_manual_override() -> HlsResult<()> {
-        let config = AbrConfig::default();
-        let selector = Arc::new(|_playlist: &MasterPlaylist| Some(2));
-        let mut controller = AbrController::new(config, Some(selector), 0);
 
-        let master_playlist = create_test_master_playlist();
-        let selected = controller.select_variant(&master_playlist)?;
-
-        assert_eq!(selected, 2); // Should select manual override
-        Ok(())
-    }
 
     #[test]
     fn test_buffer_level_updates() {

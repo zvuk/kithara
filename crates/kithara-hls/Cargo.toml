@@ -14,7 +14,6 @@ hls_m3u8 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
-axum = { workspace = true }
 async-stream = { workspace = true }
 tracing = { workspace = true }
 
@@ -24,4 +23,5 @@ default = []
 # aes-decrypt = []
 
 [dev-dependencies]
+axum = { workspace = true }
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].

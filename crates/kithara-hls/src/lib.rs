@@ -60,7 +60,6 @@ pub mod playlist;
 
 // Private modules
 mod driver;
-mod fixture;
 
 // Re-export key types
 pub use abr::{AbrConfig, AbrController, ThroughputSample};

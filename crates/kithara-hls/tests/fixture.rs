@@ -138,6 +138,22 @@ async fn key_endpoint() -> Vec<u8> {
     test_key_data()
 }
 
+// Helper function to create test master playlist (from src/fixture.rs)
+pub fn create_test_master_playlist() -> hls_m3u8::MasterPlaylist {
+    let playlist_str = r#"#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID="vid",NAME="720p",BANDWIDTH=2000000,RESOLUTION=1280x720
+#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720,CODECS="avc1.64001f,mp4a.40.2"
+video/720p/playlist.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=854x480,CODECS="avc1.64001f,mp4a.40.2"
+video/480p/playlist.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360,CODECS="avc1.64001f,mp4a.40.2"
+video/360p/playlist.m3u8
+"#;
+
+    hls_m3u8::MasterPlaylist::try_from(playlist_str).unwrap()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
