@@ -38,7 +38,7 @@ pub struct DefaultRetryPolicy {
 impl DefaultRetryPolicy {
     pub fn new(policy: RetryPolicy) -> Self {
         Self {
-            classifier: DefaultRetryClassifier::default(),
+            classifier: DefaultRetryClassifier,
             policy,
         }
     }

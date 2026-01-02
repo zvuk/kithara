@@ -11,9 +11,6 @@ pub mod types;
 use bytes::Bytes;
 use futures::Stream;
 use std::collections::HashMap;
-use std::sync::Arc;
-
-use std::time::Duration;
 
 // Re-export main types
 pub use base::ReqwestNet;
@@ -82,6 +79,8 @@ mod tests {
     use axum::{Router, extract::Request, http::StatusCode, response::Response, routing::get};
     use bytes::Bytes;
     use futures::StreamExt;
+    use std::sync::Arc;
+    use std::time::Duration;
     use tokio::net::TcpListener;
 
     fn test_app() -> Router {
