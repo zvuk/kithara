@@ -3,14 +3,12 @@ use crate::options::FileSourceOptions;
 use async_stream::stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
+use kithara_cache::AssetCache;
 use kithara_core::{AssetId, CoreError};
 use kithara_net::NetClient;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-
-#[cfg(feature = "cache")]
-use kithara_cache::AssetCache;
 
 #[derive(Debug)]
 pub struct FileSession {
@@ -24,16 +22,9 @@ impl FileSession {
         url: url::Url,
         net_client: NetClient,
         options: FileSourceOptions,
-        #[cfg(feature = "cache")] cache: Option<Arc<AssetCache>>,
+        cache: Option<Arc<AssetCache>>,
     ) -> Self {
-        let driver = Arc::new(FileDriver::new(
-            asset_id,
-            url,
-            net_client,
-            options,
-            #[cfg(feature = "cache")]
-            cache,
-        ));
+        let driver = Arc::new(FileDriver::new(asset_id, url, net_client, options, cache));
 
         let (command_tx, _command_rx) = mpsc::unbounded_channel::<FileCommand>();
         // Note: In a full implementation, we'd have a command receiver

@@ -3,21 +3,17 @@ use crate::range_policy::RangePolicy;
 use async_stream::stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
+use kithara_cache::{AssetCache, CachePath};
 use kithara_core::AssetId;
 use kithara_net::{NetClient, NetError};
 use std::pin::Pin;
-use thiserror::Error;
-
-#[cfg(feature = "cache")]
-use kithara_cache::{AssetCache, CachePath};
-#[cfg(feature = "cache")]
 use std::sync::Arc;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum DriverError {
     #[error("Network error: {0}")]
     Net(#[from] NetError),
-    #[cfg(feature = "cache")]
     #[error("Cache error: {0}")]
     Cache(#[from] kithara_cache::CacheError),
     #[error("Options error: {0}")]
@@ -39,7 +35,6 @@ pub struct FileDriver {
     net_client: NetClient,
     #[allow(dead_code)]
     options: FileSourceOptions,
-    #[cfg(feature = "cache")]
     cache: Option<Arc<AssetCache>>,
     range_policy: RangePolicy,
 }
@@ -50,7 +45,7 @@ impl FileDriver {
         url: url::Url,
         net_client: NetClient,
         options: FileSourceOptions,
-        #[cfg(feature = "cache")] cache: Option<Arc<AssetCache>>,
+        cache: Option<Arc<AssetCache>>,
     ) -> Self {
         let range_policy = RangePolicy::new(options.enable_range_seek);
         Self {
@@ -58,7 +53,6 @@ impl FileDriver {
             url,
             net_client,
             options: options.clone(),
-            #[cfg(feature = "cache")]
             cache,
             range_policy,
         }
@@ -74,14 +68,12 @@ impl FileDriver {
         let client = self.net_client.clone();
         let url = self.url.clone();
 
-        #[cfg(feature = "cache")]
         let cache = self.cache.clone();
 
         let _range_policy = &self.range_policy;
 
         Box::pin(stream! {
             // Check cache first if available
-            #[cfg(feature = "cache")]
             if let Some(ref cache) = cache {
                 let asset_handle = cache.asset(self.asset_id);
                 let body_path = match CachePath::new(vec!["file".to_string(), "body".to_string()]) {
@@ -119,13 +111,11 @@ impl FileDriver {
                 }
             };
 
-            #[cfg(feature = "cache")]
             let mut cached_bytes = Vec::new();
 
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(bytes) => {
-                        #[cfg(feature = "cache")]
                         if let Some(ref _cache) = cache {
                             cached_bytes.extend_from_slice(&bytes);
                         }
@@ -140,7 +130,6 @@ impl FileDriver {
             }
 
             // Write to cache after successful download
-            #[cfg(feature = "cache")]
             if let Some(ref cache) = cache && !cached_bytes.is_empty() {
                 let asset_handle = cache.asset(self.asset_id);
                 let body_path = match CachePath::new(vec!["file".to_string(), "body".to_string()]) {

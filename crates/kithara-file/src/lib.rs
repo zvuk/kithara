@@ -10,37 +10,17 @@ pub use options::{FileSourceOptions, OptionsError};
 pub use range_policy::RangePolicy;
 pub use session::{FileError, FileResult, FileSession};
 
+use kithara_cache::AssetCache;
 use kithara_core::AssetId;
 use kithara_net::NetClient;
-use url::Url;
-
-#[cfg(feature = "cache")]
-use kithara_cache::AssetCache;
-#[cfg(feature = "cache")]
 use std::sync::Arc;
+use url::Url;
 
 #[derive(Debug)]
 pub struct FileSource;
 
 impl FileSource {
-    pub async fn open(url: Url, opts: FileSourceOptions) -> session::FileResult<FileSession> {
-        let asset_id = AssetId::from_url(&url)?;
-        let net_client = NetClient::new(kithara_net::NetOptions::default())?;
-
-        let session = session::FileSession::new(
-            asset_id,
-            url,
-            net_client,
-            opts,
-            #[cfg(feature = "cache")]
-            None,
-        );
-
-        Ok(session)
-    }
-
-    #[cfg(feature = "cache")]
-    pub async fn open_with_cache(
+    pub async fn open(
         url: Url,
         opts: FileSourceOptions,
         cache: Option<AssetCache>,
@@ -48,14 +28,8 @@ impl FileSource {
         let asset_id = AssetId::from_url(&url)?;
         let net_client = NetClient::new(kithara_net::NetOptions::default())?;
 
-        let session = session::FileSession::new(
-            asset_id,
-            url,
-            net_client,
-            opts,
-            #[cfg(feature = "cache")]
-            cache.map(Arc::new),
-        );
+        let session =
+            session::FileSession::new(asset_id, url, net_client, opts, cache.map(Arc::new));
 
         Ok(session)
     }
@@ -99,7 +73,7 @@ mod tests {
         let url = url::Url::parse("https://example.com/audio.mp3?token=123").unwrap();
         let opts = FileSourceOptions::default();
 
-        let session = FileSource::open(url.clone(), opts).await.unwrap();
+        let session = FileSource::open(url.clone(), opts, None).await.unwrap();
 
         let expected_asset_id = AssetId::from_url(&url).unwrap();
         assert_eq!(session.asset_id(), expected_asset_id);
@@ -111,13 +85,13 @@ mod tests {
         let url2 = url::Url::parse("https://example.com/audio.mp3?different=xyz").unwrap();
         let url3 = url::Url::parse("https://example.com/audio.mp3").unwrap();
 
-        let session1 = FileSource::open(url1, FileSourceOptions::default())
+        let session1 = FileSource::open(url1, FileSourceOptions::default(), None)
             .await
             .unwrap();
-        let session2 = FileSource::open(url2, FileSourceOptions::default())
+        let session2 = FileSource::open(url2, FileSourceOptions::default(), None)
             .await
             .unwrap();
-        let session3 = FileSource::open(url3, FileSourceOptions::default())
+        let session3 = FileSource::open(url3, FileSourceOptions::default(), None)
             .await
             .unwrap();
 
@@ -130,7 +104,7 @@ mod tests {
         let url = url::Url::parse("https://example.com/audio.mp3").unwrap();
         let opts = FileSourceOptions::default();
 
-        let session = FileSource::open(url, opts).await.unwrap();
+        let session = FileSource::open(url, opts, None).await.unwrap();
 
         let _stream = session.stream();
         // The stream should be a valid Stream
@@ -143,7 +117,7 @@ mod tests {
         let server_url = run_test_server().await;
         let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-        let session = FileSource::open(url, FileSourceOptions::default())
+        let session = FileSource::open(url, FileSourceOptions::default(), None)
             .await
             .unwrap();
 
@@ -173,7 +147,7 @@ mod tests {
         // Use a non-existent server to test error handling
         let url = url::Url::parse("http://127.0.0.1:9998/nonexistent.mp3").unwrap();
 
-        let session = FileSource::open(url, FileSourceOptions::default())
+        let session = FileSource::open(url, FileSourceOptions::default(), None)
             .await
             .unwrap();
 
@@ -191,11 +165,9 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "cache")]
     #[tokio::test]
     async fn cache_through_write_works() {
-        use kithara_cache::{CacheOptions, CachePath};
-        use std::time::Duration;
+        use kithara_cache::CacheOptions;
 
         let server_url = run_test_server().await;
         let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
@@ -207,7 +179,7 @@ mod tests {
         })
         .unwrap();
 
-        let session = FileSource::open_with_cache(url, FileSourceOptions::default(), Some(cache))
+        let session = FileSource::open(url, FileSourceOptions::default(), Some(cache))
             .await
             .unwrap();
 
