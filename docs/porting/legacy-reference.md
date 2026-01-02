@@ -17,6 +17,30 @@
 - `docs/porting/legacy-stream-download-hls-tests.rs` — **полный** legacy-набор интеграционных тестов по HLS (VOD, base_url, ABR, DRM, seek, storage backends).
 - `docs/porting/legacy-stream-download-lib.rs` — reference по “streaming/read/seek” контрактам `stream-download` (как устроен Read+Seek поверх async source).
 
+Дополнительно: curated “кодовые сниппеты” (ключевые части кода, чтобы агент мог подсмотреть паттерны, не имея доступа к внешним репо):
+- `docs/porting/legacy-snippets/README.md` — индекс: что где смотреть и что именно перенимать (без копипасты 1:1).
+
+Decal (decode layering, Source/reader+hint):
+- `docs/porting/legacy-snippets/decal-lib.rs`
+- `docs/porting/legacy-snippets/decal-decoder-mod.rs`
+- `docs/porting/legacy-snippets/decal-decoder-source.rs`
+
+stream-download-hls ABR (estimator/controller split + EWMA):
+- `docs/porting/legacy-snippets/stream-download-hls-abr-mod.rs`
+- `docs/porting/legacy-snippets/stream-download-hls-abr-controller.rs`
+- `docs/porting/legacy-snippets/stream-download-hls-abr-estimator.rs`
+- `docs/porting/legacy-snippets/stream-download-hls-abr-ewma.rs`
+
+stream-download-hls downloader (decorator/layered pattern: base → timeout → retry → cache):
+- `docs/porting/legacy-snippets/stream-download-hls-downloader-mod.rs`
+- `docs/porting/legacy-snippets/stream-download-hls-downloader-traits.rs`
+- `docs/porting/legacy-snippets/stream-download-hls-downloader-types.rs`
+- `docs/porting/legacy-snippets/stream-download-hls-downloader-builder.rs`
+- `docs/porting/legacy-snippets/stream-download-hls-downloader-base.rs`
+- `docs/porting/legacy-snippets/stream-download-hls-downloader-timeout.rs`
+- `docs/porting/legacy-snippets/stream-download-hls-downloader-retry.rs`
+- `docs/porting/legacy-snippets/stream-download-hls-downloader-cache.rs`
+
 Как этим пользоваться (нормативно):
 - Агент **не копирует** код 1-в-1, а переносит **контракты и поведение**, зафиксированные тестами.
 - Любой перенос делается через TDD: сначала новый тест в `kithara-*`, затем реализация.
