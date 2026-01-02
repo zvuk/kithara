@@ -1,4 +1,5 @@
-use crate::fixture::create_test_master_playlist;
+mod fixture;
+use fixture::create_test_master_playlist;
 use kithara_hls::HlsResult;
 use kithara_hls::abr::{AbrConfig, AbrController};
 

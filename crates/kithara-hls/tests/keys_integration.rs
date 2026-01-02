@@ -1,4 +1,5 @@
-use crate::fixture::*;
+mod fixture;
+use fixture::*;
 use kithara_hls::HlsResult;
 use kithara_hls::keys::KeyManager;
 

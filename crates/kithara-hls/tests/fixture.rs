@@ -29,6 +29,10 @@ impl TestServer {
             .route("/v0.m3u8", get(|| async { test_media_playlist(0) }))
             .route("/v1.m3u8", get(|| async { test_media_playlist(1) }))
             .route("/v2.m3u8", get(|| async { test_media_playlist(2) }))
+            .route(
+                "/video/480p/playlist.m3u8",
+                get(|| async { test_media_playlist(1) }),
+            )
             .route("/seg/v0_0.bin", get(|| async { test_segment_data(0, 0) }))
             .route("/seg/v0_1.bin", get(|| async { test_segment_data(0, 1) }))
             .route("/seg/v0_2.bin", get(|| async { test_segment_data(0, 2) }))
