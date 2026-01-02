@@ -21,6 +21,77 @@ impl FsStore {
         self.root_dir.join(&asset_key[0..2]).join(&asset_key[2..4])
     }
 
+    fn put_atomic(
+        &self,
+        asset: AssetId,
+        rel_path: &CachePath,
+        bytes: &[u8],
+    ) -> CacheResult<PutResult> {
+        crate::fs_layout::FsLayout::asset_dir(self, asset_id);
+        std::fs::create_dir_all(&crate::fs_layout::FsLayout::asset_dir(self, asset_id))?;
+
+        let temp_path = crate::fs_layout::FsLayout::temp_file(self, asset_id, rel_path);
+        let final_path = crate::fs_layout::FsLayout::final_file(self, asset_id, rel_path);
+
+        crate::atomic_write::AtomicWrite::write_atomic(
+            crate::fs_layout::FsLayout::asset_dir(self, asset_id).as_ref(),
+            rel_path,
+            bytes,
+        )?;
+
+        Ok(PutResult {
+            bytes_written: bytes.len() as u64,
+        })
+    }
+
+    fn remove_all(&self, asset: AssetId) -> CacheResult<()> {
+        let asset_dir = crate::fs_layout::FsLayout::asset_dir(self, asset_id);
+        if asset_dir.exists() {
+            std::fs::remove_dir_all(&asset_dir)?;
+        }
+        Ok(())
+    }
+}
+
+impl Store for FsStore {
+    fn exists(&self, asset: AssetId, rel_path: &CachePath) -> bool {
+        crate::fs_layout::FsLayout::final_file(self, asset_id, rel_path).exists()
+    }
+
+    fn open(&self, asset: AssetId, rel_path: &CachePath) -> CacheResult<Option<std::fs::File>> {
+        let path = crate::fs_layout::FsLayout::final_file(self, asset_id, rel_path);
+        if path.exists() {
+            Ok(Some(std::fs::File::open(path)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn put_atomic(
+        &self,
+        asset: AssetId,
+        rel_path: &CachePath,
+        bytes: &[u8],
+    ) -> CacheResult<PutResult> {
+        self.put_atomic(asset, rel_path, bytes)
+    }
+
+    fn remove_all(&self, asset: AssetId) -> CacheResult<()> {
+        self.remove_all(asset)
+    }
+}
+
+impl FsStore {
+    pub fn new(root_dir: PathBuf) -> CacheResult<Self> {
+        std::fs::create_dir_all(&root_dir)?;
+        Ok(FsStore { root_dir })
+    }
+
+    fn asset_dir(&self, asset_id: AssetId) -> PathBuf {
+        let asset_key = hex::encode(asset_id.as_bytes());
+        self.root_dir.join(&asset_key[0..2]).join(&asset_key[2..4])
+    }
+
     fn temp_file(&self, asset_id: AssetId, rel_path: &CachePath) -> PathBuf {
         let asset_dir = self.asset_dir(asset_id);
         asset_dir.join(format!("{}.tmp", rel_path.as_string()))
@@ -90,7 +161,8 @@ mod tests {
     #[test]
     fn fsstore_put_atomic_creates_file() {
         let store = create_temp_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap());
+        let asset_id =
+            AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap()).unwrap();
         let path = CachePath::from_single("test.txt").unwrap();
         let data = b"test data";
 
@@ -108,7 +180,8 @@ mod tests {
     #[test]
     fn fsstore_put_atomic_overwrites_existing() {
         let store = create_temp_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap());
+        let asset_id =
+            AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap()).unwrap();
         let path = CachePath::from_single("test.txt").unwrap();
 
         store.put_atomic(asset_id, &path, b"original").unwrap();
@@ -124,7 +197,8 @@ mod tests {
     #[test]
     fn fsstore_temp_files_not_visible_as_hits() {
         let store = create_temp_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap());
+        let asset_id =
+            AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap()).unwrap();
         let path = CachePath::from_single("test.txt").unwrap();
         let data = b"test data";
 
@@ -146,7 +220,8 @@ mod tests {
     #[test]
     fn fsstore_asset_dir_layout_is_stable() {
         let store = create_temp_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap());
+        let asset_id =
+            AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap()).unwrap();
 
         let dir1 = store.asset_dir(asset_id);
         let dir2 = store.asset_dir(asset_id);
@@ -165,7 +240,8 @@ mod tests {
     #[test]
     fn fsstore_remove_all_deletes_asset_directory() {
         let store = create_temp_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap());
+        let asset_id =
+            AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap()).unwrap();
         let path = CachePath::from_single("test.txt").unwrap();
 
         // Create some files

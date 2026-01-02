@@ -1,58 +1,4 @@
-//! # kithara-cache
-//!
-//! Persistent disk cache with layered architecture.
-//!
-//! ## Architecture
-//!
-//! This crate provides a persistent disk cache with the following layered architecture:
-//!
-//! - **Base Layer (`FsStore`)**: Provides tree-friendly filesystem layout and atomic write operations.
-//!   - **Index Layer (`IndexStore`)**: Maintains `state.json` with metadata and total bytes tracking.
-//!   - **Lease Layer (`LeaseStore`)**: Provides pin/lease semantics to prevent eviction of active assets.
-//!   - **Eviction Layer (`EvictingStore`)**: Handles LRU eviction with configurable policies.
-//!
-//! ## Invariants
-//!
-//! - **Filesystem is Source of Truth**: File existence is determined by filesystem operations, not by state metadata.
-//! - **Atomic Writes**: All file writes use temp+rename pattern to ensure crash safety.
-//! - **Pinned Assets**: Assets with active leases are never evicted.
-//! - **Global Size Limit**: Cache respects a global byte limit with LRU eviction.
-//!
-//! ## State Format (`state.json`)
-//!
-//! The `state.json` file contains:
-//! - `max_bytes`: Global cache size limit
-//! - `total_bytes`: Current total bytes used by all assets  
-//! - `assets`: Per-asset metadata including:
-//!   - `size_bytes`: Size in bytes of this asset
-//!   - `last_access_ms`: Unix timestamp of last access (for LRU)
-//!   - `created_ms`: Unix timestamp when asset was first created
-//!   - `pinned`: Whether asset has an active lease
-//!
-//! ## Public API
-//!
-//! The public API remains unchanged:
-//! - `AssetCache`: Main facade that composes all layers
-//! - `AssetHandle`: Handle for operations on specific assets  
-//! - `CachePath`: Safe relative paths within assets
-//! - `LeaseGuard`: RAII guard for asset pinning
-//! - `PutResult`: Result of atomic write operations
-//! - `CacheStats`: Cache statistics and metrics
-//!
-//! ## Usage
-//!
-//! ```rust
-//! let cache = AssetCache::open(CacheOptions {
-//!     max_bytes: 1024 * 1024, // 1GB
-//!     root_dir: Some("/path/to/cache".into()),
-//! })?;
-//!
-//! let asset = cache.asset(asset_id);
-//! asset.put_atomic(&path, b"data")?;
-//! let _guard = cache.pin(asset_id)?; // Auto-unpinned on drop
-//! ```
-
-use kithara_core::{AssetId, CoreError};
+#![forbid(unsafe_code)]
 
 use kithara_core::{AssetId, CoreError};
 use serde::{Deserialize, Serialize};
@@ -197,7 +143,8 @@ impl AssetCache {
 
         // Compose layers: FsStore -> IndexStore -> LeaseStore -> EvictingStore
         let fs_store = crate::base::FsStore::new(root_dir.clone())?;
-        let index_store = crate::index::IndexStore::new(fs_store, root_dir.clone(), opts.max_bytes);
+        let index_store =
+            crate::index::IndexStore::new(fs_store, root_dir.clone(), opts.max_bytes);
         let lease_store = crate::lease::LeaseStore::new(index_store);
         let evicting_store =
             crate::evicting_store::EvictingStore::with_lru(lease_store, opts.max_bytes);

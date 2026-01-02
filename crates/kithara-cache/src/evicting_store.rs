@@ -179,15 +179,8 @@ where
 {
     /// Pin an asset to prevent eviction (creates a LeaseGuard)
     pub fn pin(&self, asset: AssetId) -> CacheResult<crate::lease::LeaseGuard<'_, S>> {
-        // First pin using the trait method
-        self.inner.pin(asset)?;
-
-        // For now, return an error since LeaseGuard construction is complex with layered types
-        // This is a limitation of the current architecture for the sanity check
-        Err(crate::CacheError::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "LeaseGuard construction not implemented for layered stores in sanity check",
-        )))
+        // Use the inner pin method directly, which creates the guard
+        self.inner.pin(asset)
     }
 }
 
@@ -229,7 +222,7 @@ where
 mod tests {
     use super::*;
     use crate::base::FsStore;
-    use crate::store_impl::IndexStore;
+    use crate::index::IndexStore;
     use std::env;
 
     fn create_temp_evicting_store() -> EvictingStore<IndexStore<FsStore>, crate::evict::LruPolicy> {
@@ -245,7 +238,8 @@ mod tests {
     #[test]
     fn evicting_store_delegates_to_inner_store() {
         let store = create_temp_evicting_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap());
+        let asset_id =
+            AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap()).unwrap();
         let path = CachePath::from_single("test.txt").unwrap();
 
         // Should delegate exists
@@ -270,8 +264,10 @@ mod tests {
     #[test]
     fn eviction_policy_is_applied() {
         let store = create_temp_evicting_store();
-        let asset1 = AssetId::from_url(&url::Url::parse("https://example.com/asset1.mp3").unwrap());
-        let asset2 = AssetId::from_url(&url::Url::parse("https://example.com/asset2.mp3").unwrap());
+        let asset1 =
+            AssetId::from_url(&url::Url::parse("https://example.com/asset1.mp3").unwrap()).unwrap();
+        let asset2 =
+            AssetId::from_url(&url::Url::parse("https://example.com/asset2.mp3").unwrap()).unwrap();
         let path = CachePath::from_single("data.txt").unwrap();
 
         // This test is limited without proper EvictionSupport implementation

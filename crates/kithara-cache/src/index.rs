@@ -9,6 +9,16 @@ use std::path::PathBuf;
 /// FS remains the source of truth for file existence.
 #[derive(Clone, Debug)]
 pub struct IndexStore<S> {
+    pub(crate) inner: S,
+    root_dir: PathBuf,
+    max_bytes: u64,
+}
+
+/// Indexing decorator that maintains state.json with metadata.
+/// Provides total_bytes tracking and per-asset metadata.
+/// FS remains the source of truth for file existence.
+#[derive(Clone, Debug)]
+pub struct IndexStore<S> {
     inner: S,
     root_dir: PathBuf,
     max_bytes: u64,
@@ -361,7 +371,11 @@ mod tests {
     #[test]
     fn indexstore_creates_state_file_on_first_put() {
         let store = create_temp_index_store();
-        let asset_id = AssetId::from_url(&url::Url::parse("https://example.com/test.mp3").unwrap());
+        let asset_id = AssetId::from_url(
+            &url::Url::parse("https://example.com/test.mp3")
+                .unwrap()
+                .unwrap(),
+        );
         let path = CachePath::from_single("test.txt").unwrap();
 
         // Initially no state file
@@ -386,8 +400,11 @@ mod tests {
     #[test]
     fn indexstore_atomic_state_save_is_crash_safe() {
         let store = create_temp_index_store();
-        let asset_id =
-            AssetId::from_url(&url::Url::parse("https://example.com/atomic.mp3").unwrap());
+        let asset_id = AssetId::from_url(
+            &url::Url::parse("https://example.com/atomic.mp3")
+                .unwrap()
+                .unwrap(),
+        );
         let path = CachePath::from_single("atomic.txt").unwrap();
 
         store.put_atomic(asset_id, &path, b"atomic test").unwrap();
@@ -408,8 +425,11 @@ mod tests {
     #[test]
     fn indexstore_touch_updates_access_time() {
         let store = create_temp_index_store();
-        let asset_id =
-            AssetId::from_url(&url::Url::parse("https://example.com/touch.mp3").unwrap());
+        let asset_id = AssetId::from_url(
+            &url::Url::parse("https://example.com/touch.mp3")
+                .unwrap()
+                .unwrap(),
+        );
         let path = CachePath::from_single("touch.txt").unwrap();
 
         // Put data to create asset state
@@ -441,8 +461,16 @@ mod tests {
     #[test]
     fn indexstore_stats_are_accurate() {
         let store = create_temp_index_store();
-        let asset1 = AssetId::from_url(&url::Url::parse("https://example.com/asset1.mp3").unwrap());
-        let asset2 = AssetId::from_url(&url::Url::parse("https://example.com/asset2.mp3").unwrap());
+        let asset1 = AssetId::from_url(
+            &url::Url::parse("https://example.com/asset1.mp3")
+                .unwrap()
+                .unwrap(),
+        );
+        let asset2 = AssetId::from_url(
+            &url::Url::parse("https://example.com/asset2.mp3")
+                .unwrap()
+                .unwrap(),
+        );
         let path = CachePath::from_single("data.txt").unwrap();
 
         // Add two assets

@@ -45,7 +45,7 @@ where
 /// Uses wrapped store's indexing mechanism for tracking pins.
 #[derive(Clone, Debug)]
 pub struct LeaseStore<S> {
-    inner: S,
+    pub(crate) inner: S,
 }
 
 impl<S> LeaseStore<S>
