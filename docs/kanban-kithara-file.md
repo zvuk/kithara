@@ -54,22 +54,22 @@
 
 Reference: `docs/porting/source-driver-reference.md`
 
-- [ ] Driver streams full content and closes (EOS):
-  - local fixture serves deterministic bytes (можно chunked)
-  - `session.stream()` выдаёт все байты в правильном порядке и **закрывается** после конца
-  - тест: `file_stream_downloads_all_bytes_and_closes`
-- [ ] Cancellation via drop (Stop не обязателен):
-  - consumer читает 1 chunk и drop’ает stream/session
-  - driver должен завершиться детерминированно (без зависаний)
-  - тест: `file_receiver_drop_cancels_driver`
-- [ ] Offline replay from cache works (если cache включён контрактом):
-  - прогон online заполняет cache
-  - повторный прогон в `offline_mode=true` читает **только из кэша** и выдаёт те же байты
-  - тест: `file_offline_replays_from_cache`
-- [ ] Offline miss is fatal (если `offline_mode` предусмотрен опциями/контрактом):
-  - `offline_mode=true` и cache пуст
-  - попытка чтения приводит к `OfflineMiss` (или эквивалент) и корректному завершению
-  - тест: `file_offline_miss_is_fatal`
+ - [x] Driver streams full content and closes (EOS):
+   - local fixture serves deterministic bytes (можно chunked)
+   - `session.stream()` выдаёт все байты в правильном порядке и **закрывается** после конца
+   - тест: `file_stream_downloads_all_bytes_and_closes`
+ - [x] Cancellation via drop (Stop не обязателен):
+   - consumer читает 1 chunk и drop’ает stream/session
+   - driver должен завершиться детерминированно (без зависаний)
+   - тест: `file_receiver_drop_cancels_driver`
+ - [x] Offline replay from cache works (если cache включён контрактом):
+   - прогон online заполняет cache
+   - повторный прогон в `offline_mode=true` читает **только из кэша** и выдаёт те же байты
+   - тест: `file_offline_replays_from_cache`
+ - [x] Offline miss is fatal (если `offline_mode` предусмотрен опциями/контрактом):
+   - `offline_mode=true` и cache пуст
+   - попытка чтения приводит к `OfflineMiss` (или эквивалент) и корректному завершению
+   - тест: `file_offline_miss_is_fatal`
 
 ## `kithara-file` — Port legacy “read/seek correctness” scenarios (tests)
 

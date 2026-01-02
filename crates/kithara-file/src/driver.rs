@@ -1,6 +1,5 @@
 use crate::options::{FileSourceOptions, OptionsError};
 use crate::range_policy::RangePolicy;
-use async_stream::stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_cache::{AssetCache, CachePath};
@@ -9,6 +8,8 @@ use kithara_net::{NetClient, NetError};
 use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 #[derive(Debug, Error)]
 pub enum DriverError {
@@ -20,6 +21,8 @@ pub enum DriverError {
     Options(#[from] OptionsError),
     #[error("Seek not supported")]
     SeekNotSupported,
+    #[error("Offline miss: content not in cache")]
+    OfflineMiss,
 }
 
 #[derive(Debug)]
@@ -67,34 +70,47 @@ impl FileDriver {
     ) -> Pin<Box<dyn Stream<Item = Result<Bytes, DriverError>> + Send + '_>> {
         let client = self.net_client.clone();
         let url = self.url.clone();
-
         let cache = self.cache.clone();
+        let asset_id = self.asset_id;
+        let offline_mode = self.options.offline_mode;
 
-        let _range_policy = &self.range_policy;
+        // Create a bounded channel for backpressure (cancellation via drop)
+        let (tx, rx) = mpsc::channel(16); // Buffer 16 chunks
 
-        Box::pin(stream! {
+        // Spawn driver task
+        let _driver_task = tokio::spawn(async move {
             // Check cache first if available
+            #[allow(unused_assignments)]
+            let mut cache_hit = false;
             if let Some(ref cache) = cache {
-                let asset_handle = cache.asset(self.asset_id);
+                let asset_handle = cache.asset(asset_id);
                 let body_path = match CachePath::new(vec!["file".to_string(), "body".to_string()]) {
                     Ok(path) => path,
                     Err(e) => {
-                        yield Err(DriverError::Cache(e));
+                        let _ = tx.send(Err(DriverError::Cache(e))).await;
                         return;
                     }
                 };
 
                 if let Some(mut file) = asset_handle.open(&body_path).unwrap_or(None) {
+                    // Cache hit - stream from cache
+                    cache_hit = true;
                     use std::io::Read;
                     let mut buffer = vec![0u8; 8192];
                     loop {
                         match file.read(&mut buffer) {
                             Ok(0) => return, // EOF
                             Ok(n) => {
-                                yield Ok(Bytes::copy_from_slice(&buffer[..n]));
+                                let chunk = Bytes::copy_from_slice(&buffer[..n]);
+                                if tx.send(Ok(chunk)).await.is_err() {
+                                    // Receiver dropped, cancel download
+                                    return;
+                                }
                             }
                             Err(e) => {
-                                yield Err(DriverError::Cache(kithara_cache::CacheError::Io(e)));
+                                let _ = tx
+                                    .send(Err(DriverError::Cache(kithara_cache::CacheError::Io(e))))
+                                    .await;
                                 return;
                             }
                         }
@@ -102,11 +118,17 @@ impl FileDriver {
                 }
             }
 
+            // If offline mode and cache miss, return OfflineMiss error
+            if offline_mode && !cache_hit {
+                let _ = tx.send(Err(DriverError::OfflineMiss)).await;
+                return;
+            }
+
             // Stream from network
             let mut stream = match client.stream(url, None).await {
                 Ok(s) => s,
                 Err(e) => {
-                    yield Err(DriverError::Net(e));
+                    let _ = tx.send(Err(DriverError::Net(e))).await;
                     return;
                 }
             };
@@ -114,16 +136,25 @@ impl FileDriver {
             let mut cached_bytes = Vec::new();
 
             while let Some(chunk_result) = stream.next().await {
+                // Check if receiver is still alive
+                if tx.is_closed() {
+                    // Consumer dropped the stream, cancel download
+                    return;
+                }
+
                 match chunk_result {
                     Ok(bytes) => {
                         if let Some(ref _cache) = cache {
                             cached_bytes.extend_from_slice(&bytes);
                         }
 
-                        yield Ok(bytes);
+                        if tx.send(Ok(bytes)).await.is_err() {
+                            // Receiver dropped, cancel download
+                            return;
+                        }
                     }
                     Err(e) => {
-                        yield Err(DriverError::Net(e));
+                        let _ = tx.send(Err(DriverError::Net(e))).await;
                         break;
                     }
                 }
@@ -131,18 +162,25 @@ impl FileDriver {
 
             // Write to cache after successful download
             if let Some(ref cache) = cache && !cached_bytes.is_empty() {
-                let asset_handle = cache.asset(self.asset_id);
-                let body_path = match CachePath::new(vec!["file".to_string(), "body".to_string()]) {
-                    Ok(path) => path,
-                    Err(_e) => {
-                        // Cache write failure shouldn't affect stream result
-                        return;
-                    }
-                };
+                let asset_handle = cache.asset(asset_id);
+                let body_path =
+                    match CachePath::new(vec!["file".to_string(), "body".to_string()]) {
+                        Ok(path) => path,
+                        Err(_e) => {
+                            // Cache write failure shouldn't affect stream result
+                            return;
+                        }
+                    };
 
+                // Ignore cache write errors - they shouldn't fail the stream
                 let _ = asset_handle.put_atomic(&body_path, &cached_bytes);
             }
-        })
+        });
+
+        // Return stream that reads from channel
+        // When this stream is dropped, the channel receiver will be dropped,
+        // which will cause the driver task to detect tx.is_closed() and cancel
+        Box::pin(ReceiverStream::new(rx))
     }
 
     #[allow(dead_code)]

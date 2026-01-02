@@ -14,6 +14,8 @@ pub struct FileSourceOptions {
     pub enable_range_seek: bool,
     /// Timeout for network operations
     pub network_timeout: Option<std::time::Duration>,
+    /// If true, only read from cache; fail if content not in cache
+    pub offline_mode: bool,
 }
 
 impl FileSourceOptions {
@@ -33,6 +35,11 @@ impl FileSourceOptions {
 
     pub fn with_network_timeout(mut self, timeout: std::time::Duration) -> Self {
         self.network_timeout = Some(timeout);
+        self
+    }
+
+    pub fn with_offline_mode(mut self, offline: bool) -> Self {
+        self.offline_mode = offline;
         self
     }
 }

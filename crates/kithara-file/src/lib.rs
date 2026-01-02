@@ -106,7 +106,7 @@ mod tests {
 
         let session = FileSource::open(url, opts, None).await.unwrap();
 
-        let _stream = session.stream();
+        let _stream = session.stream().await;
         // The stream should be a valid Stream
         // We don't test actual streaming here since that requires network access
         // This just tests that stream can be created
@@ -121,7 +121,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut stream = session.stream();
+        let mut stream = session.stream().await;
         let mut received_data = Vec::new();
 
         // Read first chunk from stream
@@ -151,7 +151,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut stream = session.stream();
+        let mut stream = session.stream().await;
 
         // Should get an error when trying to stream
         if let Some(chunk_result) = stream.next().await {
@@ -183,7 +183,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut stream = session.stream();
+        let mut stream = session.stream().await;
         let mut received_data = Vec::new();
 
         while let Some(chunk_result) = stream.next().await {

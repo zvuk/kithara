@@ -1,6 +1,5 @@
 use crate::driver::{DriverError, FileCommand, FileDriver};
 use crate::options::FileSourceOptions;
-use async_stream::stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_cache::AssetCache;
@@ -37,13 +36,11 @@ impl FileSession {
         self.driver.asset_id()
     }
 
-    pub fn stream(&self) -> Pin<Box<dyn Stream<Item = Result<Bytes, FileError>> + Send + '_>> {
-        Box::pin(stream! {
-            let mut driver_stream = self.driver.stream().await;
-            while let Some(result) = driver_stream.next().await {
-                yield result.map_err(FileError::Driver);
-            }
-        })
+    pub async fn stream(
+        &self,
+    ) -> Pin<Box<dyn Stream<Item = Result<Bytes, FileError>> + Send + '_>> {
+        let driver_stream = self.driver.stream().await;
+        Box::pin(driver_stream.map(|result| result.map_err(FileError::Driver)))
     }
 
     /// Send a command to the driver

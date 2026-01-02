@@ -98,6 +98,7 @@ hex = "0.4"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10.8"
 tower = "0.5.2"
+tempfile = "3.10.2"
 
 # async traits
 async-trait = "0.1.68"

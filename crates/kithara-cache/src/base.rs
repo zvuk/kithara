@@ -58,6 +58,14 @@ impl Store for FsStore {
         let temp_path = self.temp_file(asset, rel_path);
         let final_path = self.final_file(asset, rel_path);
 
+        // Create parent directories for both temp and final paths
+        if let Some(parent) = temp_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if let Some(parent) = final_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
         std::fs::write(&temp_path, bytes)?;
         std::fs::rename(&temp_path, &final_path)?;
 
