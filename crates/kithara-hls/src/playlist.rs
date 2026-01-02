@@ -105,6 +105,7 @@ impl PlaylistManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixture::*;
 
     #[tokio::test]
     async fn fetch_master_playlist_from_network() -> HlsResult<()> {

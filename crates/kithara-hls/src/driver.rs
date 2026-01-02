@@ -209,11 +209,7 @@ impl HlsDriver {
             }
             HlsCommand::ClearVariantOverride => {
                 self.abr_controller.clear_manual_override();
-                self.event_emitter.emit_variant_changed(
-                    self.abr_controller.current_variant(),
-                    self.abr_controller.current_variant(),
-                    VariantChangeReason::Manual,
-                );
+                // No variant change event needed for clearing override
             }
         }
         Ok(())
@@ -305,6 +301,7 @@ impl HlsDriver {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixture::*;
     use crate::fixture::*;
 
     #[tokio::test]

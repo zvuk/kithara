@@ -135,6 +135,7 @@ impl KeyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixture::*;
 
     #[tokio::test]
     async fn fetch_and_cache_key() -> HlsResult<()> {
