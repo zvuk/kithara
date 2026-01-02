@@ -100,3 +100,12 @@
   - define a minimal cache interface or hook point at the HLS layer (NOT inside net)
   - ensure net itself stays stateless by default
 - [ ] Add server-side request counting utilities in tests so `kithara-hls` can assert “key requested <= N times” deterministically
+
+---
+
+## Sanity check (после ужесточения fmt+clippy)
+
+- [ ] Remove new clippy warnings (e.g. `unused_imports`) introduced by stricter workspace lints
+- [ ] Run `cargo fmt` and ensure no formatting diffs remain
+- [ ] Run `cargo test -p kithara-net`
+- [ ] Run `cargo clippy -p kithara-net` and make it clean (no warnings/errors) under workspace lints

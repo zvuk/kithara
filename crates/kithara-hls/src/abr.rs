@@ -185,8 +185,6 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
-
-
     #[test]
     fn test_throughput_estimation() {
         let mut state = AbrState::new(0);

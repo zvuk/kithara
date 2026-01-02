@@ -168,3 +168,12 @@
 - [x] Split into modules for `fixture` (test-only), `playlist`, `fetch`, `keys`, `abr`, `driver/worker`, `events` as size grows (no behavior change) + keep tests green
 - [ ] Ensure ordered control-plane/data-plane semantics remain explicit (avoid out-of-band surprises) + add focused tests
 - [ ] Add crate-level docs: URL resolution rules (`base_url`), DRM key processing/caching, ABR switching invariants
+
+---
+
+## Sanity check (после ужесточения fmt+clippy)
+
+- [ ] Remove new clippy warnings/errors introduced by stricter workspace lints
+- [ ] Run `cargo fmt` and ensure no formatting diffs remain
+- [ ] Run `cargo test -p kithara-hls`
+- [ ] Run `cargo clippy -p kithara-hls` and make it clean (no warnings/errors) under workspace lints

@@ -112,7 +112,8 @@ impl HlsDriver {
             match self.state {
                 DriverState::Starting => {
                     // Select initial variant
-                    if let Err(e) = self.load_media_playlist(&master_playlist, current_variant)
+                    if let Err(e) = self
+                        .load_media_playlist(&master_playlist, current_variant)
                         .await
                     {
                         self.state = DriverState::Error(e.clone());
@@ -126,7 +127,8 @@ impl HlsDriver {
                     self.state = DriverState::Streaming;
                 }
                 DriverState::Streaming => {
-                    if let Err(e) = self.stream_segments(&master_playlist, current_variant)
+                    if let Err(e) = self
+                        .stream_segments(&master_playlist, current_variant)
                         .await
                     {
                         self.state = DriverState::Error(e.clone());
@@ -134,7 +136,8 @@ impl HlsDriver {
                     }
                 }
                 DriverState::Seeking(target_time) => {
-                    if let Err(e) = self.seek_to_time(&master_playlist, current_variant, target_time)
+                    if let Err(e) = self
+                        .seek_to_time(&master_playlist, current_variant, target_time)
                         .await
                     {
                         self.state = DriverState::Error(e.clone());

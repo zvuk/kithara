@@ -81,18 +81,18 @@ impl KeyManager {
             }
         }
 
-        let stream = self.net
+        let stream = self
+            .net
             .stream(fetch_url, self.key_request_headers.clone())
             .await?;
-        
+
         use futures::StreamExt;
         let mut bytes = Vec::new();
         let mut pinned_stream = Box::pin(stream);
         while let Some(chunk) = pinned_stream.next().await {
             bytes.extend_from_slice(&chunk?);
         }
-        Ok(bytes::Bytes::from(bytes))
-            .map_err(|e: kithara_net::NetError| HlsError::from(e))
+        Ok(bytes::Bytes::from(bytes)).map_err(|e: kithara_net::NetError| HlsError::from(e))
     }
 
     fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
@@ -135,7 +135,6 @@ impl KeyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[tokio::test]
     async fn fetch_and_cache_key() -> HlsResult<()> {

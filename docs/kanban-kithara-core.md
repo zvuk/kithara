@@ -51,3 +51,11 @@
 - [x] Add crate-level docs: “what belongs here / what must not” (short, contract-level)
 
 ---
+
+## Sanity check (после ужесточения fmt+clippy)
+
+- [ ] Run `cargo fmt` and ensure no formatting diffs remain
+- [ ] Run `cargo test -p kithara-core`
+- [ ] Run `cargo clippy -p kithara-core` and make it clean (no warnings/errors) under workspace lints
+
+---

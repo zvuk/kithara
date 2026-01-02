@@ -106,7 +106,6 @@ impl PlaylistManager {
 mod tests {
     use super::*;
 
-
     #[tokio::test]
     async fn fetch_master_playlist_from_network() -> HlsResult<()> {
         let server = TestServer::new().await;

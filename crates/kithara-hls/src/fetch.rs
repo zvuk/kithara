@@ -151,7 +151,6 @@ impl FetchManager {
 mod tests {
     use super::*;
 
-
     #[tokio::test]
     async fn fetch_segment_from_network() -> HlsResult<()> {
         let server = TestServer::new().await;

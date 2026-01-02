@@ -77,3 +77,12 @@
 - [ ] Split internal modules to match responsibilities (base/index/lease/evict/policy) without changing public API + keep tests green
 - [ ] Remove “misc utils dumping-ground”: move helpers into focused modules (e.g. `fs_layout`, `atomic_write`, `lru_index`) + keep tests green
 - [ ] Add crate-level docs: invariants + “FS is source of truth” + what is stored in `state.json`
+
+---
+
+## Sanity check + починка после ужесточения fmt+clippy
+
+- [ ] Fix compilation errors in `kithara-cache` (duplicates, missing modules/symbols, broken impls)
+- [ ] Run `cargo fmt` and ensure no formatting diffs remain
+- [ ] Run `cargo test -p kithara-cache`
+- [ ] Run `cargo clippy -p kithara-cache` and make it clean (no warnings/errors) under workspace lints
