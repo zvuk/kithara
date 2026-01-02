@@ -1,5 +1,17 @@
 # Kanban — `kithara-hls`
 
+> Доп. артефакты для портирования legacy-идей (агенты не имеют доступа к другим репо):
+> - `docs/porting/legacy-reference.md` (общий backlog + мотивация)
+> - `docs/porting/abr-reference.md` (ABR: estimator/controller/decision-vs-applied/tests)
+> - `docs/porting/drm-reference.md` (DRM: AES-128 decrypt, processed keys caching, offline rules, fixtures)
+
+## Важное правило (нормативно): публичный контракт `kithara-hls` не меняем
+- Нельзя менять/переименовывать/удалять публично экспортируемые типы/функции/поля.
+- Нельзя добавлять новые публичные API элементы (включая новые варианты публичных `enum` для событий), если это расширяет контракт.
+- Все уточнения семантики “decision vs applied” делаются либо:
+  - через **тесты**, которые доказывают “applied” по фактическим байтам/детерминированным префиксам фикстуры, либо
+  - через **документацию** уже существующих публичных событий/типов без изменения их формы.
+
 Этот документ содержит задачи, относящиеся **только** к сабкрейту `crates/kithara-hls`.
 
 Общие инструкции (обязательная преамбула к каждой задаче): см. `kithara/docs/kanban-instructions.md`.
@@ -46,9 +58,14 @@
 - `playlist`: парсинг master/media playlists, извлечение сегментов/keys/init.
 - `fetch`: получение ресурсов (через `kithara-net`) с учётом offline/timeout/retry политики.
 - `keys`: загрузка ключей, применение `key_processor_cb`, кэширование processed keys.
+- `drm` (может быть частью `fetch`/`keys`, но ответственность должна быть явной): AES-128 decrypt сегментов, ошибки decrypt — fatal.
 - `abr`: политика выбора variant (manual/auto), throughput estimator, переключения.
 - `driver/worker`: orchestration loop (VOD), выдача байтового потока и управление жизненным циклом.
 - `events` (если экспонируется): best-effort события (например, segment start / variant changed) — **не** использовать для строгих инвариантов, если семантика не “applied”.
+
+См. portable reference:
+- ABR: `docs/porting/abr-reference.md`
+- DRM: `docs/porting/drm-reference.md`
 
 ---
 
@@ -77,23 +94,36 @@
 
 ---
 
-## `kithara-hls` — Port legacy DRM scenarios (tests)
+## `kithara-hls` — DRM обязателен (без feature flags) + Port legacy DRM scenarios (tests)
 
-- [ ] AES-128 DRM decrypts media segments (smoke):
+Reference: `docs/porting/drm-reference.md`
+
+- [ ] DRM is mandatory (no feature gating):
+  - убедиться, что baseline DRM (AES-128) не спрятан за `cfg(feature=...)`
+  - если код уже без фич — добавить crate-level docs/комментарий в README крейта или в `docs/` (в рамках крейта) и тесты ниже
+- [ ] AES-128 decrypt pipeline is implemented end-to-end (smoke):
   - fixture serves encrypted segments + key endpoint
   - output bytes include expected plaintext prefixes for at least first segment
-- [ ] AES-128 DRM with fixed zero IV decrypts correctly
+- [ ] AES-128 with explicit IV decrypts correctly (deterministic IV):
+  - playlist задаёт `IV=0x...`
+  - тест проверяет plaintext prefix (без зависимости от padding/TS деталей)
 - [ ] Key fetch applies query params + headers + key_processor:
   - server requires specific query params and headers to return a wrapped key
   - client applies `key_processor_cb` to unwrap
   - decrypted segment payload is correct
+- [ ] Processed key is cached (and raw wrapped key is NOT persisted):
+  - first run online fills cache
+  - second run offline uses cached processed key and decrypts successfully
 - [ ] Key is cached and not fetched per segment:
   - read enough bytes to span multiple segments
-  - assert key endpoint request count is low (<=2)
+  - assert key endpoint request count is low (target <= 1; допускается <= 2 только если контракт/гонка зафиксированы тестом)
 - [ ] Required key headers missing => fatal error:
   - when server requires header and client does not send it, session fails deterministically
+- [ ] Offline mode missing key => fatal error:
+  - offline_mode=true, segments exist, processed key missing => `OfflineMiss` (или эквивалент) и корректное завершение
 - [ ] (Prereq if missing) Ensure decrypted output can be validated deterministically:
   - segment payloads contain stable prefixes per (variant, segment)
+
 
 ---
 
@@ -119,18 +149,40 @@
 
 ---
 
-## `kithara-hls` — Port legacy ABR + switching scenarios (tests)
+## `kithara-hls` — ABR “как в legacy” (estimator/controller; decision vs applied) + switching scenarios (tests)
 
-- [ ] ABR downswitch after low throughput sample:
-  - feed throughput sample that should force downswitch
-  - assert next descriptor targets lower variant and begins with init
+Reference: `docs/porting/abr-reference.md`
+
+### Unit-ish (ABR in isolation)
+- [ ] Estimator ignores cache hits:
+  - introduce `ThroughputSampleSource { Network, Cache }` (или эквивалент)
+  - update estimator only on `Network`
+  - test: `cache_hit_does_not_affect_throughput`
+- [ ] Controller downswitch after low throughput sample:
+  - feed throughput estimate/sample that should force downswitch
+  - assert decision targets lower variant, reason фиксируется
+- [ ] Controller upswitch respects buffer gating + hysteresis:
+  - low buffer => no upswitch
+  - sufficient buffer + enough throughput => upswitch
+- [ ] Controller min_switch_interval prevents oscillation:
+  - decision suppressed when interval not elapsed
+
+### Integration-ish (ABR apply in worker)
+- [ ] Decision vs applied semantics are explicit **без изменения публичного API/событий**:
+  - не добавлять новые публичные события/варианты `enum` ради “applied”
+  - доказать “applied” в тестах через детерминированные payload prefixes (например по границе сегмента/инициализации), а не через out-of-band порядок событий
+  - если уже существует публичное событие смены варианта — **зафиксировать и документировать его текущую семантику** (decision или applied) без изменения формы API
 - [ ] ABR upswitch continues from current segment index (no restart)
-- [ ] Worker auto upswitches mid-stream without restarting:
-  - observe VariantChanged + SegmentStart events and ensure sequence is non-decreasing across switch
+- [ ] ABR downswitch begins correctly (init segment behavior fixed by contract):
+  - if switching requires init, ensure next output begins with init for new variant
+- [ ] Worker auto switches mid-stream without restarting:
+  - observe events + deterministic payload prefixes and ensure segment index sequence is non-decreasing across switch
 - [ ] (Prereq if missing) Expose a deterministic ABR controller surface for tests:
-  - feed throughput samples
-  - obtain/apply decisions
+  - feed throughput samples (explicit source Network/Cache)
+  - obtain decisions
+  - apply decisions in worker at segment boundaries
   - observe selected variant and next segment descriptors
+
 
 ---
 

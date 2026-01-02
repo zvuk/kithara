@@ -1,8 +1,13 @@
 # Kanban — `kithara-net`
 
+> Доп. артефакты для портирования legacy-идей (агенты не имеют доступа к другим репо):
+> - `docs/porting/net-reference.md` (portable: layering, timeout/retry matrix, stateless design, tests)
+
 Этот документ содержит задачи, относящиеся **только** к сабкрейту `crates/kithara-net`.
 
 Общие инструкции (обязательная преамбула к каждой задаче): см. `kithara/docs/kanban-instructions.md`.
+
+Reference spec (portable): `docs/porting/net-reference.md`
 
 ---
 
@@ -67,6 +72,8 @@
 
 ## `kithara-net` — Full client (retry/timeout; layered; generics-first)
 
+Reference: `docs/porting/net-reference.md`
+
 - [x] Refactor: split `kithara-net` into modules `base/traits/types/retry/timeout/builder` without changing current behavior
 - [x] Add `ByteStream` alias and core trait `Net` (+ `NetExt` for composition)
 - [x] Implement `ReqwestNet` base layer with explicit status handling (no silent success on 4xx/5xx) + tests
@@ -83,6 +90,16 @@
 - [x] Provide `NetBuilder` / `create_default_client()` that composes base+retry+timeout into a convenient facade
 - [x] Ensure existing behavior stays covered: header passthrough + range semantics (tests must remain green after refactor)
 - [x] Add short crate-level docs (`crates/kithara-net/README.md`): layering, retry semantics, timeout semantics
+
+### Additional contract tests (portable, to match reference)
+- [ ] No mid-stream retry (v1 invariant):
+  - server returns headers + first chunk, then drops connection
+  - assert: no retry attempts after body started; stream ends with error deterministically
+- [ ] Timeout matrix tests (request/headers/body stages):
+  - `get_bytes` times out if body stalls
+  - `stream/get_range` time out waiting for response headers, but do not enforce whole-body timeout (unless отдельно зафиксировано контрактом)
+- [ ] Range behavior contract test:
+  - define behavior for servers that ignore Range and respond `200 OK` to range request (either error or accept), and test it
 
 ---
 
