@@ -28,10 +28,10 @@ impl RangePolicy {
 
     /// Update the current position after a seek operation
     pub fn update_position(&mut self, position: u64) -> Result<(), OptionsError> {
-        if let Some(total_size) = self.total_size {
-            if position > total_size {
-                return Err(OptionsError::InvalidSeekPosition(position));
-            }
+        if let Some(total_size) = self.total_size
+            && position > total_size
+        {
+            return Err(OptionsError::InvalidSeekPosition(position));
         }
 
         self.current_position = position;

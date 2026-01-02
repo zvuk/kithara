@@ -37,6 +37,7 @@ pub struct FileDriver {
     asset_id: AssetId,
     url: url::Url,
     net_client: NetClient,
+    #[allow(dead_code)]
     options: FileSourceOptions,
     #[cfg(feature = "cache")]
     cache: Option<Arc<AssetCache>>,
@@ -155,6 +156,7 @@ impl FileDriver {
         })
     }
 
+    #[allow(dead_code)]
     pub async fn seek_to(&mut self, position: u64) -> Result<(), DriverError> {
         if !self.options.enable_range_seek {
             return Err(DriverError::SeekNotSupported);
@@ -167,6 +169,7 @@ impl FileDriver {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn handle_command(&mut self, command: FileCommand) -> Result<(), DriverError> {
         match command {
             FileCommand::Stop => {

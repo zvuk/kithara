@@ -3,7 +3,7 @@ use crate::options::FileSourceOptions;
 use async_stream::stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use kithara_core::AssetId;
+use kithara_core::{AssetId, CoreError};
 use kithara_net::NetClient;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -92,6 +92,8 @@ pub enum FileError {
     DriverStopped,
     #[error("Network error: {0}")]
     Net(#[from] kithara_net::NetError),
+    #[error("Core error: {0}")]
+    Core(#[from] CoreError),
 }
 
 pub type FileResult<T> = Result<T, FileError>;

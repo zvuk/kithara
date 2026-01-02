@@ -62,9 +62,9 @@
 
 ## Sanity check (после ужесточения fmt+clippy)
 
-- [ ] Remove new clippy warnings (e.g. `unused_imports`) introduced by stricter workspace lints
-- [ ] Run `cargo fmt` and ensure no formatting diffs remain
-- [ ] Run `cargo test -p kithara-file`
-- [ ] Run `cargo clippy -p kithara-file` and make it clean (no warnings/errors) under workspace lints
+- [x] Remove new clippy warnings (e.g. `unused_imports`) introduced by stricter workspace lints
+- [x] Run `cargo fmt` and ensure no formatting diffs remain
+- [x] Run `cargo test -p kithara-file`
+- [x] Run `cargo clippy -p kithara-file` and make it clean (no warnings/errors) under workspace lints
 
 ---

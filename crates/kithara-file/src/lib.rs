@@ -24,7 +24,7 @@ pub struct FileSource;
 
 impl FileSource {
     pub async fn open(url: Url, opts: FileSourceOptions) -> session::FileResult<FileSession> {
-        let asset_id = AssetId::from_url(&url);
+        let asset_id = AssetId::from_url(&url)?;
         let net_client = NetClient::new(kithara_net::NetOptions::default())?;
 
         let session = session::FileSession::new(
@@ -45,7 +45,7 @@ impl FileSource {
         opts: FileSourceOptions,
         cache: Option<AssetCache>,
     ) -> session::FileResult<FileSession> {
-        let asset_id = AssetId::from_url(&url);
+        let asset_id = AssetId::from_url(&url)?;
         let net_client = NetClient::new(kithara_net::NetOptions::default())?;
 
         let session = session::FileSession::new(
@@ -101,7 +101,7 @@ mod tests {
 
         let session = FileSource::open(url.clone(), opts).await.unwrap();
 
-        let expected_asset_id = AssetId::from_url(&url);
+        let expected_asset_id = AssetId::from_url(&url).unwrap();
         assert_eq!(session.asset_id(), expected_asset_id);
     }
 
