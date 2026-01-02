@@ -103,7 +103,7 @@ Reference spec (portable): `docs/porting/decode-reference.md`
   - consumer non-blocking (`poll_next` => Pending when empty),
   - fatal error emits one Err item then terminates (или иной чётко описанный контракт) + tests
 - [x] Ensure decode worker can accept commands (`DecodeCommand::Seek`) and apply them best-effort + tests
-- [ ] Provide deterministic local fixtures for decode tests (no external network):
+- [x] Provide deterministic local fixtures for decode tests (no external network):
   - tiny MP3/AAC test assets embedded or served by local server
 
 ---
