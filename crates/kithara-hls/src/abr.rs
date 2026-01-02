@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use thiserror::Error;
 
-use crate::HlsResult;
+use crate::{HlsError, HlsResult};
 
 #[derive(Debug, Error)]
 pub enum AbrError {
@@ -170,7 +170,7 @@ impl AbrController {
         let _throughput = self
             .state
             .estimated_throughput()
-            .ok_or(AbrError::InsufficientData)?;
+            .ok_or_else(|| HlsError::Abr("Insufficient throughput data".to_string()))?;
 
         // TODO: Implement proper ABR logic when master playlist is available
         // For now, return current variant
@@ -185,11 +185,7 @@ mod tests {
     use super::*;
     use std::time::Instant;
 
-    fn create_test_master_playlist() -> MasterPlaylist {
-        // Parse test playlist string
-        let playlist_str = crate::fixture::test_master_playlist();
-        hls_m3u8::MasterPlaylist::try_from(playlist_str).unwrap()
-    }
+
 
     #[test]
     fn test_throughput_estimation() {

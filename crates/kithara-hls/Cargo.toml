@@ -16,6 +16,7 @@ tokio = { workspace = true }
 url = { workspace = true }
 axum = { workspace = true }
 async-stream = { workspace = true }
+tracing = { workspace = true }
 
 [features]
 default = []

@@ -52,7 +52,7 @@ impl KeyManager {
     }
 
     pub async fn get_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
-        let asset_id = AssetId::from_url(url);
+        let asset_id = AssetId::from_url(url)?;
         let cache_path = self.cache_path_for_key(url)?;
         let handle = self.cache.asset(asset_id);
 
@@ -60,7 +60,7 @@ impl KeyManager {
             let file = handle.open(&cache_path)?.unwrap();
             use std::io::Read;
             let mut buf = Vec::new();
-            file.take_to_end(&mut buf).unwrap();
+            std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
             return Ok(Bytes::from(buf));
         }
 
@@ -81,19 +81,18 @@ impl KeyManager {
             }
         }
 
-        self.net
+        let stream = self.net
             .stream(fetch_url, self.key_request_headers.clone())
-            .await
-            .and_then(|mut stream| async move {
-                use futures::StreamExt;
-                let mut bytes = Vec::new();
-                while let Some(chunk) = stream.next().await {
-                    bytes.extend_from_slice(&chunk?);
-                }
-                Ok(bytes::Bytes::from(bytes))
-            })
-            .await
-            .map_err(|e| HlsError::from(e))
+            .await?;
+        
+        use futures::StreamExt;
+        let mut bytes = Vec::new();
+        let mut pinned_stream = Box::pin(stream);
+        while let Some(chunk) = pinned_stream.next().await {
+            bytes.extend_from_slice(&chunk?);
+        }
+        Ok(bytes::Bytes::from(bytes))
+            .map_err(|e: kithara_net::NetError| HlsError::from(e))
     }
 
     fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
@@ -125,7 +124,7 @@ impl KeyManager {
             format!("{}.processed", key_name),
         ])
         .map_err(|e| {
-            HlsError::from(kithara_cache::CacheError::Path(format!(
+            HlsError::from(kithara_cache::CacheError::InvalidPath(format!(
                 "Invalid cache path: {}",
                 e
             )))
@@ -136,7 +135,7 @@ impl KeyManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixture::*;
+
 
     #[tokio::test]
     async fn fetch_and_cache_key() -> HlsResult<()> {

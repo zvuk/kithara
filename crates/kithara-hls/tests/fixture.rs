@@ -6,7 +6,9 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use url::Url;
 
-use crate::HlsError;
+pub use kithara_hls::HlsError;
+
+pub type HlsResult<T> = Result<T, HlsError>;
 
 pub struct TestServer {
     base_url: String,

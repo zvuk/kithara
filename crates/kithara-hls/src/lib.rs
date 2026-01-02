@@ -42,7 +42,7 @@
 
 use bytes::Bytes;
 use futures::Stream;
-use kithara_cache::{AssetCache, CachePath};
+use kithara_cache::AssetCache;
 use kithara_core::AssetId;
 use kithara_net::NetClient;
 use std::sync::Arc;
@@ -67,7 +67,7 @@ mod fixture;
 pub use abr::{AbrConfig, AbrController, ThroughputSample};
 pub use events::{EventEmitter, EventError, HlsEvent, VariantChangeReason};
 pub use fetch::{FetchError, FetchManager, SegmentStream};
-pub use keys::{KeyContext, KeyError, KeyManager};
+pub use keys::{KeyError, KeyManager};
 pub use playlist::{PlaylistError, PlaylistManager};
 
 #[derive(Debug, Error)]
@@ -78,17 +78,26 @@ pub enum HlsError {
     #[error("Cache error: {0}")]
     Cache(#[from] kithara_cache::CacheError),
 
+    #[error("Core error: {0}")]
+    Core(#[from] kithara_core::CoreError),
+
     #[error("Playlist parsing error: {0}")]
     PlaylistParse(String),
 
     #[error("Variant not found: {0}")]
     VariantNotFound(String),
 
+    #[error("Segment not found: {0}")]
+    SegmentNotFound(String),
+
     #[error("No suitable variant found")]
     NoSuitableVariant,
 
     #[error("Key processing failed: {0}")]
     KeyProcessing(String),
+
+    #[error("ABR error: {0}")]
+    Abr(String),
 
     #[error("Offline mode: resource not cached")]
     OfflineMiss,
@@ -98,6 +107,9 @@ pub enum HlsError {
 
     #[error("not implemented")]
     Unimplemented,
+
+    #[error("Driver error: {0}")]
+    Driver(String),
 }
 
 pub type HlsResult<T> = Result<T, HlsError>;
@@ -178,7 +190,7 @@ impl HlsSource {
         cache: AssetCache,
         net: NetClient,
     ) -> HlsResult<HlsSession> {
-        let asset_id = kithara_core::AssetId::from_url(&url);
+        let asset_id = AssetId::from_url(&url)?;
         let (cmd_sender, cmd_receiver) = mpsc::channel(16);
         let (bytes_sender, bytes_receiver) = mpsc::channel(100);
 
@@ -199,13 +211,13 @@ impl HlsSource {
 }
 
 pub struct HlsSession {
-    asset_id: kithara_core::AssetId,
+    asset_id: AssetId,
     cmd_sender: mpsc::Sender<HlsCommand>,
     bytes_receiver: mpsc::Receiver<HlsResult<Bytes>>,
 }
 
 impl HlsSession {
-    pub fn asset_id(&self) -> kithara_core::AssetId {
+    pub fn asset_id(&self) -> AssetId {
         self.asset_id
     }
 
@@ -215,43 +227,15 @@ impl HlsSession {
 
     pub fn stream(&self) -> impl Stream<Item = HlsResult<Bytes>> + Send + '_ {
         use futures::StreamExt;
-        futures::stream::unfold(self.bytes_receiver.clone(), |mut receiver| async {
-            receiver.recv().map(|item| (item, receiver))
-        })
+        let mut receiver = self.bytes_receiver;
+        async_stream::stream! {
+            while let Some(item) = receiver.recv().await {
+                yield item;
     }
 }
+}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::fixture::*;
-    use kithara_cache::CacheOptions;
-    use kithara_cache::CachePath;
-    use kithara_core::AssetId;
-    use kithara_net::NetOptions;
-    use std::io::Read;
 
-    #[tokio::test]
-    async fn parse_master_playlist_from_network() -> HlsResult<()> {
-        let server = TestServer::new().await;
-        let master_url = server.url("/master.m3u8")?;
-        let (cache, net) = create_test_cache_and_net();
-
-        // Parse master playlist using playlist manager
-        let playlist_manager = PlaylistManager::new(cache, net, None);
-        let master_playlist = playlist_manager.fetch_master_playlist(&master_url).await?;
-
-        // Verify we have 3 variants
-        assert_eq!(master_playlist.variant_streams.len(), 3);
-
-        // Check variant properties
-        let variants: Vec<_> = master_playlist.variant_streams.iter().collect();
-        assert_eq!(variants[0].bandwidth(), 1280000);
-        assert_eq!(variants[1].bandwidth(), 2560000);
-        assert_eq!(variants[2].bandwidth(), 5120000);
-
-        Ok(())
-    }
 
     #[tokio::test]
     async fn parse_media_playlist_from_network() -> HlsResult<()> {

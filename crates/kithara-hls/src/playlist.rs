@@ -69,7 +69,7 @@ impl PlaylistManager {
     }
 
     async fn fetch_resource(&self, url: &Url, default_filename: &str) -> HlsResult<bytes::Bytes> {
-        let asset_id = AssetId::from_url(url);
+        let asset_id = AssetId::from_url(url)?;
         let cache_path = self.cache_path_for_url(url, default_filename)?;
         let handle = self.cache.asset(asset_id);
 
@@ -77,7 +77,7 @@ impl PlaylistManager {
             let file = handle.open(&cache_path)?.unwrap();
             use std::io::Read;
             let mut buf = Vec::new();
-            file.take_to_end(&mut buf).unwrap();
+            std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
             return Ok(bytes::Bytes::from(buf));
         }
 
@@ -94,7 +94,7 @@ impl PlaylistManager {
             .unwrap_or(default_filename);
 
         CachePath::new(vec!["hls".to_string(), filename.to_string()]).map_err(|e| {
-            HlsError::from(kithara_cache::CacheError::Path(format!(
+            HlsError::from(kithara_cache::CacheError::InvalidPath(format!(
                 "Invalid cache path: {}",
                 e
             )))
@@ -105,7 +105,7 @@ impl PlaylistManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixture::*;
+
 
     #[tokio::test]
     async fn fetch_master_playlist_from_network() -> HlsResult<()> {

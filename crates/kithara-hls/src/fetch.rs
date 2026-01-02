@@ -42,7 +42,7 @@ impl FetchManager {
 
     pub async fn fetch_segment(
         &self,
-        media_playlist: &MediaPlaylist,
+        media_playlist: &MediaPlaylist<'_>,
         segment_index: usize,
         base_url: &Url,
         key_context: Option<&KeyContext>,
@@ -73,7 +73,7 @@ impl FetchManager {
 
     pub async fn stream_segment_sequence(
         &self,
-        media_playlist: &MediaPlaylist,
+        media_playlist: &MediaPlaylist<'_>,
         base_url: &Url,
         key_context: Option<&KeyContext>,
     ) -> SegmentStream {
@@ -85,7 +85,7 @@ impl FetchManager {
         Box::pin(async_stream::stream! {
             for (index, _segment) in media_playlist.segments.iter().enumerate() {
                 let fetcher = FetchManager::new(cache.clone(), net.clone());
-                match fetcher.fetch_segment(media_playlist, index, &base_url, key_context.as_ref()).await {
+                match fetcher.fetch_segment(media_playlist, index, &base_url, key_context).await {
                     Ok(bytes) => yield Ok(bytes),
                     Err(e) => yield Err(e),
                 }
@@ -94,7 +94,7 @@ impl FetchManager {
     }
 
     async fn fetch_resource(&self, url: &Url, default_filename: &str) -> HlsResult<Bytes> {
-        let asset_id = AssetId::from_url(url);
+        let asset_id = AssetId::from_url(url)?;
         let cache_path = self.cache_path_for_url(url, default_filename)?;
         let handle = self.cache.asset(asset_id);
 
@@ -102,7 +102,7 @@ impl FetchManager {
             let file = handle.open(&cache_path)?.unwrap();
             use std::io::Read;
             let mut buf = Vec::new();
-            file.take_to_end(&mut buf).unwrap();
+            std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
             return Ok(bytes::Bytes::from(buf));
         }
 
@@ -139,7 +139,7 @@ impl FetchManager {
             filename.to_string(),
         ])
         .map_err(|e| {
-            HlsError::from(kithara_cache::CacheError::Path(format!(
+            HlsError::from(kithara_cache::CacheError::InvalidPath(format!(
                 "Invalid cache path: {}",
                 e
             )))
@@ -150,7 +150,7 @@ impl FetchManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixture::*;
+
 
     #[tokio::test]
     async fn fetch_segment_from_network() -> HlsResult<()> {

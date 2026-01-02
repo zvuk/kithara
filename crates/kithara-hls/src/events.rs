@@ -73,7 +73,7 @@ impl EventEmitter {
 
     pub fn emit_variant_changed(&self, old: usize, new: usize, reason: VariantChangeReason) {
         // In real implementation, this would send to a channel
-        log::debug!(
+        tracing::debug!(
             "Variant changed from {} to {} (reason: {:?}",
             old,
             new,
@@ -82,7 +82,7 @@ impl EventEmitter {
     }
 
     pub fn emit_segment_start(&self, variant: usize, segment: usize, offset: u64) {
-        log::debug!(
+        tracing::debug!(
             "Segment start: variant {}, segment {}, offset {}",
             variant,
             segment,
@@ -97,7 +97,7 @@ impl EventEmitter {
         bytes: u64,
         duration: Duration,
     ) {
-        log::debug!(
+        tracing::debug!(
             "Segment complete: variant {}, segment {}, {} bytes in {:?}",
             variant,
             segment,
@@ -107,7 +107,7 @@ impl EventEmitter {
     }
 
     pub fn emit_key_fetch(&self, key_url: &str, success: bool, cached: bool) {
-        log::debug!(
+        tracing::debug!(
             "Key fetch: {} (success: {}, cached: {})",
             key_url,
             success,
@@ -116,19 +116,19 @@ impl EventEmitter {
     }
 
     pub fn emit_buffer_level(&self, level: f32) {
-        log::debug!("Buffer level: {:.2}s", level);
+        tracing::debug!("Buffer level: {:.2}s", level);
     }
 
     pub fn emit_throughput_sample(&self, bps: f64) {
-        log::debug!("Throughput: {:.2} bytes/s", bps);
+        tracing::debug!("Throughput: {:.2} bytes/s", bps);
     }
 
     pub fn emit_error(&self, error: &str, recoverable: bool) {
-        log::error!("HLS error: {} (recoverable: {})", error, recoverable);
+        tracing::error!("HLS error: {} (recoverable: {})", error, recoverable);
     }
 
     pub fn emit_end_of_stream(&self) {
-        log::debug!("End of stream");
+        tracing::debug!("End of stream");
     }
 }
 
