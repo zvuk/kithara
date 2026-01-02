@@ -47,6 +47,6 @@
 
 ## `kithara-cache` — Refactor (layering-ready; keep public contract)
 
-- [ ] Split internal modules to match responsibilities (base/index/lease/evict/policy) without changing public API + keep tests green
-- [ ] Remove “misc utils dumping-ground”: move helpers into focused modules (e.g. `fs_layout`, `atomic_write`, `lru_index`) + keep tests green
-- [ ] Add crate-level docs: invariants + “FS is source of truth” + what is stored in `state.json`
+- [x] Split internal modules to match responsibilities (base/index/lease/evict/policy) without changing public API + keep tests green
+- [x] Remove “misc utils dumping-ground”: move helpers into focused modules (e.g. `fs_layout`, `atomic_write`, `lru_index`) + keep tests green
+- [x] Add crate-level docs: invariants + “FS is source of truth” + what is stored in `state.json`
