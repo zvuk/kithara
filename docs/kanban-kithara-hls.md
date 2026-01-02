@@ -2,15 +2,11 @@
 
 > Доп. артефакты для портирования legacy-идей (агенты не имеют доступа к другим репо):
 > - `docs/porting/legacy-reference.md` (общий backlog + мотивация)
+> - `docs/porting/source-driver-reference.md` (portable: driver loop, cancellation via drop, offline miss semantics)
+> - `docs/porting/hls-vod-basic-reference.md` (portable: VOD basic playback checklist + minimal test matrix; DRM учтён, но не блокер)
 > - `docs/porting/abr-reference.md` (ABR: estimator/controller/decision-vs-applied/tests)
 > - `docs/porting/drm-reference.md` (DRM: AES-128 decrypt, processed keys caching, offline rules, fixtures)
 
-## Важное правило (нормативно): публичный контракт `kithara-hls` не меняем
-- Нельзя менять/переименовывать/удалять публично экспортируемые типы/функции/поля.
-- Нельзя добавлять новые публичные API элементы (включая новые варианты публичных `enum` для событий), если это расширяет контракт.
-- Все уточнения семантики “decision vs applied” делаются либо:
-  - через **тесты**, которые доказывают “applied” по фактическим байтам/детерминированным префиксам фикстуры, либо
-  - через **документацию** уже существующих публичных событий/типов без изменения их формы.
 
 Этот документ содержит задачи, относящиеся **только** к сабкрейту `crates/kithara-hls`.
 
@@ -64,6 +60,8 @@
 - `events` (если экспонируется): best-effort события (например, segment start / variant changed) — **не** использовать для строгих инвариантов, если семантика не “applied”.
 
 См. portable reference:
+- Source/Driver contract: `docs/porting/source-driver-reference.md`
+- VOD basic playback spec: `docs/porting/hls-vod-basic-reference.md`
 - ABR: `docs/porting/abr-reference.md`
 - DRM: `docs/porting/drm-reference.md`
 
@@ -91,6 +89,64 @@
 - [x] resource caching (playlists/init/segments) + offline test
 - [x] keys + processed keys caching + test scenario with wrapped key
 - [x] stream bytes for a variant + basic read smoke test
+
+> Важно: если текущая реализация по факту не доходит до сегментов (master → media playlist → stop),
+> то MVP “формально” выполнен, но функционально источник не работает. В этом случае задачи ниже считаются обязательными.
+
+---
+
+## `kithara-hls` — VOD basic playback (segment loop, EOS, fixture counters, manual selection) — MUST HAVE
+
+Reference: `docs/porting/hls-vod-basic-reference.md`
+
+- [ ] Fixture supports deterministic VOD shape (mock mode):
+  - master: `/master.m3u8`
+  - media: `/v{variant}.m3u8`
+  - segments: `/seg/v{variant}_{i}.bin` with plaintext prefix `V{variant}-SEG-{i}:`
+  - request counters per path
+- [ ] Driver streams **segments** end-to-end (not just playlists):
+  - master → select variant → media playlist → (init?) → segment loop → bytes out → EOS
+  - stream closes after last segment (consumer sees `None`)
+  - test: `hls_vod_completes_and_stream_closes`
+- [ ] Driver fetches **all** segments for selected variant:
+  - assert fixture counters for every `/seg/v{variant}_{i}.bin` > 0
+  - test: `hls_vod_fetches_all_segments_for_selected_variant`
+- [ ] Manual variant selection outputs only selected variant bytes:
+  - run across multiple variant indices (e.g. 0..3)
+  - assert observed payload prefixes belong to selected variant
+  - test: `hls_manual_variant_outputs_only_selected_variant_prefixes`
+- [ ] Cancellation via drop (Stop не обязателен):
+  - read N bytes then drop stream/session
+  - driver stops promptly and stops making further requests
+  - test: `hls_drop_cancels_driver_and_stops_requests`
+- [ ] DRM is not a blocker for basic playback:
+  - basic fixture is plaintext (no EXT-X-KEY) OR
+  - if EXT-X-KEY is present and decrypt not implemented yet: fail deterministically with typed `Unimplemented`
+  - add a small doc note in crate-level docs on this staged approach
+
+---
+
+## `kithara-hls` — Реальная реализация VOD driver loop (segment streaming) + EOS + cancellation via drop
+
+Reference: `docs/porting/source-driver-reference.md`
+
+- [ ] End-to-end VOD segment streaming (not just playlists):
+  - driver: master → select variant → media playlist → segment loop → bytes out → EOS
+  - stream must output segment bytes (deterministic prefixes), and close after last segment
+  - test: `hls_vod_completes_and_stream_closes` (local fixture only)
+- [ ] Segment loop fetches ALL segments for selected variant:
+  - assert per-segment request counters >= 1 (fixture counts requests)
+  - test: `hls_vod_fetches_all_segments_for_selected_variant`
+- [ ] Cancellation via drop (Stop не обязателен):
+  - consumer reads N bytes and drops stream/session
+  - driver must terminate promptly (no hang) and stop making further requests
+  - test: `hls_drop_cancels_driver_and_stops_requests`
+- [ ] Offline mode: cache-first + miss is fatal:
+  - offline_mode=true and any playlist/segment/key miss => fatal `OfflineMiss` (or equivalent) and stream closes
+  - test: `hls_offline_miss_is_fatal`
+- [ ] URL resolution contract is explicit + tested:
+  - relative URLs resolved against playlist URL (and/or base_url override) exactly as contract defines
+  - test: `hls_base_url_override_remaps_segments_keys_and_playlists`
 
 ---
 
@@ -123,7 +179,6 @@ Reference: `docs/porting/drm-reference.md`
   - offline_mode=true, segments exist, processed key missing => `OfflineMiss` (или эквивалент) и корректное завершение
 - [ ] (Prereq if missing) Ensure decrypted output can be validated deterministically:
   - segment payloads contain stable prefixes per (variant, segment)
-
 
 ---
 
@@ -168,10 +223,9 @@ Reference: `docs/porting/abr-reference.md`
   - decision suppressed when interval not elapsed
 
 ### Integration-ish (ABR apply in worker)
-- [ ] Decision vs applied semantics are explicit **без изменения публичного API/событий**:
-  - не добавлять новые публичные события/варианты `enum` ради “applied”
-  - доказать “applied” в тестах через детерминированные payload prefixes (например по границе сегмента/инициализации), а не через out-of-band порядок событий
-  - если уже существует публичное событие смены варианта — **зафиксировать и документировать его текущую семантику** (decision или applied) без изменения формы API
+- [ ] Decision vs applied semantics are explicit:
+  - expose/emit `VariantApplied` (или эквивалент) only after actual switch is applied
+  - tests must not rely on out-of-band telemetry ordering
 - [ ] ABR upswitch continues from current segment index (no restart)
 - [ ] ABR downswitch begins correctly (init segment behavior fixed by contract):
   - if switching requires init, ensure next output begins with init for new variant
@@ -182,7 +236,6 @@ Reference: `docs/porting/abr-reference.md`
   - obtain decisions
   - apply decisions in worker at segment boundaries
   - observe selected variant and next segment descriptors
-
 
 ---
 

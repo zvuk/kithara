@@ -9,6 +9,31 @@
 
 ---
 
+## 0.1) Локальные “копии legacy артефактов” внутри `kithara` (агенты должны читать это вместо внешних репо)
+
+Чтобы агенты могли портировать поведение и тесты без доступа к другим репозиториям, в `kithara/docs/porting/` лежат копии ключевых legacy файлов:
+
+- `docs/porting/legacy-stream-download-hls-lib.rs` — публичные ре-экспорты и модульная карта `stream-download-hls`.
+- `docs/porting/legacy-stream-download-hls-tests.rs` — **полный** legacy-набор интеграционных тестов по HLS (VOD, base_url, ABR, DRM, seek, storage backends).
+- `docs/porting/legacy-stream-download-lib.rs` — reference по “streaming/read/seek” контрактам `stream-download` (как устроен Read+Seek поверх async source).
+
+Как этим пользоваться (нормативно):
+- Агент **не копирует** код 1-в-1, а переносит **контракты и поведение**, зафиксированные тестами.
+- Любой перенос делается через TDD: сначала новый тест в `kithara-*`, затем реализация.
+- Нельзя менять публичный контракт `kithara-*` “под legacy”. Мы переносим legacy-поведение **внутрь** уже заложенной архитектуры.
+
+Доп. portable спецификации (это “истина” для kithara, а legacy — референс):
+- `docs/porting/source-driver-reference.md` (driver loop, cancellation via drop, offline miss fatal)
+- `docs/porting/hls-vod-basic-reference.md` (VOD basic playback: segment loop + EOS + counters; DRM учтён, но не блокер)
+- `docs/porting/downloader-reference.md` (downloader/decorator pattern для fetch stack: base → timeout → retry → cache → transform; где должен жить cache и где decrypt)
+- `docs/porting/decal-reference.md` (decal-style слойность decode: Source → Engine → Decoder → Pipeline; границы между source/driver и decode)
+- `docs/porting/abr-reference.md`
+- `docs/porting/drm-reference.md`
+- `docs/porting/decode-reference.md`
+- `docs/porting/net-reference.md`
+
+---
+
 ## 0) Контекст и правила (обязательно)
 
 Перед любой работой агент читает:
@@ -220,11 +245,42 @@
 
 ## 4) Артефакты, которые агентам нужны для реализации (внутри `kithara`)
 
-Этот документ — “главный reference”. Дополнительно полезно иметь в `kithara/docs/porting/` следующие файлы (их можно добавить отдельными задачами):
-- `abr-reference.md`: формулы/псевдокод estimator/controller + таблица тест-кейсов.
-- `drm-reference.md`: AES-128-CBC contract + fixture layout + правила IV.
-- `decode-reference.md`: слойность, последовательность вызовов, типы ошибок.
-- `net-reference.md`: retry/timeout matrix.
+Этот документ — “главный reference”. В `kithara/docs/porting/` есть два типа артефактов:
+
+### 4.1 Portable specs (нормативно для kithara)
+Эти документы задают “как должно быть” в `kithara` (не legacy):
+- `abr-reference.md`: формулы/правила estimator/controller + таблица тест-кейсов.
+- `drm-reference.md`: AES-128-CBC contract + fixture layout + правила IV + processed keys caching.
+- `decode-reference.md`: слойность decode, последовательность вызовов, инварианты EOF/backpressure.
+- `decal-reference.md`: пояснение “decal-style” слойности и границы интеграции: sources/drivers (async bytes) ↔ bridge (`kithara-io`) ↔ decode (`kithara-decode`).
+- `net-reference.md`: retry/timeout matrix + no mid-stream retry v1.
+- `downloader-reference.md`: reference по downloader/decorator pattern для resource fetching: base HTTP + timeout + retry + cache + optional transforms (DRM decrypt) с детерминированными тестами.
+- `source-driver-reference.md`: execution model источников, cancellation via drop, offline miss semantics.
+- `hls-vod-basic-reference.md`: минимальный “basic playback” для HLS VOD: segment loop + EOS + request counters; DRM учтён, но не блокер.
+
+### 4.2 Copied legacy artifacts (референс поведения/тестов)
+Эти файлы — “снимок” legacy, чтобы агенты могли портировать тестовые сценарии без доступа к внешним репо:
+- `legacy-stream-download-hls-lib.rs`
+- `legacy-stream-download-hls-tests.rs`
+- `legacy-stream-download-lib.rs`
+
+Нормативное правило использования legacy артефактов:
+- legacy служит **источником сценариев и ожиданий** (особенно для тестов),
+- но если portable spec и legacy расходятся — приоритет у portable spec и `docs/constraints.md`.
+
+### 4.3 Как использовать “decal” и “downloader” артефакты (обязательная методология)
+Эти два документа нужны, чтобы агенты не “достраивали архитектуру по наитию”, а попадали в исходные идеи:
+
+- `docs/porting/decal-reference.md`:
+  - используется при любых задачах в `kithara-decode` и `kithara-io`;
+  - фиксирует границу: sources/drivers делают async orchestration и дают async bytes; decode потребляет sync `Read+Seek`;
+  - подчёркивает критичный инвариант `Read::read() -> Ok(0)` == true EOF.
+
+- `docs/porting/downloader-reference.md`:
+  - используется при задачах в `kithara-hls` и `kithara-file` (реальная реализация segment/file streaming);
+  - описывает “fetch stack” как слои/декораторы (base → timeout → retry → cache → transform);
+  - объясняет, почему cache должен оставаться в source crates (а `kithara-net` быть stateless);
+  - показывает, как встроить DRM hook так, чтобы DRM был учтён и не блокировал VOD basic playback (plaintext fixture + детерминированный `Unimplemented` если встретили EXT-X-KEY до реализации decrypt).
 
 ---
 
