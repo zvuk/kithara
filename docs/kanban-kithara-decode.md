@@ -62,7 +62,7 @@ Reference spec (portable): `docs/porting/decode-reference.md`
   - декод пакетов → PCM,
   - `seek(Duration)` best-effort + reset.
 - `PcmSpec`, `PcmChunk<T>`: публичные PCM типы и инварианты.
-- `DecodeCommand`: команды управления (минимум `Seek(Duration)`; опционально Stop/Pause если закреплено контрактом).
+- `DecodeCommand`: команды управления (минимум `Seek(Duration)`; опционально `Pause/Resume` если закреплено контрактом). Stop как отдельная команда не обязателен: остановка = drop consumer/stream.
 - `AudioStream<T>`: high-level async consumer API (bounded queue semantics) + управление командами.
 - Worker loop: отдельный поток/задача, который читает из `AudioSource<T>`/`Source`, декодирует и пушит чанки в очередь.
 

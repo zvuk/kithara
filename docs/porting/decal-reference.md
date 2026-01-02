@@ -1,5 +1,10 @@
 # Decal reference (portable) — decode layering, integration boundary, and how it maps to legacy tests
 
+> Актуально: orchestration loop вынесен в `kithara-stream`.
+> - Источники (`kithara-file`, `kithara-hls`) реализуют `kithara-stream::Source` (что качать и в каком порядке).
+> - `kithara-stream::Stream` владеет общим orchestration loop (`tokio::select!`), cancellation via drop и command contract.
+> - “Stop” как отдельная команда **не является** частью контракта источников: остановка = **drop** consumer stream/session.
+
 This document is a **portable “decal-style” reference artifact** for agents working on `kithara`.
 Agents **do not have access** to the upstream `decal` repository, so this file explains:
 
@@ -67,11 +72,15 @@ Connects sync decode with async consumers:
 
 ### Sources/drivers (kithara-file, kithara-hls)
 Responsibilities:
+- implement resource logic as `kithara-stream::Source` (what to fetch and in what order),
 - network I/O, caching, resource orchestration, HLS playlist parsing, segment selection,
 - DRM key fetching + decrypt (for HLS),
 - ABR decision/apply (for HLS),
 - emitting an **async byte stream** (data-plane) and closing it on EOS/fatal error,
 - stopping when the consumer drops the stream/session (cancellation via drop).
+
+Note:
+- the generic orchestration loop (selecting between data-plane and control-plane, bounded channels, drop-driven cancellation) is owned by `kithara-stream::Stream`.
 
 Non-responsibilities:
 - decoding audio formats,

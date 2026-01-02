@@ -88,7 +88,7 @@
 - единый публичный интерфейс `next() -> Result<Option<PcmChunk<T>>, DecodeError>`,
 - корректное завершение (EOS),
 - обработка recoverable/fatal ошибок,
-- управление командами (`Seek`, потенциально `Stop`, `Reset`),
+- управление командами (`Seek`, потенциально `Reset`; отдельная команда `Stop` не обязательна — остановка достигается через drop consumer/stream),
 - **контракт инвариантов** `PcmChunk<T>` и `DecodeError`.
 
 **Типичный контракт:**
@@ -118,12 +118,13 @@
 - worker thread:
   - владеет `Decoder<T>`,
   - циклически читает `next()` и пушит `PcmChunk<T>` в bounded queue,
-  - принимает команды (seek/stop).
+  - принимает команды (как минимум `seek`; отдельная команда `stop` не обязательна, т.к. остановка = drop consumer/stream).
 - bounded queue:
   - ограничивает память (например по количеству `PcmChunk`),
   - writer блокируется, если очередь заполнена.
 - command channel:
-  - отдельный канал команд, чтобы consumer мог вызвать `seek`/`stop`,
+  - отдельный канал команд, чтобы consumer мог вызвать `seek` (и при необходимости другие управляющие команды),
+  - остановка по умолчанию реализуется через **drop** consumer/stream (без обязательной команды `stop`),
   - команды должны обрабатываться без дедлоков (например при заполненной очереди).
 
 **Ключевой invariant:**
@@ -142,7 +143,8 @@
   - invariant: `pcm.len() % channels == 0` (frame aligned)
 - `DecodeCommand`:
   - минимум `Seek(Duration)`
-  - опционально `Stop`, `Flush`, `Reset`
+  - опционально `Flush`, `Reset`
+  - `Stop` как отдельная команда не обязателен: остановка = drop consumer/stream
 - `DecodeError`:
   - `Io`, `Symphonia`, `NoAudioTrack`, `SeekError`, `CodecResetRequired` и т.п.
 

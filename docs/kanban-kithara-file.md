@@ -1,7 +1,7 @@
 # Kanban — `kithara-file`
 
 > Доп. артефакты для портирования legacy-идей (агенты не имеют доступа к другим репо):
-> - `docs/porting/source-driver-reference.md` (portable: как должен работать driver loop у источников, cancellation via drop, offline miss semantics)
+> - `docs/porting/source-driver-reference.md` (portable: driver loop semantics, cancellation via drop, offline miss semantics)
 > - `docs/porting/net-reference.md` (portable: timeout/retry contract, range semantics)
 >
 > Reference spec (portable): `docs/porting/source-driver-reference.md`
@@ -14,15 +14,20 @@
 
 ## Цель
 
-`kithara-file` — источник байтов для progressive ресурсов (HTTP mp3 и т.п.) с “player-grade” семантикой и **реальной** реализацией driver loop (не заглушки):
+`kithara-file` — источник байтов для progressive ресурсов (HTTP mp3 и т.п.) с “player-grade” семантикой.
 
-- async загрузка (через `kithara-net`),
-- driver loop внутри `kithara-file` (оркестрация/сеть/кэш) и выдача байтов через async stream,
+Актуальная архитектура:
+
+- **оркестрация driver loop вынесена в `kithara-stream`**:
+  - `kithara-file` реализует `kithara-stream::Source` (конкретный источник: cache-first / network / offline);
+  - `kithara-stream::Stream` инкапсулирует цикл `tokio::select!` (data-plane + control-plane), cancellation via drop и выдачу async byte stream.
+- загрузка байтов (через `kithara-net`),
+- интеграция с кэшем (через `kithara-cache`) для offline/reopen,
 - sync consumption через bridge (через `kithara-io`, если используется в интеграции),
 - корректный `Read`/EOF (см. `docs/constraints.md`),
-- best-effort `Seek` (обычно через HTTP Range) — контракт должен быть зафиксирован тестами,
-- **cancellation via drop**: “stop” это когда consumer прекратил чтение (drop stream/session); отдельная команда Stop не является обязательной семантикой,
-- интеграция с кэшем (через `kithara-cache`) для offline/reopen (если включено в настройках/контракте).
+- best-effort `Seek` (обычно через HTTP Range) — контракт фиксируется тестами и реализуется поэтапно.
+
+Важно: “stop” как отдельная команда **не является** частью контракта. Остановка = **drop** consumer stream/session.
 
 ---
 
@@ -32,10 +37,19 @@
 - Seek должен быть **абсолютным**, best-effort; поведение вне доступного диапазона — **явно** определено и тестируется.
 - **Cancellation via drop** обязательна:
   - если consumer прекратил чтение и drop’нул stream/session, driver loop должен завершиться быстро и детерминированно (без зависаний).
-- Offline режим (если предусмотрен опциями/контрактом):
+- Offline режим:
   - `offline_mode=true` + cache miss => **fatal** (никаких попыток “всё равно сходить в сеть”).
-- Ошибки должны быть типизированы; различать recoverable и fatal в терминах публичного API (как минимум: “можно продолжать” vs “сессия завершена”).
+- Ошибки должны быть типизированы; различать recoverable и fatal в терминах публичного API.
 - Тесты: детерминированные, без внешней сети (только локальная фикстура/сервер).
+
+---
+
+## Публичный контракт (актуально)
+
+- `kithara-file` предоставляет session/stream API поверх `kithara-stream`.
+- Ошибки разделены:
+  - `SourceError` (ошибки источника: сеть/кэш/offline miss),
+  - `DriverError` (обёртка: `StreamError<SourceError>` + ошибки сессии/настроек).
 
 ---
 

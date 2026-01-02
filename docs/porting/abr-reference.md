@@ -7,10 +7,15 @@
 - **не обновляет throughput по cache hits** (важно для offline),
 - реализует базовые guard-rails: hysteresis, safety factor, min switch interval, buffer gating.
 
+Важно про orchestration (актуальная архитектура kithara):
+- ABR является частью “ресурсной” логики источника и живёт в `kithara-hls` (выбор variant, estimator/controller, decision/apply).
+- Общий orchestration loop вынесен в `kithara-stream::Stream` (cancellation via drop, command contract), а `kithara-hls` реализует `kithara-stream::Source`.
+
 Связанные документы:
 - `docs/constraints.md` (особенно раздел “ABR: cache hits не должны улучшать throughput”)
 - `docs/kanban-kithara-hls.md`
 - `docs/porting/legacy-reference.md`
+- `docs/porting/source-driver-reference.md` (где зафиксирована роль `kithara-stream` и инварианты drop-driven cancellation)
 
 ---
 

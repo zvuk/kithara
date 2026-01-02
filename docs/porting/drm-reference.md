@@ -1,5 +1,10 @@
 # DRM reference spec (portable) — HLS AES-128, key processing, caching, offline rules, fixtures
 
+> Актуально: orchestration loop вынесен в `kithara-stream`.
+> - `kithara-hls` реализует `kithara-stream::Source` и содержит DRM-логику (key fetch/processing/caching + decrypt сегментов).
+> - `kithara-stream::Stream` владеет общим orchestration loop (`tokio::select!`), cancellation via drop и command contract.
+> - “Stop” как отдельная команда **не является** частью контракта источников: остановка = **drop** consumer stream/session.
+
 Этот документ — **самодостаточный reference** для реализации DRM в `kithara-hls` агентами, которые **не имеют доступа** к legacy-коду (`stream-download-hls`).
 
 Цель: обязательный DRM слой (без feature flags), который:

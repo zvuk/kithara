@@ -1,10 +1,11 @@
 # Source/Driver reference spec (portable) — execution model + contract for `kithara-file` and `kithara-hls`
 
 Этот документ — **самодостаточный reference** для автономных агентов, которые **не имеют доступа** к legacy репозиториям.
-Он фиксирует **как должны работать** источники `kithara-file` и `kithara-hls` в рамках уже заложенной архитектуры `kithara`:
+Он фиксирует **как должны работать** источники `kithara-file` и `kithara-hls` в рамках текущей архитектуры `kithara`:
+- источники описывают **ресурсную** логику (что качать и в каком порядке) и реализуют `kithara-stream::Source`,
+- `kithara-stream::Stream` владеет **общим orchestration loop** (driver loop на `tokio::select!`, cancellation via drop, command contract),
 - источники производят **async stream байтов** (data-plane),
 - декодирование происходит **синхронно** в отдельном потоке (через `kithara-io` bridge и `kithara-decode`),
-- источники содержат **driver loop** (оркестрация/сеть/кэш),
 - тесты должны быть **детерминированными**, без внешней сети.
 
 Связанные документы:
@@ -19,8 +20,9 @@
 
 ## 0) Нормативные правила (must)
 
-### 0.1 Источник == ресурсный driver loop (не decode thread)
-- Вся сеть/оркестрация (HTTP, HLS parsing, выбор сегментов, кэширование, DRM key fetch/decrypt) должна жить **внутри source crate** (`kithara-file` или `kithara-hls`) в driver loop.
+### 0.1 Источник == ресурсная оркестрация (не decode thread)
+- Общий orchestration loop (driver loop) живёт в `kithara-stream::Stream` (включая cancellation via drop и обработку команд).
+- Вся сеть/ресурсная оркестрация (HTTP, HLS parsing, выбор сегментов, кэширование, DRM key fetch/decrypt) должна жить **внутри source crate** (`kithara-file` или `kithara-hls`) как реализация `kithara-stream::Source`.
 - Decode thread (Symphonia) не должен “ходить в сеть”. Он синхронно читает из `Read+Seek` bridge.
 
 ### 0.2 Stop убираем из публичного контракта (семантика отмены)
@@ -55,9 +57,10 @@ Driver обязан корректно завершить stream:
 ## 1) Общая модель Source/Session/Driver
 
 ### 1.1 Термины
-- **Source**: публичная точка входа (`FileSource::open`, `HlsSource::open`).
+- **Source (public entrypoint)**: публичная точка входа (`FileSource::open`, `HlsSource::open`).
 - **Session**: хэндл на “живую” сессию (хранит `asset_id`, опции, и предоставляет `stream()`).
-- **Driver**: внутренняя async задача (tokio task), которая выполняет orchestration loop и пишет байты в data-plane канал.
+- **Source (kithara-stream)**: реализация `kithara-stream::Source` (ресурсная логика: cache-first/network/offline/playlist/segment/key порядок).
+- **Stream (kithara-stream)**: `kithara-stream::Stream`, который выполняет общий orchestration loop и пишет байты в data-plane.
 
 ### 1.2 Контракт уровня `Session`
 Минимальный контракт, который должен быть у обоих источников:
@@ -318,33 +321,31 @@ DRM требования см. `docs/porting/drm-reference.md`:
   - internal cancel triggered by closed channel detection
 - [ ] Ensure tests cover cancellation via drop
 
-> Если `Stop` пока часть публичного API — не удалять тип без согласования, но перестать делать его “обязательным”.
+> `Stop` не является частью актуального публичного контракта источников: остановка = **drop** consumer stream/session. Если где-то в коде/доках ещё остались упоминания `Stop`, их следует считать устаревшими и удалить/обновить вместе с тестами.
 
 ---
 
-## 6) Вопрос: выносить ли общий source/driver в отдельный сабкрейт?
+## 6) Общий source/driver слой: статус (актуально)
 
-Короткий ответ: **сейчас нет** — по правилам проекта и по риску расползания.
+Короткий ответ: **уже выделено** в отдельный крейт `kithara-stream`.
 
-Причины:
-1) Правило `AGENTS.md`: “одно изменение — один крейт”. Создание нового общего крейта почти гарантированно потребует правок минимум в `kithara-file` и `kithara-hls` (и возможно `kithara-io`), то есть нарушит правило.
-2) Общность пока “поверхностная”:
-   - да, есть driver loop и lifecycle,
-   - но HLS — дерево ресурсов + ABR + DRM, а File — линейный ресурс; ошибки, кэш-ключи и события отличаются.
-3) Риск преждевременной абстракции:
-   - общий “Driver” API быстро станет “god trait” или будет тянуть HLS-специфику в File.
+Что это означает для данного reference:
+- `kithara-file` и `kithara-hls` больше **не держат** “общий” orchestration loop у себя. Они реализуют `kithara-stream::Source`.
+- `kithara-stream::Stream` инкапсулирует:
+  - driver loop (`tokio::select!`),
+  - cancellation via drop (stop = drop consumer stream/session),
+  - командный канал (на текущем этапе: `SeekBytes`, может быть `SeekNotSupported`),
+  - выдачу async byte stream.
 
-Когда есть смысл выделять общий слой:
-- когда оба крейта имеют **устойчиво одинаковые** примитивы:
-  - “bounded byte pipe”,
-  - “driver cancellation on receiver drop”,
-  - “uniform event sink (telemetry)”
-  - “cache-through-write primitive”
-- и это подтверждено тестами и повторяющимся кодом (не на уровне “похоже”, а реально одинаковые блоки).
+Почему это важно:
+- общая семантика жизненного цикла и управления перемоткой/командами фиксируется и тестируется в одном месте (`kithara-stream`),
+- конкретная “ресурсная” логика остаётся в источниках:
+  - `kithara-file`: cache-first / network fetch / offline miss,
+  - `kithara-hls`: playlists/segments/keys/ABR/DRM/URL resolution/offline rules.
 
-Рекомендованный компромисс, совместимый с правилами:
-- сначала довести `kithara-file` и `kithara-hls` до **работающего** состояния + тесты,
-- затем, отдельной задачей, сделать “extract common primitives” (возможно как `kithara-source` или модуль в `kithara-io`, но это отдельный kanban item и отдельное согласование).
+Практическое следствие для задач и тестов:
+- тесты “cancellation via drop”, “EOF”, “команды/seek contract” относятся к `kithara-stream` как к слою оркестрации,
+- тесты “что именно качаем и как” (file cache-first, hls segment loop, DRM/ABR) остаются в соответствующих крейтах.
 
 ---
 

@@ -130,6 +130,11 @@ stream-download-hls downloader (decorator/layered pattern: base → timeout → 
 - Retry только до начала body streaming (v1), нет mid-stream retry.
 - Никаких stateful caches в net.
 
+**Важно про orchestration (актуальная архитектура kithara):**
+- общий driver loop / orchestration слой вынесен в `kithara-stream`;
+- `kithara-file` и `kithara-hls` реализуют `kithara-stream::Source` (то есть описывают “что качать и в каком порядке”),
+- а `kithara-stream::Stream` отвечает за lifecycle, cancellation via drop и обработку команд (на текущем этапе `SeekBytes` может быть `SeekNotSupported`).
+
 ---
 
 ## 2) Portable “reference spec” (то, что агент может реализовать без доступа к legacy)
