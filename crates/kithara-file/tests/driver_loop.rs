@@ -240,7 +240,9 @@ async fn file_offline_miss_is_fatal() {
 
     assert!(result.is_some(), "Stream should return an error");
     match result.unwrap() {
-        Err(kithara_file::FileError::Driver(kithara_file::DriverError::OfflineMiss)) => {
+        Err(kithara_file::FileError::Driver(kithara_file::DriverError::Stream(
+            kithara_stream::StreamError::Source(kithara_file::SourceError::OfflineMiss),
+        ))) => {
             // Expected error
         }
         other => panic!("Expected OfflineMiss error, got: {:?}", other),

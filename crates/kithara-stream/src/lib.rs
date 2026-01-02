@@ -24,9 +24,6 @@ use tracing::{debug, trace};
 #[cfg(test)]
 use std::time::Duration;
 
-pub type ByteStream =
-    Pin<Box<dyn FuturesStream<Item = Result<Bytes, StreamError>> + Send + 'static>>;
-
 /// Data plane + control plane multiplexing.
 ///
 /// You can use `M = ()` if you don't need control messages to be emitted from the driver.
@@ -61,27 +58,24 @@ pub enum Command {
     SeekBytes(u64),
 }
 
-/// Errors produced by `kithara-stream`.
+/// Errors produced by `kithara-stream` (generic over source error).
 #[derive(Debug, Error)]
-pub enum StreamError {
+pub enum StreamError<E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
     #[error("Seek not supported")]
     SeekNotSupported,
 
     #[error("Source error: {0}")]
-    Source(#[source] Box<dyn std::error::Error + Send + Sync>),
+    Source(#[source] E),
 
     #[error("Internal channel closed")]
     ChannelClosed,
 }
 
-impl StreamError {
-    pub fn from_source<E>(e: E) -> Self
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        Self::Source(Box::new(e))
-    }
-}
+pub type ByteStream<E> =
+    Pin<Box<dyn FuturesStream<Item = Result<Bytes, StreamError<E>>> + Send + 'static>>;
 
 /// Abstract byte source.
 ///
@@ -94,18 +88,24 @@ impl StreamError {
 /// - listening to commands (seek),
 /// - stopping when the consumer stream is dropped.
 pub trait Source: Send + 'static {
+    /// The underlying error type produced by this source.
+    type Error: std::error::Error + Send + Sync + 'static;
+
     /// The control message type emitted by this source/engine (optional).
     type Control: Send + 'static;
 
     /// Create a new byte stream starting from the current internal position (usually 0 initially).
     ///
     /// The returned stream must be `'static` because it is driven by a spawned task.
-    fn open(&mut self, params: StreamParams) -> Result<SourceStream<Self::Control>, StreamError>;
+    fn open(
+        &mut self,
+        params: StreamParams,
+    ) -> Result<SourceStream<Self::Control, Self::Error>, StreamError<Self::Error>>;
 
     /// Seek to the given byte position.
     ///
     /// Default: not supported.
-    fn seek_bytes(&mut self, _pos: u64) -> Result<(), StreamError> {
+    fn seek_bytes(&mut self, _pos: u64) -> Result<(), StreamError<Self::Error>> {
         Err(StreamError::SeekNotSupported)
     }
 
@@ -120,8 +120,8 @@ pub trait Source: Send + 'static {
 /// It yields either:
 /// - `Message::Data(Bytes)` for byte payloads,
 /// - `Message::Control(M)` for optional control/events.
-pub type SourceStream<M> =
-    Pin<Box<dyn FuturesStream<Item = Result<Message<M>, StreamError>> + Send + 'static>>;
+pub type SourceStream<M, E> =
+    Pin<Box<dyn FuturesStream<Item = Result<Message<M>, StreamError<E>>> + Send + 'static>>;
 
 /// Handle for controlling a running stream.
 #[derive(Clone)]
@@ -136,7 +136,10 @@ impl fmt::Debug for Handle {
 }
 
 impl Handle {
-    pub async fn seek_bytes(&self, pos: u64) -> Result<(), StreamError> {
+    pub async fn seek_bytes<E>(&self, pos: u64) -> Result<(), StreamError<E>>
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
         self.cmd_tx
             .send(Command::SeekBytes(pos))
             .await
@@ -152,20 +155,21 @@ impl Handle {
 /// - ignores or logs `Control(M)` for now (but can be surfaced later),
 /// - listens for `SeekBytes` commands and re-opens the source as needed,
 /// - stops when the consumer drops the output stream.
-///
-/// Implementation detail:
-/// - The orchestration task must keep the receiver side alive. If the receiver is dropped, the
-///   sender observes "closed" and the loop exits immediately. Therefore we move the `ReceiverStream`
-///   into the task and forward items into a second channel used by the public `Stream`.
-pub struct Stream<S: Source> {
+pub struct Stream<S>
+where
+    S: Source,
+{
     handle: Handle,
-    out: ReceiverStream<Result<Bytes, StreamError>>,
+    out: ReceiverStream<Result<Bytes, StreamError<S::Error>>>,
     _task: tokio::task::JoinHandle<()>,
     _keepalive: Arc<()>,
     _phantom: std::marker::PhantomData<S>,
 }
 
-impl<S: Source> fmt::Debug for Stream<S> {
+impl<S> fmt::Debug for Stream<S>
+where
+    S: Source,
+{
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Stream")
             .field("handle", &self.handle)
@@ -173,7 +177,10 @@ impl<S: Source> fmt::Debug for Stream<S> {
     }
 }
 
-impl<S: Source> Stream<S> {
+impl<S> Stream<S>
+where
+    S: Source,
+{
     /// Start orchestration and return (`Stream`, `Handle`).
     ///
     /// The returned `Stream` yields bytes (`Bytes`) and ends when:
@@ -181,10 +188,8 @@ impl<S: Source> Stream<S> {
     /// - the consumer drops it.
     pub fn new(mut source: S, params: StreamParams) -> Self {
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<Command>(16);
-        let (out_tx, out_rx) = mpsc::channel::<Result<Bytes, StreamError>>(16);
+        let (out_tx, out_rx) = mpsc::channel::<Result<Bytes, StreamError<S::Error>>>(16);
 
-        // Keepalive used to make it harder to accidentally drop all references while debugging;
-        // not strictly necessary, but useful when expanding this crate.
         let keepalive = Arc::new(());
         let keepalive_task = Arc::clone(&keepalive);
 
@@ -209,8 +214,6 @@ impl<S: Source> Stream<S> {
                 }
 
                 if commands_closed {
-                    // If nobody can send commands anymore, we continue streaming bytes until EOF
-                    // (or until the consumer drops the output stream).
                     match current.next().await {
                         None => {
                             trace!("source stream ended");
@@ -235,8 +238,6 @@ impl<S: Source> Stream<S> {
                 tokio::select! {
                     cmd = cmd_rx.recv() => {
                         let Some(cmd) = cmd else {
-                            // All handles dropped. This must NOT stop the stream (stream-download keeps downloading);
-                            // it only disables further control.
                             trace!("all command handles dropped; disabling command branch");
                             commands_closed = true;
                             continue;
@@ -246,7 +247,6 @@ impl<S: Source> Stream<S> {
                             Command::SeekBytes(pos) => {
                                 debug!(pos, "seek command received");
                                 if let Err(e) = source.seek_bytes(pos) {
-                                    // Propagate seek failure but keep running.
                                     let _ = out_tx.send(Err(e)).await;
                                     continue;
                                 }
@@ -299,7 +299,7 @@ impl<S: Source> Stream<S> {
         self.handle.clone()
     }
 
-    pub fn into_byte_stream(self) -> ByteStream {
+    pub fn into_byte_stream(self) -> ByteStream<S::Error> {
         Box::pin(self.out)
     }
 }
@@ -330,24 +330,24 @@ mod tests {
     }
 
     impl Source for FakeSource {
+        type Error = Boom;
         type Control = ();
 
         fn open(
             &mut self,
             params: StreamParams,
-        ) -> Result<SourceStream<Self::Control>, StreamError> {
+        ) -> Result<SourceStream<Self::Control, Self::Error>, StreamError<Self::Error>> {
             self.offline_mode_seen = Some(params.offline_mode);
             let start = self.pos;
 
-            // Produce deterministic bytes: first byte = start%256, then +1, +2, +3.
-            let items: Vec<Result<Message<()>, StreamError>> = (0..4u8)
+            let items: Vec<Result<Message<()>, StreamError<Boom>>> = (0..4u8)
                 .map(|i| Ok(Message::Data(Bytes::from(vec![start as u8 + i]))))
                 .collect();
 
             Ok(Box::pin(futures::stream::iter(items)))
         }
 
-        fn seek_bytes(&mut self, pos: u64) -> Result<(), StreamError> {
+        fn seek_bytes(&mut self, pos: u64) -> Result<(), StreamError<Boom>> {
             if !self.supports_seek {
                 return Err(StreamError::SeekNotSupported);
             }
@@ -371,16 +371,15 @@ mod tests {
     }
 
     impl Source for SlowInfiniteSource {
+        type Error = Boom;
         type Control = ();
 
         fn open(
             &mut self,
             _params: StreamParams,
-        ) -> Result<SourceStream<Self::Control>, StreamError> {
+        ) -> Result<SourceStream<Self::Control, Self::Error>, StreamError<Self::Error>> {
             let start = self.pos;
 
-            // Long-lived stream to avoid races where the driver reaches EOF before we can send seek.
-            // Emits one byte every 10ms: start, start+1, start+2, ...
             Ok(Box::pin(async_stream::stream! {
                 let mut i: u64 = 0;
                 loop {
@@ -392,7 +391,7 @@ mod tests {
             }))
         }
 
-        fn seek_bytes(&mut self, pos: u64) -> Result<(), StreamError> {
+        fn seek_bytes(&mut self, pos: u64) -> Result<(), StreamError<Boom>> {
             self.pos = pos;
             Ok(())
         }
@@ -405,12 +404,13 @@ mod tests {
     struct NoSeekSource;
 
     impl Source for NoSeekSource {
+        type Error = Boom;
         type Control = ();
 
         fn open(
             &mut self,
             _params: StreamParams,
-        ) -> Result<SourceStream<Self::Control>, StreamError> {
+        ) -> Result<SourceStream<Self::Control, Self::Error>, StreamError<Self::Error>> {
             Ok(Box::pin(futures::stream::iter(vec![Ok(Message::Data(
                 Bytes::from_static(b"abc"),
             ))])))
@@ -420,13 +420,14 @@ mod tests {
     struct FailingOpenSource;
 
     impl Source for FailingOpenSource {
+        type Error = Boom;
         type Control = ();
 
         fn open(
             &mut self,
             _params: StreamParams,
-        ) -> Result<SourceStream<Self::Control>, StreamError> {
-            Err(StreamError::from_source(Boom))
+        ) -> Result<SourceStream<Self::Control, Self::Error>, StreamError<Self::Error>> {
+            Err(StreamError::Source(Boom))
         }
     }
 
@@ -462,15 +463,11 @@ mod tests {
         let handle = stream.handle();
         let mut s = stream.into_byte_stream();
 
-        // Read first chunk(s) from initial position 0.
         let first = s.next().await.unwrap().unwrap();
         assert_eq!(first, Bytes::from_static(&[0]));
 
-        // Seek to 10 and expect subsequent output to start from 10.
-        handle.seek_bytes(10).await.unwrap();
+        handle.seek_bytes::<Boom>(10).await.unwrap();
 
-        // Because the orchestration is concurrent, there may be some in-flight bytes.
-        // The stream is long-lived, so we can deterministically wait until we observe [10].
         let mut seen_10 = false;
         for _ in 0..200 {
             let b = s.next().await.unwrap().unwrap();
@@ -491,19 +488,15 @@ mod tests {
         let handle = stream.handle();
         let mut s = stream.into_byte_stream();
 
-        // Consume the only "abc" chunk(s) from open.
         let b = s.next().await.unwrap().unwrap();
         assert_eq!(b, Bytes::from_static(b"abc"));
 
-        // Seek should fail and be propagated as an output error if the loop is still running.
-        // Depending on timing, the stream may already have ended, so just ensure seek returns error.
-        let err = handle.seek_bytes(1).await.unwrap_err();
+        let err = handle.seek_bytes::<Boom>(1).await.unwrap_err();
         assert!(matches!(
             err,
             StreamError::ChannelClosed | StreamError::SeekNotSupported
         ));
 
-        // Dropping is the stop mechanism.
         drop(s);
     }
 

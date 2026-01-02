@@ -3,7 +3,7 @@ use futures::Stream;
 use hls_m3u8::MediaPlaylist;
 use kithara_cache::{AssetCache, CachePath};
 use kithara_core::AssetId;
-use kithara_net::NetClient;
+use kithara_net::HttpClient;
 use std::pin::Pin;
 use thiserror::Error;
 use url::Url;
@@ -32,11 +32,11 @@ pub type SegmentStream<'a> = Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send 
 
 pub struct FetchManager {
     cache: AssetCache,
-    net: NetClient,
+    net: HttpClient,
 }
 
 impl FetchManager {
-    pub fn new(cache: AssetCache, net: NetClient) -> Self {
+    pub fn new(cache: AssetCache, net: HttpClient) -> Self {
         Self { cache, net }
     }
 
@@ -135,7 +135,7 @@ impl FetchManager {
             return Ok(bytes::Bytes::from(buf));
         }
 
-        let bytes = self.net.get_bytes(url.clone()).await?;
+        let bytes = self.net.get_bytes(url.clone(), None).await?;
         handle.put_atomic(&cache_path, &bytes)?;
         Ok(bytes)
     }

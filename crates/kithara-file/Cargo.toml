@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 kithara-core = { workspace = true }
 kithara-net = { workspace = true }
+kithara-stream = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }

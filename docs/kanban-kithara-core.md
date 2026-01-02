@@ -21,37 +21,6 @@
 
 ---
 
-## `kithara-core` MVP
-
-- [x] Define `AssetId` and canonicalization rules (+ tests)
-- [x] Define `ResourceHash` rules (+ tests)
-- [x] Define shared error scaffolding
-
----
-
-## `kithara-core` — Port legacy identity scenarios (tests)
-
-- [x] Canonicalization invariants for `AssetId` (URL without query/fragment) + tests:
-  - ignores query
-  - ignores fragment
-  - stable across repeated parsing/formatting
-- [x] Canonicalization invariants for `ResourceHash` (URL with query, without fragment) + tests:
-  - includes query
-  - ignores fragment
-  - differs when query differs (same base URL)
-- [x] (Prereq if missing) Add explicit error type(s) for invalid canonicalization inputs + tests:
-  - invalid/unsupported URL shapes produce typed errors (no panics)
-
----
-
-## `kithara-core` — Refactor (module boundaries; keep public contract)
-
-- [x] Split into small modules if file grows: `asset_id`, `resource_hash`, `errors` (no behavior change) + keep tests green
-- [x] Ensure no “settings creep”: options must remain outside `kithara-core` + add compile-time/doc guard (short comment or doc test)
-- [x] Add crate-level docs: “what belongs here / what must not” (short, contract-level)
-
----
-
 ## Sanity check (после ужесточения fmt+clippy)
 
 - [ ] Run `cargo fmt` and ensure no formatting diffs remain

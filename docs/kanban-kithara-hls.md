@@ -82,19 +82,6 @@
 
 ---
 
-## `kithara-hls` MVP
-
-- [x] parse master/media playlists (VOD) + tests with local fixture
-- [x] variant selection policy (parameter) + tests
-- [x] resource caching (playlists/init/segments) + offline test
-- [x] keys + processed keys caching + test scenario with wrapped key
-- [x] stream bytes for a variant + basic read smoke test
-
-> Важно: если текущая реализация по факту не доходит до сегментов (master → media playlist → stop),
-> то MVP “формально” выполнен, но функционально источник не работает. В этом случае задачи ниже считаются обязательными.
-
----
-
 ## `kithara-hls` — VOD basic playback (segment loop, EOS, fixture counters, manual selection) — MUST HAVE
 
 Reference: `docs/porting/hls-vod-basic-reference.md`

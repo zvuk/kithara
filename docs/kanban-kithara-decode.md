@@ -68,15 +68,6 @@ Reference spec (portable): `docs/porting/decode-reference.md`
 
 ---
 
-## `kithara-decode` MVP
-
-- [x] Generic sample plumbing (choose trait bounds, like decal) + unit tests
-- [x] Minimal Symphonia wrapper: open -> decode -> PCM chunk
-- [x] `seek(Duration)` best-effort
-- [x] Integration test: bridge -> decode for a small audio asset
-
----
-
 ## `kithara-decode` — Port legacy audio pipeline scenarios (tests)
 
 - [ ] PCM invariants:
@@ -93,57 +84,6 @@ Reference spec (portable): `docs/porting/decode-reference.md`
   - multiple forward/backward `Seek(Duration)` commands do not deadlock and result in continued PCM production + tests
 - [ ] Ordered boundaries (best-effort):
   - optionally expose best-effort “init boundary” / “segment boundary” events to validate ordering + tests
-
----
-
-## `kithara-decode` — Prerequisites for ported audio scenarios (only if missing in plan)
-
-- [x] Ensure `kithara-decode` exposes a bounded PCM queue stream API (`AudioStream<T>`):
-  - producer waits,
-  - consumer non-blocking (`poll_next` => Pending when empty),
-  - fatal error emits one Err item then terminates (или иной чётко описанный контракт) + tests
-- [x] Ensure decode worker can accept commands (`DecodeCommand::Seek`) and apply them best-effort + tests
-- [x] Provide deterministic local fixtures for decode tests (no external network):
-  - tiny MP3/AAC test assets embedded or served by local server
-
----
-
-## `kithara-decode` — Audio pipeline (bounded PCM queue; stream-download-audio-inspired)
-
-- [x] Define PCM public types: `PcmSpec`, `PcmChunk<T>` (interleaved, frame-aligned) + tests
-- [x] Define `DecodeCommand` (at least `Seek(Duration)`) and `AudioSource<T>` synchronous trait + tests with a fake source
-- [x] Implement `DecodeEngine` (Symphonia glue) with “reset/reopen” hooks to be codec-switch-safe + unit tests
-- [x] Implement `AudioStream<T>`:
-  - producer waits when queue full (bounded backpressure)
-  - consumer non-blocking (`poll_next` => Pending when empty)
-  - EOS and fatal error termination semantics + tests
-- [x] Implement worker loop that drives `AudioSource<T>` and pushes chunks into bounded queue (thread or `spawn_blocking`) + tests
-- [x] Add seek plumbing: `AudioStream` forwards `DecodeCommand::Seek` into worker/source; ensure no deadlocks + tests
-- [ ] (Optional, later) Add `rodio` adapter in `kithara-examples` crate (not inside `kithara-decode`) to keep decode crate minimal
-
----
-
-## `kithara-decode` — Decoder upgrade (decal-style `Decoder<T>` + Source contract)
-
-- [x] Add `Source` trait (MediaSource + `file_ext()` hint) + tests
-- [x] Add `DecoderSettings` (gapless toggle as baseline) + tests
-- [x] Implement `Decoder<T>` core state machine:
-  - probe with hint/extension
-  - pick default audio track
-  - decode packets for selected track id
-  - convert to interleaved `PcmChunk<T>` + tests
-- [x] Fix multi-channel support (not stereo-only) + tests
-- [x] Implement `seek(Duration)` via Symphonia seek + `decoder.reset()` + tests
-- [x] Add reset/reopen hooks to be codec-switch-safe (format/codec changes) + tests
-- [x] Wire `Decoder<T>` into `AudioStream<T>` worker (bounded queue semantics preserved) + integration tests
-
----
-
-## `kithara-decode` — Refactor (decoder vs pipeline; keep public contract)
-
-- [x] Separate low-level `Decoder<T>` (state machine) from high-level `AudioStream<T>` pipeline modules (no behavior change) + keep tests green
-- [x] Centralize Symphonia glue (probe/track selection/seek/reset) to avoid duplicated logic + keep tests green
-- [ ] Add crate-level docs: sample type `T`, invariants on `PcmChunk`, and command semantics
 
 ---
 

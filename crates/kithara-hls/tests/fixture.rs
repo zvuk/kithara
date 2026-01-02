@@ -1,6 +1,6 @@
 use axum::{Router, routing::get};
 use kithara_cache::{AssetCache, CacheOptions};
-use kithara_net::{NetClient, NetOptions};
+use kithara_net::{HttpClient, NetOptions};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::net::TcpListener;
@@ -82,7 +82,7 @@ impl TestServer {
     }
 }
 
-pub fn create_test_cache_and_net() -> (AssetCache, NetClient) {
+pub fn create_test_cache_and_net() -> (AssetCache, HttpClient) {
     let cache_opts = CacheOptions {
         max_bytes: 1024 * 1024,
         root_dir: None,
@@ -90,7 +90,7 @@ pub fn create_test_cache_and_net() -> (AssetCache, NetClient) {
     let cache = AssetCache::open(cache_opts).unwrap();
 
     let net_opts = NetOptions::default();
-    let net = NetClient::new(net_opts).expect("Failed to create NetClient");
+    let net = HttpClient::new(net_opts);
 
     (cache, net)
 }

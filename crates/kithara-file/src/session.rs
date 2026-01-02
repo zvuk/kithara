@@ -4,7 +4,7 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_cache::AssetCache;
 use kithara_core::{AssetId, CoreError};
-use kithara_net::NetClient;
+use kithara_net::HttpClient;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -19,7 +19,7 @@ impl FileSession {
     pub fn new(
         asset_id: AssetId,
         url: url::Url,
-        net_client: NetClient,
+        net_client: HttpClient,
         options: FileSourceOptions,
         cache: Option<Arc<AssetCache>>,
     ) -> Self {
@@ -50,11 +50,6 @@ impl FileSession {
         self.command_tx
             .send(command)
             .map_err(|_| FileError::DriverStopped)
-    }
-
-    /// Convenience method for stopping the driver
-    pub fn stop(&self) -> Result<(), FileError> {
-        self.send_command(FileCommand::Stop)
     }
 
     /// Convenience method for seeking to a byte position
