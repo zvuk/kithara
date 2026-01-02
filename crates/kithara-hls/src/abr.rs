@@ -167,13 +167,10 @@ impl AbrController {
 
     fn auto_select_variant(&mut self, _master_playlist: &MasterPlaylist) -> HlsResult<usize> {
         let current = self.state.current_variant();
-        let _throughput = self
-            .state
-            .estimated_throughput()
-            .ok_or_else(|| HlsError::Abr("Insufficient throughput data".to_string()))?;
 
+        // If we have throughput data, we could use it for ABR decisions
+        // For now, just return current variant even without throughput data
         // TODO: Implement proper ABR logic when master playlist is available
-        // For now, return current variant
         Ok(current)
     }
 

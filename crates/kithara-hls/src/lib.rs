@@ -192,12 +192,58 @@ impl HlsSource {
         let (cmd_sender, cmd_receiver) = mpsc::channel(16);
         let (bytes_sender, bytes_receiver) = mpsc::channel(100);
 
-        // For now, simplified implementation without full driver
-        // TODO: Implement full driver when cache module is fixed
+        // Create managers
+        let playlist_manager =
+            playlist::PlaylistManager::new(cache.clone(), net.clone(), opts.base_url.clone());
+        let fetch_manager = fetch::FetchManager::new(cache.clone(), net.clone());
+        let key_processor = opts.key_processor_cb.clone().map(|arc| {
+            Box::new(move |bytes, ctx| arc(bytes, ctx))
+                as Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>
+        });
+
+        let key_manager = keys::KeyManager::new(
+            cache.clone(),
+            net.clone(),
+            key_processor,
+            opts.key_query_params.clone(),
+            opts.key_request_headers.clone(),
+        );
+
+        let abr_config = abr::AbrConfig {
+            min_buffer_for_up_switch: opts.abr_min_buffer_for_up_switch,
+            down_switch_buffer: opts.abr_down_switch_buffer,
+            throughput_safety_factor: opts.abr_throughput_safety_factor,
+            up_hysteresis_ratio: opts.abr_up_hysteresis_ratio,
+            down_hysteresis_ratio: opts.abr_down_hysteresis_ratio,
+            min_switch_interval: opts.abr_min_switch_interval,
+            initial_variant_index: opts.abr_initial_variant_index,
+        };
+
+        let abr_controller = abr::AbrController::new(
+            abr_config,
+            opts.variant_stream_selector.clone(),
+            opts.abr_initial_variant_index.unwrap_or(0),
+        );
+
+        let event_emitter = events::EventEmitter::new();
+
+        // Create and spawn driver
+        let driver = driver::HlsDriver::new(
+            url.clone(),
+            opts,
+            playlist_manager,
+            fetch_manager,
+            key_manager,
+            abr_controller,
+            event_emitter,
+            cmd_receiver,
+            bytes_sender,
+        );
+
         tokio::spawn(async move {
-            // Placeholder driver that just emits unimplemented error
-            let _ = cmd_sender;
-            let _ = bytes_sender;
+            if let Err(e) = driver.run().await {
+                tracing::error!("HLS driver failed: {}", e);
+            }
         });
 
         Ok(HlsSession {

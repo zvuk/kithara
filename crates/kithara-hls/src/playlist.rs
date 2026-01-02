@@ -37,22 +37,28 @@ impl PlaylistManager {
         }
     }
 
-    pub async fn fetch_master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
+    pub async fn fetch_master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist<'static>> {
         let bytes = self.fetch_resource(url, "master.m3u8").await?;
         let content = String::from_utf8(bytes.to_vec())
             .map_err(|e| HlsError::PlaylistParse(format!("Invalid UTF-8: {}", e)))?;
 
-        hls_m3u8::MasterPlaylist::try_from(content.as_str())
-            .map_err(|e| HlsError::PlaylistParse(e.to_string()))
+        // Convert to 'static lifetime by leaking the string
+        let leaked: &'static str = Box::leak(content.into_boxed_str());
+        let playlist = hls_m3u8::MasterPlaylist::try_from(leaked)
+            .map_err(|e| HlsError::PlaylistParse(e.to_string()))?;
+        Ok(playlist)
     }
 
-    pub async fn fetch_media_playlist(&self, url: &Url) -> HlsResult<MediaPlaylist> {
+    pub async fn fetch_media_playlist(&self, url: &Url) -> HlsResult<MediaPlaylist<'static>> {
         let bytes = self.fetch_resource(url, "media.m3u8").await?;
         let content = String::from_utf8(bytes.to_vec())
             .map_err(|e| HlsError::PlaylistParse(format!("Invalid UTF-8: {}", e)))?;
 
-        hls_m3u8::MediaPlaylist::try_from(content.as_str())
-            .map_err(|e| HlsError::PlaylistParse(e.to_string()))
+        // Convert to 'static lifetime by leaking the string
+        let leaked: &'static str = Box::leak(content.into_boxed_str());
+        let playlist = hls_m3u8::MediaPlaylist::try_from(leaked)
+            .map_err(|e| HlsError::PlaylistParse(e.to_string()))?;
+        Ok(playlist)
     }
 
     pub fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
@@ -74,8 +80,8 @@ impl PlaylistManager {
         let handle = self.cache.asset(asset_id);
 
         if handle.exists(&cache_path) {
-            let file = handle.open(&cache_path)?.unwrap();
-            use std::io::Read;
+            let mut file = handle.open(&cache_path)?.unwrap();
+
             let mut buf = Vec::new();
             std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
             return Ok(bytes::Bytes::from(buf));

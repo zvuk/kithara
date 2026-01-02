@@ -28,7 +28,7 @@ pub enum FetchError {
     Encryption(String),
 }
 
-pub type SegmentStream = Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send>>;
+pub type SegmentStream<'a> = Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + 'a>>;
 
 pub struct FetchManager {
     cache: AssetCache,
@@ -71,22 +71,51 @@ impl FetchManager {
         Ok(bytes)
     }
 
-    pub async fn stream_segment_sequence(
+    pub fn stream_segment_sequence(
         &self,
-        media_playlist: &MediaPlaylist<'_>,
+        media_playlist: MediaPlaylist<'_>,
         base_url: &Url,
         key_context: Option<&KeyContext>,
-    ) -> SegmentStream {
+    ) -> SegmentStream<'static> {
         let cache = self.cache.clone();
         let net = self.net.clone();
         let base_url = base_url.clone();
         let key_ctx = key_context.cloned();
 
+        // Extract segment URIs upfront to avoid lifetime issues
+        let segment_uris: Vec<String> = media_playlist
+            .segments
+            .iter()
+            .map(|(_, segment)| segment.uri().to_string())
+            .collect();
+
         Box::pin(async_stream::stream! {
-            for (index, _segment) in media_playlist.segments.iter().enumerate() {
+            for segment_uri in segment_uris {
                 let fetcher = FetchManager::new(cache.clone(), net.clone());
-                match fetcher.fetch_segment(media_playlist, index, &base_url, key_context).await {
-                    Ok(bytes) => yield Ok(bytes),
+                let segment_url = match base_url.join(&segment_uri) {
+                    Ok(url) => url,
+                    Err(e) => {
+                        yield Err(HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)));
+                        continue;
+                    }
+                };
+
+                match fetcher.fetch_resource(&segment_url, "segment.ts").await {
+                    Ok(bytes) => {
+                        // Decrypt if needed
+                        let bytes = if let Some(key_ctx) = &key_ctx {
+                            match fetcher.decrypt_segment(bytes, key_ctx).await {
+                                Ok(decrypted) => decrypted,
+                                Err(e) => {
+                                    yield Err(e);
+                                    continue;
+                                }
+                            }
+                        } else {
+                            bytes
+                        };
+                        yield Ok(bytes);
+                    }
                     Err(e) => yield Err(e),
                 }
             }
@@ -99,8 +128,8 @@ impl FetchManager {
         let handle = self.cache.asset(asset_id);
 
         if handle.exists(&cache_path) {
-            let file = handle.open(&cache_path)?.unwrap();
-            use std::io::Read;
+            let mut file = handle.open(&cache_path)?.unwrap();
+
             let mut buf = Vec::new();
             std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
             return Ok(bytes::Bytes::from(buf));
@@ -111,7 +140,7 @@ impl FetchManager {
         Ok(bytes)
     }
 
-    async fn decrypt_segment(&self, bytes: Bytes, key_context: &KeyContext) -> HlsResult<Bytes> {
+    async fn decrypt_segment(&self, bytes: Bytes, _key_context: &KeyContext) -> HlsResult<Bytes> {
         // This would implement AES-128 decryption
         // For now, return bytes unchanged
         // In real implementation, we'd use the key from key_context

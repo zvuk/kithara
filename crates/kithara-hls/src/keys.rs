@@ -57,8 +57,8 @@ impl KeyManager {
         let handle = self.cache.asset(asset_id);
 
         if handle.exists(&cache_path) {
-            let file = handle.open(&cache_path)?.unwrap();
-            use std::io::Read;
+            let mut file = handle.open(&cache_path)?.unwrap();
+
             let mut buf = Vec::new();
             std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
             return Ok(Bytes::from(buf));

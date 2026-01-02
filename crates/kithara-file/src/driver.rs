@@ -161,16 +161,17 @@ impl FileDriver {
             }
 
             // Write to cache after successful download
-            if let Some(ref cache) = cache && !cached_bytes.is_empty() {
+            if let Some(ref cache) = cache
+                && !cached_bytes.is_empty()
+            {
                 let asset_handle = cache.asset(asset_id);
-                let body_path =
-                    match CachePath::new(vec!["file".to_string(), "body".to_string()]) {
-                        Ok(path) => path,
-                        Err(_e) => {
-                            // Cache write failure shouldn't affect stream result
-                            return;
-                        }
-                    };
+                let body_path = match CachePath::new(vec!["file".to_string(), "body".to_string()]) {
+                    Ok(path) => path,
+                    Err(_e) => {
+                        // Cache write failure shouldn't affect stream result
+                        return;
+                    }
+                };
 
                 // Ignore cache write errors - they shouldn't fail the stream
                 let _ = asset_handle.put_atomic(&body_path, &cached_bytes);
