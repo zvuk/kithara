@@ -42,17 +42,23 @@
 //! ## Usage
 //!
 //! ```rust
+//! use kithara_cache::{AssetCache, CacheOptions, CachePath};
+//! use kithara_core::AssetId;
+//! use url::Url;
+//!
 //! let cache = AssetCache::open(CacheOptions {
 //!     max_bytes: 1024 * 1024, // 1GB
 //!     root_dir: Some("/path/to/cache".into()),
 //! })?;
 //!
+//! let url = Url::parse("https://example.com/test.mp3")?;
+//! let asset_id = AssetId::from_url(&url)?;
 //! let asset = cache.asset(asset_id);
+//! let path = CachePath::from_single("test.txt")?;
 //! asset.put_atomic(&path, b"data")?;
 //! let _guard = cache.pin(asset_id)?; // Auto-unpinned on drop
+//! # Ok::<(), Box<dyn std::error::Error>>(())
 //! ```
-
-use kithara_core::{AssetId, CoreError};
 
 use kithara_core::{AssetId, CoreError};
 use serde::{Deserialize, Serialize};
@@ -62,9 +68,11 @@ use thiserror::Error;
 // Import Store trait for method calls
 use crate::store::Store;
 
+pub mod atomic_write;
 pub mod base;
 pub mod evict;
 pub mod evicting_store;
+pub mod fs_layout;
 pub mod index;
 pub mod lease;
 pub mod store;
@@ -160,11 +168,12 @@ pub struct AssetState {
 
 #[derive(Clone, Debug)]
 pub struct AssetCache {
-    // Composed layers: FsStore -> IndexStore -> LeaseStore -> EvictingStore
-    store: crate::evicting_store::EvictingStore<
+    // Separate layers for different operations
+    evicting_store: crate::evicting_store::EvictingStore<
         crate::lease::LeaseStore<crate::index::IndexStore<crate::base::FsStore>>,
         crate::evict::LruPolicy,
     >,
+    lease_store: crate::lease::LeaseStore<crate::index::IndexStore<crate::base::FsStore>>,
 }
 
 #[derive(Clone, Debug)]
@@ -200,10 +209,11 @@ impl AssetCache {
         let index_store = crate::index::IndexStore::new(fs_store, root_dir.clone(), opts.max_bytes);
         let lease_store = crate::lease::LeaseStore::new(index_store);
         let evicting_store =
-            crate::evicting_store::EvictingStore::with_lru(lease_store, opts.max_bytes);
+            crate::evicting_store::EvictingStore::with_lru(lease_store.clone(), opts.max_bytes);
 
         Ok(AssetCache {
-            store: evicting_store,
+            evicting_store,
+            lease_store,
         })
     }
 
@@ -217,23 +227,20 @@ impl AssetCache {
     pub fn pin(
         &self,
         asset: AssetId,
-    ) -> CacheResult<
-        crate::lease::LeaseGuard<
-            '_,
-            crate::lease::LeaseStore<crate::index::IndexStore<crate::base::FsStore>>,
-        >,
-    > {
-        self.store.pin(asset)
+    ) -> CacheResult<crate::lease::LeaseGuard<'_, crate::index::IndexStore<crate::base::FsStore>>>
+    {
+        // Use LeaseStore layer directly to get LeaseGuard
+        self.lease_store.pin(asset)
     }
 
     pub fn touch(&self, asset: AssetId) -> CacheResult<()> {
         // Access IndexStore through layered structure
         // EvictingStore -> LeaseStore -> IndexStore
-        self.store.inner.inner.touch(asset)
+        self.evicting_store.inner.inner.touch(asset)
     }
 
     pub fn ensure_space(&self, incoming_bytes: u64, pinned: Option<AssetId>) -> CacheResult<()> {
-        self.store.ensure_space(incoming_bytes, pinned)?;
+        self.evicting_store.ensure_space(incoming_bytes, pinned)?;
         Ok(())
     }
 
@@ -241,7 +248,7 @@ impl AssetCache {
         // Delegate to inner layers
         use crate::evicting_store::EvictionSupport;
 
-        if let Ok(assets) = self.store.inner.get_all_assets() {
+        if let Ok(assets) = self.evicting_store.inner.get_all_assets() {
             let total_bytes: u64 = assets.iter().map(|(_, state)| state.size_bytes).sum();
             let asset_count = assets.len();
             let pinned_assets = assets.iter().filter(|(_, state)| state.pinned).count();
@@ -263,19 +270,21 @@ impl AssetCache {
 
 impl<'a> AssetHandle<'a> {
     pub fn exists(&self, rel_path: &CachePath) -> bool {
-        self.cache.store.exists(self.asset_id, rel_path)
+        self.cache.evicting_store.exists(self.asset_id, rel_path)
     }
 
     pub fn open(&self, rel_path: &CachePath) -> CacheResult<Option<std::fs::File>> {
-        self.cache.store.open(self.asset_id, rel_path)
+        self.cache.evicting_store.open(self.asset_id, rel_path)
     }
 
     pub fn put_atomic(&self, rel_path: &CachePath, bytes: &[u8]) -> CacheResult<PutResult> {
-        self.cache.store.put_atomic(self.asset_id, rel_path, bytes)
+        self.cache
+            .evicting_store
+            .put_atomic(self.asset_id, rel_path, bytes)
     }
 
     pub fn remove_all(&self) -> CacheResult<()> {
-        self.cache.store.remove_all(self.asset_id)
+        self.cache.evicting_store.remove_all(self.asset_id)
     }
 }
 

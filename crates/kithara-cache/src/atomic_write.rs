@@ -1,5 +1,4 @@
 use crate::{CachePath, CacheResult, PutResult};
-use std::path::PathBuf;
 
 /// Atomic write utilities for cache operations.
 /// Provides atomic file writing with temp+rename pattern.
@@ -7,7 +6,7 @@ pub struct AtomicWrite;
 
 impl AtomicWrite {
     /// Atomically write data to a file with temp+rename pattern
-    pub fn write_atomic<P: AsRef<PathBuf>>(
+    pub fn write_atomic<P: AsRef<std::path::Path>>(
         dir: P,
         rel_path: &CachePath,
         bytes: &[u8],

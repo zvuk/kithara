@@ -178,15 +178,15 @@ where
     P: EvictionPolicy,
 {
     /// Pin an asset to prevent eviction (creates a LeaseGuard)
-    pub fn pin(&self, asset: AssetId) -> CacheResult<crate::lease::LeaseGuard<'_, S>> {
-        // Use the inner pin method directly, which creates the guard
+    pub fn pin(&self, asset: AssetId) -> CacheResult<()> {
+        // Delegate to inner PinStore
         self.inner.pin(asset)
     }
 }
 
 impl<S, P> crate::lease::PinStore for EvictingStore<S, P>
 where
-    S: crate::lease::PinStore + crate::evicting_store::EvictionSupport,
+    S: PinStore + EvictionSupport,
     P: EvictionPolicy,
 {
     fn pin(&self, asset: AssetId) -> CacheResult<()> {

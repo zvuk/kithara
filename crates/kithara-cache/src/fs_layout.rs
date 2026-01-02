@@ -14,13 +14,13 @@ impl FsLayout {
     }
 
     /// Create temporary file path for atomic writes
-    pub fn temp_file(asset_dir: &PathBuf, asset_id: AssetId, rel_path: &CachePath) -> PathBuf {
+    pub fn temp_file(root_dir: &PathBuf, asset_id: AssetId, rel_path: &CachePath) -> PathBuf {
         let asset_dir = Self::asset_dir(root_dir, asset_id);
         asset_dir.join(format!("{}.tmp", rel_path.as_string()))
     }
 
     /// Create final file path for completed writes
-    pub fn final_file(asset_dir: &PathBuf, asset_id: AssetId, rel_path: &CachePath) -> PathBuf {
+    pub fn final_file(root_dir: &PathBuf, asset_id: AssetId, rel_path: &CachePath) -> PathBuf {
         let asset_dir = Self::asset_dir(root_dir, asset_id);
         asset_dir.join(rel_path.as_path_buf())
     }
