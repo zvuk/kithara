@@ -12,6 +12,7 @@ reqwest = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
+async-trait = { workspace = true }
 
 [dev-dependencies]
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].

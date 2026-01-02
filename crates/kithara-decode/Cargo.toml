@@ -11,6 +11,7 @@ thiserror = { workspace = true }
 kanal = { workspace = true }
 symphonia = { workspace = true }
 dasp = { workspace = true }
+tokio = { workspace = true }
 
 [features]
 default = []
@@ -18,4 +19,10 @@ default = []
 # resample = []
 
 [dev-dependencies]
-# Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
+tokio = { workspace = true }
+axum = { workspace = true }
+bytes = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }

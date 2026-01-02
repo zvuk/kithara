@@ -1,19 +1,19 @@
-# Keep rustfmt config minimal and stable.
-# Prefer stable options only to avoid requiring nightly rustfmt.
-edition = "2024"
+# Stable rustfmt configuration (no nightly-only options).
+#
+# Keep this strict and predictable for agents, but compatible with stable rustfmt.
 
-# Formatting defaults (explicit for predictability).
+edition = "2024"
+newline_style = "Unix"
+
+# Line width / indentation
 max_width = 100
 hard_tabs = false
 tab_spaces = 4
-newline_style = "Unix"
 
-# Keep diffs small and readable.
+# Keep diffs small and readable
 use_small_heuristics = "Default"
 fn_params_layout = "Tall"
 match_arm_leading_pipes = "Never"
 
-# Import formatting (stable).
-imports_granularity = "Crate"
-group_imports = "StdExternalCrate"
+# Imports
 reorder_imports = true
