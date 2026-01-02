@@ -55,13 +55,13 @@
 
 ## `kithara-file` — Port legacy “read/seek correctness” scenarios (tests)
 
-- [ ] Seek roundtrip correctness:
+- [x] Seek roundtrip correctness:
   - read first N bytes, seek to 0, read again, bytes match reference (no corruption, no deadlock) + tests
-- [ ] Seek variants:
+- [x] Seek variants:
   - `SeekFrom::Start`, `SeekFrom::Current`, `SeekFrom::End` produce expected slices on a known static resource + tests
-- [ ] Cancel behavior (drop-driven):
+- [x] Cancel behavior (drop-driven):
   - after reading some bytes, **drop** session/stream and ensure termination promptly without hanging + tests
-- [ ] (Prereq if missing) Define precise seek contract for `kithara-file` session:
+- [x] (Prereq if missing) Define precise seek contract for `kithara-file` session:
   - what happens when seeking beyond cached/buffered range
   - what errors are returned (typed) + tests
 

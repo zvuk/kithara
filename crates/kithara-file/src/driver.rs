@@ -39,6 +39,10 @@ pub enum SourceError {
 
 #[derive(Debug)]
 pub enum FileCommand {
+    /// Command to seek to a specific byte position.
+    ///
+    /// The position is absolute (from start of resource).
+    /// See `FileSession::seek_bytes` for detailed contract.
     SeekBytes(u64),
 }
 
@@ -96,6 +100,19 @@ impl FileDriver {
     }
 
     #[allow(dead_code)]
+    /// Seek to a byte position.
+    ///
+    /// # Contract
+    ///
+    /// - Requires `enable_range_seek` to be `true` in options.
+    /// - Validates position against known content size (if known).
+    /// - Updates internal range policy state.
+    /// - Actual range request implementation is TODO.
+    ///
+    /// # Errors
+    ///
+    /// - `SeekNotSupported`: when `enable_range_seek` is `false`.
+    /// - `InvalidSeekPosition`: when position is beyond known content size.
     pub async fn seek_to(&mut self, position: u64) -> Result<(), DriverError> {
         if !self.options.enable_range_seek {
             return Err(DriverError::SeekNotSupported);

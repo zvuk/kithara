@@ -52,7 +52,23 @@ impl FileSession {
             .map_err(|_| FileError::DriverStopped)
     }
 
-    /// Convenience method for seeking to a byte position
+    /// Seek to a byte position in the stream.
+    ///
+    /// # Contract
+    ///
+    /// - Seeking is best-effort and may not be supported (`SeekNotSupported` error).
+    /// - When `enable_range_seek` is `true` in options, range requests may be used.
+    /// - Seeking beyond available content (EOF) should return `InvalidSeekPosition` error
+    ///   if the total size is known, otherwise may succeed but result in immediate EOF.
+    /// - After a successful seek, subsequent reads start from the new position.
+    /// - Seek position 0 resets to the beginning of the resource.
+    /// - The stream must be active (consumer reading) for seek commands to be processed.
+    ///
+    /// # Errors
+    ///
+    /// - `SeekNotSupported`: when `enable_range_seek` is `false` or seek not implemented.
+    /// - `InvalidSeekPosition`: when position is beyond known content size.
+    /// - `DriverStopped`: when driver is not running or command channel closed.
     pub fn seek_bytes(&self, position: u64) -> Result<(), FileError> {
         self.send_command(FileCommand::SeekBytes(position))
     }
