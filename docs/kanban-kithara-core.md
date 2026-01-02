@@ -23,8 +23,8 @@
 
 ## Sanity check (после ужесточения fmt+clippy)
 
-- [ ] Run `cargo fmt` and ensure no formatting diffs remain
-- [ ] Run `cargo test -p kithara-core`
-- [ ] Run `cargo clippy -p kithara-core` and make it clean (no warnings/errors) under workspace lints
+- [x] Run `cargo fmt` and ensure no formatting diffs remain
+- [x] Run `cargo test -p kithara-core`
+- [x] Run `cargo clippy -p kithara-core` and make it clean (no warnings/errors) under workspace lints
 
 ---
