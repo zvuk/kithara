@@ -7,7 +7,6 @@
 > - `docs/porting/abr-reference.md` (ABR: estimator/controller/decision-vs-applied/tests)
 > - `docs/porting/drm-reference.md` (DRM: AES-128 decrypt, processed keys caching, offline rules, fixtures)
 
-
 Этот документ содержит задачи, относящиеся **только** к сабкрейту `crates/kithara-hls`.
 
 Общие инструкции (обязательная преамбула к каждой задаче): см. `kithara/docs/kanban-instructions.md`.
@@ -18,12 +17,19 @@
 
 `kithara-hls` — HLS VOD источник байтов с “player-grade” семантикой и обязательной интеграцией с persistent кэшем:
 
-- поддержка **только VOD** (live не нужен, но дизайн не должен блокировать добавление позже),
+- поддержка **только VOD** (live не нужен),
 - парсинг master/media playlists,
 - выбор variant (manual/auto ABR),
 - загрузка сегментов, init-сегментов и ключей (DRM),
 - корректная семантика EOF/backpressure/ошибок,
 - offline режим: кэшируем всё необходимое для воспроизведения без сети; cache miss в offline → **fatal**.
+
+Актуальная архитектура:
+- **оркестрация driver loop вынесена в `kithara-stream`**:
+  - `kithara-hls` реализует `kithara-stream::Source` (конкретный источник: плейлисты/сегменты/ключи/ABR, offline правила);
+  - `kithara-stream::Stream` инкапсулирует цикл `tokio::select!` (data-plane + control-plane), cancellation via drop и выдачу async byte stream.
+- “stop” как отдельная команда **не является** частью контракта. Остановка = **drop** consumer stream/session.
+- Seek пока **не поддержан**; контракт фиксирован (`SeekNotSupported`), реализация будет добавляться через TDD.
 
 ---
 
@@ -33,6 +39,8 @@
 - `Read::read() -> Ok(0)` означает **EOF** для потребителей. Нельзя возвращать `Ok(0)` пока поток реально не завершён (см. `docs/constraints.md`).
 - Backpressure обязательна: потребление памяти ограничено; при заполнении буферов writer блокируется/дросселируется (через `kithara-io` и/или внутренние механизмы).
 - Ошибки: различать recoverable vs fatal, и иметь **явный** контракт распространения ошибок.
+- Offline режим:
+  - `offline_mode=true` + любой cache miss (playlist/segment/key) => **fatal** (никаких попыток “всё равно сходить в сеть”).
 - URL идентификация:
   - `asset_id`: canonical URL без query/fragment,
   - `resource_hash`: canonical URL с query, без fragment.
@@ -43,7 +51,6 @@
 - ABR:
   - throughput обновляется только по реальным network downloads,
   - cache hits не улучшают estimator (иначе offline ломается).
-- В бесконечном цикле загрузки (driver loop) живёт оркестрация HLS (не в decode thread).
 
 ---
 
@@ -56,7 +63,7 @@
 - `keys`: загрузка ключей, применение `key_processor_cb`, кэширование processed keys.
 - `drm` (может быть частью `fetch`/`keys`, но ответственность должна быть явной): AES-128 decrypt сегментов, ошибки decrypt — fatal.
 - `abr`: политика выбора variant (manual/auto), throughput estimator, переключения.
-- `driver/worker`: orchestration loop (VOD), выдача байтового потока и управление жизненным циклом.
+- `driver` (внутри крейта): HLS-специфичная оркестрация (VOD), которая упакована в реализацию `kithara-stream::Source`.
 - `events` (если экспонируется): best-effort события (например, segment start / variant changed) — **не** использовать для строгих инвариантов, если семантика не “applied”.
 
 См. portable reference:
@@ -67,31 +74,22 @@
 
 ---
 
-## Публичный контракт (экспорт) — ориентир
+## Публичный контракт (актуально)
 
-Точная форма API фиксируется в коде `crates/kithara-hls`, но этот борд предполагает наличие:
+Точная форма API фиксируется в коде `crates/kithara-hls`. На текущем этапе контракт такой:
 
-- `HlsOptions`/`HlsSettings` (или эквивалент):
+- `HlsOptions`:
   - `base_url` override,
   - variant selector (manual/auto),
   - ABR тюнинг (включая `abr_initial_variant_index`),
   - key request headers/query params,
   - `key_processor_cb`,
-  - offline_mode политика (cache miss => fatal).
-- Session/handle, который даёт байтовый stream (async) + control plane (stop/seek, если предусмотрено контрактом).
-
----
-
-## `kithara-hls` MVP
-
-- [x] parse master/media playlists (VOD) + tests with local fixture
-- [x] variant selection policy (parameter) + tests
-- [x] resource caching (playlists/init/segments) + offline test
-- [x] keys + processed keys caching + test scenario with wrapped key
-- [x] stream bytes for a variant + basic read smoke test
-
-> Важно: если текущая реализация по факту не доходит до сегментов (master → media playlist → stop),
-> то MVP “формально” выполнен, но функционально источник не работает. В этом случае задачи ниже считаются обязательными.
+  - `offline_mode` политика (cache miss => fatal).
+- `HlsSource::open(url, opts, cache) -> HlsSession`
+- `HlsSession::stream()` возвращает **async byte stream**; остановка = drop.
+- Ошибки разделены:
+  - `SourceError` (ошибки источника: HLS/playlist/fetch/keys/offline miss),
+  - `DriverError` (обёртка: `StreamError<SourceError>`).
 
 ---
 
@@ -209,29 +207,29 @@ Reference: `docs/porting/drm-reference.md`
 Reference: `docs/porting/abr-reference.md`
 
 ### Unit-ish (ABR in isolation)
-- [ ] Estimator ignores cache hits:
+- [x] Estimator ignores cache hits:
   - introduce `ThroughputSampleSource { Network, Cache }` (или эквивалент)
   - update estimator only on `Network`
   - test: `cache_hit_does_not_affect_throughput`
-- [ ] Controller downswitch after low throughput sample:
+- [x] Controller downswitch after low throughput sample:
   - feed throughput estimate/sample that should force downswitch
   - assert decision targets lower variant, reason фиксируется
-- [ ] Controller upswitch respects buffer gating + hysteresis:
+- [x] Controller upswitch respects buffer gating + hysteresis:
   - low buffer => no upswitch
   - sufficient buffer + enough throughput => upswitch
-- [ ] Controller min_switch_interval prevents oscillation:
+- [x] Controller min_switch_interval prevents oscillation:
   - decision suppressed when interval not elapsed
 
 ### Integration-ish (ABR apply in worker)
-- [ ] Decision vs applied semantics are explicit:
+- [x] Decision vs applied semantics are explicit:
   - expose/emit `VariantApplied` (или эквивалент) only after actual switch is applied
   - tests must not rely on out-of-band telemetry ordering
-- [ ] ABR upswitch continues from current segment index (no restart)
-- [ ] ABR downswitch begins correctly (init segment behavior fixed by contract):
+- [x] ABR upswitch continues from current segment index (no restart)
+- [x] ABR downswitch begins correctly (init segment behavior fixed by contract):
   - if switching requires init, ensure next output begins with init for new variant
-- [ ] Worker auto switches mid-stream without restarting:
+- [x] Worker auto switches mid-stream without restarting:
   - observe events + deterministic payload prefixes and ensure segment index sequence is non-decreasing across switch
-- [ ] (Prereq if missing) Expose a deterministic ABR controller surface for tests:
+- [x] (Prereq if missing) Expose a deterministic ABR controller surface for tests:
   - feed throughput samples (explicit source Network/Cache)
   - obtain decisions
   - apply decisions in worker at segment boundaries

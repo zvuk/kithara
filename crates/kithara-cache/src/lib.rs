@@ -22,7 +22,7 @@
 //!
 //! The `state.json` file contains:
 //! - `max_bytes`: Global cache size limit
-//! - `total_bytes`: Current total bytes used by all assets  
+//! - `total_bytes`: Current total bytes used by all assets
 //! - `assets`: Per-asset metadata including:
 //!   - `size_bytes`: Size in bytes of this asset
 //!   - `last_access_ms`: Unix timestamp of last access (for LRU)
@@ -70,11 +70,9 @@ use thiserror::Error;
 // Import Store trait for method calls
 use crate::store::Store;
 
-pub mod atomic_write;
 pub mod base;
 pub mod evict;
 pub mod evicting_store;
-pub mod fs_layout;
 pub mod index;
 pub mod lease;
 pub mod store;

@@ -2,53 +2,26 @@
 
 //! # kithara-hls
 //!
-//! HLS VOD orchestration with caching, ABR, and DRM support.
+//! HLS VOD orchestration with caching, ABR and offline playback.
 //!
-//! ## Features
+//! ## Architecture (new)
 //!
-//! - **Playlist Management**: Master and media playlist parsing and caching
-//! - **Adaptive Bitrate**: ABR policy with configurable parameters
-//! - **Segment Fetching**: Network and cache-aware segment streaming
-//! - **DRM Support**: AES-128 key processing and caching
-//! - **Event System**: Telemetry and monitoring events
-//! - **Offline Mode**: Complete offline playback when content is cached
+//! This crate provides a `HlsSource::open(...) -> HlsSession` API.
+//! Internally, it uses `kithara-stream` to orchestrate fetching and expose an async byte stream.
 //!
-//! ## URL Resolution Rules
-//!
-//! URLs are resolved using following priority:
-//!
-//! 1. **base_url Override**: If configured in `HlsOptions.base_url`, this takes precedence
-//!    for resolving variant playlists, segments, and keys.
-//! 2. **Playlist URL**: The URL of current playlist is used as base for relative URLs.
-//!
-//! The base_url override allows remapping resources under different path prefixes
-//! (useful for CDN changes, proxy setups, etc.).
-//!
-//! ## DRM Key Processing and Caching
-//!
-//! - Keys are fetched with optional query parameters and headers
-//! - `key_processor_cb` can transform "wrapped" keys to usable form
-//! - **Processed keys** (after transformation) are cached for offline playback
-//! - Raw keys are never logged; only fingerprints/hashes may be logged
-//! - Cache misses in offline mode are fatal errors
-//!
-//! ## ABR Switching Invariants
-//!
-//! - ABR decisions are based only on **network throughput** (cache hits don't affect estimation)
-//! - Up-switching requires sufficient buffer level and hysteresis ratio
-//! - Down-switching occurs when buffer falls below threshold
-//! - Minimum switch interval prevents oscillation
-//! - Manual overrides take precedence over automatic ABR
+//! - No explicit stop command: stopping is done by dropping the stream.
+//! - Seek is not supported yet (contract is fixed; implementation will be added via TDD).
 
 use bytes::Bytes;
 use futures::Stream;
 use kithara_cache::AssetCache;
 use kithara_core::AssetId;
-use kithara_net::NetClient;
+use kithara_net::HttpClient;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
-use tokio::sync::mpsc;
+use tokio::sync::broadcast;
 use url::Url;
 
 // Public modules
@@ -62,8 +35,11 @@ pub mod playlist;
 mod driver;
 
 // Re-export key types
-pub use abr::{AbrConfig, AbrController, ThroughputSample};
-pub use events::{EventEmitter, EventError, HlsEvent, VariantChangeReason};
+pub use abr::{
+    AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
+};
+pub use driver::{DriverError, SourceError};
+pub use events::{EventEmitter, HlsEvent};
 pub use fetch::{FetchError, FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
 pub use playlist::{PlaylistError, PlaylistManager};
@@ -124,6 +100,8 @@ pub struct HlsOptions {
     pub abr_up_hysteresis_ratio: f32,
     pub abr_down_hysteresis_ratio: f32,
     pub abr_min_switch_interval: Duration,
+
+    // networking/retry/prefetch knobs (kept for now)
     pub request_timeout: Duration,
     pub max_retries: u32,
     pub retry_base_delay: Duration,
@@ -131,9 +109,12 @@ pub struct HlsOptions {
     pub retry_timeout: Duration,
     pub prefetch_buffer_size: usize,
     pub live_refresh_interval: Option<Duration>,
+
+    // key processing
     pub key_processor_cb: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
     pub key_query_params: Option<std::collections::HashMap<String, String>>,
     pub key_request_headers: Option<std::collections::HashMap<String, String>>,
+
     pub offline_mode: bool,
 }
 
@@ -149,6 +130,7 @@ impl Default for HlsOptions {
             abr_up_hysteresis_ratio: 1.3,
             abr_down_hysteresis_ratio: 0.8,
             abr_min_switch_interval: Duration::from_secs(30),
+
             request_timeout: Duration::from_secs(30),
             max_retries: 3,
             retry_base_delay: Duration::from_millis(100),
@@ -156,9 +138,11 @@ impl Default for HlsOptions {
             retry_timeout: Duration::from_secs(60),
             prefetch_buffer_size: 3,
             live_refresh_interval: None,
+
             key_processor_cb: None,
             key_query_params: None,
             key_request_headers: None,
+
             offline_mode: false,
         }
     }
@@ -171,28 +155,14 @@ pub struct KeyContext {
 }
 
 #[derive(Clone, Debug)]
-pub enum HlsCommand {
-    Stop,
-    SeekTime(Duration),
-    SetVariant(usize),
-    ClearVariantOverride,
-}
-
-#[derive(Clone, Debug)]
 pub struct HlsSource;
 
 impl HlsSource {
-    pub async fn open(
-        url: Url,
-        opts: HlsOptions,
-        cache: AssetCache,
-        net: NetClient,
-    ) -> HlsResult<HlsSession> {
+    pub async fn open(url: Url, opts: HlsOptions, cache: AssetCache) -> HlsResult<HlsSession> {
         let asset_id = AssetId::from_url(&url)?;
-        let (cmd_sender, cmd_receiver) = mpsc::channel(16);
-        let (bytes_sender, bytes_receiver) = mpsc::channel(100);
+        let net = HttpClient::new(kithara_net::NetOptions::default());
 
-        // Create managers
+        // Create managers (kept as-is; internals will be iterated via TDD).
         let playlist_manager =
             playlist::PlaylistManager::new(cache.clone(), net.clone(), opts.base_url.clone());
         let fetch_manager = fetch::FetchManager::new(cache.clone(), net.clone());
@@ -210,13 +180,14 @@ impl HlsSource {
         );
 
         let abr_config = abr::AbrConfig {
-            min_buffer_for_up_switch: opts.abr_min_buffer_for_up_switch,
-            down_switch_buffer: opts.abr_down_switch_buffer,
-            throughput_safety_factor: opts.abr_throughput_safety_factor,
-            up_hysteresis_ratio: opts.abr_up_hysteresis_ratio,
-            down_hysteresis_ratio: opts.abr_down_hysteresis_ratio,
+            min_buffer_for_up_switch_secs: f64::from(opts.abr_min_buffer_for_up_switch),
+            down_switch_buffer_secs: f64::from(opts.abr_down_switch_buffer),
+            throughput_safety_factor: f64::from(opts.abr_throughput_safety_factor),
+            up_hysteresis_ratio: f64::from(opts.abr_up_hysteresis_ratio),
+            down_hysteresis_ratio: f64::from(opts.abr_down_hysteresis_ratio),
             min_switch_interval: opts.abr_min_switch_interval,
             initial_variant_index: opts.abr_initial_variant_index,
+            sample_window: std::time::Duration::from_secs(30),
         };
 
         let abr_controller = abr::AbrController::new(
@@ -227,7 +198,6 @@ impl HlsSource {
 
         let event_emitter = events::EventEmitter::new();
 
-        // Create and spawn driver
         let driver = driver::HlsDriver::new(
             url.clone(),
             opts,
@@ -236,28 +206,15 @@ impl HlsSource {
             key_manager,
             abr_controller,
             event_emitter,
-            cmd_receiver,
-            bytes_sender,
         );
 
-        tokio::spawn(async move {
-            if let Err(e) = driver.run().await {
-                tracing::error!("HLS driver failed: {}", e);
-            }
-        });
-
-        Ok(HlsSession {
-            asset_id,
-            cmd_sender,
-            bytes_receiver,
-        })
+        Ok(HlsSession { asset_id, driver })
     }
 }
 
 pub struct HlsSession {
     asset_id: AssetId,
-    cmd_sender: mpsc::Sender<HlsCommand>,
-    bytes_receiver: mpsc::Receiver<HlsResult<Bytes>>,
+    driver: driver::HlsDriver,
 }
 
 impl HlsSession {
@@ -265,15 +222,11 @@ impl HlsSession {
         self.asset_id
     }
 
-    pub fn commands(&self) -> mpsc::Sender<HlsCommand> {
-        self.cmd_sender.clone()
+    pub fn stream(&self) -> Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + '_>> {
+        Box::pin(self.driver.stream())
     }
 
-    pub fn stream(&mut self) -> impl Stream<Item = HlsResult<Bytes>> + Send + '_ {
-        async_stream::stream! {
-            while let Some(item) = self.bytes_receiver.recv().await {
-                yield item;
-            }
-        }
+    pub fn events(&self) -> broadcast::Receiver<HlsEvent> {
+        self.driver.events()
     }
 }

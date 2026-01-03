@@ -5,14 +5,14 @@ mod options;
 mod range_policy;
 mod session;
 
-pub use driver::{DriverError, FileCommand};
+pub use driver::{DriverError, FileCommand, SourceError};
 pub use options::{FileSourceOptions, OptionsError};
 pub use range_policy::RangePolicy;
 pub use session::{FileError, FileResult, FileSession};
 
 use kithara_cache::AssetCache;
 use kithara_core::AssetId;
-use kithara_net::NetClient;
+use kithara_net::{HttpClient, NetOptions};
 use std::sync::Arc;
 use url::Url;
 
@@ -26,7 +26,7 @@ impl FileSource {
         cache: Option<AssetCache>,
     ) -> session::FileResult<FileSession> {
         let asset_id = AssetId::from_url(&url)?;
-        let net_client = NetClient::new(kithara_net::NetOptions::default())?;
+        let net_client = HttpClient::new(NetOptions::default());
 
         let session =
             session::FileSession::new(asset_id, url, net_client, opts, cache.map(Arc::new));
@@ -157,7 +157,9 @@ mod tests {
         if let Some(chunk_result) = stream.next().await {
             match chunk_result {
                 Ok(_) => panic!("Expected error, got successful chunk"),
-                Err(session::FileError::Driver(driver::DriverError::Net(_))) => {
+                Err(session::FileError::Driver(driver::DriverError::Stream(
+                    kithara_stream::StreamError::Source(driver::SourceError::Net(_)),
+                ))) => {
                     // Expected - network error
                 }
                 Err(e) => panic!("Expected Network error, got: {}", e),

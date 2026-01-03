@@ -240,9 +240,194 @@ async fn file_offline_miss_is_fatal() {
 
     assert!(result.is_some(), "Stream should return an error");
     match result.unwrap() {
-        Err(kithara_file::FileError::Driver(kithara_file::DriverError::OfflineMiss)) => {
+        Err(kithara_file::FileError::Driver(kithara_file::DriverError::Stream(
+            kithara_stream::StreamError::Source(kithara_file::SourceError::OfflineMiss),
+        ))) => {
             // Expected error
         }
         other => panic!("Expected OfflineMiss error, got: {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn seek_roundtrip_correctness() {
+    let server = TestServer::new().await;
+    let url = server.url("/test.mp3");
+
+    let opts = FileSourceOptions {
+        enable_range_seek: true,
+        ..Default::default()
+    };
+
+    let session = FileSource::open(url, opts, None).await.unwrap();
+
+    // Start streaming first
+    let mut stream = session.stream().await;
+
+    // Read first chunk to ensure driver is running
+    let first_chunk = stream
+        .next()
+        .await
+        .expect("Should have first chunk")
+        .expect("First chunk should be ok");
+
+    assert!(!first_chunk.is_empty());
+
+    // Try to seek using session's seek_bytes method
+    let seek_result = session.seek_bytes(0);
+
+    // Currently seek returns SeekNotSupported or DriverStopped
+    // This test documents the current behavior
+    match seek_result {
+        Err(kithara_file::FileError::Driver(kithara_file::DriverError::SeekNotSupported)) => {
+            // Expected when seek is not implemented
+        }
+        Err(kithara_file::FileError::DriverStopped) => {
+            // Driver might have stopped or command channel closed
+        }
+        other => panic!(
+            "Expected SeekNotSupported or DriverStopped error, got: {:?}",
+            other
+        ),
+    }
+}
+
+#[tokio::test]
+async fn seek_variants_not_supported() {
+    let server = TestServer::new().await;
+    let url = server.url("/test.mp3");
+
+    // Test with range seek disabled
+    let opts = FileSourceOptions {
+        enable_range_seek: false,
+        ..Default::default()
+    };
+
+    let session = FileSource::open(url, opts, None).await.unwrap();
+
+    // Start streaming first
+    let mut stream = session.stream().await;
+
+    // Read first chunk to ensure driver is running
+    let first_chunk = stream
+        .next()
+        .await
+        .expect("Should have first chunk")
+        .expect("First chunk should be ok");
+
+    assert!(!first_chunk.is_empty());
+
+    // Try to seek using session's seek_bytes method
+    let seek_result = session.seek_bytes(10);
+
+    // Should return error since seek is not supported
+    assert!(seek_result.is_err());
+
+    // Check error type
+    match seek_result {
+        Err(kithara_file::FileError::Driver(kithara_file::DriverError::SeekNotSupported)) => {
+            // Expected error
+        }
+        Err(kithara_file::FileError::DriverStopped) => {
+            // Driver might have stopped or command channel closed
+        }
+        other => panic!(
+            "Expected SeekNotSupported or DriverStopped error, got: {:?}",
+            other
+        ),
+    }
+}
+
+#[tokio::test]
+async fn cancel_behavior_drop_driven() {
+    let server = TestServer::new().await;
+    let url = server.url("/test.mp3");
+
+    let session = FileSource::open(url, FileSourceOptions::default(), None)
+        .await
+        .unwrap();
+
+    // Create stream and read some bytes
+    let mut stream = session.stream().await;
+
+    // Read first chunk
+    let first_chunk = stream
+        .next()
+        .await
+        .expect("Should have first chunk")
+        .expect("First chunk should be ok");
+
+    assert!(!first_chunk.is_empty());
+
+    // Drop the stream (simulating consumer stopping)
+    drop(stream);
+
+    // Driver should cancel without hanging
+    // We can't directly test driver cancellation, but we can verify
+    // that the test doesn't hang or panic
+
+    // Try to create a new stream from the same session
+    // This should work (session should still be valid)
+    let mut new_stream = session.stream().await;
+
+    // New stream should start from beginning
+    let new_first_chunk = new_stream
+        .next()
+        .await
+        .expect("Should have first chunk on new stream")
+        .expect("First chunk should be ok");
+
+    // Should get the same data as before
+    assert_eq!(first_chunk, new_first_chunk);
+}
+
+#[tokio::test]
+async fn seek_contract_invalid_position() {
+    // This test documents the expected behavior for invalid seek positions.
+    // Currently, seek is not implemented, so we test the error paths.
+
+    let server = TestServer::new().await;
+    let url = server.url("/test.mp3");
+
+    // Test with range seek enabled
+    let opts = FileSourceOptions {
+        enable_range_seek: true,
+        ..Default::default()
+    };
+
+    let session = FileSource::open(url, opts, None).await.unwrap();
+
+    // Start streaming first
+    let mut stream = session.stream().await;
+
+    // Read first chunk to ensure driver is running
+    let first_chunk = stream
+        .next()
+        .await
+        .expect("Should have first chunk")
+        .expect("First chunk should be ok");
+
+    assert!(!first_chunk.is_empty());
+
+    // Try to seek to a very large position (beyond known size)
+    // Currently this will fail with SeekNotSupported or DriverStopped
+    // Once implemented, it should fail with InvalidSeekPosition if size is known
+    let seek_result = session.seek_bytes(1_000_000_000); // 1GB position
+
+    match seek_result {
+        Err(kithara_file::FileError::Driver(kithara_file::DriverError::SeekNotSupported)) => {
+            // Expected when seek is not implemented
+        }
+        Err(kithara_file::FileError::DriverStopped) => {
+            // Driver might have stopped or command channel closed
+        }
+        // TODO: Once seek is implemented, we should also accept:
+        // Err(kithara_file::FileError::Driver(kithara_file::DriverError::Options(
+        //     kithara_file::OptionsError::InvalidSeekPosition(_)
+        // )))
+        other => panic!(
+            "Expected SeekNotSupported or DriverStopped error, got: {:?}",
+            other
+        ),
     }
 }

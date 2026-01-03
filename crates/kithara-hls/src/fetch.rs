@@ -3,11 +3,13 @@ use futures::Stream;
 use hls_m3u8::MediaPlaylist;
 use kithara_cache::{AssetCache, CachePath};
 use kithara_core::AssetId;
-use kithara_net::NetClient;
+use kithara_net::HttpClient;
 use std::pin::Pin;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use url::Url;
 
+use crate::abr::ThroughputSampleSource;
 use crate::{HlsError, HlsResult, KeyContext};
 
 #[derive(Debug, Error)]
@@ -30,13 +32,20 @@ pub enum FetchError {
 
 pub type SegmentStream<'a> = Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + 'a>>;
 
+#[derive(Clone, Debug)]
+pub struct FetchBytes {
+    pub bytes: Bytes,
+    pub source: ThroughputSampleSource,
+    pub duration: Duration,
+}
+
 pub struct FetchManager {
     cache: AssetCache,
-    net: NetClient,
+    net: HttpClient,
 }
 
 impl FetchManager {
-    pub fn new(cache: AssetCache, net: NetClient) -> Self {
+    pub fn new(cache: AssetCache, net: HttpClient) -> Self {
         Self { cache, net }
     }
 
@@ -56,19 +65,42 @@ impl FetchManager {
             .join(&segment.uri())
             .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)))?;
 
-        let bytes = self.fetch_resource(&segment_url, "segment.ts").await?;
+        let fetch = self.fetch_resource(&segment_url, "segment.ts").await?;
 
         // Decrypt if needed
         if let Some(key_ctx) = key_context {
-            self.decrypt_segment(bytes, key_ctx).await
+            self.decrypt_segment(fetch.bytes, key_ctx).await
         } else {
-            Ok(bytes)
+            Ok(fetch.bytes)
         }
     }
 
+    pub async fn fetch_segment_with_meta(
+        &self,
+        media_playlist: &MediaPlaylist<'_>,
+        segment_index: usize,
+        base_url: &Url,
+        key_context: Option<&KeyContext>,
+    ) -> HlsResult<FetchBytes> {
+        let segment = media_playlist
+            .segments
+            .get(segment_index)
+            .ok_or_else(|| HlsError::SegmentNotFound(format!("Index {}", segment_index)))?;
+
+        let segment_url = base_url
+            .join(&segment.uri())
+            .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)))?;
+
+        let mut fetch = self.fetch_resource(&segment_url, "segment.ts").await?;
+        if let Some(key_ctx) = key_context {
+            fetch.bytes = self.decrypt_segment(fetch.bytes, key_ctx).await?;
+        }
+
+        Ok(fetch)
+    }
+
     pub async fn fetch_init_segment(&self, init_url: &Url) -> HlsResult<Bytes> {
-        let bytes = self.fetch_resource(init_url, "init.mp4").await?;
-        Ok(bytes)
+        Ok(self.fetch_resource(init_url, "init.mp4").await?.bytes)
     }
 
     pub fn stream_segment_sequence(
@@ -101,10 +133,10 @@ impl FetchManager {
                 };
 
                 match fetcher.fetch_resource(&segment_url, "segment.ts").await {
-                    Ok(bytes) => {
+                    Ok(fetch) => {
                         // Decrypt if needed
                         let bytes = if let Some(key_ctx) = &key_ctx {
-                            match fetcher.decrypt_segment(bytes, key_ctx).await {
+                            match fetcher.decrypt_segment(fetch.bytes, key_ctx).await {
                                 Ok(decrypted) => decrypted,
                                 Err(e) => {
                                     yield Err(e);
@@ -112,7 +144,7 @@ impl FetchManager {
                                 }
                             }
                         } else {
-                            bytes
+                            fetch.bytes
                         };
                         yield Ok(bytes);
                     }
@@ -122,7 +154,7 @@ impl FetchManager {
         })
     }
 
-    async fn fetch_resource(&self, url: &Url, default_filename: &str) -> HlsResult<Bytes> {
+    async fn fetch_resource(&self, url: &Url, default_filename: &str) -> HlsResult<FetchBytes> {
         let asset_id = AssetId::from_url(url)?;
         let cache_path = self.cache_path_for_url(url, default_filename)?;
         let handle = self.cache.asset(asset_id);
@@ -132,12 +164,22 @@ impl FetchManager {
 
             let mut buf = Vec::new();
             std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
-            return Ok(bytes::Bytes::from(buf));
+            return Ok(FetchBytes {
+                bytes: bytes::Bytes::from(buf),
+                source: ThroughputSampleSource::Cache,
+                duration: Duration::ZERO,
+            });
         }
 
-        let bytes = self.net.get_bytes(url.clone()).await?;
+        let start = Instant::now();
+        let bytes = self.net.get_bytes(url.clone(), None).await?;
+        let duration = start.elapsed();
         handle.put_atomic(&cache_path, &bytes)?;
-        Ok(bytes)
+        Ok(FetchBytes {
+            bytes,
+            source: ThroughputSampleSource::Network,
+            duration,
+        })
     }
 
     async fn decrypt_segment(&self, bytes: Bytes, _key_context: &KeyContext) -> HlsResult<Bytes> {

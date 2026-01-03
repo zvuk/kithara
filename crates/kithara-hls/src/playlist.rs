@@ -1,7 +1,7 @@
 use hls_m3u8::{MasterPlaylist, MediaPlaylist};
 use kithara_cache::{AssetCache, CachePath};
 use kithara_core::AssetId;
-use kithara_net::NetClient;
+use kithara_net::HttpClient;
 use thiserror::Error;
 use url::Url;
 
@@ -24,12 +24,12 @@ pub enum PlaylistError {
 
 pub struct PlaylistManager {
     cache: AssetCache,
-    net: NetClient,
+    net: HttpClient,
     base_url: Option<Url>,
 }
 
 impl PlaylistManager {
-    pub fn new(cache: AssetCache, net: NetClient, base_url: Option<Url>) -> Self {
+    pub fn new(cache: AssetCache, net: HttpClient, base_url: Option<Url>) -> Self {
         Self {
             cache,
             net,
@@ -87,7 +87,7 @@ impl PlaylistManager {
             return Ok(bytes::Bytes::from(buf));
         }
 
-        let bytes = self.net.get_bytes(url.clone()).await?;
+        let bytes = self.net.get_bytes(url.clone(), None).await?;
         handle.put_atomic(&cache_path, &bytes)?;
         Ok(bytes)
     }

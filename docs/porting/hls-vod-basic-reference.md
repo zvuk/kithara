@@ -1,5 +1,10 @@
 # HLS VOD basic playback reference (legacy-inspired, DRM-aware but not a blocker)
 
+> Актуально: orchestration loop вынесен в `kithara-stream`.
+> - `kithara-hls` реализует `kithara-stream::Source` (playlists/segments/keys/ABR/DRM/offline правила).
+> - `kithara-stream::Stream` инкапсулирует driver loop (`tokio::select!`), cancellation via drop и command-plane контракт (на текущем этапе `SeekBytes` может быть `SeekNotSupported`).
+> - “Stop” как отдельная команда **не является** частью контракта: остановка = **drop** consumer stream/session.
+
 Этот документ — portable reference для автономных агентов, которые реализуют **реально работающий** HLS VOD источник в `crates/kithara-hls` без доступа к legacy-репозиториям.
 
 Цель: добиться “basic playback” для VOD:
@@ -82,6 +87,10 @@
 
 ## 2) Контракт потока байтов (data-plane) и EOS
 
+Важно про слои ответственности:
+- `kithara-stream` отвечает за жизненный цикл loop/отмену/команды и выдачу async byte stream.
+- `kithara-hls` отвечает за “что именно является медиа-байтами” и в каком порядке (init/segments), а также за offline/DRM/ABR правила.
+
 ### 2.1 Что выдаёт stream
 Для выбранного варианта stream выдаёт:
 - init segment bytes (если формат/плейлист содержит init) — **до** первого media segment,
@@ -100,8 +109,8 @@ Fatal error:
 
 Cancellation via drop:
 - если consumer drop’нул stream/session:
-  - driver прекращает запросы,
-  - завершается без hang.
+  - orchestration loop прекращает работу (stop = drop),
+  - `kithara-hls` прекращает запросы/фетчинг и завершает работу без hang.
 
 ---
 
@@ -146,7 +155,10 @@ Cancellation via drop:
 2) Fetch segment bytes:
 - cache-first; при miss:
   - offline_mode=true: fatal OfflineMiss,
-  - иначе net.stream/net.get_bytes и записать в cache (если включён).
+  - иначе `kithara-net` (stream/get_bytes) и записать в cache (если включён).
+
+Примечание:
+- В актуальной архитектуре `offline_mode` приходит сверху как параметр `kithara-stream::StreamParams`, но enforcement (cache-first и фатальность miss) — ответственность `kithara-hls::Source`.
 
 3) DRM hook (не блокер на basic playback):
 - если segment зашифрован (METHOD=AES-128):

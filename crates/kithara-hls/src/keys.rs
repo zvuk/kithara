@@ -1,7 +1,8 @@
 use bytes::Bytes;
+use futures::StreamExt;
 use kithara_cache::{AssetCache, CachePath};
 use kithara_core::AssetId;
-use kithara_net::NetClient;
+use kithara_net::{Headers, HttpClient};
 use std::collections::HashMap;
 use thiserror::Error;
 use url::Url;
@@ -28,7 +29,7 @@ pub enum KeyError {
 
 pub struct KeyManager {
     cache: AssetCache,
-    net: NetClient,
+    net: HttpClient,
     key_processor: Option<Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
     key_query_params: Option<HashMap<String, String>>,
     key_request_headers: Option<HashMap<String, String>>,
@@ -37,7 +38,7 @@ pub struct KeyManager {
 impl KeyManager {
     pub fn new(
         cache: AssetCache,
-        net: NetClient,
+        net: HttpClient,
         key_processor: Option<Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
         key_query_params: Option<HashMap<String, String>>,
         key_request_headers: Option<HashMap<String, String>>,
@@ -81,18 +82,18 @@ impl KeyManager {
             }
         }
 
-        let stream = self
-            .net
-            .stream(fetch_url, self.key_request_headers.clone())
-            .await?;
+        let headers: Option<Headers> = self.key_request_headers.clone().map(Headers::from);
 
-        use futures::StreamExt;
-        let mut bytes = Vec::new();
+        let stream = self.net.stream(fetch_url, headers).await?;
         let mut pinned_stream = Box::pin(stream);
+
+        let mut bytes = Vec::new();
         while let Some(chunk) = pinned_stream.next().await {
-            bytes.extend_from_slice(&chunk?);
+            let chunk: Bytes = chunk?;
+            bytes.extend_from_slice(&chunk);
         }
-        Ok(bytes::Bytes::from(bytes)).map_err(|e: kithara_net::NetError| HlsError::from(e))
+
+        Ok(Bytes::from(bytes))
     }
 
     fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {

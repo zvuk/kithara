@@ -6,7 +6,11 @@ in `kithara`, inspired by the downloader/decorator architecture in legacy codeba
 Goal:
 - Provide a clear *pattern* for building download stacks (base HTTP + retry + timeout + cache + transform).
 - Keep responsibilities separated and testable.
-- Make it easy to “wire” a correct driver loop in `kithara-hls` and `kithara-file` without changing public contracts.
+- Make it easy to “wire” correct source behavior in `kithara-hls` and `kithara-file`.
+
+Note on architecture:
+- `kithara-stream` owns the generic orchestration loop (driver loop with `tokio::select!`, cancellation via drop, command contract).
+- This document focuses on **resource fetching layers** used *inside* concrete `Source` implementations (HLS/File), not on orchestration.
 
 This document complements:
 - `docs/constraints.md` (EOF/backpressure, offline, identity, ABR cache-hit rules)
@@ -24,9 +28,13 @@ This document complements:
 
 ## 0) Normative rules
 
-1) **No public contract changes**
-- Do not rename/remove/add public types/functions/fields in `kithara-*` just to fit legacy patterns.
-- All improvements should happen via internal modules and tests.
+1) **No accidental public contract changes**
+- Do not rename/remove/add public types/functions/fields in `kithara-*` *just* to fit legacy patterns.
+- If a public contract change is required for a planned architecture shift, it must be:
+  - intentional,
+  - reflected in docs/kanban for the crate,
+  - and carried through all usages + tests in the same change.
+- Prefer internal modules and tests for iterative improvements.
 
 2) **Stateless net**
 - `kithara-net` stays stateless (no persistent caches, no HLS awareness).

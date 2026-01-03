@@ -1,22 +1,23 @@
 mod fixture;
 use fixture::*;
 use futures::StreamExt;
-use kithara_hls::{HlsError, HlsOptions, HlsSource};
+use kithara_hls::{HlsOptions, HlsSource};
 use std::sync::Arc;
 
 #[tokio::test]
 async fn hls_vod_completes_and_stream_closes() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, net) = create_test_cache_and_net();
+    let (cache, _net) = create_test_cache_and_net();
 
     let master_url = server.url("/master.m3u8")?;
     let options = HlsOptions::default();
 
     // Open HLS session
-    let mut session = HlsSource::open(master_url, options, cache, net).await?;
+    let session = HlsSource::open(master_url, options, cache).await?;
 
     // Get stream and pin it
-    let stream = session.stream();
+    let mut stream = session.stream();
+    futures::pin_mut!(stream);
     let mut stream = Box::pin(stream);
 
     // Collect all bytes
@@ -48,16 +49,17 @@ async fn hls_vod_completes_and_stream_closes() -> HlsResult<()> {
 #[tokio::test]
 async fn hls_vod_fetches_all_segments_for_selected_variant() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, net) = create_test_cache_and_net();
+    let (cache, _net) = create_test_cache_and_net();
 
     let master_url = server.url("/master.m3u8")?;
     let options = HlsOptions::default();
 
     // Open HLS session
-    let mut session = HlsSource::open(master_url, options, cache, net).await?;
+    let session = HlsSource::open(master_url, options, cache).await?;
 
     // Get stream
-    let stream = session.stream();
+    let mut stream = session.stream();
+    futures::pin_mut!(stream);
     let mut stream = Box::pin(stream);
 
     // Collect all bytes
@@ -97,8 +99,7 @@ async fn hls_manual_variant_outputs_only_selected_variant_prefixes() -> HlsResul
         options.variant_stream_selector = Some(Arc::new(move |_| Some(variant)));
 
         // Open HLS session
-        let mut session =
-            HlsSource::open(master_url.clone(), options, cache.clone(), net.clone()).await?;
+        let session = HlsSource::open(master_url.clone(), options, cache.clone()).await?;
 
         // Get stream and pin it
         let stream = session.stream();
@@ -130,16 +131,17 @@ async fn hls_manual_variant_outputs_only_selected_variant_prefixes() -> HlsResul
 #[tokio::test]
 async fn hls_drop_cancels_driver_and_stops_requests() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, net) = create_test_cache_and_net();
+    let (cache, _net) = create_test_cache_and_net();
 
     let master_url = server.url("/master.m3u8")?;
     let options = HlsOptions::default();
 
     // Open HLS session
-    let mut session = HlsSource::open(master_url, options, cache, net).await?;
+    let session = HlsSource::open(master_url, options, cache).await?;
 
     // Get stream and pin it, read only first chunk
-    let stream = session.stream();
+    let mut stream = session.stream();
+    futures::pin_mut!(stream);
     let mut stream = Box::pin(stream);
 
     // Read first chunk
@@ -174,16 +176,15 @@ async fn hls_drop_cancels_driver_and_stops_requests() -> HlsResult<()> {
 #[ignore = "Offline mode not implemented yet"]
 async fn hls_offline_miss_is_fatal() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, net) = create_test_cache_and_net();
+    let (cache, _net) = create_test_cache_and_net();
 
     let master_url = server.url("/master.m3u8")?;
 
-    // Enable offline mode - cache is empty, so should fail
     let mut options = HlsOptions::default();
     options.offline_mode = true;
 
     // Open HLS session - should fail with OfflineMiss
-    let result = HlsSource::open(master_url, options, cache, net).await;
+    let result = HlsSource::open(master_url, options, cache).await;
 
     // Should get OfflineMiss error
     match result {
