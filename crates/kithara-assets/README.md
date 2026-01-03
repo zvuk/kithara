@@ -12,7 +12,7 @@ Everything else is an implementation detail.
 
 Resource opening:
 - `open_streaming_resource(key, cancel) -> CacheResult<AssetResource<StreamingResource>>`
-- `open_atomic_resource(key, cancel) -> AssetResource<AtomicResource>`
+- `open_atomic_resource(key, cancel) -> CacheResult<AssetResource<AtomicResource>>`
 
 Global index helpers (best-effort metadata; filesystem is the source of truth):
 - `open_index_resource(cancel) -> AssetResource<AtomicResource>`

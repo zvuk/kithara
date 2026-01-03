@@ -208,12 +208,12 @@ impl Assets for AssetCache {
         &self,
         key: &ResourceKey,
         cancel: CancellationToken,
-    ) -> AssetResource<AtomicResource> {
+    ) -> CacheResult<AssetResource<AtomicResource>> {
         let path = resource_path(&self.root_dir, key);
         let res = AtomicResource::open(AtomicOptions { path, cancel });
 
         let lease = self.leases.pin(&key.asset_root).await;
-        AssetResource::new(res, lease)
+        Ok(AssetResource::new(res, lease))
     }
 }
 
