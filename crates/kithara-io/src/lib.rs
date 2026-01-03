@@ -10,6 +10,14 @@
 //! - `BridgeReader`: Sync consumer implementing `Read` + `Seek`
 //! - `BufferTracker`: Centralized buffer management
 //!
+//! ## Public contracts (explicit)
+//!
+//! The explicit public contracts are the traits:
+//! - [`BridgeWrite`] — producer side (push bytes + finish).
+//! - [`BridgeRead`] — consumer side (sync `Read` + `Seek`).
+//!
+//! Concrete types (`BridgeWriter`, `BridgeReader`) implement these traits.
+//!
 //! ## EOF Semantics (Normative)
 //!
 //! **Contract:** `Read::read()` returns `Ok(0)` **only** after:
@@ -32,11 +40,44 @@
 
 #![forbid(unsafe_code)]
 
+use bytes::Bytes;
+use std::io::{Read, Seek};
+
 pub mod bridge;
 pub mod errors;
 pub mod reader;
 pub mod sync;
 pub mod writer;
+
+/// Producer-side public contract for the sync bridge.
+///
+/// This trait exists to make the public API surface explicit and searchable:
+/// consumers can depend on `dyn BridgeWrite` instead of a concrete type.
+///
+/// Normative:
+/// - `push` must apply backpressure (bounded memory).
+/// - `finish` must signal end-of-stream; it must be idempotent from the caller POV.
+pub trait BridgeWrite: Send + Sync + 'static {
+    fn push(&self, bytes: Bytes) -> IoResult<()>;
+    fn finish(&self) -> IoResult<()>;
+}
+
+/// Consumer-side public contract for the sync bridge.
+///
+/// This is intentionally just `Read + Seek` (Seek is explicitly unsupported by the default impl).
+pub trait BridgeRead: Read + Seek + Send + 'static {}
+
+impl BridgeWrite for BridgeWriter {
+    fn push(&self, bytes: Bytes) -> IoResult<()> {
+        BridgeWriter::push(self, bytes)
+    }
+
+    fn finish(&self) -> IoResult<()> {
+        BridgeWriter::finish(self)
+    }
+}
+
+impl BridgeRead for BridgeReader {}
 
 // Re-export public API
 pub use bridge::{BridgeMsg, BridgeOptions, new_bridge};

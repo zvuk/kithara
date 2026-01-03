@@ -17,6 +17,7 @@ tokio = { workspace = true }
 url = { workspace = true }
 async-stream = { workspace = true }
 tracing = { workspace = true }
+async-trait = { workspace = true }
 
 [features]
 default = []

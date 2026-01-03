@@ -11,7 +11,15 @@
 //!
 //! - No explicit stop command: stopping is done by dropping the stream.
 //! - Seek is not supported yet (contract is fixed; implementation will be added via TDD).
+//!
+//! ## Public contracts (explicit)
+//!
+//! The explicit public contracts are:
+//! - [`HlsSourceContract`] — open an HLS session for a URL + options.
+//!
+//! Concrete types (like [`HlsSource`]) implement these traits.
 
+use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
 use kithara_assets::AssetCache;
@@ -154,11 +162,17 @@ pub struct KeyContext {
     pub iv: Option<[u8; 16]>,
 }
 
-#[derive(Clone, Debug)]
+#[async_trait]
+pub trait HlsSourceContract: Send + Sync + 'static {
+    async fn open(&self, url: Url, opts: HlsOptions, cache: AssetCache) -> HlsResult<HlsSession>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct HlsSource;
 
-impl HlsSource {
-    pub async fn open(url: Url, opts: HlsOptions, cache: AssetCache) -> HlsResult<HlsSession> {
+#[async_trait]
+impl HlsSourceContract for HlsSource {
+    async fn open(&self, url: Url, opts: HlsOptions, cache: AssetCache) -> HlsResult<HlsSession> {
         let asset_id = AssetId::from_url(&url)?;
         let net = HttpClient::new(kithara_net::NetOptions::default());
 
@@ -209,6 +223,13 @@ impl HlsSource {
         );
 
         Ok(HlsSession { asset_id, driver })
+    }
+}
+
+impl HlsSource {
+    /// Convenience associated constructor matching the historical API.
+    pub async fn open(url: Url, opts: HlsOptions, cache: AssetCache) -> HlsResult<HlsSession> {
+        HlsSource.open(url, opts, cache).await
     }
 }
 

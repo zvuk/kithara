@@ -16,4 +16,7 @@ fn_params_layout = "Tall"
 match_arm_leading_pipes = "Never"
 
 # Imports
+reorder_modules = true
 reorder_imports = true
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"

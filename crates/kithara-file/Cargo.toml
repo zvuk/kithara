@@ -16,6 +16,7 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 url = { workspace = true }
 async-stream = { workspace = true }
+async-trait = { workspace = true }
 
 # Required dependency for assets/cache manager.
 # The file source can persist downloaded bytes for offline reuse.
