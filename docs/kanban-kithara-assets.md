@@ -105,7 +105,7 @@
 
 ### A) README (contract-first)
 
-- [ ] Add crate README (`crates/kithara-assets/README.md`) describing:
+- [x] Add crate README (`crates/kithara-assets/README.md`) describing:
   - `Assets` contract (methods + semantics),
   - key layout `<root>/<asset_root>/<rel_path>` (and safety rules),
   - `AssetResource<R>` auto-pin semantics,
