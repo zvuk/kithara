@@ -9,6 +9,7 @@ members = [
     "crates/kithara-io",
     "crates/kithara-decode",
     "crates/kithara-stream",
+    "crates/kithara-storage",
 ]
 
 [workspace.lints.rustdoc]
@@ -59,6 +60,7 @@ kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-io = { path = "crates/kithara-io", version = "0.1.0" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
+kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 
 # async/runtime
 tokio = { version = "1.48.0", features = ["full"] }
@@ -104,5 +106,10 @@ tempfile = "3.10.2"
 
 # async traits
 async-trait = "0.1.68"
+
+# storage (range maps + async random-access disk)
+rangemap = { version = "1.7.1", features = ["serde1"] }
+random-access-disk = { version = "3.0.1", default-features = false, features = ["tokio"] }
+random-access-storage = "5.0.0"
 
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
