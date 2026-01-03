@@ -147,7 +147,6 @@ impl fmt::Debug for AssetCache {
 impl AssetCache {
     /// Open (or create) the assets store.
     pub fn open(opts: CacheOptions) -> CacheResult<Self> {
-        std::fs::create_dir_all(&opts.root_dir)?;
         Ok(Self {
             root_dir: opts.root_dir,
             leases: Arc::new(LeaseTable::default()),

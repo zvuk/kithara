@@ -120,7 +120,7 @@ Required tests:
 Нормативно: не сохраняем обратную совместимость.
 
 - [x] Remove old “blob cache” API & modules (CachePath/Store/FsStore/IndexStore/LeaseStore/EvictingStore) from crate codebase
-- [ ] Ensure `kithara-assets` does not perform ad-hoc FS operations beyond opening resources (all IO primitives live in `kithara-storage`)
+- [x] Ensure `kithara-assets` does not perform ad-hoc FS operations beyond opening resources
 
 Required tests:
 - N/A (structural cleanup), but keep existing tests compiling.
