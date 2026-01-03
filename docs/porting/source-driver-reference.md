@@ -106,7 +106,7 @@ Driver должен:
 `kithara-file` — это **progressive HTTP** источник байтов (mp3/aac/…):
 - выдаёт байты файла последовательно от начала до конца,
 - поддерживает range GET (для seek) при необходимости в рамках `kithara-io`/bridge,
-- опционально использует `kithara-cache` как persistent disk cache для offline (если так зафиксировано контрактом).
+- использует `kithara-assets` (persistent disk assets store) и `kithara-storage` (Atomic/Streaming ресурсы) для offline и immediate-read semantics.
 
 ### 2.2 Минимально рабочий driver loop (v1)
 V1 реализация должна реально “качать весь файл” и завершаться:

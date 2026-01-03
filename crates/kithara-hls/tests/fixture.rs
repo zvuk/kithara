@@ -1,8 +1,9 @@
 use axum::{Router, routing::get};
-use kithara_cache::{AssetCache, CacheOptions};
+use kithara_assets::{AssetCache, CacheOptions};
 use kithara_net::{HttpClient, NetOptions};
 use std::collections::HashMap;
 use std::sync::Arc;
+use tempfile::TempDir;
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -82,17 +83,37 @@ impl TestServer {
     }
 }
 
-pub fn create_test_cache_and_net() -> (AssetCache, HttpClient) {
-    let cache_opts = CacheOptions {
-        max_bytes: 1024 * 1024,
-        root_dir: None,
-    };
+#[derive(Clone, Debug)]
+pub struct TestAssets {
+    cache: AssetCache,
+    _temp_dir: Arc<TempDir>,
+}
+
+impl TestAssets {
+    pub fn cache(&self) -> &AssetCache {
+        &self.cache
+    }
+}
+
+pub fn create_test_cache_and_net() -> (TestAssets, HttpClient) {
+    // NOTE: The assets/cache API has been redesigned. `CacheOptions` is now just a root directory.
+    // Keep the temp dir alive by storing it inside the returned wrapper.
+    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = Arc::new(temp_dir);
+
+    let cache_opts = CacheOptions::new(temp_dir.path().to_path_buf());
     let cache = AssetCache::open(cache_opts).unwrap();
 
     let net_opts = NetOptions::default();
     let net = HttpClient::new(net_opts);
 
-    (cache, net)
+    (
+        TestAssets {
+            cache,
+            _temp_dir: temp_dir,
+        },
+        net,
+    )
 }
 
 pub fn test_master_playlist() -> &'static str {

@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 kithara-core = { workspace = true }
-kithara-cache = { workspace = true }
+kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
 bytes = { workspace = true }
@@ -25,4 +25,5 @@ default = []
 
 [dev-dependencies]
 axum = { workspace = true }
+tempfile = { workspace = true }
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].

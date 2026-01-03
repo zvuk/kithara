@@ -17,9 +17,9 @@ tokio-stream = { workspace = true }
 url = { workspace = true }
 async-stream = { workspace = true }
 
-# Required dependency for caching.
+# Required dependency for assets/cache manager.
 # The file source can persist downloaded bytes for offline reuse.
-kithara-cache = { workspace = true }
+kithara-assets = { workspace = true }
 
 [dev-dependencies]
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].

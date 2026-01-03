@@ -7,7 +7,8 @@ use std::sync::Arc;
 #[tokio::test]
 async fn hls_vod_completes_and_stream_closes() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, _net) = create_test_cache_and_net();
+    let (assets, _net) = create_test_cache_and_net();
+    let cache = assets.cache().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let options = HlsOptions::default();
@@ -49,7 +50,8 @@ async fn hls_vod_completes_and_stream_closes() -> HlsResult<()> {
 #[tokio::test]
 async fn hls_vod_fetches_all_segments_for_selected_variant() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, _net) = create_test_cache_and_net();
+    let (assets, _net) = create_test_cache_and_net();
+    let cache = assets.cache().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let options = HlsOptions::default();
@@ -89,7 +91,8 @@ async fn hls_vod_fetches_all_segments_for_selected_variant() -> HlsResult<()> {
 #[tokio::test]
 async fn hls_manual_variant_outputs_only_selected_variant_prefixes() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, net) = create_test_cache_and_net();
+    let (assets, net) = create_test_cache_and_net();
+    let cache = assets.cache().clone();
 
     let master_url = server.url("/master.m3u8")?;
 
@@ -131,7 +134,8 @@ async fn hls_manual_variant_outputs_only_selected_variant_prefixes() -> HlsResul
 #[tokio::test]
 async fn hls_drop_cancels_driver_and_stops_requests() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, _net) = create_test_cache_and_net();
+    let (assets, _net) = create_test_cache_and_net();
+    let cache = assets.cache().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let options = HlsOptions::default();
@@ -176,7 +180,8 @@ async fn hls_drop_cancels_driver_and_stops_requests() -> HlsResult<()> {
 #[ignore = "Offline mode not implemented yet"]
 async fn hls_offline_miss_is_fatal() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, _net) = create_test_cache_and_net();
+    let (assets, _net) = create_test_cache_and_net();
+    let cache = assets.cache().clone();
 
     let master_url = server.url("/master.m3u8")?;
 

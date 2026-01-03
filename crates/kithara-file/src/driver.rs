@@ -2,7 +2,7 @@ use crate::options::{FileSourceOptions, OptionsError};
 use crate::range_policy::RangePolicy;
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt};
-use kithara_cache::{AssetCache, CachePath};
+use kithara_assets::AssetCache;
 use kithara_core::AssetId;
 use kithara_net::{HttpClient, NetError};
 use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
@@ -30,8 +30,8 @@ pub enum SourceError {
     #[error("Network error: {0}")]
     Net(#[from] NetError),
 
-    #[error("Cache error: {0}")]
-    Cache(#[from] kithara_cache::CacheError),
+    #[error("Assets error: {0}")]
+    Cache(#[from] kithara_assets::CacheError),
 
     #[error("Offline miss: content not in cache")]
     OfflineMiss,
@@ -157,30 +157,10 @@ impl Source for FileStream {
         let offline_mode = params.offline_mode;
 
         Ok(Box::pin(async_stream::stream! {
-            // Cache-first if present.
-            if let Some(ref cache) = cache {
-                let asset_handle = cache.asset(asset_id);
-                let body_path = CachePath::new(vec!["file".to_string(), "body".to_string()])
-                    .map_err(|e| StreamError::Source(SourceError::Cache(e)))?;
-
-                if let Some(mut file) = asset_handle.open(&body_path).unwrap_or(None) {
-                    use std::io::Read;
-
-                    let mut buffer = vec![0u8; 8192];
-                    loop {
-                        match file.read(&mut buffer) {
-                            Ok(0) => return, // EOF
-                            Ok(n) => {
-                                yield Ok(Message::Data(Bytes::copy_from_slice(&buffer[..n])));
-                            }
-                            Err(e) => {
-                                yield Err(StreamError::Source(SourceError::Cache(kithara_cache::CacheError::Io(e))));
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
+            // Cache/Assets integration is being redesigned (resource-based API).
+            // Disable the old cache-first path until the new Assets contract is wired in.
+            let _ = &cache;
+            let _ = asset_id;
 
             if offline_mode {
                 yield Err(StreamError::Source(SourceError::OfflineMiss));
@@ -196,14 +176,9 @@ impl Source for FileStream {
                 }
             };
 
-            let mut cached_bytes = Vec::new();
-
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(bytes) => {
-                        if cache.is_some() {
-                            cached_bytes.extend_from_slice(&bytes);
-                        }
                         yield Ok(Message::Data(bytes));
                     }
                     Err(e) => {
@@ -213,14 +188,9 @@ impl Source for FileStream {
                 }
             }
 
-            // Best-effort cache write after successful download.
-            if let Some(ref cache) = cache && !cached_bytes.is_empty() {
-                let asset_handle = cache.asset(asset_id);
-                let body_path = CachePath::new(vec!["file".to_string(), "body".to_string()])
-                    .map_err(|e| StreamError::Source(SourceError::Cache(e)))?;
-
-                let _ = asset_handle.put_atomic(&body_path, &cached_bytes);
-            }
+            // Assets integration is being redesigned (streaming+atomic resources).
+            // Old "cache whole body at end" behavior is intentionally disabled.
+            let _ = &cache;
         }))
     }
 

@@ -14,7 +14,7 @@
 
 use bytes::Bytes;
 use futures::Stream;
-use kithara_cache::AssetCache;
+use kithara_assets::AssetCache;
 use kithara_core::AssetId;
 use kithara_net::HttpClient;
 use std::pin::Pin;
@@ -49,8 +49,8 @@ pub enum HlsError {
     #[error("Network error: {0}")]
     Net(#[from] kithara_net::NetError),
 
-    #[error("Cache error: {0}")]
-    Cache(#[from] kithara_cache::CacheError),
+    #[error("Assets error: {0}")]
+    Cache(#[from] kithara_assets::CacheError),
 
     #[error("Core error: {0}")]
     Core(#[from] kithara_core::CoreError),

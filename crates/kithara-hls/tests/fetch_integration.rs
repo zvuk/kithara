@@ -22,7 +22,8 @@ use kithara_hls::fetch::FetchManager;
 #[tokio::test]
 async fn stream_segment_sequence() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, net) = create_test_cache_and_net();
+    let (assets, net) = create_test_cache_and_net();
+    let cache = assets.cache().clone();
 
     let fetch_manager = FetchManager::new(cache, net);
 

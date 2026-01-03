@@ -14,20 +14,22 @@
 
 ## Цель
 
-`kithara-file` — источник байтов для progressive ресурсов (HTTP mp3 и т.п.) с “player-grade” семантикой.
+`kithara-file` — оркестратор progressive ресурсов (HTTP mp3 и т.п.) с “player-grade” семантикой.
 
 Актуальная архитектура:
 
-- **оркестрация driver loop вынесена в `kithara-stream`**:
-  - `kithara-file` реализует `kithara-stream::Source` (конкретный источник: cache-first / network / offline);
-  - `kithara-stream::Stream` инкапсулирует цикл `tokio::select!` (data-plane + control-plane), cancellation via drop и выдачу async byte stream.
-- загрузка байтов (через `kithara-net`),
-- интеграция с кэшем (через `kithara-cache`) для offline/reopen,
-- sync consumption через bridge (через `kithara-io`, если используется в интеграции),
+- `kithara-file` управляет **логическими ресурсами**, а не “байтовой лентой”:
+  - открывает ресурсы через `kithara-assets` (persistent disk assets store),
+  - наполняет большие ресурсы через `kithara-storage::StreamingResource` (HTTP Range → `write_at`) и обеспечивает возможность чтения во время наполнения (`wait_range`),
+  - кэширует маленькие объекты (например, метаданные) через `kithara-storage::AtomicResource` (whole-object `read`/`write` с temp→rename).
+- загрузка данных из сети — через `kithara-net` (включая Range requests),
+- sync consumption для декодера — через `kithara-io`:
+  - `Read+Seek` поверх `StreamingResource` (блокировка через `wait_range`, без “ложного EOF”),
 - корректный `Read`/EOF (см. `docs/constraints.md`),
-- best-effort `Seek` (обычно через HTTP Range) — контракт фиксируется тестами и реализуется поэтапно.
+- `Seek` обязателен (плеер может перематывать в любой момент):
+  - реализуется через range-политику и наполнение `StreamingResource` нужными диапазонами.
 
-Важно: “stop” как отдельная команда **не является** частью контракта. Остановка = **drop** consumer stream/session.
+Важно: “stop” как отдельная команда **не является** частью контракта. Остановка = **drop session** + cancellation token.
 
 ---
 
@@ -35,8 +37,8 @@
 
 - `Read::read() -> Ok(0)` возвращается **только** при истинном EOS (см. `docs/constraints.md`).
 - Seek должен быть **абсолютным**, best-effort; поведение вне доступного диапазона — **явно** определено и тестируется.
-- **Cancellation via drop** обязательна:
-  - если consumer прекратил чтение и drop’нул stream/session, driver loop должен завершиться быстро и детерминированно (без зависаний).
+- **Cancellation via drop / token** обязательна:
+  - если consumer прекратил чтение и drop’нул session, все ожидания `wait_range` и фоновые загрузки должны завершиться быстро и детерминированно (без зависаний).
 - Offline режим:
   - `offline_mode=true` + cache miss => **fatal** (никаких попыток “всё равно сходить в сеть”).
 - Ошибки должны быть типизированы; различать recoverable и fatal в терминах публичного API.
@@ -46,7 +48,12 @@
 
 ## Публичный контракт (актуально)
 
-- `kithara-file` предоставляет session/stream API поверх `kithara-stream`.
+- `kithara-file` предоставляет session API, который:
+  - возвращает sync `Read+Seek` (через `kithara-io`) поверх ресурса,
+  - поддерживает `Seek` во время проигрывания (best-effort, но обязателен),
+  - использует `kithara-assets` как persistent disk assets store,
+  - использует `kithara-storage` для реализации ресурсов (atomic vs streaming).
 - Ошибки разделены:
-  - `SourceError` (ошибки источника: сеть/кэш/offline miss),
-  - `DriverError` (обёртка: `StreamError<SourceError>` + ошибки сессии/настроек).
+  - ошибки сети (`kithara-net`),
+  - ошибки assets/storage (диск/ресурс),
+  - offline miss (fatal при `offline_mode=true`).

@@ -16,7 +16,7 @@
 ## Kanban boards (per subcrate)
 
 - `docs/kanban-kithara-core.md`
-- `docs/kanban-kithara-cache.md`
+- `docs/kanban-kithara-assets.md`
 - `docs/kanban-kithara-net.md`
 - `docs/kanban-kithara-stream.md`
 - `docs/kanban-kithara-file.md`

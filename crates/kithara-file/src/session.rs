@@ -2,7 +2,7 @@ use crate::driver::{DriverError, FileCommand, FileDriver};
 use crate::options::FileSourceOptions;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use kithara_cache::AssetCache;
+use kithara_assets::AssetCache;
 use kithara_core::{AssetId, CoreError};
 use kithara_net::HttpClient;
 use std::pin::Pin;

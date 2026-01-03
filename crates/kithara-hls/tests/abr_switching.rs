@@ -175,7 +175,8 @@ async fn abr_upswitch_continues_from_current_segment_index() -> HlsResult<()> {
         Duration::from_millis(1),
     )
     .await;
-    let (cache, _net) = create_test_cache_and_net();
+    let (assets, _net) = create_test_cache_and_net();
+    let cache = assets.cache().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let mut options = HlsOptions::default();
@@ -236,7 +237,8 @@ async fn abr_downswitch_emits_init_before_next_segment_when_required() -> HlsRes
         Duration::from_millis(200),
     )
     .await;
-    let (cache, _net) = create_test_cache_and_net();
+    let (assets, _net) = create_test_cache_and_net();
+    let cache = assets.cache().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let mut options = HlsOptions::default();

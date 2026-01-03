@@ -1,8 +1,7 @@
 use bytes::Bytes;
 use futures::Stream;
 use hls_m3u8::MediaPlaylist;
-use kithara_cache::{AssetCache, CachePath};
-use kithara_core::AssetId;
+use kithara_assets::AssetCache;
 use kithara_net::HttpClient;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
@@ -17,8 +16,8 @@ pub enum FetchError {
     #[error("Network error: {0}")]
     Net(#[from] kithara_net::NetError),
 
-    #[error("Cache error: {0}")]
-    Cache(#[from] kithara_cache::CacheError),
+    #[error("Assets error: {0}")]
+    Cache(#[from] kithara_assets::CacheError),
 
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
@@ -154,27 +153,18 @@ impl FetchManager {
         })
     }
 
-    async fn fetch_resource(&self, url: &Url, default_filename: &str) -> HlsResult<FetchBytes> {
-        let asset_id = AssetId::from_url(url)?;
-        let cache_path = self.cache_path_for_url(url, default_filename)?;
-        let handle = self.cache.asset(asset_id);
-
-        if handle.exists(&cache_path) {
-            let mut file = handle.open(&cache_path)?.unwrap();
-
-            let mut buf = Vec::new();
-            std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
-            return Ok(FetchBytes {
-                bytes: bytes::Bytes::from(buf),
-                source: ThroughputSampleSource::Cache,
-                duration: Duration::ZERO,
-            });
-        }
+    async fn fetch_resource(&self, url: &Url, _default_filename: &str) -> HlsResult<FetchBytes> {
+        // NOTE: Assets integration is being redesigned to use the new resource-based API
+        // (`kithara-assets` + `kithara-storage`).
+        //
+        // The old cache layer (`kithara-cache`) supported `CachePath` + `put_atomic` and is no
+        // longer available here. For now, fetch from the network only.
+        let _ = &self.cache;
 
         let start = Instant::now();
         let bytes = self.net.get_bytes(url.clone(), None).await?;
         let duration = start.elapsed();
-        handle.put_atomic(&cache_path, &bytes)?;
+
         Ok(FetchBytes {
             bytes,
             source: ThroughputSampleSource::Network,
@@ -195,25 +185,5 @@ impl FetchManager {
         // }
 
         Ok(bytes)
-    }
-
-    fn cache_path_for_url(&self, url: &Url, default_filename: &str) -> HlsResult<CachePath> {
-        let filename = url
-            .path_segments()
-            .and_then(|segments| segments.last())
-            .and_then(|name| if name.is_empty() { None } else { Some(name) })
-            .unwrap_or(default_filename);
-
-        CachePath::new(vec![
-            "hls".to_string(),
-            "segments".to_string(),
-            filename.to_string(),
-        ])
-        .map_err(|e| {
-            HlsError::from(kithara_cache::CacheError::InvalidPath(format!(
-                "Invalid cache path: {}",
-                e
-            )))
-        })
     }
 }
