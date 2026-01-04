@@ -176,9 +176,15 @@ impl Source for FileStream {
         let client = self.net_client.clone();
         let url = self.url.clone();
         let assets = self.assets.clone();
-        let asset_root = hex::encode(self.asset_id.as_bytes());
+        let asset_id = self.asset_id;
         let start_pos = self.pos;
         let _offline_mode = params.offline_mode;
+
+        // Deterministic resource key:
+        // - asset_root stays scoped to the logical asset id
+        // - rel_path is derived from URL (no format-specific naming like "audio.mp3")
+        let asset_root = hex::encode(asset_id.as_bytes());
+        let rel_path = format!("media/{}", hex::encode(url.as_str().as_bytes()));
 
         Ok(Box::pin(async_stream::stream! {
             let Some(assets) = assets else {
@@ -192,9 +198,9 @@ impl Source for FileStream {
                 return;
             };
 
-            // MP3/progressive file layout (contracted in kithara-assets README examples).
-            let key = ResourceKey::new(asset_root, "media/audio.mp3");
             let cancel = CancellationToken::new();
+
+            let key = ResourceKey::new(asset_root, rel_path);
 
             let res = match assets.open_streaming_resource(&key, cancel).await {
                 Ok(r) => r,
