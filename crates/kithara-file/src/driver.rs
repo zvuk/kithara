@@ -5,13 +5,13 @@ use futures::{Stream as FuturesStream, StreamExt};
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_core::AssetId;
 use kithara_net::{HttpClient, NetError};
-use kithara_storage::{Resource as _, StreamingResourceExt};
 use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{
+    internal::{Feeder, Fetcher},
     options::{FileSourceOptions, OptionsError},
     range_policy::RangePolicy,
 };
@@ -109,7 +109,6 @@ impl FileDriver {
             asset_id: self.asset_id,
             url: self.url.clone(),
             net_client: self.net_client.clone(),
-            options: self.options.clone(),
             assets: self.assets.clone(),
             pos: 0,
         };
@@ -153,12 +152,15 @@ impl FileDriver {
     }
 }
 
+// Fetcher/Feeder live in `crate::internal`.
+// Keeping these loops in one place avoids duplication between the `kithara-stream` path
+// and the `kithara-io` (rodio) path.
+
 #[derive(Clone)]
 struct FileStream {
     asset_id: AssetId,
     url: url::Url,
     net_client: HttpClient,
-    options: FileSourceOptions,
     assets: Option<Arc<AssetStore>>,
     pos: u64,
 }
@@ -192,10 +194,9 @@ impl Source for FileStream {
 
             // MP3/progressive file layout (contracted in kithara-assets README examples).
             let key = ResourceKey::new(asset_root, "media/audio.mp3");
-
             let cancel = CancellationToken::new();
 
-            let res = match assets.open_streaming_resource(&key, cancel.clone()).await {
+            let res = match assets.open_streaming_resource(&key, cancel).await {
                 Ok(r) => r,
                 Err(e) => {
                     yield Err(StreamError::Source(SourceError::Assets(e)));
@@ -203,68 +204,14 @@ impl Source for FileStream {
                 }
             };
 
-            // Download loop: write sequentially into the streaming resource, then commit/fail.
-            tokio::spawn({
-                let res = res.clone();
-                let mut stream = match client.stream(url, None).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        let _ = res.fail(format!("net error: {e}")).await;
-                        return;
-                    }
-                };
+            Fetcher::new(client, url).spawn(res.clone());
 
-                async move {
-                    let mut off: u64 = 0;
+            let feeder = Feeder::new(start_pos, 64 * 1024);
 
-                    while let Some(chunk_result) = stream.next().await {
-                        match chunk_result {
-                            Ok(bytes) => {
-                                if let Err(e) = res.write_at(off, &bytes).await {
-                                    let _ = res.fail(format!("storage write_at error: {e}")).await;
-                                    return;
-                                }
-                                off = off.saturating_add(bytes.len() as u64);
-                            }
-                            Err(e) => {
-                                let _ = res.fail(format!("net stream error: {e}")).await;
-                                return;
-                            }
-                        }
-                    }
-
-                    let _ = res.commit(Some(off)).await;
-                }
-            });
-
-            // Reader loop: wait for availability and read progressively from current position.
-            let mut pos = start_pos;
-            let chunk_size: u64 = 64 * 1024;
-
-            loop {
-                let end = pos.saturating_add(chunk_size);
-
-                match res.wait_range(pos..end).await {
-                    Ok(kithara_storage::WaitOutcome::Ready) => {
-                        let len: usize = (end - pos) as usize;
-                        match res.read_at(pos, len).await {
-                            Ok(bytes) => {
-                                if bytes.is_empty() {
-                                    // Should not normally happen after Ready, but treat as EOS-ish.
-                                    return;
-                                }
-                                pos = pos.saturating_add(bytes.len() as u64);
-                                yield Ok(Message::Data(bytes));
-                            }
-                            Err(e) => {
-                                yield Err(StreamError::Source(SourceError::Storage(e)));
-                                return;
-                            }
-                        }
-                    }
-                    Ok(kithara_storage::WaitOutcome::Eof) => {
-                        return;
-                    }
+            let mut s = std::pin::pin!(feeder.stream(res));
+            while let Some(item) = s.next().await {
+                match item {
+                    Ok(bytes) => yield Ok(Message::Data(bytes)),
                     Err(e) => {
                         yield Err(StreamError::Source(SourceError::Storage(e)));
                         return;

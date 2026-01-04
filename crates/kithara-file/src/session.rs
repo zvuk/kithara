@@ -6,14 +6,13 @@ use futures::{Stream, StreamExt};
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_core::{AssetId, CoreError};
 use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome};
-use kithara_net::HttpClient;
-use kithara_storage::{Resource, StreamingResourceExt};
+use kithara_storage::StreamingResourceExt;
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace, warn};
+use tracing::trace;
 
 use crate::{
     driver::{DriverError, FileCommand, FileDriver, SourceError},
+    internal::{Fetcher, Progress},
     options::FileSourceOptions,
 };
 
@@ -22,7 +21,7 @@ pub struct SessionSource {
         kithara_storage::StreamingResource,
         kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
     >,
-    cancel: CancellationToken,
+    progress: Arc<Progress>,
     // Length is generally unknown for progressive HTTP unless the writer commits with known len.
     // We don't currently plumb a "query length" API through assets/storage, so keep it None.
     len: Option<u64>,
@@ -34,11 +33,11 @@ impl SessionSource {
             kithara_storage::StreamingResource,
             kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
         >,
-        cancel: CancellationToken,
+        progress: Arc<Progress>,
     ) -> Self {
         Self {
             res,
-            cancel,
+            progress,
             len: None,
         }
     }
@@ -77,6 +76,11 @@ impl Source for SessionSource {
             .read_at(offset, len)
             .await
             .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+
+        // Update shared progress so the fetcher can log (downloaded, read, backlog).
+        self.progress
+            .set_read_pos(offset.saturating_add(bytes.len() as u64));
+
         trace!(
             offset,
             requested = len,
@@ -100,7 +104,7 @@ impl FileSession {
     pub fn new(
         asset_id: AssetId,
         url: url::Url,
-        net_client: HttpClient,
+        net_client: kithara_net::HttpClient,
         options: FileSourceOptions,
         cache: Option<Arc<AssetStore>>,
     ) -> Self {
@@ -146,61 +150,30 @@ impl FileSession {
         let asset_root = hex::encode(driver.asset_id().as_bytes());
         let key = ResourceKey::new(asset_root, "media/audio.mp3");
 
-        let cancel = CancellationToken::new();
+        let cancel = tokio_util::sync::CancellationToken::new();
         let res = assets
             .open_streaming_resource(&key, cancel.clone())
             .await
             .map_err(|e| FileError::Driver(DriverError::Source(SourceError::Assets(e))))?;
 
-        // Start download writer ONCE for this SessionSource.
+        let progress = Arc::new(Progress::new());
+        Self::spawn_download_writer(driver, res.clone(), progress.clone());
+
+        Ok(SessionSource::new(res, progress))
+    }
+
+    fn spawn_download_writer(
+        driver: &FileDriver,
+        res: kithara_assets::AssetResource<
+            kithara_storage::StreamingResource,
+            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+        >,
+        progress: Arc<Progress>,
+    ) {
         let url = driver.url().clone();
         let client = driver.net_client().clone();
-        tokio::spawn({
-            let res = res.clone();
-            async move {
-                trace!(%url, "kithara-file SessionSource writer task: starting download");
 
-                let mut stream = match client.stream(url, None).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warn!("kithara-file SessionSource writer task: net error: {e}");
-                        let _ = res.fail(format!("net error: {e}")).await;
-                        return;
-                    }
-                };
-
-                let mut off: u64 = 0;
-                while let Some(chunk_result) = stream.next().await {
-                    match chunk_result {
-                        Ok(bytes) => {
-                            if let Err(e) = res.write_at(off, &bytes).await {
-                                warn!(
-                                    off,
-                                    bytes = bytes.len(),
-                                    "kithara-file SessionSource writer task: write_at error: {e}"
-                                );
-                                let _ = res.fail(format!("storage write_at error: {e}")).await;
-                                return;
-                            }
-                            off = off.saturating_add(bytes.len() as u64);
-                        }
-                        Err(e) => {
-                            warn!("kithara-file SessionSource writer task: net stream error: {e}");
-                            let _ = res.fail(format!("net stream error: {e}")).await;
-                            return;
-                        }
-                    }
-                }
-
-                debug!(
-                    final_len = off,
-                    "kithara-file SessionSource writer task: commit"
-                );
-                let _ = res.commit(Some(off)).await;
-            }
-        });
-
-        Ok(SessionSource::new(res, cancel))
+        Fetcher::new(client, url).spawn_with_progress(res, progress);
     }
 
     /// Send a command to the driver

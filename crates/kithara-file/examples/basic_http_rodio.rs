@@ -12,10 +12,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::default()
-                .add_directive("kithara_file=trace".parse()?)
-                .add_directive("kithara_net=debug".parse()?)
-                .add_directive("kithara_assets=debug".parse()?)
-                .add_directive("kithara_storage=debug".parse()?),
+                // You can override these via `RUST_LOG=...` (e.g. `kithara_file=trace,kithara_io=trace,kithara_file::internal::fetcher=debug`)
+                .add_directive("kithara_file=info".parse()?)
+                .add_directive("kithara_file::internal::fetcher=debug".parse()?)
+                .add_directive("kithara_file::internal::feeder=debug".parse()?)
+                .add_directive("kithara_io=info".parse()?)
+                .add_directive("kithara_net=info".parse()?)
+                .add_directive("kithara_storage=info".parse()?)
+                .add_directive("kithara_assets=info".parse()?),
         )
         .with_line_number(true)
         .with_file(true)
@@ -28,21 +32,19 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     });
     let url: Url = url.parse()?;
 
-    // Asset store is required for kithara-file streaming (it uses assets-backed storage).
     let temp_dir = TempDir::new()?;
     let assets = asset_store(temp_dir.path().to_path_buf(), EvictConfig::default());
 
     // Open a file session (async byte source).
     let session = FileSource::open(url, FileSourceOptions::default(), Some(assets)).await?;
 
-    // Build a sync `Read + Seek` for rodio by adapting the session into a `kithara-io::Source`.
+    // Build a sync `Read + Seek` for rodio.
     //
-    // Important: `kithara-io::Reader` blocks on a Tokio runtime handle; create it here (inside
-    // the Tokio runtime) and then move it into a dedicated blocking thread.
+    // Note: `kithara-io::Reader` blocks on a Tokio runtime handle; create it here (inside the
+    // Tokio runtime) and then move it into a dedicated blocking thread.
     let source = session.source().await?;
     let reader = Reader::new(Arc::new(source));
 
-    // Spawn a blocking thread to play audio via rodio, consuming the sync reader.
     let playback_thread = thread::spawn(move || -> Result<(), Box<dyn Error + Send + Sync>> {
         let (_stream, stream_handle) = rodio::OutputStream::try_default()?;
         let sink = rodio::Sink::try_new(&stream_handle)?;
@@ -53,7 +55,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         Ok(())
     });
 
-    // Wait for playback to complete.
     playback_thread.join().map_err(|_| {
         std::io::Error::new(std::io::ErrorKind::Other, "rodio playback thread panicked")
     })??;
