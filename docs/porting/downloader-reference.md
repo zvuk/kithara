@@ -9,8 +9,11 @@ Goal:
 - Make it easy to “wire” correct source behavior in `kithara-hls` and `kithara-file`.
 
 Note on architecture:
-- `kithara-stream` owns the generic orchestration loop (driver loop with `tokio::select!`, cancellation via drop, command contract).
-- This document focuses on **resource fetching layers** used *inside* concrete `Source` implementations (HLS/File), not on orchestration.
+- `kithara-assets` owns persistent disk storage and resource addressing.
+- `kithara-storage` owns the *single-resource* storage primitives:
+  - `AtomicResource` for small files (whole-object `read`/`write` with crash-safe replace),
+  - `StreamingResource` for large media (random-access `write_at/read_at` + `wait_range` for immediate-read semantics).
+- This document focuses on **resource fetching layers** used inside concrete downloaders/orchestrators (HLS/File), not on orchestration mechanics.
 
 This document complements:
 - `docs/constraints.md` (EOF/backpressure, offline, identity, ABR cache-hit rules)
@@ -38,7 +41,9 @@ This document complements:
 
 2) **Stateless net**
 - `kithara-net` stays stateless (no persistent caches, no HLS awareness).
-- Caching policy is owned by `kithara-file` / `kithara-hls` using `kithara-cache`.
+- Persistent disk storage policy is owned by `kithara-file` / `kithara-hls` using:
+  - `kithara-assets` (resource manager, persistent tree on disk),
+  - `kithara-storage` (Atomic/Streaming resources).
 
 3) **Offline mode**
 - `offline_mode=true`: any cache miss for required resources must be a fatal error.

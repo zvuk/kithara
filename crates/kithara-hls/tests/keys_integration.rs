@@ -1,14 +1,18 @@
 mod fixture;
 use fixture::*;
-use kithara_hls::HlsResult;
-use kithara_hls::keys::KeyManager;
+use kithara_hls::{HlsResult, keys::KeyManager};
 
 #[tokio::test]
 async fn fetch_and_cache_key() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, net) = create_test_cache_and_net();
+    let (assets, net) = create_test_cache_and_net();
+    let assets = assets.assets().clone();
 
-    let key_manager = KeyManager::new(cache, net, None, None, None);
+    // Note: in the real session code, this is derived from `AssetId::from_url(master_url)`.
+    // For this test we only need a stable namespace.
+    let asset_root = "test-hls".to_string();
+
+    let key_manager = KeyManager::new(asset_root, assets, net, None, None, None);
     let key_url = server.url("/key.bin")?;
 
     // Note: This test assumes the server provides a key endpoint
@@ -21,7 +25,12 @@ async fn fetch_and_cache_key() -> HlsResult<()> {
 #[tokio::test]
 async fn key_processor_applied() -> HlsResult<()> {
     let server = TestServer::new().await;
-    let (cache, net) = create_test_cache_and_net();
+    let (assets, net) = create_test_cache_and_net();
+    let assets = assets.assets().clone();
+
+    // Note: in the real session code, this is derived from `AssetId::from_url(master_url)`.
+    // For this test we only need a stable namespace.
+    let asset_root = "test-hls".to_string();
 
     let processor = Box::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
         // Simple processor that just adds a prefix
@@ -31,12 +40,11 @@ async fn key_processor_applied() -> HlsResult<()> {
         Ok(bytes::Bytes::from(processed))
     });
 
-    let key_manager = KeyManager::new(cache, net, Some(processor), None, None);
+    let key_manager = KeyManager::new(asset_root, assets, net, Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
-    // Note: This test assumes the server provides a key endpoint
-    // In real implementation, the test server would need to serve key data
-    let _key = key_manager.get_key(&key_url, None).await;
+    let key = key_manager.get_key(&key_url, None).await?;
+    assert!(key.starts_with(b"processed:"));
 
     Ok(())
 }

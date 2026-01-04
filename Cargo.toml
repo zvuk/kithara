@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "crates/kithara-core",
-    "crates/kithara-cache",
     "crates/kithara-net",
     "crates/kithara-file",
     "crates/kithara-hls",
@@ -10,6 +9,7 @@ members = [
     "crates/kithara-decode",
     "crates/kithara-stream",
     "crates/kithara-storage",
+    "crates/kithara-assets",
 ]
 
 [workspace.lints.rustdoc]
@@ -53,7 +53,7 @@ categories = ["multimedia::audio"]
 [workspace.dependencies]
 # workspace crates (path deps)
 kithara-core = { path = "crates/kithara-core", version = "0.1.0" }
-kithara-cache = { path = "crates/kithara-cache", version = "0.1.0" }
+kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
@@ -85,6 +85,7 @@ hls_m3u8 = "0.5.1"
 # decoding
 symphonia = { git = "https://github.com/pdeljanov/Symphonia.git", branch="dev-0.6", features = ["all", "opt-simd"] }
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
+rodio = "0.20.1"
 
 # errors/logging/metrics
 thiserror = "2.0.11"

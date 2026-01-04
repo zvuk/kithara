@@ -1,21 +1,23 @@
+use std::collections::HashMap;
+
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_cache::{AssetCache, CachePath};
-use kithara_core::AssetId;
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_net::{Headers, HttpClient};
-use std::collections::HashMap;
+use kithara_storage::Resource as _;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::{HlsError, HlsResult, KeyContext};
+use crate::{HlsResult, KeyContext};
 
 #[derive(Debug, Error)]
 pub enum KeyError {
     #[error("Network error: {0}")]
     Net(#[from] kithara_net::NetError),
 
-    #[error("Cache error: {0}")]
-    Cache(#[from] kithara_cache::CacheError),
+    #[error("Assets error: {0}")]
+    Assets(#[from] kithara_assets::AssetsError),
 
     #[error("Key processing failed: {0}")]
     Processing(String),
@@ -28,7 +30,8 @@ pub enum KeyError {
 }
 
 pub struct KeyManager {
-    cache: AssetCache,
+    asset_root: String,
+    assets: AssetStore,
     net: HttpClient,
     key_processor: Option<Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
     key_query_params: Option<HashMap<String, String>>,
@@ -37,14 +40,16 @@ pub struct KeyManager {
 
 impl KeyManager {
     pub fn new(
-        cache: AssetCache,
+        asset_root: String,
+        assets: AssetStore,
         net: HttpClient,
         key_processor: Option<Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
         key_query_params: Option<HashMap<String, String>>,
         key_request_headers: Option<HashMap<String, String>>,
     ) -> Self {
         Self {
-            cache,
+            asset_root,
+            assets,
             net,
             key_processor,
             key_query_params,
@@ -53,22 +58,29 @@ impl KeyManager {
     }
 
     pub async fn get_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
-        let asset_id = AssetId::from_url(url)?;
-        let cache_path = self.cache_path_for_key(url)?;
-        let handle = self.cache.asset(asset_id);
+        // Keys are metadata => AtomicResource.
+        //
+        // Asset layout contract (kithara-assets):
+        // - one logical asset_root for the HLS session (provided by the session opener),
+        // - deterministic rel_path under that root.
+        let rel_path = format!("keys/{}.bin", hex::encode(url.as_str()));
+        let key = ResourceKey::new(self.asset_root.clone(), rel_path);
 
-        if handle.exists(&cache_path) {
-            let mut file = handle.open(&cache_path)?.unwrap();
+        let cancel = CancellationToken::new();
+        let res = self.assets.open_atomic_resource(&key, cancel).await?;
 
-            let mut buf = Vec::new();
-            std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
-            return Ok(Bytes::from(buf));
+        // Best-effort cache read.
+        let cached = res.read().await?;
+        if !cached.is_empty() {
+            let processed = self.process_key(cached, url.clone(), iv)?;
+            return Ok(processed);
         }
 
+        // Cache miss => fetch and write atomically.
         let raw_key = self.fetch_raw_key(url).await?;
-        let processed_key = self.process_key(raw_key, url.clone(), iv)?;
+        res.write(&raw_key).await?;
 
-        handle.put_atomic(&cache_path, &processed_key)?;
+        let processed_key = self.process_key(raw_key, url.clone(), iv)?;
         Ok(processed_key)
     }
 
@@ -106,29 +118,5 @@ impl KeyManager {
         }
     }
 
-    fn cache_path_for_key(&self, url: &Url) -> HlsResult<CachePath> {
-        let filename = url
-            .path_segments()
-            .and_then(|segments| segments.last())
-            .and_then(|name| if name.is_empty() { None } else { Some(name) })
-            .unwrap_or("key");
-
-        let key_name = if let Some(pos) = filename.rfind('.') {
-            &filename[..pos]
-        } else {
-            filename
-        };
-
-        CachePath::new(vec![
-            "hls".to_string(),
-            "keys".to_string(),
-            format!("{}.processed", key_name),
-        ])
-        .map_err(|e| {
-            HlsError::from(kithara_cache::CacheError::InvalidPath(format!(
-                "Invalid cache path: {}",
-                e
-            )))
-        })
-    }
+    // NOTE: Old cache path logic removed while the new resource-based assets API is being wired in.
 }

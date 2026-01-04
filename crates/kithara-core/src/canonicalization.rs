@@ -1,5 +1,6 @@
-use crate::errors::{CoreError, CoreResult};
 use url::Url;
+
+use crate::errors::{CoreError, CoreResult};
 
 pub fn canonicalize_for_asset(url: &Url) -> CoreResult<String> {
     // Validate that URL has required components for asset identification
@@ -88,8 +89,9 @@ pub fn canonicalize_for_resource(url: &Url) -> CoreResult<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use url::Url;
+
+    use super::*;
 
     #[test]
     fn canonicalize_for_asset_errors_on_missing_host() {

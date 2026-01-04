@@ -1,12 +1,12 @@
+use std::{collections::HashMap, sync::Arc};
+
 use axum::{Router, routing::get};
-use kithara_cache::{AssetCache, CacheOptions};
+use kithara_assets::{AssetStore, EvictConfig, asset_store};
+pub use kithara_hls::HlsError;
 use kithara_net::{HttpClient, NetOptions};
-use std::collections::HashMap;
-use std::sync::Arc;
+use tempfile::TempDir;
 use tokio::net::TcpListener;
 use url::Url;
-
-pub use kithara_hls::HlsError;
 
 pub type HlsResult<T> = Result<T, HlsError>;
 
@@ -82,17 +82,36 @@ impl TestServer {
     }
 }
 
-pub fn create_test_cache_and_net() -> (AssetCache, HttpClient) {
-    let cache_opts = CacheOptions {
-        max_bytes: 1024 * 1024,
-        root_dir: None,
-    };
-    let cache = AssetCache::open(cache_opts).unwrap();
+#[derive(Clone)]
+pub struct TestAssets {
+    assets: AssetStore,
+    _temp_dir: Arc<TempDir>,
+}
+
+impl TestAssets {
+    pub fn assets(&self) -> &AssetStore {
+        &self.assets
+    }
+}
+
+pub fn create_test_cache_and_net() -> (TestAssets, HttpClient) {
+    // NOTE: The assets/cache API has been redesigned.
+    // Keep the temp dir alive by storing it inside the returned wrapper.
+    let temp_dir = TempDir::new().unwrap();
+    let temp_dir = Arc::new(temp_dir);
+
+    let assets = asset_store(temp_dir.path().to_path_buf(), EvictConfig::default());
 
     let net_opts = NetOptions::default();
     let net = HttpClient::new(net_opts);
 
-    (cache, net)
+    (
+        TestAssets {
+            assets,
+            _temp_dir: temp_dir,
+        },
+        net,
+    )
 }
 
 pub fn test_master_playlist() -> &'static str {
@@ -209,10 +228,10 @@ mod tests {
 
     #[test]
     fn test_fixture_creation() {
-        let (cache, _net) = create_test_cache_and_net();
+        let (assets, _net) = create_test_cache_and_net();
 
-        // Verify objects are created successfully
-        // More detailed testing would require actual cache/net operations
-        assert!(format!("{:?}", cache).contains("AssetCache")); // Basic check
+        // Verify objects are created successfully.
+        // More detailed testing would require actual assets/net operations.
+        let _ = assets;
     }
 }

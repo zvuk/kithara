@@ -1,14 +1,20 @@
-use crate::options::{FileSourceOptions, OptionsError};
-use crate::range_policy::RangePolicy;
+use std::{pin::Pin, sync::Arc};
+
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt};
-use kithara_cache::{AssetCache, CachePath};
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_core::AssetId;
 use kithara_net::{HttpClient, NetError};
 use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
-use std::pin::Pin;
-use std::sync::Arc;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
+use url::Url;
+
+use crate::{
+    internal::{Feeder, Fetcher},
+    options::{FileSourceOptions, OptionsError},
+    range_policy::RangePolicy,
+};
 
 #[derive(Debug, Error)]
 pub enum DriverError {
@@ -30,11 +36,11 @@ pub enum SourceError {
     #[error("Network error: {0}")]
     Net(#[from] NetError),
 
-    #[error("Cache error: {0}")]
-    Cache(#[from] kithara_cache::CacheError),
+    #[error("Assets error: {0}")]
+    Assets(#[from] kithara_assets::AssetsError),
 
-    #[error("Offline miss: content not in cache")]
-    OfflineMiss,
+    #[error("Storage error: {0}")]
+    Storage(#[from] kithara_storage::StorageError),
 }
 
 #[derive(Debug)]
@@ -46,15 +52,29 @@ pub enum FileCommand {
     SeekBytes(u64),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FileDriver {
     asset_id: AssetId,
     url: url::Url,
     net_client: HttpClient,
     #[allow(dead_code)]
     options: FileSourceOptions,
-    cache: Option<Arc<AssetCache>>,
+    assets: Option<Arc<AssetStore>>,
     range_policy: RangePolicy,
+}
+
+impl FileDriver {
+    pub fn assets(&self) -> Option<Arc<AssetStore>> {
+        self.assets.clone()
+    }
+
+    pub fn url(&self) -> &Url {
+        &self.url
+    }
+
+    pub fn net_client(&self) -> &HttpClient {
+        &self.net_client
+    }
 }
 
 impl FileDriver {
@@ -63,7 +83,7 @@ impl FileDriver {
         url: url::Url,
         net_client: HttpClient,
         options: FileSourceOptions,
-        cache: Option<Arc<AssetCache>>,
+        assets: Option<Arc<AssetStore>>,
     ) -> Self {
         let range_policy = RangePolicy::new(options.enable_range_seek);
         Self {
@@ -71,7 +91,7 @@ impl FileDriver {
             url,
             net_client,
             options: options.clone(),
-            cache,
+            assets,
             range_policy,
         }
     }
@@ -89,11 +109,11 @@ impl FileDriver {
             asset_id: self.asset_id,
             url: self.url.clone(),
             net_client: self.net_client.clone(),
-            options: self.options.clone(),
-            cache: self.cache.clone(),
+            assets: self.assets.clone(),
+            pos: 0,
         };
         let params = StreamParams {
-            offline_mode: self.options.offline_mode,
+            offline_mode: false,
         };
         let stream = Stream::new(source, params).into_byte_stream();
         Box::pin(stream.map(|r| r.map_err(DriverError::from)))
@@ -132,13 +152,17 @@ impl FileDriver {
     }
 }
 
-#[derive(Debug, Clone)]
+// Fetcher/Feeder live in `crate::internal`.
+// Keeping these loops in one place avoids duplication between the `kithara-stream` path
+// and the `kithara-io` (rodio) path.
+
+#[derive(Clone)]
 struct FileStream {
     asset_id: AssetId,
     url: url::Url,
     net_client: HttpClient,
-    options: FileSourceOptions,
-    cache: Option<Arc<AssetCache>>,
+    assets: Option<Arc<AssetStore>>,
+    pos: u64,
 }
 
 impl Source for FileStream {
@@ -151,84 +175,64 @@ impl Source for FileStream {
     ) -> Result<SourceStream<Self::Control, Self::Error>, StreamError<Self::Error>> {
         let client = self.net_client.clone();
         let url = self.url.clone();
-        let cache = self.cache.clone();
+        let assets = self.assets.clone();
         let asset_id = self.asset_id;
+        let start_pos = self.pos;
+        let _offline_mode = params.offline_mode;
 
-        let offline_mode = params.offline_mode;
+        // Deterministic resource key:
+        // - asset_root stays scoped to the logical asset id
+        // - rel_path is derived from URL (no format-specific naming like "audio.mp3")
+        let asset_root = hex::encode(asset_id.as_bytes());
+        let rel_path = format!("media/{}", hex::encode(url.as_str().as_bytes()));
 
         Ok(Box::pin(async_stream::stream! {
-            // Cache-first if present.
-            if let Some(ref cache) = cache {
-                let asset_handle = cache.asset(asset_id);
-                let body_path = CachePath::new(vec!["file".to_string(), "body".to_string()])
-                    .map_err(|e| StreamError::Source(SourceError::Cache(e)))?;
-
-                if let Some(mut file) = asset_handle.open(&body_path).unwrap_or(None) {
-                    use std::io::Read;
-
-                    let mut buffer = vec![0u8; 8192];
-                    loop {
-                        match file.read(&mut buffer) {
-                            Ok(0) => return, // EOF
-                            Ok(n) => {
-                                yield Ok(Message::Data(Bytes::copy_from_slice(&buffer[..n])));
-                            }
-                            Err(e) => {
-                                yield Err(StreamError::Source(SourceError::Cache(kithara_cache::CacheError::Io(e))));
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if offline_mode {
-                yield Err(StreamError::Source(SourceError::OfflineMiss));
+            let Some(assets) = assets else {
+                yield Err(StreamError::Source(SourceError::Assets(
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "assets store is required for kithara-file streaming; pass Some(AssetStore) to FileSource::open",
+                    )
+                    .into(),
+                )));
                 return;
-            }
+            };
 
-            // Network stream.
-            let mut stream = match client.stream(url, None).await {
-                Ok(s) => s,
+            let cancel = CancellationToken::new();
+
+            let key = ResourceKey::new(asset_root, rel_path);
+
+            let res = match assets.open_streaming_resource(&key, cancel).await {
+                Ok(r) => r,
                 Err(e) => {
-                    yield Err(StreamError::Source(SourceError::Net(e)));
+                    yield Err(StreamError::Source(SourceError::Assets(e)));
                     return;
                 }
             };
 
-            let mut cached_bytes = Vec::new();
+            Fetcher::new(client, url).spawn(res.clone());
 
-            while let Some(chunk_result) = stream.next().await {
-                match chunk_result {
-                    Ok(bytes) => {
-                        if cache.is_some() {
-                            cached_bytes.extend_from_slice(&bytes);
-                        }
-                        yield Ok(Message::Data(bytes));
-                    }
+            let feeder = Feeder::new(start_pos, 64 * 1024);
+
+            let mut s = std::pin::pin!(feeder.stream(res));
+            while let Some(item) = s.next().await {
+                match item {
+                    Ok(bytes) => yield Ok(Message::Data(bytes)),
                     Err(e) => {
-                        yield Err(StreamError::Source(SourceError::Net(e)));
+                        yield Err(StreamError::Source(SourceError::Storage(e)));
                         return;
                     }
                 }
             }
-
-            // Best-effort cache write after successful download.
-            if let Some(ref cache) = cache && !cached_bytes.is_empty() {
-                let asset_handle = cache.asset(asset_id);
-                let body_path = CachePath::new(vec!["file".to_string(), "body".to_string()])
-                    .map_err(|e| StreamError::Source(SourceError::Cache(e)))?;
-
-                let _ = asset_handle.put_atomic(&body_path, &cached_bytes);
-            }
         }))
     }
 
-    fn seek_bytes(&mut self, _pos: u64) -> Result<(), StreamError<Self::Error>> {
-        Err(StreamError::SeekNotSupported)
+    fn seek_bytes(&mut self, pos: u64) -> Result<(), StreamError<Self::Error>> {
+        self.pos = pos;
+        Ok(())
     }
 
     fn supports_seek(&self) -> bool {
-        false
+        true
     }
 }

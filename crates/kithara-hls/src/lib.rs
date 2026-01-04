@@ -11,15 +11,22 @@
 //!
 //! - No explicit stop command: stopping is done by dropping the stream.
 //! - Seek is not supported yet (contract is fixed; implementation will be added via TDD).
+//!
+//! ## Public contracts (explicit)
+//!
+//! The explicit public contracts are:
+//! - [`HlsSourceContract`] — open an HLS session for a URL + options.
+//!
+//! Concrete types (like [`HlsSource`]) implement these traits.
 
+use std::{pin::Pin, sync::Arc, time::Duration};
+
+use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use kithara_cache::AssetCache;
+use kithara_assets::AssetStore;
 use kithara_core::AssetId;
 use kithara_net::HttpClient;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use url::Url;
@@ -49,8 +56,11 @@ pub enum HlsError {
     #[error("Network error: {0}")]
     Net(#[from] kithara_net::NetError),
 
-    #[error("Cache error: {0}")]
-    Cache(#[from] kithara_cache::CacheError),
+    #[error("Assets error: {0}")]
+    Assets(#[from] kithara_assets::AssetsError),
+
+    #[error("Storage error: {0}")]
+    Storage(#[from] kithara_storage::StorageError),
 
     #[error("Core error: {0}")]
     Core(#[from] kithara_core::CoreError),
@@ -114,8 +124,6 @@ pub struct HlsOptions {
     pub key_processor_cb: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
     pub key_query_params: Option<std::collections::HashMap<String, String>>,
     pub key_request_headers: Option<std::collections::HashMap<String, String>>,
-
-    pub offline_mode: bool,
 }
 
 impl Default for HlsOptions {
@@ -142,8 +150,6 @@ impl Default for HlsOptions {
             key_processor_cb: None,
             key_query_params: None,
             key_request_headers: None,
-
-            offline_mode: false,
         }
     }
 }
@@ -154,25 +160,38 @@ pub struct KeyContext {
     pub iv: Option<[u8; 16]>,
 }
 
-#[derive(Clone, Debug)]
+#[async_trait]
+pub trait HlsSourceContract: Send + Sync + 'static {
+    async fn open(&self, url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession>;
+}
+
+#[derive(Clone, Copy, Debug, Default)]
 pub struct HlsSource;
 
-impl HlsSource {
-    pub async fn open(url: Url, opts: HlsOptions, cache: AssetCache) -> HlsResult<HlsSession> {
+#[async_trait]
+impl HlsSourceContract for HlsSource {
+    async fn open(&self, url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession> {
         let asset_id = AssetId::from_url(&url)?;
+        let asset_root = hex::encode(asset_id.as_bytes());
         let net = HttpClient::new(kithara_net::NetOptions::default());
 
         // Create managers (kept as-is; internals will be iterated via TDD).
-        let playlist_manager =
-            playlist::PlaylistManager::new(cache.clone(), net.clone(), opts.base_url.clone());
-        let fetch_manager = fetch::FetchManager::new(cache.clone(), net.clone());
+        let playlist_manager = playlist::PlaylistManager::new(
+            asset_root.clone(),
+            assets.clone(),
+            net.clone(),
+            opts.base_url.clone(),
+        );
+        let fetch_manager =
+            fetch::FetchManager::new(asset_root.clone(), assets.clone(), net.clone());
         let key_processor = opts.key_processor_cb.clone().map(|arc| {
             Box::new(move |bytes, ctx| arc(bytes, ctx))
                 as Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>
         });
 
         let key_manager = keys::KeyManager::new(
-            cache.clone(),
+            asset_root.clone(),
+            assets.clone(),
             net.clone(),
             key_processor,
             opts.key_query_params.clone(),
@@ -209,6 +228,13 @@ impl HlsSource {
         );
 
         Ok(HlsSession { asset_id, driver })
+    }
+}
+
+impl HlsSource {
+    /// Convenience associated constructor matching the historical API.
+    pub async fn open(url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession> {
+        HlsSource.open(url, opts, assets).await
     }
 }
 

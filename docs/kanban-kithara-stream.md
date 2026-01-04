@@ -8,14 +8,15 @@
 
 ## Цель
 
-`kithara-stream` — общий слой **оркестрации** для источников байтов (`kithara-file`, `kithara-hls` и будущих), который:
+`kithara-stream` — вспомогательный слой для **оркестрации byte-stream сценариев**, который может использоваться точечно там, где действительно нужен `Stream<Item = Bytes>` + control-plane.
 
-- инкапсулирует driver loop на базе `tokio::select!`,
-- объединяет data-plane (поток байтов) и control-plane (команды),
-- обеспечивает **cancellation via drop** (stop = drop consumer stream/session),
-- выдаёт наружу **async byte stream** для последующей передачи в `kithara-io`/decoder,
-- фиксирует контракт “seek пока может быть not supported” (через `SeekNotSupported`),
-- **не** тащит в себя ответственность сети, HLS оркестрации, кэша и файлового layout.
+В актуальной ресурсной архитектуре `kithara` основные источники (`kithara-file`, `kithara-hls`) работают через:
+
+- `kithara-assets`: открытие persistent disk ресурсов по ключам,
+- `kithara-storage`: `StreamingResource` (range `write_at/read_at` + `wait_range`) и `AtomicResource` (whole-object `read/write`),
+- `kithara-io`: sync `Read+Seek` поверх `StreamingResource` (ожидание через `wait_range`, без “ложного EOF”).
+
+`kithara-stream` остаётся как отдельный крейт, но **не является обязательным ядром проигрывания** и не определяет seek-поведение плеера.
 
 ---
 
@@ -31,12 +32,14 @@
   - внутренние каналы bounded (ограниченный буфер);
   - writer/driver дросселируется при медленном consumer’е (без бесконечного накопления памяти).
 - Команды:
-  - текущая команда: `SeekBytes(u64)`;
-  - если source не поддерживает seek — возвращается `SeekNotSupported` (контракт фиксирован тестами).
+  - текущая команда: `SeekBytes(u64)` (best-effort для byte-stream источников),
+  - если source не поддерживает seek — возвращается `SeekNotSupported`.
 - Ошибки:
   - `kithara-stream` использует **типизированную** ошибку `StreamError<E>` (generic по ошибке источника),
   - не прячет ошибки источника в `Box<dyn Error>` в публичном контракте.
 - Никаких `unwrap/expect` в прод-коде.
+
+Примечание: эти инварианты относятся только к byte-stream оркестрации. В плеерном режиме (seek в любой момент) основной контракт реализуется через `StreamingResource` + `kithara-io` (`Read+Seek` + `wait_range`).
 
 ---
 
@@ -48,9 +51,9 @@
 
 `kithara-stream` **не отвечает** за:
 - сеть/HTTP (это `kithara-net`),
-- persistent cache (это `kithara-cache`),
+- persistent assets store (это `kithara-assets` + `kithara-storage`),
 - HLS orchestration (это `kithara-hls`),
-- byte-stream → `Read+Seek` bridge (это `kithara-io`),
+- async resource → sync `Read+Seek` bridge (это `kithara-io`),
 - decoding (это `kithara-decode`).
 
 ---

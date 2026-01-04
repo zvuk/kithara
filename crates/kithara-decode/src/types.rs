@@ -1,11 +1,11 @@
-use std::fmt;
-use std::time::Duration;
+use std::{fmt, time::Duration};
 
 use dasp::sample::Sample as DaspSample;
 use kithara_core::CoreError;
-use symphonia::core::audio::conv::ConvertibleSample;
-use symphonia::core::audio::sample::Sample as SymphoniaSample;
-use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::{
+    audio::{conv::ConvertibleSample, sample::Sample as SymphoniaSample},
+    errors::Error as SymphoniaError,
+};
 use thiserror::Error;
 
 /// Main decode error type

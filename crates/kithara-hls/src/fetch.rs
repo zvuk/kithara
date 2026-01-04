@@ -1,24 +1,30 @@
+use std::{
+    pin::Pin,
+    time::{Duration, Instant},
+};
+
 use bytes::Bytes;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use hls_m3u8::MediaPlaylist;
-use kithara_cache::{AssetCache, CachePath};
-use kithara_core::AssetId;
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_net::HttpClient;
-use std::pin::Pin;
-use std::time::{Duration, Instant};
+use kithara_storage::{Resource as _, StreamingResourceExt};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::abr::ThroughputSampleSource;
-use crate::{HlsError, HlsResult, KeyContext};
+use crate::{HlsError, HlsResult, KeyContext, abr::ThroughputSampleSource};
 
 #[derive(Debug, Error)]
 pub enum FetchError {
     #[error("Network error: {0}")]
     Net(#[from] kithara_net::NetError),
 
-    #[error("Cache error: {0}")]
-    Cache(#[from] kithara_cache::CacheError),
+    #[error("Assets error: {0}")]
+    Assets(#[from] kithara_assets::AssetsError),
+
+    #[error("Storage error: {0}")]
+    Storage(#[from] kithara_storage::StorageError),
 
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
@@ -40,13 +46,18 @@ pub struct FetchBytes {
 }
 
 pub struct FetchManager {
-    cache: AssetCache,
+    asset_root: String,
+    assets: AssetStore,
     net: HttpClient,
 }
 
 impl FetchManager {
-    pub fn new(cache: AssetCache, net: HttpClient) -> Self {
-        Self { cache, net }
+    pub fn new(asset_root: String, assets: AssetStore, net: HttpClient) -> Self {
+        Self {
+            asset_root,
+            assets,
+            net,
+        }
     }
 
     pub async fn fetch_segment(
@@ -109,7 +120,8 @@ impl FetchManager {
         base_url: &Url,
         key_context: Option<&KeyContext>,
     ) -> SegmentStream<'static> {
-        let cache = self.cache.clone();
+        let asset_root = self.asset_root.clone();
+        let assets = self.assets.clone();
         let net = self.net.clone();
         let base_url = base_url.clone();
         let key_ctx = key_context.cloned();
@@ -123,7 +135,7 @@ impl FetchManager {
 
         Box::pin(async_stream::stream! {
             for segment_uri in segment_uris {
-                let fetcher = FetchManager::new(cache.clone(), net.clone());
+                let fetcher = FetchManager::new(asset_root.clone(), assets.clone(), net.clone());
                 let segment_url = match base_url.join(&segment_uri) {
                     Ok(url) => url,
                     Err(e) => {
@@ -154,29 +166,89 @@ impl FetchManager {
         })
     }
 
-    async fn fetch_resource(&self, url: &Url, default_filename: &str) -> HlsResult<FetchBytes> {
-        let asset_id = AssetId::from_url(url)?;
-        let cache_path = self.cache_path_for_url(url, default_filename)?;
-        let handle = self.cache.asset(asset_id);
+    async fn fetch_resource(&self, url: &Url, _default_filename: &str) -> HlsResult<FetchBytes> {
+        // HLS segments are large objects => StreamingResource.
+        //
+        // Contract:
+        // - writer fills the resource via `write_at`,
+        // - reader waits via `wait_range` (no "false EOF"),
+        // - completion is signaled via `commit(Some(final_len))`,
+        // - failures signal via `fail(...)`.
+        //
+        let rel_path = format!("segments/{}.bin", hex::encode(url.as_str()));
+        let key = ResourceKey::new(self.asset_root.clone(), rel_path);
 
-        if handle.exists(&cache_path) {
-            let mut file = handle.open(&cache_path)?.unwrap();
+        let cancel = CancellationToken::new();
+        let res = self
+            .assets
+            .open_streaming_resource(&key, cancel.clone())
+            .await?;
 
-            let mut buf = Vec::new();
-            std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
-            return Ok(FetchBytes {
-                bytes: bytes::Bytes::from(buf),
-                source: ThroughputSampleSource::Cache,
-                duration: Duration::ZERO,
-            });
+        // Spawn a best-effort background writer for this segment.
+        // If multiple callers race, extra writers may occur; the resource contract handles `Sealed`
+        // and failure propagation.
+        let net = self.net.clone();
+        let url = url.clone();
+        tokio::spawn({
+            let res = res.clone();
+            async move {
+                let mut stream = match net.stream(url, None).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = res.fail(format!("net error: {e}")).await;
+                        return;
+                    }
+                };
+
+                let mut off: u64 = 0;
+                while let Some(chunk_result) = stream.next().await {
+                    match chunk_result {
+                        Ok(chunk_bytes) => {
+                            if let Err(e) = res.write_at(off, &chunk_bytes).await {
+                                let _ = res.fail(format!("storage write_at error: {e}")).await;
+                                return;
+                            }
+                            off = off.saturating_add(chunk_bytes.len() as u64);
+                        }
+                        Err(e) => {
+                            let _ = res.fail(format!("net stream error: {e}")).await;
+                            return;
+                        }
+                    }
+                }
+
+                let _ = res.commit(Some(off)).await;
+            }
+        });
+
+        // Read-through to bytes: wait for full content once committed, then read all.
+        //
+        // We don't stream out of this function (callers may), so we read the whole segment after
+        // it becomes available.
+        let start = Instant::now();
+        let mut offset: u64 = 0;
+        let mut out = Vec::new();
+        let read_chunk: u64 = 64 * 1024;
+
+        loop {
+            let end = offset.saturating_add(read_chunk);
+            match res.wait_range(offset..end).await? {
+                kithara_storage::WaitOutcome::Ready => {
+                    let len: usize = (end - offset) as usize;
+                    let bytes = res.read_at(offset, len).await?;
+                    if bytes.is_empty() {
+                        break;
+                    }
+                    offset = offset.saturating_add(bytes.len() as u64);
+                    out.extend_from_slice(&bytes);
+                }
+                kithara_storage::WaitOutcome::Eof => break,
+            }
         }
 
-        let start = Instant::now();
-        let bytes = self.net.get_bytes(url.clone(), None).await?;
         let duration = start.elapsed();
-        handle.put_atomic(&cache_path, &bytes)?;
         Ok(FetchBytes {
-            bytes,
+            bytes: Bytes::from(out),
             source: ThroughputSampleSource::Network,
             duration,
         })
@@ -195,25 +267,5 @@ impl FetchManager {
         // }
 
         Ok(bytes)
-    }
-
-    fn cache_path_for_url(&self, url: &Url, default_filename: &str) -> HlsResult<CachePath> {
-        let filename = url
-            .path_segments()
-            .and_then(|segments| segments.last())
-            .and_then(|name| if name.is_empty() { None } else { Some(name) })
-            .unwrap_or(default_filename);
-
-        CachePath::new(vec![
-            "hls".to_string(),
-            "segments".to_string(),
-            filename.to_string(),
-        ])
-        .map_err(|e| {
-            HlsError::from(kithara_cache::CacheError::InvalidPath(format!(
-                "Invalid cache path: {}",
-                e
-            )))
-        })
     }
 }

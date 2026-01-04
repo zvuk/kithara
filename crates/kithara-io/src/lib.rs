@@ -1,256 +1,251 @@
-//! # Kithara I/O Bridge
+//! # Kithara I/O
 //!
-//! Bridge between async byte sources and synchronous I/O consumers.
-//! Connects async sources (`kithara-file`, `kithara-hls`) to sync consumers (`kithara-decode`)
-//! through a bounded buffer with backpressure.
+//! Sync I/O adapters for Kithara.
 //!
-//! ## Core Components
+//! ## Goal
 //!
-//! - `BridgeWriter`: Async producer interface
-//! - `BridgeReader`: Sync consumer implementing `Read` + `Seek`
-//! - `BufferTracker`: Centralized buffer management
+//! Provide `std::io::Read + std::io::Seek` required by consumers like `rodio::Decoder`,
+//! **without** depending on `kithara-storage` or `kithara-assets`.
 //!
-//! ## EOF Semantics (Normative)
+//! `kithara-file` / `kithara-hls` are responsible for fetching bytes and ensuring that
+//! requested ranges become available; this crate only adapts a generic async "source"
+//! into a sync reader.
 //!
-//! **Contract:** `Read::read()` returns `Ok(0)` **only** after:
-//! 1. `BridgeWriter::finish()` is called, AND
-//! 2. All buffered data has been consumed.
+//! ## Public contract
 //!
-//! No "false EOFs". When data is unavailable, the reader blocks.
+//! - [`Source`] — async random-access byte source with "wait until readable" semantics.
+//! - [`Reader`] — sync `Read + Seek` adapter over a [`Source`].
 //!
-//! ## Seek Contract (Normative)
+//! ## EOF semantics (normative)
 //!
-//! **Contract:** All `Seek` operations return `ErrorKind::Unsupported`.
-//! This is explicit behavior for streaming sources that lack random access.
+//! `Read::read()` returns `Ok(0)` **only** when the source reports EOF for the requested
+//! position (i.e. `wait_range(..)` returns [`WaitOutcome::Eof`], or `read_at` returns
+//! an empty buffer after EOF is known).
 //!
-//! ## Backpressure
+//! No "false EOFs": when data is not yet available, the reader blocks.
 //!
-//! Memory is bounded by `max_buffer_bytes`:
-//! - `push()` fails with `BufferFull` at limit
-//! - Memory released when data consumed
-//! - Prevents unbounded memory growth
+//! ## Cancellation
+//!
+//! This crate does not invent cancellation; the concrete [`Source`] implementation may
+//! unblock by returning an error.
+//!
+//! ## Debugging
+//!
+//! `Reader` emits `tracing` logs at `trace`/`debug` level to help diagnose stalls/deadlocks.
+//! Enable with e.g. `RUST_LOG=kithara_io=trace`.
 
 #![forbid(unsafe_code)]
 
-pub mod bridge;
-pub mod errors;
-pub mod reader;
-pub mod sync;
-pub mod writer;
+use std::{
+    io::{Read, Seek, SeekFrom},
+    ops::Range,
+    sync::Arc,
+};
 
-// Re-export public API
-pub use bridge::{BridgeMsg, BridgeOptions, new_bridge};
-pub use errors::{IoError, IoResult};
-pub use reader::BridgeReader;
-pub use writer::BridgeWriter;
+use async_trait::async_trait;
+use bytes::Bytes;
+use thiserror::Error;
+use tokio::runtime::Handle;
+use tracing::{debug, trace, warn};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::{Read, Seek, SeekFrom};
-    use std::thread;
-    use std::time::Duration;
+/// Outcome of waiting for a byte range.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaitOutcome {
+    /// The requested range is available for reading.
+    Ready,
+    /// The source is at EOF and the requested range starts at/after EOF.
+    Eof,
+}
 
-    #[test]
-    fn test_basic_bridge_creation() {
-        let opts = BridgeOptions::default();
-        let (writer, reader) = new_bridge(opts);
+/// Error type for `kithara-io`.
+#[derive(Debug, Error)]
+pub enum IoError {
+    #[error("source error: {0}")]
+    Source(String),
 
-        // Test that we can create the bridge without panicking
-        // This test will drive the basic implementation
-        drop(writer);
-        drop(reader);
+    #[error("seek requires known length, but source length is unknown")]
+    UnknownLength,
+
+    #[error("invalid seek position")]
+    InvalidSeek,
+}
+
+pub type IoResult<T> = Result<T, IoError>;
+
+/// Async random-access source contract.
+///
+/// This is intentionally minimal and does **not** depend on any storage implementation.
+/// `kithara-file` / `kithara-hls` should implement this for their internal byte providers.
+///
+/// Normative:
+/// - `wait_range(range)` must block until the entire `range` is readable, OR return `Eof`
+///   if `range.start` is at/after EOF, OR return error if the source fails/cancels.
+/// - `read_at(offset, len)` must return up to `len` bytes without implicitly waiting.
+///   If the caller needs blocking semantics it must call `wait_range` first.
+/// - When `offset` is at/after EOF (and EOF is known), `read_at` must return `Bytes::new()`.
+#[async_trait]
+pub trait Source: Send + Sync + 'static {
+    async fn wait_range(&self, range: Range<u64>) -> IoResult<WaitOutcome>;
+    async fn read_at(&self, offset: u64, len: usize) -> IoResult<Bytes>;
+
+    /// Return known total length if available.
+    ///
+    /// - `Some(len)` enables `SeekFrom::End(..)` and validation for seeking past EOF.
+    /// - `None` means length is unknown (still seekable via absolute positions, but
+    ///   seeking relative to end is unsupported).
+    fn len(&self) -> Option<u64>;
+}
+
+/// Sync `Read + Seek` adapter over a [`Source`].
+///
+/// This is designed specifically to satisfy consumers like `rodio::Decoder`.
+///
+/// Blocking behavior:
+/// - `read()` blocks on the current Tokio runtime handle to wait for availability.
+/// - Do **not** call this from within a Tokio async task (it will block the executor thread).
+///   Use it from a dedicated blocking thread (e.g. `tokio::task::spawn_blocking` or `std::thread`).
+pub struct Reader<S>
+where
+    S: Source,
+{
+    source: Arc<S>,
+    handle: Handle,
+    pos: u64,
+}
+
+impl<S> Reader<S>
+where
+    S: Source,
+{
+    /// Create a new reader bound to the current Tokio runtime.
+    ///
+    /// This captures [`tokio::runtime::Handle::current`], so it must be called from within
+    /// a Tokio runtime context (e.g. in an async fn before spawning the blocking consumer).
+    pub fn new(source: Arc<S>) -> Self {
+        trace!("kithara-io Reader::new (capturing tokio runtime handle)");
+        let len = source.len();
+        debug!(len, "kithara-io Reader created");
+        Self {
+            source,
+            handle: Handle::current(),
+            pos: 0,
+        }
     }
 
-    #[test]
-    fn test_read_blocks_until_data_then_reads() {
-        let opts = BridgeOptions::default();
-        let (writer, mut reader) = new_bridge(opts);
-
-        // Start a reader thread that will block until data is available
-        let reader_thread = thread::spawn(move || {
-            let mut buf = [0u8; 10];
-            let bytes_read = reader.read(&mut buf).expect("read should succeed");
-            assert!(bytes_read > 0, "should read some data");
-            assert_eq!(&buf[..bytes_read], b"hello worl");
-            bytes_read
-        });
-
-        // Give the reader time to start and block
-        thread::sleep(Duration::from_millis(10));
-
-        // Push data - this should unblock the reader
-        use bytes::Bytes;
-        let data = Bytes::from("hello world");
-        writer.push(data).expect("push should succeed");
-
-        // Wait for reader to complete
-        let bytes_read = reader_thread.join().expect("reader thread should complete");
-        assert_eq!(bytes_read, 10); // buffer size
+    pub fn position(&self) -> u64 {
+        self.pos
     }
 
-    #[test]
-    fn test_read_returns_0_only_after_finish() {
-        let opts = BridgeOptions::default();
-        let (writer, mut reader) = new_bridge(opts);
-
-        // Push some data first
-        use bytes::Bytes;
-        writer
-            .push(Bytes::from("test"))
-            .expect("push should succeed");
-
-        // Read the data
-        let mut buf = [0u8; 10];
-        let bytes_read = reader.read(&mut buf).expect("read should succeed");
-        assert_eq!(bytes_read, 4);
-        assert_eq!(&buf[..4], b"test");
-
-        // Before finish, read should block (not return 0)
-        // We can't easily test blocking without timeouts, so let's test
-        // that after finish, read returns 0
-
-        // Finish the stream
-        writer.finish().expect("finish should succeed");
-
-        // Now read should return 0 (EOF)
-        let bytes_read = reader.read(&mut buf).expect("read should succeed");
-        assert_eq!(bytes_read, 0, "should return 0 after finish");
-
-        // Subsequent reads should also return 0
-        let bytes_read = reader.read(&mut buf).expect("read should succeed");
-        assert_eq!(bytes_read, 0, "should continue returning 0 after EOF");
+    pub fn into_source(self) -> Arc<S> {
+        self.source
     }
+}
 
-    #[test]
-    fn test_empty_buffer_read() {
-        let opts = BridgeOptions::default();
-        let (_, mut reader) = new_bridge(opts);
-
-        let mut buf = [];
-        let bytes_read = reader.read(&mut buf).expect("read should succeed");
-        assert_eq!(bytes_read, 0, "empty buffer should return 0");
-    }
-
-    #[test]
-    fn test_multiple_small_reads() {
-        let opts = BridgeOptions::default();
-        let (writer, mut reader) = new_bridge(opts);
-
-        // Push data larger than one read
-        use bytes::Bytes;
-        let data = Bytes::from("hello world, this is a longer message");
-        writer.push(data).expect("push should succeed");
-        writer.finish().expect("finish should succeed");
-
-        // Read in small chunks
-        let mut buf1 = [0u8; 5];
-        let bytes1 = reader.read(&mut buf1).expect("read should succeed");
-        assert_eq!(bytes1, 5);
-        assert_eq!(&buf1, b"hello");
-
-        let mut buf2 = [0u8; 6];
-        let bytes2 = reader.read(&mut buf2).expect("read should succeed");
-        assert_eq!(bytes2, 6);
-        assert_eq!(&buf2, b" world");
-
-        // Continue reading until EOF
-        let mut total_read = bytes1 + bytes2;
-        let mut remaining_buf = [0u8; 100];
-
-        loop {
-            let bytes = reader
-                .read(&mut remaining_buf)
-                .expect("read should succeed");
-            if bytes == 0 {
-                break;
-            }
-            total_read += bytes;
+impl<S> Read for Reader<S>
+where
+    S: Source,
+{
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            trace!("Reader::read called with empty buf -> Ok(0)");
+            return Ok(0);
         }
 
-        // Should have read all data
-        assert_eq!(total_read, 37); // length of the message
-    }
+        let offset = self.pos;
+        let len = buf.len();
+        trace!(offset, len, "Reader::read enter");
 
-    #[test]
-    fn test_backpressure_blocks_push_when_full() {
-        let opts = BridgeOptions {
-            max_buffer_bytes: 20, // Small buffer to trigger backpressure quickly
+        let wait_range = offset..offset.saturating_add(len as u64);
+        trace!(
+            start = wait_range.start,
+            end = wait_range.end,
+            "Reader::read wait_range begin"
+        );
+        let outcome = self
+            .handle
+            .block_on(self.source.wait_range(wait_range))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        trace!(?outcome, "Reader::read wait_range done");
+
+        match outcome {
+            WaitOutcome::Eof => {
+                debug!(offset, "Reader::read reached EOF");
+                return Ok(0);
+            }
+            WaitOutcome::Ready => {}
+        }
+
+        trace!(offset, len, "Reader::read read_at begin");
+        let bytes = self
+            .handle
+            .block_on(self.source.read_at(offset, len))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        trace!(got = bytes.len(), "Reader::read read_at done");
+
+        if bytes.is_empty() {
+            // Defensive: if the source returns empty after reporting Ready, treat as EOF-ish.
+            // This avoids infinite loops in consumers.
+            warn!(
+                offset,
+                len, "Reader::read got empty buffer after Ready; treating as EOF-ish"
+            );
+            return Ok(0);
+        }
+
+        let n = bytes.len().min(buf.len());
+        buf[..n].copy_from_slice(&bytes[..n]);
+        self.pos = self.pos.saturating_add(n as u64);
+        trace!(n, new_pos = self.pos, "Reader::read exit");
+        Ok(n)
+    }
+}
+
+impl<S> Seek for Reader<S>
+where
+    S: Source,
+{
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        trace!(cur = self.pos, ?pos, "Reader::seek enter");
+
+        let new_pos: i128 = match pos {
+            SeekFrom::Start(p) => p as i128,
+            SeekFrom::Current(delta) => (self.pos as i128).saturating_add(delta as i128),
+            SeekFrom::End(delta) => {
+                let Some(len) = self.source.len() else {
+                    debug!("Reader::seek from end requested but source len is unknown");
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        IoError::UnknownLength.to_string(),
+                    ));
+                };
+                (len as i128).saturating_add(delta as i128)
+            }
         };
-        let (writer, _reader) = new_bridge(opts);
 
-        // Push data up to the limit
-        use bytes::Bytes;
-        assert!(
-            writer.push(Bytes::from("10 bytes__")).is_ok(),
-            "first push should succeed"
-        );
-        assert!(
-            writer.push(Bytes::from("10 bytes__")).is_ok(),
-            "second push should succeed"
-        );
+        if new_pos < 0 {
+            debug!(new_pos, "Reader::seek invalid (negative)");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                IoError::InvalidSeek.to_string(),
+            ));
+        }
 
-        // The third push should fail because buffer is full (20 bytes total)
-        let result = writer.push(Bytes::from("would overflow"));
-        assert!(result.is_err(), "push should fail when buffer is full");
-        assert!(
-            matches!(result, Err(IoError::BufferFull)),
-            "should return BufferFull error"
-        );
-    }
+        let new_pos_u64 = new_pos as u64;
 
-    #[test]
-    fn test_backpressure_relieved_after_reading() {
-        let opts = BridgeOptions {
-            max_buffer_bytes: 20,
-        };
-        let (writer, mut reader) = new_bridge(opts);
+        // If we know length, disallow seeking past EOF to match typical `Read+Seek` expectations
+        // for decoders that probe file structure.
+        if let Some(len) = self.source.len() {
+            if new_pos_u64 > len {
+                debug!(new_pos_u64, len, "Reader::seek invalid (past EOF)");
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    IoError::InvalidSeek.to_string(),
+                ));
+            }
+        }
 
-        // Fill the buffer
-        use bytes::Bytes;
-        assert!(writer.push(Bytes::from("message1__")).is_ok());
-        assert!(writer.push(Bytes::from("message2__")).is_ok());
-
-        // Third push should fail
-        assert!(writer.push(Bytes::from("overflow")).is_err());
-
-        // Read some data to free up space
-        let mut buf = [0u8; 10];
-        let bytes_read = reader.read(&mut buf).expect("read should succeed");
-        assert_eq!(bytes_read, 10);
-
-        // Now push should succeed again
-        assert!(writer.push(Bytes::from("success!")).is_ok());
-    }
-
-    #[test]
-    fn test_seek_behavior_contract() {
-        let opts = BridgeOptions::default();
-        let (_, mut reader) = new_bridge(opts);
-
-        // All seek operations should return Unsupported error
-        let result = reader.seek(SeekFrom::Start(10));
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Unsupported);
-
-        let result = reader.seek(SeekFrom::Current(5));
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Unsupported);
-
-        let result = reader.seek(SeekFrom::End(-5));
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::Unsupported);
-    }
-
-    #[test]
-    fn test_seek_explicit_error_message() {
-        let opts = BridgeOptions::default();
-        let (_, mut reader) = new_bridge(opts);
-
-        let result = reader.seek(SeekFrom::Start(0));
-        assert!(result.is_err());
-        let error = result.unwrap_err();
-        assert_eq!(error.kind(), std::io::ErrorKind::Unsupported);
-        assert!(error.to_string().contains("seek is not supported"));
+        self.pos = new_pos_u64;
+        trace!(new_pos = self.pos, "Reader::seek exit");
+        Ok(self.pos)
     }
 }

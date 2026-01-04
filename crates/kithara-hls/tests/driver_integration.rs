@@ -1,11 +1,13 @@
 mod fixture;
 use fixture::*;
-use kithara_hls::abr::{AbrConfig, AbrController};
-use kithara_hls::events::EventEmitter;
-use kithara_hls::fetch::FetchManager;
-use kithara_hls::keys::KeyManager;
-use kithara_hls::playlist::PlaylistManager;
-use kithara_hls::{HlsOptions, HlsResult};
+use kithara_hls::{
+    HlsOptions, HlsResult,
+    abr::{AbrConfig, AbrController},
+    events::EventEmitter,
+    fetch::FetchManager,
+    keys::KeyManager,
+    playlist::PlaylistManager,
+};
 use tokio::sync::mpsc;
 
 // #[tokio::test]

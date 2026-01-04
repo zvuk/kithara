@@ -1,8 +1,9 @@
 use hls_m3u8::{MasterPlaylist, MediaPlaylist};
-use kithara_cache::{AssetCache, CachePath};
-use kithara_core::AssetId;
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_net::HttpClient;
+use kithara_storage::Resource as _;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{HlsError, HlsResult};
@@ -12,8 +13,8 @@ pub enum PlaylistError {
     #[error("Network error: {0}")]
     Net(#[from] kithara_net::NetError),
 
-    #[error("Cache error: {0}")]
-    Cache(#[from] kithara_cache::CacheError),
+    #[error("Assets error: {0}")]
+    Assets(#[from] kithara_assets::AssetsError),
 
     #[error("Playlist parsing error: {0}")]
     Parse(String),
@@ -23,22 +24,31 @@ pub enum PlaylistError {
 }
 
 pub struct PlaylistManager {
-    cache: AssetCache,
+    asset_root: String,
+    assets: AssetStore,
     net: HttpClient,
     base_url: Option<Url>,
 }
 
 impl PlaylistManager {
-    pub fn new(cache: AssetCache, net: HttpClient, base_url: Option<Url>) -> Self {
+    pub fn new(
+        asset_root: String,
+        assets: AssetStore,
+        net: HttpClient,
+        base_url: Option<Url>,
+    ) -> Self {
         Self {
-            cache,
+            asset_root,
+            assets,
             net,
             base_url,
         }
     }
 
     pub async fn fetch_master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist<'static>> {
-        let bytes = self.fetch_resource(url, "master.m3u8").await?;
+        let bytes = self
+            .fetch_playlist_atomic(url, "playlists/master.m3u8")
+            .await?;
         let content = String::from_utf8(bytes.to_vec())
             .map_err(|e| HlsError::PlaylistParse(format!("Invalid UTF-8: {}", e)))?;
 
@@ -50,7 +60,9 @@ impl PlaylistManager {
     }
 
     pub async fn fetch_media_playlist(&self, url: &Url) -> HlsResult<MediaPlaylist<'static>> {
-        let bytes = self.fetch_resource(url, "media.m3u8").await?;
+        // Use the resolved URL string for a deterministic rel_path key.
+        let key_name = format!("playlists/media/{}.m3u8", hex::encode(url.as_str()));
+        let bytes = self.fetch_playlist_atomic(url, &key_name).await?;
         let content = String::from_utf8(bytes.to_vec())
             .map_err(|e| HlsError::PlaylistParse(format!("Invalid UTF-8: {}", e)))?;
 
@@ -74,36 +86,25 @@ impl PlaylistManager {
         Ok(resolved_base)
     }
 
-    async fn fetch_resource(&self, url: &Url, default_filename: &str) -> HlsResult<bytes::Bytes> {
-        let asset_id = AssetId::from_url(url)?;
-        let cache_path = self.cache_path_for_url(url, default_filename)?;
-        let handle = self.cache.asset(asset_id);
+    async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<bytes::Bytes> {
+        // HLS playlists are metadata => AtomicResource.
+        //
+        // Asset layout contract (kithara-assets):
+        // - one logical asset_root for the HLS session (provided by the session opener).
+        let key = ResourceKey::new(self.asset_root.clone(), rel_path);
 
-        if handle.exists(&cache_path) {
-            let mut file = handle.open(&cache_path)?.unwrap();
+        let cancel = CancellationToken::new();
+        let res = self.assets.open_atomic_resource(&key, cancel).await?;
 
-            let mut buf = Vec::new();
-            std::io::Read::read_to_end(&mut file, &mut buf).unwrap();
-            return Ok(bytes::Bytes::from(buf));
+        // Best-effort cache read.
+        let cached = res.read().await?;
+        if !cached.is_empty() {
+            return Ok(cached);
         }
 
+        // Cache miss => fetch and write atomically.
         let bytes = self.net.get_bytes(url.clone(), None).await?;
-        handle.put_atomic(&cache_path, &bytes)?;
+        res.write(&bytes).await?;
         Ok(bytes)
-    }
-
-    fn cache_path_for_url(&self, url: &Url, default_filename: &str) -> HlsResult<CachePath> {
-        let filename = url
-            .path_segments()
-            .and_then(|segments| segments.last())
-            .and_then(|name| if name.is_empty() { None } else { Some(name) })
-            .unwrap_or(default_filename);
-
-        CachePath::new(vec!["hls".to_string(), filename.to_string()]).map_err(|e| {
-            HlsError::from(kithara_cache::CacheError::InvalidPath(format!(
-                "Invalid cache path: {}",
-                e
-            )))
-        })
     }
 }

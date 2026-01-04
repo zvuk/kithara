@@ -1,6 +1,4 @@
-use std::cmp::min;
-use std::collections::HashMap;
-use std::time::Duration;
+use std::{cmp::min, collections::HashMap, time::Duration};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Headers {

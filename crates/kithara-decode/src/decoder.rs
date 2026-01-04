@@ -1,8 +1,7 @@
 use std::time::Duration;
 
 use dasp::sample::Sample as DaspSample;
-use symphonia::core::audio::conv::ConvertibleSample;
-use symphonia::core::audio::sample::Sample as SymphoniaSample;
+use symphonia::core::audio::{conv::ConvertibleSample, sample::Sample as SymphoniaSample};
 
 use crate::{AudioSource, DecodeCommand, DecodeEngine, DecodeResult, DecoderSettings, MediaSource};
 
