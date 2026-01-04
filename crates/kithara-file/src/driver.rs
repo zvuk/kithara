@@ -9,6 +9,7 @@ use kithara_storage::{Resource as _, StreamingResourceExt};
 use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
 use crate::{
     options::{FileSourceOptions, OptionsError},
@@ -60,6 +61,20 @@ pub struct FileDriver {
     options: FileSourceOptions,
     assets: Option<Arc<AssetStore>>,
     range_policy: RangePolicy,
+}
+
+impl FileDriver {
+    pub fn assets(&self) -> Option<Arc<AssetStore>> {
+        self.assets.clone()
+    }
+
+    pub fn url(&self) -> &Url {
+        &self.url
+    }
+
+    pub fn net_client(&self) -> &HttpClient {
+        &self.net_client
+    }
 }
 
 impl FileDriver {

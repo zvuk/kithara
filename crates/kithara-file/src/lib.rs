@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 pub use driver::{DriverError, FileCommand, SourceError};
-use kithara_assets::{AssetStore, EvictConfig, asset_store};
+use kithara_assets::AssetStore;
 use kithara_core::AssetId;
 use kithara_net::{HttpClient, NetOptions};
 pub use options::{FileSourceOptions, OptionsError};
@@ -72,6 +72,7 @@ mod tests {
     use axum::{Router, response::Response, routing::get};
     use bytes::Bytes;
     use futures::StreamExt;
+    use kithara_assets::{EvictConfig, asset_store};
     use tempfile::TempDir;
     use tokio::net::TcpListener;
 
