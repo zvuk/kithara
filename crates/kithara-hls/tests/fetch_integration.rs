@@ -24,7 +24,11 @@ async fn stream_segment_sequence() -> HlsResult<()> {
     let (assets, net) = create_test_cache_and_net();
     let assets = assets.assets().clone();
 
-    let fetch_manager = FetchManager::new(assets, net);
+    // Note: in the real session code, this is derived from `AssetId::from_url(master_url)`.
+    // For this test we only need a stable namespace.
+    let asset_root = "test-hls".to_string();
+
+    let fetch_manager = FetchManager::new(asset_root, assets, net);
 
     // Create a test media playlist
     let media_playlist_str = r#"#EXTM3U

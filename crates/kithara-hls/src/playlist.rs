@@ -1,7 +1,9 @@
 use hls_m3u8::{MasterPlaylist, MediaPlaylist};
-use kithara_assets::AssetStore;
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_net::HttpClient;
+use kithara_storage::Resource as _;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{HlsError, HlsResult};
@@ -22,14 +24,21 @@ pub enum PlaylistError {
 }
 
 pub struct PlaylistManager {
+    asset_root: String,
     assets: AssetStore,
     net: HttpClient,
     base_url: Option<Url>,
 }
 
 impl PlaylistManager {
-    pub fn new(assets: AssetStore, net: HttpClient, base_url: Option<Url>) -> Self {
+    pub fn new(
+        asset_root: String,
+        assets: AssetStore,
+        net: HttpClient,
+        base_url: Option<Url>,
+    ) -> Self {
         Self {
+            asset_root,
             assets,
             net,
             base_url,
@@ -37,7 +46,9 @@ impl PlaylistManager {
     }
 
     pub async fn fetch_master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist<'static>> {
-        let bytes = self.fetch_resource(url, "master.m3u8").await?;
+        let bytes = self
+            .fetch_playlist_atomic(url, "playlists/master.m3u8")
+            .await?;
         let content = String::from_utf8(bytes.to_vec())
             .map_err(|e| HlsError::PlaylistParse(format!("Invalid UTF-8: {}", e)))?;
 
@@ -49,7 +60,9 @@ impl PlaylistManager {
     }
 
     pub async fn fetch_media_playlist(&self, url: &Url) -> HlsResult<MediaPlaylist<'static>> {
-        let bytes = self.fetch_resource(url, "media.m3u8").await?;
+        // Use the resolved URL string for a deterministic rel_path key.
+        let key_name = format!("playlists/media/{}.m3u8", hex::encode(url.as_str()));
+        let bytes = self.fetch_playlist_atomic(url, &key_name).await?;
         let content = String::from_utf8(bytes.to_vec())
             .map_err(|e| HlsError::PlaylistParse(format!("Invalid UTF-8: {}", e)))?;
 
@@ -73,14 +86,25 @@ impl PlaylistManager {
         Ok(resolved_base)
     }
 
-    async fn fetch_resource(&self, url: &Url, _default_filename: &str) -> HlsResult<bytes::Bytes> {
-        // NOTE: Assets integration is being redesigned to use the new resource-based API
-        // (`kithara-assets` + `kithara-storage`).
+    async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<bytes::Bytes> {
+        // HLS playlists are metadata => AtomicResource.
         //
-        // The old cache layer (`kithara-cache`) supported `CachePath` + `put_atomic` and is no
-        // longer available here. For now, fetch from the network only.
-        let _ = &self.assets;
+        // Asset layout contract (kithara-assets):
+        // - one logical asset_root for the HLS session (provided by the session opener).
+        let key = ResourceKey::new(self.asset_root.clone(), rel_path);
+
+        let cancel = CancellationToken::new();
+        let res = self.assets.open_atomic_resource(&key, cancel).await?;
+
+        // Best-effort cache read.
+        let cached = res.read().await?;
+        if !cached.is_empty() {
+            return Ok(cached);
+        }
+
+        // Cache miss => fetch and write atomically.
         let bytes = self.net.get_bytes(url.clone(), None).await?;
+        res.write(&bytes).await?;
         Ok(bytes)
     }
 }

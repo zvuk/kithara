@@ -2,9 +2,11 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::AssetStore;
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_net::{Headers, HttpClient};
+use kithara_storage::Resource as _;
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{HlsResult, KeyContext};
@@ -28,6 +30,7 @@ pub enum KeyError {
 }
 
 pub struct KeyManager {
+    asset_root: String,
     assets: AssetStore,
     net: HttpClient,
     key_processor: Option<Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
@@ -37,6 +40,7 @@ pub struct KeyManager {
 
 impl KeyManager {
     pub fn new(
+        asset_root: String,
         assets: AssetStore,
         net: HttpClient,
         key_processor: Option<Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
@@ -44,6 +48,7 @@ impl KeyManager {
         key_request_headers: Option<HashMap<String, String>>,
     ) -> Self {
         Self {
+            asset_root,
             assets,
             net,
             key_processor,
@@ -53,14 +58,28 @@ impl KeyManager {
     }
 
     pub async fn get_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
-        // NOTE: Assets integration is being redesigned to use the new resource-based API
-        // (`kithara-assets` + `kithara-storage`).
+        // Keys are metadata => AtomicResource.
         //
-        // The old cache layer (`kithara-cache`) supported `CachePath` + `put_atomic` and is no
-        // longer available here. For now, fetch from the network only.
-        let _ = &self.assets;
+        // Asset layout contract (kithara-assets):
+        // - one logical asset_root for the HLS session (provided by the session opener),
+        // - deterministic rel_path under that root.
+        let rel_path = format!("keys/{}.bin", hex::encode(url.as_str()));
+        let key = ResourceKey::new(self.asset_root.clone(), rel_path);
 
+        let cancel = CancellationToken::new();
+        let res = self.assets.open_atomic_resource(&key, cancel).await?;
+
+        // Best-effort cache read.
+        let cached = res.read().await?;
+        if !cached.is_empty() {
+            let processed = self.process_key(cached, url.clone(), iv)?;
+            return Ok(processed);
+        }
+
+        // Cache miss => fetch and write atomically.
         let raw_key = self.fetch_raw_key(url).await?;
+        res.write(&raw_key).await?;
+
         let processed_key = self.process_key(raw_key, url.clone(), iv)?;
         Ok(processed_key)
     }

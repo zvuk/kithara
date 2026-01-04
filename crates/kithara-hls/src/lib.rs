@@ -59,6 +59,9 @@ pub enum HlsError {
     #[error("Assets error: {0}")]
     Assets(#[from] kithara_assets::AssetsError),
 
+    #[error("Storage error: {0}")]
+    Storage(#[from] kithara_storage::StorageError),
+
     #[error("Core error: {0}")]
     Core(#[from] kithara_core::CoreError),
 
@@ -169,18 +172,25 @@ pub struct HlsSource;
 impl HlsSourceContract for HlsSource {
     async fn open(&self, url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession> {
         let asset_id = AssetId::from_url(&url)?;
+        let asset_root = hex::encode(asset_id.as_bytes());
         let net = HttpClient::new(kithara_net::NetOptions::default());
 
         // Create managers (kept as-is; internals will be iterated via TDD).
-        let playlist_manager =
-            playlist::PlaylistManager::new(assets.clone(), net.clone(), opts.base_url.clone());
-        let fetch_manager = fetch::FetchManager::new(assets.clone(), net.clone());
+        let playlist_manager = playlist::PlaylistManager::new(
+            asset_root.clone(),
+            assets.clone(),
+            net.clone(),
+            opts.base_url.clone(),
+        );
+        let fetch_manager =
+            fetch::FetchManager::new(asset_root.clone(), assets.clone(), net.clone());
         let key_processor = opts.key_processor_cb.clone().map(|arc| {
             Box::new(move |bytes, ctx| arc(bytes, ctx))
                 as Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>
         });
 
         let key_manager = keys::KeyManager::new(
+            asset_root.clone(),
             assets.clone(),
             net.clone(),
             key_processor,

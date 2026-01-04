@@ -8,7 +8,11 @@ async fn fetch_and_cache_key() -> HlsResult<()> {
     let (assets, net) = create_test_cache_and_net();
     let assets = assets.assets().clone();
 
-    let key_manager = KeyManager::new(assets, net, None, None, None);
+    // Note: in the real session code, this is derived from `AssetId::from_url(master_url)`.
+    // For this test we only need a stable namespace.
+    let asset_root = "test-hls".to_string();
+
+    let key_manager = KeyManager::new(asset_root, assets, net, None, None, None);
     let key_url = server.url("/key.bin")?;
 
     // Note: This test assumes the server provides a key endpoint
@@ -24,6 +28,10 @@ async fn key_processor_applied() -> HlsResult<()> {
     let (assets, net) = create_test_cache_and_net();
     let assets = assets.assets().clone();
 
+    // Note: in the real session code, this is derived from `AssetId::from_url(master_url)`.
+    // For this test we only need a stable namespace.
+    let asset_root = "test-hls".to_string();
+
     let processor = Box::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
         // Simple processor that just adds a prefix
         let mut processed = Vec::new();
@@ -32,7 +40,7 @@ async fn key_processor_applied() -> HlsResult<()> {
         Ok(bytes::Bytes::from(processed))
     });
 
-    let key_manager = KeyManager::new(assets, net, Some(processor), None, None);
+    let key_manager = KeyManager::new(asset_root, assets, net, Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
     let key = key_manager.get_key(&key_url, None).await?;
