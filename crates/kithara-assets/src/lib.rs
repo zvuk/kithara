@@ -36,6 +36,7 @@
 
 mod cache;
 mod error;
+mod evict;
 mod index;
 mod key;
 mod lease;
@@ -44,8 +45,9 @@ mod store;
 
 // Re-exports
 pub use cache::Assets;
-pub use error::{CacheError, CacheResult};
-pub use index::PinsIndex;
+pub use error::{AssetsError, AssetsResult};
+pub use evict::EvictAssets;
+pub use index::{EvictConfig, PinsIndex};
 pub use key::ResourceKey;
 pub use lease::{LeaseAssets, LeaseGuard};
 pub use resource::AssetResource;

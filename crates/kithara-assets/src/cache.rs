@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use kithara_storage::{AtomicResource, StreamingResource};
 use tokio_util::sync::CancellationToken;
 
-use crate::{error::CacheResult, key::ResourceKey};
+use crate::{error::AssetsResult, key::ResourceKey};
 
 /// Explicit public contract for the assets abstraction.
 ///
@@ -39,7 +39,7 @@ pub trait Assets: Send + Sync + 'static {
         &self,
         key: &ResourceKey,
         cancel: CancellationToken,
-    ) -> CacheResult<AtomicResource>;
+    ) -> AssetsResult<AtomicResource>;
 
     /// Open a streaming resource (large object) addressed by `key`.
     ///
@@ -48,7 +48,7 @@ pub trait Assets: Send + Sync + 'static {
         &self,
         key: &ResourceKey,
         cancel: CancellationToken,
-    ) -> CacheResult<StreamingResource>;
+    ) -> AssetsResult<StreamingResource>;
 
     /// Open the atomic resource used for persisting the pins index.
     ///
@@ -62,5 +62,26 @@ pub trait Assets: Send + Sync + 'static {
     async fn open_pins_index_resource(
         &self,
         cancel: CancellationToken,
-    ) -> CacheResult<AtomicResource>;
+    ) -> AssetsResult<AtomicResource>;
+
+    /// Delete an entire asset (all resources under `asset_root`).
+    ///
+    /// ## Normative
+    /// - This is used by eviction/GC decorators (LRU, quota enforcement).
+    /// - Base `Assets` implementations must NOT apply pin/lease semantics here.
+    /// - Higher layers must ensure pinned assets are not deleted (decorators enforce this).
+    async fn delete_asset(&self, asset_root: &str, cancel: CancellationToken) -> AssetsResult<()>;
+
+    /// Open the atomic resource used for persisting the LRU index.
+    ///
+    /// ## Normative
+    /// - must be a small atomic file-like resource,
+    /// - must be stable for the lifetime of this assets instance.
+    ///
+    /// Key selection (where this lives on disk) is an implementation detail of the concrete
+    /// `Assets` implementation.
+    async fn open_lru_index_resource(
+        &self,
+        cancel: CancellationToken,
+    ) -> AssetsResult<AtomicResource>;
 }

@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use kithara_storage::{AtomicResource, Resource};
 
-use crate::{cache::Assets, error::CacheResult};
+use crate::{cache::Assets, error::AssetsResult};
 
 /// Minimal persisted representation of the pins index.
 ///
@@ -40,7 +40,7 @@ impl PinsIndex {
     pub async fn open<A: Assets>(
         assets: &A,
         cancel: tokio_util::sync::CancellationToken,
-    ) -> CacheResult<Self> {
+    ) -> AssetsResult<Self> {
         let res = assets.open_pins_index_resource(cancel).await?;
         Ok(Self::new(res))
     }
@@ -48,7 +48,7 @@ impl PinsIndex {
     /// Load the pins set from storage.
     ///
     /// Empty or missing file is treated as an empty set.
-    pub async fn load(&self) -> CacheResult<HashSet<String>> {
+    pub async fn load(&self) -> AssetsResult<HashSet<String>> {
         let bytes = self.res.read().await?;
 
         if bytes.is_empty() {
@@ -60,7 +60,7 @@ impl PinsIndex {
     }
 
     /// Persist the given set to storage.
-    pub async fn store(&self, pins: &HashSet<String>) -> CacheResult<()> {
+    pub async fn store(&self, pins: &HashSet<String>) -> AssetsResult<()> {
         // Stored as a list for stable JSON; treated as a set by higher layers.
         let file = PinsIndexFile {
             version: 1,
@@ -73,21 +73,21 @@ impl PinsIndex {
     }
 
     /// Add `asset_root` to the set and persist immediately.
-    pub async fn insert(&self, asset_root: &str) -> CacheResult<()> {
+    pub async fn insert(&self, asset_root: &str) -> AssetsResult<()> {
         let mut pins = self.load().await?;
         pins.insert(asset_root.to_string());
         self.store(&pins).await
     }
 
     /// Remove `asset_root` from the set and persist immediately.
-    pub async fn remove(&self, asset_root: &str) -> CacheResult<()> {
+    pub async fn remove(&self, asset_root: &str) -> AssetsResult<()> {
         let mut pins = self.load().await?;
         pins.remove(asset_root);
         self.store(&pins).await
     }
 
     /// Check whether `asset_root` is pinned (loads from storage).
-    pub async fn contains(&self, asset_root: &str) -> CacheResult<bool> {
+    pub async fn contains(&self, asset_root: &str) -> AssetsResult<bool> {
         let pins = self.load().await?;
         Ok(pins.contains(asset_root))
     }

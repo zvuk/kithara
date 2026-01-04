@@ -5,7 +5,10 @@ use thiserror::Error;
 
 /// Assets store errors.
 #[derive(Debug, Error)]
-pub enum CacheError {
+pub enum AssetsError {
+    #[error("invalid resource key")]
+    InvalidKey,
+
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
@@ -16,4 +19,4 @@ pub enum CacheError {
     Storage(#[from] StorageError),
 }
 
-pub type CacheResult<T> = Result<T, CacheError>;
+pub type AssetsResult<T> = Result<T, AssetsError>;

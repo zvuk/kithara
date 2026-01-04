@@ -9,7 +9,7 @@ use kithara_storage::{AtomicResource, StreamingResource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    cache::Assets, error::CacheResult, index::PinsIndex, key::ResourceKey, resource::AssetResource,
+    cache::Assets, error::AssetsResult, index::PinsIndex, key::ResourceKey, resource::AssetResource,
 };
 
 /// Decorator that adds "pin (lease) while handle lives" semantics on top of a base [`Assets`].
@@ -51,7 +51,7 @@ where
         &self.base
     }
 
-    async fn open_index(&self, cancel: CancellationToken) -> CacheResult<PinsIndex> {
+    async fn open_index(&self, cancel: CancellationToken) -> AssetsResult<PinsIndex> {
         PinsIndex::open(self.base(), cancel).await
     }
 
@@ -59,7 +59,7 @@ where
         &self,
         cancel: CancellationToken,
         pins: &HashSet<String>,
-    ) -> CacheResult<()> {
+    ) -> AssetsResult<()> {
         let idx = self.open_index(cancel).await?;
         idx.store(pins).await
     }
@@ -67,12 +67,12 @@ where
     async fn load_pins_best_effort(
         &self,
         cancel: CancellationToken,
-    ) -> CacheResult<HashSet<String>> {
+    ) -> AssetsResult<HashSet<String>> {
         let idx = self.open_index(cancel).await?;
         idx.load().await
     }
 
-    async fn ensure_loaded_best_effort(&self, cancel: CancellationToken) -> CacheResult<()> {
+    async fn ensure_loaded_best_effort(&self, cancel: CancellationToken) -> AssetsResult<()> {
         // Load only once (best-effort). If already loaded, do nothing.
         //
         // We intentionally keep this minimal and deterministic: if the set is empty
@@ -93,7 +93,11 @@ where
         Ok(())
     }
 
-    async fn pin(&self, asset_root: &str, cancel: CancellationToken) -> CacheResult<LeaseGuard<A>> {
+    async fn pin(
+        &self,
+        asset_root: &str,
+        cancel: CancellationToken,
+    ) -> AssetsResult<LeaseGuard<A>> {
         self.ensure_loaded_best_effort(cancel.clone()).await?;
 
         let snapshot = {
@@ -131,7 +135,7 @@ where
         &self,
         key: &ResourceKey,
         cancel: CancellationToken,
-    ) -> CacheResult<AssetResource<AtomicResource, LeaseGuard<A>>> {
+    ) -> AssetsResult<AssetResource<AtomicResource, LeaseGuard<A>>> {
         let inner = self.base.open_atomic_resource(key, cancel.clone()).await?;
 
         let lease = self.pin(&key.asset_root, cancel).await?;
@@ -144,7 +148,7 @@ where
         &self,
         key: &ResourceKey,
         cancel: CancellationToken,
-    ) -> CacheResult<AssetResource<StreamingResource, LeaseGuard<A>>> {
+    ) -> AssetsResult<AssetResource<StreamingResource, LeaseGuard<A>>> {
         let inner = self
             .base
             .open_streaming_resource(key, cancel.clone())
