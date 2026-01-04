@@ -50,17 +50,17 @@ pub trait Assets: Send + Sync + 'static {
         cancel: CancellationToken,
     ) -> CacheResult<StreamingResource>;
 
-    /// Open a static atomic metadata resource used by decorators to persist small state.
+    /// Open the atomic resource used for persisting the pins index.
     ///
     /// Normative requirements:
     /// - must be a small atomic file-like resource,
-    /// - must be *excluded* from pinning (otherwise the lease decorator will recurse),
+    /// - must be excluded from pinning (otherwise the lease decorator will recurse),
     /// - must be stable for the lifetime of this assets instance.
     ///
-    /// The `key` is a logical identifier (no path/string processing is performed by this crate).
-    async fn open_static_meta_resource(
+    /// Key selection (where this lives on disk) is an implementation detail of the concrete
+    /// `Assets` implementation. Higher layers must not construct or assume a `ResourceKey` here.
+    async fn open_pins_index_resource(
         &self,
-        key: &ResourceKey,
         cancel: CancellationToken,
     ) -> CacheResult<AtomicResource>;
 }

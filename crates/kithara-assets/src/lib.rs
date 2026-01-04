@@ -29,16 +29,10 @@
 //! The pin is expressed as an RAII guard stored inside [`AssetResource`]. Drop the handle to release
 //! the pin.
 //!
-//! ## Best-effort metadata (`_index/*`)
+//! ## Global index (best-effort)
 //!
-//! The `_index/*` namespace is reserved for small, best-effort metadata files stored via
-//! `kithara-storage::AtomicResource` (temp → rename).
-//!
-//! Current metadata used by this crate:
-//! - `_index/pins.json`: persisted pin table written by the `LeaseAssets` decorator.
-//!
-//! Filesystem remains the source of truth; metadata may be missing and can be rebuilt/recreated
-//! by higher layers (e.g. by reopening assets and repinning).
+//! `_index/state.json` is a small, atomic file (temp → rename) used as best-effort metadata.
+//! Filesystem remains the source of truth; the index may be missing and can be rebuilt later.
 
 mod cache;
 mod error;
@@ -51,8 +45,8 @@ mod store;
 // Re-exports
 pub use cache::Assets;
 pub use error::{CacheError, CacheResult};
-pub use index::{AssetIndex, AssetIndexEntry, ResourceStatus};
+pub use index::PinsIndex;
 pub use key::ResourceKey;
-pub use lease::{LeaseAssets, LeaseAssetsExt, LeaseGuard};
+pub use lease::{LeaseAssets, LeaseGuard};
 pub use resource::AssetResource;
 pub use store::{AssetStore, DiskAssetStore, asset_store};

@@ -5,12 +5,11 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use async_trait::async_trait;
-use kithara_storage::{AtomicResource, Resource, StreamingResource};
+use kithara_storage::{AtomicResource, StreamingResource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    cache::Assets, error::CacheResult, index::AssetIndex, key::ResourceKey, resource::AssetResource,
+    cache::Assets, error::CacheResult, index::PinsIndex, key::ResourceKey, resource::AssetResource,
 };
 
 /// Decorator that adds "pin (lease) while handle lives" semantics on top of a base [`Assets`].
@@ -52,44 +51,25 @@ where
         &self.base
     }
 
+    async fn open_index(&self, cancel: CancellationToken) -> CacheResult<PinsIndex> {
+        PinsIndex::open(self.base(), cancel).await
+    }
+
     async fn persist_pins_best_effort(
         &self,
         cancel: CancellationToken,
         pins: &HashSet<String>,
     ) -> CacheResult<()> {
-        // Persist as AssetIndex, but we treat it as *pin index only* for now.
-        // The rest of fields are best-effort placeholders.
-        let index = AssetIndex {
-            version: 1,
-            resources: Vec::new(),
-            pinned: pins.iter().cloned().collect(),
-        };
-
-        let res = self
-            .base
-            .open_static_meta_resource(&ResourceKey::new("_index", "pins.json"), cancel)
-            .await?;
-        let bytes = serde_json::to_vec_pretty(&index)?;
-        res.write(&bytes).await?;
-        Ok(())
+        let idx = self.open_index(cancel).await?;
+        idx.store(pins).await
     }
 
     async fn load_pins_best_effort(
         &self,
         cancel: CancellationToken,
     ) -> CacheResult<HashSet<String>> {
-        let res = self
-            .base
-            .open_static_meta_resource(&ResourceKey::new("_index", "pins.json"), cancel)
-            .await?;
-        let bytes = res.read().await?;
-
-        if bytes.is_empty() {
-            return Ok(HashSet::new());
-        }
-
-        let index: AssetIndex = serde_json::from_slice(&bytes)?;
-        Ok(index.pinned.into_iter().collect())
+        let idx = self.open_index(cancel).await?;
+        idx.load().await
     }
 
     async fn ensure_loaded_best_effort(&self, cancel: CancellationToken) -> CacheResult<()> {
@@ -210,48 +190,5 @@ where
         tokio::spawn(async move {
             owner.unpin_best_effort(&asset_root, cancel).await;
         });
-    }
-}
-
-/// Trait used by callers that want leased (auto-pinning) behavior.
-///
-/// This exists to keep the public contract readable and avoid exposing internal mechanics.
-///
-/// Note: we return `AssetResource<_, _>` with an *opaque lease type* (`impl Send + Sync + 'static`)
-/// so callers don't depend on the concrete guard type.
-#[async_trait]
-pub trait LeaseAssetsExt: Send + Sync + 'static {
-    async fn open_atomic_resource(
-        &self,
-        key: &ResourceKey,
-        cancel: CancellationToken,
-    ) -> CacheResult<AssetResource<AtomicResource, impl Send + Sync + 'static>>;
-
-    async fn open_streaming_resource(
-        &self,
-        key: &ResourceKey,
-        cancel: CancellationToken,
-    ) -> CacheResult<AssetResource<StreamingResource, impl Send + Sync + 'static>>;
-}
-
-#[async_trait]
-impl<A> LeaseAssetsExt for LeaseAssets<A>
-where
-    A: Assets,
-{
-    async fn open_atomic_resource(
-        &self,
-        key: &ResourceKey,
-        cancel: CancellationToken,
-    ) -> CacheResult<AssetResource<AtomicResource, impl Send + Sync + 'static>> {
-        LeaseAssets::open_atomic_resource(self, key, cancel).await
-    }
-
-    async fn open_streaming_resource(
-        &self,
-        key: &ResourceKey,
-        cancel: CancellationToken,
-    ) -> CacheResult<AssetResource<StreamingResource, impl Send + Sync + 'static>> {
-        LeaseAssets::open_streaming_resource(self, key, cancel).await
     }
 }
