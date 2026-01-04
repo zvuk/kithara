@@ -45,7 +45,6 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use thiserror::Error;
-use tokio::runtime::Handle;
 use tracing::{debug, trace, warn};
 
 /// Outcome of waiting for a byte range.
@@ -96,12 +95,24 @@ pub trait Source: Send + Sync + 'static {
     fn len(&self) -> Option<u64>;
 }
 
+enum WorkerReq {
+    WaitRange {
+        range: Range<u64>,
+        reply: tokio::sync::oneshot::Sender<IoResult<WaitOutcome>>,
+    },
+    ReadAt {
+        offset: u64,
+        len: usize,
+        reply: tokio::sync::oneshot::Sender<IoResult<Bytes>>,
+    },
+}
+
 /// Sync `Read + Seek` adapter over a [`Source`].
 ///
 /// This is designed specifically to satisfy consumers like `rodio::Decoder`.
 ///
 /// Blocking behavior:
-/// - `read()` blocks on the current Tokio runtime handle to wait for availability.
+/// - `read()` blocks waiting for an async worker running on a Tokio runtime.
 /// - Do **not** call this from within a Tokio async task (it will block the executor thread).
 ///   Use it from a dedicated blocking thread (e.g. `tokio::task::spawn_blocking` or `std::thread`).
 pub struct Reader<S>
@@ -109,7 +120,7 @@ where
     S: Source,
 {
     source: Arc<S>,
-    handle: Handle,
+    worker_tx: tokio::sync::mpsc::UnboundedSender<WorkerReq>,
     pos: u64,
 }
 
@@ -119,15 +130,48 @@ where
 {
     /// Create a new reader bound to the current Tokio runtime.
     ///
-    /// This captures [`tokio::runtime::Handle::current`], so it must be called from within
-    /// a Tokio runtime context (e.g. in an async fn before spawning the blocking consumer).
+    /// This spawns an async worker on the current Tokio runtime and communicates with it via
+    /// channels. This avoids calling `Handle::block_on` from arbitrary threads, which can
+    /// deadlock with some executor / storage combinations.
+    ///
+    /// This must be called from within a Tokio runtime context (e.g. in an async fn before
+    /// spawning the blocking consumer).
     pub fn new(source: Arc<S>) -> Self {
-        trace!("kithara-io Reader::new (capturing tokio runtime handle)");
+        trace!("kithara-io Reader::new (spawning async worker)");
         let len = source.len();
         debug!(len, "kithara-io Reader created");
+
+        let (worker_tx, mut worker_rx) = tokio::sync::mpsc::unbounded_channel::<WorkerReq>();
+        let src = source.clone();
+
+        tokio::spawn(async move {
+            trace!("kithara-io Reader worker started");
+            while let Some(req) = worker_rx.recv().await {
+                match req {
+                    WorkerReq::WaitRange { range, reply } => {
+                        trace!(
+                            start = range.start,
+                            end = range.end,
+                            "kithara-io Reader worker: wait_range begin"
+                        );
+                        let out = src.wait_range(range).await;
+                        trace!("kithara-io Reader worker: wait_range done");
+                        let _ = reply.send(out);
+                    }
+                    WorkerReq::ReadAt { offset, len, reply } => {
+                        trace!(offset, len, "kithara-io Reader worker: read_at begin");
+                        let out = src.read_at(offset, len).await;
+                        trace!("kithara-io Reader worker: read_at done");
+                        let _ = reply.send(out);
+                    }
+                }
+            }
+            trace!("kithara-io Reader worker stopped (channel closed)");
+        });
+
         Self {
             source,
-            handle: Handle::current(),
+            worker_tx,
             pos: 0,
         }
     }
@@ -155,16 +199,51 @@ where
         let len = buf.len();
         trace!(offset, len, "Reader::read enter");
 
-        let wait_range = offset..offset.saturating_add(len as u64);
+        let wait_start = offset;
+        let wait_end = offset.saturating_add(len as u64);
+        let wait_range = wait_start..wait_end;
         trace!(
-            start = wait_range.start,
-            end = wait_range.end,
+            start = wait_start,
+            end = wait_end,
             "Reader::read wait_range begin"
         );
-        let outcome = self
-            .handle
-            .block_on(self.source.wait_range(wait_range))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.worker_tx
+            .send(WorkerReq::WaitRange {
+                range: wait_range,
+                reply: tx,
+            })
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
+            })?;
+
+        trace!(
+            start = wait_start,
+            end = wait_end,
+            "Reader::read wait_range awaiting worker reply"
+        );
+
+        let outcome = rx
+            .blocking_recv()
+            .map_err(|_| {
+                tracing::error!(
+                    start = wait_start,
+                    end = wait_end,
+                    "Reader::read wait_range worker reply channel closed"
+                );
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
+            })?
+            .map_err(|e| {
+                tracing::error!(
+                    offset,
+                    len,
+                    err = %e,
+                    "Reader::read wait_range returned error"
+                );
+                std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+            })?;
+
         trace!(?outcome, "Reader::read wait_range done");
 
         match outcome {
@@ -176,10 +255,39 @@ where
         }
 
         trace!(offset, len, "Reader::read read_at begin");
-        let bytes = self
-            .handle
-            .block_on(self.source.read_at(offset, len))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        self.worker_tx
+            .send(WorkerReq::ReadAt {
+                offset,
+                len,
+                reply: tx,
+            })
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
+            })?;
+
+        trace!(offset, len, "Reader::read read_at awaiting worker reply");
+
+        let bytes = rx
+            .blocking_recv()
+            .map_err(|_| {
+                tracing::error!(
+                    offset,
+                    len,
+                    "Reader::read read_at worker reply channel closed"
+                );
+                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
+            })?
+            .map_err(|e| {
+                tracing::error!(
+                    offset,
+                    len,
+                    err = %e,
+                    "Reader::read read_at returned error"
+                );
+                std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+            })?;
+
         trace!(got = bytes.len(), "Reader::read read_at done");
 
         if bytes.is_empty() {

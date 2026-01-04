@@ -9,7 +9,7 @@ use tokio::sync::{Mutex, broadcast};
 use url::Url;
 
 use crate::{
-    HlsOptions, HlsResult,
+    HlsError, HlsOptions, HlsResult,
     abr::{AbrController, variants_from_master},
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
@@ -175,23 +175,22 @@ impl Source for HlsStream {
                 current_variant = initial_decision.target_variant_index;
             }
 
-            // NOTE: variant URI resolution is still the responsibility of the HLS crate;
-            // this is intentionally minimal until we TDD the full implementation.
-            let mut variant_uri = match current_variant {
-                0 => "v0.m3u8",
-                1 => "v1.m3u8",
-                2 => "v2.m3u8",
-                _ => {
-                    yield Err(StreamError::Source(SourceError::Hls(crate::HlsError::VariantNotFound(format!(
+            let mut variant_uri: String = master_playlist
+                .variant_streams
+                .get(current_variant)
+                .and_then(|vs| match vs {
+                    hls_m3u8::tags::VariantStream::ExtXStreamInf { uri, .. } => Some(uri.to_string()),
+                    hls_m3u8::tags::VariantStream::ExtXIFrame { .. } => None,
+                })
+                .ok_or_else(|| {
+                    StreamError::Source(SourceError::Hls(HlsError::VariantNotFound(format!(
                         "Variant index {}",
                         current_variant
-                    )))));
-                    return;
-                }
-            };
+                    ))))
+                })?;
 
             let mut media_url = playlist_manager
-                .resolve_url(&master_url, variant_uri)
+                .resolve_url(&master_url, &variant_uri)
                 .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
 
             let mut media_playlist = playlist_manager
@@ -234,21 +233,22 @@ impl Source for HlsStream {
                     }
 
                     current_variant = decision.target_variant_index;
-                    variant_uri = match current_variant {
-                        0 => "v0.m3u8",
-                        1 => "v1.m3u8",
-                        2 => "v2.m3u8",
-                        _ => {
-                            yield Err(StreamError::Source(SourceError::Hls(crate::HlsError::VariantNotFound(format!(
+                    variant_uri = master_playlist
+                        .variant_streams
+                        .get(current_variant)
+                        .and_then(|vs| match vs {
+                            hls_m3u8::tags::VariantStream::ExtXStreamInf { uri, .. } => Some(uri.to_string()),
+                            hls_m3u8::tags::VariantStream::ExtXIFrame { .. } => None,
+                        })
+                        .ok_or_else(|| {
+                            StreamError::Source(SourceError::Hls(HlsError::VariantNotFound(format!(
                                 "Variant index {}",
                                 current_variant
-                            )))));
-                            return;
-                        }
-                    };
+                            ))))
+                        })?;
 
                     media_url = playlist_manager
-                        .resolve_url(&master_url, variant_uri)
+                        .resolve_url(&master_url, &variant_uri)
                         .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
 
                     media_playlist = playlist_manager

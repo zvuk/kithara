@@ -133,13 +133,46 @@ impl Net for HttpClient {
         let stream = resp.bytes_stream().map_err(NetError::from);
         Ok(Box::pin(stream))
     }
+
+    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
+        let req = self.inner.head(url.clone());
+        let req = Self::apply_headers(req, headers);
+        let req = req.timeout(self.options.request_timeout);
+
+        let resp = req.send().await.map_err(NetError::from)?;
+        let status = resp.status();
+
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(NetError::HttpError {
+                url,
+                status: status.as_u16(),
+                body: Some(body),
+            });
+        }
+
+        let mut out = Headers::new();
+        for (name, value) in resp.headers().iter() {
+            if let Ok(v) = value.to_str() {
+                out.insert(name.as_str(), v);
+            }
+        }
+
+        Ok(out)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{collections::HashMap, sync::Arc, time::Duration};
 
-    use axum::{Router, extract::Request, http::StatusCode, response::Response, routing::get};
+    use axum::{
+        Router,
+        extract::Request,
+        http::{StatusCode, header},
+        response::Response,
+        routing::{get, head},
+    };
     use bytes::Bytes;
     use futures::StreamExt;
     use tokio::net::TcpListener;
@@ -152,6 +185,7 @@ mod tests {
             .route("/test", get(test_endpoint))
             .route("/range", get(range_endpoint))
             .route("/headers", get(headers_endpoint))
+            .route("/head-length", head(head_length_endpoint))
             .route("/error404", get(error_404_endpoint))
             .route("/error500", get(error_500_endpoint))
             .route("/error429", get(error_429_endpoint))
@@ -162,6 +196,14 @@ mod tests {
 
     async fn test_endpoint() -> &'static str {
         "Hello, World!"
+    }
+
+    async fn head_length_endpoint(_request: Request) -> Result<Response, StatusCode> {
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_LENGTH, "1234")
+            .body(axum::body::Body::empty())
+            .unwrap())
     }
 
     async fn range_endpoint(request: Request) -> Result<Response, StatusCode> {
@@ -509,6 +551,20 @@ mod tests {
 
         let bytes = client.get_bytes(url, None).await.unwrap();
         assert_eq!(bytes, Bytes::from("Hello, World!"));
+    }
+
+    #[tokio::test]
+    async fn test_head_returns_content_length() {
+        let server_url = run_test_server().await;
+        let client = HttpClient::new(NetOptions::default());
+        let url = format!("{}/head-length", server_url).parse().unwrap();
+
+        let headers = client.head(url, None).await.unwrap();
+
+        let content_length = headers
+            .get("content-length")
+            .or_else(|| headers.get("Content-Length"));
+        assert_eq!(content_length, Some("1234"));
     }
 
     #[tokio::test]

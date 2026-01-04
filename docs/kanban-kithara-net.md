@@ -17,6 +17,7 @@ Reference spec (portable): `docs/porting/net-reference.md`
 - async I/O (tokio-ориентированный),
 - streaming GET (byte stream),
 - range GET (для seek),
+- HEAD (для получения metadata: `Content-Length`/`Accept-Ranges`/`Content-Type`),
 - поддержка headers (в т.ч. для HLS key requests),
 - предсказуемые таймауты и retry (в виде слоёв/декораторов),
 - типизированные ошибки и явная классификация retriable vs fatal (как минимум на уровне net).
@@ -48,3 +49,13 @@ Reference spec (portable): `docs/porting/net-reference.md`
   - тесты должны быть детерминированными (без “sleep на глаз”).
 - Тесты только с локальной фикстурой/сервером (без внешней сети).
 - Не добавлять новые зависимости, если функционал уже покрыт зависимостями workspace или stdlib (см. `AGENTS.md` и `kanban-instructions.md`).
+
+---
+
+## Tasks
+
+- [x] Implement `HEAD` support:
+  - add `head(url, headers) -> Headers` to `Net` trait
+  - implement for `HttpClient`
+  - propagate through `TimeoutNet` and `RetryNet`
+  - add local fixture test that verifies `Content-Length` is returned for a `HEAD` endpoint
