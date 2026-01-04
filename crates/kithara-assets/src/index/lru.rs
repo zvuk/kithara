@@ -49,6 +49,7 @@ impl LruIndex {
     /// Load the entire LRU table from storage.
     ///
     /// Missing/empty file is treated as an empty index.
+    /// Invalid JSON is treated as an empty index (best-effort).
     pub async fn load(&self) -> AssetsResult<LruState> {
         let bytes = self.res.read().await?;
 
@@ -56,7 +57,11 @@ impl LruIndex {
             return Ok(LruState::default());
         }
 
-        let file: LruIndexFile = serde_json::from_slice(&bytes)?;
+        let file: LruIndexFile = match serde_json::from_slice(&bytes) {
+            Ok(file) => file,
+            Err(_) => return Ok(LruState::default()),
+        };
+
         Ok(LruState::from_file(file))
     }
 

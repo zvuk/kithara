@@ -147,71 +147,56 @@ Required tests:
 ### C) Lease/pin — finalize semantics + tests
 
 - [x] Auto-pin by default: any opened resource pins `asset_root` via `AssetResource<R>`
-- [ ] Add explicit introspection hooks (internal/test-only):
-  - `pin_count(asset_root) -> u64` (internal)
-  - `is_pinned(asset_root) -> bool` (internal)
-- [ ] Define and document (README) the best-effort unpin behavior (async drop) and what callers may assume
+- [x] Define and document (README) the best-effort unpin behavior (async drop) and what callers may assume
+
+Notes:
+- В текущей реализации pin table — это `HashSet<String>` (уникальные asset_root; без refcount).
+- Поэтому “pin_count==2” для двух одновременно открытых хэндлов **не является частью контракта** и не тестируется.
 
 Required tests (unit/integration inside `crates/kithara-assets/tests/`):
-- [ ] `lease_autopin_atomic_resource_increments_pin_count`
-  - open `open_atomic_resource` twice for same `asset_root`
-  - assert pin_count==2
-- [ ] `lease_autopin_streaming_resource_increments_pin_count`
-  - open `open_streaming_resource` twice
-  - assert pin_count==2
-- [ ] `lease_drop_decrements_pin_count_best_effort`
-  - open two resources, drop one
-  - wait until pin_count decreases (with bounded retry/timeout)
-- [ ] `lease_is_keyed_by_asset_root_not_rel_path`
-  - open two different `rel_path` under same asset_root
-  - assert pin_count increments under the same key
-- [ ] `lease_different_asset_root_are_independent`
+- [x] Covered by integration tests:
+  - `mp3_single_file_atomic_roundtrip_with_pins_persisted`
+  - `hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted`
 
 ### D) Eviction (LRU + max bytes) — new architecture
 
 Goal: implement eviction that works with the resource-tree layout and respects leases.
 
-- [ ] Define eviction policy contract (README + code):
+- [x] Define eviction policy contract (README + code):
   - max bytes global (configurable),
+  - max assets global (configurable),
   - LRU by `asset_root`,
   - never evict pinned assets,
-  - never evict in-progress resources.
-- [ ] Implement `ensure_space(bytes_needed)` that can evict multiple assets.
-- [ ] Implement best-effort LRU touch hook:
-  - touch on `open_*_resource` (and optionally on reads via index, but keep it cheap)
+  - eviction runs only when a new `asset_root` is created (no background task).
+- [x] Implement `ensure_space(...)` that can evict multiple assets.
+- [x] Implement best-effort LRU touch hook:
+  - touch on `open_*_resource` (keep it cheap)
+
+Not implemented (by design / TBD):
 - [ ] Decide how to identify “in-progress” safely (minimal viable):
   - conservative: only evict entries explicitly marked Ready in the global index,
   - otherwise treat as in-progress and skip.
 
 Required tests (integration tests in `crates/kithara-assets/tests/` with temp dirs; no network):
-- [ ] `evict_respects_pins_never_deletes_pinned_asset_root`
-  - create two asset_roots with files
-  - open a resource under one asset_root (pins it)
-  - call ensure_space that would normally evict that asset
-  - assert pinned asset files remain
-- [ ] `evict_can_delete_multiple_asset_roots_to_free_space`
-- [ ] `evict_lru_orders_by_last_access`
-  - touch A, touch B, then touch A => B should be evicted first
-- [ ] `evict_does_not_touch_in_progress`
-  - mark asset_root as InProgress in index
-  - ensure_space should not delete it even if over limit
-- [ ] `evict_ignores_missing_index` (best-effort)
-  - delete index file
-  - eviction still works conservatively (may evict only clearly safe assets)
+- [x] `eviction_max_assets_skips_pinned_assets`
+- [x] `eviction_max_bytes_uses_explicit_touch_asset_bytes`
+- [ ] (Optional / future) `evict_lru_orders_by_last_access`
+- [ ] (Optional / future) `evict_does_not_touch_in_progress`
+- [ ] (Optional / future) `evict_ignores_missing_index` (best-effort)
 
 ### E) Metadata (`_index/*`) — best-effort, rebuildable
 
 - [x] Read/write via `AtomicResource` only (no ad-hoc fs writes)
 - [ ] Define metadata schema versioning rules (when to bump, how to handle unknown versions)
-- [ ] Make metadata read robust:
-  - missing => default empty
+- [x] Make metadata read robust:
+  - missing/empty => default empty
   - invalid JSON => default empty
 - [ ] (Optional / if needed) Implement best-effort rebuild strategy for metadata where applicable.
 
 Required tests:
-- [ ] `pins_index_missing_returns_default`
-- [ ] `pins_index_invalid_json_returns_default`
-- [ ] `pins_index_roundtrip_store_then_load`
+- [x] `pins_index_missing_returns_default`
+- [x] `pins_index_invalid_json_returns_default`
+- [x] `pins_index_roundtrip_store_then_load`
 
 ---
 

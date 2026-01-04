@@ -47,7 +47,7 @@ impl PinsIndex {
 
     /// Load the pins set from storage.
     ///
-    /// Empty or missing file is treated as an empty set.
+    /// Empty, missing, or invalid JSON is treated as an empty set (best-effort).
     pub async fn load(&self) -> AssetsResult<HashSet<String>> {
         let bytes = self.res.read().await?;
 
@@ -55,7 +55,11 @@ impl PinsIndex {
             return Ok(HashSet::new());
         }
 
-        let file: PinsIndexFile = serde_json::from_slice(&bytes)?;
+        let file: PinsIndexFile = match serde_json::from_slice(&bytes) {
+            Ok(file) => file,
+            Err(_) => return Ok(HashSet::new()),
+        };
+
         Ok(file.pinned.into_iter().collect())
     }
 
