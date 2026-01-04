@@ -30,6 +30,4 @@ pub fn new_bridge(opts: BridgeOptions) -> (BridgeWriter, BridgeReader) {
 
 use bytes::Bytes;
 
-use crate::reader::BridgeReader;
-use crate::sync::BufferTracker;
-use crate::writer::BridgeWriter;
+use crate::{reader::BridgeReader, sync::BufferTracker, writer::BridgeWriter};

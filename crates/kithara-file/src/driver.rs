@@ -1,14 +1,17 @@
-use crate::options::{FileSourceOptions, OptionsError};
-use crate::range_policy::RangePolicy;
+use std::{pin::Pin, sync::Arc};
+
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt};
 use kithara_assets::AssetCache;
 use kithara_core::AssetId;
 use kithara_net::{HttpClient, NetError};
 use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
-use std::pin::Pin;
-use std::sync::Arc;
 use thiserror::Error;
+
+use crate::{
+    options::{FileSourceOptions, OptionsError},
+    range_policy::RangePolicy,
+};
 
 #[derive(Debug, Error)]
 pub enum DriverError {

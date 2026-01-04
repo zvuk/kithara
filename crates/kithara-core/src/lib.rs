@@ -29,8 +29,7 @@ pub mod resource_hash;
 
 // Re-export public types
 pub use asset_id::AssetId;
-pub use errors::{CoreError, CoreResult};
-pub use resource_hash::ResourceHash;
-
 // Re-export internal functions for use within the crate
 pub(crate) use canonicalization::{canonicalize_for_asset, canonicalize_for_resource};
+pub use errors::{CoreError, CoreResult};
+pub use resource_hash::ResourceHash;

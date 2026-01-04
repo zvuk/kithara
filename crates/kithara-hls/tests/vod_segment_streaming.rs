@@ -1,8 +1,9 @@
 mod fixture;
+use std::sync::Arc;
+
 use fixture::*;
 use futures::StreamExt;
 use kithara_hls::{HlsOptions, HlsSource};
-use std::sync::Arc;
 
 #[tokio::test]
 async fn hls_vod_completes_and_stream_closes() -> HlsResult<()> {

@@ -1,13 +1,12 @@
+use std::{collections::HashMap, sync::Arc};
+
 use axum::{Router, routing::get};
 use kithara_assets::{AssetCache, CacheOptions};
+pub use kithara_hls::HlsError;
 use kithara_net::{HttpClient, NetOptions};
-use std::collections::HashMap;
-use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use url::Url;
-
-pub use kithara_hls::HlsError;
 
 pub type HlsResult<T> = Result<T, HlsError>;
 

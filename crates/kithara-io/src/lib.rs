@@ -40,8 +40,9 @@
 
 #![forbid(unsafe_code)]
 
-use bytes::Bytes;
 use std::io::{Read, Seek};
+
+use bytes::Bytes;
 
 pub mod bridge;
 pub mod errors;
@@ -87,10 +88,13 @@ pub use writer::BridgeWriter;
 
 #[cfg(test)]
 mod tests {
+    use std::{
+        io::{Read, Seek, SeekFrom},
+        thread,
+        time::Duration,
+    };
+
     use super::*;
-    use std::io::{Read, Seek, SeekFrom};
-    use std::thread;
-    use std::time::Duration;
 
     #[test]
     fn test_basic_bridge_creation() {

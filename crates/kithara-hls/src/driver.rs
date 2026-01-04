@@ -1,11 +1,9 @@
+use std::{pin::Pin, sync::Arc, time::Instant};
+
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt};
-use hls_m3u8::MediaPlaylist;
-use hls_m3u8::tags::ExtXMap;
+use hls_m3u8::{MediaPlaylist, tags::ExtXMap};
 use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::Instant;
 use thiserror::Error;
 use tokio::sync::{Mutex, broadcast};
 use url::Url;

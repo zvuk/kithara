@@ -1,13 +1,16 @@
-use crate::driver::{DriverError, FileCommand, FileDriver};
-use crate::options::FileSourceOptions;
+use std::{pin::Pin, sync::Arc};
+
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_assets::AssetCache;
 use kithara_core::{AssetId, CoreError};
 use kithara_net::HttpClient;
-use std::pin::Pin;
-use std::sync::Arc;
 use tokio::sync::mpsc;
+
+use crate::{
+    driver::{DriverError, FileCommand, FileDriver},
+    options::FileSourceOptions,
+};
 
 #[derive(Debug)]
 pub struct FileSession {

@@ -1,8 +1,9 @@
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
-use hls_m3u8::MasterPlaylist;
-use hls_m3u8::tags::VariantStream;
+use hls_m3u8::{MasterPlaylist, tags::VariantStream};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThroughputSampleSource {

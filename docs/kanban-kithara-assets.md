@@ -16,37 +16,43 @@
   - **Atomic** (маленькие файлы: playlists/keys/metadata/index): whole-object `read/write` с crash-safe replace (temp → rename),
 - обеспечивает lease/pin для активных asset’ов,
 - обеспечивает eviction по общему размеру (bytes) с LRU по asset,
-- имеет best-effort глобальный индекс `_index/state.json`:
-  - индекс **не** является источником истины,
-  - при необходимости восстанавливается по файловой системе.
+- имеет best-effort metadata в namespace `_index/*` (например `_index/pins.json` для pin table):
+  - metadata **не** является источником истины,
+  - metadata может быть удалена/потеряна (FS is source of truth).
 
 ---
 
 ## Публичный контракт (нормативно)
 
-Публичный контракт `kithara-assets` — это **только** трейт:
+Публичный контракт `kithara-assets` выражен следующими публичными сущностями (см. `crates/kithara-assets/src/lib.rs`):
 
-- `Assets` (см. `crates/kithara-assets/src/lib.rs`)
+- `Assets` — базовый контракт открытия ресурсов по `ResourceKey` (без lease/pin).
+- `LeaseAssets<A>` — декоратор над `A: Assets`, добавляющий lease/pin и возвращающий `AssetResource<_, _>` с RAII guard.
+- `DiskAssetStore` — disk-backed реализация `Assets` (маппинг `ResourceKey` → реальные storage ресурсы).
+- `AssetStore` — type alias: `LeaseAssets<DiskAssetStore>`.
+- `asset_store(root_dir) -> AssetStore` — конструктор для ready-to-use композиции (free function, т.к. `AssetStore` это alias).
 
 Важное правило для агентов:
-- всё, что является частью “обязательного контракта” — должно быть выражено в `Assets`;
+- всё, что является частью “обязательного контракта” — должно быть выражено через эти публичные сущности (прежде всего `Assets` + `LeaseAssets`);
 - всё, что не является частью контракта — не должно быть `pub` (только internal).
 
 ---
 
 ## Компоненты (контракт и ответственность)
 
-### 1) `Assets` (facade)
+### 1) `Assets` (base contract)
 
 Нормативный контракт (актуально):
 
-- открывает ресурсы по ключам:
-  - `open_streaming_resource(key, cancel) -> AssetResource<StreamingResource>`
-  - `open_atomic_resource(key, cancel) -> AssetResource<AtomicResource>`
-- глобальный индекс:
-  - `open_index_resource(cancel) -> AssetResource<AtomicResource>`
-  - `load_index(cancel) -> AssetIndex`
-  - `store_index(cancel, &AssetIndex)`
+- открывает ресурсы по ключам **без** lease/pin (lease — ответственность декоратора):
+  - `open_streaming_resource(key, cancel) -> CacheResult<StreamingResource>`
+  - `open_atomic_resource(key, cancel) -> CacheResult<AtomicResource>`
+- предоставляет “static meta” атомарный ресурс для маленького состояния декораторов:
+  - `open_static_meta_resource(key, cancel) -> CacheResult<AtomicResource>`
+
+Нормативно:
+- `Assets` не “придумывает” пути и не занимается string-munging; ключи приходят снаружи.
+- `open_static_meta_resource` должен быть исключён из pinning декораторами (иначе рекурсия).
 
 ### 2) Ключи (внешний контракт)
 
@@ -63,23 +69,31 @@
 - запрещены `..`,
 - запрещены пустые сегменты.
 
-### 3) Индекс `_index/state.json` (best-effort)
+### 3) Best-effort metadata (через `_index/*`)
 
-- один глобальный индекс:
+На текущий момент в крейте зафиксировано best-effort состояние для lease/pin:
+
+- pin table (persisted):
   - `asset_root = "_index"`
-  - `rel_path = "state.json"`
-- индекс:
-  - не держится “открытым”,
-  - не является source of truth,
-  - может быть удалён/потерян и восстановлен из FS.
+  - `rel_path = "pins.json"`
+  - запись/чтение только через `Assets::open_static_meta_resource(...)` как `AtomicResource`.
+
+Нормативно:
+- metadata не является source of truth (FS is source of truth),
+- metadata может быть удалена/потеряна (higher layers должны уметь восстановиться через повторное pin при открытии ресурсов).
 
 ### 4) Auto-pin (lease) semantics (нормативно)
 
-Все ресурсы, открытые через `Assets`, автоматически **pin**’ят `asset_root` на время жизни хэндла:
+Все ресурсы, открытые через декоратор `LeaseAssets<A>`, автоматически **pin**’ят `asset_root`
+на время жизни хэндла:
 
-- тип-хэндл: `AssetResource<R>`
-- pin реализован как RAII guard внутри `AssetResource`
-- drop `AssetResource` => best-effort release pin
+- тип-хэндл: `AssetResource<R, _>` (внутри хранит RAII guard)
+- pin реализован в `LeaseAssets`: перед возвратом хэндла создаётся lease guard
+- drop `AssetResource` => best-effort release pin (асинхронно)
+
+Нормативные свойства pin table:
+- in-memory индекс: `HashSet<String>` (уникальные asset_root; без refcount),
+- каждое добавление/удаление pin приводит к немедленному best-effort persisted snapshot через `AtomicResource`.
 
 Нормативное ожидание:
 - eviction никогда не должен удалять pinned `asset_root`.
@@ -106,11 +120,11 @@
 ### A) README (contract-first)
 
 - [x] Add crate README (`crates/kithara-assets/README.md`) describing:
-  - `Assets` contract (methods + semantics),
+  - `Assets` + `LeaseAssets` contracts (methods + semantics),
   - key layout `<root>/<asset_root>/<rel_path>` (and safety rules),
-  - `AssetResource<R>` auto-pin semantics,
+  - `LeaseAssets` auto-pin semantics (`AssetResource<R, _>` with RAII guard),
   - atomic vs streaming resources (who uses which),
-  - global index `_index/state.json`: best-effort, not source-of-truth, rebuild strategy.
+  - best-effort metadata under `_index/*` (today: pin table `_index/pins.json`), FS is source of truth.
 
 Required tests:
 - N/A (docs-only).
@@ -180,24 +194,19 @@ Required tests (integration tests in `crates/kithara-assets/tests/` with temp di
   - delete index file
   - eviction still works conservatively (may evict only clearly safe assets)
 
-### E) Index (`_index/state.json`) — best-effort, rebuildable
+### E) Metadata (`_index/*`) — best-effort, rebuildable
 
 - [x] Read/write via `AtomicResource` only (no ad-hoc fs writes)
-- [ ] Define index schema versioning rules (when to bump, how to handle unknown versions)
-- [ ] Implement `rebuild_index_from_fs()` best-effort:
-  - scan `<cache_root>/**` excluding `_index/**`
-  - derive entries from file metadata (size, paths)
-  - set conservative statuses (e.g., `Ready` unless explicitly known otherwise)
-- [ ] Make index read robust:
+- [ ] Define metadata schema versioning rules (when to bump, how to handle unknown versions)
+- [ ] Make metadata read robust:
   - missing => default empty
-  - invalid JSON => default empty (and optionally schedule rebuild)
+  - invalid JSON => default empty
+- [ ] (Optional / if needed) Implement best-effort rebuild strategy for metadata where applicable.
 
 Required tests:
-- [ ] `index_missing_returns_default`
-- [ ] `index_invalid_json_returns_default`
-- [ ] `index_roundtrip_store_then_load`
-- [ ] `index_rebuild_skips__index_directory`
-- [ ] `index_rebuild_discovers_files_and_records_sizes`
+- [ ] `pins_index_missing_returns_default`
+- [ ] `pins_index_invalid_json_returns_default`
+- [ ] `pins_index_roundtrip_store_then_load`
 
 ---
 

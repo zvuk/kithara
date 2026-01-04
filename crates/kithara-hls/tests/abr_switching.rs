@@ -1,10 +1,11 @@
 mod fixture;
 
+use std::time::Duration;
+
 use axum::{Router, routing::get};
 use fixture::{HlsResult, create_test_cache_and_net};
 use futures::StreamExt;
 use kithara_hls::{HlsEvent, HlsOptions, HlsSource};
-use std::time::Duration;
 use tokio::net::TcpListener;
 use url::Url;
 

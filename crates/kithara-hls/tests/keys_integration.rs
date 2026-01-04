@@ -1,7 +1,6 @@
 mod fixture;
 use fixture::*;
-use kithara_hls::HlsResult;
-use kithara_hls::keys::KeyManager;
+use kithara_hls::{HlsResult, keys::KeyManager};
 
 #[tokio::test]
 async fn fetch_and_cache_key() -> HlsResult<()> {

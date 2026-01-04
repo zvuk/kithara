@@ -1,5 +1,4 @@
-use reqwest::Error as ReqwestError;
-use reqwest::Url;
+use reqwest::{Error as ReqwestError, Url};
 use thiserror::Error;
 
 pub type NetResult<T> = Result<T, NetError>;

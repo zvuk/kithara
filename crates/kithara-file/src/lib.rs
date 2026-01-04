@@ -5,16 +5,16 @@ mod options;
 mod range_policy;
 mod session;
 
-pub use driver::{DriverError, FileCommand, SourceError};
-pub use options::{FileSourceOptions, OptionsError};
-pub use range_policy::RangePolicy;
-pub use session::{FileError, FileResult, FileSession};
+use std::sync::Arc;
 
 use async_trait::async_trait;
+pub use driver::{DriverError, FileCommand, SourceError};
 use kithara_assets::AssetCache;
 use kithara_core::AssetId;
 use kithara_net::{HttpClient, NetOptions};
-use std::sync::Arc;
+pub use options::{FileSourceOptions, OptionsError};
+pub use range_policy::RangePolicy;
+pub use session::{FileError, FileResult, FileSession};
 use url::Url;
 
 /// Public contract for the progressive file source.
@@ -69,11 +69,12 @@ impl FileSource {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use axum::{Router, response::Response, routing::get};
     use bytes::Bytes;
     use futures::StreamExt;
     use tokio::net::TcpListener;
+
+    use super::*;
 
     async fn test_audio_endpoint() -> Response {
         // Simulate some audio data (MP3-like bytes)

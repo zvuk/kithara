@@ -1,18 +1,19 @@
 #![forbid(unsafe_code)]
 
-use std::fmt;
-use std::ops::Range;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    fmt,
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use random_access_disk::RandomAccessDisk;
+use random_access_storage::RandomAccess;
 use rangemap::RangeSet;
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
-
-use random_access_disk::RandomAccessDisk;
-use random_access_storage::RandomAccess;
 
 use crate::{Resource, StorageError, StorageResult, StreamingResourceExt, WaitOutcome};
 

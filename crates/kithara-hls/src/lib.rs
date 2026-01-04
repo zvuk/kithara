@@ -19,15 +19,14 @@
 //!
 //! Concrete types (like [`HlsSource`]) implement these traits.
 
+use std::{pin::Pin, sync::Arc, time::Duration};
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
 use kithara_assets::AssetCache;
 use kithara_core::AssetId;
 use kithara_net::HttpClient;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::Duration;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use url::Url;

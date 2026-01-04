@@ -1,13 +1,16 @@
+use std::sync::LazyLock;
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::TryStreamExt;
 use reqwest::Client;
-use std::sync::LazyLock;
 use url::Url;
 
-use crate::error::{NetError, NetResult};
-use crate::traits::Net;
-use crate::types::{Headers, NetOptions, RangeSpec};
+use crate::{
+    error::{NetError, NetResult},
+    traits::Net,
+    types::{Headers, NetOptions, RangeSpec},
+};
 
 static CLIENT: LazyLock<Client> = LazyLock::new(Client::new);
 
@@ -134,17 +137,15 @@ impl Net for HttpClient {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{collections::HashMap, sync::Arc, time::Duration};
+
     use axum::{Router, extract::Request, http::StatusCode, response::Response, routing::get};
     use bytes::Bytes;
     use futures::StreamExt;
-    use std::collections::HashMap;
-    use std::sync::Arc;
-    use std::time::Duration;
     use tokio::net::TcpListener;
 
-    use crate::traits::NetExt;
-    use crate::{RetryPolicy, TimeoutNet};
+    use super::*;
+    use crate::{RetryPolicy, TimeoutNet, traits::NetExt};
 
     fn test_app() -> Router {
         Router::new()

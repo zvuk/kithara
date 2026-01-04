@@ -1,7 +1,6 @@
 mod fixture;
 use fixture::*;
-use kithara_hls::HlsResult;
-use kithara_hls::fetch::FetchManager;
+use kithara_hls::{HlsResult, fetch::FetchManager};
 
 // #[tokio::test]
 // async fn fetch_segment_from_network() -> HlsResult<()> {

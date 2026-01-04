@@ -1,13 +1,16 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::time::Duration;
 use tokio::time::timeout;
 use url::Url;
 
-use crate::ByteStream;
-use crate::error::NetError;
-use crate::traits::Net;
-use crate::types::{Headers, RangeSpec};
+use crate::{
+    ByteStream,
+    error::NetError,
+    traits::Net,
+    types::{Headers, RangeSpec},
+};
 
 /// Timeout decorator for Net implementations
 pub struct TimeoutNet<N> {

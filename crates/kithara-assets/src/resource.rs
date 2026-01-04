@@ -1,16 +1,12 @@
 #![forbid(unsafe_code)]
 
-use std::fmt;
-use std::ops::Range;
+use std::{fmt, ops::Range};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-
 use kithara_storage::{
     Resource, StorageError, StreamingResource, StreamingResourceExt, WaitOutcome,
 };
-
-use crate::lease::LeaseGuard;
 
 /// A resource handle returned by `kithara-assets` that automatically pins its `asset_root`.
 ///
@@ -23,13 +19,13 @@ use crate::lease::LeaseGuard;
 /// The wrapper implements `kithara_storage::Resource` by delegating to the inner resource.
 /// For streaming-specific APIs it also implements `StreamingResourceExt` for
 /// `AssetResource<StreamingResource>`.
-pub struct AssetResource<R> {
+pub struct AssetResource<R, L = ()> {
     pub(crate) inner: R,
-    pub(crate) _lease: LeaseGuard,
+    pub(crate) _lease: L,
 }
 
-impl<R> AssetResource<R> {
-    pub(crate) fn new(inner: R, lease: LeaseGuard) -> Self {
+impl<R, L> AssetResource<R, L> {
+    pub(crate) fn new(inner: R, lease: L) -> Self {
         Self {
             inner,
             _lease: lease,
@@ -49,7 +45,7 @@ impl<R> AssetResource<R> {
     }
 }
 
-impl<R> fmt::Debug for AssetResource<R>
+impl<R, L> fmt::Debug for AssetResource<R, L>
 where
     R: fmt::Debug,
 {
@@ -60,9 +56,10 @@ where
     }
 }
 
-impl<R> Clone for AssetResource<R>
+impl<R, L> Clone for AssetResource<R, L>
 where
     R: Clone,
+    L: Clone,
 {
     fn clone(&self) -> Self {
         Self {
@@ -73,9 +70,10 @@ where
 }
 
 #[async_trait]
-impl<R> Resource for AssetResource<R>
+impl<R, L> Resource for AssetResource<R, L>
 where
     R: Resource + Send + Sync,
+    L: Send + Sync + 'static,
 {
     async fn write(&self, data: &[u8]) -> Result<(), StorageError> {
         self.inner.write(data).await
@@ -95,7 +93,10 @@ where
 }
 
 #[async_trait]
-impl StreamingResourceExt for AssetResource<StreamingResource> {
+impl<L> StreamingResourceExt for AssetResource<StreamingResource, L>
+where
+    L: Send + Sync + 'static,
+{
     async fn wait_range(&self, range: Range<u64>) -> Result<WaitOutcome, StorageError> {
         self.inner.wait_range(range).await
     }

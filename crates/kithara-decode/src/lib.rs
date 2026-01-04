@@ -91,18 +91,15 @@
 #![forbid(unsafe_code)]
 
 pub use dasp::sample::Sample as DaspSample;
-pub use symphonia::core::audio::conv::ConvertibleSample;
-pub use symphonia::core::audio::sample::Sample as SymphoniaSample;
-
+pub use decoder::Decoder;
+pub use engine::DecodeEngine;
+pub use pipeline::AudioStream;
+pub use symphonia::core::audio::{conv::ConvertibleSample, sample::Sample as SymphoniaSample};
 // Public API exports
 pub use types::{
     AudioSource, AudioSpec, ChannelCount, DecodeCommand, DecodeError, DecodeResult,
     DecoderSettings, MediaSource, PcmChunk, PcmSpec, ReadSeek, SampleRate,
 };
-
-pub use decoder::Decoder;
-pub use engine::DecodeEngine;
-pub use pipeline::AudioStream;
 
 // Internal modules
 mod decoder;

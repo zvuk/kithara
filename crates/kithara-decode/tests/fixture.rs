@@ -3,6 +3,8 @@
 //! Provides deterministic local fixtures for decode tests (no external network).
 //! Includes tiny MP3/AAC test assets embedded or served by local server.
 
+use std::{collections::HashMap, sync::Arc};
+
 use axum::{
     Router,
     body::Body,
@@ -10,8 +12,6 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use std::collections::HashMap;
-use std::sync::Arc;
 use tokio::net::TcpListener;
 use url::Url;
 

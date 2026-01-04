@@ -1,7 +1,8 @@
 mod fixture;
+use std::time::Instant;
+
 use fixture::create_test_master_playlist;
 use kithara_hls::abr::{AbrConfig, AbrController, AbrReason, variants_from_master};
-use std::time::Instant;
 
 #[test]
 fn test_variant_selection_manual_override() {

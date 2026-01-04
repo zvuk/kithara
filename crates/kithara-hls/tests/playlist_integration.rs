@@ -1,7 +1,6 @@
 mod fixture;
 use fixture::*;
-use kithara_hls::HlsResult;
-use kithara_hls::playlist::PlaylistManager;
+use kithara_hls::{HlsResult, playlist::PlaylistManager};
 
 #[tokio::test]
 async fn fetch_master_playlist_from_network() -> HlsResult<()> {

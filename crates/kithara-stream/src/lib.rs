@@ -11,18 +11,16 @@
 //! - `offline_mode` is a shared concern; the engine can expose it, while the concrete `Source`
 //!   decides how to enforce it (cache-only, etc).
 
+#[cfg(test)]
+use std::time::Duration;
+use std::{fmt, pin::Pin, sync::Arc};
+
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt};
-use std::fmt;
-use std::pin::Pin;
-use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, trace};
-
-#[cfg(test)]
-use std::time::Duration;
 
 /// Data plane + control plane multiplexing.
 ///
@@ -306,8 +304,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use futures::StreamExt;
+
+    use super::*;
 
     #[derive(Debug, Error)]
     #[error("boom")]

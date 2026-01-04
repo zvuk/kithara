@@ -1,8 +1,9 @@
+use std::collections::HashMap;
+
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_assets::AssetCache;
 use kithara_net::{Headers, HttpClient};
-use std::collections::HashMap;
 use thiserror::Error;
 use url::Url;
 

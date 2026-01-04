@@ -1,13 +1,16 @@
+use std::time::Duration;
+
 use async_trait::async_trait;
 use bytes::Bytes;
-use std::time::Duration;
 use tokio::time::sleep;
 use url::Url;
 
-use crate::ByteStream;
-use crate::error::NetError;
-use crate::traits::Net;
-use crate::types::{Headers, RangeSpec, RetryPolicy};
+use crate::{
+    ByteStream,
+    error::NetError,
+    traits::Net,
+    types::{Headers, RangeSpec, RetryPolicy},
+};
 
 pub trait RetryClassifier {
     fn should_retry(&self, error: &NetError) -> bool;

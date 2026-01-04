@@ -1,15 +1,17 @@
+use std::{
+    pin::Pin,
+    time::{Duration, Instant},
+};
+
 use bytes::Bytes;
 use futures::Stream;
 use hls_m3u8::MediaPlaylist;
 use kithara_assets::AssetCache;
 use kithara_net::HttpClient;
-use std::pin::Pin;
-use std::time::{Duration, Instant};
 use thiserror::Error;
 use url::Url;
 
-use crate::abr::ThroughputSampleSource;
-use crate::{HlsError, HlsResult, KeyContext};
+use crate::{HlsError, HlsResult, KeyContext, abr::ThroughputSampleSource};
 
 #[derive(Debug, Error)]
 pub enum FetchError {

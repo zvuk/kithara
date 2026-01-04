@@ -20,4 +20,4 @@ async-trait = { workspace = true }
 bytes = { workspace = true }
 
 [dev-dependencies]
-# Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
+tempfile = { workspace = true }

@@ -31,6 +31,8 @@ impl BridgeWriter {
 use bytes::Bytes;
 use kanal::Sender;
 
-use crate::bridge::BridgeMsg;
-use crate::errors::{IoError, IoResult};
-use crate::sync::BufferTracker;
+use crate::{
+    bridge::BridgeMsg,
+    errors::{IoError, IoResult},
+    sync::BufferTracker,
+};

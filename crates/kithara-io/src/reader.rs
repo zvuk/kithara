@@ -89,5 +89,4 @@ impl Seek for BridgeReader {
 use bytes::Bytes;
 use kanal::Receiver;
 
-use crate::bridge::BridgeMsg;
-use crate::sync::BufferTracker;
+use crate::{bridge::BridgeMsg, sync::BufferTracker};

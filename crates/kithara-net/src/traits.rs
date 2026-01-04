@@ -1,14 +1,16 @@
+use std::{pin::Pin, time::Duration};
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use std::pin::Pin;
-use std::time::Duration;
 use url::Url;
 
-use crate::error::NetError;
-use crate::retry::{DefaultRetryPolicy, RetryNet};
-use crate::timeout::TimeoutNet;
-use crate::types::{Headers, RangeSpec, RetryPolicy};
+use crate::{
+    error::NetError,
+    retry::{DefaultRetryPolicy, RetryNet},
+    timeout::TimeoutNet,
+    types::{Headers, RangeSpec, RetryPolicy},
+};
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>;
 
