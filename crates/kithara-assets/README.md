@@ -16,29 +16,34 @@ The public contract is expressed by the following items re-exported from `src/li
 
 - `trait Assets` — base abstraction: open resources by `ResourceKey`
 - `struct LeaseAssets<A>` — decorator that adds pin/lease behavior to a base `Assets`
-- `type AssetStore = LeaseAssets<DiskAssetStore>` + `fn asset_store(...)` — convenient “ready-to-use”
-  composition for disk-backed usage
+- `struct EvictAssets<A>` — decorator that adds best-effort LRU/quota eviction to a base `Assets`
+- `type AssetStore = LeaseAssets<EvictAssets<DiskAssetStore>>` + `fn asset_store(root_dir, EvictConfig) -> AssetStore`
+  — convenient “ready-to-use” composition for disk-backed usage
 - `struct DiskAssetStore` — concrete on-disk implementation of `Assets`
 - `struct ResourceKey` — resource identifier (`asset_root`, `rel_path`)
 - `struct AssetResource<R, L = ()>` — resource handle decorator used by the lease system
+- `struct EvictConfig` — eviction configuration (max assets / max bytes)
 
 Everything else should be treated as an implementation detail.
 
 ## `Assets` trait
 
-`Assets` is the base contract. It does **not** implement pinning/leases. It is only responsible for
-mapping a `ResourceKey` to underlying storage primitives.
+`Assets` is the base contract. It does **not** implement pinning/leases or eviction. It is only
+responsible for mapping a `ResourceKey` to underlying storage primitives and exposing hooks that
+decorators can use.
 
 Resource opening:
-- `open_atomic_resource(key, cancel) -> CacheResult<AtomicResource>`
-- `open_streaming_resource(key, cancel) -> CacheResult<StreamingResource>`
+- `open_atomic_resource(key, cancel) -> AssetsResult<AtomicResource>`
+- `open_streaming_resource(key, cancel) -> AssetsResult<StreamingResource>`
 
-Static metadata resource:
-- `open_static_meta_resource(key, cancel) -> CacheResult<AtomicResource>`
+Static metadata resources (used by decorators; must not be pinned to avoid recursion):
+- pins index:
+  - `open_pins_index_resource(cancel) -> AssetsResult<AtomicResource>`
+- LRU/eviction index:
+  - `open_lru_index_resource(cancel) -> AssetsResult<AtomicResource>`
 
-`open_static_meta_resource` exists so decorators (like `LeaseAssets`) can persist small state without
-this crate performing direct filesystem I/O. This resource must be stable for the lifetime of the
-assets instance and must be excluded from pinning by decorators to avoid recursion.
+Asset deletion hook (used by eviction decorators):
+- `delete_asset(asset_root, cancel) -> AssetsResult<()>`
 
 Cancellation:
 - all “open” operations take a `tokio_util::sync::CancellationToken` that is forwarded to the
@@ -53,13 +58,12 @@ Normative semantics:
 - opening any resource through the decorator pins its `asset_root` for the lifetime of the returned
   handle,
 - pins are keyed by `asset_root` (not by `rel_path`),
-- pin table in memory is a `HashSet<String>` (unique pinned roots; no refcounts),
-- each pin/unpin immediately persists the full table to disk (best-effort) by writing JSON through a
-  static meta `AtomicResource`.
+- pins are persisted immediately as a best-effort snapshot through a storage-backed atomic resource
+  (no ad-hoc filesystem I/O in the generic layer).
 
 Persistence details (current behavior):
-- the pin table is stored as JSON at `ResourceKey { asset_root: "_index", rel_path: "pins.json" }`
-  via `Assets::open_static_meta_resource(...)`,
+- the pin table is stored under the reserved `_index/*` namespace (as JSON),
+- the file is written via `Assets::open_pins_index_resource(...)` as an `AtomicResource`,
 - writes use `kithara-storage` atomic semantics (temp → rename).
 
 Drop behavior:
@@ -71,12 +75,17 @@ Drop behavior:
 For a convenient default composition, this crate provides:
 
 - `DiskAssetStore` — disk-backed `Assets` implementation
-- `AssetStore` — type alias for `LeaseAssets<DiskAssetStore>`
-- `asset_store(root_dir) -> AssetStore` — constructor function
+- `AssetStore` — type alias for `LeaseAssets<EvictAssets<DiskAssetStore>>`
+- `asset_store(root_dir, EvictConfig) -> AssetStore` — constructor function
+
+Decorator order (normative):
+- `EvictAssets` is inside, `LeaseAssets` is outside — eviction is evaluated before the newly opened
+  handle pins the asset.
 
 This yields a store where:
 - mapping and disk I/O are handled by `DiskAssetStore`,
-- pinning and persistence are handled by `LeaseAssets`.
+- best-effort eviction is handled by `EvictAssets`,
+- pinning and pin persistence are handled by `LeaseAssets`.
 
 ## Key layout and disk mapping
 
@@ -97,8 +106,7 @@ traversal:
 
 Current `DiskAssetStore` behavior:
 - validates `asset_root` and `rel_path` against traversal rules,
-- if validation fails, falls back to a stable SHA-256 hex representation for that path component to
-  preserve safety.
+- if validation fails, returns `AssetsError::InvalidKey`.
 
 ## Atomic vs streaming resources
 
@@ -118,9 +126,10 @@ Typical usage:
 ## Best-effort metadata (“_index” namespace)
 
 The `"_index"` `asset_root` is reserved by convention for small internal metadata files. Today,
-`LeaseAssets` uses:
+decorators use it for best-effort JSON indexes backed by `AtomicResource`:
 
-- `_index/pins.json` — persisted pin table (best-effort)
+- pins index (used by `LeaseAssets`)
+- LRU/eviction index (used by `EvictAssets`)
 
 Filesystem remains the source of truth; metadata may be missing and can be rebuilt by higher layers
 if needed.

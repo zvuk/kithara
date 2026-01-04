@@ -29,8 +29,10 @@
 - `Assets` — базовый контракт открытия ресурсов по `ResourceKey` (без lease/pin).
 - `LeaseAssets<A>` — декоратор над `A: Assets`, добавляющий lease/pin и возвращающий `AssetResource<_, _>` с RAII guard.
 - `DiskAssetStore` — disk-backed реализация `Assets` (маппинг `ResourceKey` → реальные storage ресурсы).
-- `AssetStore` — type alias: `LeaseAssets<DiskAssetStore>`.
-- `asset_store(root_dir) -> AssetStore` — конструктор для ready-to-use композиции (free function, т.к. `AssetStore` это alias).
+- `EvictAssets<A>` — декоратор над `A: Assets`, добавляющий best-effort eviction (LRU/quota) на уровне asset_root.
+- `EvictConfig` — конфигурация eviction (max_assets + max_bytes).
+- `AssetStore` — type alias: `LeaseAssets<EvictAssets<DiskAssetStore>>`.
+- `asset_store(root_dir, EvictConfig) -> AssetStore` — конструктор для ready-to-use композиции (free function, т.к. `AssetStore` это alias).
 
 Важное правило для агентов:
 - всё, что является частью “обязательного контракта” — должно быть выражено через эти публичные сущности (прежде всего `Assets` + `LeaseAssets`);
@@ -45,14 +47,17 @@
 Нормативный контракт (актуально):
 
 - открывает ресурсы по ключам **без** lease/pin (lease — ответственность декоратора):
-  - `open_streaming_resource(key, cancel) -> CacheResult<StreamingResource>`
-  - `open_atomic_resource(key, cancel) -> CacheResult<AtomicResource>`
-- предоставляет “static meta” атомарный ресурс для маленького состояния декораторов:
-  - `open_static_meta_resource(key, cancel) -> CacheResult<AtomicResource>`
+  - `open_streaming_resource(key, cancel) -> AssetsResult<StreamingResource>`
+  - `open_atomic_resource(key, cancel) -> AssetsResult<AtomicResource>`
+- предоставляет атомарные ресурсы для маленького состояния декораторов (best-effort indexes):
+  - `open_pins_index_resource(cancel) -> AssetsResult<AtomicResource>`
+  - `open_lru_index_resource(cancel) -> AssetsResult<AtomicResource>`
+- предоставляет хук для удаления целого asset (для eviction):
+  - `delete_asset(asset_root, cancel) -> AssetsResult<()>`
 
 Нормативно:
 - `Assets` не “придумывает” пути и не занимается string-munging; ключи приходят снаружи.
-- `open_static_meta_resource` должен быть исключён из pinning декораторами (иначе рекурсия).
+- ресурсы индексов (`open_pins_index_resource`, `open_lru_index_resource`) должны быть исключены из pinning декораторами (иначе рекурсия).
 
 ### 2) Ключи (внешний контракт)
 
@@ -76,7 +81,7 @@
 - pin table (persisted):
   - `asset_root = "_index"`
   - `rel_path = "pins.json"`
-  - запись/чтение только через `Assets::open_static_meta_resource(...)` как `AtomicResource`.
+  - запись/чтение pin table — только через `Assets::open_pins_index_resource(...)` как `AtomicResource`.
 
 Нормативно:
 - metadata не является source of truth (FS is source of truth),

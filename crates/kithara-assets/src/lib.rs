@@ -7,7 +7,7 @@
 //! ## Public contract
 //!
 //! The explicit public contract is the [`Assets`] trait.
-//! Everything else should be considered an implementation detail.
+//! Everything else should be considered an implementation detail (even if it is currently `pub`).
 //!
 //! ## Key mapping (normative)
 //!
@@ -31,8 +31,8 @@
 //!
 //! ## Global index (best-effort)
 //!
-//! `_index/state.json` is a small, atomic file (temp → rename) used as best-effort metadata.
-//! Filesystem remains the source of truth; the index may be missing and can be rebuilt later.
+//! `_index/*` stores small, atomic files (temp → rename) used as best-effort metadata.
+//! Filesystem remains the source of truth; indexes may be missing and can be rebuilt later.
 
 mod cache;
 mod error;
