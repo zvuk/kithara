@@ -1,7 +1,6 @@
 use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::AssetCache;
 use kithara_file::{FileSource, FileSourceOptions};
 use tokio::net::TcpListener;
 

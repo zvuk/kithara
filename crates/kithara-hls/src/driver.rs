@@ -91,7 +91,7 @@ impl HlsDriver {
         };
 
         let params = StreamParams {
-            offline_mode: self.options.offline_mode,
+            offline_mode: false,
         };
 
         let s = Stream::new(source, params).into_byte_stream();
@@ -132,13 +132,9 @@ impl Source for HlsStream {
         let abr_controller = Arc::clone(&self.abr_controller);
         let event_emitter = Arc::clone(&self.event_emitter);
 
-        let offline_mode = params.offline_mode;
+        let _offline_mode = params.offline_mode;
 
         Ok(Box::pin(async_stream::stream! {
-            if offline_mode {
-                yield Err(StreamError::Source(SourceError::Hls(crate::HlsError::OfflineMiss)));
-                return;
-            }
 
             let master_playlist = playlist_manager
                 .fetch_master_playlist(&master_url)

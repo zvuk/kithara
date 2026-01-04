@@ -24,7 +24,7 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use kithara_assets::AssetCache;
+use kithara_assets::AssetStore;
 use kithara_core::AssetId;
 use kithara_net::HttpClient;
 use thiserror::Error;
@@ -57,7 +57,7 @@ pub enum HlsError {
     Net(#[from] kithara_net::NetError),
 
     #[error("Assets error: {0}")]
-    Cache(#[from] kithara_assets::CacheError),
+    Assets(#[from] kithara_assets::AssetsError),
 
     #[error("Core error: {0}")]
     Core(#[from] kithara_core::CoreError),
@@ -121,8 +121,6 @@ pub struct HlsOptions {
     pub key_processor_cb: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
     pub key_query_params: Option<std::collections::HashMap<String, String>>,
     pub key_request_headers: Option<std::collections::HashMap<String, String>>,
-
-    pub offline_mode: bool,
 }
 
 impl Default for HlsOptions {
@@ -149,8 +147,6 @@ impl Default for HlsOptions {
             key_processor_cb: None,
             key_query_params: None,
             key_request_headers: None,
-
-            offline_mode: false,
         }
     }
 }
@@ -163,7 +159,7 @@ pub struct KeyContext {
 
 #[async_trait]
 pub trait HlsSourceContract: Send + Sync + 'static {
-    async fn open(&self, url: Url, opts: HlsOptions, cache: AssetCache) -> HlsResult<HlsSession>;
+    async fn open(&self, url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession>;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -171,21 +167,21 @@ pub struct HlsSource;
 
 #[async_trait]
 impl HlsSourceContract for HlsSource {
-    async fn open(&self, url: Url, opts: HlsOptions, cache: AssetCache) -> HlsResult<HlsSession> {
+    async fn open(&self, url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession> {
         let asset_id = AssetId::from_url(&url)?;
         let net = HttpClient::new(kithara_net::NetOptions::default());
 
         // Create managers (kept as-is; internals will be iterated via TDD).
         let playlist_manager =
-            playlist::PlaylistManager::new(cache.clone(), net.clone(), opts.base_url.clone());
-        let fetch_manager = fetch::FetchManager::new(cache.clone(), net.clone());
+            playlist::PlaylistManager::new(assets.clone(), net.clone(), opts.base_url.clone());
+        let fetch_manager = fetch::FetchManager::new(assets.clone(), net.clone());
         let key_processor = opts.key_processor_cb.clone().map(|arc| {
             Box::new(move |bytes, ctx| arc(bytes, ctx))
                 as Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>
         });
 
         let key_manager = keys::KeyManager::new(
-            cache.clone(),
+            assets.clone(),
             net.clone(),
             key_processor,
             opts.key_query_params.clone(),
@@ -227,8 +223,8 @@ impl HlsSourceContract for HlsSource {
 
 impl HlsSource {
     /// Convenience associated constructor matching the historical API.
-    pub async fn open(url: Url, opts: HlsOptions, cache: AssetCache) -> HlsResult<HlsSession> {
-        HlsSource.open(url, opts, cache).await
+    pub async fn open(url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession> {
+        HlsSource.open(url, opts, assets).await
     }
 }
 

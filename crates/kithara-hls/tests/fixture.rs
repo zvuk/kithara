@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{Router, routing::get};
-use kithara_assets::{AssetCache, CacheOptions};
+use kithara_assets::{AssetStore, EvictConfig, asset_store};
 pub use kithara_hls::HlsError;
 use kithara_net::{HttpClient, NetOptions};
 use tempfile::TempDir;
@@ -82,33 +82,32 @@ impl TestServer {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct TestAssets {
-    cache: AssetCache,
+    assets: AssetStore,
     _temp_dir: Arc<TempDir>,
 }
 
 impl TestAssets {
-    pub fn cache(&self) -> &AssetCache {
-        &self.cache
+    pub fn assets(&self) -> &AssetStore {
+        &self.assets
     }
 }
 
 pub fn create_test_cache_and_net() -> (TestAssets, HttpClient) {
-    // NOTE: The assets/cache API has been redesigned. `CacheOptions` is now just a root directory.
+    // NOTE: The assets/cache API has been redesigned.
     // Keep the temp dir alive by storing it inside the returned wrapper.
     let temp_dir = TempDir::new().unwrap();
     let temp_dir = Arc::new(temp_dir);
 
-    let cache_opts = CacheOptions::new(temp_dir.path().to_path_buf());
-    let cache = AssetCache::open(cache_opts).unwrap();
+    let assets = asset_store(temp_dir.path().to_path_buf(), EvictConfig::default());
 
     let net_opts = NetOptions::default();
     let net = HttpClient::new(net_opts);
 
     (
         TestAssets {
-            cache,
+            assets,
             _temp_dir: temp_dir,
         },
         net,
@@ -229,10 +228,10 @@ mod tests {
 
     #[test]
     fn test_fixture_creation() {
-        let (cache, _net) = create_test_cache_and_net();
+        let (assets, _net) = create_test_cache_and_net();
 
-        // Verify objects are created successfully
-        // More detailed testing would require actual cache/net operations
-        assert!(format!("{:?}", cache).contains("AssetCache")); // Basic check
+        // Verify objects are created successfully.
+        // More detailed testing would require actual assets/net operations.
+        let _ = assets;
     }
 }

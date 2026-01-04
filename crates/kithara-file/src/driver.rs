@@ -2,11 +2,13 @@ use std::{pin::Pin, sync::Arc};
 
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt};
-use kithara_assets::AssetCache;
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_core::AssetId;
 use kithara_net::{HttpClient, NetError};
+use kithara_storage::{Resource as _, StreamingResourceExt};
 use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
 use thiserror::Error;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     options::{FileSourceOptions, OptionsError},
@@ -34,10 +36,10 @@ pub enum SourceError {
     Net(#[from] NetError),
 
     #[error("Assets error: {0}")]
-    Cache(#[from] kithara_assets::CacheError),
+    Assets(#[from] kithara_assets::AssetsError),
 
-    #[error("Offline miss: content not in cache")]
-    OfflineMiss,
+    #[error("Storage error: {0}")]
+    Storage(#[from] kithara_storage::StorageError),
 }
 
 #[derive(Debug)]
@@ -49,14 +51,14 @@ pub enum FileCommand {
     SeekBytes(u64),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FileDriver {
     asset_id: AssetId,
     url: url::Url,
     net_client: HttpClient,
     #[allow(dead_code)]
     options: FileSourceOptions,
-    cache: Option<Arc<AssetCache>>,
+    assets: Option<Arc<AssetStore>>,
     range_policy: RangePolicy,
 }
 
@@ -66,7 +68,7 @@ impl FileDriver {
         url: url::Url,
         net_client: HttpClient,
         options: FileSourceOptions,
-        cache: Option<Arc<AssetCache>>,
+        assets: Option<Arc<AssetStore>>,
     ) -> Self {
         let range_policy = RangePolicy::new(options.enable_range_seek);
         Self {
@@ -74,7 +76,7 @@ impl FileDriver {
             url,
             net_client,
             options: options.clone(),
-            cache,
+            assets,
             range_policy,
         }
     }
@@ -93,10 +95,11 @@ impl FileDriver {
             url: self.url.clone(),
             net_client: self.net_client.clone(),
             options: self.options.clone(),
-            cache: self.cache.clone(),
+            assets: self.assets.clone(),
+            pos: 0,
         };
         let params = StreamParams {
-            offline_mode: self.options.offline_mode,
+            offline_mode: false,
         };
         let stream = Stream::new(source, params).into_byte_stream();
         Box::pin(stream.map(|r| r.map_err(DriverError::from)))
@@ -135,13 +138,14 @@ impl FileDriver {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct FileStream {
     asset_id: AssetId,
     url: url::Url,
     net_client: HttpClient,
     options: FileSourceOptions,
-    cache: Option<Arc<AssetCache>>,
+    assets: Option<Arc<AssetStore>>,
+    pos: u64,
 }
 
 impl Source for FileStream {
@@ -154,54 +158,113 @@ impl Source for FileStream {
     ) -> Result<SourceStream<Self::Control, Self::Error>, StreamError<Self::Error>> {
         let client = self.net_client.clone();
         let url = self.url.clone();
-        let cache = self.cache.clone();
-        let asset_id = self.asset_id;
-
-        let offline_mode = params.offline_mode;
+        let assets = self.assets.clone();
+        let asset_root = hex::encode(self.asset_id.as_bytes());
+        let start_pos = self.pos;
+        let _offline_mode = params.offline_mode;
 
         Ok(Box::pin(async_stream::stream! {
-            // Cache/Assets integration is being redesigned (resource-based API).
-            // Disable the old cache-first path until the new Assets contract is wired in.
-            let _ = &cache;
-            let _ = asset_id;
-
-            if offline_mode {
-                yield Err(StreamError::Source(SourceError::OfflineMiss));
+            let Some(assets) = assets else {
+                yield Err(StreamError::Source(SourceError::Assets(
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "assets store is required for kithara-file streaming; pass Some(AssetStore) to FileSource::open",
+                    )
+                    .into(),
+                )));
                 return;
-            }
+            };
 
-            // Network stream.
-            let mut stream = match client.stream(url, None).await {
-                Ok(s) => s,
+            // MP3/progressive file layout (contracted in kithara-assets README examples).
+            let key = ResourceKey::new(asset_root, "media/audio.mp3");
+
+            let cancel = CancellationToken::new();
+
+            let res = match assets.open_streaming_resource(&key, cancel.clone()).await {
+                Ok(r) => r,
                 Err(e) => {
-                    yield Err(StreamError::Source(SourceError::Net(e)));
+                    yield Err(StreamError::Source(SourceError::Assets(e)));
                     return;
                 }
             };
 
-            while let Some(chunk_result) = stream.next().await {
-                match chunk_result {
-                    Ok(bytes) => {
-                        yield Ok(Message::Data(bytes));
+            // Download loop: write sequentially into the streaming resource, then commit/fail.
+            tokio::spawn({
+                let res = res.clone();
+                let mut stream = match client.stream(url, None).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        let _ = res.fail(format!("net error: {e}")).await;
+                        return;
+                    }
+                };
+
+                async move {
+                    let mut off: u64 = 0;
+
+                    while let Some(chunk_result) = stream.next().await {
+                        match chunk_result {
+                            Ok(bytes) => {
+                                if let Err(e) = res.write_at(off, &bytes).await {
+                                    let _ = res.fail(format!("storage write_at error: {e}")).await;
+                                    return;
+                                }
+                                off = off.saturating_add(bytes.len() as u64);
+                            }
+                            Err(e) => {
+                                let _ = res.fail(format!("net stream error: {e}")).await;
+                                return;
+                            }
+                        }
+                    }
+
+                    let _ = res.commit(Some(off)).await;
+                }
+            });
+
+            // Reader loop: wait for availability and read progressively from current position.
+            let mut pos = start_pos;
+            let chunk_size: u64 = 64 * 1024;
+
+            loop {
+                let end = pos.saturating_add(chunk_size);
+
+                match res.wait_range(pos..end).await {
+                    Ok(kithara_storage::WaitOutcome::Ready) => {
+                        let len: usize = (end - pos) as usize;
+                        match res.read_at(pos, len).await {
+                            Ok(bytes) => {
+                                if bytes.is_empty() {
+                                    // Should not normally happen after Ready, but treat as EOS-ish.
+                                    return;
+                                }
+                                pos = pos.saturating_add(bytes.len() as u64);
+                                yield Ok(Message::Data(bytes));
+                            }
+                            Err(e) => {
+                                yield Err(StreamError::Source(SourceError::Storage(e)));
+                                return;
+                            }
+                        }
+                    }
+                    Ok(kithara_storage::WaitOutcome::Eof) => {
+                        return;
                     }
                     Err(e) => {
-                        yield Err(StreamError::Source(SourceError::Net(e)));
+                        yield Err(StreamError::Source(SourceError::Storage(e)));
                         return;
                     }
                 }
             }
-
-            // Assets integration is being redesigned (streaming+atomic resources).
-            // Old "cache whole body at end" behavior is intentionally disabled.
-            let _ = &cache;
         }))
     }
 
-    fn seek_bytes(&mut self, _pos: u64) -> Result<(), StreamError<Self::Error>> {
-        Err(StreamError::SeekNotSupported)
+    fn seek_bytes(&mut self, pos: u64) -> Result<(), StreamError<Self::Error>> {
+        self.pos = pos;
+        Ok(())
     }
 
     fn supports_seek(&self) -> bool {
-        false
+        true
     }
 }

@@ -177,7 +177,7 @@ async fn abr_upswitch_continues_from_current_segment_index() -> HlsResult<()> {
     )
     .await;
     let (assets, _net) = create_test_cache_and_net();
-    let cache = assets.cache().clone();
+    let assets = assets.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let mut options = HlsOptions::default();
@@ -185,7 +185,7 @@ async fn abr_upswitch_continues_from_current_segment_index() -> HlsResult<()> {
     options.abr_min_buffer_for_up_switch = 0.0;
     options.abr_min_switch_interval = Duration::ZERO;
 
-    let session = HlsSource::open(master_url, options, cache).await?;
+    let session = HlsSource::open(master_url, options, assets).await?;
     let mut events = session.events();
 
     let mut stream = Box::pin(session.stream());
@@ -239,7 +239,7 @@ async fn abr_downswitch_emits_init_before_next_segment_when_required() -> HlsRes
     )
     .await;
     let (assets, _net) = create_test_cache_and_net();
-    let cache = assets.cache().clone();
+    let assets = assets.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let mut options = HlsOptions::default();
@@ -247,7 +247,7 @@ async fn abr_downswitch_emits_init_before_next_segment_when_required() -> HlsRes
     options.abr_min_switch_interval = Duration::ZERO;
     options.abr_min_buffer_for_up_switch = 0.0;
 
-    let session = HlsSource::open(master_url, options, cache).await?;
+    let session = HlsSource::open(master_url, options, assets).await?;
 
     let mut stream = Box::pin(session.stream());
 

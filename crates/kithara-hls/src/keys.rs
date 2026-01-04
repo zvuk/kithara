@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::AssetCache;
+use kithara_assets::AssetStore;
 use kithara_net::{Headers, HttpClient};
 use thiserror::Error;
 use url::Url;
 
-use crate::{HlsError, HlsResult, KeyContext};
+use crate::{HlsResult, KeyContext};
 
 #[derive(Debug, Error)]
 pub enum KeyError {
@@ -15,7 +15,7 @@ pub enum KeyError {
     Net(#[from] kithara_net::NetError),
 
     #[error("Assets error: {0}")]
-    Cache(#[from] kithara_assets::CacheError),
+    Assets(#[from] kithara_assets::AssetsError),
 
     #[error("Key processing failed: {0}")]
     Processing(String),
@@ -28,7 +28,7 @@ pub enum KeyError {
 }
 
 pub struct KeyManager {
-    cache: AssetCache,
+    assets: AssetStore,
     net: HttpClient,
     key_processor: Option<Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
     key_query_params: Option<HashMap<String, String>>,
@@ -37,14 +37,14 @@ pub struct KeyManager {
 
 impl KeyManager {
     pub fn new(
-        cache: AssetCache,
+        assets: AssetStore,
         net: HttpClient,
         key_processor: Option<Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
         key_query_params: Option<HashMap<String, String>>,
         key_request_headers: Option<HashMap<String, String>>,
     ) -> Self {
         Self {
-            cache,
+            assets,
             net,
             key_processor,
             key_query_params,
@@ -58,7 +58,7 @@ impl KeyManager {
         //
         // The old cache layer (`kithara-cache`) supported `CachePath` + `put_atomic` and is no
         // longer available here. For now, fetch from the network only.
-        let _ = &self.cache;
+        let _ = &self.assets;
 
         let raw_key = self.fetch_raw_key(url).await?;
         let processed_key = self.process_key(raw_key, url.clone(), iv)?;

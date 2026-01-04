@@ -1,5 +1,5 @@
 use hls_m3u8::{MasterPlaylist, MediaPlaylist};
-use kithara_assets::AssetCache;
+use kithara_assets::AssetStore;
 use kithara_net::HttpClient;
 use thiserror::Error;
 use url::Url;
@@ -12,7 +12,7 @@ pub enum PlaylistError {
     Net(#[from] kithara_net::NetError),
 
     #[error("Assets error: {0}")]
-    Cache(#[from] kithara_assets::CacheError),
+    Assets(#[from] kithara_assets::AssetsError),
 
     #[error("Playlist parsing error: {0}")]
     Parse(String),
@@ -22,15 +22,15 @@ pub enum PlaylistError {
 }
 
 pub struct PlaylistManager {
-    cache: AssetCache,
+    assets: AssetStore,
     net: HttpClient,
     base_url: Option<Url>,
 }
 
 impl PlaylistManager {
-    pub fn new(cache: AssetCache, net: HttpClient, base_url: Option<Url>) -> Self {
+    pub fn new(assets: AssetStore, net: HttpClient, base_url: Option<Url>) -> Self {
         Self {
-            cache,
+            assets,
             net,
             base_url,
         }
@@ -79,7 +79,7 @@ impl PlaylistManager {
         //
         // The old cache layer (`kithara-cache`) supported `CachePath` + `put_atomic` and is no
         // longer available here. For now, fetch from the network only.
-        let _ = &self.cache;
+        let _ = &self.assets;
         let bytes = self.net.get_bytes(url.clone(), None).await?;
         Ok(bytes)
     }

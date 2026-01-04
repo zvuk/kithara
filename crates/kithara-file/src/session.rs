@@ -2,7 +2,7 @@ use std::{pin::Pin, sync::Arc};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use kithara_assets::AssetCache;
+use kithara_assets::AssetStore;
 use kithara_core::{AssetId, CoreError};
 use kithara_net::HttpClient;
 use tokio::sync::mpsc;
@@ -12,7 +12,6 @@ use crate::{
     options::FileSourceOptions,
 };
 
-#[derive(Debug)]
 pub struct FileSession {
     driver: Arc<FileDriver>,
     command_tx: mpsc::UnboundedSender<FileCommand>,
@@ -24,7 +23,7 @@ impl FileSession {
         url: url::Url,
         net_client: HttpClient,
         options: FileSourceOptions,
-        cache: Option<Arc<AssetCache>>,
+        cache: Option<Arc<AssetStore>>,
     ) -> Self {
         let driver = Arc::new(FileDriver::new(asset_id, url, net_client, options, cache));
 

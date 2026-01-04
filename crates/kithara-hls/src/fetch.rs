@@ -6,7 +6,7 @@ use std::{
 use bytes::Bytes;
 use futures::Stream;
 use hls_m3u8::MediaPlaylist;
-use kithara_assets::AssetCache;
+use kithara_assets::AssetStore;
 use kithara_net::HttpClient;
 use thiserror::Error;
 use url::Url;
@@ -19,7 +19,7 @@ pub enum FetchError {
     Net(#[from] kithara_net::NetError),
 
     #[error("Assets error: {0}")]
-    Cache(#[from] kithara_assets::CacheError),
+    Assets(#[from] kithara_assets::AssetsError),
 
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
@@ -41,13 +41,13 @@ pub struct FetchBytes {
 }
 
 pub struct FetchManager {
-    cache: AssetCache,
+    assets: AssetStore,
     net: HttpClient,
 }
 
 impl FetchManager {
-    pub fn new(cache: AssetCache, net: HttpClient) -> Self {
-        Self { cache, net }
+    pub fn new(assets: AssetStore, net: HttpClient) -> Self {
+        Self { assets, net }
     }
 
     pub async fn fetch_segment(
@@ -110,7 +110,7 @@ impl FetchManager {
         base_url: &Url,
         key_context: Option<&KeyContext>,
     ) -> SegmentStream<'static> {
-        let cache = self.cache.clone();
+        let assets = self.assets.clone();
         let net = self.net.clone();
         let base_url = base_url.clone();
         let key_ctx = key_context.cloned();
@@ -124,7 +124,7 @@ impl FetchManager {
 
         Box::pin(async_stream::stream! {
             for segment_uri in segment_uris {
-                let fetcher = FetchManager::new(cache.clone(), net.clone());
+                let fetcher = FetchManager::new(assets.clone(), net.clone());
                 let segment_url = match base_url.join(&segment_uri) {
                     Ok(url) => url,
                     Err(e) => {
@@ -161,7 +161,7 @@ impl FetchManager {
         //
         // The old cache layer (`kithara-cache`) supported `CachePath` + `put_atomic` and is no
         // longer available here. For now, fetch from the network only.
-        let _ = &self.cache;
+        let _ = &self.assets;
 
         let start = Instant::now();
         let bytes = self.net.get_bytes(url.clone(), None).await?;

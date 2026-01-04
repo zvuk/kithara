@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 pub use driver::{DriverError, FileCommand, SourceError};
-use kithara_assets::AssetCache;
+use kithara_assets::{AssetStore, EvictConfig, asset_store};
 use kithara_core::AssetId;
 use kithara_net::{HttpClient, NetOptions};
 pub use options::{FileSourceOptions, OptionsError};
@@ -31,7 +31,7 @@ pub trait FileSourceContract: Send + Sync + 'static {
         &self,
         url: Url,
         opts: FileSourceOptions,
-        cache: Option<AssetCache>,
+        cache: Option<AssetStore>,
     ) -> FileResult<FileSession>;
 }
 
@@ -44,7 +44,7 @@ impl FileSourceContract for FileSource {
         &self,
         url: Url,
         opts: FileSourceOptions,
-        cache: Option<AssetCache>,
+        cache: Option<AssetStore>,
     ) -> FileResult<FileSession> {
         let asset_id = AssetId::from_url(&url)?;
         let net_client = HttpClient::new(NetOptions::default());
@@ -61,7 +61,7 @@ impl FileSource {
     pub async fn open(
         url: Url,
         opts: FileSourceOptions,
-        cache: Option<AssetCache>,
+        cache: Option<AssetStore>,
     ) -> FileResult<FileSession> {
         FileSource.open(url, opts, cache).await
     }
@@ -72,6 +72,7 @@ mod tests {
     use axum::{Router, response::Response, routing::get};
     use bytes::Bytes;
     use futures::StreamExt;
+    use tempfile::TempDir;
     use tokio::net::TcpListener;
 
     use super::*;
@@ -150,7 +151,10 @@ mod tests {
         let server_url = run_test_server().await;
         let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-        let session = FileSource::open(url, FileSourceOptions::default(), None)
+        let temp_dir = TempDir::new().unwrap();
+        let assets = asset_store(temp_dir.path().to_path_buf(), EvictConfig::default());
+
+        let session = FileSource::open(url, FileSourceOptions::default(), Some(assets))
             .await
             .unwrap();
 
@@ -180,7 +184,10 @@ mod tests {
         // Use a non-existent server to test error handling
         let url = url::Url::parse("http://127.0.0.1:9998/nonexistent.mp3").unwrap();
 
-        let session = FileSource::open(url, FileSourceOptions::default(), None)
+        let temp_dir = TempDir::new().unwrap();
+        let assets = asset_store(temp_dir.path().to_path_buf(), EvictConfig::default());
+
+        let session = FileSource::open(url, FileSourceOptions::default(), Some(assets))
             .await
             .unwrap();
 

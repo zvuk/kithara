@@ -22,9 +22,9 @@ use kithara_hls::{HlsResult, fetch::FetchManager};
 async fn stream_segment_sequence() -> HlsResult<()> {
     let server = TestServer::new().await;
     let (assets, net) = create_test_cache_and_net();
-    let cache = assets.cache().clone();
+    let assets = assets.assets().clone();
 
-    let fetch_manager = FetchManager::new(cache, net);
+    let fetch_manager = FetchManager::new(assets, net);
 
     // Create a test media playlist
     let media_playlist_str = r#"#EXTM3U
