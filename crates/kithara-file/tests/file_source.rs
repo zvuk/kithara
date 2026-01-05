@@ -3,7 +3,7 @@
 use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::{EvictConfig, asset_store};
+use kithara_assets::{AssetStore, EvictConfig};
 use kithara_file::{DriverError, FileError, FileSource, FileSourceOptions, SourceError};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -81,7 +81,7 @@ async fn stream_bytes_from_network() {
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
     let temp_dir = TempDir::new().unwrap();
-    let assets = asset_store(temp_dir.path().to_path_buf(), EvictConfig::default());
+    let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
 
     let session = FileSource::open(url, FileSourceOptions::default(), Some(assets))
         .await
@@ -112,7 +112,7 @@ async fn stream_handles_network_errors() {
     let url = url::Url::parse("http://127.0.0.1:9998/nonexistent.mp3").unwrap();
 
     let temp_dir = TempDir::new().unwrap();
-    let assets = asset_store(temp_dir.path().to_path_buf(), EvictConfig::default());
+    let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
 
     let session = FileSource::open(url, FileSourceOptions::default(), Some(assets))
         .await

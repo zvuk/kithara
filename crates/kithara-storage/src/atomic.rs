@@ -6,9 +6,10 @@ use std::{
     sync::Arc,
 };
 
+use async_tempfile::TempFile;
 use async_trait::async_trait;
 use bytes::Bytes;
-use tokio::sync::Mutex;
+use tokio::{io::AsyncWriteExt, sync::Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::{AtomicResourceExt, Resource, StorageError, StorageResult};
@@ -69,49 +70,57 @@ impl AtomicResource {
     pub fn path(&self) -> &Path {
         &self.inner.path
     }
+
+    async fn preflight(&self) -> StorageResult<()> {
+        if self.inner.cancel.is_cancelled() {
+            return Err(StorageError::Cancelled);
+        }
+
+        // Important: do not hold the state lock across `.await` points.
+        let failed = {
+            let state = self.inner.state.lock().await;
+            state.failed.clone()
+        };
+
+        if let Some(err) = failed {
+            return Err(StorageError::Failed(err));
+        }
+
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl Resource for AtomicResource {
     async fn write(&self, data: &[u8]) -> StorageResult<()> {
-        if self.inner.cancel.is_cancelled() {
-            return Err(StorageError::Cancelled);
-        }
+        self.preflight().await?;
 
-        {
-            let state = self.inner.state.lock().await;
-            if let Some(err) = &state.failed {
-                return Err(StorageError::Failed(err.clone()));
-            }
-        }
+        let Some(parent) = self.inner.path.parent() else {
+            return Err(StorageError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "atomic resource path has no parent directory",
+            )));
+        };
 
-        if let Some(parent) = self.inner.path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
+        tokio::fs::create_dir_all(parent).await?;
 
-        let tmp_path = tmp_path_for(&self.inner.path);
+        // Use a uniquely-named temp file in the same directory as the final path.
+        // This avoids collisions and keeps the final `rename` atomic (same filesystem).
+        let mut tmp = TempFile::new_in(parent).await?;
 
-        // Write temp file
-        tokio::fs::write(&tmp_path, data).await?;
+        tmp.write_all(data).await?;
+        // Optional durability could be added later (sync file + sync dir).
+        // Persisting is done via atomic rename into the final path (same directory).
+        let tmp_path = tmp.file_path().clone();
+        drop(tmp);
 
-        // Best-effort durability would be: sync file + sync dir. We are intentionally not doing
-        // that yet; `rename` provides atomicity but not fsync durability.
         tokio::fs::rename(&tmp_path, &self.inner.path).await?;
 
         Ok(())
     }
 
     async fn read(&self) -> StorageResult<Bytes> {
-        if self.inner.cancel.is_cancelled() {
-            return Err(StorageError::Cancelled);
-        }
-
-        {
-            let state = self.inner.state.lock().await;
-            if let Some(err) = &state.failed {
-                return Err(StorageError::Failed(err.clone()));
-            }
-        }
+        self.preflight().await?;
 
         match tokio::fs::read(&self.inner.path).await {
             Ok(v) => Ok(Bytes::from(v)),
@@ -122,15 +131,7 @@ impl Resource for AtomicResource {
 
     async fn commit(&self, _final_len: Option<u64>) -> StorageResult<()> {
         // Atomic resource commits are a no-op: each write is whole-object.
-        if self.inner.cancel.is_cancelled() {
-            return Err(StorageError::Cancelled);
-        }
-
-        let state = self.inner.state.lock().await;
-        if let Some(err) = &state.failed {
-            return Err(StorageError::Failed(err.clone()));
-        }
-
+        self.preflight().await?;
         Ok(())
     }
 
@@ -152,27 +153,4 @@ struct Inner {
 #[derive(Default)]
 struct State {
     failed: Option<String>,
-}
-
-fn tmp_path_for(final_path: &Path) -> PathBuf {
-    // Simple deterministic temp path. We avoid random temp names to keep it small and predictable.
-    // Concurrency is serialized by the caller (higher layers), and this resource isn't intended
-    // for concurrent writers.
-    let mut p = final_path.to_path_buf();
-
-    let mut file_name = p
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "tmp".to_string());
-
-    file_name.push_str(".tmp");
-    p.set_file_name(file_name);
-    p
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    #[ignore = "tests will be added once the new API is stabilized"]
-    fn placeholder() {}
 }

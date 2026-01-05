@@ -52,4 +52,10 @@ impl<N: Net> Net for TimeoutNet<N> {
             .await
             .map_err(|_| NetError::timeout())?
     }
+
+    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
+        timeout(self.timeout, self.inner.head(url, headers))
+            .await
+            .map_err(|_| NetError::timeout())?
+    }
 }

@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bytes::Bytes;
-use kithara_assets::{EvictConfig, ResourceKey, asset_store};
+use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
 use kithara_storage::{Resource, StreamingResourceExt};
 use tokio_util::sync::CancellationToken;
 
@@ -25,7 +25,7 @@ fn read_pins_file(root: &std::path::Path) -> serde_json::Value {
 async fn mp3_single_file_atomic_roundtrip_with_pins_persisted() {
     let dir = tempfile::tempdir().unwrap();
 
-    let store = asset_store(
+    let store = AssetStore::with_root_dir(
         dir.path(),
         EvictConfig {
             max_assets: None,
@@ -70,7 +70,7 @@ async fn mp3_single_file_atomic_roundtrip_with_pins_persisted() {
 async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted() {
     let dir = tempfile::tempdir().unwrap();
 
-    let store = asset_store(
+    let store = AssetStore::with_root_dir(
         dir.path(),
         EvictConfig {
             max_assets: None,

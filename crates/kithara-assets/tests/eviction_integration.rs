@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bytes::Bytes;
-use kithara_assets::{EvictConfig, ResourceKey, asset_store};
+use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
 use kithara_storage::Resource;
 use tokio_util::sync::CancellationToken;
 
@@ -21,7 +21,7 @@ async fn eviction_max_assets_skips_pinned_assets() {
     let cancel = CancellationToken::new();
 
     // Keep only 2 assets. We'll create 3 (A, B, C) and keep B pinned by holding a handle.
-    let store = asset_store(
+    let store = AssetStore::with_root_dir(
         dir.path(),
         EvictConfig {
             max_assets: Some(2),

@@ -47,10 +47,12 @@ pub type AssetStore = LeaseAssets<EvictAssets<DiskAssetStore>>;
 /// - `EvictAssets` is applied before `LeaseAssets` so eviction is evaluated at "asset creation time"
 ///   without being affected by the new handle's pin.
 /// - `LeaseAssets` provides RAII pinning for opened resources.
-pub fn asset_store(root_dir: impl Into<PathBuf>, cfg: EvictConfig) -> AssetStore {
-    let base = Arc::new(DiskAssetStore::new(root_dir));
-    let evict = Arc::new(EvictAssets::new(base, cfg));
-    AssetStore::new(evict)
+impl AssetStore {
+    pub fn with_root_dir(root_dir: impl Into<PathBuf>, cfg: EvictConfig) -> Self {
+        let base = Arc::new(DiskAssetStore::new(root_dir));
+        let evict = Arc::new(EvictAssets::new(base, cfg));
+        Self::new(evict)
+    }
 }
 
 impl DiskAssetStore {

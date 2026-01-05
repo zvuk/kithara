@@ -13,6 +13,7 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 async-trait = { workspace = true }
+async-tempfile = { workspace = true }
 
 # async random-access backend + range tracking
 random-access-disk = { workspace = true }

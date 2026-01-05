@@ -1,8 +1,7 @@
 use std::time::Instant;
 
-use hls_m3u8::MasterPlaylist;
-
 use super::{AbrConfig, ThroughputEstimator, ThroughputSample, Variant, VariantSelector};
+use crate::playlist::MasterPlaylist;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AbrReason {
@@ -151,7 +150,7 @@ impl AbrController {
 
     pub fn decide_for_master(
         &self,
-        master_playlist: &MasterPlaylist<'_>,
+        master_playlist: &MasterPlaylist,
         variants: &[Variant],
         buffer_level_secs: f64,
         now: Instant,

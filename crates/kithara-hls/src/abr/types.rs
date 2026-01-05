@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use hls_m3u8::{MasterPlaylist, tags::VariantStream};
+use crate::playlist::MasterPlaylist;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThroughputSampleSource {
@@ -52,20 +52,15 @@ pub struct Variant {
     pub bandwidth_bps: u64,
 }
 
-pub type VariantSelector =
-    Arc<dyn Fn(&MasterPlaylist<'_>) -> Option<usize> + Send + Sync + 'static>;
+pub type VariantSelector = Arc<dyn Fn(&MasterPlaylist) -> Option<usize> + Send + Sync + 'static>;
 
-pub fn variants_from_master(master: &MasterPlaylist<'_>) -> Vec<Variant> {
+pub fn variants_from_master(master: &MasterPlaylist) -> Vec<Variant> {
     master
-        .variant_streams
+        .variants
         .iter()
-        .enumerate()
-        .filter_map(|(variant_index, stream)| match stream {
-            VariantStream::ExtXStreamInf { .. } => Some(Variant {
-                variant_index,
-                bandwidth_bps: stream.bandwidth(),
-            }),
-            VariantStream::ExtXIFrame { .. } => None,
+        .map(|v| Variant {
+            variant_index: v.id.0,
+            bandwidth_bps: v.bandwidth.unwrap_or(0),
         })
         .collect()
 }

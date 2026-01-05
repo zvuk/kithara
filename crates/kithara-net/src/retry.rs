@@ -168,6 +168,32 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
             source: Box::new(NetError::Unimplemented),
         }))
     }
+
+    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
+        let mut last_error = None;
+
+        for attempt in 0..=self.retry_policy.max_attempts() {
+            match self.inner.head(url.clone(), headers.clone()).await {
+                Ok(out) => return Ok(out),
+                Err(error) => {
+                    if !self.retry_policy.should_retry(&error, attempt) {
+                        return Err(error);
+                    }
+                    last_error = Some(error.clone());
+
+                    if attempt < self.retry_policy.max_attempts() {
+                        let delay = self.retry_policy.delay_for_attempt(attempt);
+                        sleep(delay).await;
+                    }
+                }
+            }
+        }
+
+        Err(last_error.unwrap_or_else(|| NetError::RetryExhausted {
+            max_retries: self.retry_policy.max_attempts(),
+            source: Box::new(NetError::Unimplemented),
+        }))
+    }
 }
 
 pub trait RetryPolicyTrait: Send + Sync {

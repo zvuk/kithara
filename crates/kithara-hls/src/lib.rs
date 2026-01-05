@@ -10,7 +10,7 @@
 //! Internally, it uses `kithara-stream` to orchestrate fetching and expose an async byte stream.
 //!
 //! - No explicit stop command: stopping is done by dropping the stream.
-//! - Seek is not supported yet (contract is fixed; implementation will be added via TDD).
+//! - Seek is supported for rodio playback via `HlsSession::source()` + `kithara-io::Reader`.
 //!
 //! ## Public contracts (explicit)
 //!
@@ -38,18 +38,29 @@ pub mod fetch;
 pub mod keys;
 pub mod playlist;
 
+// Public (but internal-oriented) modules
+pub mod session;
+
 // Private modules
+mod cache_keys;
 mod driver;
+
+// Internal modules (exposed for crate tests and internal plumbing).
+pub mod cursor;
+pub mod internal;
 
 // Re-export key types
 pub use abr::{
     AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
 };
+// Deterministic cache/layout helper (mirrors stream-download-hls layout).
+pub use cache_keys::{CacheKeyGenerator, master_hash_from_url};
 pub use driver::{DriverError, SourceError};
 pub use events::{EventEmitter, HlsEvent};
 pub use fetch::{FetchError, FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
 pub use playlist::{PlaylistError, PlaylistManager};
+pub use session::HlsSessionSource;
 
 #[derive(Debug, Error)]
 pub enum HlsError {
@@ -102,7 +113,7 @@ pub type HlsResult<T> = Result<T, HlsError>;
 pub struct HlsOptions {
     pub base_url: Option<Url>,
     pub variant_stream_selector:
-        Option<Arc<dyn Fn(&hls_m3u8::MasterPlaylist) -> Option<usize> + Send + Sync>>,
+        Option<Arc<dyn Fn(&crate::playlist::MasterPlaylist) -> Option<usize> + Send + Sync>>,
     pub abr_initial_variant_index: Option<usize>,
     pub abr_min_buffer_for_up_switch: f32,
     pub abr_down_switch_buffer: f32,
@@ -172,7 +183,7 @@ pub struct HlsSource;
 impl HlsSourceContract for HlsSource {
     async fn open(&self, url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession> {
         let asset_id = AssetId::from_url(&url)?;
-        let asset_root = hex::encode(asset_id.as_bytes());
+        let asset_root = master_hash_from_url(&url);
         let net = HttpClient::new(kithara_net::NetOptions::default());
 
         // Create managers (kept as-is; internals will be iterated via TDD).
@@ -219,7 +230,7 @@ impl HlsSourceContract for HlsSource {
 
         let driver = driver::HlsDriver::new(
             url.clone(),
-            opts,
+            opts.clone(),
             playlist_manager,
             fetch_manager,
             key_manager,
@@ -227,7 +238,13 @@ impl HlsSourceContract for HlsSource {
             event_emitter,
         );
 
-        Ok(HlsSession { asset_id, driver })
+        Ok(HlsSession {
+            asset_id,
+            master_url: url,
+            opts,
+            assets,
+            driver,
+        })
     }
 }
 
@@ -240,6 +257,9 @@ impl HlsSource {
 
 pub struct HlsSession {
     asset_id: AssetId,
+    master_url: Url,
+    opts: HlsOptions,
+    assets: AssetStore,
     driver: driver::HlsDriver,
 }
 
@@ -254,5 +274,33 @@ impl HlsSession {
 
     pub fn events(&self) -> broadcast::Receiver<HlsEvent> {
         self.driver.events()
+    }
+
+    /// Build an I/O `Source` adapter for this session, suitable for wrapping into
+    /// `kithara-io::Reader` (`Read + Seek`) for `rodio::Decoder`.
+    ///
+    /// This mirrors `kithara-file` example structure:
+    /// - `session.source().await?`
+    /// - `Reader::new(Arc::new(source))`
+    pub async fn source(&self) -> HlsResult<HlsSessionSource> {
+        let asset_root = master_hash_from_url(&self.master_url);
+        let net = HttpClient::new(kithara_net::NetOptions::default());
+
+        let playlist_manager = playlist::PlaylistManager::new(
+            asset_root.clone(),
+            self.assets.clone(),
+            net.clone(),
+            self.opts.base_url.clone(),
+        );
+
+        let fetch_manager = fetch::FetchManager::new(asset_root.clone(), self.assets.clone(), net);
+
+        Ok(HlsSessionSource::new(
+            self.master_url.clone(),
+            self.opts.clone(),
+            self.assets.clone(),
+            playlist_manager,
+            fetch_manager,
+        ))
     }
 }

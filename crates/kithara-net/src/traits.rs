@@ -29,6 +29,12 @@ pub trait Net: Send + Sync {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<ByteStream, NetError>;
+
+    /// Perform a HEAD request.
+    ///
+    /// This is intended for lightweight metadata probes (e.g. `Content-Length`,
+    /// `Accept-Ranges`, `Content-Type`). Implementations should return response headers.
+    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError>;
 }
 
 pub trait NetExt: Net + Sized {

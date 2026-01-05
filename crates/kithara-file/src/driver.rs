@@ -41,6 +41,9 @@ pub enum SourceError {
 
     #[error("Storage error: {0}")]
     Storage(#[from] kithara_storage::StorageError),
+
+    #[error("Fetcher error: {0}")]
+    Fetcher(#[from] crate::internal::fetcher::FetchError),
 }
 
 #[derive(Debug)]
@@ -202,7 +205,7 @@ impl Source for FileStream {
 
             let key = ResourceKey::new(asset_root, rel_path);
 
-            let res = match assets.open_streaming_resource(&key, cancel).await {
+            let res = match assets.open_streaming_resource(&key, cancel.clone()).await {
                 Ok(r) => r,
                 Err(e) => {
                     yield Err(StreamError::Source(SourceError::Assets(e)));
@@ -210,17 +213,58 @@ impl Source for FileStream {
                 }
             };
 
-            Fetcher::new(client, url).spawn(res.clone());
+            let fetch_task = Fetcher::new(client, url).spawn(res.clone(), cancel.clone());
 
             let feeder = Feeder::new(start_pos, 64 * 1024);
 
             let mut s = std::pin::pin!(feeder.stream(res));
-            while let Some(item) = s.next().await {
-                match item {
-                    Ok(bytes) => yield Ok(Message::Data(bytes)),
-                    Err(e) => {
-                        yield Err(StreamError::Source(SourceError::Storage(e)));
-                        return;
+            let mut fetch_task = Some(fetch_task);
+
+            loop {
+                tokio::select! {
+                    biased;
+
+                    fetch_res = async {
+                        match fetch_task.as_mut() {
+                            Some(t) => t.await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        // Ensure we never poll/await the JoinHandle again.
+                        fetch_task = None;
+
+                        match fetch_res {
+                            Ok(Ok(())) => {
+                                // Fetch completed successfully; continue draining feeder until EOF.
+                            }
+                            Ok(Err(_e)) => {
+                                // Preserve the historical contract: fetch failures surface to consumers
+                                // as a storage-level failure (the fetcher calls `res.fail(...)`).
+                                //
+                                // We intentionally keep reading from the resource so the consumer
+                                // observes `StorageError::Failed(..)` deterministically.
+                            }
+                            Err(_join_err) => {
+                                // Same as above: treat join errors as storage failures observed via reads.
+                                // (The resource will be marked failed by the fetcher; if it wasn't,
+                                // the subsequent read will still error or EOF appropriately.)
+                            }
+                        }
+                    }
+
+                    item = s.next() => {
+                        match item {
+                            Some(Ok(bytes)) => yield Ok(Message::Data(bytes)),
+                            Some(Err(e)) => {
+                                cancel.cancel();
+                                yield Err(StreamError::Source(SourceError::Storage(e)));
+                                return;
+                            }
+                            None => {
+                                cancel.cancel();
+                                return;
+                            }
+                        }
                     }
                 }
             }

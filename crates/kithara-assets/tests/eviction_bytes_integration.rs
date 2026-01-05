@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bytes::Bytes;
-use kithara_assets::{EvictConfig, ResourceKey, asset_store};
+use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
 use kithara_storage::Resource;
 use tokio_util::sync::CancellationToken;
 
@@ -21,7 +21,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes() {
     //
     // With max_bytes=100, we must evict the oldest non-pinned asset(s) until we're <= 100.
     // Since A is oldest and not pinned, it should be evicted.
-    let store = asset_store(
+    let store = AssetStore::with_root_dir(
         dir.path(),
         EvictConfig {
             max_assets: None,
