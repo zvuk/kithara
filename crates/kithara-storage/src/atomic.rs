@@ -78,11 +78,9 @@ impl Resource for AtomicResource {
             return Err(StorageError::Cancelled);
         }
 
-        {
-            let state = self.inner.state.lock().await;
-            if let Some(err) = &state.failed {
-                return Err(StorageError::Failed(err.clone()));
-            }
+        let state = self.inner.state.lock().await;
+        if let Some(err) = &state.failed {
+            return Err(StorageError::Failed(err.clone()));
         }
 
         if let Some(parent) = self.inner.path.parent() {
@@ -106,11 +104,9 @@ impl Resource for AtomicResource {
             return Err(StorageError::Cancelled);
         }
 
-        {
-            let state = self.inner.state.lock().await;
-            if let Some(err) = &state.failed {
-                return Err(StorageError::Failed(err.clone()));
-            }
+        let state = self.inner.state.lock().await;
+        if let Some(err) = &state.failed {
+            return Err(StorageError::Failed(err.clone()));
         }
 
         match tokio::fs::read(&self.inner.path).await {

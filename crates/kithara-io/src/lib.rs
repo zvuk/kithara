@@ -45,7 +45,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use thiserror::Error;
-use tracing::{debug, trace, warn};
+use tracing::{debug, warn};
 
 /// Outcome of waiting for a byte range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,7 +137,7 @@ where
     /// This must be called from within a Tokio runtime context (e.g. in an async fn before
     /// spawning the blocking consumer).
     pub fn new(source: Arc<S>) -> Self {
-        trace!("kithara-io Reader::new (spawning async worker)");
+        debug!("kithara-io Reader::new (spawning async worker)");
         let len = source.len();
         debug!(len, "kithara-io Reader created");
 
@@ -145,28 +145,20 @@ where
         let src = source.clone();
 
         tokio::spawn(async move {
-            trace!("kithara-io Reader worker started");
+            debug!("kithara-io Reader worker started");
             while let Some(req) = worker_rx.recv().await {
                 match req {
                     WorkerReq::WaitRange { range, reply } => {
-                        trace!(
-                            start = range.start,
-                            end = range.end,
-                            "kithara-io Reader worker: wait_range begin"
-                        );
                         let out = src.wait_range(range).await;
-                        trace!("kithara-io Reader worker: wait_range done");
                         let _ = reply.send(out);
                     }
                     WorkerReq::ReadAt { offset, len, reply } => {
-                        trace!(offset, len, "kithara-io Reader worker: read_at begin");
                         let out = src.read_at(offset, len).await;
-                        trace!("kithara-io Reader worker: read_at done");
                         let _ = reply.send(out);
                     }
                 }
             }
-            trace!("kithara-io Reader worker stopped (channel closed)");
+            debug!("kithara-io Reader worker stopped (channel closed)");
         });
 
         Self {
@@ -191,22 +183,15 @@ where
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
-            trace!("Reader::read called with empty buf -> Ok(0)");
             return Ok(0);
         }
 
         let offset = self.pos;
         let len = buf.len();
-        trace!(offset, len, "Reader::read enter");
 
         let wait_start = offset;
         let wait_end = offset.saturating_add(len as u64);
         let wait_range = wait_start..wait_end;
-        trace!(
-            start = wait_start,
-            end = wait_end,
-            "Reader::read wait_range begin"
-        );
 
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.worker_tx
@@ -217,12 +202,6 @@ where
             .map_err(|_| {
                 std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
             })?;
-
-        trace!(
-            start = wait_start,
-            end = wait_end,
-            "Reader::read wait_range awaiting worker reply"
-        );
 
         let outcome = rx
             .blocking_recv()
@@ -244,8 +223,6 @@ where
                 std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
             })?;
 
-        trace!(?outcome, "Reader::read wait_range done");
-
         match outcome {
             WaitOutcome::Eof => {
                 debug!(offset, "Reader::read reached EOF");
@@ -254,7 +231,6 @@ where
             WaitOutcome::Ready => {}
         }
 
-        trace!(offset, len, "Reader::read read_at begin");
         let (tx, rx) = tokio::sync::oneshot::channel();
         self.worker_tx
             .send(WorkerReq::ReadAt {
@@ -265,8 +241,6 @@ where
             .map_err(|_| {
                 std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
             })?;
-
-        trace!(offset, len, "Reader::read read_at awaiting worker reply");
 
         let bytes = rx
             .blocking_recv()
@@ -288,8 +262,6 @@ where
                 std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
             })?;
 
-        trace!(got = bytes.len(), "Reader::read read_at done");
-
         if bytes.is_empty() {
             // Defensive: if the source returns empty after reporting Ready, treat as EOF-ish.
             // This avoids infinite loops in consumers.
@@ -303,7 +275,6 @@ where
         let n = bytes.len().min(buf.len());
         buf[..n].copy_from_slice(&bytes[..n]);
         self.pos = self.pos.saturating_add(n as u64);
-        trace!(n, new_pos = self.pos, "Reader::read exit");
         Ok(n)
     }
 }
@@ -313,7 +284,7 @@ where
     S: Source,
 {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        trace!(cur = self.pos, ?pos, "Reader::seek enter");
+        debug!(cur = self.pos, ?pos, "Reader::seek enter");
 
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => p as i128,
@@ -353,7 +324,6 @@ where
         }
 
         self.pos = new_pos_u64;
-        trace!(new_pos = self.pos, "Reader::seek exit");
         Ok(self.pos)
     }
 }

@@ -7,16 +7,17 @@ use std::{
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use hls_m3u8::MediaPlaylist;
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_net::{Headers, HttpClient, Net as _};
 use kithara_storage::{Resource as _, StreamingResourceExt};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, warn};
 use url::Url;
 
-use crate::{HlsError, HlsResult, KeyContext, abr::ThroughputSampleSource};
+use crate::{
+    HlsError, HlsResult, KeyContext, abr::ThroughputSampleSource, playlist::MediaPlaylist,
+};
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {
     let no_query = uri.split('?').next().unwrap_or(uri);
@@ -69,6 +70,10 @@ impl FetchManager {
         }
     }
 
+    pub fn net(&self) -> &HttpClient {
+        &self.net
+    }
+
     pub async fn probe_content_length(&self, url: &Url) -> HlsResult<Option<u64>> {
         let headers: Headers = self.net.head(url.clone(), None).await?;
 
@@ -82,7 +87,7 @@ impl FetchManager {
 
     pub async fn fetch_segment(
         &self,
-        media_playlist: &MediaPlaylist<'_>,
+        media_playlist: &MediaPlaylist,
         segment_index: usize,
         base_url: &Url,
         key_context: Option<&KeyContext>,
@@ -92,9 +97,9 @@ impl FetchManager {
             .get(segment_index)
             .ok_or_else(|| HlsError::SegmentNotFound(format!("Index {}", segment_index)))?;
 
-        let segment_uri = segment.uri();
+        let segment_uri = &segment.uri;
         let segment_url = base_url
-            .join(&segment_uri)
+            .join(segment_uri)
             .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)))?;
 
         debug!(
@@ -127,7 +132,7 @@ impl FetchManager {
 
     pub async fn fetch_segment_with_meta(
         &self,
-        media_playlist: &MediaPlaylist<'_>,
+        media_playlist: &MediaPlaylist,
         segment_index: usize,
         base_url: &Url,
         key_context: Option<&KeyContext>,
@@ -137,9 +142,9 @@ impl FetchManager {
             .get(segment_index)
             .ok_or_else(|| HlsError::SegmentNotFound(format!("Index {}", segment_index)))?;
 
-        let segment_uri = segment.uri();
+        let segment_uri = &segment.uri;
         let segment_url = base_url
-            .join(&segment_uri)
+            .join(segment_uri)
             .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)))?;
 
         debug!(
@@ -243,7 +248,7 @@ impl FetchManager {
 
     pub fn stream_segment_sequence(
         &self,
-        media_playlist: MediaPlaylist<'_>,
+        media_playlist: MediaPlaylist,
         base_url: &Url,
         key_context: Option<&KeyContext>,
     ) -> SegmentStream<'static> {
@@ -257,7 +262,7 @@ impl FetchManager {
         let segment_uris: Vec<String> = media_playlist
             .segments
             .iter()
-            .map(|(_, segment)| segment.uri().to_string())
+            .map(|segment| segment.uri.clone())
             .collect();
 
         Box::pin(async_stream::stream! {
@@ -304,12 +309,8 @@ impl FetchManager {
         // - failures signal via `fail(...)`.
         let key = ResourceKey::new(self.asset_root.clone(), rel_path);
 
-        debug!(
-            asset_root = %self.asset_root,
-            url = %url,
-            rel_path = %rel_path,
-            "kithara-hls fetch_streaming_to_bytes begin"
-        );
+        // Intentionally quiet: this path can be called a lot during playback.
+        // Keep only warnings/errors and a single "done" summary.
 
         let cancel = CancellationToken::new();
         let res = self
@@ -322,20 +323,10 @@ impl FetchManager {
         // and failure propagation.
         let net = self.net.clone();
         let url = url.clone();
-        let url_for_logs = url.clone();
-
-        info!(
-            asset_root = %self.asset_root,
-            rel_path = %rel_path,
-            url = %url_for_logs,
-            "kithara-hls fetch_streaming_to_bytes: spawning segment writer task"
-        );
 
         tokio::spawn({
             let res = res.clone();
             async move {
-                info!(url = %url, "kithara-hls segment writer: started");
-
                 let mut stream = match net.stream(url.clone(), None).await {
                     Ok(s) => s,
                     Err(e) => {
@@ -349,12 +340,6 @@ impl FetchManager {
                 while let Some(chunk_result) = stream.next().await {
                     match chunk_result {
                         Ok(chunk_bytes) => {
-                            trace!(
-                                url = %url,
-                                off,
-                                bytes = chunk_bytes.len(),
-                                "kithara-hls segment writer: write_at"
-                            );
                             if let Err(e) = res.write_at(off, &chunk_bytes).await {
                                 warn!(
                                     url = %url,
@@ -380,17 +365,7 @@ impl FetchManager {
                     }
                 }
 
-                info!(
-                    url = %url,
-                    final_len = off,
-                    "kithara-hls segment writer: committing"
-                );
                 let _ = res.commit(Some(off)).await;
-                info!(
-                    url = %url,
-                    final_len = off,
-                    "kithara-hls segment writer: committed"
-                );
             }
         });
 
@@ -400,53 +375,24 @@ impl FetchManager {
         let mut out = Vec::new();
         let read_chunk: u64 = 64 * 1024;
 
-        info!(
-            asset_root = %self.asset_root,
-            rel_path = %rel_path,
-            url = %url_for_logs,
-            "kithara-hls fetch_streaming_to_bytes: entering segment wait/read loop"
-        );
-
         loop {
             let end = offset.saturating_add(read_chunk);
-            trace!(
-                asset_root = %self.asset_root,
-                rel_path = %rel_path,
-                offset,
-                end,
-                "kithara-hls segment reader: wait_range"
-            );
 
             let outcome = res.wait_range(offset..end).await?;
-            info!(
-                asset_root = %self.asset_root,
-                rel_path = %rel_path,
-                offset,
-                end,
-                ?outcome,
-                "kithara-hls segment reader: wait_range outcome"
-            );
 
             match outcome {
                 kithara_storage::WaitOutcome::Ready => {
                     let len: usize = (end - offset) as usize;
                     let bytes = res.read_at(offset, len).await?;
 
-                    trace!(
-                        asset_root = %self.asset_root,
-                        rel_path = %rel_path,
-                        offset,
-                        requested = len,
-                        got = bytes.len(),
-                        "kithara-hls segment reader: read_at"
-                    );
-
                     if bytes.is_empty() {
+                        // Storage returned empty after reporting Ready: this is unexpected and can
+                        // lead to "end of stream" at the decoder level.
                         warn!(
                             asset_root = %self.asset_root,
                             rel_path = %rel_path,
                             offset,
-                            "kithara-hls segment reader: empty-after-ready; treating as EOF-ish"
+                            "kithara-hls segment reader: empty-after-ready"
                         );
                         break;
                     }
@@ -454,12 +400,6 @@ impl FetchManager {
                     out.extend_from_slice(&bytes);
                 }
                 kithara_storage::WaitOutcome::Eof => {
-                    debug!(
-                        asset_root = %self.asset_root,
-                        rel_path = %rel_path,
-                        offset,
-                        "kithara-hls segment reader: EOF"
-                    );
                     break;
                 }
             }

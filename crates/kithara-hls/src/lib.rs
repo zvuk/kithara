@@ -45,6 +45,10 @@ pub mod session;
 mod cache_keys;
 mod driver;
 
+// Internal modules (exposed for crate tests and internal plumbing).
+pub mod cursor;
+pub mod internal;
+
 // Re-export key types
 pub use abr::{
     AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
@@ -109,7 +113,7 @@ pub type HlsResult<T> = Result<T, HlsError>;
 pub struct HlsOptions {
     pub base_url: Option<Url>,
     pub variant_stream_selector:
-        Option<Arc<dyn Fn(&hls_m3u8::MasterPlaylist) -> Option<usize> + Send + Sync>>,
+        Option<Arc<dyn Fn(&crate::playlist::MasterPlaylist) -> Option<usize> + Send + Sync>>,
     pub abr_initial_variant_index: Option<usize>,
     pub abr_min_buffer_for_up_switch: f32,
     pub abr_down_switch_buffer: f32,

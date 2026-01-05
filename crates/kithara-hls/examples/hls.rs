@@ -13,7 +13,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             EnvFilter::default()
                 // You can override these via `RUST_LOG=...`
                 // (e.g. `kithara_hls=trace,kithara_io=trace,kithara_net=debug,kithara_storage=debug,kithara_assets=debug`)
-                .add_directive("kithara_hls=info".parse()?)
+                .add_directive("kithara_hls=debug".parse()?)
                 .add_directive("kithara_io=trace".parse()?)
                 .add_directive("kithara_net=info".parse()?)
                 .add_directive("kithara_storage=info".parse()?)

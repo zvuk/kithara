@@ -2,7 +2,6 @@ use std::{pin::Pin, sync::Arc, time::Instant};
 
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt};
-use hls_m3u8::{MediaPlaylist, tags::ExtXMap};
 use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
 use thiserror::Error;
 use tokio::sync::{Mutex, broadcast};
@@ -14,7 +13,7 @@ use crate::{
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
     keys::KeyManager,
-    playlist::PlaylistManager,
+    playlist::{PlaylistManager, VariantId},
 };
 
 pub type HlsByteStream = Pin<Box<dyn FuturesStream<Item = HlsResult<Bytes>> + Send>>;
@@ -44,19 +43,8 @@ pub struct HlsDriver {
     event_emitter: Arc<EventEmitter>,
 }
 
-fn media_playlist_init_uri(media: &MediaPlaylist<'_>) -> Option<String> {
-    media
-        .segments
-        .iter()
-        .find_map(|(_, seg)| seg.map.as_ref().and_then(ext_x_map_uri))
-}
-
-fn ext_x_map_uri(map: &ExtXMap<'_>) -> Option<String> {
-    let s = map.to_string();
-    let start = s.find("URI=\"")? + "URI=\"".len();
-    let rest = s.get(start..)?;
-    let end = rest.find('\"')?;
-    Some(rest[..end].to_string())
+fn media_playlist_init_uri(media: &crate::playlist::MediaPlaylist) -> Option<&str> {
+    media.init_segment.as_ref().map(|i| i.uri.as_str())
 }
 
 impl HlsDriver {
@@ -176,12 +164,9 @@ impl Source for HlsStream {
             }
 
             let mut variant_uri: String = master_playlist
-                .variant_streams
+                .variants
                 .get(current_variant)
-                .and_then(|vs| match vs {
-                    hls_m3u8::tags::VariantStream::ExtXStreamInf { uri, .. } => Some(uri.to_string()),
-                    hls_m3u8::tags::VariantStream::ExtXIFrame { .. } => None,
-                })
+                .map(|v| v.uri.clone())
                 .ok_or_else(|| {
                     StreamError::Source(SourceError::Hls(HlsError::VariantNotFound(format!(
                         "Variant index {}",
@@ -194,11 +179,11 @@ impl Source for HlsStream {
                 .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
 
             let mut media_playlist = playlist_manager
-                .fetch_media_playlist(&media_url)
+                .fetch_media_playlist(&media_url, VariantId(current_variant))
                 .await
                 .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
 
-            let mut current_init_uri = media_playlist_init_uri(&media_playlist);
+            let mut current_init_uri = media_playlist_init_uri(&media_playlist).map(str::to_string);
             let mut pending_init_uri: Option<String> = None;
             if let Some(init_uri) = current_init_uri.as_deref() {
                 let init_url = playlist_manager
@@ -211,7 +196,7 @@ impl Source for HlsStream {
                 yield Ok(Message::Data(bytes));
             }
 
-            let segment_count = media_playlist.segments.iter().count();
+            let segment_count = media_playlist.segments.len();
             for segment_index in 0..segment_count {
                 let now = Instant::now();
                 let decision = {
@@ -234,12 +219,9 @@ impl Source for HlsStream {
 
                     current_variant = decision.target_variant_index;
                     variant_uri = master_playlist
-                        .variant_streams
+                        .variants
                         .get(current_variant)
-                        .and_then(|vs| match vs {
-                            hls_m3u8::tags::VariantStream::ExtXStreamInf { uri, .. } => Some(uri.to_string()),
-                            hls_m3u8::tags::VariantStream::ExtXIFrame { .. } => None,
-                        })
+                        .map(|v| v.uri.clone())
                         .ok_or_else(|| {
                             StreamError::Source(SourceError::Hls(HlsError::VariantNotFound(format!(
                                 "Variant index {}",
@@ -252,11 +234,11 @@ impl Source for HlsStream {
                         .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
 
                     media_playlist = playlist_manager
-                        .fetch_media_playlist(&media_url)
+                        .fetch_media_playlist(&media_url, VariantId(current_variant))
                         .await
                         .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
 
-                    let new_init_uri = media_playlist_init_uri(&media_playlist);
+                    let new_init_uri = media_playlist_init_uri(&media_playlist).map(str::to_string);
                     if new_init_uri != current_init_uri {
                         pending_init_uri = new_init_uri.clone();
                         current_init_uri = new_init_uri;
@@ -299,7 +281,7 @@ impl Source for HlsStream {
                         }
 
                         if let Some(seg) = media_playlist.segments.get(segment_index) {
-                            buffer_level_secs += seg.duration.duration().as_secs_f64();
+                            buffer_level_secs += seg.duration.as_secs_f64();
                         }
 
                         yield Ok(Message::Data(fetch.bytes));

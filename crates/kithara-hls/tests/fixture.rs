@@ -26,9 +26,22 @@ impl TestServer {
 
         let app = Router::new()
             .route("/master.m3u8", get(master_endpoint))
+            .route("/master-init.m3u8", get(master_with_init_endpoint))
             .route("/v0.m3u8", get(|| async { test_media_playlist(0) }))
             .route("/v1.m3u8", get(|| async { test_media_playlist(1) }))
             .route("/v2.m3u8", get(|| async { test_media_playlist(2) }))
+            .route(
+                "/v0-init.m3u8",
+                get(|| async { test_media_playlist_with_init(0) }),
+            )
+            .route(
+                "/v1-init.m3u8",
+                get(|| async { test_media_playlist_with_init(1) }),
+            )
+            .route(
+                "/v2-init.m3u8",
+                get(|| async { test_media_playlist_with_init(2) }),
+            )
             .route(
                 "/video/480p/playlist.m3u8",
                 get(|| async { test_media_playlist(1) }),
@@ -42,6 +55,9 @@ impl TestServer {
             .route("/seg/v2_0.bin", get(|| async { test_segment_data(2, 0) }))
             .route("/seg/v2_1.bin", get(|| async { test_segment_data(2, 1) }))
             .route("/seg/v2_2.bin", get(|| async { test_segment_data(2, 2) }))
+            .route("/init/v0.bin", get(|| async { test_init_data(0) }))
+            .route("/init/v1.bin", get(|| async { test_init_data(1) }))
+            .route("/init/v2.bin", get(|| async { test_init_data(2) }))
             .route("/key.bin", get(key_endpoint))
             .layer(axum::middleware::from_fn(
                 move |req: axum::extract::Request, next: axum::middleware::Next| {
@@ -126,6 +142,18 @@ v2.m3u8
 "#
 }
 
+pub fn test_master_playlist_with_init() -> &'static str {
+    r#"#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
+v0-init.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=2560000,RESOLUTION=1280x720,CODECS="avc1.42c01e,mp4a.40.2"
+v1-init.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=5120000,RESOLUTION=1920x1080,CODECS="avc1.42c01e,mp4a.40.2"
+v2-init.m3u8
+"#
+}
+
 pub fn test_media_playlist(variant: usize) -> String {
     format!(
         r#"#EXTM3U
@@ -145,11 +173,38 @@ seg/v{}_2.bin
     )
 }
 
+pub fn test_media_playlist_with_init(variant: usize) -> String {
+    format!(
+        r#"#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-MAP:URI="init/v{}.bin"
+#EXTINF:4.0,
+seg/v{}_0.bin
+#EXTINF:4.0,
+seg/v{}_1.bin
+#EXTINF:4.0,
+seg/v{}_2.bin
+#EXT-X-ENDLIST
+"#,
+        variant, variant, variant, variant
+    )
+}
+
 pub fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
     // Return deterministic data per segment with prefix as per spec
     let prefix = format!("V{}-SEG-{}:", variant, segment);
     let mut data = prefix.into_bytes();
     data.extend(b"TEST_SEGMENT_DATA");
+    data
+}
+
+pub fn test_init_data(variant: usize) -> Vec<u8> {
+    let prefix = format!("V{}-INIT:", variant);
+    let mut data = prefix.into_bytes();
+    data.extend(b"TEST_INIT_DATA");
     data
 }
 
@@ -160,6 +215,10 @@ pub fn test_key_data() -> Vec<u8> {
 
 async fn master_endpoint() -> &'static str {
     test_master_playlist()
+}
+
+async fn master_with_init_endpoint() -> &'static str {
+    test_master_playlist_with_init()
 }
 
 async fn key_endpoint() -> Vec<u8> {
