@@ -3,11 +3,12 @@ use std::{ops::Range, pin::Pin, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use kithara_assets::{AssetStore, ResourceKey};
+use kithara_assets::AssetStore;
 use kithara_core::{AssetId, CoreError};
 use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome};
 use kithara_storage::StreamingResourceExt;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use tracing::trace;
 
 use crate::{
@@ -157,7 +158,7 @@ impl FileSession {
             .map_err(|e| FileError::Driver(DriverError::Source(SourceError::Assets(e))))?;
 
         let progress = Arc::new(Progress::new());
-        Self::spawn_download_writer(driver, res.clone(), progress.clone());
+        Self::spawn_download_writer(driver, res.clone(), progress.clone(), cancel);
 
         Ok(SessionSource::new(res, progress))
     }
@@ -169,11 +170,12 @@ impl FileSession {
             kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
         >,
         progress: Arc<Progress>,
+        cancel: CancellationToken,
     ) {
         let url = driver.url().clone();
         let client = driver.net_client().clone();
 
-        Fetcher::new(client, url).spawn_with_progress(res, progress);
+        let _task = Fetcher::new(client, url).spawn_with_progress(res, progress, cancel);
     }
 
     /// Send a command to the driver

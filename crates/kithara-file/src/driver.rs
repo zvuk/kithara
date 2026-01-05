@@ -41,6 +41,21 @@ pub enum SourceError {
 
     #[error("Storage error: {0}")]
     Storage(#[from] kithara_storage::StorageError),
+
+    #[error("Fetcher error: {0}")]
+    Fetcher(#[from] FetcherError),
+}
+
+#[derive(Debug, Error)]
+pub enum FetcherError {
+    #[error("{0}")]
+    Message(String),
+}
+
+impl From<crate::internal::fetcher::FetchError> for FetcherError {
+    fn from(e: crate::internal::fetcher::FetchError) -> Self {
+        Self::Message(e.to_fail_message())
+    }
 }
 
 #[derive(Debug)]
@@ -202,7 +217,7 @@ impl Source for FileStream {
 
             let key = ResourceKey::new(asset_root, rel_path);
 
-            let res = match assets.open_streaming_resource(&key, cancel).await {
+            let res = match assets.open_streaming_resource(&key, cancel.clone()).await {
                 Ok(r) => r,
                 Err(e) => {
                     yield Err(StreamError::Source(SourceError::Assets(e)));
@@ -210,17 +225,50 @@ impl Source for FileStream {
                 }
             };
 
-            Fetcher::new(client, url).spawn(res.clone());
+            let fetch_task = Fetcher::new(client, url).spawn(res.clone(), cancel);
 
             let feeder = Feeder::new(start_pos, 64 * 1024);
 
             let mut s = std::pin::pin!(feeder.stream(res));
-            while let Some(item) = s.next().await {
-                match item {
-                    Ok(bytes) => yield Ok(Message::Data(bytes)),
-                    Err(e) => {
-                        yield Err(StreamError::Source(SourceError::Storage(e)));
-                        return;
+            let mut fetch_task = Some(fetch_task);
+
+            loop {
+                tokio::select! {
+                    biased;
+
+                    fetch_res = async {
+                        match fetch_task.as_mut() {
+                            Some(t) => t.await,
+                            None => std::future::pending().await,
+                        }
+                    } => {
+                        // Ensure we never poll/await the JoinHandle again.
+                        fetch_task = None;
+
+                        match fetch_res {
+                            Ok(Ok(())) => {
+                                // Fetch completed successfully; continue draining feeder until EOF.
+                            }
+                            Ok(Err(e)) => {
+                                yield Err(StreamError::Source(SourceError::Fetcher(FetcherError::from(e))));
+                                return;
+                            }
+                            Err(join_err) => {
+                                yield Err(StreamError::Source(SourceError::Fetcher(FetcherError::Message(format!("fetch task join error: {join_err}")))));
+                                return;
+                            }
+                        }
+                    }
+
+                    item = s.next() => {
+                        match item {
+                            Some(Ok(bytes)) => yield Ok(Message::Data(bytes)),
+                            Some(Err(e)) => {
+                                yield Err(StreamError::Source(SourceError::Storage(e)));
+                                return;
+                            }
+                            None => return,
+                        }
                     }
                 }
             }
