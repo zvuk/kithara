@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use std::{
-    fmt,
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -13,7 +12,8 @@ use futures::StreamExt;
 use kithara_assets::AssetResource;
 use kithara_net::HttpClient;
 use kithara_storage::{Resource, StreamingResource, StreamingResourceExt};
-use tokio::task::JoinHandle;
+use thiserror::Error;
+use tokio::task::{JoinError, JoinHandle};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 use url::Url;
@@ -23,26 +23,35 @@ type AssetStreamRes = AssetResource<
     kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
 >;
 
-#[derive(Debug)]
+#[derive(Debug, Error)]
 pub enum FetchError {
+    #[error("net error: {0}")]
     Net(String),
+
+    #[error("net stream error: {0}")]
     NetStream(String),
+
+    #[error("storage write_at error: {0}")]
     StorageWrite(String),
+
+    #[error("received empty chunk from network stream at offset={offset}")]
+    EmptyNetChunk { offset: u64 },
+
+    #[error(
+        "empty read after storage reported range as Ready (offset={offset}, requested_len={requested_len})"
+    )]
+    EmptyAfterReady { offset: u64, requested_len: usize },
+
+    #[error("download offset overflowed u64")]
+    OffsetOverflow,
+
+    #[error("fetch task join error: {0}")]
+    Join(#[from] JoinError),
 }
 
 impl FetchError {
     pub fn to_fail_message(&self) -> String {
-        match self {
-            FetchError::Net(e) => format!("net error: {e}"),
-            FetchError::NetStream(e) => format!("net stream error: {e}"),
-            FetchError::StorageWrite(e) => format!("storage write_at error: {e}"),
-        }
-    }
-}
-
-impl fmt::Display for FetchError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_fail_message())
+        self.to_string()
     }
 }
 
@@ -101,8 +110,7 @@ impl Fetcher {
         // Helper: materialize an error into the resource so readers unblock,
         // then return that structured error.
         async fn fail(res: &AssetStreamRes, err: FetchError) -> Result<(), FetchError> {
-            let msg = err.to_fail_message();
-            let _ = res.fail(msg).await;
+            let _ = res.fail(err.to_fail_message()).await;
             Err(err)
         }
 
@@ -140,6 +148,13 @@ impl Fetcher {
                         }
                     };
 
+                    if bytes.is_empty() {
+                        // If the network stream yields empty chunks, that can cause downstream
+                        // readers to interpret it as EOF and stop early.
+                        warn!(offset, "kithara-file fetcher: received empty net chunk");
+                        return fail(&res, FetchError::EmptyNetChunk { offset }).await;
+                    }
+
                     if let Err(e) = res.write_at(offset, &bytes).await {
                         warn!(
                             offset,
@@ -149,7 +164,10 @@ impl Fetcher {
                         return fail(&res, FetchError::StorageWrite(e.to_string())).await;
                     }
 
-                    offset = offset.saturating_add(bytes.len() as u64);
+                    offset = offset
+                        .checked_add(bytes.len() as u64)
+                        .ok_or(FetchError::OffsetOverflow)?;
+
                     chunks_seen = chunks_seen.saturating_add(1);
 
                     progress.set_downloaded(offset);

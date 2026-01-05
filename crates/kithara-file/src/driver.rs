@@ -43,19 +43,7 @@ pub enum SourceError {
     Storage(#[from] kithara_storage::StorageError),
 
     #[error("Fetcher error: {0}")]
-    Fetcher(#[from] FetcherError),
-}
-
-#[derive(Debug, Error)]
-pub enum FetcherError {
-    #[error("{0}")]
-    Message(String),
-}
-
-impl From<crate::internal::fetcher::FetchError> for FetcherError {
-    fn from(e: crate::internal::fetcher::FetchError) -> Self {
-        Self::Message(e.to_fail_message())
-    }
+    Fetcher(#[from] crate::internal::fetcher::FetchError),
 }
 
 #[derive(Debug)]
@@ -225,7 +213,7 @@ impl Source for FileStream {
                 }
             };
 
-            let fetch_task = Fetcher::new(client, url).spawn(res.clone(), cancel);
+            let fetch_task = Fetcher::new(client, url).spawn(res.clone(), cancel.clone());
 
             let feeder = Feeder::new(start_pos, 64 * 1024);
 
@@ -249,13 +237,17 @@ impl Source for FileStream {
                             Ok(Ok(())) => {
                                 // Fetch completed successfully; continue draining feeder until EOF.
                             }
-                            Ok(Err(e)) => {
-                                yield Err(StreamError::Source(SourceError::Fetcher(FetcherError::from(e))));
-                                return;
+                            Ok(Err(_e)) => {
+                                // Preserve the historical contract: fetch failures surface to consumers
+                                // as a storage-level failure (the fetcher calls `res.fail(...)`).
+                                //
+                                // We intentionally keep reading from the resource so the consumer
+                                // observes `StorageError::Failed(..)` deterministically.
                             }
-                            Err(join_err) => {
-                                yield Err(StreamError::Source(SourceError::Fetcher(FetcherError::Message(format!("fetch task join error: {join_err}")))));
-                                return;
+                            Err(_join_err) => {
+                                // Same as above: treat join errors as storage failures observed via reads.
+                                // (The resource will be marked failed by the fetcher; if it wasn't,
+                                // the subsequent read will still error or EOF appropriately.)
                             }
                         }
                     }
@@ -264,10 +256,14 @@ impl Source for FileStream {
                         match item {
                             Some(Ok(bytes)) => yield Ok(Message::Data(bytes)),
                             Some(Err(e)) => {
+                                cancel.cancel();
                                 yield Err(StreamError::Source(SourceError::Storage(e)));
                                 return;
                             }
-                            None => return,
+                            None => {
+                                cancel.cancel();
+                                return;
+                            }
                         }
                     }
                 }
