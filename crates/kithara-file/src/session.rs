@@ -149,10 +149,7 @@ impl FileSession {
         // Deterministic resource key (format-agnostic):
         // - asset_root stays scoped to the logical asset id
         // - rel_path is derived from URL (no "audio.mp3" hardcoding)
-        let asset_root = hex::encode(driver.asset_id().as_bytes());
-        let rel_path = format!("media/{}", hex::encode(driver.url().as_str().as_bytes()));
-        let key = ResourceKey::new(asset_root, rel_path);
-
+        let key = driver.url().into();
         let cancel = tokio_util::sync::CancellationToken::new();
         let res = assets
             .open_streaming_resource(&key, cancel.clone())

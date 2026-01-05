@@ -18,6 +18,9 @@ pub enum StorageError {
     #[error("random access error: {0}")]
     RandomAccess(#[from] random_access_storage::RandomAccessError),
 
+    #[error("tempfile error: {0}")]
+    TempFile(#[from] async_tempfile::Error),
+
     #[error("invalid range: start {start} >= end {end}")]
     InvalidRange { start: u64, end: u64 },
 

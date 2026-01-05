@@ -2,6 +2,7 @@
 
 use std::{
     fmt,
+    num::NonZeroUsize,
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
@@ -241,32 +242,45 @@ impl StreamingResourceExt for StreamingResource {
     async fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         Self::validate_range(&range)?;
 
+        // Important: do not hold `state` across `.await` points.
+        // Otherwise `wait_range` can block writers from publishing new ranges,
+        // and writers can block `wait_range` from being notified (deadlock).
         loop {
-            let state = self.inner.state.lock().await;
+            let should_wait = {
+                let state = self.inner.state.lock().await;
 
-            if let Some(err) = &state.failed {
-                return Err(StorageError::Failed(err.clone()));
-            }
-
-            if !state.sealed && state.is_covered(range.clone()) {
-                return Ok(WaitOutcome::Ready);
-            }
-
-            if let Some(final_len) = state.final_len {
-                if range.start >= final_len {
-                    return Ok(WaitOutcome::Eof);
+                if let Some(err) = &state.failed {
+                    return Err(StorageError::Failed(err.clone()));
                 }
 
-                // If the range extends beyond EOF, only the part before EOF matters.
-                let needed_end = range.end.min(final_len);
-                if state.is_covered(range.start..needed_end) {
-                    return Ok(WaitOutcome::Ready);
+                let start = range.start;
+                let end = range.end;
+
+                match state.final_len {
+                    Some(final_len) => {
+                        if start >= final_len {
+                            return Ok(WaitOutcome::Eof);
+                        }
+
+                        // If the range extends beyond EOF, only the part before EOF matters.
+                        let needed_end = end.min(final_len);
+                        if state.is_covered(start..needed_end) {
+                            return Ok(WaitOutcome::Ready);
+                        }
+                    }
+                    None => {
+                        // No known final len: still must be covered.
+                        if state.is_covered(start..end) {
+                            return Ok(WaitOutcome::Ready);
+                        }
+                    }
                 }
-            } else {
-                // Committed but unknown final len: treat as "infinite", still must be covered.
-                if state.is_covered(range.clone()) {
-                    return Ok(WaitOutcome::Ready);
-                }
+
+                true
+            };
+
+            if !should_wait {
+                continue;
             }
 
             tokio::select! {
@@ -277,18 +291,21 @@ impl StreamingResourceExt for StreamingResource {
     }
 
     async fn read_at(&self, offset: u64, len: usize) -> StorageResult<Bytes> {
-        if len == 0 {
+        let Some(len) = NonZeroUsize::new(len) else {
+            return Ok(Bytes::new());
+        };
+
+        let len = len.get();
+
+        let Some(clamped) = self.clamp_len_to_eof(offset, len).await? else {
+            return self.read_exact_len(offset, len).await;
+        };
+
+        if clamped == 0 {
             return Ok(Bytes::new());
         }
 
-        if let Some(clamped) = self.clamp_len_to_eof(offset, len).await? {
-            if clamped == 0 {
-                return Ok(Bytes::new());
-            }
-            return self.read_exact_len(offset, clamped).await;
-        }
-
-        self.read_exact_len(offset, len).await
+        self.read_exact_len(offset, clamped).await
     }
 
     async fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
@@ -308,6 +325,7 @@ impl StreamingResourceExt for StreamingResource {
                     end: offset,
                 })?;
 
+        // Stash range to only publish it after successful disk write.
         {
             let mut state = self.inner.state.lock().await;
 
@@ -318,13 +336,19 @@ impl StreamingResourceExt for StreamingResource {
                 return Err(StorageError::Sealed);
             }
 
-            // Stash range to only publish it after successful disk write.
             state.pending_add = Some(offset..end);
         }
 
-        {
+        // Ensure `pending_add` is cleared if the disk write fails.
+        let write_result: StorageResult<()> = {
             let mut disk = self.inner.disk.lock().await;
-            disk.write(offset, data).await?;
+            disk.write(offset, data).await.map_err(Into::into)
+        };
+
+        if let Err(err) = write_result {
+            let mut state = self.inner.state.lock().await;
+            state.pending_add = None;
+            return Err(err);
         }
 
         {
