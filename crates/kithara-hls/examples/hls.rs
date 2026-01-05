@@ -1,6 +1,6 @@
 use std::{env, error::Error, io::Read as _, sync::Arc, thread, time::Duration};
 
-use kithara_assets::{EvictConfig, asset_store};
+use kithara_assets::{AssetStore, EvictConfig};
 use kithara_hls::{HlsOptions, HlsSource};
 use kithara_io::Reader;
 use tracing_subscriber::EnvFilter;
@@ -29,7 +29,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Persistent disk cache root (deterministic layout inside; see `kithara-hls` cache key helpers).
     let cache_root = env::temp_dir().join("hls-cache");
-    let assets = asset_store(cache_root, EvictConfig::default());
+    let assets = AssetStore::with_root_dir(cache_root, EvictConfig::default());
 
     // Open an HLS session (async byte stream + caching).
     let session = HlsSource::open(url, HlsOptions::default(), assets).await?;

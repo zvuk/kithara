@@ -1,6 +1,6 @@
 use std::{env::args, error::Error, sync::Arc, thread};
 
-use kithara_assets::{EvictConfig, asset_store};
+use kithara_assets::{AssetStore, EvictConfig};
 use kithara_file::{FileSource, FileSourceOptions};
 use kithara_io::Reader;
 use tempfile::TempDir;
@@ -33,15 +33,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let url: Url = url.parse()?;
 
     let temp_dir = TempDir::new()?;
-    let assets = asset_store(temp_dir.path().to_path_buf(), EvictConfig::default());
+    let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
 
     // Open a file session (async byte source).
     let session = FileSource::open(url, FileSourceOptions::default(), Some(assets)).await?;
-
-    // Build a sync `Read + Seek` for rodio.
-    //
-    // Note: `kithara-io::Reader` blocks on a Tokio runtime handle; create it here (inside the
-    // Tokio runtime) and then move it into a dedicated blocking thread.
     let source = session.source().await?;
     let reader = Reader::new(Arc::new(source));
 

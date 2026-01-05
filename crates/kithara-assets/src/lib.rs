@@ -51,4 +51,4 @@ pub use index::{EvictConfig, PinsIndex};
 pub use key::ResourceKey;
 pub use lease::{LeaseAssets, LeaseGuard};
 pub use resource::AssetResource;
-pub use store::{AssetStore, DiskAssetStore, asset_store};
+pub use store::{AssetStore, DiskAssetStore};

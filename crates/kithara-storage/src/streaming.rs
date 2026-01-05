@@ -242,31 +242,29 @@ impl StreamingResourceExt for StreamingResource {
         Self::validate_range(&range)?;
 
         loop {
-            {
-                let state = self.inner.state.lock().await;
+            let state = self.inner.state.lock().await;
 
-                if let Some(err) = &state.failed {
-                    return Err(StorageError::Failed(err.clone()));
+            if let Some(err) = &state.failed {
+                return Err(StorageError::Failed(err.clone()));
+            }
+
+            if !state.sealed && state.is_covered(range.clone()) {
+                return Ok(WaitOutcome::Ready);
+            }
+
+            if let Some(final_len) = state.final_len {
+                if range.start >= final_len {
+                    return Ok(WaitOutcome::Eof);
                 }
 
-                if state.sealed {
-                    if let Some(final_len) = state.final_len {
-                        if range.start >= final_len {
-                            return Ok(WaitOutcome::Eof);
-                        }
-
-                        // If the range extends beyond EOF, only the part before EOF matters.
-                        let needed_end = range.end.min(final_len);
-                        if state.is_covered(range.start..needed_end) {
-                            return Ok(WaitOutcome::Ready);
-                        }
-                    } else {
-                        // Committed but unknown final len: treat as "infinite", still must be covered.
-                        if state.is_covered(range.clone()) {
-                            return Ok(WaitOutcome::Ready);
-                        }
-                    }
-                } else if state.is_covered(range.clone()) {
+                // If the range extends beyond EOF, only the part before EOF matters.
+                let needed_end = range.end.min(final_len);
+                if state.is_covered(range.start..needed_end) {
+                    return Ok(WaitOutcome::Ready);
+                }
+            } else {
+                // Committed but unknown final len: treat as "infinite", still must be covered.
+                if state.is_covered(range.clone()) {
                     return Ok(WaitOutcome::Ready);
                 }
             }

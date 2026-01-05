@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use kithara_assets::{DiskAssetStore, EvictConfig, PinsIndex, asset_store};
+use kithara_assets::{AssetStore, DiskAssetStore, EvictConfig, PinsIndex};
 use tokio_util::sync::CancellationToken;
 
 fn pins_path(root: &std::path::Path) -> std::path::PathBuf {
@@ -16,7 +16,7 @@ async fn pins_index_missing_returns_default() {
 
     // `AssetStore` is a leasing decorator, which intentionally does not implement `Assets`.
     // For index tests we open the index against the concrete base store.
-    let _store = asset_store(
+    let _store = AssetStore::with_root_dir(
         dir.path(),
         EvictConfig {
             max_assets: None,
@@ -42,7 +42,7 @@ async fn pins_index_invalid_json_returns_default() {
     let dir = tempfile::tempdir().unwrap();
     let cancel = CancellationToken::new();
 
-    let _store = asset_store(
+    let _store = AssetStore::with_root_dir(
         dir.path(),
         EvictConfig {
             max_assets: None,
@@ -73,7 +73,7 @@ async fn pins_index_roundtrip_store_then_load() {
     let dir = tempfile::tempdir().unwrap();
     let cancel = CancellationToken::new();
 
-    let _store = asset_store(
+    let _store = AssetStore::with_root_dir(
         dir.path(),
         EvictConfig {
             max_assets: None,
