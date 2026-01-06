@@ -1,84 +1,29 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
 
 use bytes::Bytes;
-use futures::{Stream, StreamExt, future::BoxFuture};
+use futures::{Stream, StreamExt};
+use kithara_net::{Headers, Net, NetError};
+use kithara_storage::{Resource, StorageError, StreamingResourceExt, WaitOutcome};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
+use url::Url;
 
 use crate::{StreamError, StreamMsg};
 
-/// Outcome of waiting for a byte range.
-///
-/// This mirrors the semantics of `kithara-storage::WaitOutcome` but lives here to keep the
-/// fetch/reader layer generic over the underlying storage implementation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WaitOutcome {
-    Ready,
-    Eof,
-}
-
-/// Abstract network adapter.
-///
-/// Higher-level crates (`kithara-file`, `kithara-hls`) implement this for their HTTP client.
-///
-/// Contract:
-/// - `stream(req)` opens a byte stream (optionally range-aware).
-pub trait Net: Send + Sync + 'static {
-    type Request: Send + Sync + Clone + 'static;
-    type Error: std::error::Error + Send + Sync + 'static;
-    type ByteStream: Stream<Item = Result<Bytes, Self::Error>> + Send + Unpin + 'static;
-
-    fn stream(
-        &self,
-        req: Self::Request,
-    ) -> BoxFuture<'static, Result<Self::ByteStream, Self::Error>>;
-}
-
-/// Abstract sink that supports random-access writes + lifecycle.
-pub trait WriteSink: Send + Sync + Clone + 'static {
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    fn write_at<'a>(
-        &'a self,
-        offset: u64,
-        data: &'a [u8],
-    ) -> BoxFuture<'a, Result<(), Self::Error>>;
-
-    fn commit<'a>(&'a self, final_len: Option<u64>) -> BoxFuture<'a, Result<(), Self::Error>>;
-
-    fn fail<'a>(&'a self, msg: String) -> BoxFuture<'a, Result<(), Self::Error>>;
-}
-
-/// Abstract source that supports waitable random-access reads.
-pub trait ReadSource: Send + Sync + 'static {
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    fn wait_range<'a>(
-        &'a self,
-        range: Range<u64>,
-    ) -> BoxFuture<'a, Result<WaitOutcome, Self::Error>>;
-
-    fn read_at<'a>(&'a self, offset: u64, len: usize) -> BoxFuture<'a, Result<Bytes, Self::Error>>;
-}
-
 /// Error type for the generic writer (fetch loop).
 #[derive(Debug, Error)]
-pub enum WriterError<NE, SE>
-where
-    NE: std::error::Error + Send + Sync + 'static,
-    SE: std::error::Error + Send + Sync + 'static,
-{
+pub enum WriterError {
     #[error("net open error: {0}")]
-    NetOpen(NE),
+    NetOpen(NetError),
 
     #[error("net stream error: {0}")]
-    NetStream(NE),
+    NetStream(NetError),
 
-    #[error("sink write_at error: {0}")]
-    SinkWrite(SE),
+    #[error("storage write error: {0}")]
+    SinkWrite(StorageError),
 
     #[error("offset overflowed u64")]
     OffsetOverflow,
@@ -86,15 +31,12 @@ where
 
 /// Error type for the generic reader (feed loop).
 #[derive(Debug, Error)]
-pub enum ReaderError<SE>
-where
-    SE: std::error::Error + Send + Sync + 'static,
-{
+pub enum ReaderError {
     #[error("wait_range error: {0}")]
-    Wait(SE),
+    Wait(StorageError),
 
     #[error("read_at error: {0}")]
-    Read(SE),
+    Read(StorageError),
 
     #[error("empty read after Ready (offset={offset}, len={len})")]
     EmptyAfterReady { offset: u64, len: usize },
@@ -103,40 +45,48 @@ where
 /// Generic writer: net stream -> write_at -> commit/fail.
 ///
 /// Behavior:
-/// - On any error, calls `sink.fail(...)` to unblock readers, then returns error.
-/// - On cancellation, returns Ok(()) without failing sink (partial data may remain readable).
+/// - On any error, calls `res.fail(...)` to unblock readers, then returns error.
+/// - On cancellation, returns Ok(()) without failing resource (partial data may remain readable).
 /// - On success, commits with final length.
 ///
 /// This is intentionally minimal and storage-agnostic.
-pub struct Writer<N, S>
+pub struct Writer<N, R>
 where
-    N: Net,
-    S: WriteSink,
+    N: Net + Send + Sync + 'static,
+    R: StreamingResourceExt + Resource + Clone + Send + Sync + 'static,
 {
     net: N,
-    req: N::Request,
-    sink: Arc<S>,
+    url: Url,
+    headers: Option<Headers>,
+    res: Arc<R>,
     cancel: CancellationToken,
 }
 
-impl<N, S> Writer<N, S>
+impl<N, R> Writer<N, R>
 where
-    N: Net,
-    S: WriteSink,
+    N: Net + Send + Sync + 'static,
+    R: StreamingResourceExt + Resource + Clone + Send + Sync + 'static,
 {
-    pub fn new(net: N, req: N::Request, sink: S, cancel: CancellationToken) -> Self {
+    pub fn new(
+        net: N,
+        url: Url,
+        headers: Option<Headers>,
+        res: R,
+        cancel: CancellationToken,
+    ) -> Self {
         Self {
             net,
-            req,
-            sink: Arc::new(sink),
+            url,
+            headers,
+            res: Arc::new(res),
             cancel,
         }
     }
 
-    pub async fn run(&self) -> Result<(), WriterError<N::Error, S::Error>> {
+    pub async fn run(&self) -> Result<(), WriterError> {
         let mut stream = self
             .net
-            .stream(self.req.clone())
+            .stream(self.url.clone(), self.headers.clone())
             .await
             .map_err(WriterError::NetOpen)?;
 
@@ -147,12 +97,12 @@ where
             tokio::select! {
                 _ = self.cancel.cancelled() => {
                     debug!(offset, "writer cancelled");
-                    // Do not fail sink on cancel; partial data may be useful.
+                    // Do not fail resource on cancel; partial data may be useful.
                     return Ok(());
                 }
 
                 next = stream.next() => {
-                    let Some(next): Option<Result<Bytes, N::Error>> = next else { break; };
+                    let Some(next): Option<Result<Bytes, NetError>> = next else { break; };
 
                     let bytes = next.map_err(WriterError::NetStream)?;
                     if bytes.is_empty() {
@@ -161,7 +111,7 @@ where
                         continue;
                     }
 
-                    self.sink
+                    self.res
                         .write_at(offset, &bytes)
                         .await
                         .map_err(WriterError::SinkWrite)?;
@@ -178,20 +128,20 @@ where
             }
         }
 
-        self.sink
+        self.res
             .commit(Some(offset))
             .await
             .map_err(WriterError::SinkWrite)?;
         Ok(())
     }
 
-    /// Helper that materializes an error into the sink and returns it.
-    pub async fn run_with_fail(&self) -> Result<(), WriterError<N::Error, S::Error>> {
+    /// Helper that materializes an error into the resource and returns it.
+    pub async fn run_with_fail(&self) -> Result<(), WriterError> {
         match self.run().await {
             Ok(()) => Ok(()),
             Err(e) => {
                 let msg = e.to_string();
-                let _ = self.sink.fail(msg).await;
+                let _ = self.res.fail(msg).await;
                 Err(e)
             }
         }
@@ -201,22 +151,22 @@ where
 /// Generic reader: wait_range -> read_at -> yield bytes.
 ///
 /// Emits only `StreamMsg::Data(Bytes)`; control/events are the caller's responsibility.
-pub struct Reader<S>
+pub struct Reader<R>
 where
-    S: ReadSource,
+    R: StreamingResourceExt + Send + Sync + 'static,
 {
-    source: S,
+    res: R,
     start_pos: u64,
     chunk_size: usize,
 }
 
-impl<S> Reader<S>
+impl<R> Reader<R>
 where
-    S: ReadSource,
+    R: StreamingResourceExt + Send + Sync + 'static,
 {
-    pub fn new(source: S, start_pos: u64, chunk_size: usize) -> Self {
+    pub fn new(res: R, start_pos: u64, chunk_size: usize) -> Self {
         Self {
-            source,
+            res,
             start_pos,
             chunk_size,
         }
@@ -224,7 +174,7 @@ where
 
     pub fn into_stream<Ev>(
         self,
-    ) -> impl Stream<Item = Result<StreamMsg<(), Ev>, StreamError<ReaderError<S::Error>>>> + Send + 'static
+    ) -> impl Stream<Item = Result<StreamMsg<(), Ev>, StreamError<ReaderError>>> + Send + 'static
     where
         Ev: Send + 'static,
     {
@@ -234,10 +184,10 @@ where
             loop {
                 let end = pos.saturating_add(chunk as u64);
 
-                match self.source.wait_range(pos..end).await {
+                match self.res.wait_range(pos..end).await {
                     Ok(WaitOutcome::Ready) => {
                         let bytes = self
-                            .source
+                            .res
                             .read_at(pos, chunk)
                             .await
                             .map_err(ReaderError::Read)

@@ -17,6 +17,9 @@ tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 async-stream = { workspace = true }
 tracing = { workspace = true }
+kithara-net = { workspace = true }
+kithara-storage = { workspace = true }
+url = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

@@ -23,7 +23,6 @@ mod msg;
 
 pub use engine::{Engine, EngineCommand, EngineHandle, EngineSource, EngineStream, WriterTask};
 pub use error::StreamError;
-pub use fetch::{
-    Net, ReadSource, Reader, ReaderError, WaitOutcome, WriteSink, Writer, WriterError,
-};
+pub use fetch::{Reader, ReaderError, Writer, WriterError};
+pub use kithara_storage::WaitOutcome;
 pub use msg::{StreamMsg, StreamParams};
