@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
-//! `kithara-io::Source` adapter for HLS.
+//! `kithara-stream::io::Source` adapter for HLS.
 //!
 //! Goal: expose a single contiguous byte-addressable stream (with `Read+Seek` support via
-//! `kithara-io::Reader`) backed by cached HLS segment files in `kithara-assets`.
+//! `kithara-stream::io::Reader`) backed by cached HLS segment files in `kithara-assets`.
 //!
 //! Important constraints / notes:
 //! - HLS is naturally segmented; random access is implemented by mapping a global byte offset
@@ -30,7 +30,7 @@ fn select_variant_index(master: &MasterPlaylist, options: &HlsOptions) -> usize 
 /// Tracing:
 // - This module logs initialization, playlist/segment URLs, cache keys, wait/read mapping,
 //   and EOF behavior. Use:
-//   `RUST_LOG=kithara_hls=trace,kithara_io=trace,kithara_net=debug,kithara_storage=debug,kithara_assets=debug`
+//   `RUST_LOG=kithara_hls=trace,kithara_stream::io=trace,kithara_net=debug,kithara_storage=debug,kithara_assets=debug`
 //   to debug "no audio" / deadlocks.
 //
 // Deadlock pinpointing (temporary, ultra-early logs):
@@ -42,81 +42,41 @@ use std::ops::Range;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_assets::AssetStore;
-use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome};
+use kithara_assets::ResourceKey;
 use kithara_storage::StreamingResourceExt;
+use kithara_stream::io::{
+    IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome,
+};
 use tokio::sync::OnceCell;
 use tracing::{debug, trace, warn};
 use url::Url;
 
 use crate::{
-    CacheKeyGenerator, HlsError, HlsOptions, HlsResult,
+    HlsError, HlsOptions, HlsResult,
     fetch::FetchManager,
-    internal::{Feeder as InternalFeeder, Fetcher as InternalFetcher},
-    playlist::{MasterPlaylist, MediaPlaylist, PlaylistManager, VariantId},
+    playlist::{MasterPlaylist, PlaylistManager, VariantId},
 };
 
 pub struct HlsSessionSource {
-    assets: AssetStore,
     playlist_manager: PlaylistManager,
     fetch_manager: FetchManager,
     master_url: Url,
     options: HlsOptions,
-
-    /// `asset_root` is the master hash (stream-download-hls compatible).
     asset_root: String,
-
-    /// Selected variant index for deterministic cache layout: `<master_hash>/<variant_index>/...`.
-    ///
-    /// NOTE: this is only a deterministic default. The effective selected variant is stored in
-    /// `State::variant_index` once `ensure_state()` runs.
-    variant_index: usize,
-
-    /// Lazily initialized: resolved media playlist URL + parsed playlist + segment index.
     state: OnceCell<State>,
 }
 
 struct State {
-    /// Selected variant index used for deterministic cache layout and on-demand fetch triggers.
     variant_index: usize,
-
-    media_url: Url,
-    media: MediaPlaylist,
-
-    /// Shared-handle fetcher/feeder pair used by `wait_range`/`read_at`.
-    ///
-    /// IMPORTANT:
-    /// `kithara-storage::StreamingResource` keeps "available ranges" in-memory per handle.
-    /// Therefore, a "file-like" reader must wait/read from the *same* handle that the writer updates.
-    /// These internal components implement that pattern (kithara-file style).
-    fetcher: std::sync::Arc<InternalFetcher>,
-    feeder: InternalFeeder,
-
-    /// Segment descriptors resolved to absolute URLs.
-    ///
-    /// IMPORTANT: for fMP4, if the playlist contains `EXT-X-MAP`, we prepend the init segment
-    /// as `segments[0]` (with `is_init=true`) before media segments, so the virtual file begins
-    /// with initialization bytes.
     segments: Vec<SegmentDesc>,
-
-    /// Total length in bytes.
     total_len: u64,
-
-    /// Prefix sums of segment lengths: prefix[i] = sum(len[0..i]).
-    ///
-    /// Invariant: prefix.len() == segments.len() + 1, prefix[0] == 0, prefix.last() == total_len.
     prefix: Vec<u64>,
 }
 
 #[derive(Clone, Debug)]
 struct SegmentDesc {
     url: Url,
-    /// Cache rel_path under `<asset_root>/...` (without repeating master_hash).
-    rel_path: String,
-    /// Final length of the segment in bytes.
     len: u64,
-    /// Whether this is an init segment (EXT-X-MAP).
-    is_init: bool,
 }
 
 impl HlsSessionSource {
@@ -126,30 +86,17 @@ impl HlsSessionSource {
     pub fn new(
         master_url: Url,
         options: HlsOptions,
-        assets: AssetStore,
         playlist_manager: PlaylistManager,
         fetch_manager: FetchManager,
     ) -> Self {
-        let asset_root = crate::master_hash_from_url(&master_url);
-
-        // The actual variant is selected from the fetched master playlist in `ensure_state()`.
-        // Keep a deterministic default here; it will be overwritten during init.
-        let variant_index = 0usize;
-
-        debug!(
-            master_url = %master_url,
-            master_hash = %asset_root,
-            "kithara-hls session source created"
-        );
+        let asset_root = ResourceKey::asset_root_for_url(&master_url);
 
         Self {
-            assets,
             playlist_manager,
             fetch_manager,
             master_url,
             options,
             asset_root,
-            variant_index,
             state: OnceCell::new(),
         }
     }
@@ -219,9 +166,6 @@ impl HlsSessionSource {
                     "kithara-hls media playlist fetched"
                 );
 
-                // 5) Build segment descriptors (absolute URLs + deterministic cache rel_paths).
-                let keys = CacheKeyGenerator::new(&self.master_url);
-
                 // Optional init segment (EXT-X-MAP) for fMP4.
                 let init_uri = media.init_segment.as_ref().map(|i| i.uri.as_str());
 
@@ -273,46 +217,22 @@ impl HlsSessionSource {
                         HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {e}"))
                     })?;
 
-                    // Init segment cache key: `<master_hash>/<variant_index>/init_<basename>`.
-                    let full_rel = keys
-                        .init_segment_rel_path_from_url(variant_index, &init_url)
-                        .ok_or_else(|| {
-                            HlsError::InvalidUrl("Failed to derive init segment basename".into())
-                        })?;
-
-                    let rel_path = full_rel
-                        .strip_prefix(&format!("{}/", self.asset_root))
-                        .unwrap_or(full_rel.as_str())
-                        .to_string();
-
                     debug!(
                         segment_index = 0,
                         segment_url = %init_url,
                         asset_root = %self.asset_root,
-                        rel_path = %rel_path,
                         "kithara-hls session source: init segment indexed"
                     );
 
                     // We want init bytes to be available immediately for fMP4 demux, so trigger init download now.
-                    let _ = self
+                    let init_fetch = self
                         .fetch_manager
                         .fetch_init_segment_resource(variant_index, &init_url)
                         .await?;
 
-                    let len = self
-                        .fetch_manager
-                        .probe_content_length(&init_url)
-                        .await?
-                        .ok_or_else(|| {
-                            HlsError::Driver("init segment Content-Length is unknown".into())
-                        })?;
+                    let len = init_fetch.bytes.len() as u64;
 
-                    segments.push(SegmentDesc {
-                        url: init_url,
-                        rel_path,
-                        len,
-                        is_init: true,
-                    });
+                    segments.push(SegmentDesc { url: init_url, len });
                 }
 
                 let base_index = segments.len();
@@ -320,47 +240,22 @@ impl HlsSessionSource {
                     let _out_index = base_index + i;
                     let media_index = i;
 
-                    let full_rel = keys
-                        .media_segment_rel_path_from_url(variant_index, &url)
-                        .ok_or_else(|| {
-                            HlsError::InvalidUrl("Failed to derive segment basename".into())
-                        })?;
-
-                    // Strip "<master_hash>/" because assets already scopes under asset_root.
-                    let rel_path = full_rel
-                        .strip_prefix(&format!("{}/", self.asset_root))
-                        .unwrap_or(full_rel.as_str())
-                        .to_string();
-
-                    // Prefetch the first media segment during initialization.
-                    //
-                    // This reduces the chance of a sync consumer (e.g. `rodio::Decoder` via
-                    // `kithara-io::Reader`) stalling on cold cache before the runtime has produced
-                    // enough bytes beyond the init segment to let the demuxer proceed.
-                    //
-                    // IMPORTANT: `out_index` includes the optional init segment (EXT-X-MAP).
-                    // Prefetch should be keyed off the media segment index.
-                    if media_index == 0 {
-                        let _ = self
+                    let len = if media_index == 0 {
+                        let first_fetch = self
                             .fetch_manager
                             .fetch_media_segment_resource(variant_index, &url)
                             .await?;
-                    }
+                        first_fetch.bytes.len() as u64
+                    } else {
+                        self.fetch_manager
+                            .probe_content_length(&url)
+                            .await?
+                            .ok_or_else(|| {
+                                HlsError::Driver("segment Content-Length is unknown".into())
+                            })?
+                    };
 
-                    let len = self
-                        .fetch_manager
-                        .probe_content_length(&url)
-                        .await?
-                        .ok_or_else(|| {
-                            HlsError::Driver("segment Content-Length is unknown".into())
-                        })?;
-
-                    segments.push(SegmentDesc {
-                        url,
-                        rel_path,
-                        len,
-                        is_init: false,
-                    });
+                    segments.push(SegmentDesc { url, len });
                 }
 
                 // Prefix sums.
@@ -380,104 +275,14 @@ impl HlsSessionSource {
                     "kithara-hls session source initialized"
                 );
 
-                let internal_fetcher = std::sync::Arc::new(InternalFetcher::new(
-                    self.assets.clone(),
-                    self.asset_root.clone(),
-                    self.fetch_manager.net().clone(),
-                    variant_index,
-                ));
-                let internal_feeder = InternalFeeder::new(std::sync::Arc::clone(&internal_fetcher));
-
                 Ok::<_, HlsError>(State {
                     variant_index,
-                    media_url,
-                    media,
-                    fetcher: internal_fetcher,
-                    feeder: internal_feeder,
                     segments,
                     total_len,
                     prefix,
                 })
             })
             .await
-    }
-
-    async fn ensure_segment_committed(
-        &self,
-        variant_index: usize,
-        url: &Url,
-        rel_path: &str,
-    ) -> HlsResult<u64> {
-        // Legacy helper retained to keep diffs small; initialization no longer calls this.
-        // We still trigger a best-effort fetch so reads can block on storage availability.
-        debug!(
-            variant_index,
-            segment_url = %url,
-            asset_root = %self.asset_root,
-            rel_path = %rel_path,
-            "kithara-hls ensure_segment_committed: begin"
-        );
-
-        let _ = self
-            .fetch_manager
-            .fetch_media_segment_resource(variant_index, url)
-            .await?;
-
-        let len = self
-            .fetch_manager
-            .probe_content_length(url)
-            .await?
-            .ok_or_else(|| HlsError::Driver("segment Content-Length is unknown".into()))?;
-
-        Ok(len)
-    }
-
-    async fn try_len_via_eof_probe(
-        &self,
-        res: &kithara_assets::AssetResource<
-            kithara_storage::StreamingResource,
-            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-        >,
-    ) -> HlsResult<Option<u64>> {
-        // Deprecated: EOF probing is intentionally kept for now to avoid a large refactor in one step.
-        // The session initialization path should prefer `FetchManager::probe_content_length(...)`.
-        debug!("kithara-hls len probe: about to wait_range(0..1)");
-        let first = res.wait_range(0..1).await?;
-        debug!(?first, "kithara-hls len probe: wait_range(0..1) returned");
-
-        if first == kithara_storage::WaitOutcome::Eof {
-            return Ok(Some(0));
-        }
-
-        let mut off: u64 = 0;
-        let chunk: u64 = 256 * 1024;
-
-        loop {
-            let end = off.saturating_add(chunk);
-            trace!(off, end, "kithara-hls len probe: wait_range begin");
-            match res.wait_range(off..end).await? {
-                kithara_storage::WaitOutcome::Ready => {
-                    let len = (end - off) as usize;
-                    trace!(off, len, "kithara-hls len probe: read_at begin");
-                    let bytes = res.read_at(off, len).await?;
-                    trace!(
-                        off,
-                        got = bytes.len(),
-                        "kithara-hls len probe: read_at done"
-                    );
-
-                    if bytes.is_empty() {
-                        warn!(
-                            off,
-                            "kithara-hls len probe: empty-after-ready; treating as EOF-ish"
-                        );
-                        return Ok(Some(off));
-                    }
-                    off = off.saturating_add(bytes.len() as u64);
-                }
-                kithara_storage::WaitOutcome::Eof => return Ok(Some(off)),
-            }
-        }
     }
 
     fn locate(&self, state: &State, pos: u64) -> Option<(usize, u64)> {
@@ -522,10 +327,17 @@ impl HlsSessionSource {
         let start = offset_in_segment;
         let end = offset_in_segment.saturating_add(len as u64);
 
-        state
-            .feeder
-            .wait_in_segment(&seg.url, &seg.rel_path, seg.is_init, start..end)
+        let res = self
+            .fetch_manager
+            .open_media_streaming_resource(state.variant_index, &seg.url)
             .await
+            .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+
+        match res.wait_range(start..end).await {
+            Ok(kithara_storage::WaitOutcome::Ready) => Ok(WaitOutcome::Ready),
+            Ok(kithara_storage::WaitOutcome::Eof) => Ok(WaitOutcome::Eof),
+            Err(e) => Err(KitharaIoError::Source(e.to_string())),
+        }
     }
 
     async fn read_in_segment(
@@ -540,17 +352,22 @@ impl HlsSessionSource {
             .get(segment_index)
             .ok_or_else(|| KitharaIoError::Source("segment index out of bounds".into()))?;
 
-        state
-            .feeder
-            .read_in_segment(&seg.url, &seg.rel_path, seg.is_init, offset_in_segment, len)
+        let res = self
+            .fetch_manager
+            .open_media_streaming_resource(state.variant_index, &seg.url)
             .await
+            .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+
+        res.read_at(offset_in_segment, len)
+            .await
+            .map_err(|e| KitharaIoError::Source(e.to_string()))
     }
 }
 
 #[async_trait]
 impl Source for HlsSessionSource {
     async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome> {
-        debug!(
+        trace!(
             start = range.start,
             end = range.end,
             len = self.len(),
@@ -562,7 +379,7 @@ impl Source for HlsSessionSource {
             .await
             .map_err(|e| KitharaIoError::Source(e.to_string()))?;
 
-        debug!(
+        trace!(
             total_len = state.total_len,
             segments = state.segments.len(),
             variant_index = state.variant_index,
@@ -574,7 +391,7 @@ impl Source for HlsSessionSource {
             return Ok(WaitOutcome::Eof);
         }
 
-        // We only guarantee that *some* progress can be read; `kithara-io::Reader` requests a
+        // We only guarantee that *some* progress can be read; `kithara-stream::io::Reader` requests a
         // contiguous range. Ensure that requested window is fully available across segment boundaries.
         let mut pos = range.start;
         let end = range.end.min(state.total_len);
@@ -587,12 +404,11 @@ impl Source for HlsSessionSource {
 
             let seg = &state.segments[seg_idx];
             let seg_remaining = seg.len.saturating_sub(seg_off);
-            debug!(
+            trace!(
                 pos,
                 end,
                 seg_idx,
                 seg_off,
-                seg_rel = %seg.rel_path,
                 seg_len = seg.len,
                 seg_remaining,
                 "kithara-hls wait_range mapped"
@@ -638,7 +454,7 @@ impl Source for HlsSessionSource {
     }
 
     async fn read_at(&self, offset: u64, len: usize) -> KitharaIoResult<Bytes> {
-        debug!(
+        trace!(
             offset,
             len,
             source_len = self.len(),
@@ -668,17 +484,24 @@ impl Source for HlsSessionSource {
             return Ok(Bytes::new());
         };
 
-        // Read within one segment only. The caller (`kithara-io::Reader`) will call again if it needs
+        trace!(
+            offset,
+            seg_idx,
+            seg_off,
+            seg_len = state.segments[seg_idx].len,
+            "kithara-hls read_at located segment"
+        );
+
+        // Read within one segment only. The caller (`kithara-stream::io::Reader`) will call again if it needs
         // more; this keeps reads simple and avoids allocating large buffers on boundary crossings.
         let seg = &state.segments[seg_idx];
         let seg_remaining = seg.len.saturating_sub(seg_off);
 
-        debug!(
+        trace!(
             offset,
             len,
             seg_idx,
             seg_off,
-            seg_rel = %seg.rel_path,
             seg_len = seg.len,
             seg_remaining,
             "kithara-hls read_at mapped"

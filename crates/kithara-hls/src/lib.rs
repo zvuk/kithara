@@ -10,7 +10,7 @@
 //! Internally, it uses `kithara-stream` to orchestrate fetching and expose an async byte stream.
 //!
 //! - No explicit stop command: stopping is done by dropping the stream.
-//! - Seek is supported for rodio playback via `HlsSession::source()` + `kithara-io::Reader`.
+//! - Seek is supported for rodio playback via `HlsSession::source()` + `kithara-stream::io::Reader`.
 //!
 //! ## Public contracts (explicit)
 //!
@@ -24,40 +24,31 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use kithara_assets::AssetStore;
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_core::AssetId;
 use kithara_net::HttpClient;
 use thiserror::Error;
 use tokio::sync::broadcast;
 use url::Url;
 
-// Public modules
 pub mod abr;
+mod driver;
 pub mod events;
 pub mod fetch;
 pub mod keys;
 pub mod playlist;
-
-// Public (but internal-oriented) modules
 pub mod session;
-
-// Private modules
-mod cache_keys;
-mod driver;
 
 // Internal modules (exposed for crate tests and internal plumbing).
 pub mod cursor;
-pub mod internal;
 
 // Re-export key types
 pub use abr::{
     AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
 };
-// Deterministic cache/layout helper (mirrors stream-download-hls layout).
-pub use cache_keys::{CacheKeyGenerator, master_hash_from_url};
 pub use driver::{DriverError, SourceError};
 pub use events::{EventEmitter, HlsEvent};
-pub use fetch::{FetchError, FetchManager, SegmentStream};
+pub use fetch::{FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
 pub use playlist::{PlaylistError, PlaylistManager};
 pub use session::HlsSessionSource;
@@ -183,7 +174,7 @@ pub struct HlsSource;
 impl HlsSourceContract for HlsSource {
     async fn open(&self, url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession> {
         let asset_id = AssetId::from_url(&url)?;
-        let asset_root = master_hash_from_url(&url);
+        let asset_root = ResourceKey::asset_root_for_url(&url);
         let net = HttpClient::new(kithara_net::NetOptions::default());
 
         // Create managers (kept as-is; internals will be iterated via TDD).
@@ -277,13 +268,13 @@ impl HlsSession {
     }
 
     /// Build an I/O `Source` adapter for this session, suitable for wrapping into
-    /// `kithara-io::Reader` (`Read + Seek`) for `rodio::Decoder`.
+    /// `kithara-stream::io::Reader` (`Read + Seek`) for `rodio::Decoder`.
     ///
     /// This mirrors `kithara-file` example structure:
     /// - `session.source().await?`
     /// - `Reader::new(Arc::new(source))`
     pub async fn source(&self) -> HlsResult<HlsSessionSource> {
-        let asset_root = master_hash_from_url(&self.master_url);
+        let asset_root = ResourceKey::asset_root_for_url(&self.master_url);
         let net = HttpClient::new(kithara_net::NetOptions::default());
 
         let playlist_manager = playlist::PlaylistManager::new(
@@ -298,7 +289,6 @@ impl HlsSession {
         Ok(HlsSessionSource::new(
             self.master_url.clone(),
             self.opts.clone(),
-            self.assets.clone(),
             playlist_manager,
             fetch_manager,
         ))

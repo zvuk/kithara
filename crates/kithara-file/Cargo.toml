@@ -10,7 +10,6 @@ kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-assets = { workspace = true }
-kithara-io = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
@@ -26,8 +25,8 @@ async-trait = { workspace = true }
 [dev-dependencies]
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
 axum = { workspace = true }
-kithara-io = { workspace = true }
 rodio = { workspace = true }
+rstest = { workspace = true }
 tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
 hex = { workspace = true }

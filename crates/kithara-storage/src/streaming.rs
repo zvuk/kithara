@@ -96,7 +96,7 @@ impl StreamingResource {
                 path: opts.path,
                 cancel: opts.cancel,
                 disk: Mutex::new(disk),
-                state: Mutex::new(State::new()),
+                state: Mutex::new(State::with_initial_len(opts.initial_len)),
                 notify: Notify::new(),
             }),
         })
@@ -393,6 +393,18 @@ impl State {
         }
     }
 
+    fn with_initial_len(initial_len: Option<u64>) -> Self {
+        let mut s = Self::new();
+        if let Some(len) = initial_len {
+            if len > 0 {
+                s.available.insert(0..len);
+            }
+            s.sealed = true;
+            s.final_len = Some(len);
+        }
+        s
+    }
+
     fn is_covered(&self, range: Range<u64>) -> bool {
         // Check that there are no holes between range.start and range.end,
         // using the set's overlapping iterator.
@@ -412,11 +424,4 @@ impl State {
 
         cursor >= range.end
     }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    #[ignore = "tests will be written once atomic resource + manager integration is complete"]
-    fn placeholder() {}
 }

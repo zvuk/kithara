@@ -1,10 +1,14 @@
 #![forbid(unsafe_code)]
 
+use std::time::Duration;
+
 use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_assets::{AssetStore, EvictConfig};
 use kithara_file::{DriverError, FileError, FileSource, FileSourceOptions, SourceError};
+use kithara_storage::StreamingResourceExt;
+use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
@@ -33,57 +37,109 @@ async fn run_test_server() -> String {
     format!("http://127.0.0.1:{}", addr.port())
 }
 
+#[fixture]
+fn example_url() -> url::Url {
+    url::Url::parse("https://example.com/audio.mp3?token=123").unwrap()
+}
+
+#[fixture]
+fn example_url_no_query() -> url::Url {
+    url::Url::parse("https://example.com/audio.mp3").unwrap()
+}
+
+#[fixture]
+fn default_opts() -> FileSourceOptions {
+    FileSourceOptions::default()
+}
+
+#[rstest]
 #[tokio::test]
-async fn open_session_creates_asset_id_from_url() {
-    let url = url::Url::parse("https://example.com/audio.mp3?token=123").unwrap();
-    let opts = FileSourceOptions::default();
+#[timeout(Duration::from_secs(5))]
+async fn open_session_creates_asset_id_from_url(
+    example_url: url::Url,
+    default_opts: FileSourceOptions,
+) {
+    let session = FileSource::open(example_url.clone(), default_opts, None)
+        .await
+        .unwrap();
 
-    let session = FileSource::open(url.clone(), opts, None).await.unwrap();
-
-    let expected_asset_id = kithara_core::AssetId::from_url(&url).unwrap();
+    let expected_asset_id = kithara_core::AssetId::from_url(&example_url).unwrap();
     assert_eq!(session.asset_id(), expected_asset_id);
 }
 
+#[rstest]
 #[tokio::test]
-async fn asset_id_is_stable_without_query() {
-    let url1 = url::Url::parse("https://example.com/audio.mp3?token=abc").unwrap();
-    let url2 = url::Url::parse("https://example.com/audio.mp3?different=xyz").unwrap();
-    let url3 = url::Url::parse("https://example.com/audio.mp3").unwrap();
-
-    let session1 = FileSource::open(url1, FileSourceOptions::default(), None)
+#[timeout(Duration::from_secs(5))]
+async fn asset_id_is_stable_without_query(
+    example_url: url::Url,
+    example_url_no_query: url::Url,
+    default_opts: FileSourceOptions,
+) {
+    let session1 = FileSource::open(example_url, default_opts.clone(), None)
         .await
         .unwrap();
-    let session2 = FileSource::open(url2, FileSourceOptions::default(), None)
-        .await
-        .unwrap();
-    let session3 = FileSource::open(url3, FileSourceOptions::default(), None)
+    let session2 = FileSource::open(example_url_no_query, default_opts, None)
         .await
         .unwrap();
 
     assert_eq!(session1.asset_id(), session2.asset_id());
-    assert_eq!(session1.asset_id(), session3.asset_id());
 }
 
+#[rstest]
+#[case("https://example.com/audio.mp3?token=abc")]
+#[case("https://example.com/audio.mp3?different=xyz")]
+#[case("https://example.com/audio.mp3")]
 #[tokio::test]
-async fn session_returns_stream() {
-    let url = url::Url::parse("https://example.com/audio.mp3").unwrap();
+#[timeout(Duration::from_secs(5))]
+async fn asset_id_is_stable_across_different_queries(#[case] url_str: &str) {
+    let url = url::Url::parse(url_str).unwrap();
     let opts = FileSourceOptions::default();
 
     let session = FileSource::open(url, opts, None).await.unwrap();
+
+    // All should have same asset ID (without query)
+    let expected_id =
+        kithara_core::AssetId::from_url(&url::Url::parse("https://example.com/audio.mp3").unwrap())
+            .unwrap();
+    assert_eq!(session.asset_id(), expected_id);
+}
+
+#[rstest]
+#[tokio::test]
+#[timeout(Duration::from_secs(5))]
+async fn session_returns_stream(example_url_no_query: url::Url, default_opts: FileSourceOptions) {
+    let session = FileSource::open(example_url_no_query, default_opts, None)
+        .await
+        .unwrap();
 
     let _stream = session.stream().await;
     // We don't consume it here; this test asserts stream construction is possible.
 }
 
-#[tokio::test]
-async fn stream_bytes_from_network() {
-    let server_url = run_test_server().await;
-    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+#[fixture]
+async fn test_server() -> String {
+    run_test_server().await
+}
 
+#[fixture]
+async fn temp_assets() -> AssetStore {
     let temp_dir = TempDir::new().unwrap();
-    let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
+    AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default())
+}
 
-    let session = FileSource::open(url, FileSourceOptions::default(), Some(assets))
+#[rstest]
+#[tokio::test]
+#[timeout(Duration::from_secs(10))]
+async fn stream_bytes_from_network(
+    #[future] test_server: String,
+    #[future] temp_assets: AssetStore,
+    default_opts: FileSourceOptions,
+) {
+    let server_url = test_server.await;
+    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+    let assets = temp_assets.await;
+
+    let session = FileSource::open(url, default_opts, Some(assets))
         .await
         .unwrap();
 
@@ -106,15 +162,49 @@ async fn stream_bytes_from_network() {
     );
 }
 
+#[rstest]
 #[tokio::test]
-async fn stream_handles_network_errors() {
+#[timeout(Duration::from_secs(10))]
+async fn stream_seek_bytes_repositions_reader(
+    #[future] test_server: String,
+    #[future] temp_assets: AssetStore,
+    default_opts: FileSourceOptions,
+) {
+    let server_url = test_server.await;
+    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+    let assets = temp_assets.await;
+
+    let session = FileSource::open(url, default_opts, Some(assets))
+        .await
+        .unwrap();
+
+    let mut stream = session.stream().await;
+    session.seek_bytes(4).await.unwrap();
+
+    let chunk = stream
+        .next()
+        .await
+        .expect("Should receive chunk after seek")
+        .expect("Seeked stream should not error");
+
+    assert_eq!(
+        chunk,
+        Bytes::from_static(b"\x00\x00\x00\x00\x00TestAudioData12345")
+    );
+}
+
+#[rstest]
+#[tokio::test]
+#[timeout(Duration::from_secs(10))]
+async fn stream_handles_network_errors(
+    #[future] temp_assets: AssetStore,
+    default_opts: FileSourceOptions,
+) {
     // Use a non-existent server to test error handling
     let url = url::Url::parse("http://127.0.0.1:9998/nonexistent.mp3").unwrap();
+    let assets = temp_assets.await;
 
-    let temp_dir = TempDir::new().unwrap();
-    let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
-
-    let session = FileSource::open(url, FileSourceOptions::default(), Some(assets))
+    let session = FileSource::open(url, default_opts, Some(assets))
         .await
         .unwrap();
 
@@ -132,8 +222,72 @@ async fn stream_handles_network_errors() {
     }
 }
 
+#[rstest]
 #[tokio::test]
-#[ignore = "outdated: relied on removed kithara-cache API (CacheOptions/max_bytes/root_dir); will be rewritten for kithara-assets + resource-based API"]
-async fn cache_through_write_works() {
-    unimplemented!("rewrite this test for kithara-assets + resource-based API");
+#[timeout(Duration::from_secs(30))]
+async fn cache_through_write_works(
+    #[future] test_server: String,
+    #[future] temp_assets: AssetStore,
+    default_opts: FileSourceOptions,
+) {
+    let server_url = test_server.await;
+    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+    let assets = temp_assets.await;
+
+    // First, open a session and stream data to populate cache
+    let session1 = FileSource::open(url.clone(), default_opts.clone(), Some(assets.clone()))
+        .await
+        .unwrap();
+
+    let mut stream1 = session1.stream().await;
+    let mut received_data = Vec::new();
+
+    while let Some(chunk_result) = stream1.next().await {
+        let chunk = chunk_result.expect("Stream should not error");
+        received_data.extend_from_slice(&chunk);
+    }
+
+    // Verify we received the expected data
+    assert_eq!(
+        received_data,
+        b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345"
+    );
+
+    // Now create a new session with the same assets store (simulating a new playback session)
+    // This should read from cache without network requests
+    let session2 = FileSource::open(url.clone(), default_opts, Some(assets.clone()))
+        .await
+        .unwrap();
+
+    let mut stream2 = session2.stream().await;
+    let mut cached_data = Vec::new();
+
+    while let Some(chunk_result) = stream2.next().await {
+        let chunk = chunk_result.expect("Stream should not error from cache");
+        cached_data.extend_from_slice(&chunk);
+    }
+
+    // Verify cached data matches original
+    assert_eq!(received_data, cached_data);
+
+    // Verify the data is actually stored on disk
+    // kithara-file uses ResourceKey::from(&url) which creates:
+    // - asset_root: first 32 chars of SHA-256 hash of URL string
+    // - rel_path: last path segment of URL (or "index" if empty)
+    let resource_key = kithara_assets::ResourceKey::from(&url);
+
+    // Open the streaming resource directly to verify it exists
+    let cancel = tokio_util::sync::CancellationToken::new();
+    let streaming_resource = assets
+        .open_streaming_resource(&resource_key, cancel.clone())
+        .await
+        .expect("Should be able to open cached resource");
+
+    // Read the data from the resource using read_at since read() requires sealed state
+    let stored_data = streaming_resource
+        .read_at(0, received_data.len())
+        .await
+        .expect("Should read cached data");
+
+    assert_eq!(stored_data, Bytes::from(received_data));
 }

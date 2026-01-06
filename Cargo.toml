@@ -5,7 +5,6 @@ members = [
     "crates/kithara-net",
     "crates/kithara-file",
     "crates/kithara-hls",
-    "crates/kithara-io",
     "crates/kithara-decode",
     "crates/kithara-stream",
     "crates/kithara-storage",
@@ -57,10 +56,10 @@ kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
-kithara-io = { path = "crates/kithara-io", version = "0.1.0" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
+rstest = "0.26.1"
 
 # async/runtime
 tokio = { version = "1.48.0", features = ["full"] }
@@ -104,7 +103,6 @@ uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10.8"
 tower = "0.5.2"
 tempfile = "3.10.2"
-async-tempfile = { version = "0.7.0", features = ["uuid"] }
 
 # async traits
 async-trait = "0.1.68"

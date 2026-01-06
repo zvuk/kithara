@@ -10,14 +10,6 @@ use url::Url;
 
 use crate::{FileResult, FileSession, FileSourceOptions};
 
-/// Public contract for the progressive file source.
-///
-/// This trait exists to make the public API surface explicit and searchable.
-/// Concrete implementations (like [`FileSource`]) must implement it.
-///
-/// Note: the default implementation uses [`HttpClient`] with default options.
-/// If you need dependency injection for networking, that should be expressed as
-/// a different constructor/implementation, not hidden behind private functions.
 #[async_trait]
 pub trait FileSourceContract: Send + Sync + 'static {
     async fn open(
@@ -28,7 +20,6 @@ pub trait FileSourceContract: Send + Sync + 'static {
     ) -> FileResult<FileSession>;
 }
 
-/// Default progressive file source implementation.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FileSource;
 
@@ -50,7 +41,6 @@ impl FileSourceContract for FileSource {
 }
 
 impl FileSource {
-    /// Convenience associated constructor matching the historical API.
     pub async fn open(
         url: Url,
         opts: FileSourceOptions,

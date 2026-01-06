@@ -3,44 +3,76 @@ use std::{ops::Range, pin::Pin, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use kithara_assets::AssetStore;
+use kithara_assets::{AssetResource, AssetStore, DiskAssetStore, EvictAssets, LeaseGuard};
 use kithara_core::{AssetId, CoreError};
-use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome};
-use kithara_storage::StreamingResourceExt;
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
+use kithara_net::{HttpClient, NetError};
+use kithara_storage::{StreamingResource, StreamingResourceExt};
+use kithara_stream::{
+    EngineHandle, StreamMsg, Writer,
+    io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome},
+};
+use tokio::sync::{Mutex, broadcast};
 use tracing::trace;
+use url::Url;
 
 use crate::{
-    driver::{DriverError, FileCommand, FileDriver, SourceError},
-    internal::{Fetcher, Progress},
+    driver::{DriverError, FileDriver, FileStreamState, SourceError},
+    events::FileEvent,
     options::FileSourceOptions,
 };
 
+// Type aliases for complex types
+type AssetResourceType = AssetResource<StreamingResource, LeaseGuard<EvictAssets<DiskAssetStore>>>;
+
+#[derive(Debug)]
+pub struct Progress {
+    read_pos: std::sync::atomic::AtomicU64,
+    download_pos: std::sync::atomic::AtomicU64,
+}
+
+impl Progress {
+    pub fn new() -> Self {
+        Self {
+            read_pos: std::sync::atomic::AtomicU64::new(0),
+            download_pos: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    pub fn set_read_pos(&self, v: u64) {
+        use std::sync::atomic::Ordering;
+        self.read_pos.store(v, Ordering::Relaxed);
+    }
+
+    pub fn set_download_pos(&self, v: u64) {
+        use std::sync::atomic::Ordering;
+        self.download_pos.store(v, Ordering::Relaxed);
+    }
+}
+
 pub struct SessionSource {
-    res: kithara_assets::AssetResource<
-        kithara_storage::StreamingResource,
-        kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-    >,
+    res: AssetResourceType,
     progress: Arc<Progress>,
-    // Length is generally unknown for progressive HTTP unless the writer commits with known len.
-    // We don't currently plumb a "query length" API through assets/storage, so keep it None.
+    events: broadcast::Sender<FileEvent>,
     len: Option<u64>,
 }
 
 impl SessionSource {
     fn new(
-        res: kithara_assets::AssetResource<
-            kithara_storage::StreamingResource,
-            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-        >,
+        res: AssetResourceType,
         progress: Arc<Progress>,
+        events: broadcast::Sender<FileEvent>,
+        len: Option<u64>,
     ) -> Self {
         Self {
             res,
             progress,
-            len: None,
+            events,
+            len,
         }
+    }
+
+    pub fn events(&self) -> broadcast::Receiver<FileEvent> {
+        self.events.subscribe()
     }
 }
 
@@ -78,9 +110,15 @@ impl Source for SessionSource {
             .await
             .map_err(|e| KitharaIoError::Source(e.to_string()))?;
 
-        // Update shared progress so the fetcher can log (downloaded, read, backlog).
-        self.progress
-            .set_read_pos(offset.saturating_add(bytes.len() as u64));
+        let new_pos = offset.saturating_add(bytes.len() as u64);
+        self.progress.set_read_pos(new_pos);
+        let percent = self
+            .len
+            .map(|len| ((new_pos as f64 / len as f64) * 100.0).min(100.0) as f32);
+        let _ = self.events.send(FileEvent::PlaybackProgress {
+            position: new_pos,
+            percent,
+        });
 
         trace!(
             offset,
@@ -98,24 +136,31 @@ impl Source for SessionSource {
 
 pub struct FileSession {
     driver: Arc<FileDriver>,
-    command_tx: mpsc::UnboundedSender<FileCommand>,
+    net_client: HttpClient,
+    engine_handle: Arc<Mutex<Option<EngineHandle>>>,
 }
 
 impl FileSession {
     pub fn new(
         asset_id: AssetId,
-        url: url::Url,
-        net_client: kithara_net::HttpClient,
+        url: Url,
+        net_client: HttpClient,
         options: FileSourceOptions,
         cache: Option<Arc<AssetStore>>,
     ) -> Self {
-        let driver = Arc::new(FileDriver::new(asset_id, url, net_client, options, cache));
+        let driver = Arc::new(FileDriver::new(
+            asset_id,
+            url,
+            net_client.clone(),
+            options,
+            cache,
+        ));
 
-        let (command_tx, _command_rx) = mpsc::unbounded_channel::<FileCommand>();
-        // Note: In a full implementation, we'd have a command receiver
-        // that the driver loop would monitor. For now, this is the placeholder.
-
-        Self { driver, command_tx }
+        Self {
+            driver,
+            net_client,
+            engine_handle: Arc::new(Mutex::new(None)),
+        }
     }
 
     pub fn asset_id(&self) -> AssetId {
@@ -125,70 +170,83 @@ impl FileSession {
     pub async fn stream(
         &self,
     ) -> Pin<Box<dyn Stream<Item = Result<Bytes, FileError>> + Send + '_>> {
-        let driver_stream = self.driver.stream().await;
+        let (handle, driver_stream) = self.driver.stream_with_handle().await;
+        {
+            let mut guard = self.engine_handle.lock().await;
+            *guard = Some(handle);
+        }
         Box::pin(driver_stream.map(|result| result.map_err(FileError::Driver)))
     }
 
-    /// Create an I/O `Source` adapter for this session.
-    ///
-    /// This opens exactly one streaming resource and starts exactly one writer task that fills it.
-    /// The returned [`SessionSource`] can be wrapped by `kithara-io::Reader` to satisfy
-    /// sync consumers like `rodio::Decoder` (`Read + Seek`).
     pub async fn source(&self) -> Result<SessionSource, FileError> {
         let driver = &self.driver;
 
-        let Some(assets) = driver.assets() else {
-            return Err(FileError::Driver(DriverError::Source(SourceError::Assets(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "assets store is required for kithara-file; pass Some(AssetStore)",
-                )
-                .into(),
-            ))));
-        };
-
-        // Deterministic resource key (format-agnostic):
-        // - asset_root stays scoped to the logical asset id
-        // - rel_path is derived from URL (no "audio.mp3" hardcoding)
-        let key = driver.url().into();
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let res = assets
-            .open_streaming_resource(&key, cancel.clone())
-            .await
-            .map_err(|e| FileError::Driver(DriverError::Source(SourceError::Assets(e))))?;
+        let state = FileStreamState::create(
+            driver.assets(),
+            self.net_client.clone(),
+            driver.url().clone(),
+        )
+        .await
+        .map_err(|e| FileError::Driver(DriverError::Source(e)))?;
 
         let progress = Arc::new(Progress::new());
-        Self::spawn_download_writer(driver, res.clone(), progress.clone(), cancel);
+        Self::spawn_download_writer(&self.net_client, driver, state.clone(), progress.clone());
 
-        Ok(SessionSource::new(res, progress))
+        Ok(SessionSource::new(
+            state.res().clone(),
+            progress,
+            state.events().clone(),
+            state.len(),
+        ))
     }
 
     fn spawn_download_writer(
+        net_client: &HttpClient,
         driver: &FileDriver,
-        res: kithara_assets::AssetResource<
-            kithara_storage::StreamingResource,
-            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-        >,
+        state: Arc<FileStreamState>,
         progress: Arc<Progress>,
-        cancel: CancellationToken,
     ) {
+        let net = net_client.clone();
         let url = driver.url().clone();
-        let client = driver.net_client().clone();
+        let events = state.events().clone();
+        let len = state.len();
+        let res = state.res().clone();
+        let cancel = state.cancel().clone();
+        let progress_dl = progress.clone();
 
-        let _task = Fetcher::new(client, url).spawn_with_progress(res, progress, cancel);
+        tokio::spawn(async move {
+            let writer = Writer::<_, _, FileEvent>::new(net, url, None, res, cancel).with_event(
+                move |offset, _len| {
+                    progress_dl.set_download_pos(offset);
+                    let percent =
+                        len.map(|len| ((offset as f64 / len as f64) * 100.0).min(100.0) as f32);
+                    FileEvent::DownloadProgress { offset, percent }
+                },
+                move |msg| {
+                    if let StreamMsg::Event(ev) = msg {
+                        let _ = events.send(ev);
+                    }
+                },
+            );
+
+            let _ = writer.run_with_fail().await;
+        });
     }
 
-    /// Send a command to the driver
-    ///
-    /// Returns an error if the command channel is closed
-    pub fn send_command(&self, command: FileCommand) -> Result<(), FileError> {
-        self.command_tx
-            .send(command)
-            .map_err(|_| FileError::DriverStopped)
-    }
+    pub async fn seek_bytes(&self, position: u64) -> FileResult<()> {
+        let handle = {
+            let guard = self.engine_handle.lock().await;
+            guard.clone()
+        };
+        let Some(handle) = handle else {
+            return Err(FileError::Driver(DriverError::SeekNotSupported));
+        };
 
-    pub fn seek_bytes(&self, position: u64) -> Result<(), FileError> {
-        self.send_command(FileCommand::SeekBytes(position))
+        handle
+            .seek_bytes::<SourceError>(position)
+            .await
+            .map_err(DriverError::from)
+            .map_err(FileError::Driver)
     }
 }
 
@@ -196,7 +254,8 @@ impl Clone for FileSession {
     fn clone(&self) -> Self {
         Self {
             driver: self.driver.clone(),
-            command_tx: self.command_tx.clone(),
+            net_client: self.net_client.clone(),
+            engine_handle: self.engine_handle.clone(),
         }
     }
 }
@@ -208,7 +267,7 @@ pub enum FileError {
     #[error("Driver has stopped")]
     DriverStopped,
     #[error("Network error: {0}")]
-    Net(#[from] kithara_net::NetError),
+    Net(#[from] NetError),
     #[error("Core error: {0}")]
     Core(#[from] CoreError),
 }

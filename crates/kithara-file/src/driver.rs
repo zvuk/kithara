@@ -1,20 +1,29 @@
 use std::{pin::Pin, sync::Arc};
 
 use bytes::Bytes;
-use futures::{Stream as FuturesStream, StreamExt};
-use kithara_assets::{AssetStore, ResourceKey};
+use futures::{Stream as FuturesStream, StreamExt, pin_mut};
+use kithara_assets::{
+    AssetResource, AssetStore, AssetsError, DiskAssetStore, EvictAssets, LeaseGuard,
+};
 use kithara_core::AssetId;
-use kithara_net::{HttpClient, NetError};
-use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
+use kithara_net::{HttpClient, Net, NetError};
+use kithara_storage::{StorageError, StreamingResource};
+use kithara_stream::{
+    Engine, EngineHandle, EngineSource, Reader, ReaderError, StreamError, StreamMsg, StreamParams,
+    Writer, WriterTask,
+};
 use thiserror::Error;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{
-    internal::{Feeder, Fetcher},
+    events::FileEvent,
     options::{FileSourceOptions, OptionsError},
-    range_policy::RangePolicy,
 };
+
+// Type aliases for complex types
+type AssetResourceType = AssetResource<StreamingResource, LeaseGuard<EvictAssets<DiskAssetStore>>>;
 
 #[derive(Debug, Error)]
 pub enum DriverError {
@@ -22,7 +31,7 @@ pub enum DriverError {
     Source(#[from] SourceError),
 
     #[error("Stream error: {0}")]
-    Stream(#[from] kithara_stream::StreamError<SourceError>),
+    Stream(#[from] StreamError<SourceError>),
 
     #[error("Options error: {0}")]
     Options(#[from] OptionsError),
@@ -37,36 +46,44 @@ pub enum SourceError {
     Net(#[from] NetError),
 
     #[error("Assets error: {0}")]
-    Assets(#[from] kithara_assets::AssetsError),
+    Assets(#[from] AssetsError),
 
     #[error("Storage error: {0}")]
-    Storage(#[from] kithara_storage::StorageError),
+    Storage(#[from] StorageError),
 
-    #[error("Fetcher error: {0}")]
-    Fetcher(#[from] crate::internal::fetcher::FetchError),
-}
+    #[error("Writer error: {0}")]
+    Writer(String),
 
-#[derive(Debug)]
-pub enum FileCommand {
-    /// Command to seek to a specific byte position.
-    ///
-    /// The position is absolute (from start of resource).
-    /// See `FileSession::seek_bytes` for detailed contract.
-    SeekBytes(u64),
+    #[error("Reader error: {0}")]
+    Reader(String),
 }
 
 #[derive(Clone)]
 pub struct FileDriver {
     asset_id: AssetId,
-    url: url::Url,
+    url: Url,
     net_client: HttpClient,
-    #[allow(dead_code)]
-    options: FileSourceOptions,
+    _options: FileSourceOptions,
     assets: Option<Arc<AssetStore>>,
-    range_policy: RangePolicy,
 }
 
 impl FileDriver {
+    pub fn new(
+        asset_id: AssetId,
+        url: Url,
+        net_client: HttpClient,
+        options: FileSourceOptions,
+        assets: Option<Arc<AssetStore>>,
+    ) -> Self {
+        Self {
+            asset_id,
+            url,
+            net_client,
+            _options: options,
+            assets,
+        }
+    }
+
     pub fn assets(&self) -> Option<Arc<AssetStore>> {
         self.assets.clone()
     }
@@ -75,193 +92,219 @@ impl FileDriver {
         &self.url
     }
 
-    pub fn net_client(&self) -> &HttpClient {
-        &self.net_client
-    }
-}
-
-impl FileDriver {
-    pub fn new(
-        asset_id: AssetId,
-        url: url::Url,
-        net_client: HttpClient,
-        options: FileSourceOptions,
-        assets: Option<Arc<AssetStore>>,
-    ) -> Self {
-        let range_policy = RangePolicy::new(options.enable_range_seek);
-        Self {
-            asset_id,
-            url,
-            net_client,
-            options: options.clone(),
-            assets,
-            range_policy,
-        }
-    }
-
     pub fn asset_id(&self) -> AssetId {
         self.asset_id
     }
 
-    pub async fn stream(
+    pub async fn stream_with_handle(
         &self,
-    ) -> Pin<Box<dyn FuturesStream<Item = Result<Bytes, DriverError>> + Send + '_>> {
-        // We intentionally rely on `kithara-stream` for orchestration and command handling.
-        // Stopping is done by dropping the returned stream.
+    ) -> (
+        EngineHandle,
+        Pin<Box<dyn FuturesStream<Item = Result<Bytes, DriverError>> + Send + '_>>,
+    ) {
         let source = FileStream {
-            asset_id: self.asset_id,
             url: self.url.clone(),
             net_client: self.net_client.clone(),
             assets: self.assets.clone(),
             pos: 0,
         };
+
         let params = StreamParams {
             offline_mode: false,
         };
-        let stream = Stream::new(source, params).into_byte_stream();
-        Box::pin(stream.map(|r| r.map_err(DriverError::from)))
-    }
+        let engine = Engine::new(source, params);
+        let handle = engine.handle();
+        let stream = engine.into_stream().filter_map(|item| async move {
+            match item {
+                Ok(StreamMsg::Data(b)) => Some(Ok(b)),
+                Ok(StreamMsg::Control(_)) | Ok(StreamMsg::Event(_)) => None,
+                Err(e) => Some(Err(DriverError::from(e))),
+            }
+        });
 
-    #[allow(dead_code)]
-    /// Seek to a byte position.
-    ///
-    /// # Contract
-    ///
-    /// - Requires `enable_range_seek` to be `true` in options.
-    /// - Validates position against known content size (if known).
-    /// - Updates internal range policy state.
-    /// - Actual range request implementation is TODO.
-    ///
-    /// # Errors
-    ///
-    /// - `SeekNotSupported`: when `enable_range_seek` is `false`.
-    /// - `InvalidSeekPosition`: when position is beyond known content size.
-    pub async fn seek_to(&mut self, position: u64) -> Result<(), DriverError> {
-        if !self.options.enable_range_seek {
-            return Err(DriverError::SeekNotSupported);
-        }
-
-        self.range_policy.update_position(position)?;
-        // TODO: implement range seeking via kithara-stream command path once the file source
-        // supports reopen-from-position.
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub async fn handle_command(&mut self, command: FileCommand) -> Result<(), DriverError> {
-        match command {
-            FileCommand::SeekBytes(position) => self.seek_to(position).await,
-        }
+        (handle, Box::pin(stream))
     }
 }
 
-// Fetcher/Feeder live in `crate::internal`.
-// Keeping these loops in one place avoids duplication between the `kithara-stream` path
-// and the `kithara-io` (rodio) path.
-
 #[derive(Clone)]
 struct FileStream {
-    asset_id: AssetId,
-    url: url::Url,
+    url: Url,
     net_client: HttpClient,
     assets: Option<Arc<AssetStore>>,
     pos: u64,
 }
 
-impl Source for FileStream {
+#[derive(Debug, Clone)]
+pub(crate) struct FileStreamState {
+    pub(crate) cancel: CancellationToken,
+    pub(crate) res: AssetResourceType,
+    pub(crate) events: broadcast::Sender<FileEvent>,
+    pub(crate) len: Option<u64>,
+}
+
+impl FileStreamState {
+    pub(crate) async fn create(
+        assets: Option<Arc<AssetStore>>,
+        net_client: HttpClient,
+        url: Url,
+    ) -> Result<Arc<Self>, SourceError> {
+        let assets = assets.ok_or_else(|| {
+            SourceError::Assets(
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "assets store is required for kithara-file streaming; pass Some(AssetStore) to FileSource::open",
+                )
+                .into(),
+            )
+        })?;
+
+        let headers = net_client.head(url.clone(), None).await?;
+        let len = headers
+            .get("content-length")
+            .or_else(|| headers.get("Content-Length"))
+            .and_then(|v| v.parse::<u64>().ok());
+
+        let key = (&url).into();
+        let cancel = CancellationToken::new();
+        let res = assets
+            .open_streaming_resource(&key, cancel.clone())
+            .await
+            .map_err(SourceError::Assets)?;
+
+        let (events, _) = broadcast::channel(64);
+
+        Ok(Arc::new(FileStreamState {
+            cancel,
+            res,
+            events,
+            len,
+        }))
+    }
+
+    pub(crate) fn res(&self) -> &AssetResourceType {
+        &self.res
+    }
+
+    pub(crate) fn events(&self) -> &broadcast::Sender<FileEvent> {
+        &self.events
+    }
+
+    pub(crate) fn len(&self) -> Option<u64> {
+        self.len
+    }
+
+    pub(crate) fn cancel(&self) -> &CancellationToken {
+        &self.cancel
+    }
+}
+
+impl EngineSource for FileStream {
     type Error = SourceError;
     type Control = ();
+    type Event = FileEvent;
+    type State = Arc<FileStreamState>;
 
-    fn open(
+    fn init(
         &mut self,
         params: StreamParams,
-    ) -> Result<SourceStream<Self::Control, Self::Error>, StreamError<Self::Error>> {
-        let client = self.net_client.clone();
-        let url = self.url.clone();
-        let assets = self.assets.clone();
-        let asset_id = self.asset_id;
-        let start_pos = self.pos;
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Self::State, StreamError<Self::Error>>>
+                + Send
+                + 'static,
+        >,
+    > {
         let _offline_mode = params.offline_mode;
+        let assets = self.assets.clone();
+        let url = self.url.clone();
+        let net_client = self.net_client.clone();
 
-        // Deterministic resource key:
-        // - asset_root stays scoped to the logical asset id
-        // - rel_path is derived from URL (no format-specific naming like "audio.mp3")
-        let asset_root = hex::encode(asset_id.as_bytes());
-        let rel_path = format!("media/{}", hex::encode(url.as_str().as_bytes()));
+        Box::pin(async move {
+            FileStreamState::create(assets, net_client, url)
+                .await
+                .map_err(StreamError::Source)
+        })
+    }
+
+    fn open_reader(
+        &mut self,
+        state: &Self::State,
+        params: StreamParams,
+    ) -> Result<
+        Pin<
+            Box<
+                dyn FuturesStream<Item = Result<StreamMsg<(), FileEvent>, StreamError<SourceError>>>
+                    + Send
+                    + 'static,
+            >,
+        >,
+        StreamError<SourceError>,
+    > {
+        let start_pos = self.pos;
+        let state = state.clone();
+        let _ = params;
 
         Ok(Box::pin(async_stream::stream! {
-            let Some(assets) = assets else {
-                yield Err(StreamError::Source(SourceError::Assets(
-                    std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        "assets store is required for kithara-file streaming; pass Some(AssetStore) to FileSource::open",
-                    )
-                    .into(),
-                )));
-                return;
-            };
+            let reader_stream = Reader::new(state.res.clone(), start_pos, 64 * 1024).into_stream::<FileEvent>();
+            pin_mut!(reader_stream);
 
-            let cancel = CancellationToken::new();
-
-            let key = ResourceKey::new(asset_root, rel_path);
-
-            let res = match assets.open_streaming_resource(&key, cancel.clone()).await {
-                Ok(r) => r,
-                Err(e) => {
-                    yield Err(StreamError::Source(SourceError::Assets(e)));
-                    return;
-                }
-            };
-
-            let fetch_task = Fetcher::new(client, url).spawn(res.clone(), cancel.clone());
-
-            let feeder = Feeder::new(start_pos, 64 * 1024);
-
-            let mut s = std::pin::pin!(feeder.stream(res));
-            let mut fetch_task = Some(fetch_task);
+            let mut events_rx = state.events.subscribe();
+            let mut events_closed = false;
+            let mut pos = start_pos;
 
             loop {
                 tokio::select! {
-                    biased;
-
-                    fetch_res = async {
-                        match fetch_task.as_mut() {
-                            Some(t) => t.await,
-                            None => std::future::pending().await,
-                        }
-                    } => {
-                        // Ensure we never poll/await the JoinHandle again.
-                        fetch_task = None;
-
-                        match fetch_res {
-                            Ok(Ok(())) => {
-                                // Fetch completed successfully; continue draining feeder until EOF.
+                    maybe_ev = events_rx.recv(), if !events_closed => {
+                        match maybe_ev {
+                            Ok(ev) => {
+                                yield Ok(StreamMsg::Event(ev));
                             }
-                            Ok(Err(_e)) => {
-                                // Preserve the historical contract: fetch failures surface to consumers
-                                // as a storage-level failure (the fetcher calls `res.fail(...)`).
-                                //
-                                // We intentionally keep reading from the resource so the consumer
-                                // observes `StorageError::Failed(..)` deterministically.
+                            Err(broadcast::error::RecvError::Lagged(_)) => {
+                                continue;
                             }
-                            Err(_join_err) => {
-                                // Same as above: treat join errors as storage failures observed via reads.
-                                // (The resource will be marked failed by the fetcher; if it wasn't,
-                                // the subsequent read will still error or EOF appropriately.)
+                            Err(broadcast::error::RecvError::Closed) => {
+                                events_closed = true;
+                                continue;
                             }
                         }
                     }
-
-                    item = s.next() => {
+                    item = reader_stream.next() => {
+                        let Some(item) = item else {
+                            state.cancel.cancel();
+                            return;
+                        };
                         match item {
-                            Some(Ok(bytes)) => yield Ok(Message::Data(bytes)),
-                            Some(Err(e)) => {
-                                cancel.cancel();
-                                yield Err(StreamError::Source(SourceError::Storage(e)));
+                            Ok(StreamMsg::Data(bytes)) => {
+                                pos = pos.saturating_add(bytes.len() as u64);
+                                let percent = state.len.map(|len| {
+                                    ((pos as f64 / len as f64) * 100.0).min(100.0) as f32
+                                });
+                                let _ = state.events.send(FileEvent::PlaybackProgress {
+                                    position: pos,
+                                    percent,
+                                });
+                                yield Ok(StreamMsg::Data(bytes));
+                            }
+                            Ok(StreamMsg::Control(_)) | Ok(StreamMsg::Event(_)) => {}
+                            Err(StreamError::Source(ReaderError::Wait(storage_err)))
+                            | Err(StreamError::Source(ReaderError::Read(storage_err))) => {
+                                state.cancel.cancel();
+                                yield Err(StreamError::Source(SourceError::Storage(storage_err)));
                                 return;
                             }
-                            None => {
-                                cancel.cancel();
+                            Err(StreamError::Source(other)) => {
+                                state.cancel.cancel();
+                                yield Err(StreamError::Source(SourceError::Reader(other.to_string())));
+                                return;
+                            }
+                            Err(StreamError::WriterJoin(e)) => {
+                                state.cancel.cancel();
+                                yield Err(StreamError::Source(SourceError::Reader(e)));
+                                return;
+                            }
+                            Err(StreamError::SeekNotSupported) | Err(StreamError::ChannelClosed) => {
+                                state.cancel.cancel();
+                                yield Err(StreamError::Source(SourceError::Reader("reader error".to_string())));
                                 return;
                             }
                         }
@@ -271,7 +314,38 @@ impl Source for FileStream {
         }))
     }
 
-    fn seek_bytes(&mut self, pos: u64) -> Result<(), StreamError<Self::Error>> {
+    fn start_writer(
+        &mut self,
+        state: &Self::State,
+        _params: StreamParams,
+    ) -> Result<WriterTask<SourceError>, StreamError<SourceError>> {
+        let net = self.net_client.clone();
+        let url = self.url.clone();
+        let res = state.res.clone();
+        let cancel = state.cancel.clone();
+        let events = state.events.clone();
+        let len = state.len;
+
+        Ok(tokio::spawn(async move {
+            let writer = Writer::<_, _, FileEvent>::new(net, url, None, res, cancel).with_event(
+                move |offset, _len| {
+                    let percent =
+                        len.map(|len| ((offset as f64 / len as f64) * 100.0).min(100.0) as f32);
+                    FileEvent::DownloadProgress { offset, percent }
+                },
+                move |msg| {
+                    if let StreamMsg::Event(ev) = msg {
+                        let _ = events.send(ev);
+                    }
+                },
+            );
+
+            let _ = writer.run_with_fail().await;
+            Ok(())
+        }))
+    }
+
+    fn seek_bytes(&mut self, pos: u64) -> Result<(), StreamError<SourceError>> {
         self.pos = pos;
         Ok(())
     }
