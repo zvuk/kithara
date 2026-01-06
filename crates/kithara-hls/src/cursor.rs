@@ -239,9 +239,9 @@ impl SegmentCursor {
                 let bytes = self.read_at(self.pos, want).await?;
 
                 if bytes.is_empty() {
-                    // Defensive: if storage returned empty after Ready, treat as EOF-ish.
-                    self.pos = self.total_len;
-                    return Ok(None);
+                    return Err(KitharaIoError::Source(
+                        "segment_cursor: storage returned empty after Ready".into(),
+                    ));
                 }
 
                 self.pos = self.pos.saturating_add(bytes.len() as u64);

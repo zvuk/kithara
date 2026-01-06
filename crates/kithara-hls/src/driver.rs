@@ -10,7 +10,7 @@ use tokio::sync::{Mutex, broadcast};
 use url::Url;
 
 use crate::{
-    HlsError, HlsOptions, HlsResult,
+    HlsError, HlsOptions, HlsResult, KeyContext,
     abr::{AbrController, variants_from_master},
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
@@ -121,6 +121,37 @@ struct HlsStreamState {
     event_emitter: Arc<EventEmitter>,
 }
 
+impl HlsStream {
+    async fn load_variant_state(
+        playlist_manager: &PlaylistManager,
+        master_url: &Url,
+        variant_uri: String,
+        variant_index: usize,
+        current_init_uri: Option<String>,
+    ) -> Result<
+        (String, Url, crate::playlist::MediaPlaylist, Option<String>),
+        StreamError<SourceError>,
+    > {
+        let media_url = playlist_manager
+            .resolve_url(master_url, &variant_uri)
+            .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
+
+        let media_playlist = playlist_manager
+            .fetch_media_playlist(&media_url, VariantId(variant_index))
+            .await
+            .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
+
+        let new_init_uri = media_playlist_init_uri(&media_playlist).map(str::to_string);
+        let pending_init_uri = if new_init_uri != current_init_uri {
+            new_init_uri.clone()
+        } else {
+            None
+        };
+
+        Ok((variant_uri, media_url, media_playlist, pending_init_uri))
+    }
+}
+
 impl EngineSource for HlsStream {
     type Error = SourceError;
     type Control = ();
@@ -216,17 +247,17 @@ impl EngineSource for HlsStream {
                     ))))
                 })?;
 
-            let mut media_url = playlist_manager
-                .resolve_url(&master_url, &variant_uri)
-                .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-
-            let mut media_playlist = playlist_manager
-                .fetch_media_playlist(&media_url, VariantId(current_variant))
-                .await
-                .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
+            let (mut variant_uri, mut media_url, mut media_playlist, mut pending_init_uri) =
+                HlsStream::load_variant_state(
+                    &playlist_manager,
+                    &master_url,
+                    variant_uri,
+                    current_variant,
+                    None,
+                )
+                .await?;
 
             let mut current_init_uri = media_playlist_init_uri(&media_playlist).map(str::to_string);
-            let mut pending_init_uri: Option<String> = None;
             if let Some(init_uri) = current_init_uri.as_deref() {
                 let init_url = playlist_manager
                     .resolve_url(&media_url, init_uri)
@@ -260,7 +291,7 @@ impl EngineSource for HlsStream {
                     }
 
                     current_variant = decision.target_variant_index;
-                    variant_uri = master_playlist
+                    let target_uri = master_playlist
                         .variants
                         .get(current_variant)
                         .map(|v| v.uri.clone())
@@ -271,20 +302,21 @@ impl EngineSource for HlsStream {
                             ))))
                         })?;
 
-                    media_url = playlist_manager
-                        .resolve_url(&master_url, &variant_uri)
-                        .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
+                    let (new_variant_uri, new_media_url, new_media_playlist, new_pending_init) =
+                        HlsStream::load_variant_state(
+                            &playlist_manager,
+                            &master_url,
+                            target_uri,
+                            current_variant,
+                            current_init_uri.clone(),
+                        )
+                        .await?;
 
-                    media_playlist = playlist_manager
-                        .fetch_media_playlist(&media_url, VariantId(current_variant))
-                        .await
-                        .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-
-                    let new_init_uri = media_playlist_init_uri(&media_playlist).map(str::to_string);
-                    if new_init_uri != current_init_uri {
-                        pending_init_uri = new_init_uri.clone();
-                        current_init_uri = new_init_uri;
-                    }
+                    variant_uri = new_variant_uri;
+                    media_url = new_media_url;
+                    media_playlist = new_media_playlist;
+                    pending_init_uri = new_pending_init;
+                    current_init_uri = media_playlist_init_uri(&media_playlist).map(str::to_string);
                 }
 
                 if let Some((from, to, reason)) = pending_applied.take() {
@@ -301,8 +333,29 @@ impl EngineSource for HlsStream {
                     }
                 }
 
+                let segment_key_ctx = media_playlist
+                    .segments
+                    .get(segment_index)
+                    .and_then(|seg| seg.key.as_ref())
+                    .and_then(|seg_key| seg_key.key_info.as_ref())
+                    .and_then(|info| info.uri.as_ref().map(|uri| (uri.clone(), info.iv)));
+
+                let key_context_owned = if let Some((key_uri, iv)) = segment_key_ctx {
+                    let key_url = playlist_manager
+                        .resolve_url(&media_url, &key_uri)
+                        .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
+                    Some(KeyContext { url: key_url, iv })
+                } else {
+                    None
+                };
+
                 let fetch = fetch_manager
-                    .fetch_segment_with_meta(&media_playlist, segment_index, &media_url, None)
+                    .fetch_segment_with_meta(
+                        &media_playlist,
+                        segment_index,
+                        &media_url,
+                        key_context_owned.as_ref(),
+                    )
                     .await;
                 match fetch {
                     Ok(fetch) => {

@@ -42,7 +42,7 @@ use std::ops::Range;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_assets::{AssetStore, ResourceKey};
+use kithara_assets::ResourceKey;
 use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome};
 use kithara_storage::StreamingResourceExt;
 use tokio::sync::OnceCell;
@@ -52,59 +52,29 @@ use url::Url;
 use crate::{
     HlsError, HlsOptions, HlsResult,
     fetch::FetchManager,
-    playlist::{MasterPlaylist, MediaPlaylist, PlaylistManager, VariantId},
+    playlist::{MasterPlaylist, PlaylistManager, VariantId},
 };
 
 pub struct HlsSessionSource {
-    assets: AssetStore,
     playlist_manager: PlaylistManager,
     fetch_manager: FetchManager,
     master_url: Url,
     options: HlsOptions,
-
-    /// `asset_root` is the master hash (stream-download-hls compatible).
     asset_root: String,
-
-    /// Selected variant index for deterministic cache layout: `<master_hash>/<variant_index>/...`.
-    ///
-    /// NOTE: this is only a deterministic default. The effective selected variant is stored in
-    /// `State::variant_index` once `ensure_state()` runs.
-    variant_index: usize,
-
-    /// Lazily initialized: resolved media playlist URL + parsed playlist + segment index.
     state: OnceCell<State>,
 }
 
 struct State {
-    /// Selected variant index used for deterministic cache layout and on-demand fetch triggers.
     variant_index: usize,
-
-    media_url: Url,
-    media: MediaPlaylist,
-
-    /// Segment descriptors resolved to absolute URLs.
-    ///
-    /// IMPORTANT: for fMP4, if the playlist contains `EXT-X-MAP`, we prepend the init segment
-    /// as `segments[0]` (with `is_init=true`) before media segments, so the virtual file begins
-    /// with initialization bytes.
     segments: Vec<SegmentDesc>,
-
-    /// Total length in bytes.
     total_len: u64,
-
-    /// Prefix sums of segment lengths: prefix[i] = sum(len[0..i]).
-    ///
-    /// Invariant: prefix.len() == segments.len() + 1, prefix[0] == 0, prefix.last() == total_len.
     prefix: Vec<u64>,
 }
 
 #[derive(Clone, Debug)]
 struct SegmentDesc {
     url: Url,
-    /// Final length of the segment in bytes.
     len: u64,
-    /// Whether this is an init segment (EXT-X-MAP).
-    is_init: bool,
 }
 
 impl HlsSessionSource {
@@ -114,30 +84,17 @@ impl HlsSessionSource {
     pub fn new(
         master_url: Url,
         options: HlsOptions,
-        assets: AssetStore,
         playlist_manager: PlaylistManager,
         fetch_manager: FetchManager,
     ) -> Self {
         let asset_root = ResourceKey::asset_root_for_url(&master_url);
 
-        // The actual variant is selected from the fetched master playlist in `ensure_state()`.
-        // Keep a deterministic default here; it will be overwritten during init.
-        let variant_index = 0usize;
-
-        debug!(
-            master_url = %master_url,
-            master_hash = %asset_root,
-            "kithara-hls session source created"
-        );
-
         Self {
-            assets,
             playlist_manager,
             fetch_manager,
             master_url,
             options,
             asset_root,
-            variant_index,
             state: OnceCell::new(),
         }
     }
@@ -273,11 +230,7 @@ impl HlsSessionSource {
 
                     let len = init_fetch.bytes.len() as u64;
 
-                    segments.push(SegmentDesc {
-                        url: init_url,
-                        len,
-                        is_init: true,
-                    });
+                    segments.push(SegmentDesc { url: init_url, len });
                 }
 
                 let base_index = segments.len();
@@ -300,11 +253,7 @@ impl HlsSessionSource {
                             })?
                     };
 
-                    segments.push(SegmentDesc {
-                        url,
-                        len,
-                        is_init: false,
-                    });
+                    segments.push(SegmentDesc { url, len });
                 }
 
                 // Prefix sums.
@@ -326,8 +275,6 @@ impl HlsSessionSource {
 
                 Ok::<_, HlsError>(State {
                     variant_index,
-                    media_url,
-                    media,
                     segments,
                     total_len,
                     prefix,
@@ -430,12 +377,6 @@ impl Source for HlsSessionSource {
             .await
             .map_err(|e| KitharaIoError::Source(e.to_string()))?;
 
-        debug!(
-            start = range.start,
-            end = range.end,
-            "kithara-hls wait_range request"
-        );
-
         trace!(
             total_len = state.total_len,
             segments = state.segments.len(),
@@ -518,8 +459,6 @@ impl Source for HlsSessionSource {
             "kithara-hls session source read_at begin"
         );
 
-        debug!(offset, len, "kithara-hls read_at request");
-
         if len == 0 {
             return Ok(Bytes::new());
         }
@@ -543,7 +482,7 @@ impl Source for HlsSessionSource {
             return Ok(Bytes::new());
         };
 
-        debug!(
+        trace!(
             offset,
             seg_idx,
             seg_off,

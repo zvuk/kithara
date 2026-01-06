@@ -53,9 +53,9 @@ impl FetchManager {
         // Helper for case-insensitive lookup
         fn find_content_length(headers: &Headers) -> Option<u64> {
             headers
-                .get("content-length")
-                .or_else(|| headers.get("Content-Length"))
-                .and_then(|s| s.parse::<u64>().ok())
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, v)| v.parse::<u64>().ok())
         }
 
         Ok(find_content_length(&headers))
@@ -239,7 +239,7 @@ impl FetchManager {
             url = %url,
             "kithara-hls open_init_streaming_resource"
         );
-        self.open_streaming_resource_with_writer(url, variant_id, events)
+        self.open_streaming_resource_with_writer(url, variant_id, events, None)
             .await
     }
 
@@ -253,7 +253,7 @@ impl FetchManager {
             kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
         >,
     > {
-        self.open_media_streaming_resource_with_events(variant_id, url, None)
+        self.open_media_streaming_resource_with_events(variant_id, url, None, None)
             .await
     }
 
@@ -262,6 +262,7 @@ impl FetchManager {
         variant_id: usize,
         url: &Url,
         events: Option<broadcast::Sender<HlsEvent>>,
+        segment_index: Option<usize>,
     ) -> HlsResult<
         kithara_assets::AssetResource<
             kithara_storage::StreamingResource,
@@ -275,7 +276,7 @@ impl FetchManager {
             "kithara-hls open_media_streaming_resource"
         );
 
-        self.open_streaming_resource_with_writer(url, variant_id, events)
+        self.open_streaming_resource_with_writer(url, variant_id, events, segment_index)
             .await
     }
 
@@ -284,6 +285,7 @@ impl FetchManager {
         url: &Url,
         variant_id: usize,
         events: Option<broadcast::Sender<HlsEvent>>,
+        segment_index: Option<usize>,
     ) -> HlsResult<
         kithara_assets::AssetResource<
             kithara_storage::StreamingResource,
@@ -309,80 +311,16 @@ impl FetchManager {
         let res_for_writer = res.clone();
         let events_for_writer = events.clone();
         let content_length_for_progress = self.probe_content_length(&url).await.ok().flatten();
-        let started_at = Instant::now();
 
-        tokio::spawn(async move {
-            if let Some(ev) = &events_for_writer {
-                let _: Result<_, broadcast::error::SendError<HlsEvent>> =
-                    ev.send(HlsEvent::SegmentStart {
-                        variant: variant_id,
-                        segment_index: 0, // TODO: segment_index is unknown in this context
-                        byte_offset: 0,
-                    });
-            }
-
-            let mut stream = match net.stream(url.clone(), None).await {
-                Ok(s) => s,
-                Err(e) => {
-                    warn!(url = %url, error = %e, "kithara-hls streaming writer: net open error");
-                    let _ = res_for_writer.fail(format!("net error: {e}")).await;
-                    return;
-                }
-            };
-
-            let mut off: u64 = 0;
-            while let Some(chunk_result) = stream.next().await {
-                match chunk_result {
-                    Ok(chunk_bytes) => {
-                        let chunk_len = chunk_bytes.len() as u64;
-                        if let Err(e) = res_for_writer.write_at(off, &chunk_bytes).await {
-                            warn!(
-                                url = %url,
-                                off,
-                                error = %e,
-                                "kithara-hls streaming writer: storage write_at error"
-                            );
-                            let _ = res_for_writer
-                                .fail(format!("storage write_at error: {e}"))
-                                .await;
-                            return;
-                        }
-                        off = off.saturating_add(chunk_len);
-                        if let Some(ev) = &events_for_writer {
-                            let percent = content_length_for_progress
-                                .map(|len| ((off as f64 / len as f64) * 100.0).min(100.0) as f32);
-                            let _: Result<_, broadcast::error::SendError<HlsEvent>> =
-                                ev.send(HlsEvent::DownloadProgress {
-                                    offset: off,
-                                    percent,
-                                });
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            url = %url,
-                            off,
-                            error = %e,
-                            "kithara-hls streaming writer: net stream error"
-                        );
-                        let _ = res_for_writer.fail(format!("net stream error: {e}")).await;
-                        return;
-                    }
-                }
-            }
-
-            let _ = res_for_writer.commit(Some(off)).await;
-
-            if let Some(ev) = &events_for_writer {
-                let _: Result<_, broadcast::error::SendError<HlsEvent>> =
-                    ev.send(HlsEvent::SegmentComplete {
-                        variant: variant_id,
-                        segment_index: 0, // TODO: segment_index is unknown in this context
-                        bytes_transferred: off,
-                        duration: started_at.elapsed(),
-                    });
-            }
-        });
+        Self::spawn_stream_writer(
+            net,
+            url,
+            res_for_writer,
+            events_for_writer,
+            variant_id,
+            segment_index,
+            content_length_for_progress,
+        );
 
         Ok(res)
     }
@@ -400,7 +338,7 @@ impl FetchManager {
         let key_ctx = key_context.cloned();
 
         Box::pin(async_stream::stream! {
-            for segment in media_playlist.segments {
+            for (segment_index, segment) in media_playlist.segments.into_iter().enumerate() {
                 let segment_url = match base_url.join(&segment.uri) {
                     Ok(url) => url,
                     Err(e) => {
@@ -412,7 +350,7 @@ impl FetchManager {
                 // Use captured fields directly instead of creating new FetchManager
                 let key = ResourceKey::from_url_with_asset_root(asset_root.clone(), &segment_url);
                 let fetch_result = Self::fetch_streaming_to_bytes_internal(
-                    &asset_root, &assets, &net, &segment_url, &key.rel_path
+                    &asset_root, &assets, &net, &segment_url, &key.rel_path, Some(segment_index)
                 ).await;
 
                 match fetch_result {
@@ -444,12 +382,99 @@ impl FetchManager {
             &self.net,
             url,
             rel_path,
+            None,
         )
         .await
     }
 
     async fn decrypt_segment(&self, bytes: Bytes, key_context: &KeyContext) -> HlsResult<Bytes> {
         Self::decrypt_segment_internal(bytes, key_context).await
+    }
+
+    fn spawn_stream_writer(
+        net: HttpClient,
+        url: Url,
+        res: kithara_assets::AssetResource<
+            kithara_storage::StreamingResource,
+            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+        >,
+        events: Option<broadcast::Sender<HlsEvent>>,
+        variant_id: usize,
+        segment_index: Option<usize>,
+        content_length_for_progress: Option<u64>,
+    ) {
+        let started_at = Instant::now();
+
+        tokio::spawn(async move {
+            if let (Some(ev), Some(segment_index)) = (&events, segment_index) {
+                let _: Result<_, broadcast::error::SendError<HlsEvent>> =
+                    ev.send(HlsEvent::SegmentStart {
+                        variant: variant_id,
+                        segment_index,
+                        byte_offset: 0,
+                    });
+            }
+
+            let mut stream = match net.stream(url.clone(), None).await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(url = %url, error = %e, "kithara-hls streaming writer: net open error");
+                    let _ = res.fail(format!("net error: {e}")).await;
+                    return;
+                }
+            };
+
+            let mut off: u64 = 0;
+            while let Some(chunk_result) = stream.next().await {
+                match chunk_result {
+                    Ok(chunk_bytes) => {
+                        let chunk_len = chunk_bytes.len() as u64;
+                        if let Err(e) = res.write_at(off, &chunk_bytes).await {
+                            warn!(
+                                url = %url,
+                                off,
+                                error = %e,
+                                "kithara-hls streaming writer: storage write_at error"
+                            );
+                            let _ = res.fail(format!("storage write_at error: {e}")).await;
+                            return;
+                        }
+                        off = off.saturating_add(chunk_len);
+                        if let Some(ev) = &events {
+                            let percent = content_length_for_progress
+                                .map(|len| ((off as f64 / len as f64) * 100.0).min(100.0) as f32);
+                            let _: Result<_, broadcast::error::SendError<HlsEvent>> =
+                                ev.send(HlsEvent::DownloadProgress {
+                                    offset: off,
+                                    percent,
+                                });
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            url = %url,
+                            off,
+                            error = %e,
+                            "kithara-hls streaming writer: net stream error"
+                        );
+                        let _ = res.fail(format!("net stream error: {e}")).await;
+                        return;
+                    }
+                }
+            }
+
+            let _ = res.commit(Some(off)).await;
+
+            if let (Some(ev), Some(segment_index)) = (&events, segment_index) {
+                let _: Result<_, broadcast::error::SendError<HlsEvent>> =
+                    ev.send(HlsEvent::SegmentComplete {
+                        variant: variant_id,
+                        segment_index,
+                        bytes_transferred: off,
+                        duration: started_at.elapsed(),
+                    });
+            }
+        });
     }
 
     // Helper for stream_segment_sequence to avoid creating new FetchManager
@@ -459,6 +484,7 @@ impl FetchManager {
         net: &HttpClient,
         url: &Url,
         rel_path: &str,
+        segment_index: Option<usize>,
     ) -> HlsResult<FetchBytes> {
         let key = ResourceKey::from_url_with_asset_root(asset_root.to_string(), url);
 
@@ -474,50 +500,10 @@ impl FetchManager {
         let net = net.clone();
         let url = url.clone();
 
-        tokio::spawn({
-            let res = res.clone();
-            async move {
-                let mut stream = match net.stream(url.clone(), None).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warn!(url = %url, error = %e, "kithara-hls segment writer: net error");
-                        let _ = res.fail(format!("net error: {e}")).await;
-                        return;
-                    }
-                };
-
-                let mut off: u64 = 0;
-                while let Some(chunk_result) = stream.next().await {
-                    match chunk_result {
-                        Ok(chunk_bytes) => {
-                            if let Err(e) = res.write_at(off, &chunk_bytes).await {
-                                warn!(
-                                    url = %url,
-                                    off,
-                                    error = %e,
-                                    "kithara-hls segment writer: storage write_at error"
-                                );
-                                let _ = res.fail(format!("storage write_at error: {e}")).await;
-                                return;
-                            }
-                            off = off.saturating_add(chunk_bytes.len() as u64);
-                        }
-                        Err(e) => {
-                            warn!(
-                                url = %url,
-                                off,
-                                error = %e,
-                                "kithara-hls segment writer: net stream error"
-                            );
-                            let _ = res.fail(format!("net stream error: {e}")).await;
-                            return;
-                        }
-                    }
-                }
-
-                let _ = res.commit(Some(off)).await;
-            }
-        });
+        let status = res.inner().status().await;
+        if !matches!(status, ResourceStatus::Committed { .. }) {
+            Self::spawn_stream_writer(net, url, res.clone(), None, 0, segment_index, None);
+        }
 
         // Read-through to bytes: wait for full content once committed, then read all.
         let start = Instant::now();

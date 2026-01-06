@@ -289,7 +289,6 @@ impl HlsSession {
         Ok(HlsSessionSource::new(
             self.master_url.clone(),
             self.opts.clone(),
-            self.assets.clone(),
             playlist_manager,
             fetch_manager,
         ))
