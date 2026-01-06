@@ -48,7 +48,7 @@ pub use abr::{
 };
 pub use driver::{DriverError, SourceError};
 pub use events::{EventEmitter, HlsEvent};
-pub use fetch::{FetchError, FetchManager, SegmentStream};
+pub use fetch::{FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
 pub use playlist::{PlaylistError, PlaylistManager};
 pub use session::HlsSessionSource;

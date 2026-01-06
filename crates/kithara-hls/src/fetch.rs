@@ -10,36 +10,14 @@ use futures::{Stream, StreamExt};
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_net::{Headers, HttpClient, Net as _};
 use kithara_storage::{Resource as _, ResourceStatus, StreamingResourceExt};
-use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace, warn};
+use tracing::{trace, warn};
 use url::Url;
 
 use crate::{
     HlsError, HlsEvent, HlsResult, KeyContext, abr::ThroughputSampleSource, playlist::MediaPlaylist,
 };
-
-#[derive(Debug, Error)]
-pub enum FetchError {
-    #[error("Network error: {0}")]
-    Net(#[from] kithara_net::NetError),
-
-    #[error("Assets error: {0}")]
-    Assets(#[from] kithara_assets::AssetsError),
-
-    #[error("Storage error: {0}")]
-    Storage(#[from] kithara_storage::StorageError),
-
-    #[error("Invalid URL: {0}")]
-    InvalidUrl(String),
-
-    #[error("Segment not found: {0}")]
-    SegmentNotFound(String),
-
-    #[error("Encryption error: {0}")]
-    Encryption(String),
-}
 
 pub type SegmentStream<'a> = Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + 'a>>;
 
@@ -72,12 +50,15 @@ impl FetchManager {
     pub async fn probe_content_length(&self, url: &Url) -> HlsResult<Option<u64>> {
         let headers: Headers = self.net.head(url.clone(), None).await?;
 
-        let len = headers
-            .get("content-length")
-            .or_else(|| headers.get("Content-Length"))
-            .and_then(|s: &str| s.parse::<u64>().ok());
+        // Helper for case-insensitive lookup
+        fn find_content_length(headers: &Headers) -> Option<u64> {
+            headers
+                .get("content-length")
+                .or_else(|| headers.get("Content-Length"))
+                .and_then(|s| s.parse::<u64>().ok())
+        }
 
-        Ok(len)
+        Ok(find_content_length(&headers))
     }
 
     pub async fn fetch_segment(
@@ -106,7 +87,10 @@ impl FetchManager {
             "kithara-hls fetch_segment begin"
         );
 
-        let fetch = self.fetch_resource(&segment_url, "segment.ts").await?;
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
+        let fetch = self
+            .fetch_streaming_to_bytes(&segment_url, &key.rel_path)
+            .await?;
 
         // Decrypt if needed
         let out = if let Some(key_ctx) = key_context {
@@ -151,7 +135,10 @@ impl FetchManager {
             "kithara-hls fetch_segment_with_meta begin"
         );
 
-        let mut fetch = self.fetch_resource(&segment_url, "segment.ts").await?;
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
+        let mut fetch = self
+            .fetch_streaming_to_bytes(&segment_url, &key.rel_path)
+            .await?;
         if let Some(key_ctx) = key_context {
             fetch.bytes = self.decrypt_segment(fetch.bytes, key_ctx).await?;
         }
@@ -329,7 +316,7 @@ impl FetchManager {
                 let _: Result<_, broadcast::error::SendError<HlsEvent>> =
                     ev.send(HlsEvent::SegmentStart {
                         variant: variant_id,
-                        segment_index: 0,
+                        segment_index: 0, // TODO: segment_index is unknown in this context
                         byte_offset: 0,
                     });
             }
@@ -390,7 +377,7 @@ impl FetchManager {
                 let _: Result<_, broadcast::error::SendError<HlsEvent>> =
                     ev.send(HlsEvent::SegmentComplete {
                         variant: variant_id,
-                        segment_index: 0,
+                        segment_index: 0, // TODO: segment_index is unknown in this context
                         bytes_transferred: off,
                         duration: started_at.elapsed(),
                     });
@@ -412,17 +399,9 @@ impl FetchManager {
         let base_url = base_url.clone();
         let key_ctx = key_context.cloned();
 
-        // Extract segment URIs upfront to avoid lifetime issues
-        let segment_uris: Vec<String> = media_playlist
-            .segments
-            .iter()
-            .map(|segment| segment.uri.clone())
-            .collect();
-
         Box::pin(async_stream::stream! {
-            for segment_uri in segment_uris {
-                let fetcher = FetchManager::new(asset_root.clone(), assets.clone(), net.clone());
-                let segment_url = match base_url.join(&segment_uri) {
+            for segment in media_playlist.segments {
+                let segment_url = match base_url.join(&segment.uri) {
                     Ok(url) => url,
                     Err(e) => {
                         yield Err(HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)));
@@ -430,12 +409,17 @@ impl FetchManager {
                     }
                 };
 
-                // NOTE: variant_id is not plumbed through this API yet; use `0` for now.
-                match fetcher.fetch_media_segment_resource(0, &segment_url).await {
+                // Use captured fields directly instead of creating new FetchManager
+                let key = ResourceKey::from_url_with_asset_root(asset_root.clone(), &segment_url);
+                let fetch_result = Self::fetch_streaming_to_bytes_internal(
+                    &asset_root, &assets, &net, &segment_url, &key.rel_path
+                ).await;
+
+                match fetch_result {
                     Ok(fetch) => {
                         // Decrypt if needed
                         let bytes = if let Some(key_ctx) = &key_ctx {
-                            match fetcher.decrypt_segment(fetch.bytes, key_ctx).await {
+                            match Self::decrypt_segment_internal(fetch.bytes, key_ctx).await {
                                 Ok(decrypted) => decrypted,
                                 Err(e) => {
                                     yield Err(e);
@@ -454,21 +438,40 @@ impl FetchManager {
     }
 
     async fn fetch_streaming_to_bytes(&self, url: &Url, rel_path: &str) -> HlsResult<FetchBytes> {
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
+        Self::fetch_streaming_to_bytes_internal(
+            &self.asset_root,
+            &self.assets,
+            &self.net,
+            url,
+            rel_path,
+        )
+        .await
+    }
+
+    async fn decrypt_segment(&self, bytes: Bytes, key_context: &KeyContext) -> HlsResult<Bytes> {
+        Self::decrypt_segment_internal(bytes, key_context).await
+    }
+
+    // Helper for stream_segment_sequence to avoid creating new FetchManager
+    async fn fetch_streaming_to_bytes_internal(
+        asset_root: &str,
+        assets: &AssetStore,
+        net: &HttpClient,
+        url: &Url,
+        rel_path: &str,
+    ) -> HlsResult<FetchBytes> {
+        let key = ResourceKey::from_url_with_asset_root(asset_root.to_string(), url);
 
         // Intentionally quiet: this path can be called a lot during playback.
         // Keep only warnings/errors and a single "done" summary.
 
         let cancel = CancellationToken::new();
-        let res = self
-            .assets
-            .open_streaming_resource(&key, cancel.clone())
-            .await?;
+        let res = assets.open_streaming_resource(&key, cancel.clone()).await?;
 
         // Spawn a best-effort background writer for this segment.
         // If multiple callers race, extra writers may occur; the resource contract handles `Sealed`
         // and failure propagation.
-        let net = self.net.clone();
+        let net = net.clone();
         let url = url.clone();
 
         tokio::spawn({
@@ -536,7 +539,7 @@ impl FetchManager {
                         // Storage returned empty after reporting Ready: this is unexpected and can
                         // lead to "end of stream" at the decoder level.
                         warn!(
-                            asset_root = %self.asset_root,
+                            asset_root = %asset_root,
                             rel_path = %rel_path,
                             offset,
                             "kithara-hls segment reader: empty-after-ready"
@@ -554,7 +557,7 @@ impl FetchManager {
 
         let duration = start.elapsed();
         trace!(
-            asset_root = %self.asset_root,
+            asset_root = %asset_root,
             rel_path = %rel_path,
             bytes = out.len(),
             duration_ms = duration.as_millis(),
@@ -568,97 +571,12 @@ impl FetchManager {
         })
     }
 
-    async fn fetch_resource(&self, url: &Url, _default_filename: &str) -> HlsResult<FetchBytes> {
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
-
-        let cancel = CancellationToken::new();
-        let res = self
-            .assets
-            .open_streaming_resource(&key, cancel.clone())
-            .await?;
-
-        // Spawn a best-effort background writer for this segment.
-        // If multiple callers race, extra writers may occur; the resource contract handles `Sealed`
-        // and failure propagation.
-        let net = self.net.clone();
-        let url = url.clone();
-        tokio::spawn({
-            let res = res.clone();
-            async move {
-                let mut stream = match net.stream(url, None).await {
-                    Ok(s) => s,
-                    Err(e) => {
-                        let _ = res.fail(format!("net error: {e}")).await;
-                        return;
-                    }
-                };
-
-                let mut off: u64 = 0;
-                while let Some(chunk_result) = stream.next().await {
-                    match chunk_result {
-                        Ok(chunk_bytes) => {
-                            if let Err(e) = res.write_at(off, &chunk_bytes).await {
-                                let _ = res.fail(format!("storage write_at error: {e}")).await;
-                                return;
-                            }
-                            off = off.saturating_add(chunk_bytes.len() as u64);
-                        }
-                        Err(e) => {
-                            let _ = res.fail(format!("net stream error: {e}")).await;
-                            return;
-                        }
-                    }
-                }
-
-                let _ = res.commit(Some(off)).await;
-            }
-        });
-
-        // Read-through to bytes: wait for full content once committed, then read all.
-        //
-        // We don't stream out of this function (callers may), so we read the whole segment after
-        // it becomes available.
-        let start = Instant::now();
-        let mut offset: u64 = 0;
-        let mut out = Vec::new();
-        let read_chunk: u64 = 64 * 1024;
-
-        loop {
-            let end = offset.saturating_add(read_chunk);
-            match res.wait_range(offset..end).await? {
-                kithara_storage::WaitOutcome::Ready => {
-                    let len: usize = (end - offset) as usize;
-                    let bytes = res.read_at(offset, len).await?;
-                    if bytes.is_empty() {
-                        break;
-                    }
-                    offset = offset.saturating_add(bytes.len() as u64);
-                    out.extend_from_slice(&bytes);
-                }
-                kithara_storage::WaitOutcome::Eof => break,
-            }
-        }
-
-        let duration = start.elapsed();
-        Ok(FetchBytes {
-            bytes: Bytes::from(out),
-            source: ThroughputSampleSource::Network,
-            duration,
-        })
-    }
-
-    async fn decrypt_segment(&self, bytes: Bytes, _key_context: &KeyContext) -> HlsResult<Bytes> {
-        // This would implement AES-128 decryption
-        // For now, return bytes unchanged
-        // In real implementation, we'd use the key from key_context
-
-        // TODO: Implement AES-128 decryption when crypto support is added
-        // if let Some(key) = self.get_decryption_key(&key_context.url).await? {
-        //     decrypt_aes128_cbc(&bytes, &key, &key_context.iv.unwrap_or_default())
-        // } else {
-        //     Err(HlsError::Encryption("No decryption key available".to_string()))
-        // }
-
-        Ok(bytes)
+    // Helper for stream_segment_sequence
+    async fn decrypt_segment_internal(
+        _bytes: Bytes,
+        _key_context: &KeyContext,
+    ) -> HlsResult<Bytes> {
+        // Encryption support is not implemented yet
+        Err(HlsError::Unimplemented)
     }
 }
