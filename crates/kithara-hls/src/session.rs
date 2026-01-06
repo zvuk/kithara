@@ -42,7 +42,7 @@ use std::ops::Range;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_assets::AssetStore;
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome};
 use kithara_storage::StreamingResourceExt;
 use tokio::sync::OnceCell;
@@ -120,7 +120,7 @@ impl HlsSessionSource {
         playlist_manager: PlaylistManager,
         fetch_manager: FetchManager,
     ) -> Self {
-        let asset_root = crate::master_hash_from_url(&master_url);
+        let asset_root = ResourceKey::asset_root_for_url(&master_url);
 
         // The actual variant is selected from the fetched master playlist in `ensure_state()`.
         // Keep a deterministic default here; it will be overwritten during init.

@@ -43,6 +43,16 @@ pub enum HlsEvent {
         bytes_per_second: f64,
     },
 
+    DownloadProgress {
+        offset: u64,
+        percent: Option<f32>,
+    },
+
+    PlaybackProgress {
+        position: u64,
+        percent: Option<f32>,
+    },
+
     Error {
         error: String,
         recoverable: bool,
@@ -123,6 +133,16 @@ impl EventEmitter {
         let _ = self
             .tx
             .send(HlsEvent::ThroughputSample { bytes_per_second });
+    }
+
+    pub fn emit_download_progress(&self, offset: u64, percent: Option<f32>) {
+        let _ = self.tx.send(HlsEvent::DownloadProgress { offset, percent });
+    }
+
+    pub fn emit_playback_progress(&self, position: u64, percent: Option<f32>) {
+        let _ = self
+            .tx
+            .send(HlsEvent::PlaybackProgress { position, percent });
     }
 
     pub fn emit_error(&self, error: &str, recoverable: bool) {

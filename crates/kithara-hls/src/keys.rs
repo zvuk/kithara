@@ -9,13 +9,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::{HlsError, HlsResult, KeyContext};
-
-fn uri_basename_no_query(uri: &str) -> Option<&str> {
-    let no_query = uri.split('?').next().unwrap_or(uri);
-    let base = no_query.rsplit('/').next().unwrap_or(no_query);
-    if base.is_empty() { None } else { Some(base) }
-}
+use crate::{HlsResult, KeyContext};
 
 #[derive(Debug, Error)]
 pub enum KeyError {
@@ -64,18 +58,7 @@ impl KeyManager {
     }
 
     pub async fn get_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
-        // Keys are metadata => AtomicResource.
-        //
-        // Disk layout contract (stream-download-hls compatible, adapted to kithara-assets):
-        // - asset_root = "<master_hash>"
-        // - rel_path   = "<variant_id>/<key_basename>"
-        //
-        // NOTE: Variant id is not plumbed through this API yet; use `0` for now.
-        let basename = uri_basename_no_query(url.as_str())
-            .ok_or_else(|| HlsError::InvalidUrl("Failed to derive key basename".into()))?;
-        let rel_path = format!("{}/{}", 0usize, basename);
-
-        let key = ResourceKey::new(self.asset_root.clone(), rel_path);
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
 
         let cancel = CancellationToken::new();
         let res = self.assets.open_atomic_resource(&key, cancel).await?;

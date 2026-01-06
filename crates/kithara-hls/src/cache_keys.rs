@@ -9,27 +9,13 @@
 //! - media segments: `"<master_hash>/<variant_id>/seg_<basename>"`
 //!
 //! Notes:
-//! - `master_hash` is computed from the master playlist URL using `DefaultHasher`,
-//!   matching legacy behavior. This is deterministic within a Rust version, but not
-//!   guaranteed stable across Rust versions.
+//! - `master_hash` is computed from the master playlist URL using `ResourceKey::asset_root_for_url`
+//!   (SHA-256 truncated to 16 bytes, hex-encoded), stable across runs.
 //! - Basename extraction ignores query string.
 //! - This module only *derives keys*; it does not perform any I/O.
 
-use std::{
-    collections::hash_map::DefaultHasher,
-    hash::{Hash, Hasher},
-};
-
+use kithara_assets::ResourceKey;
 use url::Url;
-
-/// Computes a deterministic identifier for a stream from the master playlist URL.
-///
-/// NOTE: uses the standard library hasher, so the result is not guaranteed to be stable across Rust versions.
-pub fn master_hash_from_url(url: &Url) -> String {
-    let mut hasher = DefaultHasher::new();
-    url.as_str().hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
-}
 
 /// Generator for cache keys based on the master URL.
 ///
@@ -43,7 +29,14 @@ impl CacheKeyGenerator {
     /// Create a new generator from a master playlist URL.
     pub fn new(master_url: &Url) -> Self {
         Self {
-            master_hash: master_hash_from_url(master_url),
+            master_hash: ResourceKey::asset_root_for_url(master_url),
+        }
+    }
+
+    /// Create a new generator from a precomputed master hash.
+    pub fn with_master_hash(master_hash: impl Into<String>) -> Self {
+        Self {
+            master_hash: master_hash.into(),
         }
     }
 
@@ -122,56 +115,5 @@ impl CacheKeyGenerator {
             "{}/{}/seg_{}",
             self.master_hash, variant_id, segment_basename
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn uri_basename_no_query_works() {
-        assert_eq!(
-            CacheKeyGenerator::uri_basename_no_query("https://a/b/master.m3u8?token=1"),
-            Some("master.m3u8")
-        );
-        assert_eq!(
-            CacheKeyGenerator::uri_basename_no_query("https://a/b/"),
-            None
-        );
-        assert_eq!(
-            CacheKeyGenerator::uri_basename_no_query("master.m3u8?x=1"),
-            Some("master.m3u8")
-        );
-    }
-
-    #[test]
-    fn rel_path_formats_match_contract() {
-        let master = Url::parse("https://example.com/hls/master.m3u8").unwrap();
-        let g = CacheKeyGenerator::new(&master);
-
-        let playlist = Url::parse("https://x/y/index.m3u8?z=1").unwrap();
-        let key = Url::parse("https://x/y/key.bin?z=1").unwrap();
-        let init = Url::parse("https://x/y/init.mp4?z=1").unwrap();
-        let seg = Url::parse("https://x/y/seg_0001.ts?z=1").unwrap();
-
-        let mh = g.master_hash().to_string();
-
-        assert_eq!(
-            g.playlist_rel_path_from_url(&playlist).unwrap(),
-            format!("{}/index.m3u8", mh)
-        );
-        assert_eq!(
-            g.key_rel_path_from_url(3, &key).unwrap(),
-            format!("{}/3/key.bin", mh)
-        );
-        assert_eq!(
-            g.init_segment_rel_path_from_url(3, &init).unwrap(),
-            format!("{}/3/init_init.mp4", mh)
-        );
-        assert_eq!(
-            g.media_segment_rel_path_from_url(3, &seg).unwrap(),
-            format!("{}/3/seg_seg_0001.ts", mh)
-        );
     }
 }

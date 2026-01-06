@@ -243,12 +243,7 @@ impl PlaylistManager {
     }
 
     async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
-        // HLS playlists are metadata => AtomicResource.
-        //
-        // Layout:
-        // - asset_root = "<master_hash>"
-        // - rel_path   = "<playlist_basename>" (no query)
-        let key = ResourceKey::new(self.asset_root.clone(), rel_path);
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
 
         debug!(
             url = %url,

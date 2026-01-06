@@ -11,12 +11,14 @@ use kithara_assets::{AssetStore, ResourceKey};
 use kithara_net::{Headers, HttpClient, Net as _};
 use kithara_storage::{Resource as _, StreamingResourceExt};
 use thiserror::Error;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 use url::Url;
 
 use crate::{
-    HlsError, HlsResult, KeyContext, abr::ThroughputSampleSource, playlist::MediaPlaylist,
+    CacheKeyGenerator, HlsError, HlsEvent, HlsResult, KeyContext, abr::ThroughputSampleSource,
+    playlist::MediaPlaylist,
 };
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {
@@ -57,6 +59,7 @@ pub struct FetchBytes {
 
 pub struct FetchManager {
     asset_root: String,
+    keys: CacheKeyGenerator,
     assets: AssetStore,
     net: HttpClient,
 }
@@ -64,7 +67,8 @@ pub struct FetchManager {
 impl FetchManager {
     pub fn new(asset_root: String, assets: AssetStore, net: HttpClient) -> Self {
         Self {
-            asset_root,
+            asset_root: asset_root.clone(),
+            keys: CacheKeyGenerator::with_master_hash(asset_root),
             assets,
             net,
         }
@@ -207,7 +211,9 @@ impl FetchManager {
         // - rel_path   = "<variant_id>/init_<basename>"
         let basename = uri_basename_no_query(url.as_str())
             .ok_or_else(|| HlsError::InvalidUrl("Failed to derive init segment basename".into()))?;
-        let rel_path = format!("{}/init_{}", variant_id, basename);
+        let rel_path = self
+            .keys
+            .init_segment_rel_path_from_basename(variant_id, basename);
 
         debug!(
             asset_root = %self.asset_root,
@@ -233,7 +239,9 @@ impl FetchManager {
         // - rel_path   = "<variant_id>/seg_<basename>"
         let basename = uri_basename_no_query(url.as_str())
             .ok_or_else(|| HlsError::InvalidUrl("Failed to derive segment basename".into()))?;
-        let rel_path = format!("{}/seg_{}", variant_id, basename);
+        let rel_path = self
+            .keys
+            .media_segment_rel_path_from_basename(variant_id, basename);
 
         debug!(
             asset_root = %self.asset_root,
@@ -256,19 +264,29 @@ impl FetchManager {
             kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
         >,
     > {
-        let basename = uri_basename_no_query(url.as_str())
-            .ok_or_else(|| HlsError::InvalidUrl("Failed to derive init segment basename".into()))?;
-        let rel_path = format!("{}/init_{}", variant_id, basename);
+        self.open_init_streaming_resource_with_events(variant_id, url, None)
+            .await
+    }
 
+    pub async fn open_init_streaming_resource_with_events(
+        &self,
+        variant_id: usize,
+        url: &Url,
+        events: Option<broadcast::Sender<HlsEvent>>,
+    ) -> HlsResult<
+        kithara_assets::AssetResource<
+            kithara_storage::StreamingResource,
+            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+        >,
+    > {
         debug!(
             asset_root = %self.asset_root,
             variant_id,
             url = %url,
-            rel_path = %rel_path,
             "kithara-hls open_init_streaming_resource"
         );
 
-        self.open_streaming_resource_with_writer(url, rel_path)
+        self.open_streaming_resource_with_writer(url, variant_id, events)
             .await
     }
 
@@ -282,33 +300,44 @@ impl FetchManager {
             kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
         >,
     > {
-        let basename = uri_basename_no_query(url.as_str())
-            .ok_or_else(|| HlsError::InvalidUrl("Failed to derive segment basename".into()))?;
-        let rel_path = format!("{}/seg_{}", variant_id, basename);
-
-        debug!(
-            asset_root = %self.asset_root,
-            variant_id,
-            url = %url,
-            rel_path = %rel_path,
-            "kithara-hls open_media_streaming_resource"
-        );
-
-        self.open_streaming_resource_with_writer(url, rel_path)
+        self.open_media_streaming_resource_with_events(variant_id, url, None)
             .await
     }
 
-    async fn open_streaming_resource_with_writer(
+    pub async fn open_media_streaming_resource_with_events(
         &self,
+        variant_id: usize,
         url: &Url,
-        rel_path: String,
+        events: Option<broadcast::Sender<HlsEvent>>,
     ) -> HlsResult<
         kithara_assets::AssetResource<
             kithara_storage::StreamingResource,
             kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
         >,
     > {
-        let key = ResourceKey::new(self.asset_root.clone(), rel_path.clone());
+        debug!(
+            asset_root = %self.asset_root,
+            variant_id,
+            url = %url,
+            "kithara-hls open_media_streaming_resource"
+        );
+
+        self.open_streaming_resource_with_writer(url, variant_id, events)
+            .await
+    }
+
+    async fn open_streaming_resource_with_writer(
+        &self,
+        url: &Url,
+        variant_id: usize,
+        events: Option<broadcast::Sender<HlsEvent>>,
+    ) -> HlsResult<
+        kithara_assets::AssetResource<
+            kithara_storage::StreamingResource,
+            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+        >,
+    > {
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
         let cancel = CancellationToken::new();
         let res = self
             .assets
@@ -319,8 +348,20 @@ impl FetchManager {
         let net = self.net.clone();
         let url = url.clone();
         let res_for_writer = res.clone();
+        let events_for_writer = events.clone();
+        let content_length_for_progress = self.probe_content_length(&url).await.ok().flatten();
+        let started_at = Instant::now();
 
         tokio::spawn(async move {
+            if let Some(ev) = &events_for_writer {
+                let _: Result<_, broadcast::error::SendError<HlsEvent>> =
+                    ev.send(HlsEvent::SegmentStart {
+                        variant: variant_id,
+                        segment_index: 0,
+                        byte_offset: 0,
+                    });
+            }
+
             let mut stream = match net.stream(url.clone(), None).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -334,6 +375,7 @@ impl FetchManager {
             while let Some(chunk_result) = stream.next().await {
                 match chunk_result {
                     Ok(chunk_bytes) => {
+                        let chunk_len = chunk_bytes.len() as u64;
                         if let Err(e) = res_for_writer.write_at(off, &chunk_bytes).await {
                             warn!(
                                 url = %url,
@@ -346,7 +388,18 @@ impl FetchManager {
                                 .await;
                             return;
                         }
-                        off = off.saturating_add(chunk_bytes.len() as u64);
+                        off = off.saturating_add(chunk_len);
+                        if let Some(ev) = &events_for_writer {
+                            let percent = content_length_for_progress
+                                .map(|len| ((off as f64 / len as f64) * 100.0).min(100.0) as f32);
+                            let _: Result<_, broadcast::error::SendError<HlsEvent>> =
+                                ev.send(HlsEvent::BufferLevel { level_seconds: 0.0 });
+                            let _: Result<_, broadcast::error::SendError<HlsEvent>> =
+                                ev.send(HlsEvent::DownloadProgress {
+                                    offset: off,
+                                    percent,
+                                });
+                        }
                     }
                     Err(e) => {
                         warn!(
@@ -362,6 +415,16 @@ impl FetchManager {
             }
 
             let _ = res_for_writer.commit(Some(off)).await;
+
+            if let Some(ev) = &events_for_writer {
+                let _: Result<_, broadcast::error::SendError<HlsEvent>> =
+                    ev.send(HlsEvent::SegmentComplete {
+                        variant: variant_id,
+                        segment_index: 0,
+                        bytes_transferred: off,
+                        duration: started_at.elapsed(),
+                    });
+            }
         });
 
         Ok(res)
@@ -421,14 +484,7 @@ impl FetchManager {
     }
 
     async fn fetch_streaming_to_bytes(&self, url: &Url, rel_path: &str) -> HlsResult<FetchBytes> {
-        // HLS segments are large objects => StreamingResource.
-        //
-        // Contract:
-        // - writer fills the resource via `write_at`,
-        // - reader waits via `wait_range` (no "false EOF"),
-        // - completion is signaled via `commit(Some(final_len))`,
-        // - failures signal via `fail(...)`.
-        let key = ResourceKey::new(self.asset_root.clone(), rel_path);
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
 
         // Intentionally quiet: this path can be called a lot during playback.
         // Keep only warnings/errors and a single "done" summary.
@@ -543,12 +599,7 @@ impl FetchManager {
     }
 
     async fn fetch_resource(&self, url: &Url, _default_filename: &str) -> HlsResult<FetchBytes> {
-        // Back-compat internal helper: keep deterministic key derived from full URL.
-        //
-        // Prefer `fetch_init_segment_resource` / `fetch_media_segment_resource` for
-        // stream-download-hls compatible layout.
-        let rel_path = format!("segments/{}.bin", hex::encode(url.as_str().as_bytes()));
-        let key = ResourceKey::new(self.asset_root.clone(), rel_path);
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
 
         let cancel = CancellationToken::new();
         let res = self

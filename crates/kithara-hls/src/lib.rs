@@ -24,7 +24,7 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use kithara_assets::AssetStore;
+use kithara_assets::{AssetStore, ResourceKey};
 use kithara_core::AssetId;
 use kithara_net::HttpClient;
 use thiserror::Error;
@@ -53,7 +53,7 @@ pub use abr::{
     AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
 };
 // Deterministic cache/layout helper (mirrors stream-download-hls layout).
-pub use cache_keys::{CacheKeyGenerator, master_hash_from_url};
+pub use cache_keys::CacheKeyGenerator;
 pub use driver::{DriverError, SourceError};
 pub use events::{EventEmitter, HlsEvent};
 pub use fetch::{FetchError, FetchManager, SegmentStream};
@@ -182,7 +182,7 @@ pub struct HlsSource;
 impl HlsSourceContract for HlsSource {
     async fn open(&self, url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession> {
         let asset_id = AssetId::from_url(&url)?;
-        let asset_root = master_hash_from_url(&url);
+        let asset_root = ResourceKey::asset_root_for_url(&url);
         let net = HttpClient::new(kithara_net::NetOptions::default());
 
         // Create managers (kept as-is; internals will be iterated via TDD).
@@ -282,7 +282,7 @@ impl HlsSession {
     /// - `session.source().await?`
     /// - `Reader::new(Arc::new(source))`
     pub async fn source(&self) -> HlsResult<HlsSessionSource> {
-        let asset_root = master_hash_from_url(&self.master_url);
+        let asset_root = ResourceKey::asset_root_for_url(&self.master_url);
         let net = HttpClient::new(kithara_net::NetOptions::default());
 
         let playlist_manager = playlist::PlaylistManager::new(

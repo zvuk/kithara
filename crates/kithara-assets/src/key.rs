@@ -21,23 +21,21 @@ pub struct ResourceKey {
 }
 
 impl ResourceKey {
-    pub fn new(asset_root: impl Into<String>, rel_path: impl Into<String>) -> Self {
+    pub(crate) fn new(asset_root: impl Into<String>, rel_path: impl Into<String>) -> Self {
         Self {
             asset_root: asset_root.into(),
             rel_path: rel_path.into(),
         }
     }
-}
 
-/// Derives a ResourceKey from a URL: asset_root = first 32 chars of SHA-256 hash, rel_path = last path segment.
-impl From<&Url> for ResourceKey {
-    fn from(url: &Url) -> Self {
-        // Use SHA-256 for stable hashing across runs
+    pub fn asset_root_for_url(url: &Url) -> String {
         let mut hasher = Sha256::new();
         hasher.update(url.as_str().as_bytes());
         let hash_result = hasher.finalize();
-        let asset_root = hex::encode(&hash_result[..16]);
-        // Get the last path segment as filename
+        hex::encode(&hash_result[..16])
+    }
+
+    pub fn from_url_with_asset_root(asset_root: impl Into<String>, url: &Url) -> Self {
         let rel_path = url
             .path_segments()
             .and_then(|segments| segments.last())
@@ -45,5 +43,13 @@ impl From<&Url> for ResourceKey {
             .unwrap_or("index")
             .to_string();
         Self::new(asset_root, rel_path)
+    }
+}
+
+/// Derives a ResourceKey from a URL using its own hash as asset_root.
+impl From<&Url> for ResourceKey {
+    fn from(url: &Url) -> Self {
+        let asset_root = ResourceKey::asset_root_for_url(url);
+        ResourceKey::from_url_with_asset_root(asset_root, url)
     }
 }
