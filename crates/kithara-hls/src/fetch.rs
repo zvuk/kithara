@@ -9,22 +9,16 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_assets::{AssetStore, ResourceKey};
 use kithara_net::{Headers, HttpClient, Net as _};
-use kithara_storage::{Resource as _, StreamingResourceExt};
+use kithara_storage::{Resource as _, ResourceStatus, StreamingResourceExt};
 use thiserror::Error;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, trace, warn};
 use url::Url;
 
 use crate::{
     HlsError, HlsEvent, HlsResult, KeyContext, abr::ThroughputSampleSource, playlist::MediaPlaylist,
 };
-
-fn uri_basename_no_query(uri: &str) -> Option<&str> {
-    let no_query = uri.split('?').next().unwrap_or(uri);
-    let base = no_query.rsplit('/').next().unwrap_or(no_query);
-    if base.is_empty() { None } else { Some(base) }
-}
 
 #[derive(Debug, Error)]
 pub enum FetchError {
@@ -103,7 +97,7 @@ impl FetchManager {
             .join(segment_uri)
             .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)))?;
 
-        debug!(
+        trace!(
             asset_root = %self.asset_root,
             segment_index,
             base_url = %base_url,
@@ -121,7 +115,7 @@ impl FetchManager {
             fetch.bytes
         };
 
-        debug!(
+        trace!(
             asset_root = %self.asset_root,
             segment_index,
             bytes = out.len(),
@@ -148,7 +142,7 @@ impl FetchManager {
             .join(segment_uri)
             .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)))?;
 
-        debug!(
+        trace!(
             asset_root = %self.asset_root,
             segment_index,
             base_url = %base_url,
@@ -162,7 +156,7 @@ impl FetchManager {
             fetch.bytes = self.decrypt_segment(fetch.bytes, key_ctx).await?;
         }
 
-        debug!(
+        trace!(
             asset_root = %self.asset_root,
             segment_index,
             bytes = fetch.bytes.len(),
@@ -174,18 +168,14 @@ impl FetchManager {
     }
 
     pub async fn fetch_init_segment(&self, init_url: &Url) -> HlsResult<Bytes> {
-        // Back-compat helper.
-        //
-        // This API doesn't know the selected variant, so it uses `variant_id=0`.
-        // Prefer `fetch_init_segment_resource(variant_id, ...)` when variant selection is known.
-        debug!(
+        trace!(
             asset_root = %self.asset_root,
             init_url = %init_url,
             variant_id = 0usize,
             "kithara-hls fetch_init_segment begin"
         );
         let out = self.fetch_init_segment_resource(0, init_url).await?.bytes;
-        debug!(
+        trace!(
             asset_root = %self.asset_root,
             init_url = %init_url,
             variant_id = 0usize,
@@ -202,7 +192,7 @@ impl FetchManager {
     ) -> HlsResult<FetchBytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
 
-        debug!(
+        trace!(
             asset_root = %self.asset_root,
             variant_id,
             url = %url,
@@ -220,7 +210,7 @@ impl FetchManager {
     ) -> HlsResult<FetchBytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
 
-        debug!(
+        trace!(
             asset_root = %self.asset_root,
             variant_id,
             url = %url,
@@ -256,7 +246,7 @@ impl FetchManager {
             kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
         >,
     > {
-        debug!(
+        trace!(
             asset_root = %self.asset_root,
             variant_id,
             url = %url,
@@ -291,7 +281,7 @@ impl FetchManager {
             kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
         >,
     > {
-        debug!(
+        trace!(
             asset_root = %self.asset_root,
             variant_id,
             url = %url,
@@ -320,7 +310,13 @@ impl FetchManager {
             .open_streaming_resource(&key, cancel.clone())
             .await?;
 
+        let status = res.inner().status().await;
+
         // Spawn best-effort writer (net -> storage). Readers will observe availability via the same handle.
+        if matches!(status, ResourceStatus::Committed { .. }) {
+            return Ok(res);
+        }
+
         let net = self.net.clone();
         let url = url.clone();
         let res_for_writer = res.clone();
@@ -557,7 +553,7 @@ impl FetchManager {
         }
 
         let duration = start.elapsed();
-        debug!(
+        trace!(
             asset_root = %self.asset_root,
             rel_path = %rel_path,
             bytes = out.len(),

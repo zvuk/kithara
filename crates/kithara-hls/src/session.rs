@@ -266,18 +266,12 @@ impl HlsSessionSource {
                     );
 
                     // We want init bytes to be available immediately for fMP4 demux, so trigger init download now.
-                    let _ = self
+                    let init_fetch = self
                         .fetch_manager
                         .fetch_init_segment_resource(variant_index, &init_url)
                         .await?;
 
-                    let len = self
-                        .fetch_manager
-                        .probe_content_length(&init_url)
-                        .await?
-                        .ok_or_else(|| {
-                            HlsError::Driver("init segment Content-Length is unknown".into())
-                        })?;
+                    let len = init_fetch.bytes.len() as u64;
 
                     segments.push(SegmentDesc {
                         url: init_url,
@@ -291,20 +285,20 @@ impl HlsSessionSource {
                     let _out_index = base_index + i;
                     let media_index = i;
 
-                    if media_index == 0 {
-                        let _ = self
+                    let len = if media_index == 0 {
+                        let first_fetch = self
                             .fetch_manager
                             .fetch_media_segment_resource(variant_index, &url)
                             .await?;
-                    }
-
-                    let len = self
-                        .fetch_manager
-                        .probe_content_length(&url)
-                        .await?
-                        .ok_or_else(|| {
-                            HlsError::Driver("segment Content-Length is unknown".into())
-                        })?;
+                        first_fetch.bytes.len() as u64
+                    } else {
+                        self.fetch_manager
+                            .probe_content_length(&url)
+                            .await?
+                            .ok_or_else(|| {
+                                HlsError::Driver("segment Content-Length is unknown".into())
+                            })?
+                    };
 
                     segments.push(SegmentDesc {
                         url,
@@ -436,6 +430,12 @@ impl Source for HlsSessionSource {
             .await
             .map_err(|e| KitharaIoError::Source(e.to_string()))?;
 
+        debug!(
+            start = range.start,
+            end = range.end,
+            "kithara-hls wait_range request"
+        );
+
         trace!(
             total_len = state.total_len,
             segments = state.segments.len(),
@@ -518,6 +518,8 @@ impl Source for HlsSessionSource {
             "kithara-hls session source read_at begin"
         );
 
+        debug!(offset, len, "kithara-hls read_at request");
+
         if len == 0 {
             return Ok(Bytes::new());
         }
@@ -540,6 +542,14 @@ impl Source for HlsSessionSource {
             warn!(offset, "kithara-hls read_at locate returned None -> empty");
             return Ok(Bytes::new());
         };
+
+        debug!(
+            offset,
+            seg_idx,
+            seg_off,
+            seg_len = state.segments[seg_idx].len,
+            "kithara-hls read_at located segment"
+        );
 
         // Read within one segment only. The caller (`kithara-io::Reader`) will call again if it needs
         // more; this keeps reads simple and avoids allocating large buffers on boundary crossings.

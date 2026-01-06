@@ -18,8 +18,6 @@ use crate::{
     playlist::{PlaylistManager, VariantId},
 };
 
-pub type HlsByteStream = Pin<Box<dyn FuturesStream<Item = HlsResult<Bytes>> + Send>>;
-
 #[derive(Debug, Error)]
 pub enum DriverError {
     #[error("Stream error: {0}")]

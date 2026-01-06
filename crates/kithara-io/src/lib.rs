@@ -275,6 +275,13 @@ where
         let n = bytes.len().min(buf.len());
         buf[..n].copy_from_slice(&bytes[..n]);
         self.pos = self.pos.saturating_add(n as u64);
+        debug!(
+            offset,
+            requested = len,
+            read = n,
+            new_pos = self.pos,
+            "Reader::read progress"
+        );
         Ok(n)
     }
 }
