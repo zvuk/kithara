@@ -8,13 +8,13 @@ use kithara_core::{AssetId, CoreError};
 use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome};
 use kithara_net::{HttpClient, NetError};
 use kithara_storage::{StreamingResource, StreamingResourceExt};
-use kithara_stream::{StreamMsg, Writer};
-use tokio::sync::{broadcast, mpsc};
+use kithara_stream::{EngineHandle, StreamMsg, Writer};
+use tokio::sync::{Mutex, broadcast};
 use tracing::trace;
 use url::Url;
 
 use crate::{
-    driver::{DriverError, FileCommand, FileDriver, FileStreamState},
+    driver::{DriverError, FileDriver, FileStreamState, SourceError},
     events::FileEvent,
     options::FileSourceOptions,
 };
@@ -44,11 +44,6 @@ impl Progress {
     pub fn set_download_pos(&self, v: u64) {
         use std::sync::atomic::Ordering;
         self.download_pos.store(v, Ordering::Relaxed);
-    }
-
-    pub fn download_pos(&self) -> u64 {
-        use std::sync::atomic::Ordering;
-        self.download_pos.load(Ordering::Relaxed)
     }
 }
 
@@ -140,7 +135,7 @@ impl Source for SessionSource {
 pub struct FileSession {
     driver: Arc<FileDriver>,
     net_client: HttpClient,
-    command_tx: mpsc::UnboundedSender<FileCommand>,
+    engine_handle: Arc<Mutex<Option<EngineHandle>>>,
 }
 
 impl FileSession {
@@ -159,12 +154,10 @@ impl FileSession {
             cache,
         ));
 
-        let (command_tx, _command_rx) = mpsc::unbounded_channel::<FileCommand>();
-
         Self {
             driver,
             net_client,
-            command_tx,
+            engine_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -175,7 +168,11 @@ impl FileSession {
     pub async fn stream(
         &self,
     ) -> Pin<Box<dyn Stream<Item = Result<Bytes, FileError>> + Send + '_>> {
-        let driver_stream = self.driver.stream().await;
+        let (handle, driver_stream) = self.driver.stream_with_handle().await;
+        {
+            let mut guard = self.engine_handle.lock().await;
+            *guard = Some(handle);
+        }
         Box::pin(driver_stream.map(|result| result.map_err(FileError::Driver)))
     }
 
@@ -234,14 +231,20 @@ impl FileSession {
         });
     }
 
-    pub fn send_command(&self, command: FileCommand) -> Result<(), FileError> {
-        self.command_tx
-            .send(command)
-            .map_err(|_| FileError::DriverStopped)
-    }
+    pub async fn seek_bytes(&self, position: u64) -> FileResult<()> {
+        let handle = {
+            let guard = self.engine_handle.lock().await;
+            guard.clone()
+        };
+        let Some(handle) = handle else {
+            return Err(FileError::Driver(DriverError::SeekNotSupported));
+        };
 
-    pub fn seek_bytes(&self, position: u64) -> Result<(), FileError> {
-        self.send_command(FileCommand::SeekBytes(position))
+        handle
+            .seek_bytes::<SourceError>(position)
+            .await
+            .map_err(DriverError::from)
+            .map_err(FileError::Driver)
     }
 }
 
@@ -250,7 +253,7 @@ impl Clone for FileSession {
         Self {
             driver: self.driver.clone(),
             net_client: self.net_client.clone(),
-            command_tx: self.command_tx.clone(),
+            engine_handle: self.engine_handle.clone(),
         }
     }
 }

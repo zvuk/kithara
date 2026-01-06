@@ -9,8 +9,8 @@ use kithara_core::AssetId;
 use kithara_net::{HttpClient, Net, NetError};
 use kithara_storage::{StorageError, StreamingResource};
 use kithara_stream::{
-    Engine, EngineSource, Reader, ReaderError, StreamError, StreamMsg, StreamParams, Writer,
-    WriterTask,
+    Engine, EngineHandle, EngineSource, Reader, ReaderError, StreamError, StreamMsg, StreamParams,
+    Writer, WriterTask,
 };
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -58,21 +58,12 @@ pub enum SourceError {
     Reader(String),
 }
 
-#[derive(Debug)]
-pub enum FileCommand {
-    /// Command to seek to a specific byte position.
-    ///
-    /// The position is absolute (from start of resource).
-    /// See `FileSession::seek_bytes` for detailed contract.
-    SeekBytes(u64),
-}
-
 #[derive(Clone)]
 pub struct FileDriver {
     asset_id: AssetId,
     url: Url,
     net_client: HttpClient,
-    options: FileSourceOptions,
+    _options: FileSourceOptions,
     assets: Option<Arc<AssetStore>>,
 }
 
@@ -88,7 +79,7 @@ impl FileDriver {
             asset_id,
             url,
             net_client,
-            options: options.clone(),
+            _options: options,
             assets,
         }
     }
@@ -105,9 +96,12 @@ impl FileDriver {
         self.asset_id
     }
 
-    pub async fn stream(
+    pub async fn stream_with_handle(
         &self,
-    ) -> Pin<Box<dyn FuturesStream<Item = Result<Bytes, DriverError>> + Send + '_>> {
+    ) -> (
+        EngineHandle,
+        Pin<Box<dyn FuturesStream<Item = Result<Bytes, DriverError>> + Send + '_>>,
+    ) {
         let source = FileStream {
             url: self.url.clone(),
             net_client: self.net_client.clone(),
@@ -118,15 +112,17 @@ impl FileDriver {
         let params = StreamParams {
             offline_mode: false,
         };
-        let s = Engine::new(source, params).into_stream();
-
-        Box::pin(s.filter_map(|item| async move {
+        let engine = Engine::new(source, params);
+        let handle = engine.handle();
+        let stream = engine.into_stream().filter_map(|item| async move {
             match item {
                 Ok(StreamMsg::Data(b)) => Some(Ok(b)),
                 Ok(StreamMsg::Control(_)) | Ok(StreamMsg::Event(_)) => None,
                 Err(e) => Some(Err(DriverError::from(e))),
             }
-        }))
+        });
+
+        (handle, Box::pin(stream))
     }
 }
 

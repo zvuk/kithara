@@ -213,7 +213,7 @@ async fn seek_roundtrip_correctness(
     assert!(!first_chunk.is_empty());
 
     // Try to seek using session's seek_bytes method
-    let seek_result = session.seek_bytes(0);
+    let seek_result = session.seek_bytes(0).await;
 
     // Currently seek may return DriverStopped; this test documents the current behavior
     match seek_result {
@@ -256,7 +256,7 @@ async fn seek_variants_not_supported(
     assert!(!first_chunk.is_empty());
 
     // Try to seek using session's seek_bytes method
-    let seek_result = session.seek_bytes(10);
+    let seek_result = session.seek_bytes(10).await;
 
     // Should return error (seek behavior is still being redesigned)
     assert!(seek_result.is_err());
@@ -354,7 +354,7 @@ async fn seek_contract_invalid_position(
     // Try to seek to a very large position (beyond known size)
     // Currently this will fail with SeekNotSupported or DriverStopped
     // Once implemented, it should fail with InvalidSeekPosition if size is known
-    let seek_result = session.seek_bytes(1_000_000_000); // 1GB position
+    let seek_result = session.seek_bytes(1_000_000_000).await; // 1GB position
 
     match seek_result {
         Err(kithara_file::FileError::Driver(kithara_file::DriverError::SeekNotSupported)) => {

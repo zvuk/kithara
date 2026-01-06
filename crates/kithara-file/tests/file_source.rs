@@ -165,6 +165,37 @@ async fn stream_bytes_from_network(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
+async fn stream_seek_bytes_repositions_reader(
+    #[future] test_server: String,
+    #[future] temp_assets: AssetStore,
+    default_opts: FileSourceOptions,
+) {
+    let server_url = test_server.await;
+    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+    let assets = temp_assets.await;
+
+    let session = FileSource::open(url, default_opts, Some(assets))
+        .await
+        .unwrap();
+
+    let mut stream = session.stream().await;
+    session.seek_bytes(4).await.unwrap();
+
+    let chunk = stream
+        .next()
+        .await
+        .expect("Should receive chunk after seek")
+        .expect("Seeked stream should not error");
+
+    assert_eq!(
+        chunk,
+        Bytes::from_static(b"\x00\x00\x00\x00\x00TestAudioData12345")
+    );
+}
+
+#[rstest]
+#[tokio::test]
+#[timeout(Duration::from_secs(10))]
 async fn stream_handles_network_errors(
     #[future] temp_assets: AssetStore,
     default_opts: FileSourceOptions,

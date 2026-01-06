@@ -1,11 +1,9 @@
-use std::{env::args, error::Error, sync::Arc, thread};
+use std::{env::args, error::Error, sync::Arc};
 
 use kithara_assets::{AssetStore, EvictConfig};
 use kithara_file::{FileEvent, FileSource, FileSourceOptions};
 use kithara_io::Reader;
-use kithara_stream::StreamMsg;
 use tempfile::TempDir;
-use tokio::sync::mpsc;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -41,44 +39,31 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let source = session.source().await?;
 
     let mut events_rx = source.events();
-    let (event_tx, mut event_rx) = mpsc::unbounded_channel::<StreamMsg<(), FileEvent>>();
+    let reader = Reader::new(Arc::new(source));
 
     tokio::spawn(async move {
-        while let Some(ev) = events_rx.recv().await.ok() {
-            let _ = event_tx.send(StreamMsg::Event(ev));
-        }
-    });
-
-    tokio::spawn(async move {
-        while let Some(msg) = event_rx.recv().await {
-            if let StreamMsg::Event(ev) = msg {
-                match ev {
-                    FileEvent::DownloadProgress { offset, percent } => {
-                        info!(offset, ?percent, "Stream event: download");
-                    }
-                    FileEvent::PlaybackProgress { position, percent } => {
-                        info!(position, ?percent, "Stream event: playback");
-                    }
+        while let Some(msg) = events_rx.recv().await.ok() {
+            match msg {
+                FileEvent::DownloadProgress { offset, percent } => {
+                    info!(offset, ?percent, "Stream event: download");
+                }
+                FileEvent::PlaybackProgress { position, percent } => {
+                    info!(position, ?percent, "Stream event: playback");
                 }
             }
         }
     });
 
-    let reader = Reader::new(Arc::new(source));
-
-    let playback_thread = thread::spawn(move || -> Result<(), Box<dyn Error + Send + Sync>> {
+    let handle = tokio::task::spawn_blocking(move || {
         let (_stream, stream_handle) = rodio::OutputStream::try_default()?;
         let sink = rodio::Sink::try_new(&stream_handle)?;
 
         sink.append(rodio::Decoder::new(reader)?);
         sink.sleep_until_end();
 
-        Ok(())
+        Ok::<_, Box<dyn Error + Send + Sync>>(())
     });
-
-    playback_thread.join().map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::Other, "rodio playback thread panicked")
-    })??;
+    handle.await??;
 
     Ok(())
 }
