@@ -2,7 +2,9 @@ use std::{pin::Pin, sync::Arc, time::Instant};
 
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt};
-use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
+use kithara_stream::{
+    Engine, EngineSource, EngineStream, StreamError, StreamMsg, StreamParams, WriterTask,
+};
 use thiserror::Error;
 use tokio::sync::{Mutex, broadcast};
 use url::Url;
@@ -20,9 +22,6 @@ pub type HlsByteStream = Pin<Box<dyn FuturesStream<Item = HlsResult<Bytes>> + Se
 
 #[derive(Debug, Error)]
 pub enum DriverError {
-    #[error("Source error: {0}")]
-    Source(#[from] SourceError),
-
     #[error("Stream error: {0}")]
     Stream(#[from] kithara_stream::StreamError<SourceError>),
 }
@@ -82,14 +81,22 @@ impl HlsDriver {
             offline_mode: false,
         };
 
-        let s = Stream::new(source, params).into_byte_stream();
-        Box::pin(s.map(|r| {
-            r.map_err(|e| match e {
-                StreamError::SeekNotSupported => crate::HlsError::Unimplemented,
-                StreamError::ChannelClosed => crate::HlsError::Driver("channel closed".to_string()),
-                StreamError::WriterJoin(msg) => crate::HlsError::Driver(msg),
-                StreamError::Source(SourceError::Hls(hls)) => hls,
-            })
+        let engine = Engine::new(source, params);
+        let s = engine.into_stream();
+        // TODO: surface control/event messages (e.g., variant switches, metrics) to consumers once the API surface is decided.
+        Box::pin(s.filter_map(|r| async move {
+            match r {
+                Ok(StreamMsg::Data(bytes)) => Some(Ok(bytes)),
+                Ok(StreamMsg::Control(_)) | Ok(StreamMsg::Event(_)) => None,
+                Err(e) => Some(Err(match e {
+                    StreamError::SeekNotSupported => crate::HlsError::Unimplemented,
+                    StreamError::ChannelClosed => {
+                        crate::HlsError::Driver("channel closed".to_string())
+                    }
+                    StreamError::WriterJoin(msg) => crate::HlsError::Driver(msg),
+                    StreamError::Source(SourceError::Hls(hls)) => hls,
+                })),
+            }
         }))
     }
 
@@ -107,19 +114,55 @@ struct HlsStream {
     event_emitter: Arc<EventEmitter>,
 }
 
-impl Source for HlsStream {
+struct HlsStreamState {
+    master_url: Url,
+    playlist_manager: Arc<PlaylistManager>,
+    fetch_manager: Arc<FetchManager>,
+    key_manager: Arc<KeyManager>,
+    abr_controller: Arc<Mutex<AbrController>>,
+    event_emitter: Arc<EventEmitter>,
+}
+
+impl EngineSource for HlsStream {
     type Error = SourceError;
     type Control = ();
+    type Event = HlsEvent;
+    type State = Arc<HlsStreamState>;
 
-    fn open(
+    fn init(
         &mut self,
         params: StreamParams,
-    ) -> Result<SourceStream<Self::Control, Self::Error>, StreamError<Self::Error>> {
-        let master_url = self.master_url.clone();
-        let playlist_manager = Arc::clone(&self.playlist_manager);
-        let fetch_manager = Arc::clone(&self.fetch_manager);
-        let abr_controller = Arc::clone(&self.abr_controller);
-        let event_emitter = Arc::clone(&self.event_emitter);
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Self::State, StreamError<Self::Error>>>
+                + Send
+                + 'static,
+        >,
+    > {
+        let _offline_mode = params.offline_mode;
+        let state = Arc::new(HlsStreamState {
+            master_url: self.master_url.clone(),
+            playlist_manager: Arc::clone(&self.playlist_manager),
+            fetch_manager: Arc::clone(&self.fetch_manager),
+            key_manager: Arc::clone(&self.key_manager),
+            abr_controller: Arc::clone(&self.abr_controller),
+            event_emitter: Arc::clone(&self.event_emitter),
+        });
+
+        Box::pin(async move { Ok(state) })
+    }
+
+    fn open_reader(
+        &mut self,
+        state: &Self::State,
+        params: StreamParams,
+    ) -> Result<EngineStream<Self::Control, Self::Event, Self::Error>, StreamError<Self::Error>>
+    {
+        let master_url = state.master_url.clone();
+        let playlist_manager = Arc::clone(&state.playlist_manager);
+        let fetch_manager = Arc::clone(&state.fetch_manager);
+        let abr_controller = Arc::clone(&state.abr_controller);
+        let event_emitter = Arc::clone(&state.event_emitter);
 
         let _offline_mode = params.offline_mode;
 
@@ -194,7 +237,7 @@ impl Source for HlsStream {
                     .fetch_init_segment(&init_url)
                     .await
                     .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-                yield Ok(Message::Data(bytes));
+                yield Ok(StreamMsg::Data(bytes));
             }
 
             let segment_count = media_playlist.segments.len();
@@ -256,7 +299,7 @@ impl Source for HlsStream {
                             .fetch_init_segment(&init_url)
                             .await
                             .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-                        yield Ok(Message::Data(init));
+                        yield Ok(StreamMsg::Data(init));
                     }
                 }
 
@@ -285,7 +328,7 @@ impl Source for HlsStream {
                             buffer_level_secs += seg.duration.as_secs_f64();
                         }
 
-                        yield Ok(Message::Data(fetch.bytes));
+                        yield Ok(StreamMsg::Data(fetch.bytes));
                     }
                     Err(e) => {
                         yield Err(StreamError::Source(SourceError::Hls(e)));
@@ -296,6 +339,14 @@ impl Source for HlsStream {
 
             event_emitter.emit_end_of_stream();
         }))
+    }
+
+    fn start_writer(
+        &mut self,
+        _state: &Self::State,
+        _params: StreamParams,
+    ) -> Result<WriterTask<Self::Error>, StreamError<Self::Error>> {
+        Ok(tokio::spawn(async { Ok(()) }))
     }
 
     fn seek_bytes(&mut self, _pos: u64) -> Result<(), StreamError<Self::Error>> {

@@ -47,7 +47,6 @@ mod driver;
 
 // Internal modules (exposed for crate tests and internal plumbing).
 pub mod cursor;
-pub mod internal;
 
 // Re-export key types
 pub use abr::{

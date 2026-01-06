@@ -4,17 +4,18 @@ use std::ops::Range;
 
 use bytes::Bytes;
 use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, WaitOutcome};
+use kithara_storage::StreamingResourceExt;
 use tracing::debug;
 use url::Url;
 
-use crate::internal::Feeder;
+use crate::fetch::FetchManager;
 
 /// Fixed-variant, byte-addressable cursor over an HLS VOD playlist.
 ///
 /// This type is intentionally "file-like" (contiguous byte stream), but it does **not** prefetch
 /// nor "stitch" anything in memory. It maps a global byte offset (`pos`) to a specific segment and
 /// offset inside that segment, then uses:
-/// - [`Feeder`] to trigger fetch (best-effort) and wait/read from storage,
+/// - [`FetchManager`] to trigger fetch and wait/read from storage,
 /// - the provided segment list (init + media segments) to define the byte layout.
 ///
 /// Contract:
@@ -25,7 +26,8 @@ use crate::internal::Feeder;
 /// Note: This is async and returns `Bytes`. A sync `Read+Seek` adapter can be built on top
 /// (e.g. for `rodio`), but that is out of scope for this file.
 pub struct SegmentCursor {
-    feeder: Feeder,
+    fetch: FetchManager,
+    variant_index: usize,
     segments: Vec<SegmentDesc>,
     prefix: Vec<u64>,
     total_len: u64,
@@ -52,10 +54,14 @@ impl SegmentCursor {
     /// - then media segments in playback order.
     ///
     /// `len` fields must be correct. They are used for mapping and EOF decisions.
-    pub fn new(feeder: Feeder, segments: Vec<SegmentDesc>, chunk_size: usize) -> Self {
+    pub fn new(
+        fetch: FetchManager,
+        variant_index: usize,
+        segments: Vec<SegmentDesc>,
+        chunk_size: usize,
+    ) -> Self {
         let mut prefix: Vec<u64> = Vec::with_capacity(segments.len() + 1);
         prefix.push(0);
-
         let mut total_len: u64 = 0;
         for s in &segments {
             total_len = total_len.saturating_add(s.len);
@@ -63,7 +69,8 @@ impl SegmentCursor {
         }
 
         Self {
-            feeder,
+            fetch,
+            variant_index,
             segments,
             prefix,
             total_len,
@@ -148,21 +155,21 @@ impl SegmentCursor {
 
             // Intentionally quiet: this mapping is on the hot path during playback.
 
-            let outcome = self
-                .feeder
-                .wait_in_segment(
-                    &seg.url,
-                    &seg.rel_path,
-                    seg.is_init,
-                    seg_off..seg_off.saturating_add(need),
-                )
-                .await?;
+            let res = self
+                .fetch
+                .open_media_streaming_resource(self.variant_index, &seg.url)
+                .await
+                .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+            let outcome = res
+                .wait_range(seg_off..seg_off.saturating_add(need))
+                .await
+                .map_err(|e| KitharaIoError::Source(e.to_string()))?;
 
             match outcome {
-                WaitOutcome::Ready => {
+                kithara_storage::WaitOutcome::Ready => {
                     pos = pos.saturating_add(need);
                 }
-                WaitOutcome::Eof => return Ok(WaitOutcome::Eof),
+                kithara_storage::WaitOutcome::Eof => return Ok(WaitOutcome::Eof),
             }
         }
 
@@ -198,9 +205,15 @@ impl SegmentCursor {
 
         // Intentionally quiet: this mapping is on the hot path during playback.
 
-        self.feeder
-            .read_in_segment(&seg.url, &seg.rel_path, seg.is_init, seg_off, want_usize)
+        let res = self
+            .fetch
+            .open_media_streaming_resource(self.variant_index, &seg.url)
             .await
+            .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+
+        res.read_at(seg_off, want_usize)
+            .await
+            .map_err(|e| KitharaIoError::Source(e.to_string()))
     }
 
     /// Yield the next sequential chunk from the current cursor position.

@@ -246,6 +246,127 @@ impl FetchManager {
         self.fetch_streaming_to_bytes(url, &rel_path).await
     }
 
+    pub async fn open_init_streaming_resource(
+        &self,
+        variant_id: usize,
+        url: &Url,
+    ) -> HlsResult<
+        kithara_assets::AssetResource<
+            kithara_storage::StreamingResource,
+            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+        >,
+    > {
+        let basename = uri_basename_no_query(url.as_str())
+            .ok_or_else(|| HlsError::InvalidUrl("Failed to derive init segment basename".into()))?;
+        let rel_path = format!("{}/init_{}", variant_id, basename);
+
+        debug!(
+            asset_root = %self.asset_root,
+            variant_id,
+            url = %url,
+            rel_path = %rel_path,
+            "kithara-hls open_init_streaming_resource"
+        );
+
+        self.open_streaming_resource_with_writer(url, rel_path)
+            .await
+    }
+
+    pub async fn open_media_streaming_resource(
+        &self,
+        variant_id: usize,
+        url: &Url,
+    ) -> HlsResult<
+        kithara_assets::AssetResource<
+            kithara_storage::StreamingResource,
+            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+        >,
+    > {
+        let basename = uri_basename_no_query(url.as_str())
+            .ok_or_else(|| HlsError::InvalidUrl("Failed to derive segment basename".into()))?;
+        let rel_path = format!("{}/seg_{}", variant_id, basename);
+
+        debug!(
+            asset_root = %self.asset_root,
+            variant_id,
+            url = %url,
+            rel_path = %rel_path,
+            "kithara-hls open_media_streaming_resource"
+        );
+
+        self.open_streaming_resource_with_writer(url, rel_path)
+            .await
+    }
+
+    async fn open_streaming_resource_with_writer(
+        &self,
+        url: &Url,
+        rel_path: String,
+    ) -> HlsResult<
+        kithara_assets::AssetResource<
+            kithara_storage::StreamingResource,
+            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+        >,
+    > {
+        let key = ResourceKey::new(self.asset_root.clone(), rel_path.clone());
+        let cancel = CancellationToken::new();
+        let res = self
+            .assets
+            .open_streaming_resource(&key, cancel.clone())
+            .await?;
+
+        // Spawn best-effort writer (net -> storage). Readers will observe availability via the same handle.
+        let net = self.net.clone();
+        let url = url.clone();
+        let res_for_writer = res.clone();
+
+        tokio::spawn(async move {
+            let mut stream = match net.stream(url.clone(), None).await {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!(url = %url, error = %e, "kithara-hls streaming writer: net open error");
+                    let _ = res_for_writer.fail(format!("net error: {e}")).await;
+                    return;
+                }
+            };
+
+            let mut off: u64 = 0;
+            while let Some(chunk_result) = stream.next().await {
+                match chunk_result {
+                    Ok(chunk_bytes) => {
+                        if let Err(e) = res_for_writer.write_at(off, &chunk_bytes).await {
+                            warn!(
+                                url = %url,
+                                off,
+                                error = %e,
+                                "kithara-hls streaming writer: storage write_at error"
+                            );
+                            let _ = res_for_writer
+                                .fail(format!("storage write_at error: {e}"))
+                                .await;
+                            return;
+                        }
+                        off = off.saturating_add(chunk_bytes.len() as u64);
+                    }
+                    Err(e) => {
+                        warn!(
+                            url = %url,
+                            off,
+                            error = %e,
+                            "kithara-hls streaming writer: net stream error"
+                        );
+                        let _ = res_for_writer.fail(format!("net stream error: {e}")).await;
+                        return;
+                    }
+                }
+            }
+
+            let _ = res_for_writer.commit(Some(off)).await;
+        });
+
+        Ok(res)
+    }
+
     pub fn stream_segment_sequence(
         &self,
         media_playlist: MediaPlaylist,
