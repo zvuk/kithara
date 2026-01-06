@@ -6,11 +6,11 @@ use std::{
     sync::Arc,
 };
 
-use async_tempfile::TempFile;
 use async_trait::async_trait;
 use bytes::Bytes;
-use tokio::{io::AsyncWriteExt, sync::Mutex};
+use tokio::{fs::OpenOptions, io::AsyncWriteExt, sync::Mutex};
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::{AtomicResourceExt, Resource, StorageError, StorageResult};
 
@@ -106,12 +106,16 @@ impl Resource for AtomicResource {
 
         // Use a uniquely-named temp file in the same directory as the final path.
         // This avoids collisions and keeps the final `rename` atomic (same filesystem).
-        let mut tmp = TempFile::new_in(parent).await?;
+        let tmp_path = parent.join(format!(".atomic-{}.tmp", Uuid::new_v4()));
+        let mut tmp = OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp_path)
+            .await?;
 
         tmp.write_all(data).await?;
-        // Optional durability could be added later (sync file + sync dir).
-        // Persisting is done via atomic rename into the final path (same directory).
-        let tmp_path = tmp.file_path().clone();
+        tmp.flush().await?;
+        tmp.sync_data().await?;
         drop(tmp);
 
         tokio::fs::rename(&tmp_path, &self.inner.path).await?;

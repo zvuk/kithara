@@ -24,12 +24,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .with_file(true)
         .init();
 
-    let url = args().nth(1).unwrap_or_else(|| {
-        // fMP4 test stream; replace via CLI arg for other content.
-        "https://stream.silvercomet.top/hls/master.m3u8".to_string()
-    });
-    let url: Url = url.parse()?;
+    let url = args()
+        .nth(1)
+        .unwrap_or_else(|| "https://stream.silvercomet.top/hls/master.m3u8".to_string());
 
+    let url: Url = url.parse()?;
     let temp_dir = TempDir::new()?;
     let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
 

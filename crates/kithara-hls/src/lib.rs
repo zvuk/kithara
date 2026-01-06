@@ -31,19 +31,13 @@ use thiserror::Error;
 use tokio::sync::broadcast;
 use url::Url;
 
-// Public modules
 pub mod abr;
+mod driver;
 pub mod events;
 pub mod fetch;
 pub mod keys;
 pub mod playlist;
-
-// Public (but internal-oriented) modules
 pub mod session;
-
-// Private modules
-mod cache_keys;
-mod driver;
 
 // Internal modules (exposed for crate tests and internal plumbing).
 pub mod cursor;
@@ -52,8 +46,6 @@ pub mod cursor;
 pub use abr::{
     AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
 };
-// Deterministic cache/layout helper (mirrors stream-download-hls layout).
-pub use cache_keys::CacheKeyGenerator;
 pub use driver::{DriverError, SourceError};
 pub use events::{EventEmitter, HlsEvent};
 pub use fetch::{FetchError, FetchManager, SegmentStream};

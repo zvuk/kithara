@@ -17,8 +17,7 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::{
-    CacheKeyGenerator, HlsError, HlsEvent, HlsResult, KeyContext, abr::ThroughputSampleSource,
-    playlist::MediaPlaylist,
+    HlsError, HlsEvent, HlsResult, KeyContext, abr::ThroughputSampleSource, playlist::MediaPlaylist,
 };
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {
@@ -59,7 +58,6 @@ pub struct FetchBytes {
 
 pub struct FetchManager {
     asset_root: String,
-    keys: CacheKeyGenerator,
     assets: AssetStore,
     net: HttpClient,
 }
@@ -67,8 +65,7 @@ pub struct FetchManager {
 impl FetchManager {
     pub fn new(asset_root: String, assets: AssetStore, net: HttpClient) -> Self {
         Self {
-            asset_root: asset_root.clone(),
-            keys: CacheKeyGenerator::with_master_hash(asset_root),
+            asset_root,
             assets,
             net,
         }
@@ -203,27 +200,17 @@ impl FetchManager {
         variant_id: usize,
         url: &Url,
     ) -> HlsResult<FetchBytes> {
-        // Disk layout contract (stream-download-hls compatible):
-        // `<cache_root>/<master_hash>/<variant_id>/init_<basename>`
-        //
-        // `kithara-assets` maps `<cache_root>/<asset_root>/<rel_path>`, so:
-        // - asset_root = "<master_hash>" (self.asset_root)
-        // - rel_path   = "<variant_id>/init_<basename>"
-        let basename = uri_basename_no_query(url.as_str())
-            .ok_or_else(|| HlsError::InvalidUrl("Failed to derive init segment basename".into()))?;
-        let rel_path = self
-            .keys
-            .init_segment_rel_path_from_basename(variant_id, basename);
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
 
         debug!(
             asset_root = %self.asset_root,
             variant_id,
             url = %url,
-            rel_path = %rel_path,
+            rel_path = %key.rel_path,
             "kithara-hls fetch_init_segment_resource"
         );
 
-        self.fetch_streaming_to_bytes(url, &rel_path).await
+        self.fetch_streaming_to_bytes(url, &key.rel_path).await
     }
 
     pub async fn fetch_media_segment_resource(
@@ -231,27 +218,17 @@ impl FetchManager {
         variant_id: usize,
         url: &Url,
     ) -> HlsResult<FetchBytes> {
-        // Disk layout contract (stream-download-hls compatible):
-        // `<cache_root>/<master_hash>/<variant_id>/seg_<basename>`
-        //
-        // `kithara-assets` maps `<cache_root>/<asset_root>/<rel_path>`, so:
-        // - asset_root = "<master_hash>" (self.asset_root)
-        // - rel_path   = "<variant_id>/seg_<basename>"
-        let basename = uri_basename_no_query(url.as_str())
-            .ok_or_else(|| HlsError::InvalidUrl("Failed to derive segment basename".into()))?;
-        let rel_path = self
-            .keys
-            .media_segment_rel_path_from_basename(variant_id, basename);
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
 
         debug!(
             asset_root = %self.asset_root,
             variant_id,
             url = %url,
-            rel_path = %rel_path,
+            rel_path = %key.rel_path,
             "kithara-hls fetch_media_segment_resource"
         );
 
-        self.fetch_streaming_to_bytes(url, &rel_path).await
+        self.fetch_streaming_to_bytes(url, &key.rel_path).await
     }
 
     pub async fn open_init_streaming_resource(
@@ -285,7 +262,6 @@ impl FetchManager {
             url = %url,
             "kithara-hls open_init_streaming_resource"
         );
-
         self.open_streaming_resource_with_writer(url, variant_id, events)
             .await
     }
@@ -337,7 +313,7 @@ impl FetchManager {
             kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
         >,
     > {
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
         let cancel = CancellationToken::new();
         let res = self
             .assets
@@ -392,8 +368,6 @@ impl FetchManager {
                         if let Some(ev) = &events_for_writer {
                             let percent = content_length_for_progress
                                 .map(|len| ((off as f64 / len as f64) * 100.0).min(100.0) as f32);
-                            let _: Result<_, broadcast::error::SendError<HlsEvent>> =
-                                ev.send(HlsEvent::BufferLevel { level_seconds: 0.0 });
                             let _: Result<_, broadcast::error::SendError<HlsEvent>> =
                                 ev.send(HlsEvent::DownloadProgress {
                                     offset: off,

@@ -50,7 +50,7 @@ use tracing::{debug, trace, warn};
 use url::Url;
 
 use crate::{
-    CacheKeyGenerator, HlsError, HlsOptions, HlsResult,
+    HlsError, HlsOptions, HlsResult,
     fetch::FetchManager,
     playlist::{MasterPlaylist, MediaPlaylist, PlaylistManager, VariantId},
 };
@@ -101,8 +101,6 @@ struct State {
 #[derive(Clone, Debug)]
 struct SegmentDesc {
     url: Url,
-    /// Cache rel_path under `<asset_root>/...` (without repeating master_hash).
-    rel_path: String,
     /// Final length of the segment in bytes.
     len: u64,
     /// Whether this is an init segment (EXT-X-MAP).
@@ -209,9 +207,6 @@ impl HlsSessionSource {
                     "kithara-hls media playlist fetched"
                 );
 
-                // 5) Build segment descriptors (absolute URLs + deterministic cache rel_paths).
-                let keys = CacheKeyGenerator::new(&self.master_url);
-
                 // Optional init segment (EXT-X-MAP) for fMP4.
                 let init_uri = media.init_segment.as_ref().map(|i| i.uri.as_str());
 
@@ -263,23 +258,10 @@ impl HlsSessionSource {
                         HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {e}"))
                     })?;
 
-                    // Init segment cache key: `<master_hash>/<variant_index>/init_<basename>`.
-                    let full_rel = keys
-                        .init_segment_rel_path_from_url(variant_index, &init_url)
-                        .ok_or_else(|| {
-                            HlsError::InvalidUrl("Failed to derive init segment basename".into())
-                        })?;
-
-                    let rel_path = full_rel
-                        .strip_prefix(&format!("{}/", self.asset_root))
-                        .unwrap_or(full_rel.as_str())
-                        .to_string();
-
                     debug!(
                         segment_index = 0,
                         segment_url = %init_url,
                         asset_root = %self.asset_root,
-                        rel_path = %rel_path,
                         "kithara-hls session source: init segment indexed"
                     );
 
@@ -299,7 +281,6 @@ impl HlsSessionSource {
 
                     segments.push(SegmentDesc {
                         url: init_url,
-                        rel_path,
                         len,
                         is_init: true,
                     });
@@ -310,26 +291,6 @@ impl HlsSessionSource {
                     let _out_index = base_index + i;
                     let media_index = i;
 
-                    let full_rel = keys
-                        .media_segment_rel_path_from_url(variant_index, &url)
-                        .ok_or_else(|| {
-                            HlsError::InvalidUrl("Failed to derive segment basename".into())
-                        })?;
-
-                    // Strip "<master_hash>/" because assets already scopes under asset_root.
-                    let rel_path = full_rel
-                        .strip_prefix(&format!("{}/", self.asset_root))
-                        .unwrap_or(full_rel.as_str())
-                        .to_string();
-
-                    // Prefetch the first media segment during initialization.
-                    //
-                    // This reduces the chance of a sync consumer (e.g. `rodio::Decoder` via
-                    // `kithara-io::Reader`) stalling on cold cache before the runtime has produced
-                    // enough bytes beyond the init segment to let the demuxer proceed.
-                    //
-                    // IMPORTANT: `out_index` includes the optional init segment (EXT-X-MAP).
-                    // Prefetch should be keyed off the media segment index.
                     if media_index == 0 {
                         let _ = self
                             .fetch_manager
@@ -347,7 +308,6 @@ impl HlsSessionSource {
 
                     segments.push(SegmentDesc {
                         url,
-                        rel_path,
                         len,
                         is_init: false,
                     });
@@ -464,7 +424,7 @@ impl HlsSessionSource {
 #[async_trait]
 impl Source for HlsSessionSource {
     async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome> {
-        debug!(
+        trace!(
             start = range.start,
             end = range.end,
             len = self.len(),
@@ -476,7 +436,7 @@ impl Source for HlsSessionSource {
             .await
             .map_err(|e| KitharaIoError::Source(e.to_string()))?;
 
-        debug!(
+        trace!(
             total_len = state.total_len,
             segments = state.segments.len(),
             variant_index = state.variant_index,
@@ -501,12 +461,11 @@ impl Source for HlsSessionSource {
 
             let seg = &state.segments[seg_idx];
             let seg_remaining = seg.len.saturating_sub(seg_off);
-            debug!(
+            trace!(
                 pos,
                 end,
                 seg_idx,
                 seg_off,
-                seg_rel = %seg.rel_path,
                 seg_len = seg.len,
                 seg_remaining,
                 "kithara-hls wait_range mapped"
@@ -552,7 +511,7 @@ impl Source for HlsSessionSource {
     }
 
     async fn read_at(&self, offset: u64, len: usize) -> KitharaIoResult<Bytes> {
-        debug!(
+        trace!(
             offset,
             len,
             source_len = self.len(),
@@ -587,12 +546,11 @@ impl Source for HlsSessionSource {
         let seg = &state.segments[seg_idx];
         let seg_remaining = seg.len.saturating_sub(seg_off);
 
-        debug!(
+        trace!(
             offset,
             len,
             seg_idx,
             seg_off,
-            seg_rel = %seg.rel_path,
             seg_len = seg.len,
             seg_remaining,
             "kithara-hls read_at mapped"
