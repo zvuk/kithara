@@ -190,7 +190,7 @@ async fn file_offline_miss_is_fatal(_default_opts: FileSourceOptions) {
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-#[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-io Read+Seek; will be rewritten"]
+#[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-stream::io Read+Seek; will be rewritten"]
 async fn seek_roundtrip_correctness(
     #[future] test_server: TestServer,
     default_opts: FileSourceOptions,
@@ -233,7 +233,7 @@ async fn seek_roundtrip_correctness(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-#[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-io Read+Seek; will be rewritten"]
+#[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-stream::io Read+Seek; will be rewritten"]
 async fn seek_variants_not_supported(
     #[future] test_server: TestServer,
     default_opts: FileSourceOptions,
@@ -326,7 +326,7 @@ async fn cancel_behavior_drop_driven(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-#[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-io Read+Seek; will be rewritten"]
+#[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-stream::io Read+Seek; will be rewritten"]
 async fn seek_contract_invalid_position(
     #[future] test_server: TestServer,
     default_opts: FileSourceOptions,

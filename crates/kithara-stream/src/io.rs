@@ -1,39 +1,3 @@
-//! # Kithara I/O
-//!
-//! Sync I/O adapters for Kithara.
-//!
-//! ## Goal
-//!
-//! Provide `std::io::Read + std::io::Seek` required by consumers like `rodio::Decoder`,
-//! **without** depending on `kithara-storage` or `kithara-assets`.
-//!
-//! `kithara-file` / `kithara-hls` are responsible for fetching bytes and ensuring that
-//! requested ranges become available; this crate only adapts a generic async "source"
-//! into a sync reader.
-//!
-//! ## Public contract
-//!
-//! - [`Source`] — async random-access byte source with "wait until readable" semantics.
-//! - [`Reader`] — sync `Read + Seek` adapter over a [`Source`].
-//!
-//! ## EOF semantics (normative)
-//!
-//! `Read::read()` returns `Ok(0)` **only** when the source reports EOF for the requested
-//! position (i.e. `wait_range(..)` returns [`WaitOutcome::Eof`], or `read_at` returns
-//! an empty buffer after EOF is known).
-//!
-//! No "false EOFs": when data is not yet available, the reader blocks.
-//!
-//! ## Cancellation
-//!
-//! This crate does not invent cancellation; the concrete [`Source`] implementation may
-//! unblock by returning an error.
-//!
-//! ## Debugging
-//!
-//! `Reader` emits `tracing` logs at `trace`/`debug` level to help diagnose stalls/deadlocks.
-//! Enable with e.g. `RUST_LOG=kithara_io=trace`.
-
 #![forbid(unsafe_code)]
 
 use std::{
@@ -44,19 +8,11 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
+pub use kithara_storage::WaitOutcome;
 use thiserror::Error;
 use tracing::{debug, warn};
 
-/// Outcome of waiting for a byte range.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum WaitOutcome {
-    /// The requested range is available for reading.
-    Ready,
-    /// The source is at EOF and the requested range starts at/after EOF.
-    Eof,
-}
-
-/// Error type for `kithara-io`.
+/// Error type for `kithara-stream::io`.
 #[derive(Debug, Error)]
 pub enum IoError {
     #[error("source error: {0}")]
@@ -84,8 +40,12 @@ pub type IoResult<T> = Result<T, IoError>;
 /// - When `offset` is at/after EOF (and EOF is known), `read_at` must return `Bytes::new()`.
 #[async_trait]
 pub trait Source: Send + Sync + 'static {
-    async fn wait_range(&self, range: Range<u64>) -> IoResult<WaitOutcome>;
-    async fn read_at(&self, offset: u64, len: usize) -> IoResult<Bytes>;
+    async fn wait_range(&self, range: Range<u64>) -> IoResult<WaitOutcome>
+    where
+        Self: Send + Sync;
+    async fn read_at(&self, offset: u64, len: usize) -> IoResult<Bytes>
+    where
+        Self: Send + Sync;
 
     /// Return known total length if available.
     ///
@@ -137,15 +97,15 @@ where
     /// This must be called from within a Tokio runtime context (e.g. in an async fn before
     /// spawning the blocking consumer).
     pub fn new(source: Arc<S>) -> Self {
-        debug!("kithara-io Reader::new (spawning async worker)");
+        debug!("kithara-stream::io Reader::new (spawning async worker)");
         let len = source.len();
-        debug!(len, "kithara-io Reader created");
+        debug!(len, "kithara-stream::io Reader created");
 
         let (worker_tx, mut worker_rx) = tokio::sync::mpsc::unbounded_channel::<WorkerReq>();
         let src = source.clone();
 
         tokio::spawn(async move {
-            debug!("kithara-io Reader worker started");
+            debug!("kithara-stream::io Reader worker started");
             while let Some(req) = worker_rx.recv().await {
                 match req {
                     WorkerReq::WaitRange { range, reply } => {
@@ -158,7 +118,7 @@ where
                     }
                 }
             }
-            debug!("kithara-io Reader worker stopped (channel closed)");
+            debug!("kithara-stream::io Reader worker stopped (channel closed)");
         });
 
         Self {

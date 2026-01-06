@@ -16,6 +16,7 @@ tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 async-stream = { workspace = true }
+async-trait = { workspace = true }
 tracing = { workspace = true }
 kithara-net = { workspace = true }
 kithara-storage = { workspace = true }

@@ -3,8 +3,8 @@
 use std::ops::Range;
 
 use bytes::Bytes;
-use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, WaitOutcome};
 use kithara_storage::StreamingResourceExt;
+use kithara_stream::io::{IoError as KitharaIoError, IoResult as KitharaIoResult, WaitOutcome};
 use tracing::debug;
 use url::Url;
 

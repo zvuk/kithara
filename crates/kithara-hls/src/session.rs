@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
-//! `kithara-io::Source` adapter for HLS.
+//! `kithara-stream::io::Source` adapter for HLS.
 //!
 //! Goal: expose a single contiguous byte-addressable stream (with `Read+Seek` support via
-//! `kithara-io::Reader`) backed by cached HLS segment files in `kithara-assets`.
+//! `kithara-stream::io::Reader`) backed by cached HLS segment files in `kithara-assets`.
 //!
 //! Important constraints / notes:
 //! - HLS is naturally segmented; random access is implemented by mapping a global byte offset
@@ -30,7 +30,7 @@ fn select_variant_index(master: &MasterPlaylist, options: &HlsOptions) -> usize 
 /// Tracing:
 // - This module logs initialization, playlist/segment URLs, cache keys, wait/read mapping,
 //   and EOF behavior. Use:
-//   `RUST_LOG=kithara_hls=trace,kithara_io=trace,kithara_net=debug,kithara_storage=debug,kithara_assets=debug`
+//   `RUST_LOG=kithara_hls=trace,kithara_stream::io=trace,kithara_net=debug,kithara_storage=debug,kithara_assets=debug`
 //   to debug "no audio" / deadlocks.
 //
 // Deadlock pinpointing (temporary, ultra-early logs):
@@ -43,8 +43,10 @@ use std::ops::Range;
 use async_trait::async_trait;
 use bytes::Bytes;
 use kithara_assets::ResourceKey;
-use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome};
 use kithara_storage::StreamingResourceExt;
+use kithara_stream::io::{
+    IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome,
+};
 use tokio::sync::OnceCell;
 use tracing::{debug, trace, warn};
 use url::Url;
@@ -389,7 +391,7 @@ impl Source for HlsSessionSource {
             return Ok(WaitOutcome::Eof);
         }
 
-        // We only guarantee that *some* progress can be read; `kithara-io::Reader` requests a
+        // We only guarantee that *some* progress can be read; `kithara-stream::io::Reader` requests a
         // contiguous range. Ensure that requested window is fully available across segment boundaries.
         let mut pos = range.start;
         let end = range.end.min(state.total_len);
@@ -490,7 +492,7 @@ impl Source for HlsSessionSource {
             "kithara-hls read_at located segment"
         );
 
-        // Read within one segment only. The caller (`kithara-io::Reader`) will call again if it needs
+        // Read within one segment only. The caller (`kithara-stream::io::Reader`) will call again if it needs
         // more; this keeps reads simple and avoids allocating large buffers on boundary crossings.
         let seg = &state.segments[seg_idx];
         let seg_remaining = seg.len.saturating_sub(seg_off);

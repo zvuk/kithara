@@ -20,6 +20,7 @@
 mod engine;
 mod error;
 mod fetch;
+pub mod io;
 mod msg;
 
 pub use engine::{Engine, EngineCommand, EngineHandle, EngineSource, EngineStream, WriterTask};

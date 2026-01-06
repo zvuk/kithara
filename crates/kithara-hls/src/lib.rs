@@ -10,7 +10,7 @@
 //! Internally, it uses `kithara-stream` to orchestrate fetching and expose an async byte stream.
 //!
 //! - No explicit stop command: stopping is done by dropping the stream.
-//! - Seek is supported for rodio playback via `HlsSession::source()` + `kithara-io::Reader`.
+//! - Seek is supported for rodio playback via `HlsSession::source()` + `kithara-stream::io::Reader`.
 //!
 //! ## Public contracts (explicit)
 //!
@@ -268,7 +268,7 @@ impl HlsSession {
     }
 
     /// Build an I/O `Source` adapter for this session, suitable for wrapping into
-    /// `kithara-io::Reader` (`Read + Seek`) for `rodio::Decoder`.
+    /// `kithara-stream::io::Reader` (`Read + Seek`) for `rodio::Decoder`.
     ///
     /// This mirrors `kithara-file` example structure:
     /// - `session.source().await?`

@@ -5,10 +5,12 @@ use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_assets::{AssetResource, AssetStore, DiskAssetStore, EvictAssets, LeaseGuard};
 use kithara_core::{AssetId, CoreError};
-use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome};
 use kithara_net::{HttpClient, NetError};
 use kithara_storage::{StreamingResource, StreamingResourceExt};
-use kithara_stream::{EngineHandle, StreamMsg, Writer};
+use kithara_stream::{
+    EngineHandle, StreamMsg, Writer,
+    io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome},
+};
 use tokio::sync::{Mutex, broadcast};
 use tracing::trace;
 use url::Url;

@@ -2,7 +2,7 @@ use std::{env::args, error::Error, sync::Arc};
 
 use kithara_assets::{AssetStore, EvictConfig};
 use kithara_file::{FileEvent, FileSource, FileSourceOptions};
-use kithara_io::Reader;
+use kithara_stream::io::Reader;
 use tempfile::TempDir;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .with_env_filter(
             EnvFilter::default()
                 .add_directive("kithara_file=info".parse()?)
-                .add_directive("kithara_io=info".parse()?)
+                .add_directive("kithara_stream::io=info".parse()?)
                 .add_directive("kithara_net=info".parse()?)
                 .add_directive("kithara_storage=info".parse()?)
                 .add_directive("kithara_assets=info".parse()?)
