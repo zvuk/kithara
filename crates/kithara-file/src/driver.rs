@@ -1,14 +1,19 @@
-use std::{pin::Pin, sync::Arc};
+use std::{ops::Range, pin::Pin, sync::Arc};
 
 use bytes::Bytes;
-use futures::{Stream as FuturesStream, StreamExt, pin_mut};
-use kithara_assets::AssetStore;
+use futures::{Stream as FuturesStream, StreamExt, pin_mut, stream::BoxStream};
+use kithara_assets::{
+    AssetResource, AssetStore, AssetsError, DiskAssetStore, EvictAssets, LeaseGuard,
+};
 use kithara_core::AssetId;
 use kithara_net::{HttpClient, NetError};
-use kithara_storage::{Resource, StreamingResourceExt};
+use kithara_storage::{
+    Resource, StorageError, StreamingResource, StreamingResourceExt,
+    WaitOutcome as StorageWaitOutcome,
+};
 use kithara_stream::{
     Engine, EngineSource, Net, ReadSource, Reader, ReaderError, StreamError, StreamMsg,
-    StreamParams, WaitOutcome, WriteSink, Writer,
+    StreamParams, WaitOutcome, WriteSink, Writer, WriterTask,
 };
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -19,13 +24,16 @@ use crate::{
     range_policy::RangePolicy,
 };
 
+// Type aliases for complex types
+type AssetResourceType = AssetResource<StreamingResource, LeaseGuard<EvictAssets<DiskAssetStore>>>;
+
 #[derive(Debug, Error)]
 pub enum DriverError {
     #[error("Source error: {0}")]
     Source(#[from] SourceError),
 
     #[error("Stream error: {0}")]
-    Stream(#[from] kithara_stream::StreamError<SourceError>),
+    Stream(#[from] StreamError<SourceError>),
 
     #[error("Options error: {0}")]
     Options(#[from] OptionsError),
@@ -40,10 +48,10 @@ pub enum SourceError {
     Net(#[from] NetError),
 
     #[error("Assets error: {0}")]
-    Assets(#[from] kithara_assets::AssetsError),
+    Assets(#[from] AssetsError),
 
     #[error("Storage error: {0}")]
-    Storage(#[from] kithara_storage::StorageError),
+    Storage(#[from] StorageError),
 
     #[error("Writer error: {0}")]
     Writer(String),
@@ -63,30 +71,18 @@ pub enum FileCommand {
 
 #[derive(Clone)]
 pub struct FileDriver {
-    #[allow(dead_code)]
     asset_id: AssetId,
-    url: url::Url,
+    url: Url,
     net_client: HttpClient,
-    #[allow(dead_code)]
     options: FileSourceOptions,
     assets: Option<Arc<AssetStore>>,
     range_policy: RangePolicy,
 }
 
 impl FileDriver {
-    pub fn assets(&self) -> Option<Arc<AssetStore>> {
-        self.assets.clone()
-    }
-
-    pub fn url(&self) -> &Url {
-        &self.url
-    }
-}
-
-impl FileDriver {
     pub fn new(
         asset_id: AssetId,
-        url: url::Url,
+        url: Url,
         net_client: HttpClient,
         options: FileSourceOptions,
         assets: Option<Arc<AssetStore>>,
@@ -102,6 +98,14 @@ impl FileDriver {
         }
     }
 
+    pub fn assets(&self) -> Option<Arc<AssetStore>> {
+        self.assets.clone()
+    }
+
+    pub fn url(&self) -> &Url {
+        &self.url
+    }
+
     pub fn asset_id(&self) -> AssetId {
         self.asset_id
     }
@@ -109,8 +113,6 @@ impl FileDriver {
     pub async fn stream(
         &self,
     ) -> Pin<Box<dyn FuturesStream<Item = Result<Bytes, DriverError>> + Send + '_>> {
-        // New architecture: use `kithara-stream::Engine` which outputs `StreamMsg<C, E>`.
-        // For the plain file driver we only emit `Data(Bytes)` and ignore control/events.
         let source = FileStream {
             asset_id: self.asset_id,
             url: self.url.clone(),
@@ -122,14 +124,12 @@ impl FileDriver {
         let params = StreamParams {
             offline_mode: false,
         };
-
         let s = Engine::new(source, params).into_stream();
 
         Box::pin(s.filter_map(|item| async move {
             match item {
                 Ok(StreamMsg::Data(b)) => Some(Ok(b)),
-                Ok(StreamMsg::Control(_)) => None,
-                Ok(StreamMsg::Event(_)) => None,
+                Ok(StreamMsg::Control(_)) | Ok(StreamMsg::Event(_)) => None,
                 Err(e) => Some(Err(DriverError::from(e))),
             }
         }))
@@ -168,7 +168,7 @@ impl FileDriver {
 #[derive(Clone)]
 struct FileStream {
     asset_id: AssetId,
-    url: url::Url,
+    url: Url,
     net_client: HttpClient,
     assets: Option<Arc<AssetStore>>,
     pos: u64,
@@ -177,10 +177,7 @@ struct FileStream {
 #[derive(Debug, Clone)]
 struct FileStreamState {
     cancel: CancellationToken,
-    res: kithara_assets::AssetResource<
-        kithara_storage::StreamingResource,
-        kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-    >,
+    res: AssetResourceType,
 }
 
 /// Net adapter over `HttpClient`.
@@ -190,7 +187,7 @@ struct NetHttp(HttpClient);
 impl Net for NetHttp {
     type Request = Url;
     type Error = SourceError;
-    type ByteStream = futures::stream::BoxStream<'static, Result<Bytes, SourceError>>;
+    type ByteStream = BoxStream<'static, Result<Bytes, SourceError>>;
 
     fn stream(
         &self,
@@ -206,10 +203,7 @@ impl Net for NetHttp {
 
 #[derive(Clone)]
 struct AssetSink {
-    res: kithara_assets::AssetResource<
-        kithara_storage::StreamingResource,
-        kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-    >,
+    res: AssetResourceType,
 }
 
 impl WriteSink for AssetSink {
@@ -220,9 +214,9 @@ impl WriteSink for AssetSink {
         offset: u64,
         data: &'a [u8],
     ) -> futures::future::BoxFuture<'a, Result<(), Self::Error>> {
+        let res = self.res.clone();
         Box::pin(async move {
-            self.res
-                .write_at(offset, data)
+            res.write_at(offset, data)
                 .await
                 .map_err(SourceError::Storage)
         })
@@ -232,25 +226,19 @@ impl WriteSink for AssetSink {
         &'a self,
         final_len: Option<u64>,
     ) -> futures::future::BoxFuture<'a, Result<(), Self::Error>> {
-        Box::pin(async move {
-            self.res
-                .commit(final_len)
-                .await
-                .map_err(SourceError::Storage)
-        })
+        let res = self.res.clone();
+        Box::pin(async move { res.commit(final_len).await.map_err(SourceError::Storage) })
     }
 
     fn fail<'a>(&'a self, msg: String) -> futures::future::BoxFuture<'a, Result<(), Self::Error>> {
-        Box::pin(async move { self.res.fail(msg).await.map_err(SourceError::Storage) })
+        let res = self.res.clone();
+        Box::pin(async move { res.fail(msg).await.map_err(SourceError::Storage) })
     }
 }
 
 #[derive(Clone)]
 struct AssetSource {
-    res: kithara_assets::AssetResource<
-        kithara_storage::StreamingResource,
-        kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-    >,
+    res: AssetResourceType,
 }
 
 impl ReadSource for AssetSource {
@@ -258,17 +246,13 @@ impl ReadSource for AssetSource {
 
     fn wait_range<'a>(
         &'a self,
-        range: std::ops::Range<u64>,
+        range: Range<u64>,
     ) -> futures::future::BoxFuture<'a, Result<WaitOutcome, Self::Error>> {
+        let res = self.res.clone();
         Box::pin(async move {
-            match self
-                .res
-                .wait_range(range)
-                .await
-                .map_err(SourceError::Storage)?
-            {
-                kithara_storage::WaitOutcome::Ready => Ok(WaitOutcome::Ready),
-                kithara_storage::WaitOutcome::Eof => Ok(WaitOutcome::Eof),
+            match res.wait_range(range).await.map_err(SourceError::Storage)? {
+                StorageWaitOutcome::Ready => Ok(WaitOutcome::Ready),
+                StorageWaitOutcome::Eof => Ok(WaitOutcome::Eof),
             }
         })
     }
@@ -278,12 +262,8 @@ impl ReadSource for AssetSource {
         offset: u64,
         len: usize,
     ) -> futures::future::BoxFuture<'a, Result<Bytes, Self::Error>> {
-        Box::pin(async move {
-            self.res
-                .read_at(offset, len)
-                .await
-                .map_err(SourceError::Storage)
-        })
+        let res = self.res.clone();
+        Box::pin(async move { res.read_at(offset, len).await.map_err(SourceError::Storage) })
     }
 }
 
@@ -291,7 +271,6 @@ impl EngineSource for FileStream {
     type Error = SourceError;
     type Control = ();
     type Event = ();
-
     type State = Arc<FileStreamState>;
 
     fn init(
@@ -305,24 +284,22 @@ impl EngineSource for FileStream {
         >,
     > {
         let _offline_mode = params.offline_mode;
-
         let assets = self.assets.clone();
         let url = self.url.clone();
 
         Box::pin(async move {
-            let Some(assets) = assets else {
-                return Err(StreamError::Source(SourceError::Assets(
+            let assets = assets.ok_or_else(|| {
+                StreamError::Source(SourceError::Assets(
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
                         "assets store is required for kithara-file streaming; pass Some(AssetStore) to FileSource::open",
                     )
                     .into(),
-                )));
-            };
+                ))
+            })?;
 
             let key = (&url).into();
             let cancel = CancellationToken::new();
-
             let res = assets
                 .open_streaming_resource(&key, cancel.clone())
                 .await
@@ -339,25 +316,19 @@ impl EngineSource for FileStream {
     ) -> Result<
         Pin<
             Box<
-                dyn FuturesStream<
-                        Item = Result<
-                            StreamMsg<Self::Control, Self::Event>,
-                            StreamError<Self::Error>,
-                        >,
-                    > + Send
+                dyn FuturesStream<Item = Result<StreamMsg<(), ()>, StreamError<SourceError>>>
+                    + Send
                     + 'static,
             >,
         >,
-        StreamError<Self::Error>,
+        StreamError<SourceError>,
     > {
         let start_pos = self.pos;
         let _offline_mode = params.offline_mode;
         let state = state.clone();
 
         Ok(Box::pin(async_stream::stream! {
-            let source = AssetSource {
-                res: state.res.clone(),
-            };
+            let source = AssetSource { res: state.res.clone() };
             let reader_stream = Reader::new(source, start_pos, 64 * 1024).into_stream::<()>();
             pin_mut!(reader_stream);
 
@@ -367,7 +338,6 @@ impl EngineSource for FileStream {
                     Ok(StreamMsg::Control(_)) | Ok(StreamMsg::Event(_)) => {}
                     Err(StreamError::Source(ReaderError::Wait(storage_err)))
                     | Err(StreamError::Source(ReaderError::Read(storage_err))) => {
-                        // Preserve historical contract: surface storage failures as Storage errors.
                         state.cancel.cancel();
                         match storage_err {
                             SourceError::Storage(e) => {
@@ -405,11 +375,10 @@ impl EngineSource for FileStream {
         &mut self,
         state: &Self::State,
         params: StreamParams,
-    ) -> Result<kithara_stream::WriterTask<Self::Error>, StreamError<Self::Error>> {
+    ) -> Result<WriterTask<SourceError>, StreamError<SourceError>> {
+        let _offline_mode = params.offline_mode;
         let net = NetHttp(self.net_client.clone());
         let req = self.url.clone();
-        let _offline_mode = params.offline_mode;
-
         let sink = AssetSink {
             res: state.res.clone(),
         };
@@ -421,7 +390,7 @@ impl EngineSource for FileStream {
         }))
     }
 
-    fn seek_bytes(&mut self, pos: u64) -> Result<(), StreamError<Self::Error>> {
+    fn seek_bytes(&mut self, pos: u64) -> Result<(), StreamError<SourceError>> {
         self.pos = pos;
         Ok(())
     }

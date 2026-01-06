@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -13,7 +15,7 @@ pub struct FileSourceOptions {
     /// Maximum buffer size for streaming (bytes)
     pub max_buffer_size: Option<usize>,
     /// Timeout for network operations
-    pub network_timeout: Option<std::time::Duration>,
+    pub network_timeout: Option<Duration>,
 }
 
 impl FileSourceOptions {
@@ -26,7 +28,7 @@ impl FileSourceOptions {
         self
     }
 
-    pub fn with_network_timeout(mut self, timeout: std::time::Duration) -> Self {
+    pub fn with_network_timeout(mut self, timeout: Duration) -> Self {
         self.network_timeout = Some(timeout);
         self
     }
