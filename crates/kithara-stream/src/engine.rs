@@ -218,95 +218,37 @@ where
                     return;
                 }
 
-                // Observe writer completion (exactly once) but do not block reader progress.
-                if !writer_done {
-                    // Poll writer completion fairly together with reader/commands by awaiting it in select.
-                    tokio::select! {
-                        // Writer completion branch (one-shot): once it resolves, we mark done and never await it again.
-                        w = async {
-                            match writer.as_mut() {
-                                Some(h) => Some(h.await),
-                                None => None,
-                            }
-                        } => {
-                            writer_done = true;
-                            let _ = writer.take(); // ensure we never await/abort again
-
-                            match w {
-                                None => {}
-                                Some(Ok(Ok(()))) => {
-                                    trace!("Engine writer completed successfully");
-                                    // Keep draining reader until EOF.
-                                }
-                                Some(Ok(Err(e))) => {
-                                    // Surface writer error (sources that prefer "storage-failure-only"
-                                    // can materialize it into storage and have reader surface it instead).
-                                    let _ = out_tx.send(Err(StreamError::Source(e))).await;
-                                    return;
-                                }
-                                Some(Err(join_err)) => {
-                                    let _ = out_tx
-                                        .send(Err(StreamError::WriterJoin(join_err.to_string())))
-                                        .await;
-                                    return;
-                                }
-                            }
-                        }
-
-                        // Commands (optional)
-                        cmd = cmd_rx.recv(), if !commands_closed => {
-                            let Some(cmd) = cmd else {
-                                commands_closed = true;
-                                continue;
-                            };
-
-                            match cmd {
-                                EngineCommand::SeekBytes(pos) => {
-                                    debug!(pos, "Engine seek command received");
-                                    if let Err(e) = source.seek_bytes(pos) {
-                                        let _ = out_tx.send(Err(e)).await;
-                                        continue;
-                                    }
-                                    match source.open_reader(&state, params) {
-                                        Ok(s) => reader = s,
-                                        Err(e) => {
-                                            let _ = out_tx.send(Err(e)).await;
-                                            return;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        // Reader items
-                        item = reader.next() => {
-                            match item {
-                                None => return,
-                                Some(item) => {
-                                    if out_tx.send(item).await.is_err() {
-                                        return;
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    continue;
-                }
-
-                // Writer done: only commands + reader remain.
-                if commands_closed {
-                    match reader.next().await {
-                        None => return,
-                        Some(item) => {
-                            let _ = out_tx.send(item).await;
-                        }
-                    }
-                    continue;
-                }
-
                 tokio::select! {
-                    cmd = cmd_rx.recv() => {
+                    // Writer completion branch (one-shot)
+                    w = async {
+                        match writer.as_mut() {
+                            Some(h) => Some(h.await),
+                            None => None,
+                        }
+                    }, if !writer_done => {
+                        writer_done = true;
+                        let _ = writer.take(); // ensure we never await/abort again
+
+                        match w {
+                            None => {}
+                            Some(Ok(Ok(()))) => {
+                                trace!("Engine writer completed successfully");
+                            }
+                            Some(Ok(Err(e))) => {
+                                let _ = out_tx.send(Err(StreamError::Source(e))).await;
+                                return;
+                            }
+                            Some(Err(join_err)) => {
+                                let _ = out_tx
+                                    .send(Err(StreamError::WriterJoin(join_err.to_string())))
+                                    .await;
+                                return;
+                            }
+                        }
+                    }
+
+                    // Commands (optional)
+                    cmd = cmd_rx.recv(), if !commands_closed => {
                         let Some(cmd) = cmd else {
                             commands_closed = true;
                             continue;
@@ -314,7 +256,7 @@ where
 
                         match cmd {
                             EngineCommand::SeekBytes(pos) => {
-                                debug!(pos, "Engine seek command received (writer done)");
+                                debug!(pos, "Engine seek command received");
                                 if let Err(e) = source.seek_bytes(pos) {
                                     let _ = out_tx.send(Err(e)).await;
                                     continue;
@@ -330,11 +272,14 @@ where
                         }
                     }
 
+                    // Reader items
                     item = reader.next() => {
                         match item {
                             None => return,
                             Some(item) => {
-                                let _ = out_tx.send(item).await;
+                                if out_tx.send(item).await.is_err() {
+                                    return;
+                                }
                             }
                         }
                     }
