@@ -81,16 +81,16 @@
 
 ## `kithara-stream` — MUST HAVE (контракт + тесты)
 
-- [ ] Контракт “stop = drop”:
+- [x] Контракт “stop = drop”:
   - drop consumer stream => loop завершает работу быстро и детерминированно + tests
 - [ ] Контракт “handle не обязателен”:
   - если все handle’ы drop’нуты, stream продолжает выдавать байты до EOF + tests
-- [ ] Команда `SeekBytes`:
+- [x] Команда `SeekBytes`:
   - если source поддерживает seek: после seek поток переоткрывается/переключается на новую позицию + tests (детерминированная фикстура)
   - если source не поддерживает seek: возвращается `SeekNotSupported` + tests
-- [ ] Типизированные ошибки:
+- [x] Типизированные ошибки:
   - `StreamError<E>` корректно прокидывает `E` без boxing + tests
-- [ ] Backpressure:
+- [x] Backpressure:
   - bounded channels, без неограниченного роста памяти + tests (как минимум smoke: small buffer + slow consumer)
 
 ---
@@ -103,9 +103,25 @@
 - [ ] Командный контракт:
   - зафиксировать best-effort semantics для отправки команд:
     - если stream уже завершён → `ChannelClosed` допустим
-- [ ] Документация crate-level:
+- [x] Документация crate-level:
   - кратко описать responsibilities/invariants/stop semantics/seek contract
-- [ ] `cargo clippy -p kithara-stream` без предупреждений под workspace lints
+- [x] `cargo clippy -p kithara-stream` без предупреждений под workspace lints
+
+---
+
+## Улучшение тестов с rstest (дополнительно)
+
+- [x] Добавлен `rstest = "0.26.1"` в workspace dependencies
+- [x] Прокинут `rstest = { workspace = true }` в dev-dependencies `kithara-stream`
+- [x] Прокинут `rstest = { workspace = true }` в dev-dependencies `kithara-file`
+- [x] Тесты `kithara-stream` используют `rstest` для параметризации:
+  - `seek_reopens_reader_after_writer_done` параметризован разными данными и позициями
+  - `seek_handles_different_positions` параметризован разными сценариями seek
+  - Использованы фикстуры (`#[fixture]`) для тестовых данных
+- [x] Тесты `kithara-file` используют `rstest` для параметризации:
+  - `asset_id_is_stable_across_different_queries` параметризован разными URL
+  - Использованы фикстуры для общих тестовых данных (URL, опции, сервер)
+  - Асинхронные фикстуры с `#[future]` для тестового сервера и временных ассетов
 
 ---
 

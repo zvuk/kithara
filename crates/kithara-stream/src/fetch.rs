@@ -178,7 +178,10 @@ where
             }
         }
 
-        let _ = self.sink.commit(Some(offset)).await;
+        self.sink
+            .commit(Some(offset))
+            .await
+            .map_err(WriterError::SinkWrite)?;
         Ok(())
     }
 

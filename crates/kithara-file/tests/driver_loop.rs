@@ -1,7 +1,12 @@
+#![forbid(unsafe_code)]
+
+use std::time::Duration;
+
 use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_file::{FileSource, FileSourceOptions};
+use rstest::{fixture, rstest};
 use tokio::net::TcpListener;
 
 // NOTE: These integration tests were written for the legacy `kithara-cache` API
@@ -9,6 +14,16 @@ use tokio::net::TcpListener;
 //
 // The project has moved to the resource-based `kithara-assets` + `kithara-storage` architecture.
 // This file is kept compiling, but tests are ignored and will be rewritten against the new API.
+
+#[fixture]
+fn default_opts() -> FileSourceOptions {
+    FileSourceOptions::default()
+}
+
+#[fixture]
+async fn test_server() -> TestServer {
+    TestServer::new().await
+}
 
 struct TestServer {
     base_url: String,
@@ -64,15 +79,18 @@ impl TestServer {
     }
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(10))]
 #[ignore = "outdated: will be rewritten for kithara-assets + resource-based API"]
-async fn file_stream_downloads_all_bytes_and_closes() {
-    let server = TestServer::new().await;
+async fn file_stream_downloads_all_bytes_and_closes(
+    #[future] test_server: TestServer,
+    default_opts: FileSourceOptions,
+) {
+    let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    let session = FileSource::open(url, FileSourceOptions::default(), None)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_opts, None).await.unwrap();
 
     let mut stream = session.stream().await;
     let mut received_data = Vec::new();
@@ -89,15 +107,18 @@ async fn file_stream_downloads_all_bytes_and_closes() {
     );
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(10))]
 #[ignore = "outdated: will be rewritten for kithara-assets + resource-based API"]
-async fn file_stream_downloads_chunked_content_and_closes() {
-    let server = TestServer::new().await;
+async fn file_stream_downloads_chunked_content_and_closes(
+    #[future] test_server: TestServer,
+    default_opts: FileSourceOptions,
+) {
+    let server = test_server.await;
     let url = server.url("/chunked.mp3");
 
-    let session = FileSource::open(url, FileSourceOptions::default(), None)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_opts, None).await.unwrap();
 
     let mut stream = session.stream().await;
     let mut received_data = Vec::new();
@@ -111,15 +132,18 @@ async fn file_stream_downloads_chunked_content_and_closes() {
     assert_eq!(received_data, b"Chunk1-Chunk2-Chunk3");
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(10))]
 #[ignore = "outdated: will be rewritten for kithara-assets + resource-based API"]
-async fn file_receiver_drop_cancels_driver() {
-    let server = TestServer::new().await;
+async fn file_receiver_drop_cancels_driver(
+    #[future] test_server: TestServer,
+    default_opts: FileSourceOptions,
+) {
+    let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    let session = FileSource::open(url, FileSourceOptions::default(), None)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_opts, None).await.unwrap();
 
     // Create stream and read one chunk
     let mut stream = session.stream().await;
@@ -139,9 +163,11 @@ async fn file_receiver_drop_cancels_driver() {
     // that the test doesn't hang or panic
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(5))]
 #[ignore = "outdated: relied on removed legacy cache API; will be rewritten for kithara-assets + kithara-storage (StreamingResource/AtomicResource)"]
-async fn file_offline_replays_from_cache() {
+async fn file_offline_replays_from_cache(_default_opts: FileSourceOptions) {
     // Legacy test body intentionally removed. The new offline replay contract is:
     // - resources addressed as <cache_root>/<asset_root>/<rel_path>
     // - small objects via AtomicResource (whole-object read/write, atomic replace)
@@ -151,25 +177,28 @@ async fn file_offline_replays_from_cache() {
     unimplemented!("rewrite for kithara-assets + kithara-storage offline semantics");
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(5))]
 #[ignore = "outdated: relied on removed cache API; will be rewritten for kithara-assets + resource-based API"]
-async fn file_offline_miss_is_fatal() {
+async fn file_offline_miss_is_fatal(_default_opts: FileSourceOptions) {
     // Legacy test body intentionally removed. This scenario will be re-specified
     // for kithara-assets + kithara-storage once offline rules are implemented there.
     unimplemented!("rewrite for kithara-assets + kithara-storage (offline rules on resources)");
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(10))]
 #[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-io Read+Seek; will be rewritten"]
-async fn seek_roundtrip_correctness() {
-    let server = TestServer::new().await;
+async fn seek_roundtrip_correctness(
+    #[future] test_server: TestServer,
+    default_opts: FileSourceOptions,
+) {
+    let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    let opts = FileSourceOptions {
-        ..Default::default()
-    };
-
-    let session = FileSource::open(url, opts, None).await.unwrap();
+    let session = FileSource::open(url, default_opts, None).await.unwrap();
 
     // Start streaming first
     let mut stream = session.stream().await;
@@ -201,18 +230,18 @@ async fn seek_roundtrip_correctness() {
     }
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(10))]
 #[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-io Read+Seek; will be rewritten"]
-async fn seek_variants_not_supported() {
-    let server = TestServer::new().await;
+async fn seek_variants_not_supported(
+    #[future] test_server: TestServer,
+    default_opts: FileSourceOptions,
+) {
+    let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    // Test with range seek disabled
-    let opts = FileSourceOptions {
-        ..Default::default()
-    };
-
-    let session = FileSource::open(url, opts, None).await.unwrap();
+    let session = FileSource::open(url, default_opts, None).await.unwrap();
 
     // Start streaming first
     let mut stream = session.stream().await;
@@ -247,15 +276,18 @@ async fn seek_variants_not_supported() {
     }
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(10))]
 #[ignore = "outdated: cancellation contract is being redesigned around CancellationToken + wait_range; will be rewritten"]
-async fn cancel_behavior_drop_driven() {
-    let server = TestServer::new().await;
+async fn cancel_behavior_drop_driven(
+    #[future] test_server: TestServer,
+    default_opts: FileSourceOptions,
+) {
+    let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    let session = FileSource::open(url, FileSourceOptions::default(), None)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_opts, None).await.unwrap();
 
     // Create stream and read some bytes
     let mut stream = session.stream().await;
@@ -291,21 +323,21 @@ async fn cancel_behavior_drop_driven() {
     assert_eq!(first_chunk, new_first_chunk);
 }
 
+#[rstest]
 #[tokio::test]
+#[timeout(Duration::from_secs(10))]
 #[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-io Read+Seek; will be rewritten"]
-async fn seek_contract_invalid_position() {
+async fn seek_contract_invalid_position(
+    #[future] test_server: TestServer,
+    default_opts: FileSourceOptions,
+) {
     // This test documents the expected behavior for invalid seek positions.
     // Currently, seek is not implemented, so we test the error paths.
 
-    let server = TestServer::new().await;
+    let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    // Test with range seek enabled
-    let opts = FileSourceOptions {
-        ..Default::default()
-    };
-
-    let session = FileSource::open(url, opts, None).await.unwrap();
+    let session = FileSource::open(url, default_opts, None).await.unwrap();
 
     // Start streaming first
     let mut stream = session.stream().await;

@@ -38,6 +38,8 @@ pub struct StreamParams {
 
 impl Default for StreamParams {
     fn default() -> Self {
-        Self { offline_mode: false }
+        Self {
+            offline_mode: false,
+        }
     }
 }

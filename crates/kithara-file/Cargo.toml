@@ -28,6 +28,7 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 kithara-io = { workspace = true }
 rodio = { workspace = true }
+rstest = { workspace = true }
 tempfile = { workspace = true }
 tracing-subscriber = { workspace = true }
 hex = { workspace = true }
