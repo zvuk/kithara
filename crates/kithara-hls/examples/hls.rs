@@ -46,14 +46,15 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     });
 
     let handle = tokio::task::spawn_blocking(move || {
-        let (_stream, stream_handle) = rodio::OutputStream::try_default()?;
-        let sink = rodio::Sink::try_new(&stream_handle)?;
-
+        let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
+        let sink = rodio::Sink::connect_new(stream_handle.mixer());
+        sink.set_volume(0.01);
         sink.append(rodio::Decoder::new(reader)?);
         sink.sleep_until_end();
 
         Ok::<_, Box<dyn Error + Send + Sync>>(())
     });
+
     handle.await??;
 
     Ok(())

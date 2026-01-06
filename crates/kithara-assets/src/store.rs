@@ -152,14 +152,8 @@ impl Assets for DiskAssetStore {
 fn sanitize_rel(input: &str) -> Result<String, ()> {
     // Minimal normalization: treat backslashes as separators to avoid Windows traversal surprises.
     let s = input.replace('\\', "/");
-
-    if s.is_empty() || s.starts_with('/') {
+    if s.is_empty() || s.starts_with('/') || s.split('/').any(|seg| seg.is_empty() || seg == "..") {
         return Err(());
     }
-
-    if s.split('/').any(|seg| seg.is_empty() || seg == "..") {
-        return Err(());
-    }
-
     Ok(s)
 }
