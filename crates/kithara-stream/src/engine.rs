@@ -130,7 +130,7 @@ pub trait EngineSource: Send + 'static {
     }
 
     fn supports_seek(&self) -> bool {
-        true
+        false
     }
 }
 
@@ -205,7 +205,6 @@ where
                 }
             };
 
-            let mut writer_done = false;
             let mut commands_closed = false;
 
             loop {
@@ -221,28 +220,21 @@ where
                 tokio::select! {
                     // Writer completion branch (one-shot)
                     w = async {
-                        match writer.as_mut() {
-                            Some(h) => Some(h.await),
-                            None => None,
-                        }
-                    }, if !writer_done => {
-                        writer_done = true;
-                        let _ = writer.take(); // ensure we never await/abort again
-
-                        match w {
-                            None => {}
-                            Some(Ok(Ok(()))) => {
-                                trace!("Engine writer completed successfully");
-                            }
-                            Some(Ok(Err(e))) => {
-                                let _ = out_tx.send(Err(StreamError::Source(e))).await;
-                                return;
-                            }
-                            Some(Err(join_err)) => {
-                                let _ = out_tx
-                                    .send(Err(StreamError::WriterJoin(join_err.to_string())))
-                                    .await;
-                                return;
+                        writer.take()
+                    }, if writer.is_some() => {
+                        if let Some(w) = w {
+                            match w.await {
+                                Ok(Ok(())) => trace!("Engine writer completed successfully"),
+                                Ok(Err(e)) => {
+                                    let _ = out_tx.send(Err(StreamError::Source(e))).await;
+                                    return;
+                                }
+                                Err(join_err) => {
+                                    let _ = out_tx
+                                        .send(Err(StreamError::WriterJoin(join_err.to_string())))
+                                        .await;
+                                    return;
+                                }
                             }
                         }
                     }

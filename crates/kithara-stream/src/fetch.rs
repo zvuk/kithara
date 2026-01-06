@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 
-use std::{marker::PhantomData, sync::Arc};
+use std::sync::Arc;
 
-use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_net::{Headers, Net, NetError};
 use kithara_storage::{Resource, StorageError, StreamingResourceExt, WaitOutcome};
@@ -63,7 +62,6 @@ where
     cancel: CancellationToken,
     on_event: Option<Arc<dyn Fn(StreamMsg<(), Ev>) + Send + Sync>>,
     map_event: Option<Arc<dyn Fn(u64, usize) -> Ev + Send + Sync>>,
-    _phantom: PhantomData<Ev>,
 }
 
 impl<N, R, Ev> Writer<N, R, Ev>
@@ -87,7 +85,6 @@ where
             cancel,
             on_event: None,
             map_event: None,
-            _phantom: PhantomData,
         }
     }
 
@@ -111,7 +108,7 @@ where
             .map_err(WriterError::NetOpen)?;
 
         let mut offset: u64 = 0;
-        let mut chunks: u64 = 0;
+        let mut first_chunk = true;
 
         loop {
             tokio::select! {
@@ -122,7 +119,7 @@ where
                 }
 
                 next = stream.next() => {
-                    let Some(next): Option<Result<Bytes, NetError>> = next else { break; };
+                    let Some(next) = next else { break; };
 
                     let bytes = next.map_err(WriterError::NetStream)?;
                     if bytes.is_empty() {
@@ -137,18 +134,19 @@ where
                         .map_err(WriterError::SinkWrite)?;
 
                     let chunk_len = bytes.len();
+                    let start = offset;
                     offset = offset
                         .checked_add(chunk_len as u64)
                         .ok_or(WriterError::OffsetOverflow)?;
 
                     if let (Some(build), Some(sink)) = (&self.map_event, &self.on_event) {
-                        let ev = build(offset, chunk_len);
+                        let ev = build(start, chunk_len);
                         sink(StreamMsg::Event(ev));
                     }
 
-                    chunks = chunks.saturating_add(1);
-                    if chunks == 1 {
+                    if first_chunk {
                         debug!(offset, "writer first chunk written");
+                        first_chunk = false;
                     }
                 }
             }
