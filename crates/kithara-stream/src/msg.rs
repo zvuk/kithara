@@ -2,16 +2,6 @@
 
 use bytes::Bytes;
 
-/// Legacy data/control multiplexing used by the legacy `Stream` orchestrator.
-///
-/// This is kept for transitional compatibility while higher-level crates migrate to the new
-/// `StreamMsg<C, E>` model.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Message<M> {
-    Data(Bytes),
-    Control(M),
-}
-
 /// Generic "data + control + events" message model.
 ///
 /// - `C`: in-band control messages that the consumer must observe (e.g. HLS variant change,

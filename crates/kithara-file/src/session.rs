@@ -178,6 +178,7 @@ impl Source for SessionSource {
 
 pub struct FileSession {
     driver: Arc<FileDriver>,
+    net_client: kithara_net::HttpClient,
     command_tx: mpsc::UnboundedSender<FileCommand>,
 }
 
@@ -189,13 +190,23 @@ impl FileSession {
         options: FileSourceOptions,
         cache: Option<Arc<AssetStore>>,
     ) -> Self {
-        let driver = Arc::new(FileDriver::new(asset_id, url, net_client, options, cache));
+        let driver = Arc::new(FileDriver::new(
+            asset_id,
+            url,
+            net_client.clone(),
+            options,
+            cache,
+        ));
 
         let (command_tx, _command_rx) = mpsc::unbounded_channel::<FileCommand>();
         // Note: In a full implementation, we'd have a command receiver
         // that the driver loop would monitor. For now, this is the placeholder.
 
-        Self { driver, command_tx }
+        Self {
+            driver,
+            net_client,
+            command_tx,
+        }
     }
 
     pub fn asset_id(&self) -> AssetId {
@@ -238,12 +249,19 @@ impl FileSession {
             .map_err(|e| FileError::Driver(DriverError::Source(SourceError::Assets(e))))?;
 
         let progress = Arc::new(Progress::new());
-        Self::spawn_download_writer(driver, res.clone(), progress.clone(), cancel);
+        Self::spawn_download_writer(
+            &self.net_client,
+            driver,
+            res.clone(),
+            progress.clone(),
+            cancel,
+        );
 
         Ok(SessionSource::new(res, progress))
     }
 
     fn spawn_download_writer(
+        net_client: &kithara_net::HttpClient,
         driver: &FileDriver,
         res: kithara_assets::AssetResource<
             kithara_storage::StreamingResource,
@@ -255,7 +273,7 @@ impl FileSession {
         // Progress is currently used only for read-side bookkeeping.
         let _ = progress;
 
-        let net = NetHttp(driver.net_client().clone());
+        let net = NetHttp(net_client.clone());
         let sink = AssetSink { res: res.clone() };
         let req = driver.url().clone();
         let cancel_cloned = cancel.clone();
@@ -285,6 +303,7 @@ impl Clone for FileSession {
     fn clone(&self) -> Self {
         Self {
             driver: self.driver.clone(),
+            net_client: self.net_client.clone(),
             command_tx: self.command_tx.clone(),
         }
     }

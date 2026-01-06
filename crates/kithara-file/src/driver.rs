@@ -81,11 +81,6 @@ impl FileDriver {
     pub fn url(&self) -> &Url {
         &self.url
     }
-
-    #[allow(dead_code)]
-    pub fn net_client(&self) -> &HttpClient {
-        &self.net_client
-    }
 }
 
 impl FileDriver {

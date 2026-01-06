@@ -19,7 +19,6 @@
 mod engine;
 mod error;
 mod fetch;
-mod legacy;
 mod msg;
 
 pub use engine::{Engine, EngineCommand, EngineHandle, EngineSource, EngineStream, WriterTask};
@@ -27,6 +26,4 @@ pub use error::StreamError;
 pub use fetch::{
     Net, ReadSource, Reader, ReaderError, WaitOutcome, WriteSink, Writer, WriterError,
 };
-// Legacy surface (temporary)
-pub use legacy::{ByteStream, Command, Handle, Source, SourceStream, Stream};
-pub use msg::{Message, StreamMsg, StreamParams};
+pub use msg::{StreamMsg, StreamParams};
