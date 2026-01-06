@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{Router, routing::get};
-use kithara_assets::{AssetStore, EvictConfig, asset_store};
+use kithara_assets::{AssetStore, EvictConfig};
 pub use kithara_hls::HlsError;
 use kithara_net::{HttpClient, NetOptions};
 use tempfile::TempDir;
@@ -116,7 +116,7 @@ pub fn create_test_cache_and_net() -> (TestAssets, HttpClient) {
     let temp_dir = TempDir::new().unwrap();
     let temp_dir = Arc::new(temp_dir);
 
-    let assets = asset_store(temp_dir.path().to_path_buf(), EvictConfig::default());
+    let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
 
     let net_opts = NetOptions::default();
     let net = HttpClient::new(net_opts);

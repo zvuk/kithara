@@ -82,7 +82,6 @@ impl TestServer {
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-#[ignore = "outdated: will be rewritten for kithara-assets + resource-based API"]
 async fn file_stream_downloads_all_bytes_and_closes(
     #[future] test_server: TestServer,
     default_opts: FileSourceOptions,
@@ -110,7 +109,6 @@ async fn file_stream_downloads_all_bytes_and_closes(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-#[ignore = "outdated: will be rewritten for kithara-assets + resource-based API"]
 async fn file_stream_downloads_chunked_content_and_closes(
     #[future] test_server: TestServer,
     default_opts: FileSourceOptions,
@@ -135,7 +133,6 @@ async fn file_stream_downloads_chunked_content_and_closes(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-#[ignore = "outdated: will be rewritten for kithara-assets + resource-based API"]
 async fn file_receiver_drop_cancels_driver(
     #[future] test_server: TestServer,
     default_opts: FileSourceOptions,
@@ -166,7 +163,6 @@ async fn file_receiver_drop_cancels_driver(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(5))]
-#[ignore = "outdated: relied on removed legacy cache API; will be rewritten for kithara-assets + kithara-storage (StreamingResource/AtomicResource)"]
 async fn file_offline_replays_from_cache(_default_opts: FileSourceOptions) {
     // Legacy test body intentionally removed. The new offline replay contract is:
     // - resources addressed as <cache_root>/<asset_root>/<rel_path>
@@ -180,7 +176,6 @@ async fn file_offline_replays_from_cache(_default_opts: FileSourceOptions) {
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(5))]
-#[ignore = "outdated: relied on removed cache API; will be rewritten for kithara-assets + resource-based API"]
 async fn file_offline_miss_is_fatal(_default_opts: FileSourceOptions) {
     // Legacy test body intentionally removed. This scenario will be re-specified
     // for kithara-assets + kithara-storage once offline rules are implemented there.
@@ -190,7 +185,6 @@ async fn file_offline_miss_is_fatal(_default_opts: FileSourceOptions) {
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-#[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-stream::io Read+Seek; will be rewritten"]
 async fn seek_roundtrip_correctness(
     #[future] test_server: TestServer,
     default_opts: FileSourceOptions,
@@ -233,7 +227,6 @@ async fn seek_roundtrip_correctness(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-#[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-stream::io Read+Seek; will be rewritten"]
 async fn seek_variants_not_supported(
     #[future] test_server: TestServer,
     default_opts: FileSourceOptions,
@@ -279,7 +272,6 @@ async fn seek_variants_not_supported(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-#[ignore = "outdated: cancellation contract is being redesigned around CancellationToken + wait_range; will be rewritten"]
 async fn cancel_behavior_drop_driven(
     #[future] test_server: TestServer,
     default_opts: FileSourceOptions,
@@ -326,7 +318,6 @@ async fn cancel_behavior_drop_driven(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-#[ignore = "outdated: seek contract is being redesigned around StreamingResource + kithara-stream::io Read+Seek; will be rewritten"]
 async fn seek_contract_invalid_position(
     #[future] test_server: TestServer,
     default_opts: FileSourceOptions,

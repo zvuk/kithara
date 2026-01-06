@@ -1,6 +1,9 @@
 mod fixture;
 use fixture::*;
-use kithara_hls::{HlsResult, playlist::PlaylistManager};
+use kithara_hls::{
+    HlsResult,
+    playlist::{PlaylistManager, VariantId},
+};
 
 #[tokio::test]
 async fn fetch_master_playlist_from_network() -> HlsResult<()> {
@@ -14,10 +17,9 @@ async fn fetch_master_playlist_from_network() -> HlsResult<()> {
 
     let playlist_manager = PlaylistManager::new(asset_root, assets, net, None);
     let master_url = server.url("/master.m3u8")?;
-
     let master_playlist = playlist_manager.fetch_master_playlist(&master_url).await?;
 
-    assert_eq!(master_playlist.variant_streams.len(), 3);
+    assert_eq!(master_playlist.variants.len(), 3);
     Ok(())
 }
 
@@ -34,9 +36,11 @@ async fn fetch_media_playlist_from_network() -> HlsResult<()> {
     let playlist_manager = PlaylistManager::new(asset_root, assets, net, None);
     let media_url = server.url("/video/480p/playlist.m3u8")?;
 
-    let media_playlist = playlist_manager.fetch_media_playlist(&media_url).await?;
+    let media_playlist = playlist_manager
+        .fetch_media_playlist(&media_url, VariantId(0))
+        .await?;
 
-    let segment_count = media_playlist.segments.into_iter().count();
+    let segment_count = media_playlist.segments.len();
     assert_eq!(segment_count, 3);
     Ok(())
 }
