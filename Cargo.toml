@@ -4,7 +4,7 @@ members = [
     "crates/kithara-core",
     "crates/kithara-net",
     "crates/kithara-file",
-    "crates/kithara-hls",
+    # "crates/kithara-hls",  # temporarily disabled due to legacy API removal
     "crates/kithara-io",
     "crates/kithara-decode",
     "crates/kithara-stream",

@@ -5,6 +5,7 @@
 //! ## Design goals
 //! - Generic over in-band `Control` and `Event` message types (defined by higher-level crates).
 //! - Deadlock-free orchestration of a *writer* (fetch → storage) and a *reader* (storage → consumer).
+//! - Writer supports user-defined event mapping per chunk (generic `Ev`), suitable for `StreamMsg::Event`.
 //! - Provide an async `Stream` API as the primary surface.
 //!
 //! ## Transitional note

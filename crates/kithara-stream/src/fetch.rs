@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
+use std::{marker::PhantomData, sync::Arc};
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
@@ -50,22 +50,27 @@ pub enum ReaderError {
 /// - On success, commits with final length.
 ///
 /// This is intentionally minimal and storage-agnostic.
-pub struct Writer<N, R>
+pub struct Writer<N, R, Ev>
 where
     N: Net + Send + Sync + 'static,
     R: StreamingResourceExt + Resource + Clone + Send + Sync + 'static,
+    Ev: Send + 'static,
 {
     net: N,
     url: Url,
     headers: Option<Headers>,
     res: Arc<R>,
     cancel: CancellationToken,
+    on_event: Option<Arc<dyn Fn(StreamMsg<(), Ev>) + Send + Sync>>,
+    map_event: Option<Arc<dyn Fn(u64, usize) -> Ev + Send + Sync>>,
+    _phantom: PhantomData<Ev>,
 }
 
-impl<N, R> Writer<N, R>
+impl<N, R, Ev> Writer<N, R, Ev>
 where
     N: Net + Send + Sync + 'static,
     R: StreamingResourceExt + Resource + Clone + Send + Sync + 'static,
+    Ev: Send + 'static,
 {
     pub fn new(
         net: N,
@@ -80,7 +85,22 @@ where
             headers,
             res: Arc::new(res),
             cancel,
+            on_event: None,
+            map_event: None,
+            _phantom: PhantomData,
         }
+    }
+
+    /// Attach an event callback invoked after each successful chunk write.
+    /// `map` builds a user-defined event value; `sink` receives `StreamMsg::Event(event)`.
+    pub fn with_event(
+        mut self,
+        map: impl Fn(u64, usize) -> Ev + Send + Sync + 'static,
+        sink: impl Fn(StreamMsg<(), Ev>) + Send + Sync + 'static,
+    ) -> Self {
+        self.map_event = Some(Arc::new(map));
+        self.on_event = Some(Arc::new(sink));
+        self
     }
 
     pub async fn run(&self) -> Result<(), WriterError> {
@@ -116,9 +136,15 @@ where
                         .await
                         .map_err(WriterError::SinkWrite)?;
 
+                    let chunk_len = bytes.len();
                     offset = offset
-                        .checked_add(bytes.len() as u64)
+                        .checked_add(chunk_len as u64)
                         .ok_or(WriterError::OffsetOverflow)?;
+
+                    if let (Some(build), Some(sink)) = (&self.map_event, &self.on_event) {
+                        let ev = build(offset, chunk_len);
+                        sink(StreamMsg::Event(ev));
+                    }
 
                     chunks = chunks.saturating_add(1);
                     if chunks == 1 {

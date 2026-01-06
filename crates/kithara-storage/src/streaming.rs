@@ -413,10 +413,3 @@ impl State {
         cursor >= range.end
     }
 }
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    #[ignore = "tests will be written once atomic resource + manager integration is complete"]
-    fn placeholder() {}
-}
