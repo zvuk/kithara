@@ -6,16 +6,96 @@ use futures::{Stream, StreamExt};
 use kithara_assets::AssetStore;
 use kithara_core::{AssetId, CoreError};
 use kithara_io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome};
-use kithara_storage::StreamingResourceExt;
+use kithara_storage::{Resource, StreamingResourceExt};
+use kithara_stream::{Net, WriteSink, Writer};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
+use url::Url;
 
 use crate::{
     driver::{DriverError, FileCommand, FileDriver, SourceError},
-    internal::{Fetcher, Progress},
     options::FileSourceOptions,
 };
+
+#[derive(Debug)]
+pub struct Progress {
+    read_pos: std::sync::atomic::AtomicU64,
+}
+
+impl Progress {
+    pub fn new() -> Self {
+        Self {
+            read_pos: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    pub fn set_read_pos(&self, v: u64) {
+        use std::sync::atomic::Ordering;
+        self.read_pos.store(v, Ordering::Relaxed);
+    }
+}
+
+#[derive(Clone)]
+struct NetHttp(kithara_net::HttpClient);
+
+impl Net for NetHttp {
+    type Request = Url;
+    type Error = SourceError;
+    type ByteStream = futures::stream::BoxStream<'static, Result<bytes::Bytes, SourceError>>;
+
+    fn stream(
+        &self,
+        req: Self::Request,
+    ) -> futures::future::BoxFuture<'static, Result<Self::ByteStream, Self::Error>> {
+        let client = self.0.clone();
+        Box::pin(async move {
+            let s = client.stream(req, None).await.map_err(SourceError::Net)?;
+            Ok(s.map(|r| r.map_err(SourceError::Net)).boxed())
+        })
+    }
+}
+
+#[derive(Clone)]
+struct AssetSink {
+    res: kithara_assets::AssetResource<
+        kithara_storage::StreamingResource,
+        kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+    >,
+}
+
+impl WriteSink for AssetSink {
+    type Error = SourceError;
+
+    fn write_at<'a>(
+        &'a self,
+        offset: u64,
+        data: &'a [u8],
+    ) -> futures::future::BoxFuture<'a, Result<(), Self::Error>> {
+        Box::pin(async move {
+            self.res
+                .write_at(offset, data)
+                .await
+                .map_err(SourceError::Storage)
+        })
+    }
+
+    fn commit<'a>(
+        &'a self,
+        final_len: Option<u64>,
+    ) -> futures::future::BoxFuture<'a, Result<(), Self::Error>> {
+        Box::pin(async move {
+            self.res
+                .commit(final_len)
+                .await
+                .map_err(SourceError::Storage)
+        })
+    }
+
+    fn fail<'a>(&'a self, msg: String) -> futures::future::BoxFuture<'a, Result<(), Self::Error>> {
+        Box::pin(async move { self.res.fail(msg).await.map_err(SourceError::Storage) })
+    }
+}
 
 pub struct SessionSource {
     res: kithara_assets::AssetResource<
@@ -78,7 +158,7 @@ impl Source for SessionSource {
             .await
             .map_err(|e| KitharaIoError::Source(e.to_string()))?;
 
-        // Update shared progress so the fetcher can log (downloaded, read, backlog).
+        // Update shared progress so the writer side (if any) can log/read backlog.
         self.progress
             .set_read_pos(offset.saturating_add(bytes.len() as u64));
 
@@ -172,10 +252,19 @@ impl FileSession {
         progress: Arc<Progress>,
         cancel: CancellationToken,
     ) {
-        let url = driver.url().clone();
-        let client = driver.net_client().clone();
+        // Progress is currently used only for read-side bookkeeping.
+        let _ = progress;
 
-        let _task = Fetcher::new(client, url).spawn_with_progress(res, progress, cancel);
+        let net = NetHttp(driver.net_client().clone());
+        let sink = AssetSink { res: res.clone() };
+        let req = driver.url().clone();
+        let cancel_cloned = cancel.clone();
+
+        tokio::spawn(async move {
+            let _ = Writer::new(net, req, sink, cancel_cloned)
+                .run_with_fail()
+                .await;
+        });
     }
 
     /// Send a command to the driver

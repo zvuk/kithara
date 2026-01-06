@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 mod driver;
-mod internal;
 mod options;
 mod range_policy;
 mod session;

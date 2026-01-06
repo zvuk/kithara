@@ -1,17 +1,20 @@
 use std::{pin::Pin, sync::Arc};
 
 use bytes::Bytes;
-use futures::{Stream as FuturesStream, StreamExt};
-use kithara_assets::{AssetStore, ResourceKey};
+use futures::{Stream as FuturesStream, StreamExt, pin_mut};
+use kithara_assets::AssetStore;
 use kithara_core::AssetId;
 use kithara_net::{HttpClient, NetError};
-use kithara_stream::{Message, Source, SourceStream, Stream, StreamError, StreamParams};
+use kithara_storage::{Resource, StreamingResourceExt};
+use kithara_stream::{
+    Engine, EngineSource, Net, ReadSource, Reader, ReaderError, StreamError, StreamMsg,
+    StreamParams, WaitOutcome, WriteSink, Writer,
+};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{
-    internal::{Feeder, Fetcher},
     options::{FileSourceOptions, OptionsError},
     range_policy::RangePolicy,
 };
@@ -42,8 +45,11 @@ pub enum SourceError {
     #[error("Storage error: {0}")]
     Storage(#[from] kithara_storage::StorageError),
 
-    #[error("Fetcher error: {0}")]
-    Fetcher(#[from] crate::internal::fetcher::FetchError),
+    #[error("Writer error: {0}")]
+    Writer(String),
+
+    #[error("Reader error: {0}")]
+    Reader(String),
 }
 
 #[derive(Debug)]
@@ -57,6 +63,7 @@ pub enum FileCommand {
 
 #[derive(Clone)]
 pub struct FileDriver {
+    #[allow(dead_code)]
     asset_id: AssetId,
     url: url::Url,
     net_client: HttpClient,
@@ -75,6 +82,7 @@ impl FileDriver {
         &self.url
     }
 
+    #[allow(dead_code)]
     pub fn net_client(&self) -> &HttpClient {
         &self.net_client
     }
@@ -106,8 +114,8 @@ impl FileDriver {
     pub async fn stream(
         &self,
     ) -> Pin<Box<dyn FuturesStream<Item = Result<Bytes, DriverError>> + Send + '_>> {
-        // We intentionally rely on `kithara-stream` for orchestration and command handling.
-        // Stopping is done by dropping the returned stream.
+        // New architecture: use `kithara-stream::Engine` which outputs `StreamMsg<C, E>`.
+        // For the plain file driver we only emit `Data(Bytes)` and ignore control/events.
         let source = FileStream {
             asset_id: self.asset_id,
             url: self.url.clone(),
@@ -115,11 +123,21 @@ impl FileDriver {
             assets: self.assets.clone(),
             pos: 0,
         };
+
         let params = StreamParams {
             offline_mode: false,
         };
-        let stream = Stream::new(source, params).into_byte_stream();
-        Box::pin(stream.map(|r| r.map_err(DriverError::from)))
+
+        let s = Engine::new(source, params).into_stream();
+
+        Box::pin(s.filter_map(|item| async move {
+            match item {
+                Ok(StreamMsg::Data(b)) => Some(Ok(b)),
+                Ok(StreamMsg::Control(_)) => None,
+                Ok(StreamMsg::Event(_)) => None,
+                Err(e) => Some(Err(DriverError::from(e))),
+            }
+        }))
     }
 
     #[allow(dead_code)]
@@ -155,9 +173,8 @@ impl FileDriver {
     }
 }
 
-// Fetcher/Feeder live in `crate::internal`.
-// Keeping these loops in one place avoids duplication between the `kithara-stream` path
-// and the `kithara-io` (rodio) path.
+// Streaming loops are provided by the generic kithara-stream writer/reader adapters.
+// This source only wires them to assets + net.
 
 #[derive(Clone)]
 struct FileStream {
@@ -168,106 +185,250 @@ struct FileStream {
     pos: u64,
 }
 
-impl Source for FileStream {
+#[derive(Debug, Clone)]
+struct FileStreamState {
+    cancel: CancellationToken,
+    res: kithara_assets::AssetResource<
+        kithara_storage::StreamingResource,
+        kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+    >,
+}
+
+/// Net adapter over `HttpClient`.
+#[derive(Clone)]
+struct NetHttp(HttpClient);
+
+impl Net for NetHttp {
+    type Request = Url;
+    type Error = SourceError;
+    type ByteStream = futures::stream::BoxStream<'static, Result<Bytes, SourceError>>;
+
+    fn stream(
+        &self,
+        req: Self::Request,
+    ) -> futures::future::BoxFuture<'static, Result<Self::ByteStream, Self::Error>> {
+        let client = self.0.clone();
+        Box::pin(async move {
+            let s = client.stream(req, None).await.map_err(SourceError::Net)?;
+            Ok(s.map(|r| r.map_err(SourceError::Net)).boxed())
+        })
+    }
+}
+
+#[derive(Clone)]
+struct AssetSink {
+    res: kithara_assets::AssetResource<
+        kithara_storage::StreamingResource,
+        kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+    >,
+}
+
+impl WriteSink for AssetSink {
+    type Error = SourceError;
+
+    fn write_at<'a>(
+        &'a self,
+        offset: u64,
+        data: &'a [u8],
+    ) -> futures::future::BoxFuture<'a, Result<(), Self::Error>> {
+        Box::pin(async move {
+            self.res
+                .write_at(offset, data)
+                .await
+                .map_err(SourceError::Storage)
+        })
+    }
+
+    fn commit<'a>(
+        &'a self,
+        final_len: Option<u64>,
+    ) -> futures::future::BoxFuture<'a, Result<(), Self::Error>> {
+        Box::pin(async move {
+            self.res
+                .commit(final_len)
+                .await
+                .map_err(SourceError::Storage)
+        })
+    }
+
+    fn fail<'a>(&'a self, msg: String) -> futures::future::BoxFuture<'a, Result<(), Self::Error>> {
+        Box::pin(async move { self.res.fail(msg).await.map_err(SourceError::Storage) })
+    }
+}
+
+#[derive(Clone)]
+struct AssetSource {
+    res: kithara_assets::AssetResource<
+        kithara_storage::StreamingResource,
+        kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+    >,
+}
+
+impl ReadSource for AssetSource {
+    type Error = SourceError;
+
+    fn wait_range<'a>(
+        &'a self,
+        range: std::ops::Range<u64>,
+    ) -> futures::future::BoxFuture<'a, Result<WaitOutcome, Self::Error>> {
+        Box::pin(async move {
+            match self
+                .res
+                .wait_range(range)
+                .await
+                .map_err(SourceError::Storage)?
+            {
+                kithara_storage::WaitOutcome::Ready => Ok(WaitOutcome::Ready),
+                kithara_storage::WaitOutcome::Eof => Ok(WaitOutcome::Eof),
+            }
+        })
+    }
+
+    fn read_at<'a>(
+        &'a self,
+        offset: u64,
+        len: usize,
+    ) -> futures::future::BoxFuture<'a, Result<Bytes, Self::Error>> {
+        Box::pin(async move {
+            self.res
+                .read_at(offset, len)
+                .await
+                .map_err(SourceError::Storage)
+        })
+    }
+}
+
+impl EngineSource for FileStream {
     type Error = SourceError;
     type Control = ();
+    type Event = ();
 
-    fn open(
+    type State = Arc<FileStreamState>;
+
+    fn init(
         &mut self,
         params: StreamParams,
-    ) -> Result<SourceStream<Self::Control, Self::Error>, StreamError<Self::Error>> {
-        let client = self.net_client.clone();
-        let url = self.url.clone();
-        let assets = self.assets.clone();
-        let asset_id = self.asset_id;
-        let start_pos = self.pos;
+    ) -> Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Self::State, StreamError<Self::Error>>>
+                + Send
+                + 'static,
+        >,
+    > {
         let _offline_mode = params.offline_mode;
 
-        // Deterministic resource key:
-        // - asset_root stays scoped to the logical asset id
-        // - rel_path is derived from URL (no format-specific naming like "audio.mp3")
-        let asset_root = hex::encode(asset_id.as_bytes());
-        let rel_path = format!("media/{}", hex::encode(url.as_str().as_bytes()));
+        let assets = self.assets.clone();
+        let url = self.url.clone();
 
-        Ok(Box::pin(async_stream::stream! {
+        Box::pin(async move {
             let Some(assets) = assets else {
-                yield Err(StreamError::Source(SourceError::Assets(
+                return Err(StreamError::Source(SourceError::Assets(
                     std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
                         "assets store is required for kithara-file streaming; pass Some(AssetStore) to FileSource::open",
                     )
                     .into(),
                 )));
-                return;
             };
 
+            let key = (&url).into();
             let cancel = CancellationToken::new();
 
-            let key = ResourceKey::new(asset_root, rel_path);
+            let res = assets
+                .open_streaming_resource(&key, cancel.clone())
+                .await
+                .map_err(|e| StreamError::Source(SourceError::Assets(e)))?;
 
-            let res = match assets.open_streaming_resource(&key, cancel.clone()).await {
-                Ok(r) => r,
-                Err(e) => {
-                    yield Err(StreamError::Source(SourceError::Assets(e)));
-                    return;
-                }
+            Ok(Arc::new(FileStreamState { cancel, res }))
+        })
+    }
+
+    fn open_reader(
+        &mut self,
+        state: &Self::State,
+        params: StreamParams,
+    ) -> Result<
+        Pin<
+            Box<
+                dyn FuturesStream<
+                        Item = Result<
+                            StreamMsg<Self::Control, Self::Event>,
+                            StreamError<Self::Error>,
+                        >,
+                    > + Send
+                    + 'static,
+            >,
+        >,
+        StreamError<Self::Error>,
+    > {
+        let start_pos = self.pos;
+        let _offline_mode = params.offline_mode;
+        let state = state.clone();
+
+        Ok(Box::pin(async_stream::stream! {
+            let source = AssetSource {
+                res: state.res.clone(),
             };
+            let reader_stream = Reader::new(source, start_pos, 64 * 1024).into_stream::<()>();
+            pin_mut!(reader_stream);
 
-            let fetch_task = Fetcher::new(client, url).spawn(res.clone(), cancel.clone());
-
-            let feeder = Feeder::new(start_pos, 64 * 1024);
-
-            let mut s = std::pin::pin!(feeder.stream(res));
-            let mut fetch_task = Some(fetch_task);
-
-            loop {
-                tokio::select! {
-                    biased;
-
-                    fetch_res = async {
-                        match fetch_task.as_mut() {
-                            Some(t) => t.await,
-                            None => std::future::pending().await,
-                        }
-                    } => {
-                        // Ensure we never poll/await the JoinHandle again.
-                        fetch_task = None;
-
-                        match fetch_res {
-                            Ok(Ok(())) => {
-                                // Fetch completed successfully; continue draining feeder until EOF.
-                            }
-                            Ok(Err(_e)) => {
-                                // Preserve the historical contract: fetch failures surface to consumers
-                                // as a storage-level failure (the fetcher calls `res.fail(...)`).
-                                //
-                                // We intentionally keep reading from the resource so the consumer
-                                // observes `StorageError::Failed(..)` deterministically.
-                            }
-                            Err(_join_err) => {
-                                // Same as above: treat join errors as storage failures observed via reads.
-                                // (The resource will be marked failed by the fetcher; if it wasn't,
-                                // the subsequent read will still error or EOF appropriately.)
-                            }
-                        }
-                    }
-
-                    item = s.next() => {
-                        match item {
-                            Some(Ok(bytes)) => yield Ok(Message::Data(bytes)),
-                            Some(Err(e)) => {
-                                cancel.cancel();
+            while let Some(item) = reader_stream.next().await {
+                match item {
+                    Ok(StreamMsg::Data(bytes)) => yield Ok(StreamMsg::Data(bytes)),
+                    Ok(StreamMsg::Control(_)) | Ok(StreamMsg::Event(_)) => {}
+                    Err(StreamError::Source(ReaderError::Wait(storage_err)))
+                    | Err(StreamError::Source(ReaderError::Read(storage_err))) => {
+                        // Preserve historical contract: surface storage failures as Storage errors.
+                        state.cancel.cancel();
+                        match storage_err {
+                            SourceError::Storage(e) => {
                                 yield Err(StreamError::Source(SourceError::Storage(e)));
-                                return;
                             }
-                            None => {
-                                cancel.cancel();
-                                return;
+                            other => {
+                                yield Err(StreamError::Source(SourceError::Reader(other.to_string())));
                             }
                         }
+                        return;
+                    }
+                    Err(StreamError::Source(other)) => {
+                        state.cancel.cancel();
+                        yield Err(StreamError::Source(SourceError::Reader(other.to_string())));
+                        return;
+                    }
+                    Err(StreamError::WriterJoin(e)) => {
+                        state.cancel.cancel();
+                        yield Err(StreamError::Source(SourceError::Reader(e)));
+                        return;
+                    }
+                    Err(StreamError::SeekNotSupported) | Err(StreamError::ChannelClosed) => {
+                        state.cancel.cancel();
+                        yield Err(StreamError::Source(SourceError::Reader("reader error".to_string())));
+                        return;
                     }
                 }
             }
+
+            state.cancel.cancel();
+        }))
+    }
+
+    fn start_writer(
+        &mut self,
+        state: &Self::State,
+        params: StreamParams,
+    ) -> Result<kithara_stream::WriterTask<Self::Error>, StreamError<Self::Error>> {
+        let net = NetHttp(self.net_client.clone());
+        let req = self.url.clone();
+        let _offline_mode = params.offline_mode;
+
+        let sink = AssetSink {
+            res: state.res.clone(),
+        };
+        let cancel = state.cancel.clone();
+
+        Ok(tokio::spawn(async move {
+            let _ = Writer::new(net, req, sink, cancel).run_with_fail().await;
+            Ok(())
         }))
     }
 
