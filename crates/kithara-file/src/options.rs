@@ -6,12 +6,12 @@ pub enum OptionsError {
     InvalidSeekPosition(u64),
 }
 
+/// Options for file source streaming.
+/// Range seek is always enabled; only buffer and timeout are configurable here.
 #[derive(Clone, Debug, Default)]
 pub struct FileSourceOptions {
     /// Maximum buffer size for streaming (bytes)
     pub max_buffer_size: Option<usize>,
-    /// Whether to use range requests for seeking (when supported)
-    pub enable_range_seek: bool,
     /// Timeout for network operations
     pub network_timeout: Option<std::time::Duration>,
 }
@@ -23,11 +23,6 @@ impl FileSourceOptions {
 
     pub fn with_max_buffer_size(mut self, size: usize) -> Self {
         self.max_buffer_size = Some(size);
-        self
-    }
-
-    pub fn with_range_seek(mut self, enable: bool) -> Self {
-        self.enable_range_seek = enable;
         self
     }
 

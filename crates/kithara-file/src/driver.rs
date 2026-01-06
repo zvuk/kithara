@@ -96,7 +96,7 @@ impl FileDriver {
         options: FileSourceOptions,
         assets: Option<Arc<AssetStore>>,
     ) -> Self {
-        let range_policy = RangePolicy::new(options.enable_range_seek);
+        let range_policy = RangePolicy::new(true);
         Self {
             asset_id,
             url,
@@ -145,20 +145,14 @@ impl FileDriver {
     ///
     /// # Contract
     ///
-    /// - Requires `enable_range_seek` to be `true` in options.
     /// - Validates position against known content size (if known).
     /// - Updates internal range policy state.
     /// - Actual range request implementation is TODO.
     ///
     /// # Errors
     ///
-    /// - `SeekNotSupported`: when `enable_range_seek` is `false`.
     /// - `InvalidSeekPosition`: when position is beyond known content size.
     pub async fn seek_to(&mut self, position: u64) -> Result<(), DriverError> {
-        if !self.options.enable_range_seek {
-            return Err(DriverError::SeekNotSupported);
-        }
-
         self.range_policy.update_position(position)?;
         // TODO: implement range seeking via kithara-stream command path once the file source
         // supports reopen-from-position.

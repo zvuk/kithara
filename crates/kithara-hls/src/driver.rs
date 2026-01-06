@@ -87,6 +87,7 @@ impl HlsDriver {
             r.map_err(|e| match e {
                 StreamError::SeekNotSupported => crate::HlsError::Unimplemented,
                 StreamError::ChannelClosed => crate::HlsError::Driver("channel closed".to_string()),
+                StreamError::WriterJoin(msg) => crate::HlsError::Driver(msg),
                 StreamError::Source(SourceError::Hls(hls)) => hls,
             })
         }))

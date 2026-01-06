@@ -9,8 +9,6 @@ use crate::options::OptionsError;
 
 #[derive(Debug, Clone)]
 pub struct RangePolicy {
-    /// Whether range requests are enabled
-    range_enabled: bool,
     /// Current position in bytes (for seek tracking)
     current_position: u64,
     /// Total file size if known
@@ -18,9 +16,8 @@ pub struct RangePolicy {
 }
 
 impl RangePolicy {
-    pub fn new(range_enabled: bool) -> Self {
+    pub fn new(_range_enabled: bool) -> Self {
         Self {
-            range_enabled,
             current_position: 0,
             total_size: None,
         }
@@ -45,7 +42,7 @@ impl RangePolicy {
 
     /// Check if range requests are enabled
     pub fn is_range_enabled(&self) -> bool {
-        self.range_enabled
+        true
     }
 
     /// Set the total file size when known
@@ -61,7 +58,7 @@ impl RangePolicy {
     /// Determine if a seek should use range requests
     /// Returns true if range requests are enabled and position is valid
     pub fn should_use_range_for_seek(&self, position: u64) -> bool {
-        self.range_enabled && self.is_valid_position(position)
+        self.is_valid_position(position)
     }
 
     /// Check if a position is valid for seeking
@@ -76,10 +73,6 @@ impl RangePolicy {
 
     /// Generate HTTP Range header value for the given position
     pub fn generate_range_header(&self, start_pos: u64) -> Option<String> {
-        if !self.range_enabled {
-            return None;
-        }
-
         Some(format!("bytes={}-", start_pos))
     }
 

@@ -130,7 +130,7 @@ pub trait EngineSource: Send + 'static {
     }
 
     fn supports_seek(&self) -> bool {
-        false
+        true
     }
 }
 
@@ -301,5 +301,218 @@ where
 
     pub fn into_stream(self) -> EngineStream<S::Control, S::Event, S::Error> {
         Box::pin(self.out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    };
+
+    use bytes::Bytes;
+    use futures::{StreamExt, stream};
+    use tokio::time::{Duration, sleep};
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct TestError;
+
+    impl fmt::Display for TestError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("test error")
+        }
+    }
+
+    impl std::error::Error for TestError {}
+
+    struct SeekState {
+        pos: AtomicU64,
+        data: Vec<u8>,
+    }
+
+    struct SeekSource {
+        data: Vec<u8>,
+        state: Option<Arc<SeekState>>,
+    }
+
+    impl SeekSource {
+        fn new(data: Vec<u8>) -> Self {
+            Self { data, state: None }
+        }
+    }
+
+    impl EngineSource for SeekSource {
+        type Error = TestError;
+        type Control = ();
+        type Event = ();
+        type State = Arc<SeekState>;
+
+        fn init(
+            &mut self,
+            _params: StreamParams,
+        ) -> Pin<
+            Box<
+                dyn std::future::Future<Output = Result<Self::State, StreamError<Self::Error>>>
+                    + Send
+                    + 'static,
+            >,
+        > {
+            let state = Arc::new(SeekState {
+                pos: AtomicU64::new(0),
+                data: self.data.clone(),
+            });
+            self.state = Some(state.clone());
+            Box::pin(async move { Ok(state) })
+        }
+
+        fn open_reader(
+            &mut self,
+            state: &Self::State,
+            _params: StreamParams,
+        ) -> Result<EngineStream<Self::Control, Self::Event, Self::Error>, StreamError<Self::Error>>
+        {
+            let start = state.pos.load(Ordering::SeqCst) as usize;
+            let data = state.data.clone();
+            let items = data
+                .into_iter()
+                .skip(start)
+                .map(|b| Ok(StreamMsg::Data(Bytes::from(vec![b]))));
+            Ok(stream::iter(items).boxed())
+        }
+
+        fn start_writer(
+            &mut self,
+            _state: &Self::State,
+            _params: StreamParams,
+        ) -> Result<WriterTask<Self::Error>, StreamError<Self::Error>> {
+            Ok(tokio::spawn(async { Ok(()) }))
+        }
+
+        fn seek_bytes(&mut self, pos: u64) -> Result<(), StreamError<Self::Error>> {
+            if let Some(state) = &self.state {
+                state.pos.store(pos, Ordering::SeqCst);
+            }
+            Ok(())
+        }
+
+        fn supports_seek(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn seek_reopens_reader_after_writer_done() {
+        let engine = Engine::new(SeekSource::new(b"abcd".to_vec()), StreamParams::default());
+        let handle = engine.handle();
+        let mut stream = engine.into_stream();
+
+        let first = stream.next().await.unwrap().unwrap();
+        assert_eq!(first, StreamMsg::Data(Bytes::from_static(b"a")));
+
+        handle.seek_bytes::<TestError>(2).await.unwrap();
+
+        let second = stream.next().await.unwrap().unwrap();
+        assert_eq!(second, StreamMsg::Data(Bytes::from_static(b"c")));
+
+        let third = stream.next().await.unwrap().unwrap();
+        assert_eq!(third, StreamMsg::Data(Bytes::from_static(b"d")));
+
+        assert!(stream.next().await.is_none());
+    }
+
+    struct AbortGuard {
+        flag: Arc<AtomicBool>,
+    }
+
+    impl Drop for AbortGuard {
+        fn drop(&mut self) {
+            self.flag.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[derive(Clone)]
+    struct DropSource {
+        flag: Arc<AtomicBool>,
+    }
+
+    impl DropSource {
+        fn new(flag: Arc<AtomicBool>) -> Self {
+            Self { flag }
+        }
+    }
+
+    impl EngineSource for DropSource {
+        type Error = TestError;
+        type Control = ();
+        type Event = ();
+        type State = Arc<AtomicBool>;
+
+        fn init(
+            &mut self,
+            _params: StreamParams,
+        ) -> Pin<
+            Box<
+                dyn std::future::Future<Output = Result<Self::State, StreamError<Self::Error>>>
+                    + Send
+                    + 'static,
+            >,
+        > {
+            let flag = self.flag.clone();
+            Box::pin(async move { Ok(flag) })
+        }
+
+        fn open_reader(
+            &mut self,
+            _state: &Self::State,
+            _params: StreamParams,
+        ) -> Result<EngineStream<Self::Control, Self::Event, Self::Error>, StreamError<Self::Error>>
+        {
+            Ok(stream::pending::<
+                Result<StreamMsg<Self::Control, Self::Event>, StreamError<Self::Error>>,
+            >()
+            .boxed())
+        }
+
+        fn start_writer(
+            &mut self,
+            state: &Self::State,
+            _params: StreamParams,
+        ) -> Result<WriterTask<Self::Error>, StreamError<Self::Error>> {
+            let flag = state.clone();
+            Ok(tokio::spawn(async move {
+                let _guard = AbortGuard { flag };
+                loop {
+                    sleep(Duration::from_secs(1)).await;
+                }
+            }))
+        }
+
+        fn seek_bytes(&mut self, _pos: u64) -> Result<(), StreamError<Self::Error>> {
+            Ok(())
+        }
+
+        fn supports_seek(&self) -> bool {
+            true
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_output_aborts_writer() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let engine = Engine::new(DropSource::new(flag.clone()), StreamParams::default());
+        let stream = engine.into_stream();
+        drop(stream);
+
+        for _ in 0..10 {
+            if flag.load(Ordering::SeqCst) {
+                return;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+
+        assert!(flag.load(Ordering::SeqCst));
     }
 }

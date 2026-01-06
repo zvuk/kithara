@@ -166,7 +166,6 @@ async fn seek_roundtrip_correctness() {
     let url = server.url("/test.mp3");
 
     let opts = FileSourceOptions {
-        enable_range_seek: true,
         ..Default::default()
     };
 
@@ -187,8 +186,7 @@ async fn seek_roundtrip_correctness() {
     // Try to seek using session's seek_bytes method
     let seek_result = session.seek_bytes(0);
 
-    // Currently seek returns SeekNotSupported or DriverStopped
-    // This test documents the current behavior
+    // Currently seek may return DriverStopped; this test documents the current behavior
     match seek_result {
         Err(kithara_file::FileError::Driver(kithara_file::DriverError::SeekNotSupported)) => {
             // Expected when seek is not implemented
@@ -211,7 +209,6 @@ async fn seek_variants_not_supported() {
 
     // Test with range seek disabled
     let opts = FileSourceOptions {
-        enable_range_seek: false,
         ..Default::default()
     };
 
@@ -232,7 +229,7 @@ async fn seek_variants_not_supported() {
     // Try to seek using session's seek_bytes method
     let seek_result = session.seek_bytes(10);
 
-    // Should return error since seek is not supported
+    // Should return error (seek behavior is still being redesigned)
     assert!(seek_result.is_err());
 
     // Check error type
@@ -305,7 +302,6 @@ async fn seek_contract_invalid_position() {
 
     // Test with range seek enabled
     let opts = FileSourceOptions {
-        enable_range_seek: true,
         ..Default::default()
     };
 
