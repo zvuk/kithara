@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use kithara_assets::{AssetStore, DiskAssetStore, EvictConfig, PinsIndex};
 use rstest::{fixture, rstest};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 fn pins_path(root: &std::path::Path) -> std::path::PathBuf {
@@ -37,6 +38,7 @@ fn disk_asset_store(temp_dir: tempfile::TempDir) -> DiskAssetStore {
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn pins_index_missing_returns_default(
     cancel_token: CancellationToken,
@@ -60,6 +62,7 @@ async fn pins_index_missing_returns_default(
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn pins_index_invalid_json_returns_default(
     cancel_token: CancellationToken,
@@ -88,6 +91,7 @@ async fn pins_index_invalid_json_returns_default(
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn pins_index_roundtrip_store_then_load(
     cancel_token: CancellationToken,
@@ -119,6 +123,7 @@ async fn pins_index_roundtrip_store_then_load(
 #[case(vec!["asset-a"])]
 #[case(vec!["asset-a", "asset-b", "asset-c"])]
 #[case(vec!["asset-1", "asset-2", "asset-3", "asset-4", "asset-5"])]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn pins_index_store_load_with_different_sets(
     #[case] asset_names: Vec<&str>,
@@ -139,8 +144,13 @@ async fn pins_index_store_load_with_different_sets(
 }
 
 #[rstest]
+#[case(2)]
+#[case(3)]
+#[case(5)]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn pins_index_concurrent_updates_handled_correctly(
+    #[case] asset_count: usize,
     cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
     disk_asset_store: DiskAssetStore,
@@ -151,9 +161,9 @@ async fn pins_index_concurrent_updates_handled_correctly(
 
     // Create first index and store some pins
     let idx1 = PinsIndex::open(&base, cancel.clone()).await.unwrap();
-    let mut pins1 = HashSet::new();
-    pins1.insert("asset-1".to_string());
-    pins1.insert("asset-2".to_string());
+    let pins1: HashSet<String> = (0..asset_count)
+        .map(|i| format!("asset-{}", i + 1))
+        .collect();
     idx1.store(&pins1).await.unwrap();
 
     // Create second index and load (should see first pins)
@@ -164,9 +174,9 @@ async fn pins_index_concurrent_updates_handled_correctly(
     assert_eq!(loaded1, pins1);
 
     // Update with second index
-    let mut pins2 = HashSet::new();
-    pins2.insert("asset-3".to_string());
-    pins2.insert("asset-4".to_string());
+    let pins2: HashSet<String> = (0..asset_count)
+        .map(|i| format!("asset-updated-{}", i + 1))
+        .collect();
     idx2.store(&pins2).await.unwrap();
 
     // First index should see updated pins
@@ -175,6 +185,7 @@ async fn pins_index_concurrent_updates_handled_correctly(
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn pins_index_empty_set_stores_and_loads_correctly(
     cancel_token: CancellationToken,
@@ -213,6 +224,7 @@ async fn pins_index_empty_set_stores_and_loads_correctly(
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn pins_index_persists_across_store_instances(
     cancel_token: CancellationToken,

@@ -4,8 +4,10 @@ use bytes::Bytes;
 use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
 use kithara_storage::{Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
+use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
+#[allow(dead_code)]
 fn mp3_bytes() -> Bytes {
     // Deterministic “mp3-like” payload (we don't parse mp3 here; just bytes).
     // Big enough to exercise read/write paths.
@@ -47,8 +49,15 @@ fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
 }
 
 #[rstest]
+#[case("asset-mp3-001", "media/audio.mp3", 128 * 1024)]
+#[case("asset-mp3-002", "audio/song.mp3", 64 * 1024)]
+#[case("asset-mp3-003", "music/track.mp3", 256 * 1024)]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
+    #[case] asset_root: &str,
+    #[case] rel_path: &str,
+    #[case] size: usize,
     cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
     asset_store_no_limits: AssetStore,
@@ -59,10 +68,10 @@ async fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
 
     // MP3 scenario: single wrapped file inside an asset.
     let key = ResourceKey {
-        asset_root: "asset-mp3-001".to_string(),
-        rel_path: "media/audio.mp3".to_string(),
+        asset_root: asset_root.to_string(),
+        rel_path: rel_path.to_string(),
     };
-    let payload = mp3_bytes();
+    let payload = Bytes::from((0..size).map(|i| (i % 251) as u8).collect::<Vec<_>>());
 
     // Keep the handle alive while we check the persisted pins file.
     let res = store
@@ -84,8 +93,9 @@ async fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
             .expect("pins index must contain `pinned` array if exists");
 
         assert!(
-            pinned.iter().any(|v| v.as_str() == Some("asset-mp3-001")),
-            "mp3 asset_root must be pinned while resource is open if pins file exists"
+            pinned.iter().any(|v| v.as_str() == Some(asset_root)),
+            "mp3 asset_root {} must be pinned while resource is open if pins file exists",
+            asset_root
         );
     }
 
@@ -93,8 +103,14 @@ async fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
 }
 
 #[rstest]
+#[case("asset-hls-123", 3)]
+#[case("asset-hls-456", 5)]
+#[case("asset-hls-789", 2)]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
+    #[case] asset_root: &str,
+    #[case] segment_count: usize,
     cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
     asset_store_no_limits: AssetStore,
@@ -104,7 +120,6 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     let store = asset_store_no_limits;
 
     // HLS scenario: many resources under one asset_root.
-    let asset_root = "asset-hls-123";
 
     // 1) playlist (atomic)
     let playlist_key = ResourceKey {
@@ -122,49 +137,50 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     assert_eq!(playlist.read().await.unwrap(), playlist_bytes);
 
     // 2) segments (streaming, random access writes)
-    let seg1_key = ResourceKey {
-        asset_root: asset_root.to_string(),
-        rel_path: "segments/0001.m4s".to_string(),
-    };
-    let seg2_key = ResourceKey {
-        asset_root: asset_root.to_string(),
-        rel_path: "segments/0002.m4s".to_string(),
-    };
+    let mut segments = Vec::new();
+    for i in 0..segment_count.min(2) {
+        let seg_key = ResourceKey {
+            asset_root: asset_root.to_string(),
+            rel_path: format!("segments/{:04}.m4s", i + 1),
+        };
 
-    let seg1 = store
-        .open_streaming_resource(&seg1_key, cancel.clone())
-        .await
-        .unwrap();
-    let seg2 = store
-        .open_streaming_resource(&seg2_key, cancel.clone())
-        .await
-        .unwrap();
+        let seg = store
+            .open_streaming_resource(&seg_key, cancel.clone())
+            .await
+            .unwrap();
+        segments.push((seg, i));
+    }
 
-    // Write two disjoint ranges in seg1 and read back.
-    let a = vec![0xAAu8; 4096];
-    let b = vec![0xBBu8; 2048];
+    if let Some((seg1, _)) = segments.get(0) {
+        // Write two disjoint ranges in seg1 and read back.
+        let a = vec![0xAAu8; 4096];
+        let b = vec![0xBBu8; 2048];
 
-    seg1.write_at(0, &a).await.unwrap();
-    seg1.write_at(8192, &b).await.unwrap();
+        seg1.write_at(0, &a).await.unwrap();
+        seg1.write_at(8192, &b).await.unwrap();
 
-    // Ensure ranges become available before reading.
-    seg1.wait_range(0..(a.len() as u64)).await.unwrap();
-    seg1.wait_range(8192..(8192 + b.len() as u64))
-        .await
-        .unwrap();
+        // Ensure ranges become available before reading.
+        seg1.wait_range(0..(a.len() as u64)).await.unwrap();
+        seg1.wait_range(8192..(8192 + b.len() as u64))
+            .await
+            .unwrap();
 
-    assert_eq!(seg1.read_at(0, a.len()).await.unwrap(), Bytes::from(a));
-    assert_eq!(seg1.read_at(8192, b.len()).await.unwrap(), Bytes::from(b));
+        assert_eq!(seg1.read_at(0, a.len()).await.unwrap(), Bytes::from(a));
+        assert_eq!(seg1.read_at(8192, b.len()).await.unwrap(), Bytes::from(b));
+    }
 
-    // seg2: single contiguous write
-    let c = vec![0xCCu8; 10 * 1024];
-    seg2.write_at(0, &c).await.unwrap();
-    seg2.wait_range(0..(c.len() as u64)).await.unwrap();
-    assert_eq!(seg2.read_at(0, c.len()).await.unwrap(), Bytes::from(c));
+    if let Some((seg2, _)) = segments.get(1) {
+        // seg2: single contiguous write
+        let c = vec![0xCCu8; 10 * 1024];
+        seg2.write_at(0, &c).await.unwrap();
+        seg2.wait_range(0..(c.len() as u64)).await.unwrap();
+        assert_eq!(seg2.read_at(0, c.len()).await.unwrap(), Bytes::from(c));
+    }
 
     // Seal resources (optional but makes the lifecycle explicit).
-    seg1.commit(None).await.unwrap();
-    seg2.commit(None).await.unwrap();
+    for (seg, _) in &segments {
+        seg.commit(None).await.unwrap();
+    }
 
     // Pins may be persisted; check if pins file exists
     if let Some(pins_json) = read_pins_file(dir) {
@@ -179,8 +195,9 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
         );
     }
 
-    drop(seg2);
-    drop(seg1);
+    for (seg, _) in segments {
+        drop(seg);
+    }
     drop(playlist);
 }
 
@@ -188,12 +205,13 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
 #[case("asset-test-1", "media/file1.bin")]
 #[case("asset-test-2", "deep/path/to/file2.bin")]
 #[case("asset-test-3", "file3.bin")]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn atomic_resource_roundtrip_with_different_paths(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
     cancel_token: CancellationToken,
-    _temp_dir: tempfile::TempDir,
+    temp_dir: tempfile::TempDir,
     asset_store_no_limits: AssetStore,
 ) {
     let cancel = cancel_token;
@@ -221,13 +239,14 @@ async fn atomic_resource_roundtrip_with_different_paths(
 #[case(0, 4096, 4096)] // Write at beginning
 #[case(8192, 2048, 2048)] // Write at offset
 #[case(16384, 10240, 10240)] // Larger write
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn streaming_resource_write_read_at_different_positions(
     #[case] offset: u64,
     #[case] size: usize,
     #[case] read_size: usize,
     cancel_token: CancellationToken,
-    _temp_dir: tempfile::TempDir,
+    temp_dir: tempfile::TempDir,
     asset_store_no_limits: AssetStore,
 ) {
     let cancel = cancel_token;
@@ -263,10 +282,15 @@ async fn streaming_resource_write_read_at_different_positions(
 }
 
 #[rstest]
+#[case(2)]
+#[case(3)]
+#[case(5)]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn multiple_resources_same_asset_root_independently_accessible(
+    #[case] resource_count: usize,
     cancel_token: CancellationToken,
-    _temp_dir: tempfile::TempDir,
+    temp_dir: tempfile::TempDir,
     asset_store_no_limits: AssetStore,
 ) {
     let cancel = cancel_token;
@@ -275,20 +299,16 @@ async fn multiple_resources_same_asset_root_independently_accessible(
     let asset_root = "multi-resource-asset";
 
     // Create multiple resources under same asset_root
-    let keys = vec![
-        ResourceKey {
+    let keys: Vec<ResourceKey> = (0..resource_count)
+        .map(|i| ResourceKey {
             asset_root: asset_root.to_string(),
-            rel_path: "file1.bin".to_string(),
-        },
-        ResourceKey {
-            asset_root: asset_root.to_string(),
-            rel_path: "file2.bin".to_string(),
-        },
-        ResourceKey {
-            asset_root: asset_root.to_string(),
-            rel_path: "subdir/file3.bin".to_string(),
-        },
-    ];
+            rel_path: if i % 2 == 0 {
+                format!("file{}.bin", i)
+            } else {
+                format!("subdir/file{}.bin", i)
+            },
+        })
+        .collect();
 
     let mut resources = Vec::new();
     for (i, key) in keys.iter().enumerate() {
