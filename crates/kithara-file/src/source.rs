@@ -3,8 +3,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use kithara_assets::AssetStore;
-use kithara_core::AssetId;
+use kithara_assets::{AssetId, AssetStore};
 use kithara_net::{HttpClient, NetOptions};
 use url::Url;
 

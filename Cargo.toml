@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/kithara-core",
     "crates/kithara-net",
     "crates/kithara-file",
     "crates/kithara-hls",
@@ -51,7 +50,6 @@ categories = ["multimedia::audio"]
 # - In crate Cargo.toml files use `{ workspace = true }`.
 [workspace.dependencies]
 # workspace crates (path deps)
-kithara-core = { path = "crates/kithara-core", version = "0.1.0" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
@@ -59,24 +57,24 @@ kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
-rstest = "0.26.1"
+rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 
 # async/runtime
-tokio = { version = "1.48.0", features = ["full"] }
-tokio-util = { version = "0.7.17", features = ["full"] }
-tokio-stream = "0.1.17"
+tokio = { version = "1.49.0", features = ["full"] }
+tokio-util = { version = "0.7.18", features = ["full"] }
+tokio-stream = "0.1.18"
 futures = "0.3.31"
 
 # channels/buffers
 kanal = "0.1.1"
 bytes = "1.11.0"
 ringbuf = "0.4.8"
-async-stream = "0.3.5"
+async-stream = "0.3.6"
 
 # http/url
-reqwest = { version = "0.12.24", default-features = false, features = ["rustls-tls", "stream"] }
-url = "2.5.7"
-axum = "0.8.1"
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "stream"] }
+url = "2.5.8"
+axum = "0.8.8"
 
 # hls parsing
 hls_m3u8 = "0.5.1"
@@ -84,12 +82,12 @@ hls_m3u8 = "0.5.1"
 # decoding
 symphonia = { git = "https://github.com/pdeljanov/Symphonia.git", branch="dev-0.6", features = ["all", "opt-simd"] }
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
-rodio = "0.20.1"
+rodio = "0.21.1"
 
 # errors/logging/metrics
-thiserror = "2.0.11"
-tracing = "0.1.40"
-tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+thiserror = "2.0.17"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 
 # serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -100,12 +98,12 @@ hex = "0.4"
 
 # misc
 uuid = { version = "1", features = ["v4"] }
-sha2 = "0.10.8"
+sha2 = "0.10.9"
 tower = "0.5.2"
-tempfile = "3.10.2"
+tempfile = "3.24.0"
 
 # async traits
-async-trait = "0.1.68"
+async-trait = "0.1.89"
 
 # storage (range maps + async random-access disk)
 rangemap = { version = "1.7.1", features = ["serde1"] }

@@ -3,8 +3,9 @@ use std::{ops::Range, pin::Pin, sync::Arc};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use kithara_assets::{AssetResource, AssetStore, DiskAssetStore, EvictAssets, LeaseGuard};
-use kithara_core::{AssetId, CoreError};
+use kithara_assets::{
+    AssetId, AssetResource, AssetStore, AssetsError, DiskAssetStore, EvictAssets, LeaseGuard,
+};
 use kithara_net::{HttpClient, NetError};
 use kithara_storage::{StreamingResource, StreamingResourceExt};
 use kithara_stream::{
@@ -268,8 +269,8 @@ pub enum FileError {
     DriverStopped,
     #[error("Network error: {0}")]
     Net(#[from] NetError),
-    #[error("Core error: {0}")]
-    Core(#[from] CoreError),
+    #[error("Assets error: {0}")]
+    Assets(#[from] AssetsError),
 }
 
 pub type FileResult<T> = Result<T, FileError>;

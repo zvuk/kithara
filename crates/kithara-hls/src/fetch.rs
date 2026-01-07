@@ -89,7 +89,7 @@ impl FetchManager {
 
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
         let fetch = self
-            .fetch_streaming_to_bytes(&segment_url, &key.rel_path)
+            .fetch_streaming_to_bytes(&segment_url, &key.rel_path())
             .await?;
 
         // Decrypt if needed
@@ -137,7 +137,7 @@ impl FetchManager {
 
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
         let mut fetch = self
-            .fetch_streaming_to_bytes(&segment_url, &key.rel_path)
+            .fetch_streaming_to_bytes(&segment_url, &key.rel_path())
             .await?;
         if let Some(key_ctx) = key_context {
             fetch.bytes = self.decrypt_segment(fetch.bytes, key_ctx).await?;
@@ -183,11 +183,11 @@ impl FetchManager {
             asset_root = %self.asset_root,
             variant_id,
             url = %url,
-            rel_path = %key.rel_path,
+            rel_path = %key.rel_path(),
             "kithara-hls fetch_init_segment_resource"
         );
 
-        self.fetch_streaming_to_bytes(url, &key.rel_path).await
+        self.fetch_streaming_to_bytes(url, &key.rel_path()).await
     }
 
     pub async fn fetch_media_segment_resource(
@@ -201,11 +201,11 @@ impl FetchManager {
             asset_root = %self.asset_root,
             variant_id,
             url = %url,
-            rel_path = %key.rel_path,
+            rel_path = %key.rel_path(),
             "kithara-hls fetch_media_segment_resource"
         );
 
-        self.fetch_streaming_to_bytes(url, &key.rel_path).await
+        self.fetch_streaming_to_bytes(url, &key.rel_path()).await
     }
 
     pub async fn open_init_streaming_resource(
@@ -350,7 +350,7 @@ impl FetchManager {
                 // Use captured fields directly instead of creating new FetchManager
                 let key = ResourceKey::from_url_with_asset_root(asset_root.clone(), &segment_url);
                 let fetch_result = Self::fetch_streaming_to_bytes_internal(
-                    &asset_root, &assets, &net, &segment_url, &key.rel_path, Some(segment_index)
+                    &asset_root, &assets, &net, &segment_url, &key.rel_path(), Some(segment_index)
                 ).await;
 
                 match fetch_result {

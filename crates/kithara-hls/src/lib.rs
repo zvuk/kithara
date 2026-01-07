@@ -24,8 +24,7 @@ use std::{pin::Pin, sync::Arc, time::Duration};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use kithara_assets::{AssetStore, ResourceKey};
-use kithara_core::AssetId;
+use kithara_assets::{AssetId, AssetStore, ResourceKey};
 use kithara_net::HttpClient;
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -63,9 +62,6 @@ pub enum HlsError {
 
     #[error("Storage error: {0}")]
     Storage(#[from] kithara_storage::StorageError),
-
-    #[error("Core error: {0}")]
-    Core(#[from] kithara_core::CoreError),
 
     #[error("Playlist parsing error: {0}")]
     PlaylistParse(String),

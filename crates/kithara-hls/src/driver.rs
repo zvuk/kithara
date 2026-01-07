@@ -31,7 +31,7 @@ pub enum SourceError {
 }
 
 pub struct HlsDriver {
-    options: HlsOptions,
+    _options: HlsOptions,
     master_url: Url,
     playlist_manager: Arc<PlaylistManager>,
     fetch_manager: Arc<FetchManager>,
@@ -55,7 +55,7 @@ impl HlsDriver {
         event_emitter: EventEmitter,
     ) -> Self {
         Self {
-            options,
+            _options: options,
             master_url,
             playlist_manager: Arc::new(playlist_manager),
             fetch_manager: Arc::new(fetch_manager),
@@ -116,7 +116,7 @@ struct HlsStreamState {
     master_url: Url,
     playlist_manager: Arc<PlaylistManager>,
     fetch_manager: Arc<FetchManager>,
-    key_manager: Arc<KeyManager>,
+    _key_manager: Arc<KeyManager>,
     abr_controller: Arc<Mutex<AbrController>>,
     event_emitter: Arc<EventEmitter>,
 }
@@ -173,7 +173,7 @@ impl EngineSource for HlsStream {
             master_url: self.master_url.clone(),
             playlist_manager: Arc::clone(&self.playlist_manager),
             fetch_manager: Arc::clone(&self.fetch_manager),
-            key_manager: Arc::clone(&self.key_manager),
+            _key_manager: Arc::clone(&self.key_manager),
             abr_controller: Arc::clone(&self.abr_controller),
             event_emitter: Arc::clone(&self.event_emitter),
         });
@@ -236,7 +236,7 @@ impl EngineSource for HlsStream {
                 current_variant = initial_decision.target_variant_index;
             }
 
-            let mut variant_uri: String = master_playlist
+            let variant_uri: String = master_playlist
                 .variants
                 .get(current_variant)
                 .map(|v| v.uri.clone())
@@ -247,7 +247,7 @@ impl EngineSource for HlsStream {
                     ))))
                 })?;
 
-            let (mut variant_uri, mut media_url, mut media_playlist, mut pending_init_uri) =
+            let (_variant_uri, mut media_url, mut media_playlist, mut pending_init_uri) =
                 HlsStream::load_variant_state(
                     &playlist_manager,
                     &master_url,
@@ -312,7 +312,7 @@ impl EngineSource for HlsStream {
                         )
                         .await?;
 
-                    variant_uri = new_variant_uri;
+                    let _ = new_variant_uri; // unused assignment
                     media_url = new_media_url;
                     media_playlist = new_media_playlist;
                     pending_init_uri = new_pending_init;

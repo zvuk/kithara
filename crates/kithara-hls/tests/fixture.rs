@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{Router, routing::get};
-use kithara_assets::{AssetStore, EvictConfig, asset_store};
+use kithara_assets::{AssetStore, EvictConfig};
 pub use kithara_hls::HlsError;
 use kithara_net::{HttpClient, NetOptions};
 use tempfile::TempDir;
@@ -116,7 +116,7 @@ pub fn create_test_cache_and_net() -> (TestAssets, HttpClient) {
     let temp_dir = TempDir::new().unwrap();
     let temp_dir = Arc::new(temp_dir);
 
-    let assets = asset_store(temp_dir.path().to_path_buf(), EvictConfig::default());
+    let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
 
     let net_opts = NetOptions::default();
     let net = HttpClient::new(net_opts);
@@ -243,11 +243,27 @@ video/360p/playlist.m3u8
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use rstest::{fixture, rstest};
+
     use super::*;
 
+    #[fixture]
+    async fn test_server_fixture() -> TestServer {
+        TestServer::new().await
+    }
+
+    #[fixture]
+    fn test_assets_fixture() -> (TestAssets, HttpClient) {
+        create_test_cache_and_net()
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
     #[tokio::test]
-    async fn test_server_creation() {
-        let server = TestServer::new().await;
+    async fn test_server_creation(#[future] test_server_fixture: TestServer) {
+        let server = test_server_fixture.await;
 
         // Verify server URL is valid
         let url = server.url("/master.m3u8").unwrap();
@@ -255,9 +271,11 @@ mod tests {
         assert!(url.as_str().ends_with("/master.m3u8"));
     }
 
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
     #[tokio::test]
-    async fn test_request_counting() {
-        let server = TestServer::new().await;
+    async fn test_request_counting(#[future] test_server_fixture: TestServer) {
+        let server = test_server_fixture.await;
 
         // Make some requests (would need HTTP client in real test)
         let initial_count = server.get_request_count("/master.m3u8");
@@ -267,29 +285,99 @@ mod tests {
         // For now, just test the counting mechanism works
     }
 
-    #[test]
-    fn test_test_data_consistency() {
+    #[rstest]
+    #[case(0)]
+    #[case(1)]
+    #[case(2)]
+    fn test_test_data_consistency(#[case] variant: usize) {
         // Verify test data is consistent
         let master = test_master_playlist();
         assert!(master.contains("#EXTM3U"));
         assert!(master.contains("v0.m3u8"));
 
-        let media = test_media_playlist(0);
+        let media = test_media_playlist(variant);
         assert!(media.contains("#EXTM3U"));
-        assert!(media.contains("seg/v0_0.bin"));
+        assert!(media.contains(&format!("seg/v{}_0.bin", variant)));
 
-        let segment = test_segment_data(0, 0);
-        assert_eq!(segment.len(), 26); // "V0-SEG-0:" (9) + "TEST_SEGMENT_DATA" (17) = 26 bytes
+        let segment = test_segment_data(variant, 0);
+        let expected_prefix = format!("V{}-SEG-0:", variant);
+        assert!(segment.starts_with(expected_prefix.as_bytes()));
+        assert_eq!(segment.len(), 26); // "V{}-SEG-0:" (9) + "TEST_SEGMENT_DATA" (17) = 26 bytes
 
         let key = test_key_data();
         assert_eq!(key.len(), 20); // "TEST_KEY_DATA_123456" = 20 bytes
     }
 
-    #[test]
+    #[rstest]
+    #[case(0, 0, 26)]
+    #[case(1, 1, 26)]
+    #[case(2, 2, 26)]
+    #[case(0, 2, 26)]
+    fn test_segment_data_variants(
+        #[case] variant: usize,
+        #[case] segment: usize,
+        #[case] expected_len: usize,
+    ) {
+        let data = test_segment_data(variant, segment);
+        let expected_prefix = format!("V{}-SEG-{}:", variant, segment);
+        assert!(data.starts_with(expected_prefix.as_bytes()));
+        assert_eq!(data.len(), expected_len);
+    }
+
+    #[rstest]
+    #[case(0)]
+    #[case(1)]
+    #[case(2)]
+    fn test_init_data_variants(#[case] variant: usize) {
+        let data = test_init_data(variant);
+        let expected_prefix = format!("V{}-INIT:", variant);
+        assert!(data.starts_with(expected_prefix.as_bytes()));
+        assert_eq!(data.len(), 22); // "V{}-INIT:" (9) + "TEST_INIT_DATA" (13) = 22 bytes
+    }
+
+    #[rstest]
+    #[case(0)]
+    #[case(1)]
+    #[case(2)]
+    fn test_media_playlist_variants(#[case] variant: usize) {
+        let playlist = test_media_playlist(variant);
+        assert!(playlist.contains("#EXTM3U"));
+        assert!(playlist.contains("#EXT-X-VERSION:6"));
+        assert!(playlist.contains(&format!("seg/v{}_0.bin", variant)));
+        assert!(playlist.contains(&format!("seg/v{}_1.bin", variant)));
+        assert!(playlist.contains(&format!("seg/v{}_2.bin", variant)));
+        assert!(playlist.contains("#EXT-X-ENDLIST"));
+    }
+
+    #[rstest]
+    #[case(0)]
+    #[case(1)]
+    #[case(2)]
+    fn test_media_playlist_with_init_variants(#[case] variant: usize) {
+        let playlist = test_media_playlist_with_init(variant);
+        assert!(playlist.contains("#EXTM3U"));
+        assert!(playlist.contains("#EXT-X-VERSION:6"));
+        assert!(playlist.contains(&format!("#EXT-X-MAP:URI=\"init/v{}.bin\"", variant)));
+        assert!(playlist.contains(&format!("seg/v{}_0.bin", variant)));
+        assert!(playlist.contains("#EXT-X-ENDLIST"));
+    }
+
+    #[rstest]
     fn test_fixture_creation() {
         let (assets, _net) = create_test_cache_and_net();
 
         // Verify objects are created successfully.
+        // More detailed testing would require actual assets/net operations.
+        let _ = assets;
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    #[tokio::test]
+    async fn test_fixture_creation_async() {
+        let (assets, _net) = create_test_cache_and_net();
+
+        // Verify objects are created successfully in async context.
         // More detailed testing would require actual assets/net operations.
         let _ = assets;
     }

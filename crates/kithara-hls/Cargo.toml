@@ -5,7 +5,6 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-kithara-core = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
@@ -32,4 +31,5 @@ axum = { workspace = true }
 tempfile = { workspace = true }
 rodio = { workspace = true }
 tracing-subscriber = { workspace = true }
+rstest = { workspace = true }
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].

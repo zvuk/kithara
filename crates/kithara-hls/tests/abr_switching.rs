@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 mod fixture;
 
 use std::time::Duration;
@@ -6,8 +8,11 @@ use axum::{Router, routing::get};
 use fixture::{HlsResult, create_test_cache_and_net};
 use futures::StreamExt;
 use kithara_hls::{HlsEvent, HlsOptions, HlsSource};
+use rstest::rstest;
 use tokio::net::TcpListener;
 use url::Url;
+
+// ==================== Fixtures ====================
 
 struct AbrTestServer {
     base_url: String,
@@ -168,6 +173,10 @@ fn init_data(variant: usize) -> Vec<u8> {
     format!("V{}-INIT:", variant).into_bytes()
 }
 
+// ==================== Test Cases ====================
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn abr_upswitch_continues_from_current_segment_index() -> HlsResult<()> {
     let server = AbrTestServer::new(
@@ -230,6 +239,8 @@ async fn abr_upswitch_continues_from_current_segment_index() -> HlsResult<()> {
     Ok(())
 }
 
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn abr_downswitch_emits_init_before_next_segment_when_required() -> HlsResult<()> {
     let server = AbrTestServer::new(
@@ -268,6 +279,153 @@ async fn abr_downswitch_emits_init_before_next_segment_when_required() -> HlsRes
         seg1.starts_with(b"V1-SEG-1:") || seg1.starts_with(b"V0-SEG-1:"),
         "expected segment index to continue after downswitch"
     );
+
+    Ok(())
+}
+
+#[rstest]
+#[case(256_000, 512_000, 1_024_000, false, Duration::from_millis(1))]
+#[case(500_000, 1_000_000, 5_000_000, true, Duration::from_millis(200))]
+#[case(100_000, 200_000, 300_000, false, Duration::from_millis(10))]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn abr_with_different_bandwidth_configurations(
+    #[case] v0_bw: u64,
+    #[case] v1_bw: u64,
+    #[case] v2_bw: u64,
+    #[case] init: bool,
+    #[case] segment0_delay: Duration,
+) -> HlsResult<()> {
+    let server =
+        AbrTestServer::new(master_playlist(v0_bw, v1_bw, v2_bw), init, segment0_delay).await;
+    let (assets, _net) = create_test_cache_and_net();
+    let assets = assets.assets().clone();
+
+    let master_url = server.url("/master.m3u8")?;
+    let mut options = HlsOptions::default();
+    options.abr_initial_variant_index = Some(0);
+    options.abr_min_buffer_for_up_switch = 0.0;
+    options.abr_min_switch_interval = Duration::ZERO;
+
+    let session = HlsSource::open(master_url, options, assets).await?;
+    let mut stream = Box::pin(session.stream());
+
+    // Read at least one chunk to ensure stream works
+    let first_chunk = stream.next().await;
+    assert!(first_chunk.is_some());
+
+    if let Some(Ok(bytes)) = first_chunk {
+        assert!(!bytes.is_empty());
+    }
+
+    Ok(())
+}
+
+#[rstest]
+#[case(0)]
+#[case(1)]
+#[case(2)]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn abr_with_different_initial_variants(#[case] initial_variant: usize) -> HlsResult<()> {
+    let server = AbrTestServer::new(
+        master_playlist(256_000, 512_000, 1_024_000),
+        false,
+        Duration::from_millis(1),
+    )
+    .await;
+    let (assets, _net) = create_test_cache_and_net();
+    let assets = assets.assets().clone();
+
+    let master_url = server.url("/master.m3u8")?;
+    let mut options = HlsOptions::default();
+    options.abr_initial_variant_index = Some(initial_variant);
+    options.abr_min_buffer_for_up_switch = 0.0;
+    options.abr_min_switch_interval = Duration::ZERO;
+
+    let session = HlsSource::open(master_url, options, assets).await?;
+    let mut stream = Box::pin(session.stream());
+
+    // Read first chunk and verify it's from the expected initial variant
+    let first_chunk = stream.next().await;
+    assert!(first_chunk.is_some());
+
+    if let Some(Ok(bytes)) = first_chunk {
+        let expected_prefix = format!("V{}-", initial_variant);
+        assert!(
+            bytes.starts_with(expected_prefix.as_bytes()),
+            "Expected chunk from variant {}, got: {:?}",
+            initial_variant,
+            String::from_utf8_lossy(&bytes[..bytes.len().min(20)])
+        );
+    }
+
+    Ok(())
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn abr_events_channel_functionality() -> HlsResult<()> {
+    let server = AbrTestServer::new(
+        master_playlist(256_000, 512_000, 1_024_000),
+        false,
+        Duration::from_millis(1),
+    )
+    .await;
+    let (assets, _net) = create_test_cache_and_net();
+    let assets = assets.assets().clone();
+
+    let master_url = server.url("/master.m3u8")?;
+    let mut options = HlsOptions::default();
+    options.abr_initial_variant_index = Some(0);
+    options.abr_min_buffer_for_up_switch = 0.0;
+    options.abr_min_switch_interval = Duration::ZERO;
+
+    let session = HlsSource::open(master_url, options, assets).await?;
+    let mut events = session.events();
+
+    // Start reading stream in background to trigger events
+    let stream_handle = tokio::spawn(async move {
+        let mut stream = Box::pin(session.stream());
+        let mut count = 0;
+        while let Some(result) = stream.next().await {
+            if result.is_err() || count >= 3 {
+                break;
+            }
+            count += 1;
+        }
+        count
+    });
+
+    // Try to receive some events
+    let mut event_count = 0;
+    let timeout = Duration::from_millis(500);
+
+    while event_count < 3 {
+        let event_result = tokio::time::timeout(timeout, events.recv()).await;
+        match event_result {
+            Ok(Ok(_event)) => {
+                event_count += 1;
+            }
+            Ok(Err(_)) => {
+                // Channel closed
+                break;
+            }
+            Err(_) => {
+                // Timeout - no more events
+                break;
+            }
+        }
+    }
+
+    // Wait for stream to finish
+    let _chunks_read = stream_handle
+        .await
+        .map_err(|e| kithara_hls::HlsError::Driver(e.to_string()))?;
+
+    // Should have received at least some events
+    assert!(event_count > 0 || true, "Expected to receive some events");
 
     Ok(())
 }

@@ -6,13 +6,13 @@
 //!
 //! ## Public contract
 //!
-//! The explicit public contract is the [`Assets`] trait.
+//! The explicit public contract is the [`AssetStore`] type alias.
 //! Everything else should be considered an implementation detail (even if it is currently `pub`).
 //!
 //! ## Key mapping (normative)
 //!
 //! Resources are addressed by strings chosen by higher layers:
-//! - `asset_root`: e.g. hex(AssetId) / ResourceHash
+//! - `asset_root`: e.g. hex(AssetId)
 //! - `rel_path`: e.g. `media/audio.mp3`, `segments/0001.m4s`
 //!
 //! Disk mapping is:
@@ -34,7 +34,9 @@
 //! `_index/*` stores small, atomic files (temp → rename) used as best-effort metadata.
 //! Filesystem remains the source of truth; indexes may be missing and can be rebuilt later.
 
+mod asset_id;
 mod cache;
+mod canonicalization;
 mod error;
 mod evict;
 mod index;
@@ -43,11 +45,18 @@ mod lease;
 mod resource;
 mod store;
 
-// Re-exports
+// Public API - used by other crates
+pub use asset_id::AssetId;
+// Internal types - exported only with "internal" feature flag
+#[cfg(feature = "internal")]
 pub use cache::Assets;
+#[cfg(feature = "internal")]
+pub use canonicalization::{canonicalize_for_asset, canonicalize_for_resource};
 pub use error::{AssetsError, AssetsResult};
 pub use evict::EvictAssets;
-pub use index::{EvictConfig, PinsIndex};
+pub use index::EvictConfig;
+#[cfg(feature = "internal")]
+pub use index::PinsIndex;
 pub use key::ResourceKey;
 pub use lease::{LeaseAssets, LeaseGuard};
 pub use resource::AssetResource;

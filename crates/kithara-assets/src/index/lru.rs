@@ -220,10 +220,10 @@ impl LruState {
                 simulated_bytes = simulated_bytes.saturating_sub(b);
             }
 
-            let ok_assets = max_assets.map_or(true, |m| simulated_assets <= m);
-            let ok_bytes = max_bytes.map_or(true, |m| simulated_bytes <= m);
-
-            if ok_assets && ok_bytes {
+            // Stop if both constraints are satisfied.
+            let satisfied_assets = max_assets.map_or(true, |max| simulated_assets <= max);
+            let satisfied_bytes = max_bytes.map_or(true, |max| simulated_bytes <= max);
+            if satisfied_assets && satisfied_bytes {
                 break;
             }
         }

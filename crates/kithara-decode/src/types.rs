@@ -1,7 +1,7 @@
 use std::{fmt, time::Duration};
 
 use dasp::sample::Sample as DaspSample;
-use kithara_core::CoreError;
+use kithara_assets::AssetsError;
 use symphonia::core::{
     audio::{conv::ConvertibleSample, sample::Sample as SymphoniaSample},
     errors::Error as SymphoniaError,
@@ -14,8 +14,8 @@ pub enum DecodeError {
     #[error("not implemented")]
     Unimplemented,
 
-    #[error("core error: {0}")]
-    Core(#[from] CoreError),
+    #[error("assets error: {0}")]
+    Assets(#[from] AssetsError),
 
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
