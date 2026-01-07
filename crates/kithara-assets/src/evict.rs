@@ -106,7 +106,7 @@ where
         g.insert(asset_root.to_string())
     }
 
-    async fn on_asset_created(&self, _asset_root: &str, cancel: CancellationToken) {
+    async fn on_asset_created(&self, asset_root: &str, cancel: CancellationToken) {
         // 1) Touch in LRU index (new asset already inserted by caller logic)
         // 2) If constraints exceeded, compute candidates and attempt deletions.
         let lru = match self.open_lru(cancel.clone()).await {
@@ -124,7 +124,17 @@ where
             Err(_) => return,
         };
 
-        let candidates = match lru.eviction_candidates(&self.cfg, &pinned).await {
+        // Get LRU state to check its length
+        let _lru_state = match lru.load().await {
+            Ok(state) => state,
+            Err(_) => return,
+        };
+
+        // Exclude the newly created asset from eviction candidates
+        let mut pinned_with_new = pinned.clone();
+        pinned_with_new.insert(asset_root.to_string());
+
+        let candidates = match lru.eviction_candidates(&self.cfg, &pinned_with_new).await {
             Ok(v) => v,
             Err(_) => return,
         };

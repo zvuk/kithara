@@ -325,9 +325,12 @@ impl StreamingResourceExt for StreamingResource {
                     end: offset,
                 })?;
 
-        // Stash range to only publish it after successful disk write.
+        // Stash range locally to only publish it after successful disk write.
+        let pending_range = offset..end;
+
+        // Check preconditions before disk write
         {
-            let mut state = self.inner.state.lock().await;
+            let state = self.inner.state.lock().await;
 
             if let Some(err) = &state.failed {
                 return Err(StorageError::Failed(err.clone()));
@@ -335,27 +338,22 @@ impl StreamingResourceExt for StreamingResource {
             if state.sealed {
                 return Err(StorageError::Sealed);
             }
-
-            state.pending_add = Some(offset..end);
         }
 
-        // Ensure `pending_add` is cleared if the disk write fails.
+        // Perform disk write
         let write_result: StorageResult<()> = {
             let mut disk = self.inner.disk.lock().await;
             disk.write(offset, data).await.map_err(Into::into)
         };
 
         if let Err(err) = write_result {
-            let mut state = self.inner.state.lock().await;
-            state.pending_add = None;
             return Err(err);
         }
 
+        // Add the range to available after successful disk write
         {
             let mut state = self.inner.state.lock().await;
-            if let Some(r) = state.pending_add.take() {
-                state.available.insert(r);
-            }
+            state.available.insert(pending_range);
         }
 
         self.inner.notify.notify_waiters();
@@ -377,9 +375,7 @@ struct State {
     sealed: bool,
     final_len: Option<u64>,
     failed: Option<String>,
-
     // Temporary range published only after successful write.
-    pending_add: Option<Range<u64>>,
 }
 
 impl State {
@@ -389,7 +385,6 @@ impl State {
             sealed: false,
             final_len: None,
             failed: None,
-            pending_add: None,
         }
     }
 
