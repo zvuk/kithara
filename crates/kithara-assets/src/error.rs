@@ -17,6 +17,15 @@ pub enum AssetsError {
 
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),
+
+    #[error("URL canonicalization failed: {0}")]
+    Canonicalization(String),
+
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(String),
+
+    #[error("URL is missing required component: {0}")]
+    MissingComponent(String),
 }
 
 pub type AssetsResult<T> = Result<T, AssetsError>;

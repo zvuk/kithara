@@ -7,7 +7,7 @@ use url::Url;
 /// Key type for addressing resources.
 ///
 /// The assets store does not construct these strings. Higher layers are responsible for:
-/// - choosing `asset_root` (e.g. hex(AssetId) / ResourceHash),
+/// - choosing `asset_root` (e.g. hex(AssetId)),
 /// - choosing `rel_path` (e.g. `media/audio.mp3`, `segments/0001.m4s`).
 ///
 /// The assets store only:

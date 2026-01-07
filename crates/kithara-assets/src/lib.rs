@@ -12,7 +12,7 @@
 //! ## Key mapping (normative)
 //!
 //! Resources are addressed by strings chosen by higher layers:
-//! - `asset_root`: e.g. hex(AssetId) / ResourceHash
+//! - `asset_root`: e.g. hex(AssetId)
 //! - `rel_path`: e.g. `media/audio.mp3`, `segments/0001.m4s`
 //!
 //! Disk mapping is:
@@ -34,7 +34,9 @@
 //! `_index/*` stores small, atomic files (temp → rename) used as best-effort metadata.
 //! Filesystem remains the source of truth; indexes may be missing and can be rebuilt later.
 
+mod asset_id;
 mod cache;
+mod canonicalization;
 mod error;
 mod evict;
 mod index;
@@ -44,7 +46,9 @@ mod resource;
 mod store;
 
 // Re-exports
+pub use asset_id::AssetId;
 pub use cache::Assets;
+pub use canonicalization::{canonicalize_for_asset, canonicalize_for_resource};
 pub use error::{AssetsError, AssetsResult};
 pub use evict::EvictAssets;
 pub use index::{EvictConfig, PinsIndex};

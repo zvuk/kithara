@@ -3,9 +3,8 @@ use std::{pin::Pin, sync::Arc};
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt, pin_mut};
 use kithara_assets::{
-    AssetResource, AssetStore, AssetsError, DiskAssetStore, EvictAssets, LeaseGuard,
+    AssetId, AssetResource, AssetStore, AssetsError, DiskAssetStore, EvictAssets, LeaseGuard,
 };
-use kithara_core::AssetId;
 use kithara_net::{HttpClient, Net, NetError};
 use kithara_storage::{StorageError, StreamingResource};
 use kithara_stream::{

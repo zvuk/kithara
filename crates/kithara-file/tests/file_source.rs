@@ -5,7 +5,7 @@ use std::time::Duration;
 use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::{AssetStore, EvictConfig};
+use kithara_assets::{AssetId, AssetStore, EvictConfig};
 use kithara_file::{DriverError, FileError, FileSource, FileSourceOptions, SourceError};
 use kithara_storage::StreamingResourceExt;
 use rstest::{fixture, rstest};
@@ -139,7 +139,7 @@ async fn open_session_creates_asset_id_from_url(
         .await
         .unwrap();
 
-    let expected_asset_id = kithara_core::AssetId::from_url(&example_url).unwrap();
+    let expected_asset_id = AssetId::from_url(&example_url).unwrap();
     assert_eq!(session.asset_id(), expected_asset_id);
 }
 
@@ -178,8 +178,7 @@ async fn asset_id_is_stable_across_different_queries(#[case] url_str: &str) {
 
     // All should have same asset ID (without query)
     let expected_id =
-        kithara_core::AssetId::from_url(&url::Url::parse("https://example.com/audio.mp3").unwrap())
-            .unwrap();
+        AssetId::from_url(&url::Url::parse("https://example.com/audio.mp3").unwrap()).unwrap();
     assert_eq!(session.asset_id(), expected_id);
 }
 
@@ -197,7 +196,7 @@ async fn asset_id_differs_for_different_paths_and_domains(#[case] url_str: &str)
     let session = FileSource::open(url.clone(), opts, Some(assets))
         .await
         .unwrap();
-    let expected_id = kithara_core::AssetId::from_url(&url).unwrap();
+    let expected_id = AssetId::from_url(&url).unwrap();
 
     assert_eq!(session.asset_id(), expected_id);
 }
