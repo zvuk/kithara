@@ -24,18 +24,13 @@ use crate::{
 /// - The pin index resource must be excluded from pinning to avoid recursion.
 ///
 /// This type does **not** do any filesystem/path logic; it uses the base `Assets` abstraction.
-pub struct LeaseAssets<A> {
+#[derive(Clone)]
+pub struct LeaseAssets<A>
+where
+    A: Assets,
+{
     base: Arc<A>,
     pins: Arc<Mutex<HashSet<String>>>,
-}
-
-impl<A> Clone for LeaseAssets<A> {
-    fn clone(&self) -> Self {
-        Self {
-            base: Arc::clone(&self.base),
-            pins: Arc::clone(&self.pins),
-        }
-    }
 }
 
 impl<A> LeaseAssets<A>

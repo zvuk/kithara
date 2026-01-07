@@ -33,7 +33,7 @@ use crate::{error::AssetsResult, key::ResourceKey};
 /// Leasing / pinning is implemented strictly as a decorator (`LeaseAssets`) over a base [`Assets`]
 /// implementation. The base `Assets` does not know about pins.
 #[async_trait]
-pub trait Assets: Send + Sync + 'static {
+pub trait Assets: Clone + Send + Sync + 'static {
     /// Open an atomic resource (small object) addressed by `key`.
     ///
     /// This must not perform pinning; pinning is the responsibility of the `LeaseAssets` decorator.

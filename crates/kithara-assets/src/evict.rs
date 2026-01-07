@@ -32,13 +32,14 @@ use crate::{
 /// - Both `max_assets` and `max_bytes` are soft caps enforced best‑effort.
 /// - Byte accounting is best‑effort and must be explicitly updated via
 ///   `touch_asset_bytes`; the evictor does NOT walk the filesystem.
+#[derive(Clone)]
 pub struct EvictAssets<A>
 where
     A: Assets,
 {
     base: Arc<A>,
     cfg: EvictConfig,
-    seen: Mutex<HashSet<String>>,
+    seen: Arc<Mutex<HashSet<String>>>,
 }
 
 impl<A> EvictAssets<A>
@@ -49,17 +50,12 @@ where
         Self {
             base,
             cfg,
-            seen: Mutex::new(HashSet::new()),
+            seen: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
     pub(crate) fn base(&self) -> &A {
         &self.base
-    }
-
-    #[allow(dead_code)]
-    fn root_dir(&self) -> &Path {
-        self.base.root_dir()
     }
 
     /// Explicitly record the byte size of an asset in the LRU index.
