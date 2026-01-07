@@ -4,7 +4,7 @@ use std::{error::Error, sync::Arc, time::Duration};
 
 use kithara_assets::{AssetStore, EvictConfig};
 use kithara_hls::{HlsOptions, HlsSource};
-use kithara_stream::io::Reader;
+use kithara_stream::SyncReader;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tracing::{info, warn};
@@ -95,7 +95,7 @@ async fn test_basic_hls_playback(
     });
 
     // Create reader for the stream
-    let reader = Reader::new(Arc::new(source));
+    let reader = SyncReader::new(Arc::new(source));
 
     // 3. Test: Create rodio decoder (this validates the stream format)
     info!("Creating rodio decoder...");

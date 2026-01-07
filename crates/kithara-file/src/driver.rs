@@ -306,6 +306,11 @@ impl EngineSource for FileStream {
                                 yield Err(StreamError::Source(SourceError::Reader("reader error".to_string())));
                                 return;
                             }
+                            Err(StreamError::InvalidSeek) | Err(StreamError::UnknownLength) => {
+                                state.cancel.cancel();
+                                yield Err(StreamError::Source(SourceError::Reader("invalid seek or unknown length".to_string())));
+                                return;
+                            }
                         }
                     }
                 }

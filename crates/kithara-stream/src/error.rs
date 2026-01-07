@@ -19,6 +19,12 @@ where
     #[error("seek not supported")]
     SeekNotSupported,
 
+    #[error("invalid seek position")]
+    InvalidSeek,
+
+    #[error("seek requires known length, but source length is unknown")]
+    UnknownLength,
+
     #[error("source error: {0}")]
     Source(#[source] E),
 
@@ -28,3 +34,6 @@ where
     #[error("writer task join error: {0}")]
     WriterJoin(String),
 }
+
+/// Result type for `kithara-stream` (generic over source error).
+pub type StreamResult<T, E> = Result<T, StreamError<E>>;

@@ -2,7 +2,7 @@ use std::{env::args, error::Error, sync::Arc};
 
 use kithara_assets::{AssetStore, EvictConfig};
 use kithara_hls::{HlsOptions, HlsSource};
-use kithara_stream::io::Reader;
+use kithara_stream::SyncReader;
 use tempfile::TempDir;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
@@ -37,7 +37,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let source = session.source().await?;
 
     let mut events_rx = session.events();
-    let reader = Reader::new(Arc::new(source));
+    let reader = SyncReader::new(Arc::new(source));
 
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {

@@ -9,8 +9,8 @@ use kithara_assets::{
 use kithara_net::{HttpClient, NetError};
 use kithara_storage::{StreamingResource, StreamingResourceExt};
 use kithara_stream::{
-    EngineHandle, StreamMsg, Writer,
-    io::{IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome},
+    EngineHandle, Source, StreamError as KitharaIoError, StreamMsg,
+    StreamResult as KitharaIoResult, WaitOutcome, Writer,
 };
 use tokio::sync::{Mutex, broadcast};
 use tracing::trace;
@@ -79,7 +79,9 @@ impl SessionSource {
 
 #[async_trait]
 impl Source for SessionSource {
-    async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome> {
+    type Error = SourceError;
+
+    async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome, Self::Error> {
         trace!(
             start = range.start,
             end = range.end,
@@ -90,7 +92,7 @@ impl Source for SessionSource {
             .res
             .wait_range(range)
             .await
-            .map_err(|e| KitharaIoError::Source(e.to_string()))?
+            .map_err(|e| KitharaIoError::Source(SourceError::Storage(e)))?
         {
             kithara_storage::WaitOutcome::Ready => {
                 trace!("kithara-file SessionSource wait_range -> Ready");
@@ -103,13 +105,13 @@ impl Source for SessionSource {
         }
     }
 
-    async fn read_at(&self, offset: u64, len: usize) -> KitharaIoResult<Bytes> {
+    async fn read_at(&self, offset: u64, len: usize) -> KitharaIoResult<Bytes, Self::Error> {
         trace!(offset, len, "kithara-file SessionSource read_at begin");
         let bytes = self
             .res
             .read_at(offset, len)
             .await
-            .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+            .map_err(|e| KitharaIoError::Source(SourceError::Storage(e)))?;
 
         let new_pos = offset.saturating_add(bytes.len() as u64);
         self.progress.set_read_pos(new_pos);

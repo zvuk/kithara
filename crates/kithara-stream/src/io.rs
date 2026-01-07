@@ -8,24 +8,10 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-pub use kithara_storage::WaitOutcome;
-use thiserror::Error;
+use kithara_storage::WaitOutcome;
 use tracing::{debug, warn};
 
-/// Error type for `kithara-stream::io`.
-#[derive(Debug, Error)]
-pub enum IoError {
-    #[error("source error: {0}")]
-    Source(String),
-
-    #[error("seek requires known length, but source length is unknown")]
-    UnknownLength,
-
-    #[error("invalid seek position")]
-    InvalidSeek,
-}
-
-pub type IoResult<T> = Result<T, IoError>;
+use crate::error::{StreamError, StreamResult};
 
 /// Async random-access source contract.
 ///
@@ -40,10 +26,12 @@ pub type IoResult<T> = Result<T, IoError>;
 /// - When `offset` is at/after EOF (and EOF is known), `read_at` must return `Bytes::new()`.
 #[async_trait]
 pub trait Source: Send + Sync + 'static {
-    async fn wait_range(&self, range: Range<u64>) -> IoResult<WaitOutcome>
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>
     where
         Self: Send + Sync;
-    async fn read_at(&self, offset: u64, len: usize) -> IoResult<Bytes>
+    async fn read_at(&self, offset: u64, len: usize) -> StreamResult<Bytes, Self::Error>
     where
         Self: Send + Sync;
 
@@ -55,15 +43,18 @@ pub trait Source: Send + Sync + 'static {
     fn len(&self) -> Option<u64>;
 }
 
-enum WorkerReq {
+enum WorkerReq<S>
+where
+    S: Source,
+{
     WaitRange {
         range: Range<u64>,
-        reply: tokio::sync::oneshot::Sender<IoResult<WaitOutcome>>,
+        reply: tokio::sync::oneshot::Sender<StreamResult<WaitOutcome, S::Error>>,
     },
     ReadAt {
         offset: u64,
         len: usize,
-        reply: tokio::sync::oneshot::Sender<IoResult<Bytes>>,
+        reply: tokio::sync::oneshot::Sender<StreamResult<Bytes, S::Error>>,
     },
 }
 
@@ -75,16 +66,16 @@ enum WorkerReq {
 /// - `read()` blocks waiting for an async worker running on a Tokio runtime.
 /// - Do **not** call this from within a Tokio async task (it will block the executor thread).
 ///   Use it from a dedicated blocking thread (e.g. `tokio::task::spawn_blocking` or `std::thread`).
-pub struct Reader<S>
+pub struct SyncReader<S>
 where
     S: Source,
 {
     source: Arc<S>,
-    worker_tx: tokio::sync::mpsc::UnboundedSender<WorkerReq>,
+    worker_tx: tokio::sync::mpsc::UnboundedSender<WorkerReq<S>>,
     pos: u64,
 }
 
-impl<S> Reader<S>
+impl<S> SyncReader<S>
 where
     S: Source,
 {
@@ -101,7 +92,7 @@ where
         let len = source.len();
         debug!(len, "kithara-stream::io Reader created");
 
-        let (worker_tx, mut worker_rx) = tokio::sync::mpsc::unbounded_channel::<WorkerReq>();
+        let (worker_tx, mut worker_rx) = tokio::sync::mpsc::unbounded_channel::<WorkerReq<S>>();
         let src = source.clone();
 
         tokio::spawn(async move {
@@ -137,7 +128,7 @@ where
     }
 }
 
-impl<S> Read for Reader<S>
+impl<S> Read for SyncReader<S>
 where
     S: Source,
 {
@@ -173,7 +164,7 @@ where
                 );
                 std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
             })?
-            .map_err(|e| {
+            .map_err(|e: StreamError<S::Error>| {
                 tracing::error!(
                     offset,
                     len,
@@ -212,7 +203,7 @@ where
                 );
                 std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
             })?
-            .map_err(|e| {
+            .map_err(|e: StreamError<S::Error>| {
                 tracing::error!(
                     offset,
                     len,
@@ -246,7 +237,7 @@ where
     }
 }
 
-impl<S> Seek for Reader<S>
+impl<S> Seek for SyncReader<S>
 where
     S: Source,
 {
@@ -261,7 +252,7 @@ where
                     debug!("Reader::seek from end requested but source len is unknown");
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::Unsupported,
-                        IoError::UnknownLength.to_string(),
+                        StreamError::<S::Error>::UnknownLength.to_string(),
                     ));
                 };
                 (len as i128).saturating_add(delta as i128)
@@ -272,7 +263,7 @@ where
             debug!(new_pos, "Reader::seek invalid (negative)");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                IoError::InvalidSeek.to_string(),
+                StreamError::<S::Error>::InvalidSeek.to_string(),
             ));
         }
 
@@ -285,7 +276,7 @@ where
                 debug!(new_pos_u64, len, "Reader::seek invalid (past EOF)");
                 return Err(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    IoError::InvalidSeek.to_string(),
+                    StreamError::<S::Error>::InvalidSeek.to_string(),
                 ));
             }
         }
