@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::ops::Range;
+use std::{ops::Range, path::Path};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -41,6 +41,12 @@ pub trait Resource: Send + Sync + 'static {
     ///
     /// Implementations should store the error message so subsequent operations fail consistently.
     async fn fail(&self, error: impl Into<String> + Send) -> StorageResult<()>;
+
+    /// Return the path to the backing file.
+    ///
+    /// For disk-backed resources, this returns the filesystem path.
+    /// For in-memory or network-backed resources, this may return a placeholder path.
+    fn path(&self) -> &Path;
 }
 
 /// Extension trait for streaming-like resources: random-access reads/writes + waitable ranges.

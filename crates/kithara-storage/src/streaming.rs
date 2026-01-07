@@ -235,6 +235,10 @@ impl Resource for StreamingResource {
         self.inner.notify.notify_waiters();
         Ok(())
     }
+
+    fn path(&self) -> &Path {
+        self.path()
+    }
 }
 
 #[async_trait]

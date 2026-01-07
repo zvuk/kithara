@@ -2,9 +2,11 @@
 
 use std::{
     collections::HashSet,
+    path::Path,
     sync::{Arc, Mutex},
 };
 
+use async_trait::async_trait;
 use kithara_storage::{AtomicResource, StreamingResource};
 use tokio_util::sync::CancellationToken;
 
@@ -156,6 +158,57 @@ where
 
         let lease = self.pin(&key.asset_root, cancel).await?;
         Ok(AssetResource::new(inner, lease))
+    }
+}
+
+#[async_trait]
+impl<A> Assets for LeaseAssets<A>
+where
+    A: Assets,
+{
+    fn root_dir(&self) -> &Path {
+        self.base.root_dir()
+    }
+
+    async fn open_atomic_resource(
+        &self,
+        key: &ResourceKey,
+        cancel: CancellationToken,
+    ) -> AssetsResult<AtomicResource> {
+        // Note: This method bypasses pinning and returns a raw resource.
+        // The public `open_atomic_resource` method wraps it with a lease guard.
+        self.base.open_atomic_resource(key, cancel).await
+    }
+
+    async fn open_streaming_resource(
+        &self,
+        key: &ResourceKey,
+        cancel: CancellationToken,
+    ) -> AssetsResult<StreamingResource> {
+        // Note: This method bypasses pinning and returns a raw resource.
+        // The public `open_streaming_resource` method wraps it with a lease guard.
+        self.base.open_streaming_resource(key, cancel).await
+    }
+
+    async fn open_pins_index_resource(
+        &self,
+        cancel: CancellationToken,
+    ) -> AssetsResult<AtomicResource> {
+        // Pins index must be opened without pinning to avoid recursion
+        self.base.open_pins_index_resource(cancel).await
+    }
+
+    async fn delete_asset(&self, asset_root: &str, cancel: CancellationToken) -> AssetsResult<()> {
+        // Delete asset through base implementation
+        self.base.delete_asset(asset_root, cancel).await
+    }
+
+    async fn open_lru_index_resource(
+        &self,
+        cancel: CancellationToken,
+    ) -> AssetsResult<AtomicResource> {
+        // LRU index must be opened without pinning
+        self.base.open_lru_index_resource(cancel).await
     }
 }
 

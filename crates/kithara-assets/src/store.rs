@@ -93,6 +93,10 @@ impl DiskAssetStore {
 
 #[async_trait]
 impl Assets for DiskAssetStore {
+    fn root_dir(&self) -> &Path {
+        &self.root_dir
+    }
+
     async fn open_atomic_resource(
         &self,
         key: &ResourceKey,

@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::path::Path;
+
 use async_trait::async_trait;
 use kithara_storage::{AtomicResource, StreamingResource};
 use tokio_util::sync::CancellationToken;
@@ -84,4 +86,10 @@ pub trait Assets: Send + Sync + 'static {
         &self,
         cancel: CancellationToken,
     ) -> AssetsResult<AtomicResource>;
+
+    /// Return the root directory for disk-backed implementations.
+    ///
+    /// For disk-backed implementations, this returns the root directory path.
+    /// For in-memory or network-backed implementations, this may return a placeholder path.
+    fn root_dir(&self) -> &Path;
 }

@@ -139,7 +139,6 @@ async fn eviction_max_assets_skips_pinned_assets(
 #[case(3)]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-#[ignore = "eviction logic needs investigation"]
 async fn eviction_ignores_missing_index(
     #[case] asset_count: usize,
     cancel_token: CancellationToken,

@@ -144,6 +144,10 @@ impl Resource for AtomicResource {
         state.failed = Some(error.into());
         Ok(())
     }
+
+    fn path(&self) -> &Path {
+        self.path()
+    }
 }
 
 impl AtomicResourceExt for AtomicResource {}

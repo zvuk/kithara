@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{fmt, ops::Range};
+use std::{fmt, ops::Range, path::Path};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -89,6 +89,10 @@ where
 
     async fn fail(&self, error: impl Into<String> + Send) -> Result<(), StorageError> {
         self.inner.fail(error).await
+    }
+
+    fn path(&self) -> &Path {
+        self.inner.path()
     }
 }
 
