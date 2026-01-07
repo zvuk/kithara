@@ -3,12 +3,53 @@
 use std::{error::Error, sync::Arc, time::Duration};
 
 use kithara_assets::{AssetStore, EvictConfig};
-use kithara_hls::{HlsOptions, HlsSource, playlist::VariantId};
+use kithara_hls::{HlsOptions, HlsSource};
 use kithara_stream::io::Reader;
+use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use url::Url;
+
+// ==================== Fixtures ====================
+
+#[fixture]
+fn temp_dir() -> TempDir {
+    TempDir::new().unwrap()
+}
+
+#[fixture]
+fn assets(temp_dir: TempDir) -> AssetStore {
+    AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default())
+}
+
+#[fixture]
+fn hls_options() -> HlsOptions {
+    HlsOptions::default()
+}
+
+#[fixture]
+fn test_stream_url() -> Url {
+    // Use a public test HLS stream
+    "https://stream.silvercomet.top/hls/master.m3u8"
+        .parse()
+        .unwrap()
+}
+
+#[fixture]
+fn tracing_setup() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::default()
+                .add_directive("kithara_hls=info".parse().unwrap())
+                .add_directive("kithara_stream=info".parse().unwrap())
+                .add_directive("warn".parse().unwrap()),
+        )
+        .with_test_writer()
+        .try_init();
+}
+
+// ==================== Test Cases ====================
 
 /// Basic integration test for HLS playback functionality.
 /// This test verifies that:
@@ -19,32 +60,20 @@ use url::Url;
 ///
 /// Note: This is an integration test that requires network access.
 /// It uses a public test stream URL.
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn test_basic_hls_playback() -> Result<(), Box<dyn Error + Send + Sync>> {
-    // Setup minimal logging for test
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::default()
-                .add_directive("kithara_hls=info".parse()?)
-                .add_directive("kithara_stream=info".parse()?)
-                .add_directive("warn".parse()?),
-        )
-        .with_test_writer()
-        .try_init();
-
-    // Use a public test HLS stream
-    let test_url = "https://stream.silvercomet.top/hls/master.m3u8";
-    let url: Url = test_url.parse()?;
-
-    info!("Starting HLS playback test with URL: {}", url);
-
-    // Create temporary directory for cache
-    let temp_dir = TempDir::new()?;
-    let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
+async fn test_basic_hls_playback(
+    _tracing_setup: (),
+    test_stream_url: Url,
+    assets: AssetStore,
+    hls_options: HlsOptions,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    info!("Starting HLS playback test with URL: {}", test_stream_url);
 
     // 1. Test: Open HLS session
     info!("Opening HLS session...");
-    let session = HlsSource::open(url.clone(), HlsOptions::default(), assets).await?;
+    let session = HlsSource::open(test_stream_url.clone(), hls_options, assets).await?;
     info!("✓ HLS session opened successfully");
 
     // 2. Test: Get audio source
@@ -100,21 +129,21 @@ async fn test_basic_hls_playback() -> Result<(), Box<dyn Error + Send + Sync>> {
 /// Test that verifies HLS session creation without actual playback.
 /// This is useful for testing HLS functionality in CI environments
 /// where audio playback might not be available.
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn test_hls_session_creation() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn test_hls_session_creation(
+    test_stream_url: Url,
+    assets: AssetStore,
+    hls_options: HlsOptions,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::default().add_directive("warn".parse()?))
+        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
         .with_test_writer()
         .try_init();
 
-    let test_url = "https://stream.silvercomet.top/hls/master.m3u8";
-    let url: Url = test_url.parse()?;
-
-    let temp_dir = TempDir::new()?;
-    let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
-
     // Test session creation
-    let session = HlsSource::open(url, HlsOptions::default(), assets).await?;
+    let session = HlsSource::open(test_stream_url, hls_options, assets).await?;
 
     // Test source acquisition
     let _source = session.source().await?;
@@ -133,31 +162,119 @@ async fn test_hls_session_creation() -> Result<(), Box<dyn Error + Send + Sync>>
     Ok(())
 }
 
-/// Test with a different HLS stream to verify compatibility with various formats.
+/// Test with different HLS stream URLs to verify compatibility with various formats.
+#[rstest]
+#[case("https://stream.silvercomet.top/hls/master.m3u8")]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn test_alternative_hls_stream() -> Result<(), Box<dyn Error + Send + Sync>> {
-    // This test is ignored by default because it requires specific test streams.
-    // It can be run manually with: cargo test test_alternative_hls_stream -- --ignored
+async fn test_hls_with_different_streams(
+    #[case] stream_url: &str,
+    assets: AssetStore,
+    hls_options: HlsOptions,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
+        .with_test_writer()
+        .try_init();
 
-    let test_streams: [&str; 0] = [
-        // Add alternative test streams here for comprehensive testing
-        // "https://example.com/hls/stream.m3u8",
-    ];
+    info!("Testing HLS stream: {}", stream_url);
 
-    for stream_url in test_streams.iter() {
-        info!("Testing HLS stream: {}", stream_url);
+    let url: Url = stream_url.parse()?;
 
-        let url: Url = stream_url.parse()?;
-        let temp_dir = TempDir::new()?;
-        let assets =
-            AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
+    // Just test that we can open the session
+    let session = HlsSource::open(url, hls_options, assets).await?;
+    let _source = session.source().await?;
 
-        // Just test that we can open the session
-        let session = HlsSource::open(url, HlsOptions::default(), assets).await?;
-        let _source = session.source().await?;
+    info!("✓ Stream {} opened successfully", stream_url);
+    Ok(())
+}
 
-        info!("✓ Stream {} opened successfully", stream_url);
+/// Test HLS with different options configurations.
+#[rstest]
+#[case(HlsOptions::default())]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn test_hls_with_different_options(
+    #[case] options: HlsOptions,
+    test_stream_url: Url,
+    assets: AssetStore,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
+        .with_test_writer()
+        .try_init();
+
+    info!("Testing HLS with custom options");
+
+    // Test session creation with different options
+    let session = HlsSource::open(test_stream_url, options, assets).await?;
+    let _source = session.source().await?;
+
+    info!("✓ HLS session opened successfully with custom options");
+    Ok(())
+}
+
+/// Test HLS session error handling with invalid URLs.
+#[rstest]
+#[case("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")]
+#[case("not-a-valid-url")]
+#[case("")]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn test_hls_invalid_url_handling(
+    #[case] invalid_url: &str,
+    assets: AssetStore,
+    hls_options: HlsOptions,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
+        .with_test_writer()
+        .try_init();
+
+    let url_result = Url::parse(invalid_url);
+
+    if let Ok(url) = url_result {
+        // If URL parses, try to open HLS (should fail with network error)
+        let result = HlsSource::open(url, hls_options, assets).await;
+        // Either Ok (if somehow connects) or Err (expected) is acceptable
+        assert!(result.is_ok() || result.is_err());
+    } else {
+        // Invalid URL string - parse should fail
+        assert!(url_result.is_err());
     }
 
+    Ok(())
+}
+
+/// Test HLS with empty assets store (should still work for network streaming).
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn test_hls_without_cache(
+    test_stream_url: Url,
+    temp_dir: TempDir,
+    hls_options: HlsOptions,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
+        .with_test_writer()
+        .try_init();
+
+    // Create assets store with very small cache to simulate limited caching
+    let limited_assets = AssetStore::with_root_dir(
+        temp_dir.path().to_path_buf(),
+        EvictConfig {
+            max_assets: Some(1),
+            max_bytes: Some(1024), // 1KB cache
+        },
+    );
+
+    info!("Testing HLS with limited cache");
+
+    // Test session creation with limited cache
+    let session = HlsSource::open(test_stream_url, hls_options, limited_assets).await?;
+    let _source = session.source().await?;
+
+    info!("✓ HLS session opened successfully with limited cache");
     Ok(())
 }

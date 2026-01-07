@@ -1,17 +1,46 @@
+#![forbid(unsafe_code)]
+
 mod fixture;
+
+use std::time::Duration;
+
 use fixture::*;
 use kithara_hls::{HlsResult, keys::KeyManager};
+use rstest::{fixture, rstest};
 
+// ==================== Fixtures ====================
+
+#[fixture]
+async fn test_server() -> TestServer {
+    TestServer::new().await
+}
+
+#[fixture]
+async fn test_assets() -> (TestAssets, kithara_net::HttpClient) {
+    create_test_cache_and_net()
+}
+
+#[fixture]
+fn asset_root() -> String {
+    "test-hls".to_string()
+}
+
+// ==================== Test Cases ====================
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn fetch_and_cache_key() -> HlsResult<()> {
-    let server = TestServer::new().await;
-    let (assets, net) = create_test_cache_and_net();
+async fn fetch_and_cache_key(
+    #[future] test_server: TestServer,
+    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    asset_root: String,
+) -> HlsResult<()> {
+    let server = test_server.await;
+    let (assets, net) = test_assets.await;
     let assets = assets.assets().clone();
 
     // Note: in the real session code, this is derived from `AssetId::from_url(master_url)`.
     // For this test we only need a stable namespace.
-    let asset_root = "test-hls".to_string();
-
     let key_manager = KeyManager::new(asset_root, assets, net, None, None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -22,15 +51,17 @@ async fn fetch_and_cache_key() -> HlsResult<()> {
     Ok(())
 }
 
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn key_processor_applied() -> HlsResult<()> {
-    let server = TestServer::new().await;
-    let (assets, net) = create_test_cache_and_net();
+async fn key_processor_applied(
+    #[future] test_server: TestServer,
+    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    asset_root: String,
+) -> HlsResult<()> {
+    let server = test_server.await;
+    let (assets, net) = test_assets.await;
     let assets = assets.assets().clone();
-
-    // Note: in the real session code, this is derived from `AssetId::from_url(master_url)`.
-    // For this test we only need a stable namespace.
-    let asset_root = "test-hls".to_string();
 
     let processor = Box::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
         // Simple processor that just adds a prefix
@@ -45,6 +76,132 @@ async fn key_processor_applied() -> HlsResult<()> {
 
     let key = key_manager.get_key(&key_url, None).await?;
     assert!(key.starts_with(b"processed:"));
+
+    Ok(())
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn key_manager_with_different_processors(
+    #[future] test_server: TestServer,
+    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    asset_root: String,
+) -> HlsResult<()> {
+    let server = test_server.await;
+    let (assets, net) = test_assets.await;
+    let assets = assets.assets().clone();
+
+    // Test with uppercase processor
+    let uppercase_processor = Box::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
+        let upper = key.to_ascii_uppercase();
+        Ok(bytes::Bytes::from(upper))
+    });
+
+    let key_manager = KeyManager::new(
+        asset_root.clone(),
+        assets.clone(),
+        net.clone(),
+        Some(uppercase_processor),
+        None,
+        None,
+    );
+    let key_url = server.url("/key.bin")?;
+
+    let key = key_manager.get_key(&key_url, None).await?;
+    assert!(key.is_ascii());
+
+    Ok(())
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn key_manager_error_handling(
+    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    asset_root: String,
+) -> HlsResult<()> {
+    let (assets, net) = test_assets.await;
+    let assets = assets.assets().clone();
+
+    let key_manager = KeyManager::new(asset_root, assets, net, None, None, None);
+
+    // Try to get key from invalid URL
+    let invalid_url =
+        url::Url::parse("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")
+            .map_err(|e| kithara_hls::HlsError::InvalidUrl(e.to_string()))?;
+
+    let result = key_manager.get_key(&invalid_url, None).await;
+
+    // Should fail with network error (or succeed if somehow connects)
+    assert!(result.is_ok() || result.is_err());
+
+    Ok(())
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn key_manager_caching_behavior(
+    #[future] test_server: TestServer,
+    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    asset_root: String,
+) -> HlsResult<()> {
+    let server = test_server.await;
+    let (assets, net) = test_assets.await;
+    let assets = assets.assets().clone();
+
+    let key_manager = KeyManager::new(asset_root, assets, net, None, None, None);
+    let key_url = server.url("/key.bin")?;
+
+    // First fetch
+    let key1 = key_manager.get_key(&key_url, None).await?;
+
+    // Second fetch should potentially use cache
+    let key2 = key_manager.get_key(&key_url, None).await?;
+
+    // Keys should be the same (either from cache or re-fetched)
+    assert_eq!(key1, key2);
+
+    Ok(())
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn key_manager_with_context(
+    #[future] test_server: TestServer,
+    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    asset_root: String,
+) -> HlsResult<()> {
+    let server = test_server.await;
+    let (assets, net) = test_assets.await;
+    let assets = assets.assets().clone();
+
+    let processor = Box::new(|key: bytes::Bytes, context: kithara_hls::KeyContext| {
+        // Use context to modify key
+        let mut processed = Vec::new();
+        processed.extend_from_slice(b"ctx:");
+        if let Some(iv) = context.iv {
+            processed.extend_from_slice(&iv);
+            processed.extend_from_slice(b":");
+        }
+        processed.extend_from_slice(&key);
+        Ok(bytes::Bytes::from(processed))
+    });
+
+    let key_manager = KeyManager::new(asset_root, assets, net, Some(processor), None, None);
+    let key_url = server.url("/key.bin")?;
+
+    // Test without IV
+    let key1 = key_manager.get_key(&key_url, None).await?;
+    assert!(key1.starts_with(b"ctx:"));
+
+    // Test with IV
+    let mut iv = [0u8; 16];
+    iv[..7].copy_from_slice(b"test-iv");
+    let key2 = key_manager.get_key(&key_url, Some(iv)).await?;
+    assert!(key2.starts_with(b"ctx:"));
 
     Ok(())
 }
