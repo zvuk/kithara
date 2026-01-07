@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
+use std::time::Duration;
+
 use bytes::Bytes;
 use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
 use kithara_storage::{Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 #[fixture]
@@ -29,8 +30,8 @@ fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
 }
 
 #[rstest]
-#[case(1024, 512, 0)]      // Small write
-#[case(4096, 2048, 8192)]   // Medium write with offset
+#[case(1024, 512, 0)] // Small write
+#[case(4096, 2048, 8192)] // Medium write with offset
 #[case(16384, 8192, 32768)] // Large write with offset
 #[case(65536, 32768, 131072)] // Very large write with offset
 #[timeout(Duration::from_secs(5))]
@@ -61,12 +62,12 @@ async fn streaming_resource_complex_write_patterns(
     for i in 0..total_chunks {
         let offset = initial_offset + (i * chunk_size) as u64;
         let data: Vec<u8> = (0..chunk_size).map(|j| ((i + j) % 256) as u8).collect();
-        
+
         res.write_at(offset, &data).await.unwrap();
         res.wait_range(offset..(offset + chunk_size as u64))
             .await
             .unwrap();
-        
+
         // Verify the written data
         let read_back = res.read_at(offset, chunk_size).await.unwrap();
         assert_eq!(read_back, Bytes::from(data));
@@ -76,8 +77,8 @@ async fn streaming_resource_complex_write_patterns(
 }
 
 #[rstest]
-#[case(1, 100)]     // Single concurrent write
-#[case(2, 50)]      // Few concurrent writes (reduced to avoid timeout)
+#[case(1, 100)] // Single concurrent write
+#[case(2, 50)] // Few concurrent writes (reduced to avoid timeout)
 #[timeout(Duration::from_secs(10))]
 #[tokio::test]
 async fn streaming_resource_concurrent_writes(
@@ -105,19 +106,22 @@ async fn streaming_resource_concurrent_writes(
     for i in 0..write_count {
         let res_clone = res.clone();
         let _cancel_clone = cancel.clone();
-        
+
         let handle = tokio::spawn(async move {
             let offset = (i * chunk_size) as u64;
-            let data: Vec<u8> = (0..chunk_size).map(|j| ((i * chunk_size + j) % 256) as u8).collect();
-            
+            let data: Vec<u8> = (0..chunk_size)
+                .map(|j| ((i * chunk_size + j) % 256) as u8)
+                .collect();
+
             res_clone.write_at(offset, &data).await.unwrap();
-            res_clone.wait_range(offset..(offset + chunk_size as u64))
+            res_clone
+                .wait_range(offset..(offset + chunk_size as u64))
                 .await
                 .unwrap();
-            
+
             (offset, data)
         });
-        
+
         handles.push(handle);
     }
 
@@ -132,10 +136,10 @@ async fn streaming_resource_concurrent_writes(
 }
 
 #[rstest]
-#[case(0, 1024)]      // Read from start
-#[case(2048, 1024)]   // Read from middle
-#[case(4096, 512)]    // Read from end
-#[case(8192, 100)]    // Read beyond written data (partial)
+#[case(0, 1024)] // Read from start
+#[case(2048, 1024)] // Read from middle
+#[case(4096, 512)] // Read from end
+#[case(8192, 100)] // Read beyond written data (partial)
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn streaming_resource_edge_case_reads(
@@ -168,9 +172,9 @@ async fn streaming_resource_edge_case_reads(
     if offset < data_size as u64 {
         let expected_size = read_size.min(data_size - offset as usize);
         let read_back = res.read_at(offset, read_size).await.unwrap();
-        
+
         assert_eq!(read_back.len(), expected_size);
-        
+
         if expected_size > 0 {
             let expected_data = &initial_data[offset as usize..offset as usize + expected_size];
             assert_eq!(read_back, Bytes::copy_from_slice(expected_data));
@@ -181,8 +185,8 @@ async fn streaming_resource_edge_case_reads(
 }
 
 #[rstest]
-#[case(vec![(0, 1024), (2048, 1024)])]     // Non-overlapping
-#[case(vec![(0, 512), (1024, 512)])]        // Smaller overlapping
+#[case(vec![(0, 1024), (2048, 1024)])] // Non-overlapping
+#[case(vec![(0, 512), (1024, 512)])] // Smaller overlapping
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn streaming_resource_multiple_range_operations(
@@ -208,12 +212,12 @@ async fn streaming_resource_multiple_range_operations(
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
         let data: Vec<u8> = (0..*size).map(|j| ((i * 1000 + j) % 256) as u8).collect();
         let offset_u64 = *offset as u64;
-        
+
         res.write_at(offset_u64, &data).await.unwrap();
         res.wait_range(offset_u64..(offset_u64 + *size as u64))
             .await
             .unwrap();
-        
+
         // Verify each write immediately
         let read_back = res.read_at(offset_u64, *size).await.unwrap();
         assert_eq!(read_back, Bytes::from(data));
@@ -230,8 +234,8 @@ async fn streaming_resource_multiple_range_operations(
 }
 
 #[rstest]
-#[case(false)]  // Without explicit commit
-#[case(true)]   // With explicit commit
+#[case(false)] // Without explicit commit
+#[case(true)] // With explicit commit
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn streaming_resource_commit_behavior(
@@ -278,7 +282,7 @@ async fn streaming_resource_commit_behavior(
         .open_streaming_resource(&key, cancel.clone())
         .await
         .unwrap();
-    
+
     // Should be able to read the data (assuming persistence works)
     let final_read = res_reopened.read_at(0, data.len()).await.unwrap();
     assert_eq!(final_read, Bytes::from(data.clone()));

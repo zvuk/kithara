@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
+use std::time::Duration;
+
 use bytes::Bytes;
 use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
 use kithara_storage::{Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 #[allow(dead_code)]

@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
+use std::time::Duration;
+
 use bytes::Bytes;
 use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
 use kithara_storage::Resource;
 use rstest::{fixture, rstest};
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
@@ -68,12 +69,14 @@ async fn eviction_max_assets_skips_pinned_assets(
             asset_root: format!("asset-{}", i),
             rel_path: format!("media/{}.bin", i),
         };
-        
+
         let res = store
             .open_atomic_resource(&key, cancel.clone())
             .await
             .unwrap();
-        res.write(&Bytes::from(format!("data-{}", i))).await.unwrap();
+        res.write(&Bytes::from(format!("data-{}", i)))
+            .await
+            .unwrap();
         res.commit(None).await.unwrap();
 
         // Keep handle for the last asset to pin it
@@ -87,13 +90,15 @@ async fn eviction_max_assets_skips_pinned_assets(
                         .and_then(|v| v.as_array())
                         .expect("pins index must contain `pinned` array");
                     assert!(
-                        pinned.iter().any(|v| v.as_str() == Some(&format!("asset-{}", i))),
+                        pinned
+                            .iter()
+                            .any(|v| v.as_str() == Some(&format!("asset-{}", i))),
                         "asset-{} must be pinned while its handle is alive",
                         i
                     );
                 }
             }
-            
+
             // Asset that should trigger eviction - this should remove oldest non-pinned assets
             let key_trigger = ResourceKey {
                 asset_root: format!("asset-trigger-{}", i),
@@ -105,10 +110,10 @@ async fn eviction_max_assets_skips_pinned_assets(
                 .unwrap();
             res_trigger.write(&Bytes::from("trigger")).await.unwrap();
             res_trigger.commit(None).await.unwrap();
-            
+
             assert!(exists_asset_dir(dir, &format!("asset-trigger-{}", i)));
             assert!(exists_asset_dir(dir, &format!("asset-{}", i))); // pinned asset should remain
-            
+
             drop(res_b);
         }
     }
@@ -116,7 +121,9 @@ async fn eviction_max_assets_skips_pinned_assets(
     // Count how many asset directories exist
     let mut existing_count = 0;
     for i in 0..=create_count {
-        if exists_asset_dir(dir, &format!("asset-{}", i)) || exists_asset_dir(dir, &format!("asset-trigger-{}", i)) {
+        if exists_asset_dir(dir, &format!("asset-{}", i))
+            || exists_asset_dir(dir, &format!("asset-trigger-{}", i))
+        {
             existing_count += 1;
         }
     }
@@ -132,7 +139,7 @@ async fn eviction_max_assets_skips_pinned_assets(
 
 #[rstest]
 #[case(1)]
-#[case(2)] 
+#[case(2)]
 #[case(3)]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
@@ -159,12 +166,14 @@ async fn eviction_ignores_missing_index(
             asset_root: format!("asset-{}", i),
             rel_path: format!("data/{}.bin", i),
         };
-        
+
         let res = store
             .open_atomic_resource(&key, cancel.clone())
             .await
             .unwrap();
-        res.write(&Bytes::from(format!("data-{}", i))).await.unwrap();
+        res.write(&Bytes::from(format!("data-{}", i)))
+            .await
+            .unwrap();
         res.commit(None).await.unwrap();
     }
 
@@ -179,11 +188,11 @@ async fn eviction_ignores_missing_index(
         asset_root: "trigger-asset".to_string(),
         rel_path: "data/trigger.bin".to_string(),
     };
-    
+
     let res = store
         .open_atomic_resource(&trigger_key, cancel.clone())
         .await;
-    
+
     assert!(res.is_ok(), "Should handle missing LRU index gracefully");
 }
 
@@ -212,14 +221,14 @@ async fn eviction_with_zero_byte_assets(
             asset_root: format!("zero-asset-{}", i),
             rel_path: "empty.bin".to_string(),
         };
-        
+
         let res = store
             .open_atomic_resource(&key, cancel.clone())
             .await
             .unwrap();
         res.write(&Bytes::new()).await.unwrap();
         res.commit(None).await.unwrap();
-        
+
         // Explicitly record zero bytes
         store
             .base()
@@ -235,7 +244,7 @@ async fn eviction_with_zero_byte_assets(
             existing_count += 1;
         }
     }
-    
+
     assert!(
         existing_count <= 2,
         "Should have at most 2 zero-byte assets after eviction, got {}",

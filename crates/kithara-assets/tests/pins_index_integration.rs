@@ -1,10 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use kithara_assets::{AssetStore, DiskAssetStore, EvictConfig, PinsIndex};
 use rstest::{fixture, rstest};
-use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 
 fn pins_path(root: &std::path::Path) -> std::path::PathBuf {
