@@ -59,7 +59,7 @@ kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
-rstest = "0.26.1"
+rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 
 # async/runtime
 tokio = { version = "1.49.0", features = ["full"] }
