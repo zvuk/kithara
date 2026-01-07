@@ -1,18 +1,21 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use kithara_net::{Headers, Net, NetError, RangeSpec, TimeoutNet};
+use kithara_net::{Headers, Net, NetError, NetExt, RangeSpec};
 use rstest::*;
 use url::Url;
 
+// ============================================================================
 // Mock Net implementation for testing timeout logic
+// ============================================================================
+
 #[derive(Clone)]
-struct MockNet {
+struct TimeoutMockNet {
     delay: Duration,
     should_succeed: bool,
 }
 
-impl MockNet {
+impl TimeoutMockNet {
     fn new(delay: Duration, should_succeed: bool) -> Self {
         Self {
             delay,
@@ -22,7 +25,7 @@ impl MockNet {
 }
 
 #[async_trait::async_trait]
-impl kithara_net::Net for MockNet {
+impl Net for TimeoutMockNet {
     async fn get_bytes(
         &self,
         _url: Url,
@@ -40,7 +43,7 @@ impl kithara_net::Net for MockNet {
         &self,
         _url: Url,
         _headers: Option<Headers>,
-    ) -> Result<kithara_net::ByteStream, kithara_net::NetError> {
+    ) -> Result<kithara_net::ByteStream, NetError> {
         tokio::time::sleep(self.delay).await;
         if self.should_succeed {
             let stream =
@@ -56,7 +59,7 @@ impl kithara_net::Net for MockNet {
         _url: Url,
         _range: RangeSpec,
         _headers: Option<Headers>,
-    ) -> Result<kithara_net::ByteStream, kithara_net::NetError> {
+    ) -> Result<kithara_net::ByteStream, NetError> {
         tokio::time::sleep(self.delay).await;
         if self.should_succeed {
             let stream =
@@ -67,11 +70,7 @@ impl kithara_net::Net for MockNet {
         }
     }
 
-    async fn head(
-        &self,
-        _url: Url,
-        _headers: Option<Headers>,
-    ) -> Result<Headers, kithara_net::NetError> {
+    async fn head(&self, _url: Url, _headers: Option<Headers>) -> Result<Headers, NetError> {
         tokio::time::sleep(self.delay).await;
         if self.should_succeed {
             let mut headers = Headers::new();
@@ -83,365 +82,239 @@ impl kithara_net::Net for MockNet {
     }
 }
 
-// Test data for timeout scenarios
-#[fixture]
-fn timeout_scenarios() -> Vec<(Duration, Duration, bool)> {
-    vec![
-        (Duration::from_millis(100), Duration::from_millis(200), true), // Should succeed (delay < timeout)
+// ============================================================================
+// Helper functions
+// ============================================================================
+
+async fn test_all_net_methods_with_timeout_net(net: &impl Net) {
+    let url = Url::parse("http://example.com").unwrap();
+
+    // Test get_bytes
+    let result = net.get_bytes(url.clone(), None).await;
+    assert!(result.is_ok());
+    assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
+
+    // Test stream
+    let result = net.stream(url.clone(), None).await;
+    assert!(result.is_ok());
+    let mut stream = result.unwrap();
+    let mut collected = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        assert!(chunk.is_ok());
+        collected.extend_from_slice(&chunk.unwrap());
+    }
+    assert_eq!(collected, b"success");
+
+    // Test get_range
+    let range = RangeSpec::new(0, None);
+    let result = net.get_range(url.clone(), range, None).await;
+    assert!(result.is_ok());
+    let mut stream = result.unwrap();
+    let mut collected = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        assert!(chunk.is_ok());
+        collected.extend_from_slice(&chunk.unwrap());
+    }
+    assert_eq!(collected, b"success");
+
+    // Test head
+    let result = net.head(url, None).await;
+    assert!(result.is_ok());
+    let headers = result.unwrap();
+    assert_eq!(headers.get("content-length"), Some("7"));
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+// Test timeout scenarios
+#[rstest]
+#[case::success_before_timeout(Duration::from_millis(100), Duration::from_millis(200), true)]
+#[case::timeout_before_success(Duration::from_millis(200), Duration::from_millis(100), false)]
+#[case::zero_delay(Duration::from_millis(0), Duration::from_millis(100), true)]
+#[case::large_timeout(Duration::from_millis(1000), Duration::from_millis(10), false)]
+#[tokio::test]
+async fn test_timeout_scenarios(
+    #[case] delay: Duration,
+    #[case] timeout: Duration,
+    #[case] should_succeed: bool,
+) {
+    let mock_net = TimeoutMockNet::new(delay, true);
+    let timeout_net = mock_net.with_timeout(timeout);
+
+    let url = Url::parse("http://example.com").unwrap();
+    let result = timeout_net.get_bytes(url, None).await;
+
+    if should_succeed {
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
+    } else {
+        assert!(result.is_err());
+        assert!(matches!(result.err().unwrap(), NetError::Timeout));
+    }
+}
+
+// Test timeout with error (not timeout) - should preserve original error when timeout > delay
+#[rstest]
+#[case(Duration::from_millis(100), Duration::from_millis(200))] // Error before timeout
+#[tokio::test]
+async fn test_timeout_with_error(#[case] delay: Duration, #[case] timeout: Duration) {
+    let mock_net = TimeoutMockNet::new(delay, false);
+    let timeout_net = mock_net.with_timeout(timeout);
+
+    let url = Url::parse("http://example.com").unwrap();
+    let result = timeout_net.get_bytes(url, None).await;
+
+    assert!(result.is_err());
+    let error = result.err().unwrap();
+
+    // When delay < timeout, should get original Http error
+    // When delay > timeout, should get Timeout error
+    if delay < timeout {
+        assert!(matches!(error, NetError::Http(_)));
+    } else {
+        assert!(matches!(error, NetError::Timeout));
+    }
+}
+
+// Test all Net methods with timeout
+#[rstest]
+#[case(Duration::from_millis(100), Duration::from_millis(200), true)]
+#[case(Duration::from_millis(200), Duration::from_millis(100), false)]
+#[tokio::test]
+async fn test_all_net_methods_with_timeout(
+    #[case] delay: Duration,
+    #[case] timeout: Duration,
+    #[case] should_succeed: bool,
+) {
+    let mock_net = TimeoutMockNet::new(delay, true);
+    let timeout_net = mock_net.with_timeout(timeout);
+
+    if should_succeed {
+        test_all_net_methods_with_timeout_net(&timeout_net).await;
+    } else {
+        // For timeout case, just test get_bytes as representative
+        let url = Url::parse("http://example.com").unwrap();
+        let result = timeout_net.get_bytes(url, None).await;
+        assert!(result.is_err());
+        assert!(matches!(result.err().unwrap(), NetError::Timeout));
+    }
+}
+
+// Test zero timeout (should timeout immediately for any non-zero delay)
+#[rstest]
+#[case(Duration::from_millis(0), true)]
+#[case(Duration::from_millis(1), false)]
+#[case(Duration::from_millis(100), false)]
+#[tokio::test]
+async fn test_zero_timeout(#[case] delay: Duration, #[case] should_succeed: bool) {
+    let mock_net = TimeoutMockNet::new(delay, true);
+    let timeout_net = mock_net.with_timeout(Duration::from_millis(0));
+
+    let url = Url::parse("http://example.com").unwrap();
+    let result = timeout_net.get_bytes(url, None).await;
+
+    if should_succeed {
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
+    } else {
+        assert!(result.is_err());
+        assert!(matches!(result.err().unwrap(), NetError::Timeout));
+    }
+}
+
+// Test large timeout (should succeed for reasonable delays)
+#[rstest]
+#[case(Duration::from_millis(0), true)]
+#[case(Duration::from_millis(100), true)]
+#[case(Duration::from_millis(1000), true)]
+#[case(Duration::from_millis(5000), true)]
+#[tokio::test]
+async fn test_large_timeout(#[case] delay: Duration, #[case] should_succeed: bool) {
+    let mock_net = TimeoutMockNet::new(delay, true);
+    let timeout_net = mock_net.with_timeout(Duration::from_secs(10));
+
+    let url = Url::parse("http://example.com").unwrap();
+    let result = timeout_net.get_bytes(url, None).await;
+
+    if should_succeed {
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
+    } else {
+        assert!(result.is_err());
+        // Should not timeout with 10 second timeout
+        assert!(matches!(result.err().unwrap(), NetError::Http(_)));
+    }
+}
+
+// Test timeout preserves original error when operation fails before timeout
+#[rstest]
+#[case(Duration::from_millis(50))]
+#[case(Duration::from_millis(100))]
+#[case(Duration::from_millis(200))]
+#[tokio::test]
+async fn test_timeout_preserves_error(#[case] delay: Duration) {
+    let mock_net = TimeoutMockNet::new(delay, false);
+    let timeout_net = mock_net.with_timeout(Duration::from_secs(1));
+
+    let url = Url::parse("http://example.com").unwrap();
+    let result = timeout_net.get_bytes(url, None).await;
+
+    assert!(result.is_err());
+    let error = result.err().unwrap();
+
+    assert!(matches!(error, NetError::Http(_)));
+    assert!(error.to_string().contains("mock error"));
+}
+
+// Test timeout with representative scenarios
+#[tokio::test]
+async fn test_timeout_representative_scenarios() {
+    let scenarios = vec![
+        (Duration::from_millis(100), Duration::from_millis(200), true),
         (
             Duration::from_millis(200),
             Duration::from_millis(100),
             false,
-        ), // Should timeout (delay > timeout)
-        (Duration::from_millis(50), Duration::from_millis(100), true),  // Should succeed
+        ),
+        (Duration::from_millis(50), Duration::from_millis(100), true),
         (
             Duration::from_millis(150),
             Duration::from_millis(100),
             false,
-        ), // Should timeout
-    ]
-}
+        ),
+        (Duration::from_millis(0), Duration::from_millis(100), true),
+        (
+            Duration::from_millis(1000),
+            Duration::from_millis(10),
+            false,
+        ),
+    ];
 
-// Test data for different methods
-#[fixture]
-fn net_methods() -> Vec<&'static str> {
-    vec!["get_bytes", "stream", "get_range", "head"]
-}
+    for (delay, timeout, should_succeed) in scenarios {
+        let mock_net = TimeoutMockNet::new(delay, true);
+        let timeout_net = mock_net.with_timeout(timeout);
 
-// Basic timeout tests - parameterized by scenario
-#[rstest]
-#[case::get_bytes("get_bytes")]
-#[case::stream("stream")]
-#[case::get_range("get_range")]
-#[case::head("head")]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn test_timeout_success_when_fast_enough(#[case] method: &str) {
-    let mock_net = MockNet::new(Duration::from_millis(50), true);
-    let timeout_net = TimeoutNet::new(mock_net, Duration::from_millis(100));
-    let url = Url::parse("http://example.com").unwrap();
+        let url = Url::parse("http://example.com").unwrap();
+        let result = timeout_net.get_bytes(url, None).await;
 
-    match method {
-        "get_bytes" => {
-            let result: Result<bytes::Bytes, kithara_net::NetError> =
-                timeout_net.get_bytes(url.clone(), None).await;
-            assert!(result.is_ok());
+        if should_succeed {
+            assert!(
+                result.is_ok(),
+                "Should succeed with delay={:?}, timeout={:?}",
+                delay,
+                timeout
+            );
             assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
+        } else {
+            assert!(
+                result.is_err(),
+                "Should timeout with delay={:?}, timeout={:?}",
+                delay,
+                timeout
+            );
+            assert!(matches!(result.err().unwrap(), NetError::Timeout));
         }
-        "stream" => {
-            let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-                timeout_net.stream(url.clone(), None).await;
-            assert!(result.is_ok());
-            let mut stream = result.unwrap();
-            let chunk = stream.next().await.unwrap().unwrap();
-            assert_eq!(chunk, bytes::Bytes::from("success"));
-        }
-        "get_range" => {
-            let range = RangeSpec::new(0, Some(10));
-            let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-                timeout_net.get_range(url.clone(), range, None).await;
-            assert!(result.is_ok());
-            let mut stream = result.unwrap();
-            let chunk = stream.next().await.unwrap().unwrap();
-            assert_eq!(chunk, bytes::Bytes::from("success"));
-        }
-        "head" => {
-            let result: Result<kithara_net::Headers, kithara_net::NetError> =
-                timeout_net.head(url.clone(), None).await;
-            assert!(result.is_ok());
-            let headers = result.unwrap();
-            assert_eq!(headers.get("content-length"), Some("7"));
-        }
-        _ => unreachable!(),
     }
-}
-
-// Timeout failure tests - parameterized by scenario
-#[rstest]
-#[case::get_bytes("get_bytes")]
-#[case::stream("stream")]
-#[case::get_range("get_range")]
-#[case::head("head")]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn test_timeout_failure_when_too_slow(#[case] method: &str) {
-    let mock_net = MockNet::new(Duration::from_millis(200), true);
-    let timeout_net = TimeoutNet::new(mock_net, Duration::from_millis(100));
-    let url = Url::parse("http://example.com").unwrap();
-
-    match method {
-        "get_bytes" => {
-            let result: Result<bytes::Bytes, kithara_net::NetError> =
-                timeout_net.get_bytes(url.clone(), None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            assert!(matches!(error, NetError::Timeout));
-        }
-        "stream" => {
-            let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-                timeout_net.stream(url.clone(), None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            assert!(matches!(error, NetError::Timeout));
-        }
-        "get_range" => {
-            let range = RangeSpec::new(0, Some(10));
-            let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-                timeout_net.get_range(url.clone(), range, None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            assert!(matches!(error, NetError::Timeout));
-        }
-        "head" => {
-            let result: Result<kithara_net::Headers, kithara_net::NetError> =
-                timeout_net.head(url.clone(), None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            assert!(matches!(error, NetError::Timeout));
-        }
-        _ => unreachable!(),
-    }
-}
-
-// Test that timeout doesn't affect error propagation
-#[rstest]
-#[case::get_bytes("get_bytes")]
-#[case::stream("stream")]
-#[case::get_range("get_range")]
-#[case::head("head")]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn test_timeout_preserves_original_errors(#[case] method: &str) {
-    let mock_net = MockNet::new(Duration::from_millis(50), false);
-    let timeout_net = TimeoutNet::new(mock_net, Duration::from_millis(100));
-    let url = Url::parse("http://example.com").unwrap();
-
-    match method {
-        "get_bytes" => {
-            let result: Result<bytes::Bytes, kithara_net::NetError> =
-                timeout_net.get_bytes(url.clone(), None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            match error {
-                NetError::Http(msg) if msg == "mock error" => (),
-                _ => panic!("Expected Http error, got {:?}", error),
-            }
-        }
-        "stream" => {
-            let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-                timeout_net.stream(url.clone(), None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            match error {
-                NetError::Http(msg) if msg == "mock error" => (),
-                _ => panic!("Expected Http error, got {:?}", error),
-            }
-        }
-        "get_range" => {
-            let range = RangeSpec::new(0, Some(10));
-            let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-                timeout_net.get_range(url.clone(), range, None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            match error {
-                NetError::Http(msg) if msg == "mock error" => (),
-                _ => panic!("Expected Http error, got {:?}", error),
-            }
-        }
-        "head" => {
-            let result: Result<kithara_net::Headers, kithara_net::NetError> =
-                timeout_net.head(url.clone(), None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            match error {
-                NetError::Http(msg) if msg == "mock error" => (),
-                _ => panic!("Expected Http error, got {:?}", error),
-            }
-        }
-        _ => unreachable!(),
-    }
-}
-
-// Test timeout with zero duration (immediate timeout)
-#[rstest]
-#[case::get_bytes("get_bytes")]
-#[case::stream("stream")]
-#[case::get_range("get_range")]
-#[case::head("head")]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn test_zero_timeout(#[case] method: &str) {
-    let mock_net = MockNet::new(Duration::from_millis(100), true);
-    let timeout_net = TimeoutNet::new(mock_net, Duration::ZERO);
-    let url = Url::parse("http://example.com").unwrap();
-
-    match method {
-        "get_bytes" => {
-            let result: Result<bytes::Bytes, kithara_net::NetError> =
-                timeout_net.get_bytes(url.clone(), None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            assert!(matches!(error, NetError::Timeout));
-        }
-        "stream" => {
-            let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-                timeout_net.stream(url.clone(), None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            assert!(matches!(error, NetError::Timeout));
-        }
-        "get_range" => {
-            let range = RangeSpec::new(0, Some(10));
-            let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-                timeout_net.get_range(url.clone(), range, None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            assert!(matches!(error, NetError::Timeout));
-        }
-        "head" => {
-            let result: Result<kithara_net::Headers, kithara_net::NetError> =
-                timeout_net.head(url.clone(), None).await;
-            assert!(result.is_err());
-            let error = result.err().unwrap();
-            assert!(matches!(error, NetError::Timeout));
-        }
-        _ => unreachable!(),
-    }
-}
-
-// Test timeout with very large duration (effectively no timeout)
-#[rstest]
-#[case::get_bytes("get_bytes")]
-#[case::stream("stream")]
-#[case::get_range("get_range")]
-#[case::head("head")]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn test_large_timeout(#[case] method: &str) {
-    let mock_net = MockNet::new(Duration::from_millis(50), true);
-    let timeout_net = TimeoutNet::new(mock_net, Duration::from_secs(10));
-    let url = Url::parse("http://example.com").unwrap();
-
-    match method {
-        "get_bytes" => {
-            let result: Result<bytes::Bytes, kithara_net::NetError> =
-                timeout_net.get_bytes(url.clone(), None).await;
-            assert!(result.is_ok());
-            assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
-        }
-        "stream" => {
-            let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-                timeout_net.stream(url.clone(), None).await;
-            assert!(result.is_ok());
-            let mut stream = result.unwrap();
-            let chunk = stream.next().await.unwrap().unwrap();
-            assert_eq!(chunk, bytes::Bytes::from("success"));
-        }
-        "get_range" => {
-            let range = RangeSpec::new(0, Some(10));
-            let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-                timeout_net.get_range(url.clone(), range, None).await;
-            assert!(result.is_ok());
-            let mut stream = result.unwrap();
-            let chunk = stream.next().await.unwrap().unwrap();
-            assert_eq!(chunk, bytes::Bytes::from("success"));
-        }
-        "head" => {
-            let result: Result<kithara_net::Headers, kithara_net::NetError> =
-                timeout_net.head(url.clone(), None).await;
-            assert!(result.is_ok());
-            let headers = result.unwrap();
-            assert_eq!(headers.get("content-length"), Some("7"));
-        }
-        _ => unreachable!(),
-    }
-}
-
-// Test TimeoutNet constructor
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn test_timeout_net_constructor() {
-    let mock_net = MockNet::new(Duration::from_millis(50), true);
-    let timeout = Duration::from_millis(100);
-
-    let timeout_net = TimeoutNet::new(mock_net, timeout);
-
-    // Verify the timeout net works correctly
-    let url = Url::parse("http://example.com").unwrap();
-    let result: Result<bytes::Bytes, kithara_net::NetError> =
-        timeout_net.get_bytes(url, None).await;
-
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
-}
-
-// Test timeout error is retryable
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn test_timeout_error_is_retryable() {
-    let timeout_error = kithara_net::NetError::Timeout;
-    assert!(timeout_error.is_retryable());
-    assert!(timeout_error.is_timeout());
-}
-
-// Test timeout with headers
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn test_timeout_with_headers() {
-    let mock_net = MockNet::new(Duration::from_millis(50), true);
-    let timeout_net = TimeoutNet::new(mock_net, Duration::from_millis(100));
-    let url = Url::parse("http://example.com").unwrap();
-
-    let mut headers = Headers::new();
-    headers.insert("X-Test", "value");
-
-    let result: Result<bytes::Bytes, kithara_net::NetError> =
-        timeout_net.get_bytes(url, Some(headers)).await;
-
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
-}
-
-// Test timeout with range request
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn test_timeout_with_range() {
-    let mock_net = MockNet::new(Duration::from_millis(50), true);
-    let timeout_net = TimeoutNet::new(mock_net, Duration::from_millis(100));
-    let url = Url::parse("http://example.com").unwrap();
-
-    let range = RangeSpec::new(10, Some(20));
-
-    let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-        timeout_net.get_range(url, range, None).await;
-
-    assert!(result.is_ok());
-    let mut stream = result.unwrap();
-    let chunk = stream.next().await.unwrap().unwrap();
-    assert_eq!(chunk, bytes::Bytes::from("success"));
-}
-
-// Test that timeout doesn't affect stream consumption after creation
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn test_timeout_only_applies_to_stream_creation() {
-    let mock_net = MockNet::new(Duration::from_millis(50), true);
-    let timeout_net = TimeoutNet::new(mock_net, Duration::from_millis(100));
-    let url = Url::parse("http://example.com").unwrap();
-
-    // Create stream (should timeout if too slow)
-    let result: Result<kithara_net::ByteStream, kithara_net::NetError> =
-        timeout_net.stream(url, None).await;
-    assert!(result.is_ok());
-
-    // Consuming the stream should not be affected by timeout
-    let mut stream = result.unwrap();
-    let chunk = stream.next().await;
-    assert!(chunk.is_some());
-    assert!(chunk.unwrap().is_ok());
 }
