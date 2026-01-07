@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[features]
+internal = []  # Expose internal types for testing
+
 [dependencies]
 url = { workspace = true }
 kithara-storage = { workspace = true }
@@ -20,3 +23,4 @@ hex = { workspace = true }
 [dev-dependencies]
 tempfile = { workspace = true }
 rstest = { workspace = true }
+kithara-assets = { path = ".", features = ["internal"] }

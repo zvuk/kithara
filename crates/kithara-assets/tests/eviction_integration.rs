@@ -65,10 +65,7 @@ async fn eviction_max_assets_skips_pinned_assets(
 
     // Create more assets than the limit, keep the last one pinned
     for i in 0..create_count {
-        let key = ResourceKey {
-            asset_root: format!("asset-{}", i),
-            rel_path: format!("media/{}.bin", i),
-        };
+        let key = ResourceKey::new(format!("asset-{}", i), format!("media/{}.bin", i));
 
         let res = store
             .open_atomic_resource(&key, cancel.clone())
@@ -100,10 +97,10 @@ async fn eviction_max_assets_skips_pinned_assets(
             }
 
             // Asset that should trigger eviction - this should remove oldest non-pinned assets
-            let key_trigger = ResourceKey {
-                asset_root: format!("asset-trigger-{}", i),
-                rel_path: "media/trigger.bin".to_string(),
-            };
+            let key_trigger = ResourceKey::new(
+                format!("asset-trigger-{}", i),
+                "media/trigger.bin".to_string(),
+            );
             let res_trigger = store
                 .open_atomic_resource(&key_trigger, cancel.clone())
                 .await
@@ -162,10 +159,7 @@ async fn eviction_ignores_missing_index(
 
     // Create assets without proper LRU tracking (simulate missing/corrupted index)
     for i in 0..asset_count {
-        let key = ResourceKey {
-            asset_root: format!("asset-{}", i),
-            rel_path: format!("data/{}.bin", i),
-        };
+        let key = ResourceKey::new(format!("asset-{}", i), format!("data/{}.bin", i));
 
         let res = store
             .open_atomic_resource(&key, cancel.clone())
@@ -184,10 +178,7 @@ async fn eviction_ignores_missing_index(
     }
 
     // Creating one more asset should work without crashing despite missing index
-    let trigger_key = ResourceKey {
-        asset_root: "trigger-asset".to_string(),
-        rel_path: "data/trigger.bin".to_string(),
-    };
+    let trigger_key = ResourceKey::new("trigger-asset".to_string(), "data/trigger.bin".to_string());
 
     let res = store
         .open_atomic_resource(&trigger_key, cancel.clone())
@@ -217,10 +208,7 @@ async fn eviction_with_zero_byte_assets(
 
     // Create assets with zero bytes
     for i in 0..3 {
-        let key = ResourceKey {
-            asset_root: format!("zero-asset-{}", i),
-            rel_path: "empty.bin".to_string(),
-        };
+        let key = ResourceKey::new(format!("zero-asset-{}", i), "empty.bin".to_string());
 
         let res = store
             .open_atomic_resource(&key, cancel.clone())
@@ -280,10 +268,7 @@ async fn eviction_respects_max_assets_limit(
     // Create more assets than the limit
     let mut handles = Vec::new();
     for i in 0..create_count {
-        let key = ResourceKey {
-            asset_root: format!("asset-{}", i),
-            rel_path: format!("media/{}.bin", i),
-        };
+        let key = ResourceKey::new(format!("asset-{}", i), format!("media/{}.bin", i));
         let res = store
             .open_atomic_resource(&key, cancel.clone())
             .await

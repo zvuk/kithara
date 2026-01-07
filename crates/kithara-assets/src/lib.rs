@@ -6,7 +6,7 @@
 //!
 //! ## Public contract
 //!
-//! The explicit public contract is the [`Assets`] trait.
+//! The explicit public contract is the [`AssetStore`] type alias.
 //! Everything else should be considered an implementation detail (even if it is currently `pub`).
 //!
 //! ## Key mapping (normative)
@@ -45,13 +45,18 @@ mod lease;
 mod resource;
 mod store;
 
-// Re-exports
+// Public API - used by other crates
 pub use asset_id::AssetId;
+// Internal types - exported only with "internal" feature flag
+#[cfg(feature = "internal")]
 pub use cache::Assets;
+#[cfg(feature = "internal")]
 pub use canonicalization::{canonicalize_for_asset, canonicalize_for_resource};
 pub use error::{AssetsError, AssetsResult};
 pub use evict::EvictAssets;
-pub use index::{EvictConfig, PinsIndex};
+pub use index::EvictConfig;
+#[cfg(feature = "internal")]
+pub use index::PinsIndex;
 pub use key::ResourceKey;
 pub use lease::{LeaseAssets, LeaseGuard};
 pub use resource::AssetResource;

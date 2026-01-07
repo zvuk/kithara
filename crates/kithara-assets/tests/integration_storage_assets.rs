@@ -68,10 +68,7 @@ async fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     let store = asset_store_no_limits;
 
     // MP3 scenario: single wrapped file inside an asset.
-    let key = ResourceKey {
-        asset_root: asset_root.to_string(),
-        rel_path: rel_path.to_string(),
-    };
+    let key = ResourceKey::new(asset_root.to_string(), rel_path.to_string());
     let payload = Bytes::from((0..size).map(|i| (i % 251) as u8).collect::<Vec<_>>());
 
     // Keep the handle alive while we check the persisted pins file.
@@ -123,10 +120,7 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     // HLS scenario: many resources under one asset_root.
 
     // 1) playlist (atomic)
-    let playlist_key = ResourceKey {
-        asset_root: asset_root.to_string(),
-        rel_path: "master.m3u8".to_string(),
-    };
+    let playlist_key = ResourceKey::new(asset_root.to_string(), "master.m3u8".to_string());
     let playlist_bytes = Bytes::from_static(b"#EXTM3U\n#EXT-X-VERSION:7\n");
 
     let playlist = store
@@ -140,10 +134,8 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     // 2) segments (streaming, random access writes)
     let mut segments = Vec::new();
     for i in 0..segment_count.min(2) {
-        let seg_key = ResourceKey {
-            asset_root: asset_root.to_string(),
-            rel_path: format!("segments/{:04}.m4s", i + 1),
-        };
+        let seg_key =
+            ResourceKey::new(asset_root.to_string(), format!("segments/{:04}.m4s", i + 1));
 
         let seg = store
             .open_streaming_resource(&seg_key, cancel.clone())
@@ -212,16 +204,12 @@ async fn atomic_resource_roundtrip_with_different_paths(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
     cancel_token: CancellationToken,
-    temp_dir: tempfile::TempDir,
     asset_store_no_limits: AssetStore,
 ) {
     let cancel = cancel_token;
     let store = asset_store_no_limits;
 
-    let key = ResourceKey {
-        asset_root: asset_root.to_string(),
-        rel_path: rel_path.to_string(),
-    };
+    let key = ResourceKey::new(asset_root.to_string(), rel_path.to_string());
     let payload = Bytes::from_static(b"test data for atomic resource");
 
     let res = store
@@ -247,17 +235,12 @@ async fn streaming_resource_write_read_at_different_positions(
     #[case] size: usize,
     #[case] read_size: usize,
     cancel_token: CancellationToken,
-    temp_dir: tempfile::TempDir,
     asset_store_no_limits: AssetStore,
 ) {
     let cancel = cancel_token;
     let store = asset_store_no_limits;
 
-    let key = ResourceKey {
-        asset_root: "streaming-test".to_string(),
-        rel_path: "data.bin".to_string(),
-    };
-
+    let key = ResourceKey::new("streaming-test".to_string(), "data.bin".to_string());
     let res = store
         .open_streaming_resource(&key, cancel.clone())
         .await
@@ -291,23 +274,21 @@ async fn streaming_resource_write_read_at_different_positions(
 async fn multiple_resources_same_asset_root_independently_accessible(
     #[case] resource_count: usize,
     cancel_token: CancellationToken,
-    temp_dir: tempfile::TempDir,
     asset_store_no_limits: AssetStore,
 ) {
     let cancel = cancel_token;
     let store = asset_store_no_limits;
-
     let asset_root = "multi-resource-asset";
 
     // Create multiple resources under same asset_root
     let keys: Vec<ResourceKey> = (0..resource_count)
-        .map(|i| ResourceKey {
-            asset_root: asset_root.to_string(),
-            rel_path: if i % 2 == 0 {
+        .map(|i| {
+            let rel_path = if i % 2 == 0 {
                 format!("file{}.bin", i)
             } else {
                 format!("subdir/file{}.bin", i)
-            },
+            };
+            ResourceKey::new(asset_root.to_string(), rel_path)
         })
         .collect();
 

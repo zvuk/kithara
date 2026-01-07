@@ -16,12 +16,12 @@ use url::Url;
 /// - opens the file using the requested resource type (streaming vs atomic).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ResourceKey {
-    pub asset_root: String,
-    pub rel_path: String,
+    pub(crate) asset_root: String,
+    pub(crate) rel_path: String,
 }
 
 impl ResourceKey {
-    pub(crate) fn new(asset_root: impl Into<String>, rel_path: impl Into<String>) -> Self {
+    pub fn new(asset_root: impl Into<String>, rel_path: impl Into<String>) -> Self {
         Self {
             asset_root: asset_root.into(),
             rel_path: rel_path.into(),
@@ -43,6 +43,14 @@ impl ResourceKey {
             .unwrap_or("index")
             .to_string();
         Self::new(asset_root, rel_path)
+    }
+
+    pub fn asset_root(&self) -> &str {
+        &self.asset_root
+    }
+
+    pub fn rel_path(&self) -> &str {
+        &self.rel_path
     }
 }
 

@@ -47,10 +47,7 @@ async fn streaming_resource_complex_write_patterns(
     let cancel = cancel_token;
     let store = asset_store_no_limits;
 
-    let key = ResourceKey {
-        asset_root: "streaming-complex".to_string(),
-        rel_path: "data.bin".to_string(),
-    };
+    let key = ResourceKey::new("streaming-complex".to_string(), "data.bin".to_string());
 
     let res = store
         .open_streaming_resource(&key, cancel.clone())
@@ -91,10 +88,10 @@ async fn streaming_resource_concurrent_writes(
     let cancel = cancel_token;
     let store = asset_store_no_limits;
 
-    let key = ResourceKey {
-        asset_root: "streaming-concurrent".to_string(),
-        rel_path: "concurrent.bin".to_string(),
-    };
+    let key = ResourceKey::new(
+        "streaming-concurrent".to_string(),
+        "concurrent.bin".to_string(),
+    );
 
     let res = store
         .open_streaming_resource(&key, cancel.clone())
@@ -152,10 +149,7 @@ async fn streaming_resource_edge_case_reads(
     let cancel = cancel_token;
     let store = asset_store_no_limits;
 
-    let key = ResourceKey {
-        asset_root: "streaming-edge-reads".to_string(),
-        rel_path: "edge.bin".to_string(),
-    };
+    let key = ResourceKey::new("streaming-edge-reads".to_string(), "edge.bin".to_string());
 
     let res = store
         .open_streaming_resource(&key, cancel.clone())
@@ -198,10 +192,7 @@ async fn streaming_resource_multiple_range_operations(
     let cancel = cancel_token;
     let store = asset_store_no_limits;
 
-    let key = ResourceKey {
-        asset_root: "streaming-multi-range".to_string(),
-        rel_path: "multi.bin".to_string(),
-    };
+    let key = ResourceKey::new("streaming-multi-range".to_string(), "multi.bin".to_string());
 
     let res = store
         .open_streaming_resource(&key, cancel.clone())
@@ -247,10 +238,7 @@ async fn streaming_resource_commit_behavior(
     let cancel = cancel_token;
     let store = asset_store_no_limits;
 
-    let key = ResourceKey {
-        asset_root: "streaming-commit".to_string(),
-        rel_path: "commit.bin".to_string(),
-    };
+    let key = ResourceKey::new("streaming-commit".to_string(), "commit.bin".to_string());
 
     let res = store
         .open_streaming_resource(&key, cancel.clone())
@@ -303,10 +291,7 @@ async fn streaming_resource_zero_length_operations(
     let cancel = cancel_token;
     let store = asset_store_no_limits;
 
-    let key = ResourceKey {
-        asset_root: "streaming-zero-length".to_string(),
-        rel_path: "zero.bin".to_string(),
-    };
+    let key = ResourceKey::new("streaming-zero-length".to_string(), "zero.bin".to_string());
 
     let res = store
         .open_streaming_resource(&key, cancel.clone())

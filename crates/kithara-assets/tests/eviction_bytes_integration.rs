@@ -64,10 +64,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
 
     // Asset A: create some data and then explicitly record bytes in LRU via eviction decorator.
     {
-        let key_a = ResourceKey {
-            asset_root: asset_a_name.to_string(),
-            rel_path: "media/a.bin".to_string(),
-        };
+        let key_a = ResourceKey::new(asset_a_name.to_string(), "media/a.bin".to_string());
         let res_a = store
             .open_atomic_resource(&key_a, cancel.clone())
             .await
@@ -93,10 +90,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
 
     // Asset B: create and record bytes.
     {
-        let key_b = ResourceKey {
-            asset_root: asset_b_name.to_string(),
-            rel_path: "media/b.bin".to_string(),
-        };
+        let key_b = ResourceKey::new(asset_b_name.to_string(), "media/b.bin".to_string());
         let res_b = store
             .open_atomic_resource(&key_b, cancel.clone())
             .await
@@ -119,10 +113,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
 
     // Asset C: first open for a new asset_root triggers eviction.
     {
-        let key_c = ResourceKey {
-            asset_root: asset_c_name.to_string(),
-            rel_path: "media/c.bin".to_string(),
-        };
+        let key_c = ResourceKey::new(asset_c_name.to_string(), "media/c.bin".to_string());
         let res_c = store
             .open_atomic_resource(&key_c, cancel.clone())
             .await
@@ -181,10 +172,7 @@ async fn eviction_corner_cases_different_byte_limits(
     let asset_names = vec!["asset-corner-1", "asset-corner-2"];
 
     for (i, (size, name)) in asset_sizes.iter().zip(asset_names.iter()).enumerate() {
-        let key = ResourceKey {
-            asset_root: name.to_string(),
-            rel_path: format!("data{}.bin", i),
-        };
+        let key = ResourceKey::new(name.to_string(), format!("data{}.bin", i));
 
         let res = store
             .open_atomic_resource(&key, cancel.clone())
@@ -203,10 +191,7 @@ async fn eviction_corner_cases_different_byte_limits(
     }
 
     // Create a new asset that should trigger eviction
-    let trigger_key = ResourceKey {
-        asset_root: "asset-trigger".to_string(),
-        rel_path: "trigger.bin".to_string(),
-    };
+    let trigger_key = ResourceKey::new("asset-trigger".to_string(), "trigger.bin".to_string());
 
     let res = store
         .open_atomic_resource(&trigger_key, cancel.clone())
