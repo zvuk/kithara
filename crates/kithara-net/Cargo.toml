@@ -19,3 +19,4 @@ async-trait = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }
 futures = { workspace = true }
+rstest = { workspace = true }
