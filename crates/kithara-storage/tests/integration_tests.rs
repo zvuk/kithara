@@ -28,6 +28,47 @@ fn cancel_token_cancelled() -> CancellationToken {
     token
 }
 
+// === Path Method Tests ===
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn atomic_resource_path_method(temp_dir: TempDir, cancel_token: CancellationToken) {
+    let file_path = temp_dir.path().join("test.dat");
+    let atomic: AtomicResource =
+        AtomicResource::open(AtomicOptions::new(file_path.clone(), cancel_token));
+
+    // Check that path() returns the correct path
+    assert_eq!(atomic.path(), file_path);
+
+    // Check that path() returns the same path after operations
+    atomic
+        .write(b"test data")
+        .await
+        .expect("Write should succeed");
+    assert_eq!(atomic.path(), file_path);
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn streaming_resource_path_method(temp_dir: TempDir, cancel_token: CancellationToken) {
+    let file_path = temp_dir.path().join("streaming.dat");
+    let streaming = StreamingResource::open_disk(DiskOptions::new(file_path.clone(), cancel_token))
+        .await
+        .expect("Open should succeed");
+
+    // Check that path() returns the correct path
+    assert_eq!(streaming.path(), file_path);
+
+    // Check that path() returns the same path after operations
+    streaming
+        .write_at(0, b"test")
+        .await
+        .expect("Write should succeed");
+    assert_eq!(streaming.path(), file_path);
+}
+
 // === AtomicResource Tests ===
 
 #[rstest]

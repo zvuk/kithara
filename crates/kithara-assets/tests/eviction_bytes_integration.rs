@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
+use kithara_assets::{AssetStore, Assets, EvictConfig, ResourceKey};
 use kithara_storage::Resource;
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
@@ -39,7 +39,6 @@ fn asset_store_with_100_bytes_limit(temp_dir: tempfile::TempDir) -> AssetStore {
 #[case(90, 30, "large-1", "large-2", "large-3")]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-#[ignore = "eviction logic needs investigation"]
 async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     #[case] bytes_a: usize,
     #[case] bytes_b: usize,
@@ -47,12 +46,13 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     #[case] asset_b_name: &str,
     #[case] asset_c_name: &str,
     cancel_token: CancellationToken,
-    temp_dir: tempfile::TempDir,
     asset_store_with_100_bytes_limit: AssetStore,
 ) {
-    let dir = temp_dir.path();
     let cancel = cancel_token;
     let store = asset_store_with_100_bytes_limit;
+
+    // Get the root directory from the store
+    let dir = store.root_dir();
 
     // Keep bytes under 100. We'll:
     // - create A (60 bytes)
@@ -85,7 +85,14 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             .await
             .unwrap();
 
-        assert!(exists_asset_dir(dir, asset_a_name));
+        // Check that the resource file exists at the correct path
+        let expected_path = dir.join(asset_a_name).join("media/a.bin");
+        assert_eq!(res_a.path(), expected_path);
+        assert!(
+            res_a.path().exists(),
+            "Resource file should exist at {:?}",
+            res_a.path()
+        );
     }
 
     // Asset B: create and record bytes.
@@ -108,7 +115,14 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             .await
             .unwrap();
 
-        assert!(exists_asset_dir(dir, asset_b_name));
+        // Check that the resource file exists at the correct path
+        let expected_path = dir.join(asset_b_name).join("media/b.bin");
+        assert_eq!(res_b.path(), expected_path);
+        assert!(
+            res_b.path().exists(),
+            "Resource file should exist at {:?}",
+            res_b.path()
+        );
     }
 
     // Asset C: first open for a new asset_root triggers eviction.
@@ -122,24 +136,41 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         res_c.write(&Bytes::from_static(b"C")).await.unwrap();
         res_c.commit(None).await.unwrap();
 
-        assert!(exists_asset_dir(dir, asset_c_name));
+        // Check that the resource file exists at the correct path
+        let expected_path = dir.join(asset_c_name).join("media/c.bin");
+        assert_eq!(res_c.path(), expected_path);
+        assert!(
+            res_c.path().exists(),
+            "Resource file should exist at {:?}",
+            res_c.path()
+        );
     }
 
     // Expect A evicted (oldest) to satisfy max_bytes.
+    // Check that the resource file no longer exists
+    let asset_a_path = dir.join(asset_a_name).join("media/a.bin");
     assert!(
-        !exists_asset_dir(dir, asset_a_name),
-        "{} should be evicted as the oldest asset to satisfy max_bytes",
-        asset_a_name
+        !asset_a_path.exists(),
+        "{} should be evicted as the oldest asset to satisfy max_bytes. Path: {:?}",
+        asset_a_name,
+        asset_a_path
     );
+
+    // Check that asset B and C still exist
+    let asset_b_path = dir.join(asset_b_name).join("media/b.bin");
     assert!(
-        exists_asset_dir(dir, asset_b_name),
-        "{} should remain after eviction",
-        asset_b_name
+        asset_b_path.exists(),
+        "{} should remain after eviction. Path: {:?}",
+        asset_b_name,
+        asset_b_path
     );
+
+    let asset_c_path = dir.join(asset_c_name).join("media/c.bin");
     assert!(
-        exists_asset_dir(dir, asset_c_name),
-        "{} is newly created and should exist",
-        asset_c_name
+        asset_c_path.exists(),
+        "{} is newly created and should exist. Path: {:?}",
+        asset_c_name,
+        asset_c_path
     );
 }
 
@@ -156,7 +187,6 @@ async fn eviction_corner_cases_different_byte_limits(
     cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
 ) {
-    let dir = temp_dir.path();
     let cancel = cancel_token;
 
     let store = AssetStore::with_root_dir(
@@ -166,6 +196,8 @@ async fn eviction_corner_cases_different_byte_limits(
             max_bytes: Some(max_bytes as u64),
         },
     );
+
+    let dir = store.root_dir();
 
     // Create assets that approach the limit
     let asset_sizes = vec![max_bytes / 3, max_bytes / 3];

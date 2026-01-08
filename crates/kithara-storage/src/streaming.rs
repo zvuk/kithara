@@ -102,11 +102,6 @@ impl StreamingResource {
         })
     }
 
-    /// Return the backing path (disk backend).
-    pub fn path(&self) -> &Path {
-        &self.inner.path
-    }
-
     /// Return current status (best-effort snapshot).
     pub async fn status(&self) -> ResourceStatus {
         let state = self.inner.state.lock().await;
@@ -234,6 +229,10 @@ impl Resource for StreamingResource {
         }
         self.inner.notify.notify_waiters();
         Ok(())
+    }
+
+    fn path(&self) -> &Path {
+        &self.inner.path
     }
 }
 

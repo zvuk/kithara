@@ -44,8 +44,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use kithara_assets::ResourceKey;
 use kithara_storage::StreamingResourceExt;
-use kithara_stream::io::{
-    IoError as KitharaIoError, IoResult as KitharaIoResult, Source, WaitOutcome,
+use kithara_stream::{
+    Source, StreamError as KitharaIoError, StreamResult as KitharaIoResult, WaitOutcome,
 };
 use tokio::sync::OnceCell;
 use tracing::{debug, trace, warn};
@@ -318,11 +318,12 @@ impl HlsSessionSource {
         segment_index: usize,
         offset_in_segment: u64,
         len: usize,
-    ) -> KitharaIoResult<WaitOutcome> {
-        let seg = state
-            .segments
-            .get(segment_index)
-            .ok_or_else(|| KitharaIoError::Source("segment index out of bounds".into()))?;
+    ) -> KitharaIoResult<WaitOutcome, HlsError> {
+        let seg = state.segments.get(segment_index).ok_or_else(|| {
+            KitharaIoError::Source(HlsError::PlaylistParse(
+                "segment index out of bounds".to_string(),
+            ))
+        })?;
 
         let start = offset_in_segment;
         let end = offset_in_segment.saturating_add(len as u64);
@@ -331,12 +332,12 @@ impl HlsSessionSource {
             .fetch_manager
             .open_media_streaming_resource(state.variant_index, &seg.url)
             .await
-            .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+            .map_err(KitharaIoError::Source)?;
 
         match res.wait_range(start..end).await {
             Ok(kithara_storage::WaitOutcome::Ready) => Ok(WaitOutcome::Ready),
             Ok(kithara_storage::WaitOutcome::Eof) => Ok(WaitOutcome::Eof),
-            Err(e) => Err(KitharaIoError::Source(e.to_string())),
+            Err(e) => Err(KitharaIoError::Source(HlsError::Storage(e))),
         }
     }
 
@@ -346,27 +347,30 @@ impl HlsSessionSource {
         segment_index: usize,
         offset_in_segment: u64,
         len: usize,
-    ) -> KitharaIoResult<Bytes> {
-        let seg = state
-            .segments
-            .get(segment_index)
-            .ok_or_else(|| KitharaIoError::Source("segment index out of bounds".into()))?;
+    ) -> KitharaIoResult<Bytes, HlsError> {
+        let seg = state.segments.get(segment_index).ok_or_else(|| {
+            KitharaIoError::Source(HlsError::PlaylistParse(
+                "segment index out of bounds".to_string(),
+            ))
+        })?;
 
         let res = self
             .fetch_manager
             .open_media_streaming_resource(state.variant_index, &seg.url)
             .await
-            .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+            .map_err(KitharaIoError::Source)?;
 
         res.read_at(offset_in_segment, len)
             .await
-            .map_err(|e| KitharaIoError::Source(e.to_string()))
+            .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))
     }
 }
 
 #[async_trait]
 impl Source for HlsSessionSource {
-    async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome> {
+    type Error = HlsError;
+
+    async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome, HlsError> {
         trace!(
             start = range.start,
             end = range.end,
@@ -374,10 +378,7 @@ impl Source for HlsSessionSource {
             "kithara-hls session source wait_range begin"
         );
 
-        let state = self
-            .ensure_state()
-            .await
-            .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+        let state = self.ensure_state().await.map_err(KitharaIoError::Source)?;
 
         trace!(
             total_len = state.total_len,
@@ -423,9 +424,9 @@ impl Source for HlsSessionSource {
             }
 
             let need = (end - pos).min(seg_remaining);
-            let need_usize: usize = need
-                .try_into()
-                .map_err(|_| KitharaIoError::Source("range too large".into()))?;
+            let need_usize: usize = need.try_into().map_err(|_| {
+                KitharaIoError::Source(HlsError::PlaylistParse("range too large".to_string()))
+            })?;
 
             trace!(
                 seg_idx,
@@ -453,7 +454,7 @@ impl Source for HlsSessionSource {
         Ok(WaitOutcome::Ready)
     }
 
-    async fn read_at(&self, offset: u64, len: usize) -> KitharaIoResult<Bytes> {
+    async fn read_at(&self, offset: u64, len: usize) -> KitharaIoResult<Bytes, HlsError> {
         trace!(
             offset,
             len,
@@ -465,10 +466,7 @@ impl Source for HlsSessionSource {
             return Ok(Bytes::new());
         }
 
-        let state = self
-            .ensure_state()
-            .await
-            .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+        let state = self.ensure_state().await.map_err(KitharaIoError::Source)?;
 
         if offset >= state.total_len {
             trace!(
@@ -516,9 +514,9 @@ impl Source for HlsSessionSource {
         }
 
         let want = (len as u64).min(seg_remaining);
-        let want_usize: usize = want
-            .try_into()
-            .map_err(|_| KitharaIoError::Source("read length too large".into()))?;
+        let want_usize: usize = want.try_into().map_err(|_| {
+            KitharaIoError::Source(HlsError::PlaylistParse("read length too large".to_string()))
+        })?;
 
         let bytes = self
             .read_in_segment(state, seg_idx, seg_off, want_usize)

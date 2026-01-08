@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::path::Path;
+
 use async_trait::async_trait;
 use kithara_storage::{AtomicResource, StreamingResource};
 use tokio_util::sync::CancellationToken;
@@ -31,7 +33,7 @@ use crate::{error::AssetsResult, key::ResourceKey};
 /// Leasing / pinning is implemented strictly as a decorator (`LeaseAssets`) over a base [`Assets`]
 /// implementation. The base `Assets` does not know about pins.
 #[async_trait]
-pub trait Assets: Send + Sync + 'static {
+pub trait Assets: Clone + Send + Sync + 'static {
     /// Open an atomic resource (small object) addressed by `key`.
     ///
     /// This must not perform pinning; pinning is the responsibility of the `LeaseAssets` decorator.
@@ -84,4 +86,10 @@ pub trait Assets: Send + Sync + 'static {
         &self,
         cancel: CancellationToken,
     ) -> AssetsResult<AtomicResource>;
+
+    /// Return the root directory for disk-backed implementations.
+    ///
+    /// For disk-backed implementations, this returns the root directory path.
+    /// For in-memory or network-backed implementations, this may return a placeholder path.
+    fn root_dir(&self) -> &Path;
 }

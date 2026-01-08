@@ -4,11 +4,11 @@ use std::ops::Range;
 
 use bytes::Bytes;
 use kithara_storage::StreamingResourceExt;
-use kithara_stream::io::{IoError as KitharaIoError, IoResult as KitharaIoResult, WaitOutcome};
+use kithara_stream::{StreamError as KitharaIoError, StreamResult as KitharaIoResult, WaitOutcome};
 use tracing::debug;
 use url::Url;
 
-use crate::fetch::FetchManager;
+use crate::{HlsError, fetch::FetchManager};
 
 /// Fixed-variant, byte-addressable cursor over an HLS VOD playlist.
 ///
@@ -132,7 +132,7 @@ impl SegmentCursor {
     /// Ensure that a contiguous byte range is available (across segment boundaries).
     ///
     /// This does not read bytes; it just blocks until the data is available (or EOF).
-    pub async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome> {
+    pub async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome, HlsError> {
         if range.start >= self.total_len {
             return Ok(WaitOutcome::Eof);
         }
@@ -159,11 +159,11 @@ impl SegmentCursor {
                 .fetch
                 .open_media_streaming_resource(self.variant_index, &seg.url)
                 .await
-                .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+                .map_err(KitharaIoError::Source)?;
             let outcome = res
                 .wait_range(seg_off..seg_off.saturating_add(need))
                 .await
-                .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+                .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?;
 
             match outcome {
                 kithara_storage::WaitOutcome::Ready => {
@@ -180,7 +180,7 @@ impl SegmentCursor {
     ///
     /// This reads within a single segment only. Callers that need contiguous buffers across
     /// boundaries should loop.
-    pub async fn read_at(&self, offset: u64, len: usize) -> KitharaIoResult<Bytes> {
+    pub async fn read_at(&self, offset: u64, len: usize) -> KitharaIoResult<Bytes, HlsError> {
         if len == 0 {
             return Ok(Bytes::new());
         }
@@ -199,9 +199,9 @@ impl SegmentCursor {
         }
 
         let want = (len as u64).min(seg_remaining);
-        let want_usize: usize = want
-            .try_into()
-            .map_err(|_| KitharaIoError::Source("read length too large".into()))?;
+        let want_usize: usize = want.try_into().map_err(|_| {
+            KitharaIoError::Source(HlsError::PlaylistParse("read length too large".to_string()))
+        })?;
 
         // Intentionally quiet: this mapping is on the hot path during playback.
 
@@ -209,11 +209,11 @@ impl SegmentCursor {
             .fetch
             .open_media_streaming_resource(self.variant_index, &seg.url)
             .await
-            .map_err(|e| KitharaIoError::Source(e.to_string()))?;
+            .map_err(KitharaIoError::Source)?;
 
         res.read_at(seg_off, want_usize)
             .await
-            .map_err(|e| KitharaIoError::Source(e.to_string()))
+            .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))
     }
 
     /// Yield the next sequential chunk from the current cursor position.
@@ -222,7 +222,7 @@ impl SegmentCursor {
     /// - `Ok(Some(bytes))` with non-empty bytes on progress,
     /// - `Ok(None)` on EOF,
     /// - `Err(...)` on I/O/storage/network errors.
-    pub async fn next_chunk(&mut self) -> KitharaIoResult<Option<Bytes>> {
+    pub async fn next_chunk(&mut self) -> KitharaIoResult<Option<Bytes>, HlsError> {
         if self.pos >= self.total_len {
             return Ok(None);
         }
@@ -236,12 +236,12 @@ impl SegmentCursor {
             WaitOutcome::Eof => Ok(None),
             WaitOutcome::Ready => {
                 let want = (end - self.pos) as usize;
-                let bytes = self.read_at(self.pos, want).await?;
+                let bytes: Bytes = self.read_at(self.pos, want).await?;
 
                 if bytes.is_empty() {
-                    return Err(KitharaIoError::Source(
-                        "segment_cursor: storage returned empty after Ready".into(),
-                    ));
+                    return Err(KitharaIoError::Source(HlsError::PlaylistParse(
+                        "segment_cursor: storage returned empty after Ready".to_string(),
+                    )));
                 }
 
                 self.pos = self.pos.saturating_add(bytes.len() as u64);

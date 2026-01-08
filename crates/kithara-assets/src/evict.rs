@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashSet,
+    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -16,29 +17,21 @@ use crate::{
     key::ResourceKey,
 };
 
-/// Eviction decorator over a base [`Assets`] implementation.
+/// A decorator that enforces LRU eviction with optional per-asset byte accounting.
 ///
-/// ## Normative behavior
-/// - Eviction is evaluated **only** when a *new* asset is created (first time `asset_root` is seen),
-///   not as a background task.
-/// - LRU bookkeeping is stored on disk via `open_lru_index_resource`.
-/// - Pins are stored on disk via `open_pins_index_resource`, and pinned assets must not be evicted.
-/// - If a candidate is pinned, it is skipped.
-/// - Best-effort: eviction failures must not prevent opening resources for the new asset; errors
-///   are swallowed during eviction attempts.
+/// This layer sits between `LeaseAssets` (pinning) and the concrete store (disk).
+/// It does NOT wrap resources; it only intercepts `open_*_resource` calls to
+/// perform eviction decisions at asset-creation time.
 ///
-/// ## Asset creation time (definition)
-/// An asset is considered "created" when the decorator observes an `open_*_resource` call for an
-/// `asset_root` that does not yet exist in the persisted LRU index. (Touching an existing asset
-/// does not trigger eviction.)
-///
-/// ## max_bytes accounting
-/// `max_bytes` is enforced based on best-effort bytes accounting stored in the LRU index, not by
-/// scanning the filesystem. This decorator updates bytes on:
-/// - atomic writes: size = last written length (whole-object)
-/// - streaming commits: `final_len` if provided
-///
-/// If bytes are unknown for many assets, `max_bytes` becomes a soft hint.
+/// ## Normative
+/// - Eviction is evaluated only when a new `asset_root` is observed (i.e., the first
+///   `open_*_resource` for that root in this process).
+/// - The decision uses the persisted LRU index, not in‑memory state (except for a
+///   small “already seen” set to avoid reloading the index on every open).
+/// - Pinned assets are excluded from eviction candidates.
+/// - Both `max_assets` and `max_bytes` are soft caps enforced best‑effort.
+/// - Byte accounting is best‑effort and must be explicitly updated via
+///   `touch_asset_bytes`; the evictor does NOT walk the filesystem.
 #[derive(Clone)]
 pub struct EvictAssets<A>
 where
@@ -46,9 +39,6 @@ where
 {
     base: Arc<A>,
     cfg: EvictConfig,
-
-    // In-memory fast path: avoid re-triggering eviction on repeated opens for the same asset_root
-    // within this process. Persistence is still the source of truth.
     seen: Arc<Mutex<HashSet<String>>>,
 }
 
@@ -56,7 +46,7 @@ impl<A> EvictAssets<A>
 where
     A: Assets,
 {
-    pub fn new(base: Arc<A>, cfg: EvictConfig) -> Self {
+    pub(crate) fn new(base: Arc<A>, cfg: EvictConfig) -> Self {
         Self {
             base,
             cfg,
@@ -64,19 +54,15 @@ where
         }
     }
 
-    pub fn base(&self) -> &A {
+    pub(crate) fn base(&self) -> &A {
         &self.base
     }
 
-    pub fn config(&self) -> &EvictConfig {
-        &self.cfg
-    }
-
-    /// Explicitly update best-effort byte accounting for an asset.
+    /// Explicitly record the byte size of an asset in the LRU index.
     ///
-    /// This is the MVP `max_bytes` integration:
-    /// - higher layers call this when they know the asset size (e.g. after writing/committing),
-    /// - we persist `bytes` into the LRU index via `touch(asset_root, Some(bytes))`.
+    /// This is a separate call because the evictor does not know the actual size
+    /// of an asset (it does not walk the filesystem). Higher layers must call
+    /// this after they have written the asset’s data.
     ///
     /// Normative:
     /// - this does NOT trigger eviction by itself; eviction is only evaluated on "asset creation"
@@ -188,6 +174,10 @@ impl<A> Assets for EvictAssets<A>
 where
     A: Assets,
 {
+    fn root_dir(&self) -> &Path {
+        self.base.root_dir()
+    }
+
     async fn open_atomic_resource(
         &self,
         key: &ResourceKey,
@@ -223,14 +213,14 @@ where
         self.base.open_pins_index_resource(cancel).await
     }
 
-    async fn delete_asset(&self, asset_root: &str, cancel: CancellationToken) -> AssetsResult<()> {
-        self.base.delete_asset(asset_root, cancel).await
-    }
-
     async fn open_lru_index_resource(
         &self,
         cancel: CancellationToken,
     ) -> AssetsResult<AtomicResource> {
         self.base.open_lru_index_resource(cancel).await
+    }
+
+    async fn delete_asset(&self, asset_root: &str, cancel: CancellationToken) -> AssetsResult<()> {
+        self.base.delete_asset(asset_root, cancel).await
     }
 }

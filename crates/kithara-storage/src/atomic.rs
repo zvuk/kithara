@@ -67,10 +67,6 @@ impl AtomicResource {
         }
     }
 
-    pub fn path(&self) -> &Path {
-        &self.inner.path
-    }
-
     async fn preflight(&self) -> StorageResult<()> {
         if self.inner.cancel.is_cancelled() {
             return Err(StorageError::Cancelled);
@@ -143,6 +139,10 @@ impl Resource for AtomicResource {
         let mut state = self.inner.state.lock().await;
         state.failed = Some(error.into());
         Ok(())
+    }
+
+    fn path(&self) -> &Path {
+        &self.inner.path
     }
 }
 

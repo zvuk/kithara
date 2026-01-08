@@ -88,6 +88,8 @@ impl HlsDriver {
                 Ok(StreamMsg::Control(_)) | Ok(StreamMsg::Event(_)) => None,
                 Err(e) => Some(Err(match e {
                     StreamError::SeekNotSupported => crate::HlsError::Unimplemented,
+                    StreamError::InvalidSeek => crate::HlsError::Unimplemented,
+                    StreamError::UnknownLength => crate::HlsError::Unimplemented,
                     StreamError::ChannelClosed => {
                         crate::HlsError::Driver("channel closed".to_string())
                     }
