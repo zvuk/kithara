@@ -46,13 +46,14 @@ pub mod cursor;
 pub use abr::{
     AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
 };
-pub use driver::{DriverError, SourceError};
+pub use driver::DriverError;
 pub use events::{EventEmitter, HlsEvent};
 pub use fetch::{FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
 pub use pipeline::{
-    Pipeline, PipelineCommand, PipelineError, PipelineEvent, PipelineResult, SegmentMeta,
-    SegmentPayload,
+    AbrStream, BaseStream, DrmStream, PipelineCommand, PipelineError, PipelineEvent,
+    PipelineResult, PrefetchStream, SegmentMeta, SegmentPayload,
+    SegmentStream as PipelineSegmentStream,
 };
 pub use playlist::{PlaylistError, PlaylistManager};
 pub use session::HlsSessionSource;
@@ -147,7 +148,7 @@ impl Default for HlsOptions {
             retry_base_delay: Duration::from_millis(100),
             max_retry_delay: Duration::from_secs(5),
             retry_timeout: Duration::from_secs(60),
-            prefetch_buffer_size: Some(3),
+            prefetch_buffer_size: Some(8),
             live_refresh_interval: None,
 
             key_processor_cb: None,

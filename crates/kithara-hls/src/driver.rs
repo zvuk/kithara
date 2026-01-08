@@ -1,50 +1,95 @@
-use std::{pin::Pin, sync::Arc, time::Instant};
+use std::{collections::HashMap, pin::Pin, sync::Arc};
 
+use async_stream::stream;
 use bytes::Bytes;
-use futures::{Stream as FuturesStream, StreamExt};
-use kithara_stream::{
-    Engine, EngineSource, EngineStream, StreamError, StreamMsg, StreamParams, WriterTask,
-};
-use thiserror::Error;
-use tokio::sync::{Mutex, broadcast};
+use futures::{Stream, StreamExt};
+use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{
-    HlsError, HlsOptions, HlsResult, KeyContext,
-    abr::{AbrController, variants_from_master},
+    HlsError, HlsOptions, HlsResult,
+    abr::{self, AbrController, Variant},
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
     keys::KeyManager,
-    playlist::{PlaylistManager, VariantId},
+    pipeline::{
+        AbrStream, BaseStream, DrmStream, PipelineError, PipelineEvent, PrefetchStream,
+        SegmentPayload, SegmentStream, base::PlaylistProvider, drm::Decrypter,
+    },
+    playlist::{MasterPlaylist, MediaPlaylist, PlaylistManager, VariantId},
 };
 
-#[derive(Debug, Error)]
+#[derive(Debug, thiserror::Error)]
 pub enum DriverError {
-    #[error("Stream error: {0}")]
-    Stream(#[from] kithara_stream::StreamError<SourceError>),
+    #[error("pipeline error: {0}")]
+    Pipeline(#[from] PipelineError),
 }
 
-#[derive(Debug, Error)]
-pub enum SourceError {
-    #[error("HLS error: {0}")]
-    Hls(#[from] crate::HlsError),
+/// Адаптер для FetchManager под новый пайплайн.
+struct FetcherAdapter {
+    fetch: Arc<FetchManager>,
+}
+
+impl crate::pipeline::base::Fetcher for FetcherAdapter {
+    fn stream_segment_sequence(
+        &self,
+        media_playlist: MediaPlaylist,
+        base_url: &Url,
+    ) -> crate::fetch::SegmentStream<'static> {
+        self.fetch
+            .stream_segment_sequence(media_playlist, base_url, None)
+    }
+}
+
+/// Адаптер плейлистов: мастер + заранее загруженные медиа.
+struct PlaylistAdapter {
+    master: MasterPlaylist,
+    media: HashMap<usize, (Url, MediaPlaylist)>,
+}
+
+impl PlaylistAdapter {
+    fn new(master: MasterPlaylist, media: HashMap<usize, (Url, MediaPlaylist)>) -> Self {
+        Self { master, media }
+    }
+}
+
+impl crate::pipeline::base::PlaylistProvider for PlaylistAdapter {
+    fn master_playlist(&self) -> &MasterPlaylist {
+        &self.master
+    }
+
+    fn media_playlist(&self, variant_index: usize) -> Option<(Url, MediaPlaylist)> {
+        self.media.get(&variant_index).cloned()
+    }
+}
+
+/// Passthrough DRM: возвращает payload как есть (шифрование ещё не реализовано).
+struct PassthroughDecrypter;
+
+impl Decrypter for PassthroughDecrypter {
+    fn decrypt(
+        &self,
+        payload: SegmentPayload,
+    ) -> Pin<Box<dyn futures::Future<Output = Result<SegmentPayload, HlsError>> + Send + 'static>>
+    {
+        Box::pin(async move { Ok(payload) })
+    }
 }
 
 pub struct HlsDriver {
-    _options: HlsOptions,
+    options: HlsOptions,
     master_url: Url,
     playlist_manager: Arc<PlaylistManager>,
     fetch_manager: Arc<FetchManager>,
     key_manager: Arc<KeyManager>,
     abr_controller: Arc<Mutex<AbrController>>,
     event_emitter: Arc<EventEmitter>,
-}
-
-fn media_playlist_init_uri(media: &crate::playlist::MediaPlaylist) -> Option<&str> {
-    media.init_segment.as_ref().map(|i| i.uri.as_str())
+    cancel: CancellationToken,
 }
 
 impl HlsDriver {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         master_url: Url,
         options: HlsOptions,
@@ -55,358 +100,164 @@ impl HlsDriver {
         event_emitter: EventEmitter,
     ) -> Self {
         Self {
-            _options: options,
+            options,
             master_url,
             playlist_manager: Arc::new(playlist_manager),
             fetch_manager: Arc::new(fetch_manager),
             key_manager: Arc::new(key_manager),
             abr_controller: Arc::new(Mutex::new(abr_controller)),
             event_emitter: Arc::new(event_emitter),
+            cancel: CancellationToken::new(),
         }
-    }
-
-    pub fn stream(&self) -> Pin<Box<dyn FuturesStream<Item = HlsResult<Bytes>> + Send + '_>> {
-        let source = HlsStream {
-            master_url: self.master_url.clone(),
-            playlist_manager: Arc::clone(&self.playlist_manager),
-            fetch_manager: Arc::clone(&self.fetch_manager),
-            key_manager: Arc::clone(&self.key_manager),
-            abr_controller: Arc::clone(&self.abr_controller),
-            event_emitter: Arc::clone(&self.event_emitter),
-        };
-
-        let params = StreamParams {
-            offline_mode: false,
-        };
-
-        let engine = Engine::new(source, params);
-        let s = engine.into_stream();
-        // TODO: surface control/event messages (e.g., variant switches, metrics) to consumers once the API surface is decided.
-        Box::pin(s.filter_map(|r| async move {
-            match r {
-                Ok(StreamMsg::Data(bytes)) => Some(Ok(bytes)),
-                Ok(StreamMsg::Control(_)) | Ok(StreamMsg::Event(_)) => None,
-                Err(e) => Some(Err(match e {
-                    StreamError::SeekNotSupported => crate::HlsError::Unimplemented,
-                    StreamError::InvalidSeek => crate::HlsError::Unimplemented,
-                    StreamError::UnknownLength => crate::HlsError::Unimplemented,
-                    StreamError::ChannelClosed => {
-                        crate::HlsError::Driver("channel closed".to_string())
-                    }
-                    StreamError::WriterJoin(msg) => crate::HlsError::Driver(msg),
-                    StreamError::Source(SourceError::Hls(hls)) => hls,
-                })),
-            }
-        }))
     }
 
     pub fn events(&self) -> broadcast::Receiver<HlsEvent> {
         self.event_emitter.subscribe()
     }
-}
 
-struct HlsStream {
-    master_url: Url,
-    playlist_manager: Arc<PlaylistManager>,
-    fetch_manager: Arc<FetchManager>,
-    key_manager: Arc<KeyManager>,
-    abr_controller: Arc<Mutex<AbrController>>,
-    event_emitter: Arc<EventEmitter>,
-}
+    pub fn stream(&self) -> Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + '_>> {
+        let playlist_manager = Arc::clone(&self.playlist_manager);
+        let fetch_manager = Arc::clone(&self.fetch_manager);
+        let abr = Arc::clone(&self.abr_controller);
+        let events = Arc::clone(&self.event_emitter);
+        let cancel = self.cancel.clone();
+        let opts = self.options.clone();
+        let master_url = self.master_url.clone();
 
-struct HlsStreamState {
-    master_url: Url,
-    playlist_manager: Arc<PlaylistManager>,
-    fetch_manager: Arc<FetchManager>,
-    _key_manager: Arc<KeyManager>,
-    abr_controller: Arc<Mutex<AbrController>>,
-    event_emitter: Arc<EventEmitter>,
-}
-
-impl HlsStream {
-    async fn load_variant_state(
-        playlist_manager: &PlaylistManager,
-        master_url: &Url,
-        variant_uri: String,
-        variant_index: usize,
-        current_init_uri: Option<String>,
-    ) -> Result<
-        (String, Url, crate::playlist::MediaPlaylist, Option<String>),
-        StreamError<SourceError>,
-    > {
-        let media_url = playlist_manager
-            .resolve_url(master_url, &variant_uri)
-            .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-
-        let media_playlist = playlist_manager
-            .fetch_media_playlist(&media_url, VariantId(variant_index))
-            .await
-            .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-
-        let new_init_uri = media_playlist_init_uri(&media_playlist).map(str::to_string);
-        let pending_init_uri = if new_init_uri != current_init_uri {
-            new_init_uri.clone()
-        } else {
-            None
-        };
-
-        Ok((variant_uri, media_url, media_playlist, pending_init_uri))
-    }
-}
-
-impl EngineSource for HlsStream {
-    type Error = SourceError;
-    type Control = ();
-    type Event = HlsEvent;
-    type State = Arc<HlsStreamState>;
-
-    fn init(
-        &mut self,
-        params: StreamParams,
-    ) -> Pin<
-        Box<
-            dyn std::future::Future<Output = Result<Self::State, StreamError<Self::Error>>>
-                + Send
-                + 'static,
-        >,
-    > {
-        let _offline_mode = params.offline_mode;
-        let state = Arc::new(HlsStreamState {
-            master_url: self.master_url.clone(),
-            playlist_manager: Arc::clone(&self.playlist_manager),
-            fetch_manager: Arc::clone(&self.fetch_manager),
-            _key_manager: Arc::clone(&self.key_manager),
-            abr_controller: Arc::clone(&self.abr_controller),
-            event_emitter: Arc::clone(&self.event_emitter),
-        });
-
-        Box::pin(async move { Ok(state) })
-    }
-
-    fn open_reader(
-        &mut self,
-        state: &Self::State,
-        params: StreamParams,
-    ) -> Result<EngineStream<Self::Control, Self::Event, Self::Error>, StreamError<Self::Error>>
-    {
-        let master_url = state.master_url.clone();
-        let playlist_manager = Arc::clone(&state.playlist_manager);
-        let fetch_manager = Arc::clone(&state.fetch_manager);
-        let abr_controller = Arc::clone(&state.abr_controller);
-        let event_emitter = Arc::clone(&state.event_emitter);
-
-        let _offline_mode = params.offline_mode;
-
-        Ok(Box::pin(async_stream::stream! {
-
-            let master_playlist = playlist_manager
-                .fetch_master_playlist(&master_url)
-                .await
-                .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-
-            let variants = variants_from_master(&master_playlist);
-
-            let mut buffer_level_secs: f64 = 0.0;
-            let mut pending_applied: Option<(usize, usize, crate::abr::AbrReason)> = None;
-
-            let mut current_variant = {
-                let abr = abr_controller.lock().await;
-                abr.current_variant()
-            };
-
-            let now = Instant::now();
-            let initial_decision = {
-                let abr = abr_controller.lock().await;
-                abr.decide_for_master(&master_playlist, &variants, buffer_level_secs, now)
-            };
-            if initial_decision.changed && initial_decision.target_variant_index != current_variant {
-                event_emitter.emit_variant_decision(
-                    current_variant,
-                    initial_decision.target_variant_index,
-                    initial_decision.reason,
-                );
-                pending_applied = Some((
-                    current_variant,
-                    initial_decision.target_variant_index,
-                    initial_decision.reason,
-                ));
-
-                {
-                    let mut abr = abr_controller.lock().await;
-                    abr.apply(&initial_decision, now);
+        Box::pin(stream! {
+            // 1) Загружаем мастер плейлист.
+            let master_playlist = match playlist_manager.fetch_master_playlist(&master_url).await {
+                Ok(m) => m,
+                Err(e) => {
+                    yield Err(e);
+                    return;
                 }
-                current_variant = initial_decision.target_variant_index;
-            }
+            };
 
-            let variant_uri: String = master_playlist
-                .variants
-                .get(current_variant)
-                .map(|v| v.uri.clone())
-                .ok_or_else(|| {
-                    StreamError::Source(SourceError::Hls(HlsError::VariantNotFound(format!(
-                        "Variant index {}",
-                        current_variant
-                    ))))
-                })?;
+            // 2) Загружаем все медиа плейлисты по вариантам (для быстрой смены).
+            let mut media_map: HashMap<usize, (Url, MediaPlaylist)> = HashMap::new();
+            for (idx, variant) in master_playlist.variants.iter().enumerate() {
+                let variant_url = match playlist_manager.resolve_url(&master_url, &variant.uri) {
+                    Ok(url) => url,
+                    Err(e) => {
+                        yield Err(e);
+                        return;
+                    }
+                };
 
-            let (_variant_uri, mut media_url, mut media_playlist, mut pending_init_uri) =
-                HlsStream::load_variant_state(
-                    &playlist_manager,
-                    &master_url,
-                    variant_uri,
-                    current_variant,
-                    None,
-                )
-                .await?;
-
-            let mut current_init_uri = media_playlist_init_uri(&media_playlist).map(str::to_string);
-            if let Some(init_uri) = current_init_uri.as_deref() {
-                let init_url = playlist_manager
-                    .resolve_url(&media_url, init_uri)
-                    .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-                let bytes = fetch_manager
-                    .fetch_init_segment(&init_url)
+                match playlist_manager
+                    .fetch_media_playlist(&variant_url, VariantId(idx))
                     .await
-                    .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-                yield Ok(StreamMsg::Data(bytes));
-            }
-
-            let segment_count = media_playlist.segments.len();
-            for segment_index in 0..segment_count {
-                let now = Instant::now();
-                let decision = {
-                    let abr = abr_controller.lock().await;
-                    abr.decide_for_master(&master_playlist, &variants, buffer_level_secs, now)
-                };
-
-                if decision.changed && decision.target_variant_index != current_variant {
-                    event_emitter.emit_variant_decision(
-                        current_variant,
-                        decision.target_variant_index,
-                        decision.reason,
-                    );
-                    pending_applied = Some((current_variant, decision.target_variant_index, decision.reason));
-
-                    {
-                        let mut abr = abr_controller.lock().await;
-                        abr.apply(&decision, now);
-                    }
-
-                    current_variant = decision.target_variant_index;
-                    let target_uri = master_playlist
-                        .variants
-                        .get(current_variant)
-                        .map(|v| v.uri.clone())
-                        .ok_or_else(|| {
-                            StreamError::Source(SourceError::Hls(HlsError::VariantNotFound(format!(
-                                "Variant index {}",
-                                current_variant
-                            ))))
-                        })?;
-
-                    let (new_variant_uri, new_media_url, new_media_playlist, new_pending_init) =
-                        HlsStream::load_variant_state(
-                            &playlist_manager,
-                            &master_url,
-                            target_uri,
-                            current_variant,
-                            current_init_uri.clone(),
-                        )
-                        .await?;
-
-                    let _ = new_variant_uri; // unused assignment
-                    media_url = new_media_url;
-                    media_playlist = new_media_playlist;
-                    pending_init_uri = new_pending_init;
-                    current_init_uri = media_playlist_init_uri(&media_playlist).map(str::to_string);
-                }
-
-                if let Some((from, to, reason)) = pending_applied.take() {
-                    event_emitter.emit_variant_applied(from, to, reason);
-                    if let Some(init_uri) = pending_init_uri.take() {
-                        let init_url = playlist_manager
-                            .resolve_url(&media_url, &init_uri)
-                            .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-                        let init = fetch_manager
-                            .fetch_init_segment(&init_url)
-                            .await
-                            .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-                        yield Ok(StreamMsg::Data(init));
-                    }
-                }
-
-                let segment_key_ctx = media_playlist
-                    .segments
-                    .get(segment_index)
-                    .and_then(|seg| seg.key.as_ref())
-                    .and_then(|seg_key| seg_key.key_info.as_ref())
-                    .and_then(|info| info.uri.as_ref().map(|uri| (uri.clone(), info.iv)));
-
-                let key_context_owned = if let Some((key_uri, iv)) = segment_key_ctx {
-                    let key_url = playlist_manager
-                        .resolve_url(&media_url, &key_uri)
-                        .map_err(|e| StreamError::Source(SourceError::Hls(e)))?;
-                    Some(KeyContext { url: key_url, iv })
-                } else {
-                    None
-                };
-
-                let fetch = fetch_manager
-                    .fetch_segment_with_meta(
-                        &media_playlist,
-                        segment_index,
-                        &media_url,
-                        key_context_owned.as_ref(),
-                    )
-                    .await;
-                match fetch {
-                    Ok(fetch) => {
-                        let at = Instant::now();
-                        if fetch.duration != std::time::Duration::ZERO {
-                            let bytes_per_second = fetch.bytes.len() as f64 / fetch.duration.as_secs_f64();
-                            event_emitter.emit_throughput_sample(bytes_per_second);
-                        }
-
-                        {
-                            let mut abr = abr_controller.lock().await;
-                            abr.push_throughput_sample(crate::abr::ThroughputSample {
-                                bytes: fetch.bytes.len() as u64,
-                                duration: fetch.duration,
-                                at,
-                                source: fetch.source,
-                            });
-                        }
-
-                        if let Some(seg) = media_playlist.segments.get(segment_index) {
-                            buffer_level_secs += seg.duration.as_secs_f64();
-                        }
-
-                        yield Ok(StreamMsg::Data(fetch.bytes));
+                {
+                    Ok(media) => {
+                        media_map.insert(idx, (variant_url.clone(), media));
                     }
                     Err(e) => {
-                        yield Err(StreamError::Source(SourceError::Hls(e)));
+                        yield Err(e);
                         return;
                     }
                 }
             }
 
-            event_emitter.emit_end_of_stream();
-        }))
-    }
+            // 3) Адаптеры для пайплайна.
+            let playlist_adapter = Arc::new(PlaylistAdapter::new(master_playlist.clone(), media_map));
+            let fetch_adapter = Arc::new(FetcherAdapter { fetch: fetch_manager.clone() });
 
-    fn start_writer(
-        &mut self,
-        _state: &Self::State,
-        _params: StreamParams,
-    ) -> Result<WriterTask<Self::Error>, StreamError<Self::Error>> {
-        Ok(tokio::spawn(async { Ok(()) }))
-    }
+            // 4) Начальный вариант через ABR (как раньше).
+            let variants: Vec<Variant> = abr::variants_from_master(&master_playlist);
+            let now = std::time::Instant::now();
+            let initial_variant = {
+                let abr_guard = abr.lock().await;
+                abr_guard
+                    .decide_for_master(&master_playlist, &variants, 0.0, now)
+                    .target_variant_index
+            };
 
-    fn seek_bytes(&mut self, _pos: u64) -> Result<(), StreamError<Self::Error>> {
-        Err(StreamError::SeekNotSupported)
-    }
+            // 5) Фоновый воркер: вычитываем сегменты выбранного варианта в кеш заранее.
+            if let Some((media_url, media_playlist)) = playlist_adapter.media_playlist(initial_variant) {
+            let fm_prefetch = fetch_manager.clone();
+            let url_base: Url = media_url.clone();
+                tokio::spawn(async move {
+                    for (seg_idx, seg) in media_playlist.segments.iter().enumerate() {
+                        if let Ok(seg_url) = url_base.join(&seg.uri) {
+                            let _ = fm_prefetch
+                                .open_media_streaming_resource(initial_variant, &seg_url)
+                                .await;
+                        } else {
+                            tracing::warn!(segment_index = seg_idx, "prefetch: failed to join segment url");
+                        }
+                    }
+                });
+            }
 
-    fn supports_seek(&self) -> bool {
-        false
+            let base = BaseStream::new(
+                fetch_adapter,
+                playlist_adapter,
+                cancel.clone(),
+                initial_variant,
+            );
+            let abr_layer = AbrStream::new(base, abr.clone(), cancel.clone());
+            let drm_layer = DrmStream::new(
+                abr_layer,
+                Some(Arc::new(PassthroughDecrypter)),
+                cancel.clone(),
+            );
+            let prefetch_capacity = opts.prefetch_buffer_size.unwrap_or(1).max(1);
+            let pipeline = PrefetchStream::new(drm_layer, prefetch_capacity, cancel.clone());
+
+            // 5) Подписка на события пайплайна -> HlsEvent.
+            let mut ev_rx = pipeline.event_sender().subscribe();
+            let events_clone = Arc::clone(&events);
+            tokio::spawn(async move {
+                while let Ok(ev) = ev_rx.recv().await {
+                    match ev {
+                        PipelineEvent::VariantSelected { from, to } => {
+                            events_clone.emit_variant_decision(from, to, abr::AbrReason::ManualOverride);
+                        }
+                        PipelineEvent::VariantApplied { from, to } => {
+                            events_clone.emit_variant_applied(from, to, abr::AbrReason::ManualOverride);
+                        }
+                        PipelineEvent::SegmentReady { variant, segment_index } => {
+                            events_clone.emit_segment_start(variant, segment_index, 0);
+                        }
+                        PipelineEvent::Decrypted { .. } => {
+                            // Нет отдельного HlsEvent, пропускаем.
+                        }
+                        PipelineEvent::Prefetched { .. } => {
+                            // Нет отдельного HlsEvent, пропускаем.
+                        }
+                    }
+                }
+            });
+
+            // 6) Воркер пайплайна пишет байты в очередь; внешний поток читает из неё.
+            let mut data_stream = Box::pin(pipeline);
+            let (tx, mut rx) = mpsc::channel(8);
+            tokio::spawn(async move {
+                while let Some(item) = data_stream.next().await {
+                    if tx.send(item).await.is_err() {
+                        break;
+                    }
+                }
+            });
+
+            while let Some(item) = rx.recv().await {
+                match item {
+                    Ok(payload) => {
+                        yield Ok(payload.bytes);
+                    }
+                    Err(PipelineError::Hls(e)) => {
+                        yield Err(e);
+                        return;
+                    }
+                    Err(PipelineError::Aborted) => {
+                        yield Err(HlsError::Driver("pipeline aborted".to_string()));
+                        return;
+                    }
+                }
+            }
+
+            events.emit_end_of_stream();
+        })
     }
 }
