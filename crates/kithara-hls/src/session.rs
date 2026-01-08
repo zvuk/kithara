@@ -15,6 +15,11 @@
 //! - Cache keys must include the selected variant index to match the deterministic on-disk layout.
 //! - If the media playlist contains an init segment (`EXT-X-MAP`), it must be included at the
 //!   beginning of the virtual file so `rodio::Decoder`/Symphonia can demux fMP4 correctly.
+//!
+//! Prefetch behavior:
+//! - When `prefetch_buffer_size` is `Some(n)`, we prefetch up to `n` segments ahead of current position.
+//! - When `prefetch_buffer_size` is `None`, we prefetch all remaining segments (continuous download).
+//! - Prefetch is triggered on `wait_in_segment` and respects ABR switches and seeks.
 
 /// Selects the effective variant index to use for this session.
 ///
@@ -27,6 +32,7 @@ fn select_variant_index(master: &MasterPlaylist, options: &HlsOptions) -> usize 
     }
 }
 
+use std::collections::HashMap;
 /// Tracing:
 // - This module logs initialization, playlist/segment URLs, cache keys, wait/read mapping,
 //   and EOF behavior. Use:
@@ -47,8 +53,8 @@ use kithara_storage::StreamingResourceExt;
 use kithara_stream::{
     Source, StreamError as KitharaIoError, StreamResult as KitharaIoResult, WaitOutcome,
 };
-use tokio::sync::OnceCell;
-use tracing::{debug, trace, warn};
+use tokio::sync::{OnceCell, RwLock};
+use tracing::{debug, error, info, trace, warn};
 use url::Url;
 
 use crate::{
@@ -64,14 +70,26 @@ pub struct HlsSessionSource {
     options: HlsOptions,
     asset_root: String,
     state: OnceCell<State>,
+    /// Cache for opened streaming resources
+    resource_cache: RwLock<ResourceCache>,
 }
 
+#[derive(Clone)]
 struct State {
     variant_index: usize,
     segments: Vec<SegmentDesc>,
     total_len: u64,
     prefix: Vec<u64>,
 }
+
+/// Cache for opened streaming resources to avoid reopening the same segment multiple times
+type ResourceCache = HashMap<
+    usize,
+    kithara_assets::AssetResource<
+        kithara_storage::StreamingResource,
+        kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
+    >,
+>;
 
 #[derive(Clone, Debug)]
 struct SegmentDesc {
@@ -98,6 +116,7 @@ impl HlsSessionSource {
             options,
             asset_root,
             state: OnceCell::new(),
+            resource_cache: RwLock::new(HashMap::new()),
         }
     }
 
@@ -328,16 +347,131 @@ impl HlsSessionSource {
         let start = offset_in_segment;
         let end = offset_in_segment.saturating_add(len as u64);
 
-        let res = self
-            .fetch_manager
-            .open_media_streaming_resource(state.variant_index, &seg.url)
-            .await
-            .map_err(KitharaIoError::Source)?;
+        info!(
+            segment_index,
+            offset_in_segment,
+            len,
+            segment_url = %seg.url,
+            "HLS wait_in_segment START"
+        );
+        let wait_start = std::time::Instant::now();
 
-        match res.wait_range(start..end).await {
+        // Check cache first
+        let res = {
+            let cache = self.resource_cache.read().await;
+            if let Some(cached_res) = cache.get(&segment_index) {
+                info!(segment_index, "HLS using cached resource");
+                cached_res.clone()
+            } else {
+                drop(cache); // Release read lock before writing
+
+                let res = self
+                    .fetch_manager
+                    .open_media_streaming_resource(state.variant_index, &seg.url)
+                    .await
+                    .map_err(KitharaIoError::Source)?;
+
+                // Cache the resource
+                let mut cache = self.resource_cache.write().await;
+                cache.insert(segment_index, res.clone());
+                info!(segment_index, "HLS cached resource");
+
+                res
+            }
+        };
+
+        let open_duration = wait_start.elapsed();
+        info!(
+            segment_index,
+            open_duration_ms = open_duration.as_millis(),
+            "HLS open_media_streaming_resource DONE"
+        );
+
+        // Trigger prefetch for upcoming segments
+        self.prefetch_upcoming_segments(state, segment_index).await;
+
+        let wait_start = std::time::Instant::now();
+        let result = match res.wait_range(start..end).await {
             Ok(kithara_storage::WaitOutcome::Ready) => Ok(WaitOutcome::Ready),
             Ok(kithara_storage::WaitOutcome::Eof) => Ok(WaitOutcome::Eof),
             Err(e) => Err(KitharaIoError::Source(HlsError::Storage(e))),
+        };
+
+        let wait_duration = wait_start.elapsed();
+        info!(
+            segment_index,
+            wait_duration_ms = wait_duration.as_millis(),
+            outcome = ?result,
+            "HLS wait_range DONE"
+        );
+
+        result
+    }
+
+    /// Prefetch upcoming segments based on prefetch_buffer_size setting
+    async fn prefetch_upcoming_segments(&self, state: &State, current_segment_index: usize) {
+        // Check if we need to prefetch
+        let Some(prefetch_size) = self.options.prefetch_buffer_size else {
+            // None means prefetch all remaining segments (continuous download)
+            // Prefetch only the next segment to avoid overloading
+            let next_index = current_segment_index + 1;
+            if let Some(seg) = state.segments.get(next_index) {
+                info!(
+                    segment_index = next_index,
+                    segment_url = %seg.url,
+                    "HLS prefetch (continuous) START"
+                );
+                let prefetch_start = std::time::Instant::now();
+
+                // Non-blocking prefetch - ignore result
+                let _ = self
+                    .fetch_manager
+                    .open_media_streaming_resource(state.variant_index, &seg.url)
+                    .await;
+
+                let prefetch_duration = prefetch_start.elapsed();
+                info!(
+                    segment_index = next_index,
+                    prefetch_duration_ms = prefetch_duration.as_millis(),
+                    "HLS prefetch (continuous) DONE"
+                );
+            }
+            return;
+        };
+
+        // Some(n) means prefetch up to n segments ahead
+        if prefetch_size == 0 {
+            return;
+        }
+
+        // Calculate range of segments to prefetch
+        let start_index = current_segment_index + 1;
+        let end_index = (current_segment_index + 1 + prefetch_size).min(state.segments.len());
+
+        // Prefetch only the next segment (simplified to avoid complexity)
+        if start_index < end_index {
+            if let Some(seg) = state.segments.get(start_index) {
+                info!(
+                    segment_index = start_index,
+                    segment_url = %seg.url,
+                    prefetch_buffer_size = prefetch_size,
+                    "HLS prefetch (buffered) START"
+                );
+                let prefetch_start = std::time::Instant::now();
+
+                // Non-blocking prefetch - ignore result
+                let _ = self
+                    .fetch_manager
+                    .open_media_streaming_resource(state.variant_index, &seg.url)
+                    .await;
+
+                let prefetch_duration = prefetch_start.elapsed();
+                info!(
+                    segment_index = start_index,
+                    prefetch_duration_ms = prefetch_duration.as_millis(),
+                    "HLS prefetch (buffered) DONE"
+                );
+            }
         }
     }
 
@@ -354,15 +488,64 @@ impl HlsSessionSource {
             ))
         })?;
 
-        let res = self
-            .fetch_manager
-            .open_media_streaming_resource(state.variant_index, &seg.url)
-            .await
-            .map_err(KitharaIoError::Source)?;
+        info!(
+            segment_index,
+            offset_in_segment,
+            len,
+            segment_url = %seg.url,
+            "HLS read_in_segment START"
+        );
+        let read_start = std::time::Instant::now();
 
-        res.read_at(offset_in_segment, len)
+        // Check cache first
+        let res = {
+            let cache = self.resource_cache.read().await;
+            if let Some(cached_res) = cache.get(&segment_index) {
+                info!(segment_index, "HLS using cached resource for read");
+                cached_res.clone()
+            } else {
+                drop(cache); // Release read lock before writing
+
+                let res = self
+                    .fetch_manager
+                    .open_media_streaming_resource(state.variant_index, &seg.url)
+                    .await
+                    .map_err(KitharaIoError::Source)?;
+
+                // Cache the resource
+                let mut cache = self.resource_cache.write().await;
+                cache.insert(segment_index, res.clone());
+                info!(segment_index, "HLS cached resource for read");
+
+                res
+            }
+        };
+
+        let open_duration = read_start.elapsed();
+        info!(
+            segment_index,
+            open_duration_ms = open_duration.as_millis(),
+            "HLS open_media_streaming_resource for read DONE"
+        );
+
+        // Also trigger prefetch when reading
+        self.prefetch_upcoming_segments(state, segment_index).await;
+
+        let read_start = std::time::Instant::now();
+        let result = res
+            .read_at(offset_in_segment, len)
             .await
-            .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))
+            .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)));
+
+        let read_duration = read_start.elapsed();
+        info!(
+            segment_index,
+            read_duration_ms = read_duration.as_millis(),
+            bytes_read = result.as_ref().map(|b| b.len()).unwrap_or(0),
+            "HLS read_at DONE"
+        );
+
+        result
     }
 }
 

@@ -35,6 +35,7 @@ mod driver;
 pub mod events;
 pub mod fetch;
 pub mod keys;
+pub mod pipeline;
 pub mod playlist;
 pub mod session;
 
@@ -49,6 +50,10 @@ pub use driver::{DriverError, SourceError};
 pub use events::{EventEmitter, HlsEvent};
 pub use fetch::{FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
+pub use pipeline::{
+    Pipeline, PipelineCommand, PipelineError, PipelineEvent, PipelineResult, SegmentMeta,
+    SegmentPayload,
+};
 pub use playlist::{PlaylistError, PlaylistManager};
 pub use session::HlsSessionSource;
 
@@ -115,7 +120,7 @@ pub struct HlsOptions {
     pub retry_base_delay: Duration,
     pub max_retry_delay: Duration,
     pub retry_timeout: Duration,
-    pub prefetch_buffer_size: usize,
+    pub prefetch_buffer_size: Option<usize>,
     pub live_refresh_interval: Option<Duration>,
 
     // key processing
@@ -142,7 +147,7 @@ impl Default for HlsOptions {
             retry_base_delay: Duration::from_millis(100),
             max_retry_delay: Duration::from_secs(5),
             retry_timeout: Duration::from_secs(60),
-            prefetch_buffer_size: 3,
+            prefetch_buffer_size: Some(3),
             live_refresh_interval: None,
 
             key_processor_cb: None,

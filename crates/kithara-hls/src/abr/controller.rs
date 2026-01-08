@@ -50,6 +50,10 @@ impl AbrController {
         self.current_variant_index
     }
 
+    pub fn set_current_variant(&mut self, variant_index: usize) {
+        self.current_variant_index = variant_index;
+    }
+
     pub fn push_throughput_sample(&mut self, sample: ThroughputSample) {
         self.estimator.push_sample(sample);
     }

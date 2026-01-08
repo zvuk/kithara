@@ -163,6 +163,7 @@ pub struct MediaSegment {
 }
 
 /// Thin wrapper: fetches + parses playlists with caching via `kithara-assets`.
+#[derive(Clone)]
 pub struct PlaylistManager {
     asset_root: String,
     assets: AssetStore,

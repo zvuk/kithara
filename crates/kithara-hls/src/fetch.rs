@@ -28,6 +28,7 @@ pub struct FetchBytes {
     pub duration: Duration,
 }
 
+#[derive(Clone)]
 pub struct FetchManager {
     asset_root: String,
     assets: AssetStore,
