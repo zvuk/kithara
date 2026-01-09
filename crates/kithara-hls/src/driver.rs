@@ -3,7 +3,7 @@ use std::{collections::HashMap, pin::Pin, sync::Arc};
 use async_stream::stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -71,7 +71,7 @@ impl Decrypter for PassthroughDecrypter {
     fn decrypt(
         &self,
         payload: SegmentPayload,
-    ) -> Pin<Box<dyn futures::Future<Output = Result<SegmentPayload, HlsError>> + Send + 'static>>
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SegmentPayload, HlsError>> + Send>>
     {
         Box::pin(async move { Ok(payload) })
     }
@@ -82,8 +82,8 @@ pub struct HlsDriver {
     master_url: Url,
     playlist_manager: Arc<PlaylistManager>,
     fetch_manager: Arc<FetchManager>,
-    key_manager: Arc<KeyManager>,
-    abr_controller: Arc<Mutex<AbrController>>,
+    // key_manager: Arc<KeyManager>, // Temporarily unused, kept for future DRM support
+    abr_controller: Arc<tokio::sync::Mutex<AbrController>>,
     event_emitter: Arc<EventEmitter>,
     cancel: CancellationToken,
 }
@@ -104,8 +104,8 @@ impl HlsDriver {
             master_url,
             playlist_manager: Arc::new(playlist_manager),
             fetch_manager: Arc::new(fetch_manager),
-            key_manager: Arc::new(key_manager),
-            abr_controller: Arc::new(Mutex::new(abr_controller)),
+            // key_manager parameter is temporarily unused but kept for future DRM support
+            abr_controller: Arc::new(tokio::sync::Mutex::new(abr_controller)),
             event_emitter: Arc::new(event_emitter),
             cancel: CancellationToken::new(),
         }
@@ -173,22 +173,8 @@ impl HlsDriver {
                     .target_variant_index
             };
 
-            // 5) Фоновый воркер: вычитываем сегменты выбранного варианта в кеш заранее.
-            if let Some((media_url, media_playlist)) = playlist_adapter.media_playlist(initial_variant) {
-            let fm_prefetch = fetch_manager.clone();
-            let url_base: Url = media_url.clone();
-                tokio::spawn(async move {
-                    for (seg_idx, seg) in media_playlist.segments.iter().enumerate() {
-                        if let Ok(seg_url) = url_base.join(&seg.uri) {
-                            let _ = fm_prefetch
-                                .open_media_streaming_resource(initial_variant, &seg_url)
-                                .await;
-                        } else {
-                            tracing::warn!(segment_index = seg_idx, "prefetch: failed to join segment url");
-                        }
-                    }
-                });
-            }
+            // 5) Prefetch теперь управляется PrefetchStream слоем, который заполняет
+            // буферы последовательно (один за другим) согласно prefetch_buffer_size.
 
             let base = BaseStream::new(
                 fetch_adapter,
@@ -196,7 +182,7 @@ impl HlsDriver {
                 cancel.clone(),
                 initial_variant,
             );
-            let abr_layer = AbrStream::new(base, abr.clone(), cancel.clone());
+            let abr_layer = AbrStream::new(base, abr.clone(), cancel.clone(), initial_variant);
             let drm_layer = DrmStream::new(
                 abr_layer,
                 Some(Arc::new(PassthroughDecrypter)),
@@ -205,7 +191,7 @@ impl HlsDriver {
             let prefetch_capacity = opts.prefetch_buffer_size.unwrap_or(1).max(1);
             let pipeline = PrefetchStream::new(drm_layer, prefetch_capacity, cancel.clone());
 
-            // 5) Подписка на события пайплайна -> HlsEvent.
+            // 6) Подписка на события пайплайна -> HlsEvent.
             let mut ev_rx = pipeline.event_sender().subscribe();
             let events_clone = Arc::clone(&events);
             tokio::spawn(async move {
@@ -230,7 +216,7 @@ impl HlsDriver {
                 }
             });
 
-            // 6) Воркер пайплайна пишет байты в очередь; внешний поток читает из неё.
+            // 7) Воркер пайплайна пишет байты в очередь; внешний поток читает из неё.
             let mut data_stream = Box::pin(pipeline);
             let (tx, mut rx) = mpsc::channel(8);
             tokio::spawn(async move {

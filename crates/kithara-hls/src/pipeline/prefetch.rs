@@ -13,7 +13,8 @@ use super::types::{
 };
 
 /// Prefetch stage: буферизует элементы из нижнего слоя до `capacity`,
-/// пробрасывает команды вниз, отправляет событие `Prefetched`, реагирует на cancellation.
+/// заполняет буферы последовательно (один за другим), а не параллельно.
+/// Пробрасывает команды вниз, отправляет событие `Prefetched`, реагирует на cancellation.
 pub struct PrefetchStream<I>
 where
     I: SegmentStream,
@@ -24,9 +25,24 @@ where
     cmd_tx: mpsc::Sender<PipelineCommand>,
     cmd_rx: mpsc::Receiver<PipelineCommand>,
     cancel: CancellationToken,
-    buf: VecDeque<PipelineResult<SegmentPayload>>,
+
+    // Основной буфер для выдачи данных потребителю
+    output_buffer: VecDeque<PipelineResult<SegmentPayload>>,
+
+    // Текущий заполняемый буфер (заполняется последовательно)
+    current_filling_buffer: VecDeque<PipelineResult<SegmentPayload>>,
+
+    // Общая емкость префетча (сколько сегментов хранить заранее)
     capacity: usize,
+
+    // Размер текущего заполняемого буфера (сколько уже заполнено в текущем буфере)
+    current_buffer_fill: usize,
+
+    // Флаг окончания потока
     ended: bool,
+
+    // Флаг, что мы в процессе заполнения буфера
+    is_filling: bool,
 }
 
 impl<I> PrefetchStream<I>
@@ -45,9 +61,12 @@ where
             cmd_tx,
             cmd_rx,
             cancel,
-            buf: VecDeque::with_capacity(capacity.max(1)),
+            output_buffer: VecDeque::with_capacity(capacity.max(1)),
+            current_filling_buffer: VecDeque::new(),
             capacity: capacity.max(1),
+            current_buffer_fill: 0,
             ended: false,
+            is_filling: false,
         }
     }
 
@@ -58,15 +77,23 @@ where
                     let _ = self
                         .inner_cmd
                         .try_send(PipelineCommand::Seek { segment_index });
-                    self.buf.clear();
+                    // Сбрасываем все буферы при seek
+                    self.output_buffer.clear();
+                    self.current_filling_buffer.clear();
+                    self.current_buffer_fill = 0;
                     self.ended = false;
+                    self.is_filling = false;
                 }
                 PipelineCommand::ForceVariant { variant_index } => {
                     let _ = self
                         .inner_cmd
                         .try_send(PipelineCommand::ForceVariant { variant_index });
-                    self.buf.clear();
+                    // Сбрасываем все буферы при смене варианта
+                    self.output_buffer.clear();
+                    self.current_filling_buffer.clear();
+                    self.current_buffer_fill = 0;
                     self.ended = false;
+                    self.is_filling = false;
                 }
                 PipelineCommand::Shutdown => {
                     let _ = self.inner_cmd.try_send(PipelineCommand::Shutdown);
@@ -77,22 +104,52 @@ where
         Ok(())
     }
 
-    fn fill_buffer(&mut self, cx: &mut Context<'_>) {
-        while self.buf.len() < self.capacity && !self.ended {
+    /// Заполняет текущий буфер последовательно до полного заполнения
+    fn fill_current_buffer(&mut self, cx: &mut Context<'_>) {
+        // Если буфер уже заполнен или поток закончился, не заполняем
+        if self.current_buffer_fill >= self.capacity || self.ended {
+            return;
+        }
+
+        // Заполняем текущий буфер
+        while self.current_buffer_fill < self.capacity && !self.ended {
             match self.inner.as_mut().poll_next(cx) {
                 Poll::Ready(Some(res)) => {
                     if let Ok(ref payload) = res {
+                        // Отправляем событие о префетче
                         let _ = self.events.send(PipelineEvent::Prefetched {
                             variant: payload.meta.variant,
                             segment_index: payload.meta.segment_index,
                         });
                     }
-                    self.buf.push_back(res);
+                    self.current_filling_buffer.push_back(res);
+                    self.current_buffer_fill += 1;
+
+                    // Если текущий буфер заполнен, перемещаем его в output_buffer
+                    if self.current_buffer_fill >= self.capacity {
+                        while let Some(item) = self.current_filling_buffer.pop_front() {
+                            self.output_buffer.push_back(item);
+                        }
+                        self.current_buffer_fill = 0;
+                        self.is_filling = false;
+                        return;
+                    }
                 }
                 Poll::Ready(None) => {
+                    // Поток закончился, перемещаем все что есть в output_buffer
                     self.ended = true;
+                    while let Some(item) = self.current_filling_buffer.pop_front() {
+                        self.output_buffer.push_back(item);
+                    }
+                    self.current_buffer_fill = 0;
+                    self.is_filling = false;
+                    return;
                 }
-                Poll::Pending => break,
+                Poll::Pending => {
+                    // Больше данных нет сейчас, выходим
+                    self.is_filling = true;
+                    return;
+                }
             }
         }
     }
@@ -104,29 +161,43 @@ where
 {
     type Item = PipelineResult<SegmentPayload>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-
-        if this.cancel.is_cancelled() {
-            let _ = this.inner_cmd.try_send(PipelineCommand::Shutdown);
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.cancel.is_cancelled() {
+            let _ = self.inner_cmd.try_send(PipelineCommand::Shutdown);
             return Poll::Ready(Some(Err(PipelineError::Aborted)));
         }
 
-        if let Err(err) = this.handle_commands() {
+        if let Err(err) = self.handle_commands() {
             return Poll::Ready(Some(Err(err)));
         }
 
-        this.fill_buffer(cx);
-
-        if let Some(item) = this.buf.pop_front() {
+        // Если в output_buffer есть данные, возвращаем их
+        if let Some(item) = self.output_buffer.pop_front() {
+            // После извлечения элемента проверяем, нужно ли начать заполнение нового буфера
+            if self.output_buffer.len() < self.capacity / 2 && !self.ended && !self.is_filling {
+                self.fill_current_buffer(cx);
+            }
             return Poll::Ready(Some(item));
         }
 
-        if this.ended {
-            return Poll::Ready(None);
+        // Если output_buffer пуст, но поток еще не закончился
+        if !self.ended {
+            // Пытаемся заполнить буфер
+            self.fill_current_buffer(cx);
+
+            // Проверяем, появились ли данные в output_buffer после заполнения
+            if let Some(item) = self.output_buffer.pop_front() {
+                return Poll::Ready(Some(item));
+            }
+
+            // Если после заполнения все еще нет данных, но поток не закончился
+            if !self.ended {
+                return Poll::Pending;
+            }
         }
 
-        Poll::Pending
+        // Поток закончился и буферы пусты
+        Poll::Ready(None)
     }
 }
 

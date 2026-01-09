@@ -1,12 +1,11 @@
 use std::{
-    future::Future,
     pin::Pin,
     sync::Arc,
     task::{Context, Poll},
 };
 
-use futures::Stream;
-use tokio::sync::mpsc;
+use futures::{Future, Stream};
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use super::types::{
@@ -19,11 +18,7 @@ pub trait Decrypter: Send + Sync + 'static {
     fn decrypt(
         &self,
         payload: SegmentPayload,
-    ) -> Pin<Box<dyn Future<Output = Result<SegmentPayload, HlsError>> + Send + 'static>>;
-}
-
-struct PendingDecrypt {
-    fut: Pin<Box<dyn Future<Output = Result<SegmentPayload, HlsError>> + Send>>,
+    ) -> Pin<Box<dyn Future<Output = Result<SegmentPayload, HlsError>> + Send>>;
 }
 
 /// DRM-оверлей: расшифровывает сегменты (если задан decryptor), транслирует команды вниз,
@@ -35,12 +30,12 @@ where
 {
     inner: Pin<Box<I>>,
     inner_cmd: mpsc::Sender<PipelineCommand>,
-    events: tokio::sync::broadcast::Sender<PipelineEvent>,
+    events: broadcast::Sender<PipelineEvent>,
     cmd_tx: mpsc::Sender<PipelineCommand>,
     cmd_rx: mpsc::Receiver<PipelineCommand>,
     decrypter: Option<Arc<D>>,
     cancel: CancellationToken,
-    pending: Option<PendingDecrypt>,
+    pending_decrypt: Option<Pin<Box<dyn Future<Output = Result<SegmentPayload, HlsError>> + Send>>>,
 }
 
 impl<I, D> DrmStream<I, D>
@@ -61,7 +56,7 @@ where
             cmd_rx,
             decrypter,
             cancel,
-            pending: None,
+            pending_decrypt: None,
         }
     }
 
@@ -72,11 +67,15 @@ where
                     let _ = self
                         .inner_cmd
                         .try_send(PipelineCommand::Seek { segment_index });
+                    // Сбрасываем ожидающую расшифровку, так как seek меняет позицию
+                    self.pending_decrypt = None;
                 }
                 PipelineCommand::ForceVariant { variant_index } => {
                     let _ = self
                         .inner_cmd
                         .try_send(PipelineCommand::ForceVariant { variant_index });
+                    // Сбрасываем ожидающую расшифровку, так как смена варианта меняет данные
+                    self.pending_decrypt = None;
                 }
                 PipelineCommand::Shutdown => {
                     let _ = self.inner_cmd.try_send(PipelineCommand::Shutdown);
@@ -85,33 +84,6 @@ where
             }
         }
         Ok(())
-    }
-
-    fn poll_pending(
-        &mut self,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<PipelineResult<SegmentPayload>>> {
-        let Some(pending) = self.pending.as_mut() else {
-            return Poll::Pending;
-        };
-
-        match pending.fut.as_mut().poll(cx) {
-            Poll::Ready(res) => {
-                let payload = match res {
-                    Ok(payload) => {
-                        let _ = self.events.send(PipelineEvent::Decrypted {
-                            variant: payload.meta.variant,
-                            segment_index: payload.meta.segment_index,
-                        });
-                        Ok(payload)
-                    }
-                    Err(err) => Err(PipelineError::Hls(err)),
-                };
-                self.pending = None;
-                Poll::Ready(Some(payload))
-            }
-            Poll::Pending => Poll::Pending,
-        }
     }
 }
 
@@ -122,29 +94,47 @@ where
 {
     type Item = PipelineResult<SegmentPayload>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-
-        if this.cancel.is_cancelled() {
-            let _ = this.inner_cmd.try_send(PipelineCommand::Shutdown);
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if self.cancel.is_cancelled() {
+            let _ = self.inner_cmd.try_send(PipelineCommand::Shutdown);
             return Poll::Ready(Some(Err(PipelineError::Aborted)));
         }
 
-        if let Err(err) = this.handle_commands() {
+        if let Err(err) = self.handle_commands() {
             return Poll::Ready(Some(Err(err)));
         }
 
-        if let Poll::Ready(res) = this.poll_pending(cx) {
-            return Poll::Ready(res);
+        // Если есть ожидающая расшифровка, обрабатываем её
+        if let Some(mut fut) = self.pending_decrypt.take() {
+            match fut.as_mut().poll(cx) {
+                Poll::Ready(Ok(payload)) => {
+                    // Отправляем событие о расшифровке
+                    let _ = self.events.send(PipelineEvent::Decrypted {
+                        variant: payload.meta.variant,
+                        segment_index: payload.meta.segment_index,
+                    });
+                    return Poll::Ready(Some(Ok(payload)));
+                }
+                Poll::Ready(Err(err)) => {
+                    return Poll::Ready(Some(Err(PipelineError::Hls(err))));
+                }
+                Poll::Pending => {
+                    self.pending_decrypt = Some(fut);
+                    return Poll::Pending;
+                }
+            }
         }
 
-        match this.inner.as_mut().poll_next(cx) {
+        // Опрашиваем внутренний поток
+        match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(payload))) => {
-                if let Some(dec) = this.decrypter.as_ref() {
-                    let fut = dec.decrypt(payload);
-                    this.pending = Some(PendingDecrypt { fut });
-                    this.poll_pending(cx)
+                if let Some(decrypter) = self.decrypter.as_ref() {
+                    // Начинаем расшифровку
+                    self.pending_decrypt = Some(decrypter.decrypt(payload));
+                    // Рекурсивно опрашиваем себя для обработки расшифровки
+                    self.poll_next(cx)
                 } else {
+                    // Нет decryptor, возвращаем как есть
                     Poll::Ready(Some(Ok(payload)))
                 }
             }
@@ -164,7 +154,7 @@ where
         self.cmd_tx.clone()
     }
 
-    fn event_sender(&self) -> tokio::sync::broadcast::Sender<PipelineEvent> {
+    fn event_sender(&self) -> broadcast::Sender<PipelineEvent> {
         self.events.clone()
     }
 }
