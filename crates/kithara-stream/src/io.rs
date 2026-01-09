@@ -9,7 +9,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use kithara_storage::WaitOutcome;
-use tracing::{debug, warn};
+use tracing::{debug, info};
 
 use crate::error::{StreamError, StreamResult};
 
@@ -47,11 +47,7 @@ enum WorkerReq<S>
 where
     S: Source,
 {
-    WaitRange {
-        range: Range<u64>,
-        reply: tokio::sync::oneshot::Sender<StreamResult<WaitOutcome, S::Error>>,
-    },
-    ReadAt {
+    WaitAndReadAt {
         offset: u64,
         len: usize,
         reply: tokio::sync::oneshot::Sender<StreamResult<Bytes, S::Error>>,
@@ -99,12 +95,16 @@ where
             debug!("kithara-stream::io Reader worker started");
             while let Some(req) = worker_rx.recv().await {
                 match req {
-                    WorkerReq::WaitRange { range, reply } => {
-                        let out = src.wait_range(range).await;
-                        let _ = reply.send(out);
-                    }
-                    WorkerReq::ReadAt { offset, len, reply } => {
-                        let out = src.read_at(offset, len).await;
+                    WorkerReq::WaitAndReadAt { offset, len, reply } => {
+                        let range = offset..offset.saturating_add(len as u64);
+                        let wait_result = src.wait_range(range).await;
+
+                        let out = match wait_result {
+                            Ok(WaitOutcome::Ready) => src.read_at(offset, len).await,
+                            Ok(WaitOutcome::Eof) => Ok(Bytes::new()),
+                            Err(e) => Err(e),
+                        };
+
                         let _ = reply.send(out);
                     }
                 }
@@ -140,51 +140,18 @@ where
         let offset = self.pos;
         let len = buf.len();
 
-        let wait_start = offset;
-        let wait_end = offset.saturating_add(len as u64);
-        let wait_range = wait_start..wait_end;
+        info!(
+            offset,
+            requested_len = len,
+            buffer_size = buf.len(),
+            "SyncReader::read START"
+        );
+        let read_start = std::time::Instant::now();
 
         let (tx, rx) = tokio::sync::oneshot::channel();
+        let send_start = std::time::Instant::now();
         self.worker_tx
-            .send(WorkerReq::WaitRange {
-                range: wait_range,
-                reply: tx,
-            })
-            .map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
-            })?;
-
-        let outcome = rx
-            .blocking_recv()
-            .map_err(|_| {
-                tracing::error!(
-                    start = wait_start,
-                    end = wait_end,
-                    "Reader::read wait_range worker reply channel closed"
-                );
-                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
-            })?
-            .map_err(|e: StreamError<S::Error>| {
-                tracing::error!(
-                    offset,
-                    len,
-                    err = %e,
-                    "Reader::read wait_range returned error"
-                );
-                std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
-            })?;
-
-        match outcome {
-            WaitOutcome::Eof => {
-                debug!(offset, "Reader::read reached EOF");
-                return Ok(0);
-            }
-            WaitOutcome::Ready => {}
-        }
-
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.worker_tx
-            .send(WorkerReq::ReadAt {
+            .send(WorkerReq::WaitAndReadAt {
                 offset,
                 len,
                 reply: tx,
@@ -192,14 +159,21 @@ where
             .map_err(|_| {
                 std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
             })?;
+        let send_duration = send_start.elapsed();
+        info!(
+            offset,
+            send_duration_ms = send_duration.as_millis(),
+            "SyncReader::send to worker DONE"
+        );
 
+        let recv_start = std::time::Instant::now();
         let bytes = rx
             .blocking_recv()
             .map_err(|_| {
                 tracing::error!(
                     offset,
                     len,
-                    "Reader::read read_at worker reply channel closed"
+                    "Reader::read wait_and_read_at worker reply channel closed"
                 );
                 std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
             })?
@@ -208,24 +182,42 @@ where
                     offset,
                     len,
                     err = %e,
-                    "Reader::read read_at returned error"
+                    "Reader::read wait_and_read_at returned error"
                 );
                 std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
             })?;
+        let recv_duration = recv_start.elapsed();
+        info!(
+            offset,
+            recv_duration_ms = recv_duration.as_millis(),
+            bytes_received = bytes.len(),
+            "SyncReader::blocking_recv DONE"
+        );
 
         if bytes.is_empty() {
-            // Defensive: if the source returns empty after reporting Ready, treat as EOF-ish.
-            // This avoids infinite loops in consumers.
-            warn!(
+            // Empty bytes means EOF (either from WaitOutcome::Eof or read_at returning empty at EOF)
+            let total_duration = read_start.elapsed();
+            info!(
                 offset,
-                len, "Reader::read got empty buffer after Ready; treating as EOF-ish"
+                total_duration_ms = total_duration.as_millis(),
+                "SyncReader::read EOF"
             );
+            debug!(offset, "Reader::read reached EOF");
             return Ok(0);
         }
 
         let n = bytes.len().min(buf.len());
         buf[..n].copy_from_slice(&bytes[..n]);
         self.pos = self.pos.saturating_add(n as u64);
+        let total_duration = read_start.elapsed();
+        info!(
+            offset,
+            total_duration_ms = total_duration.as_millis(),
+            requested = len,
+            read = n,
+            new_pos = self.pos,
+            "SyncReader::read DONE"
+        );
         debug!(
             offset,
             requested = len,

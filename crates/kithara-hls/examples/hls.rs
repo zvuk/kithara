@@ -13,8 +13,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::default()
-                .add_directive("kithara_hls=debug".parse()?)
-                .add_directive("kithara_streamå=info".parse()?)
+                .add_directive("kithara_hls=info".parse()?)
+                .add_directive("kithara_stream=info".parse()?)
                 .add_directive("kithara_net=info".parse()?)
                 .add_directive("kithara_storage=info".parse()?)
                 .add_directive("kithara_assets=info".parse()?)

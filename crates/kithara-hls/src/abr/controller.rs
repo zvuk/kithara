@@ -1,4 +1,10 @@
-use std::time::Instant;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Instant,
+};
 
 use super::{AbrConfig, ThroughputEstimator, ThroughputSample, Variant, VariantSelector};
 use crate::playlist::MasterPlaylist;
@@ -26,7 +32,7 @@ pub struct AbrController {
     cfg: AbrConfig,
     variant_selector: Option<VariantSelector>,
     estimator: ThroughputEstimator,
-    current_variant_index: usize,
+    current_variant: Arc<AtomicUsize>,
     last_switch_at: Option<Instant>,
 }
 
@@ -34,20 +40,24 @@ impl AbrController {
     pub fn new(
         cfg: AbrConfig,
         variant_selector: Option<VariantSelector>,
-        initial_variant: usize,
+        current_variant: Arc<AtomicUsize>,
     ) -> Self {
         let estimator = ThroughputEstimator::new(&cfg);
         Self {
             cfg,
             variant_selector,
             estimator,
-            current_variant_index: initial_variant,
+            current_variant,
             last_switch_at: None,
         }
     }
 
     pub fn current_variant(&self) -> usize {
-        self.current_variant_index
+        self.current_variant.load(Ordering::Relaxed)
+    }
+
+    pub fn set_current_variant(&self, variant_index: usize) {
+        self.current_variant.store(variant_index, Ordering::Relaxed);
     }
 
     pub fn push_throughput_sample(&mut self, sample: ThroughputSample) {
@@ -60,7 +70,7 @@ impl AbrController {
         buffer_level_secs: f64,
         now: Instant,
     ) -> AbrDecision {
-        let current = self.current_variant_index;
+        let current = self.current_variant.load(Ordering::Relaxed);
 
         let Some(estimate_bps) = self.estimator.estimate_bps() else {
             return AbrDecision {
@@ -160,7 +170,7 @@ impl AbrController {
                 return AbrDecision {
                     target_variant_index: manual,
                     reason: AbrReason::ManualOverride,
-                    changed: manual != self.current_variant_index,
+                    changed: manual != self.current_variant.load(Ordering::Relaxed),
                 };
             }
         }
@@ -169,10 +179,11 @@ impl AbrController {
     }
 
     pub fn apply(&mut self, decision: &AbrDecision, now: Instant) {
-        if decision.target_variant_index == self.current_variant_index {
+        if decision.target_variant_index == self.current_variant.load(Ordering::Relaxed) {
             return;
         }
-        self.current_variant_index = decision.target_variant_index;
+        self.current_variant
+            .store(decision.target_variant_index, Ordering::Relaxed);
         self.last_switch_at = Some(now);
     }
 
@@ -214,7 +225,7 @@ mod tests {
         cfg.down_switch_buffer_secs = 0.0;
         cfg.min_switch_interval = Duration::ZERO;
 
-        let mut c = AbrController::new(cfg, None, 2);
+        let mut c = AbrController::new(cfg, None, Arc::new(AtomicUsize::new(2)));
         let now = Instant::now();
         c.push_throughput_sample(ThroughputSample {
             bytes: 300_000 / 8,
@@ -237,7 +248,7 @@ mod tests {
         cfg.up_hysteresis_ratio = 1.3;
         cfg.min_switch_interval = Duration::ZERO;
 
-        let mut c = AbrController::new(cfg, None, 0);
+        let mut c = AbrController::new(cfg, None, Arc::new(AtomicUsize::new(0)));
         let now = Instant::now();
         c.push_throughput_sample(ThroughputSample {
             bytes: 2_000_000 / 8,
@@ -263,7 +274,7 @@ mod tests {
         cfg.min_buffer_for_up_switch_secs = 0.0;
         cfg.down_switch_buffer_secs = 0.0;
 
-        let mut c = AbrController::new(cfg, None, 1);
+        let mut c = AbrController::new(cfg, None, Arc::new(AtomicUsize::new(1)));
         let now = Instant::now();
         c.push_throughput_sample(ThroughputSample {
             bytes: 2_000_000 / 8,
