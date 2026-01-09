@@ -3,7 +3,7 @@ use std::{collections::HashMap, pin::Pin, sync::Arc};
 use async_stream::stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::{Mutex, broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -83,7 +83,6 @@ pub struct HlsDriver {
     playlist_manager: Arc<PlaylistManager>,
     fetch_manager: Arc<FetchManager>,
     // key_manager: Arc<KeyManager>, // Temporarily unused, kept for future DRM support
-    abr_controller: Arc<tokio::sync::Mutex<AbrController>>,
     event_emitter: Arc<EventEmitter>,
     cancel: CancellationToken,
 }
@@ -96,7 +95,6 @@ impl HlsDriver {
         playlist_manager: PlaylistManager,
         fetch_manager: FetchManager,
         key_manager: KeyManager,
-        abr_controller: AbrController,
         event_emitter: EventEmitter,
     ) -> Self {
         Self {
@@ -105,7 +103,6 @@ impl HlsDriver {
             playlist_manager: Arc::new(playlist_manager),
             fetch_manager: Arc::new(fetch_manager),
             // key_manager parameter is temporarily unused but kept for future DRM support
-            abr_controller: Arc::new(tokio::sync::Mutex::new(abr_controller)),
             event_emitter: Arc::new(event_emitter),
             cancel: CancellationToken::new(),
         }
@@ -118,7 +115,6 @@ impl HlsDriver {
     pub fn stream(&self) -> Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + '_>> {
         let playlist_manager = Arc::clone(&self.playlist_manager);
         let fetch_manager = Arc::clone(&self.fetch_manager);
-        let abr = Arc::clone(&self.abr_controller);
         let events = Arc::clone(&self.event_emitter);
         let cancel = self.cancel.clone();
         let opts = self.options.clone();
@@ -163,17 +159,34 @@ impl HlsDriver {
             let playlist_adapter = Arc::new(PlaylistAdapter::new(master_playlist.clone(), media_map));
             let fetch_adapter = Arc::new(FetcherAdapter { fetch: fetch_manager.clone() });
 
-            // 4) Начальный вариант через ABR (как раньше).
-            let variants: Vec<Variant> = abr::variants_from_master(&master_playlist);
-            let now = std::time::Instant::now();
-            let initial_variant = {
-                let abr_guard = abr.lock().await;
-                abr_guard
-                    .decide_for_master(&master_playlist, &variants, 0.0, now)
-                    .target_variant_index
+            // 4) Создаем конфигурацию ABR
+            let abr_config = abr::AbrConfig {
+                min_buffer_for_up_switch_secs: f64::from(opts.abr_min_buffer_for_up_switch),
+                down_switch_buffer_secs: f64::from(opts.abr_down_switch_buffer),
+                throughput_safety_factor: f64::from(opts.abr_throughput_safety_factor),
+                up_hysteresis_ratio: f64::from(opts.abr_up_hysteresis_ratio),
+                down_hysteresis_ratio: f64::from(opts.abr_down_hysteresis_ratio),
+                min_switch_interval: opts.abr_min_switch_interval,
+                initial_variant_index: opts.abr_initial_variant_index,
+                sample_window: std::time::Duration::from_secs(30),
             };
 
-            // 5) Prefetch теперь управляется PrefetchStream слоем, который заполняет
+            // 5) Определяем начальный вариант
+            let variants: Vec<Variant> = abr::variants_from_master(&master_playlist);
+            let now = std::time::Instant::now();
+
+            // Создаем ABR контроллер для начального решения
+            let abr_controller = abr::AbrController::new(
+                abr_config.clone(),
+                opts.variant_stream_selector.clone(),
+                opts.abr_initial_variant_index.unwrap_or(0),
+            );
+
+            let initial_variant = abr_controller
+                .decide_for_master(&master_playlist, &variants, 0.0, now)
+                .target_variant_index;
+
+            // 6) Prefetch теперь управляется PrefetchStream слоем, который заполняет
             // буферы последовательно (один за другим) согласно prefetch_buffer_size.
 
             let base = BaseStream::new(
@@ -182,7 +195,7 @@ impl HlsDriver {
                 cancel.clone(),
                 initial_variant,
             );
-            let abr_layer = AbrStream::new(base, abr.clone(), cancel.clone(), initial_variant);
+            let abr_layer = AbrStream::new(base, abr_controller);
             let drm_layer = DrmStream::new(
                 abr_layer,
                 Some(Arc::new(PassthroughDecrypter)),

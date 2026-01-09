@@ -227,7 +227,6 @@ impl HlsSourceContract for HlsSource {
             playlist_manager,
             fetch_manager,
             key_manager,
-            abr_controller,
             event_emitter,
         );
 

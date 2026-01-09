@@ -1,20 +1,25 @@
 use std::{
     pin::Pin,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     task::{Context, Poll},
 };
 
 use futures::Stream;
 use tokio::sync::{broadcast, mpsc};
-use tokio_util::sync::CancellationToken;
 
 use super::types::{
     PipelineCommand, PipelineError, PipelineEvent, PipelineResult, SegmentPayload, SegmentStream,
 };
-use crate::abr::AbrController;
+use crate::{
+    abr::{AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, Variant},
+    playlist::MasterPlaylist,
+};
 
-/// ABR-оверлей: отслеживает текущий вариант, транслирует команды вниз,
-/// публикует события о смене варианта.
+/// ABR-оверлей: владеет ABR контроллером напрямую, отслеживает метрики,
+/// принимает решения о переключении и транслирует команды вниз.
 pub struct AbrStream<I>
 where
     I: SegmentStream,
@@ -24,23 +29,25 @@ where
     events: broadcast::Sender<PipelineEvent>,
     cmd_tx: mpsc::Sender<PipelineCommand>,
     cmd_rx: mpsc::Receiver<PipelineCommand>,
-    cancel: CancellationToken,
-    current_variant: usize,
+
+    // Внутренний ABR контроллер, которым владеем напрямую
+    abr_controller: AbrController,
+
+    // Атомарная ссылка на текущий вариант для быстрого доступа
+    current_variant: Arc<AtomicUsize>,
 }
 
 impl<I> AbrStream<I>
 where
     I: SegmentStream,
 {
-    pub fn new(
-        inner: I,
-        _abr: std::sync::Arc<tokio::sync::Mutex<AbrController>>,
-        cancel: CancellationToken,
-        initial_variant: usize,
-    ) -> Self {
+    pub fn new(inner: I, abr_controller: AbrController) -> Self {
         let inner_cmd = inner.command_sender();
         let events = inner.event_sender();
         let (cmd_tx, cmd_rx) = mpsc::channel(64);
+
+        let initial_variant = abr_controller.current_variant();
+        let current_variant = Arc::new(AtomicUsize::new(initial_variant));
 
         Self {
             inner: Box::pin(inner),
@@ -48,8 +55,8 @@ where
             events,
             cmd_tx,
             cmd_rx,
-            cancel,
-            current_variant: initial_variant,
+            abr_controller,
+            current_variant,
         }
     }
 
@@ -62,16 +69,9 @@ where
                         .try_send(PipelineCommand::Seek { segment_index });
                 }
                 PipelineCommand::ForceVariant { variant_index } => {
-                    let from = self.current_variant;
-                    self.current_variant = variant_index;
-
-                    // Обновляем ABR контроллер асинхронно
-                    // Мы не можем блокировать здесь, поэтому сохраняем команду
-                    // для асинхронной обработки. Вместо этого просто обновляем
-                    // локальное состояние и передаем команду вниз.
-                    // ABR контроллер будет обновлен при следующем вызове
-                    // через отдельную задачу или при следующем взаимодействии.
-                    // Для простоты пока просто обновляем локальное состояние.
+                    let from = self.abr_controller.current_variant();
+                    self.abr_controller.set_current_variant(variant_index);
+                    self.current_variant.store(variant_index, Ordering::Relaxed);
 
                     // Отправляем событие о выборе варианта
                     let _ = self.events.send(PipelineEvent::VariantSelected {
@@ -92,6 +92,47 @@ where
         }
         Ok(())
     }
+
+    /// Добавить throughput sample для ABR логики
+    pub fn add_throughput_sample(&mut self, sample: ThroughputSample) {
+        self.abr_controller.push_throughput_sample(sample);
+    }
+
+    /// Принять ABR решение на основе текущих метрик
+    pub fn decide_abr(&self, variants: &[Variant], buffer_level_secs: f64) -> AbrDecision {
+        self.abr_controller
+            .decide(variants, buffer_level_secs, std::time::Instant::now())
+    }
+
+    /// Получить текущий выбранный вариант
+    pub fn current_variant(&self) -> usize {
+        self.current_variant.load(Ordering::Relaxed)
+    }
+
+    /// Получить mutable ссылку на внутренний ABR контроллер
+    pub fn abr_controller_mut(&mut self) -> &mut AbrController {
+        &mut self.abr_controller
+    }
+
+    /// Получить immutable ссылку на внутренний ABR контроллер
+    pub fn abr_controller(&self) -> &AbrController {
+        &self.abr_controller
+    }
+
+    /// Принять решение для мастер-плейлиста
+    pub fn decide_for_master(
+        &self,
+        master: &MasterPlaylist,
+        variants: &[Variant],
+        buffer_level_secs: f64,
+    ) -> AbrDecision {
+        self.abr_controller.decide_for_master(
+            master,
+            variants,
+            buffer_level_secs,
+            std::time::Instant::now(),
+        )
+    }
 }
 
 impl<I> Stream for AbrStream<I>
@@ -100,19 +141,12 @@ where
 {
     type Item = PipelineResult<SegmentPayload>;
 
-    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let this = self.get_mut();
-
-        if this.cancel.is_cancelled() {
-            let _ = this.inner_cmd.try_send(PipelineCommand::Shutdown);
-            return Poll::Ready(Some(Err(PipelineError::Aborted)));
-        }
-
-        if let Err(err) = this.handle_commands() {
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        if let Err(err) = self.handle_commands() {
             return Poll::Ready(Some(Err(err)));
         }
 
-        this.inner.as_mut().poll_next(cx)
+        self.inner.as_mut().poll_next(cx)
     }
 }
 

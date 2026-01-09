@@ -52,6 +52,7 @@ where
     cmd_rx: mpsc::Receiver<PipelineCommand>,
     events: broadcast::Sender<PipelineEvent>,
     current_variant: Arc<AtomicUsize>,
+    previous_variant: usize,
     inner: Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>>,
 }
 
@@ -75,6 +76,7 @@ where
             playlists.clone(),
             events.clone(),
             initial_variant,
+            initial_variant,
             0,
         );
 
@@ -86,6 +88,7 @@ where
             cmd_rx,
             events,
             current_variant,
+            previous_variant: initial_variant,
             inner,
         }
     }
@@ -94,13 +97,14 @@ where
         fetcher: Arc<F>,
         playlists: Arc<P>,
         events: broadcast::Sender<PipelineEvent>,
-        variant_index: usize,
+        from_variant: usize,
+        to_variant: usize,
         start_from: usize,
     ) -> Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>> {
-        let playlist_pair = playlists.media_playlist(variant_index);
+        let playlist_pair = playlists.media_playlist(to_variant);
         let Some((media_url, media_playlist)) = playlist_pair else {
             return Box::pin(stream! {
-                yield Err(PipelineError::Hls(HlsError::VariantNotFound(format!("variant {}", variant_index))));
+                yield Err(PipelineError::Hls(HlsError::VariantNotFound(format!("variant {}", to_variant))));
             });
         };
 
@@ -109,6 +113,12 @@ where
             .enumerate();
 
         Box::pin(stream! {
+            // Send VariantApplied event when starting a new variant stream
+            let _ = events.send(PipelineEvent::VariantApplied {
+                from: from_variant,
+                to: to_variant,
+            });
+
             while let Some((idx, item)) = enumerated.next().await {
                 if idx < start_from {
                     continue;
@@ -117,17 +127,13 @@ where
                 match item {
                     Ok(bytes) => {
                         let meta = SegmentMeta {
-                            variant: variant_index,
+                            variant: to_variant,
                             segment_index: idx,
                             url: media_url.clone(),
                             duration: None,
                         };
-                        let _ = events.send(PipelineEvent::VariantApplied {
-                            from: variant_index,
-                            to: variant_index,
-                        });
                         let _ = events.send(PipelineEvent::SegmentReady {
-                            variant: variant_index,
+                            variant: to_variant,
                             segment_index: idx,
                         });
                         yield Ok(SegmentPayload { meta, bytes });
@@ -153,20 +159,19 @@ where
                         self.fetcher.clone(),
                         self.playlists.clone(),
                         self.events.clone(),
+                        self.previous_variant,
                         variant,
                         segment_index,
                     );
                 }
                 PipelineCommand::ForceVariant { variant_index } => {
                     let from = self.current_variant.swap(variant_index, Ordering::Relaxed);
-                    let _ = self.events.send(PipelineEvent::VariantApplied {
-                        from,
-                        to: variant_index,
-                    });
+                    self.previous_variant = from;
                     self.inner = Self::variant_stream(
                         self.fetcher.clone(),
                         self.playlists.clone(),
                         self.events.clone(),
+                        from,
                         variant_index,
                         0,
                     );
