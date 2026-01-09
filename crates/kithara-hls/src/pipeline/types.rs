@@ -15,8 +15,6 @@ pub enum PipelineCommand {
     Seek { segment_index: usize },
     /// Принудительно выбрать вариант (отключает ABR до следующей команды).
     ForceVariant { variant_index: usize },
-    /// Остановить работу пайплайна.
-    Shutdown,
 }
 
 /// Единый тип событий от всех слоёв.

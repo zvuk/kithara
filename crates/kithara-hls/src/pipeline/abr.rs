@@ -1,9 +1,5 @@
 use std::{
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
     task::{Context, Poll},
 };
 
@@ -14,7 +10,7 @@ use super::types::{
     PipelineCommand, PipelineError, PipelineEvent, PipelineResult, SegmentPayload, SegmentStream,
 };
 use crate::{
-    abr::{AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, Variant},
+    abr::{AbrController, AbrDecision, ThroughputSample, Variant},
     playlist::MasterPlaylist,
 };
 
@@ -29,12 +25,7 @@ where
     events: broadcast::Sender<PipelineEvent>,
     cmd_tx: mpsc::Sender<PipelineCommand>,
     cmd_rx: mpsc::Receiver<PipelineCommand>,
-
-    // Внутренний ABR контроллер, которым владеем напрямую
     abr_controller: AbrController,
-
-    // Атомарная ссылка на текущий вариант для быстрого доступа
-    current_variant: Arc<AtomicUsize>,
 }
 
 impl<I> AbrStream<I>
@@ -46,9 +37,6 @@ where
         let events = inner.event_sender();
         let (cmd_tx, cmd_rx) = mpsc::channel(64);
 
-        let initial_variant = abr_controller.current_variant();
-        let current_variant = Arc::new(AtomicUsize::new(initial_variant));
-
         Self {
             inner: Box::pin(inner),
             inner_cmd,
@@ -56,7 +44,6 @@ where
             cmd_tx,
             cmd_rx,
             abr_controller,
-            current_variant,
         }
     }
 
@@ -71,7 +58,6 @@ where
                 PipelineCommand::ForceVariant { variant_index } => {
                     let from = self.abr_controller.current_variant();
                     self.abr_controller.set_current_variant(variant_index);
-                    self.current_variant.store(variant_index, Ordering::Relaxed);
 
                     // Отправляем событие о выборе варианта
                     let _ = self.events.send(PipelineEvent::VariantSelected {
@@ -83,10 +69,6 @@ where
                     let _ = self
                         .inner_cmd
                         .try_send(PipelineCommand::ForceVariant { variant_index });
-                }
-                PipelineCommand::Shutdown => {
-                    let _ = self.inner_cmd.try_send(PipelineCommand::Shutdown);
-                    return Err(PipelineError::Aborted);
                 }
             }
         }
@@ -106,7 +88,7 @@ where
 
     /// Получить текущий выбранный вариант
     pub fn current_variant(&self) -> usize {
-        self.current_variant.load(Ordering::Relaxed)
+        self.abr_controller.current_variant()
     }
 
     /// Получить mutable ссылку на внутренний ABR контроллер

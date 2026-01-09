@@ -51,6 +51,7 @@ where
     cmd_tx: mpsc::Sender<PipelineCommand>,
     cmd_rx: mpsc::Receiver<PipelineCommand>,
     events: broadcast::Sender<PipelineEvent>,
+    // Shared current variant tracker owned by ABR controller.
     current_variant: Arc<AtomicUsize>,
     previous_variant: usize,
     inner: Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>>,
@@ -64,12 +65,13 @@ where
     pub fn new(
         fetcher: Arc<F>,
         playlists: Arc<P>,
+        current_variant: Arc<AtomicUsize>,
         cancel: CancellationToken,
-        initial_variant: usize,
     ) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel(64);
         let (events, _) = broadcast::channel(256);
-        let current_variant = Arc::new(AtomicUsize::new(initial_variant));
+        let initial_variant = current_variant.load(Ordering::Relaxed);
+        // BaseStream uses the shared current_variant rather than owning its own copy.
 
         let inner = Self::variant_stream(
             fetcher.clone(),
@@ -147,11 +149,8 @@ where
         })
     }
 
-    fn handle_commands(&mut self) -> Result<bool, PipelineError> {
-        let mut changed = false;
-
+    fn handle_commands(&mut self) -> Result<(), PipelineError> {
         while let Ok(cmd) = self.cmd_rx.try_recv() {
-            changed = true;
             match cmd {
                 PipelineCommand::Seek { segment_index } => {
                     let variant = self.current_variant.load(Ordering::Relaxed);
@@ -163,10 +162,10 @@ where
                         variant,
                         segment_index,
                     );
+                    self.previous_variant = variant;
                 }
                 PipelineCommand::ForceVariant { variant_index } => {
                     let from = self.current_variant.swap(variant_index, Ordering::Relaxed);
-                    self.previous_variant = from;
                     self.inner = Self::variant_stream(
                         self.fetcher.clone(),
                         self.playlists.clone(),
@@ -175,12 +174,12 @@ where
                         variant_index,
                         0,
                     );
+                    self.previous_variant = variant_index;
                 }
-                PipelineCommand::Shutdown => return Err(PipelineError::Aborted),
             }
         }
 
-        Ok(changed)
+        Ok(())
     }
 }
 
@@ -195,7 +194,7 @@ where
         let this = self.get_mut();
 
         if this.cancel.is_cancelled() {
-            return Poll::Ready(Some(Err(PipelineError::Aborted)));
+            return Poll::Ready(None);
         }
 
         if let Err(err) = this.handle_commands() {

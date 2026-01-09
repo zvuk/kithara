@@ -1,21 +1,27 @@
-use std::{collections::HashMap, pin::Pin, sync::Arc};
+use std::{
+    collections::HashMap,
+    pin::Pin,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
 use async_stream::stream;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use tokio::sync::{Mutex, broadcast, mpsc};
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{
     HlsError, HlsOptions, HlsResult,
-    abr::{self, AbrController, Variant},
+    abr::{self, Variant},
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
-    keys::KeyManager,
     pipeline::{
         AbrStream, BaseStream, DrmStream, PipelineError, PipelineEvent, PrefetchStream,
-        SegmentPayload, SegmentStream, base::PlaylistProvider, drm::Decrypter,
+        SegmentPayload, SegmentStream, drm::Decrypter,
     },
     playlist::{MasterPlaylist, MediaPlaylist, PlaylistManager, VariantId},
 };
@@ -64,10 +70,10 @@ impl crate::pipeline::base::PlaylistProvider for PlaylistAdapter {
     }
 }
 
-/// Passthrough DRM: возвращает payload как есть (шифрование ещё не реализовано).
-struct PassthroughDecrypter;
+/// No-op DRM placeholder: returns payload unchanged until real DRM arrives.
+struct NoopDecrypter;
 
-impl Decrypter for PassthroughDecrypter {
+impl Decrypter for NoopDecrypter {
     fn decrypt(
         &self,
         payload: SegmentPayload,
@@ -94,7 +100,6 @@ impl HlsDriver {
         options: HlsOptions,
         playlist_manager: PlaylistManager,
         fetch_manager: FetchManager,
-        key_manager: KeyManager,
         event_emitter: EventEmitter,
     ) -> Self {
         Self {
@@ -102,7 +107,6 @@ impl HlsDriver {
             master_url,
             playlist_manager: Arc::new(playlist_manager),
             fetch_manager: Arc::new(fetch_manager),
-            // key_manager parameter is temporarily unused but kept for future DRM support
             event_emitter: Arc::new(event_emitter),
             cancel: CancellationToken::new(),
         }
@@ -175,16 +179,22 @@ impl HlsDriver {
             let variants: Vec<Variant> = abr::variants_from_master(&master_playlist);
             let now = std::time::Instant::now();
 
+            // Shared current_variant for ABR + base layer
+            let current_variant = Arc::new(AtomicUsize::new(
+                opts.abr_initial_variant_index.unwrap_or(0),
+            ));
+
             // Создаем ABR контроллер для начального решения
             let abr_controller = abr::AbrController::new(
                 abr_config.clone(),
                 opts.variant_stream_selector.clone(),
-                opts.abr_initial_variant_index.unwrap_or(0),
+                current_variant.clone(),
             );
 
             let initial_variant = abr_controller
                 .decide_for_master(&master_playlist, &variants, 0.0, now)
                 .target_variant_index;
+            current_variant.store(initial_variant, Ordering::Relaxed);
 
             // 6) Prefetch теперь управляется PrefetchStream слоем, который заполняет
             // буферы последовательно (один за другим) согласно prefetch_buffer_size.
@@ -192,13 +202,13 @@ impl HlsDriver {
             let base = BaseStream::new(
                 fetch_adapter,
                 playlist_adapter,
+                current_variant.clone(),
                 cancel.clone(),
-                initial_variant,
             );
             let abr_layer = AbrStream::new(base, abr_controller);
             let drm_layer = DrmStream::new(
                 abr_layer,
-                Some(Arc::new(PassthroughDecrypter)),
+                Some(Arc::new(NoopDecrypter)),
                 cancel.clone(),
             );
             let prefetch_capacity = opts.prefetch_buffer_size.unwrap_or(1).max(1);

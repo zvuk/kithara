@@ -77,10 +77,6 @@ where
                     // Сбрасываем ожидающую расшифровку, так как смена варианта меняет данные
                     self.pending_decrypt = None;
                 }
-                PipelineCommand::Shutdown => {
-                    let _ = self.inner_cmd.try_send(PipelineCommand::Shutdown);
-                    return Err(PipelineError::Aborted);
-                }
             }
         }
         Ok(())
@@ -96,7 +92,6 @@ where
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.cancel.is_cancelled() {
-            let _ = self.inner_cmd.try_send(PipelineCommand::Shutdown);
             return Poll::Ready(Some(Err(PipelineError::Aborted)));
         }
 
