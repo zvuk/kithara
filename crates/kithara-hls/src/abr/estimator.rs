@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use super::{AbrConfig, ThroughputSample, ThroughputSampleSource};
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct ThroughputEstimator {
     sample_window: Duration,
     alpha: f64,

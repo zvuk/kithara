@@ -1,10 +1,7 @@
 use std::{
     collections::HashMap,
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::Arc,
     task::{Context, Poll},
 };
 
@@ -46,10 +43,7 @@ pub struct BaseStream {
     playlists: Arc<PlaylistSet>,
     cancel: CancellationToken,
     events: broadcast::Sender<PipelineEvent>,
-    abr_controller: Option<AbrController>,
-    // Shared current variant tracker owned by ABR controller.
-    current_variant: Arc<AtomicUsize>,
-    previous_variant: usize,
+    abr_controller: AbrController,
     inner: Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>>,
 }
 
@@ -57,22 +51,20 @@ impl BaseStream {
     pub fn new(
         fetch: Arc<FetchManager>,
         playlists: Arc<PlaylistSet>,
-        current_variant: Arc<AtomicUsize>,
+        abr_controller: AbrController,
         cancel: CancellationToken,
     ) -> Self {
-        Self::with_abr_controller(fetch, playlists, current_variant, cancel, None)
+        Self::with_abr_controller(fetch, playlists, cancel, abr_controller)
     }
 
     pub fn with_abr_controller(
         fetch: Arc<FetchManager>,
         playlists: Arc<PlaylistSet>,
-        current_variant: Arc<AtomicUsize>,
         cancel: CancellationToken,
-        abr_controller: Option<AbrController>,
+        abr_controller: AbrController,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
-        let initial_variant = current_variant.load(Ordering::Relaxed);
-        // BaseStream uses the shared current_variant rather than owning its own copy.
+        let initial_variant = abr_controller.current_variant();
 
         let inner = Self::variant_stream(
             fetch.clone(),
@@ -89,8 +81,6 @@ impl BaseStream {
             cancel,
             events,
             abr_controller,
-            current_variant,
-            previous_variant: initial_variant,
             inner,
         }
     }
@@ -99,7 +89,7 @@ impl BaseStream {
         master_url: Url,
         fetch: Arc<FetchManager>,
         playlist_manager: Arc<PlaylistManager>,
-        current_variant: Arc<AtomicUsize>,
+        abr_controller: AbrController,
         cancel: CancellationToken,
     ) -> Result<Self, HlsError> {
         let master_playlist = playlist_manager.fetch_master_playlist(&master_url).await?;
@@ -115,7 +105,7 @@ impl BaseStream {
 
         let playlists = Arc::new(PlaylistSet::new(media));
 
-        Ok(Self::new(fetch, playlists, current_variant, cancel))
+        Ok(Self::new(fetch, playlists, abr_controller, cancel))
     }
 
     fn variant_stream(
@@ -221,24 +211,21 @@ impl BaseStream {
     }
 
     pub fn seek(&mut self, segment_index: usize) {
-        let variant = self.current_variant.load(Ordering::Relaxed);
+        let variant = self.abr_controller.current_variant();
         self.inner = Self::variant_stream(
             self.fetch.clone(),
             self.playlists.clone(),
             self.events.clone(),
-            self.previous_variant,
+            variant,
             variant,
             segment_index,
         );
-        self.previous_variant = variant;
         let _ = self.events.send(PipelineEvent::StreamReset);
     }
 
     pub fn force_variant(&mut self, variant_index: usize) {
-        let from = self.current_variant.swap(variant_index, Ordering::Relaxed);
-        if let Some(abr) = self.abr_controller.as_mut() {
-            abr.set_current_variant(variant_index);
-        }
+        let from = self.abr_controller.current_variant();
+        self.abr_controller.set_current_variant(variant_index);
         let _ = self.events.send(PipelineEvent::VariantSelected {
             from,
             to: variant_index,
@@ -251,7 +238,6 @@ impl BaseStream {
             variant_index,
             0,
         );
-        self.previous_variant = variant_index;
         let _ = self.events.send(PipelineEvent::StreamReset);
     }
 }

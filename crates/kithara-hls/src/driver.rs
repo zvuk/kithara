@@ -1,7 +1,4 @@
-use std::{
-    pin::Pin,
-    sync::{Arc, atomic::AtomicUsize},
-};
+use std::{pin::Pin, sync::Arc};
 
 use async_stream::stream;
 use bytes::Bytes;
@@ -12,7 +9,7 @@ use url::Url;
 
 use crate::{
     HlsError, HlsOptions, HlsResult,
-    abr::AbrReason,
+    abr::{AbrConfig, AbrController, AbrReason},
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
     keys::KeyManager,
@@ -72,17 +69,24 @@ impl HlsDriver {
         let master_url = self.master_url.clone();
 
         Box::pin(stream! {
-            // Shared current_variant for базового слоя
-            let current_variant = Arc::new(AtomicUsize::new(
-                opts.abr_initial_variant_index.unwrap_or(0),
-            ));
+            let mut abr_config = AbrConfig::default();
+            abr_config.min_buffer_for_up_switch_secs = opts.abr_min_buffer_for_up_switch as f64;
+            abr_config.down_switch_buffer_secs = opts.abr_down_switch_buffer as f64;
+            abr_config.throughput_safety_factor = opts.abr_throughput_safety_factor as f64;
+            abr_config.up_hysteresis_ratio = opts.abr_up_hysteresis_ratio as f64;
+            abr_config.down_hysteresis_ratio = opts.abr_down_hysteresis_ratio as f64;
+            abr_config.min_switch_interval = opts.abr_min_switch_interval;
+            abr_config.initial_variant_index = opts.abr_initial_variant_index;
+
+            let abr_controller =
+                AbrController::new(abr_config, opts.variant_stream_selector.clone());
 
             // 3) Базовый слой сам загружает мастер и медиаплейлисты.
             let base = match BaseStream::build(
                 master_url.clone(),
                 fetch_manager.clone(),
                 playlist_manager.clone(),
-                current_variant.clone(),
+                abr_controller.clone(),
                 cancel.clone(),
             )
             .await
