@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     pin::Pin,
     sync::{
         Arc,
@@ -19,34 +20,30 @@ use super::types::{
 };
 use crate::{
     HlsError,
-    fetch::SegmentStream as FetchSegmentStream,
-    playlist::{MasterPlaylist, MediaPlaylist},
+    fetch::FetchManager,
+    playlist::{MediaPlaylist, PlaylistManager, VariantId},
 };
 
-/// Абстракция получения сегментов выбранного варианта в виде Stream<Bytes>.
-pub trait Fetcher: Send + Sync + 'static {
-    fn stream_segment_sequence(
-        &self,
-        media_playlist: MediaPlaylist,
-        base_url: &Url,
-    ) -> FetchSegmentStream<'static>;
+#[derive(Debug, Clone)]
+pub struct PlaylistSet {
+    media: HashMap<usize, (Url, MediaPlaylist)>,
 }
 
-/// Абстракция доступа к мастер/медиа плейлистам.
-pub trait PlaylistProvider: Send + Sync + 'static {
-    fn master_playlist(&self) -> &MasterPlaylist;
-    fn media_playlist(&self, variant_index: usize) -> Option<(Url, MediaPlaylist)>;
+impl PlaylistSet {
+    pub fn new(media: HashMap<usize, (Url, MediaPlaylist)>) -> Self {
+        Self { media }
+    }
+
+    pub fn media_playlist(&self, variant_index: usize) -> Option<(Url, MediaPlaylist)> {
+        self.media.get(&variant_index).cloned()
+    }
 }
 
 /// Базовый слой: выбирает вариант, итерирует сегменты, реагирует на команды (seek/force/shutdown),
 /// публикует события в общий канал.
-pub struct BaseStream<F, P>
-where
-    F: Fetcher,
-    P: PlaylistProvider,
-{
-    fetcher: Arc<F>,
-    playlists: Arc<P>,
+pub struct BaseStream {
+    fetch: Arc<FetchManager>,
+    playlists: Arc<PlaylistSet>,
     cancel: CancellationToken,
     cmd_tx: mpsc::Sender<PipelineCommand>,
     cmd_rx: mpsc::Receiver<PipelineCommand>,
@@ -57,14 +54,10 @@ where
     inner: Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>>,
 }
 
-impl<F, P> BaseStream<F, P>
-where
-    F: Fetcher,
-    P: PlaylistProvider,
-{
+impl BaseStream {
     pub fn new(
-        fetcher: Arc<F>,
-        playlists: Arc<P>,
+        fetch: Arc<FetchManager>,
+        playlists: Arc<PlaylistSet>,
         current_variant: Arc<AtomicUsize>,
         cancel: CancellationToken,
     ) -> Self {
@@ -74,7 +67,7 @@ where
         // BaseStream uses the shared current_variant rather than owning its own copy.
 
         let inner = Self::variant_stream(
-            fetcher.clone(),
+            fetch.clone(),
             playlists.clone(),
             events.clone(),
             initial_variant,
@@ -83,7 +76,7 @@ where
         );
 
         Self {
-            fetcher,
+            fetch,
             playlists,
             cancel,
             cmd_tx,
@@ -95,9 +88,32 @@ where
         }
     }
 
+    pub async fn build(
+        master_url: Url,
+        fetch: Arc<FetchManager>,
+        playlist_manager: Arc<PlaylistManager>,
+        current_variant: Arc<AtomicUsize>,
+        cancel: CancellationToken,
+    ) -> Result<Self, HlsError> {
+        let master_playlist = playlist_manager.fetch_master_playlist(&master_url).await?;
+
+        let mut media: HashMap<usize, (Url, MediaPlaylist)> = HashMap::new();
+        for (idx, variant) in master_playlist.variants.iter().enumerate() {
+            let variant_url = playlist_manager.resolve_url(&master_url, &variant.uri)?;
+            let media_playlist = playlist_manager
+                .fetch_media_playlist(&variant_url, VariantId(idx))
+                .await?;
+            media.insert(idx, (variant_url, media_playlist));
+        }
+
+        let playlists = Arc::new(PlaylistSet::new(media));
+
+        Ok(Self::new(fetch, playlists, current_variant, cancel))
+    }
+
     fn variant_stream(
-        fetcher: Arc<F>,
-        playlists: Arc<P>,
+        fetch: Arc<FetchManager>,
+        playlists: Arc<PlaylistSet>,
         events: broadcast::Sender<PipelineEvent>,
         from_variant: usize,
         to_variant: usize,
@@ -110,8 +126,8 @@ where
             });
         };
 
-        let mut enumerated = fetcher
-            .stream_segment_sequence(media_playlist, &media_url)
+        let mut enumerated = fetch
+            .stream_segment_sequence(media_playlist, &media_url, None)
             .enumerate();
 
         Box::pin(stream! {
@@ -155,7 +171,7 @@ where
                 PipelineCommand::Seek { segment_index } => {
                     let variant = self.current_variant.load(Ordering::Relaxed);
                     self.inner = Self::variant_stream(
-                        self.fetcher.clone(),
+                        self.fetch.clone(),
                         self.playlists.clone(),
                         self.events.clone(),
                         self.previous_variant,
@@ -167,7 +183,7 @@ where
                 PipelineCommand::ForceVariant { variant_index } => {
                     let from = self.current_variant.swap(variant_index, Ordering::Relaxed);
                     self.inner = Self::variant_stream(
-                        self.fetcher.clone(),
+                        self.fetch.clone(),
                         self.playlists.clone(),
                         self.events.clone(),
                         from,
@@ -183,11 +199,7 @@ where
     }
 }
 
-impl<F, P> Stream for BaseStream<F, P>
-where
-    F: Fetcher,
-    P: PlaylistProvider,
-{
+impl Stream for BaseStream {
     type Item = PipelineResult<SegmentPayload>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -205,11 +217,7 @@ where
     }
 }
 
-impl<F, P> SegmentStream for BaseStream<F, P>
-where
-    F: Fetcher,
-    P: PlaylistProvider,
-{
+impl SegmentStream for BaseStream {
     fn command_sender(&self) -> mpsc::Sender<PipelineCommand> {
         self.cmd_tx.clone()
     }

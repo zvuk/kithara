@@ -11,9 +11,6 @@ pub mod pipeline;
 pub mod playlist;
 pub mod session;
 
-// Internal modules (exposed for crate tests and internal plumbing).
-pub mod cursor;
-
 // Public API re-exports
 pub use abr::{
     AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,

@@ -7,9 +7,13 @@ use std::{
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use kithara_assets::{AssetStore, ResourceKey};
+use kithara_assets::{
+    AssetResource, AssetStore, DiskAssetStore, EvictAssets, LeaseGuard, ResourceKey,
+};
 use kithara_net::{Headers, HttpClient, Net as _};
-use kithara_storage::{Resource as _, ResourceStatus, StreamingResourceExt};
+use kithara_storage::{
+    Resource as _, ResourceStatus, StreamingResource, StreamingResourceExt, WaitOutcome,
+};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
@@ -20,6 +24,9 @@ use crate::{
 };
 
 pub type SegmentStream<'a> = Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + 'a>>;
+
+pub type StreamingAssetResource =
+    AssetResource<StreamingResource, LeaseGuard<EvictAssets<DiskAssetStore>>>;
 
 #[derive(Clone, Debug)]
 pub struct FetchBytes {
@@ -88,17 +95,22 @@ impl FetchManager {
             "kithara-hls fetch_segment begin"
         );
 
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
-        let fetch = self
-            .fetch_streaming_to_bytes(&segment_url, &key.rel_path())
-            .await?;
+        if key_context.is_some() {
+            return Err(HlsError::Unimplemented);
+        }
 
-        // Decrypt if needed
-        let out = if let Some(key_ctx) = key_context {
-            self.decrypt_segment(fetch.bytes, key_ctx).await?
-        } else {
-            fetch.bytes
-        };
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
+        let fetch = Self::fetch_streaming_to_bytes_internal(
+            &self.asset_root,
+            &self.assets,
+            &self.net,
+            &segment_url,
+            &key.rel_path(),
+            Some(segment_index),
+        )
+        .await?;
+
+        let out = fetch.bytes;
 
         trace!(
             asset_root = %self.asset_root,
@@ -136,13 +148,20 @@ impl FetchManager {
             "kithara-hls fetch_segment_with_meta begin"
         );
 
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
-        let mut fetch = self
-            .fetch_streaming_to_bytes(&segment_url, &key.rel_path())
-            .await?;
-        if let Some(key_ctx) = key_context {
-            fetch.bytes = self.decrypt_segment(fetch.bytes, key_ctx).await?;
+        if key_context.is_some() {
+            return Err(HlsError::Unimplemented);
         }
+
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
+        let mut fetch = Self::fetch_streaming_to_bytes_internal(
+            &self.asset_root,
+            &self.assets,
+            &self.net,
+            &segment_url,
+            &key.rel_path(),
+            Some(segment_index),
+        )
+        .await?;
 
         trace!(
             asset_root = %self.asset_root,
@@ -188,7 +207,15 @@ impl FetchManager {
             "kithara-hls fetch_init_segment_resource"
         );
 
-        self.fetch_streaming_to_bytes(url, &key.rel_path()).await
+        Self::fetch_streaming_to_bytes_internal(
+            &self.asset_root,
+            &self.assets,
+            &self.net,
+            url,
+            &key.rel_path(),
+            None,
+        )
+        .await
     }
 
     pub async fn fetch_media_segment_resource(
@@ -206,19 +233,22 @@ impl FetchManager {
             "kithara-hls fetch_media_segment_resource"
         );
 
-        self.fetch_streaming_to_bytes(url, &key.rel_path()).await
+        Self::fetch_streaming_to_bytes_internal(
+            &self.asset_root,
+            &self.assets,
+            &self.net,
+            url,
+            &key.rel_path(),
+            None,
+        )
+        .await
     }
 
     pub async fn open_init_streaming_resource(
         &self,
         variant_id: usize,
         url: &Url,
-    ) -> HlsResult<
-        kithara_assets::AssetResource<
-            kithara_storage::StreamingResource,
-            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-        >,
-    > {
+    ) -> HlsResult<StreamingAssetResource> {
         self.open_init_streaming_resource_with_events(variant_id, url, None)
             .await
     }
@@ -228,12 +258,7 @@ impl FetchManager {
         variant_id: usize,
         url: &Url,
         events: Option<broadcast::Sender<HlsEvent>>,
-    ) -> HlsResult<
-        kithara_assets::AssetResource<
-            kithara_storage::StreamingResource,
-            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-        >,
-    > {
+    ) -> HlsResult<StreamingAssetResource> {
         trace!(
             asset_root = %self.asset_root,
             variant_id,
@@ -248,12 +273,7 @@ impl FetchManager {
         &self,
         variant_id: usize,
         url: &Url,
-    ) -> HlsResult<
-        kithara_assets::AssetResource<
-            kithara_storage::StreamingResource,
-            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-        >,
-    > {
+    ) -> HlsResult<StreamingAssetResource> {
         self.open_media_streaming_resource_with_events(variant_id, url, None, None)
             .await
     }
@@ -264,12 +284,7 @@ impl FetchManager {
         url: &Url,
         events: Option<broadcast::Sender<HlsEvent>>,
         segment_index: Option<usize>,
-    ) -> HlsResult<
-        kithara_assets::AssetResource<
-            kithara_storage::StreamingResource,
-            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-        >,
-    > {
+    ) -> HlsResult<StreamingAssetResource> {
         trace!(
             asset_root = %self.asset_root,
             variant_id,
@@ -287,12 +302,7 @@ impl FetchManager {
         variant_id: usize,
         events: Option<broadcast::Sender<HlsEvent>>,
         segment_index: Option<usize>,
-    ) -> HlsResult<
-        kithara_assets::AssetResource<
-            kithara_storage::StreamingResource,
-            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-        >,
-    > {
+    ) -> HlsResult<StreamingAssetResource> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
         let cancel = CancellationToken::new();
         let res = self
@@ -339,6 +349,11 @@ impl FetchManager {
         let key_ctx = key_context.cloned();
 
         Box::pin(async_stream::stream! {
+            if key_ctx.is_some() {
+                yield Err(HlsError::Unimplemented);
+                return;
+            }
+
             for (segment_index, segment) in media_playlist.segments.into_iter().enumerate() {
                 let segment_url = match base_url.join(&segment.uri) {
                     Ok(url) => url,
@@ -356,19 +371,7 @@ impl FetchManager {
 
                 match fetch_result {
                     Ok(fetch) => {
-                        // Decrypt if needed
-                        let bytes = if let Some(key_ctx) = &key_ctx {
-                            match Self::decrypt_segment_internal(fetch.bytes, key_ctx).await {
-                                Ok(decrypted) => decrypted,
-                                Err(e) => {
-                                    yield Err(e);
-                                    continue;
-                                }
-                            }
-                        } else {
-                            fetch.bytes
-                        };
-                        yield Ok(bytes);
+                        yield Ok(fetch.bytes);
                     }
                     Err(e) => yield Err(e),
                 }
@@ -376,29 +379,10 @@ impl FetchManager {
         })
     }
 
-    async fn fetch_streaming_to_bytes(&self, url: &Url, rel_path: &str) -> HlsResult<FetchBytes> {
-        Self::fetch_streaming_to_bytes_internal(
-            &self.asset_root,
-            &self.assets,
-            &self.net,
-            url,
-            rel_path,
-            None,
-        )
-        .await
-    }
-
-    async fn decrypt_segment(&self, bytes: Bytes, key_context: &KeyContext) -> HlsResult<Bytes> {
-        Self::decrypt_segment_internal(bytes, key_context).await
-    }
-
     fn spawn_stream_writer(
         net: HttpClient,
         url: Url,
-        res: kithara_assets::AssetResource<
-            kithara_storage::StreamingResource,
-            kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-        >,
+        res: StreamingAssetResource,
         events: Option<broadcast::Sender<HlsEvent>>,
         variant_id: usize,
         segment_index: Option<usize>,
@@ -518,7 +502,7 @@ impl FetchManager {
             let outcome = res.wait_range(offset..end).await?;
 
             match outcome {
-                kithara_storage::WaitOutcome::Ready => {
+                WaitOutcome::Ready => {
                     let len: usize = (end - offset) as usize;
                     let bytes = res.read_at(offset, len).await?;
 
@@ -536,7 +520,7 @@ impl FetchManager {
                     offset = offset.saturating_add(bytes.len() as u64);
                     out.extend_from_slice(&bytes);
                 }
-                kithara_storage::WaitOutcome::Eof => {
+                WaitOutcome::Eof => {
                     break;
                 }
             }
@@ -556,14 +540,5 @@ impl FetchManager {
             source: ThroughputSampleSource::Network,
             duration,
         })
-    }
-
-    // Helper for stream_segment_sequence
-    async fn decrypt_segment_internal(
-        _bytes: Bytes,
-        _key_context: &KeyContext,
-    ) -> HlsResult<Bytes> {
-        // Encryption support is not implemented yet
-        Err(HlsError::Unimplemented)
     }
 }

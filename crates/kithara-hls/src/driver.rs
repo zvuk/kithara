@@ -1,10 +1,6 @@
 use std::{
-    collections::HashMap,
     pin::Pin,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Arc, atomic::AtomicUsize},
 };
 
 use async_stream::stream;
@@ -16,71 +12,20 @@ use url::Url;
 
 use crate::{
     HlsError, HlsOptions, HlsResult,
-    abr::{self, Variant},
+    abr::{self},
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
     pipeline::{
         AbrStream, BaseStream, DrmStream, PipelineError, PipelineEvent, PrefetchStream,
-        SegmentPayload, SegmentStream, drm::Decrypter,
+        SegmentStream,
     },
-    playlist::{MasterPlaylist, MediaPlaylist, PlaylistManager, VariantId},
+    playlist::PlaylistManager,
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum DriverError {
     #[error("pipeline error: {0}")]
     Pipeline(#[from] PipelineError),
-}
-
-/// Адаптер для FetchManager под новый пайплайн.
-struct FetcherAdapter {
-    fetch: Arc<FetchManager>,
-}
-
-impl crate::pipeline::base::Fetcher for FetcherAdapter {
-    fn stream_segment_sequence(
-        &self,
-        media_playlist: MediaPlaylist,
-        base_url: &Url,
-    ) -> crate::fetch::SegmentStream<'static> {
-        self.fetch
-            .stream_segment_sequence(media_playlist, base_url, None)
-    }
-}
-
-/// Адаптер плейлистов: мастер + заранее загруженные медиа.
-struct PlaylistAdapter {
-    master: MasterPlaylist,
-    media: HashMap<usize, (Url, MediaPlaylist)>,
-}
-
-impl PlaylistAdapter {
-    fn new(master: MasterPlaylist, media: HashMap<usize, (Url, MediaPlaylist)>) -> Self {
-        Self { master, media }
-    }
-}
-
-impl crate::pipeline::base::PlaylistProvider for PlaylistAdapter {
-    fn master_playlist(&self) -> &MasterPlaylist {
-        &self.master
-    }
-
-    fn media_playlist(&self, variant_index: usize) -> Option<(Url, MediaPlaylist)> {
-        self.media.get(&variant_index).cloned()
-    }
-}
-
-/// No-op DRM placeholder: returns payload unchanged until real DRM arrives.
-struct NoopDecrypter;
-
-impl Decrypter for NoopDecrypter {
-    fn decrypt(
-        &self,
-        payload: SegmentPayload,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<SegmentPayload, HlsError>> + Send>>
-    {
-        Box::pin(async move { Ok(payload) })
-    }
 }
 
 pub struct HlsDriver {
@@ -125,45 +70,7 @@ impl HlsDriver {
         let master_url = self.master_url.clone();
 
         Box::pin(stream! {
-            // 1) Загружаем мастер плейлист.
-            let master_playlist = match playlist_manager.fetch_master_playlist(&master_url).await {
-                Ok(m) => m,
-                Err(e) => {
-                    yield Err(e);
-                    return;
-                }
-            };
-
-            // 2) Загружаем все медиа плейлисты по вариантам (для быстрой смены).
-            let mut media_map: HashMap<usize, (Url, MediaPlaylist)> = HashMap::new();
-            for (idx, variant) in master_playlist.variants.iter().enumerate() {
-                let variant_url = match playlist_manager.resolve_url(&master_url, &variant.uri) {
-                    Ok(url) => url,
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
-                };
-
-                match playlist_manager
-                    .fetch_media_playlist(&variant_url, VariantId(idx))
-                    .await
-                {
-                    Ok(media) => {
-                        media_map.insert(idx, (variant_url.clone(), media));
-                    }
-                    Err(e) => {
-                        yield Err(e);
-                        return;
-                    }
-                }
-            }
-
-            // 3) Адаптеры для пайплайна.
-            let playlist_adapter = Arc::new(PlaylistAdapter::new(master_playlist.clone(), media_map));
-            let fetch_adapter = Arc::new(FetcherAdapter { fetch: fetch_manager.clone() });
-
-            // 4) Создаем конфигурацию ABR
+            // 1) Создаем конфигурацию ABR
             let abr_config = abr::AbrConfig {
                 min_buffer_for_up_switch_secs: f64::from(opts.abr_min_buffer_for_up_switch),
                 down_switch_buffer_secs: f64::from(opts.abr_down_switch_buffer),
@@ -174,10 +81,6 @@ impl HlsDriver {
                 initial_variant_index: opts.abr_initial_variant_index,
                 sample_window: std::time::Duration::from_secs(30),
             };
-
-            // 5) Определяем начальный вариант
-            let variants: Vec<Variant> = abr::variants_from_master(&master_playlist);
-            let now = std::time::Instant::now();
 
             // Shared current_variant for ABR + base layer
             let current_variant = Arc::new(AtomicUsize::new(
@@ -191,24 +94,26 @@ impl HlsDriver {
                 current_variant.clone(),
             );
 
-            let initial_variant = abr_controller
-                .decide_for_master(&master_playlist, &variants, 0.0, now)
-                .target_variant_index;
-            current_variant.store(initial_variant, Ordering::Relaxed);
-
-            // 6) Prefetch теперь управляется PrefetchStream слоем, который заполняет
-            // буферы последовательно (один за другим) согласно prefetch_buffer_size.
-
-            let base = BaseStream::new(
-                fetch_adapter,
-                playlist_adapter,
+            // 3) Базовый слой сам загружает мастер и медиаплейлисты.
+            let base = match BaseStream::build(
+                master_url.clone(),
+                fetch_manager.clone(),
+                playlist_manager.clone(),
                 current_variant.clone(),
                 cancel.clone(),
-            );
+            )
+            .await
+            {
+                Ok(base) => base,
+                Err(e) => {
+                    yield Err(e);
+                    return;
+                }
+            };
             let abr_layer = AbrStream::new(base, abr_controller);
             let drm_layer = DrmStream::new(
                 abr_layer,
-                Some(Arc::new(NoopDecrypter)),
+                None,
                 cancel.clone(),
             );
             let prefetch_capacity = opts.prefetch_buffer_size.unwrap_or(1).max(1);

@@ -64,7 +64,7 @@ impl Default for HlsOptions {
             retry_base_delay: Duration::from_millis(100),
             max_retry_delay: Duration::from_secs(5),
             retry_timeout: Duration::from_secs(60),
-            prefetch_buffer_size: Some(8),
+            prefetch_buffer_size: Some(3),
             live_refresh_interval: None,
 
             key_processor_cb: None,
