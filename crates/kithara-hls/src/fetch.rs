@@ -16,7 +16,7 @@ use kithara_storage::{
 };
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tracing::{trace, warn};
+use tracing::{debug, trace, warn};
 use url::Url;
 
 use crate::{
@@ -53,6 +53,89 @@ impl FetchManager {
 
     pub fn net(&self) -> &HttpClient {
         &self.net
+    }
+
+    pub async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
+
+        let cancel = CancellationToken::new();
+        let res = self.assets.open_atomic_resource(&key, cancel).await?;
+
+        let cached = res.read().await?;
+        if !cached.is_empty() {
+            debug!(
+                url = %url,
+                asset_root = %self.asset_root,
+                rel_path = %rel_path,
+                bytes = cached.len(),
+                "kithara-hls: playlist cache hit"
+            );
+            return Ok(cached);
+        }
+
+        debug!(
+            url = %url,
+            asset_root = %self.asset_root,
+            rel_path = %rel_path,
+            "kithara-hls: playlist cache miss -> fetching from network"
+        );
+
+        let bytes = self.net.get_bytes(url.clone(), None).await?;
+        res.write(&bytes).await?;
+
+        debug!(
+            url = %url,
+            asset_root = %self.asset_root,
+            rel_path = %rel_path,
+            bytes = bytes.len(),
+            "kithara-hls: playlist fetched from network and cached"
+        );
+
+        Ok(bytes)
+    }
+
+    pub async fn fetch_key_atomic(
+        &self,
+        url: &Url,
+        rel_path: &str,
+        headers: Option<Headers>,
+    ) -> HlsResult<Bytes> {
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
+
+        let cancel = CancellationToken::new();
+        let res = self.assets.open_atomic_resource(&key, cancel).await?;
+
+        let cached = res.read().await?;
+        if !cached.is_empty() {
+            debug!(
+                url = %url,
+                asset_root = %self.asset_root,
+                rel_path = %rel_path,
+                bytes = cached.len(),
+                "kithara-hls: key cache hit"
+            );
+            return Ok(cached);
+        }
+
+        debug!(
+            url = %url,
+            asset_root = %self.asset_root,
+            rel_path = %rel_path,
+            "kithara-hls: key cache miss -> fetching from network"
+        );
+
+        let bytes = self.net.get_bytes(url.clone(), headers).await?;
+        res.write(&bytes).await?;
+
+        debug!(
+            url = %url,
+            asset_root = %self.asset_root,
+            rel_path = %rel_path,
+            bytes = bytes.len(),
+            "kithara-hls: key fetched from network and cached"
+        );
+
+        Ok(bytes)
     }
 
     pub async fn probe_content_length(&self, url: &Url) -> HlsResult<Option<u64>> {
@@ -127,14 +210,10 @@ impl FetchManager {
     }
 
     pub async fn fetch_init_segment(&self, init_url: &Url) -> HlsResult<Bytes> {
-        Ok(self.fetch_init_segment_resource(0, init_url).await?.bytes)
+        Ok(self.fetch_init_segment_resource(init_url).await?.bytes)
     }
 
-    pub async fn fetch_init_segment_resource(
-        &self,
-        variant_id: usize,
-        url: &Url,
-    ) -> HlsResult<FetchBytes> {
+    pub async fn fetch_init_segment_resource(&self, url: &Url) -> HlsResult<FetchBytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
 
         Self::fetch_streaming_to_bytes_internal(
@@ -148,11 +227,7 @@ impl FetchManager {
         .await
     }
 
-    pub async fn fetch_media_segment_resource(
-        &self,
-        variant_id: usize,
-        url: &Url,
-    ) -> HlsResult<FetchBytes> {
+    pub async fn fetch_media_segment_resource(&self, url: &Url) -> HlsResult<FetchBytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
 
         Self::fetch_streaming_to_bytes_internal(
@@ -237,7 +312,7 @@ impl FetchManager {
             url,
             res_for_writer,
             events_for_writer,
-            variant_id,
+            Some(variant_id),
             segment_index,
             content_length_for_progress,
         );
@@ -293,14 +368,16 @@ impl FetchManager {
         url: Url,
         res: StreamingAssetResource,
         events: Option<broadcast::Sender<HlsEvent>>,
-        variant_id: usize,
+        variant_id: Option<usize>,
         segment_index: Option<usize>,
         content_length_for_progress: Option<u64>,
     ) {
         let started_at = Instant::now();
 
         tokio::spawn(async move {
-            if let (Some(ev), Some(segment_index)) = (&events, segment_index) {
+            if let (Some(ev), Some(segment_index), Some(variant_id)) =
+                (&events, segment_index, variant_id)
+            {
                 let _: Result<_, broadcast::error::SendError<HlsEvent>> =
                     ev.send(HlsEvent::SegmentStart {
                         variant: variant_id,
@@ -359,7 +436,9 @@ impl FetchManager {
 
             let _ = res.commit(Some(off)).await;
 
-            if let (Some(ev), Some(segment_index)) = (&events, segment_index) {
+            if let (Some(ev), Some(segment_index), Some(variant_id)) =
+                (&events, segment_index, variant_id)
+            {
                 let _: Result<_, broadcast::error::SendError<HlsEvent>> =
                     ev.send(HlsEvent::SegmentComplete {
                         variant: variant_id,
@@ -396,7 +475,7 @@ impl FetchManager {
 
         let status = res.inner().status().await;
         if !matches!(status, ResourceStatus::Committed { .. }) {
-            Self::spawn_stream_writer(net, url, res.clone(), None, 0, segment_index, None);
+            Self::spawn_stream_writer(net, url, res.clone(), None, None, segment_index, None);
         }
 
         // Read-through to bytes: wait for full content once committed, then read all.

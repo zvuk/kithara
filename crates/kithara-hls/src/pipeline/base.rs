@@ -156,7 +156,7 @@ impl BaseStream {
                         }
                     };
 
-                    match fetch.fetch_init_segment_resource(to_variant, &init_url).await {
+                    match fetch.fetch_init_segment_resource(&init_url).await {
                         Ok(init_fetch) => {
                             let meta = SegmentMeta {
                                 variant: to_variant,

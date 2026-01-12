@@ -15,6 +15,7 @@ use crate::{
     abr::AbrReason,
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
+    keys::KeyManager,
     pipeline::{
         BaseStream, DrmStream, PipelineError, PipelineEvent, PrefetchStream, SegmentStream,
     },
@@ -32,6 +33,7 @@ pub struct HlsDriver {
     master_url: Url,
     playlist_manager: Arc<PlaylistManager>,
     fetch_manager: Arc<FetchManager>,
+    key_manager: Arc<KeyManager>,
     event_emitter: Arc<EventEmitter>,
     cancel: CancellationToken,
 }
@@ -42,6 +44,7 @@ impl HlsDriver {
         options: HlsOptions,
         playlist_manager: PlaylistManager,
         fetch_manager: FetchManager,
+        key_manager: KeyManager,
         event_emitter: EventEmitter,
     ) -> Self {
         Self {
@@ -49,6 +52,7 @@ impl HlsDriver {
             master_url,
             playlist_manager: Arc::new(playlist_manager),
             fetch_manager: Arc::new(fetch_manager),
+            key_manager: Arc::new(key_manager),
             event_emitter: Arc::new(event_emitter),
             cancel: CancellationToken::new(),
         }
@@ -61,6 +65,7 @@ impl HlsDriver {
     pub fn stream(&self) -> Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + '_>> {
         let playlist_manager = Arc::clone(&self.playlist_manager);
         let fetch_manager = Arc::clone(&self.fetch_manager);
+        let key_manager = Arc::clone(&self.key_manager);
         let events = Arc::clone(&self.event_emitter);
         let cancel = self.cancel.clone();
         let opts = self.options.clone();
@@ -90,7 +95,7 @@ impl HlsDriver {
             };
             let drm_layer = DrmStream::new(
                 base,
-                None,
+                Some(Arc::clone(&key_manager)),
                 cancel.clone(),
             );
             let prefetch_capacity = opts.prefetch_buffer_size.unwrap_or(1).max(1);

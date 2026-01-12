@@ -5,15 +5,10 @@ use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,
     tags::VariantStream as HlsVariantStreamTag, types::DecryptionKey as HlsDecryptionKey,
 };
-use kithara_assets::{AssetStore, ResourceKey};
-use kithara_net::HttpClient;
-use kithara_storage::Resource as _;
 use thiserror::Error;
-use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace};
 use url::Url;
 
-use crate::{HlsError, HlsResult};
+use crate::{HlsError, HlsResult, fetch::FetchManager};
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {
     let no_query = uri.split('?').next().unwrap_or(uri);
@@ -165,25 +160,13 @@ pub struct MediaSegment {
 /// Thin wrapper: fetches + parses playlists with caching via `kithara-assets`.
 #[derive(Clone)]
 pub struct PlaylistManager {
-    asset_root: String,
-    assets: AssetStore,
-    net: HttpClient,
+    fetch: FetchManager,
     base_url: Option<Url>,
 }
 
 impl PlaylistManager {
-    pub fn new(
-        asset_root: String,
-        assets: AssetStore,
-        net: HttpClient,
-        base_url: Option<Url>,
-    ) -> Self {
-        Self {
-            asset_root,
-            assets,
-            net,
-            base_url,
-        }
+    pub fn new(fetch: FetchManager, base_url: Option<Url>) -> Self {
+        Self { fetch, base_url }
     }
 
     pub async fn fetch_master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
@@ -227,42 +210,7 @@ impl PlaylistManager {
     }
 
     async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
-
-        let cancel = CancellationToken::new();
-        let res = self.assets.open_atomic_resource(&key, cancel).await?;
-
-        let cached = res.read().await?;
-        if !cached.is_empty() {
-            debug!(
-                url = %url,
-                asset_root = %self.asset_root,
-                rel_path = %rel_path,
-                bytes = cached.len(),
-                "kithara-hls: playlist cache hit"
-            );
-            return Ok(cached);
-        }
-
-        debug!(
-            url = %url,
-            asset_root = %self.asset_root,
-            rel_path = %rel_path,
-            "kithara-hls: playlist cache miss -> fetching from network"
-        );
-
-        let bytes = self.net.get_bytes(url.clone(), None).await?;
-        res.write(&bytes).await?;
-
-        debug!(
-            url = %url,
-            asset_root = %self.asset_root,
-            rel_path = %rel_path,
-            bytes = bytes.len(),
-            "kithara-hls: playlist fetched from network and cached"
-        );
-
-        Ok(bytes)
+        self.fetch.fetch_playlist_atomic(url, rel_path).await
     }
 }
 

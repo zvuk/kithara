@@ -32,19 +32,8 @@ fn select_variant_index(master: &MasterPlaylist, options: &HlsOptions) -> usize 
     }
 }
 
-use std::collections::HashMap;
-/// Tracing:
-// - This module logs initialization, playlist/segment URLs, cache keys, wait/read mapping,
-//   and EOF behavior. Use:
-//   `RUST_LOG=kithara_hls=trace,kithara_stream::io=trace,kithara_net=debug,kithara_storage=debug,kithara_assets=debug`
-//   to debug "no audio" / deadlocks.
-//
-// Deadlock pinpointing (temporary, ultra-early logs):
-// - There are `info!` markers before *each* potentially blocking await in the segment caching path.
-// - Run with at least `RUST_LOG=kithara_hls=info` to see them.
-//
-// This module is intentionally self-contained and does not introduce speculative helpers.
 use std::{
+    collections::HashMap,
     ops::Range,
     sync::{
         Arc,
@@ -98,10 +87,6 @@ struct State {
     total_len: u64,
     prefix: Vec<u64>,
 }
-
-/// Cache for opened streaming resources to avoid reopening the same segment multiple times
-type ResourceCache =
-    HashMap<usize, AssetResource<StreamingResource, LeaseGuard<EvictAssets<DiskAssetStore>>>>;
 
 #[derive(Clone, Debug)]
 struct SegmentDesc {
@@ -263,7 +248,7 @@ impl HlsSessionSource {
                     // We want init bytes to be available immediately for fMP4 demux, so trigger init download now.
                     let init_fetch = self
                         .fetch_manager
-                        .fetch_init_segment_resource(variant_index, &init_url)
+                        .fetch_init_segment_resource(&init_url)
                         .await?;
 
                     let len = init_fetch.bytes.len() as u64;
@@ -279,7 +264,7 @@ impl HlsSessionSource {
                     let len = if media_index == 0 {
                         let first_fetch = self
                             .fetch_manager
-                            .fetch_media_segment_resource(variant_index, &url)
+                            .fetch_media_segment_resource(&url)
                             .await?;
                         first_fetch.bytes.len() as u64
                     } else {
