@@ -6,15 +6,23 @@ use thiserror::Error;
 use tokio::sync::broadcast;
 use url::Url;
 
-use crate::HlsError;
+use crate::{HlsError, abr::AbrReason};
 
 /// Единый тип событий от всех слоёв.
 #[derive(Debug, Clone)]
 pub enum PipelineEvent {
     /// ABR принял решение переключить вариант (ещё не применён).
-    VariantSelected { from: usize, to: usize },
+    VariantSelected {
+        from: usize,
+        to: usize,
+        reason: AbrReason,
+    },
     /// Вариант применён (базовый слой начал выдавать новый вариант).
-    VariantApplied { from: usize, to: usize },
+    VariantApplied {
+        from: usize,
+        to: usize,
+        reason: AbrReason,
+    },
     /// Сегмент готов к выдаче из текущего слоя.
     SegmentReady {
         variant: usize,

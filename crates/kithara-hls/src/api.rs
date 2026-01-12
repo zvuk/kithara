@@ -60,7 +60,6 @@ impl Default for HlsOptions {
             abr_up_hysteresis_ratio: 1.3,
             abr_down_hysteresis_ratio: 0.8,
             abr_min_switch_interval: Duration::from_secs(30),
-
             request_timeout: Duration::from_secs(30),
             max_retries: 3,
             retry_base_delay: Duration::from_millis(100),
@@ -68,7 +67,6 @@ impl Default for HlsOptions {
             retry_timeout: Duration::from_secs(60),
             prefetch_buffer_size: Some(3),
             live_refresh_interval: None,
-
             key_processor_cb: None,
             key_query_params: None,
             key_request_headers: None,

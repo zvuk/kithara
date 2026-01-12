@@ -16,11 +16,6 @@ async fn test_server() -> TestServer {
 }
 
 #[fixture]
-async fn test_assets() -> (TestAssets, kithara_net::HttpClient) {
-    create_test_cache_and_net()
-}
-
-#[fixture]
 fn asset_root() -> String {
     "test-hls".to_string()
 }
@@ -32,12 +27,13 @@ fn asset_root() -> String {
 #[tokio::test]
 async fn fetch_and_cache_key(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
     let key_manager = KeyManager::new(asset_root, fetch_manager, None, None, None);
@@ -55,12 +51,13 @@ async fn fetch_and_cache_key(
 #[tokio::test]
 async fn key_processor_applied(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let processor = Arc::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
         // Simple processor that just adds a prefix
@@ -85,12 +82,13 @@ async fn key_processor_applied(
 #[tokio::test]
 async fn key_manager_with_different_processors(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     // Test with uppercase processor
     let uppercase_processor = Arc::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
@@ -118,11 +116,12 @@ async fn key_manager_with_different_processors(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn key_manager_error_handling(
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
     let key_manager = KeyManager::new(asset_root, fetch_manager, None, None, None);
@@ -145,12 +144,13 @@ async fn key_manager_error_handling(
 #[tokio::test]
 async fn key_manager_caching_behavior(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
     let key_manager = KeyManager::new(asset_root, fetch_manager, None, None, None);
@@ -173,12 +173,13 @@ async fn key_manager_caching_behavior(
 #[tokio::test]
 async fn key_manager_with_context(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let processor = Arc::new(|key: bytes::Bytes, context: kithara_hls::KeyContext| {
         // Use context to modify key

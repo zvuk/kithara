@@ -112,11 +112,11 @@ impl HlsDriver {
                 let mut ev_rx = ev_rx;
                 while let Ok(ev) = ev_rx.recv().await {
                     match ev {
-                        PipelineEvent::VariantSelected { from, to } => {
-                            events_clone.emit_variant_decision(from, to, AbrReason::ManualOverride);
+                        PipelineEvent::VariantSelected { from, to, reason } => {
+                            events_clone.emit_variant_decision(from, to, reason);
                         }
-                        PipelineEvent::VariantApplied { from, to } => {
-                            events_clone.emit_variant_applied(from, to, AbrReason::ManualOverride);
+                        PipelineEvent::VariantApplied { from, to, reason } => {
+                            events_clone.emit_variant_applied(from, to, reason);
                         }
                         PipelineEvent::SegmentReady { variant, segment_index } => {
                             events_clone.emit_segment_start(variant, segment_index, 0);

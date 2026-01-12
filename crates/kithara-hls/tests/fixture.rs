@@ -1,14 +1,118 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use axum::{Router, routing::get};
 use kithara_assets::{AssetStore, EvictConfig};
 pub use kithara_hls::HlsError;
 use kithara_net::{HttpClient, NetOptions};
+use rstest::fixture;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use url::Url;
 
 pub type HlsResult<T> = Result<T, HlsError>;
+
+pub struct AbrTestServer {
+    base_url: String,
+}
+
+impl AbrTestServer {
+    pub async fn new(master_playlist: String, init: bool, segment0_delay: Duration) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base_url = format!("http://127.0.0.1:{}", addr.port());
+
+        let master = master_playlist;
+
+        let app =
+            Router::new()
+                .route(
+                    "/master.m3u8",
+                    get(move || {
+                        let master = master.clone();
+                        async move { master }
+                    }),
+                )
+                .route(
+                    "/v0.m3u8",
+                    get(move || async move { media_playlist(0, init) }),
+                )
+                .route(
+                    "/v1.m3u8",
+                    get(move || async move { media_playlist(1, init) }),
+                )
+                .route(
+                    "/v2.m3u8",
+                    get(move || async move { media_playlist(2, init) }),
+                )
+                .route(
+                    "/seg/v0_0.bin",
+                    get(move || async move {
+                        segment_data(0, 0, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v0_1.bin",
+                    get(move || async move {
+                        segment_data(0, 1, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v0_2.bin",
+                    get(move || async move {
+                        segment_data(0, 2, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v1_0.bin",
+                    get(move || async move {
+                        segment_data(1, 0, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v1_1.bin",
+                    get(move || async move {
+                        segment_data(1, 1, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v1_2.bin",
+                    get(move || async move {
+                        segment_data(1, 2, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v2_0.bin",
+                    get(move || async move { segment_data(2, 0, segment0_delay, 50_000).await }),
+                )
+                .route(
+                    "/seg/v2_1.bin",
+                    get(move || async move {
+                        segment_data(2, 1, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v2_2.bin",
+                    get(move || async move {
+                        segment_data(2, 2, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route("/init/v0.bin", get(|| async { init_data(0) }))
+                .route("/init/v1.bin", get(|| async { init_data(1) }))
+                .route("/init/v2.bin", get(|| async { init_data(2) }));
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        Self { base_url }
+    }
+
+    pub fn url(&self, path: &str) -> HlsResult<Url> {
+        format!("{}{}", self.base_url, path)
+            .parse()
+            .map_err(|e| HlsError::InvalidUrl(format!("Invalid test URL: {}", e)))
+    }
+}
 
 pub struct TestServer {
     base_url: String,
@@ -105,12 +209,13 @@ pub struct TestAssets {
 }
 
 impl TestAssets {
+    #[allow(dead_code)]
     pub fn assets(&self) -> &AssetStore {
         &self.assets
     }
 }
 
-pub fn create_test_cache_and_net() -> (TestAssets, HttpClient) {
+pub fn create_test_assets() -> TestAssets {
     // NOTE: The assets/cache API has been redesigned.
     // Keep the temp dir alive by storing it inside the returned wrapper.
     let temp_dir = TempDir::new().unwrap();
@@ -118,16 +223,96 @@ pub fn create_test_cache_and_net() -> (TestAssets, HttpClient) {
 
     let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
 
-    let net_opts = NetOptions::default();
-    let net = HttpClient::new(net_opts);
+    TestAssets {
+        assets,
+        _temp_dir: temp_dir,
+    }
+}
 
-    (
-        TestAssets {
-            assets,
-            _temp_dir: temp_dir,
-        },
-        net,
+pub fn create_test_net() -> HttpClient {
+    let net_opts = NetOptions::default();
+    HttpClient::new(net_opts)
+}
+
+pub fn master_playlist(v0_bw: u64, v1_bw: u64, v2_bw: u64) -> String {
+    format!(
+        r#"#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH={v0_bw}
+v0.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH={v1_bw}
+v1.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH={v2_bw}
+v2.m3u8
+"#
     )
+}
+
+pub fn media_playlist(variant: usize, init: bool) -> String {
+    let mut s = String::new();
+    s.push_str(
+        r#"#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:VOD
+"#,
+    );
+    if init {
+        s.push_str(&format!("#EXT-X-MAP:URI=\"init/v{}.bin\"\n", variant));
+    }
+    for i in 0..3 {
+        s.push_str("#EXTINF:4.0,\n");
+        s.push_str(&format!("seg/v{}_{}.bin\n", variant, i));
+    }
+    s.push_str("#EXT-X-ENDLIST\n");
+    s
+}
+
+pub async fn segment_data(
+    variant: usize,
+    segment: usize,
+    delay: Duration,
+    total_len: usize,
+) -> Vec<u8> {
+    if delay != Duration::ZERO {
+        tokio::time::sleep(delay).await;
+    }
+    let prefix = format!("V{}-SEG-{}:", variant, segment);
+    let mut data = prefix.into_bytes();
+    if data.len() < total_len {
+        data.extend(std::iter::repeat(b'A').take(total_len - data.len()));
+    }
+    data
+}
+
+pub fn init_data(variant: usize) -> Vec<u8> {
+    format!("V{}-INIT:", variant).into_bytes()
+}
+
+#[fixture]
+pub async fn abr_server_default() -> AbrTestServer {
+    AbrTestServer::new(
+        master_playlist(256_000, 512_000, 1_024_000),
+        false,
+        Duration::from_millis(1),
+    )
+    .await
+}
+
+#[fixture]
+pub fn assets_fixture() -> TestAssets {
+    create_test_assets()
+}
+
+#[fixture]
+pub fn net_fixture() -> HttpClient {
+    create_test_net()
+}
+
+#[fixture]
+pub fn abr_cache_and_net() -> (TestAssets, HttpClient) {
+    (create_test_assets(), create_test_net())
 }
 
 pub fn test_master_playlist() -> &'static str {
@@ -225,22 +410,6 @@ async fn key_endpoint() -> Vec<u8> {
     test_key_data()
 }
 
-// Helper function to create test master playlist (from src/fixture.rs)
-pub fn create_test_master_playlist() -> hls_m3u8::MasterPlaylist<'static> {
-    let playlist_str = r#"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-MEDIA:TYPE=VIDEO,GROUP-ID="vid",NAME="720p",BANDWIDTH=2000000,RESOLUTION=1280x720
-#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720,CODECS="avc1.64001f,mp4a.40.2"
-video/720p/playlist.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=1000000,RESOLUTION=854x480,CODECS="avc1.64001f,mp4a.40.2"
-video/480p/playlist.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360,CODECS="avc1.64001f,mp4a.40.2"
-video/360p/playlist.m3u8
-"#;
-
-    hls_m3u8::MasterPlaylist::try_from(playlist_str).unwrap()
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -255,8 +424,13 @@ mod tests {
     }
 
     #[fixture]
-    fn test_assets_fixture() -> (TestAssets, HttpClient) {
-        create_test_cache_and_net()
+    fn test_assets_fixture() -> TestAssets {
+        create_test_assets()
+    }
+
+    #[fixture]
+    fn test_net_fixture() -> HttpClient {
+        create_test_net()
     }
 
     #[rstest]
@@ -364,10 +538,9 @@ mod tests {
 
     #[rstest]
     fn test_fixture_creation() {
-        let (assets, _net) = create_test_cache_and_net();
+        let assets = create_test_assets();
+        let _net = create_test_net();
 
-        // Verify objects are created successfully.
-        // More detailed testing would require actual assets/net operations.
         let _ = assets;
     }
 
@@ -375,10 +548,31 @@ mod tests {
     #[timeout(Duration::from_secs(5))]
     #[tokio::test]
     async fn test_fixture_creation_async() {
-        let (assets, _net) = create_test_cache_and_net();
+        let assets = create_test_assets();
+        let _net = create_test_net();
 
-        // Verify objects are created successfully in async context.
-        // More detailed testing would require actual assets/net operations.
         let _ = assets;
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    #[tokio::test]
+    async fn abr_server_fixture_produces_urls(#[future] abr_server_default: AbrTestServer) {
+        let server = abr_server_default.await;
+
+        let url = server.url("/master.m3u8").unwrap();
+        assert!(url.as_str().contains("127.0.0.1"));
+        assert!(url.as_str().ends_with("/master.m3u8"));
+    }
+
+    #[rstest]
+    fn abr_playlist_helpers_build_variants() {
+        let master = master_playlist(100_000, 200_000, 300_000);
+        assert!(master.contains("v0.m3u8"));
+        assert!(master.contains("BANDWIDTH=300000"));
+
+        let media = media_playlist(1, true);
+        assert!(media.contains("#EXT-X-MAP:URI=\"init/v1.bin\""));
+        assert!(media.contains("seg/v1_2.bin"));
     }
 }

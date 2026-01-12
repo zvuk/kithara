@@ -20,8 +20,13 @@ async fn test_server() -> TestServer {
 }
 
 #[fixture]
-async fn test_assets() -> (TestAssets, kithara_net::HttpClient) {
-    create_test_cache_and_net()
+fn assets_fixture() -> TestAssets {
+    create_test_assets()
+}
+
+#[fixture]
+fn net_fixture() -> kithara_net::HttpClient {
+    create_test_net()
 }
 
 #[fixture]
@@ -46,12 +51,13 @@ fn variant_id_1() -> VariantId {
 #[tokio::test]
 async fn fetch_master_playlist_from_network(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
     let playlist_manager = PlaylistManager::new(fetch_manager, None);
@@ -67,13 +73,14 @@ async fn fetch_master_playlist_from_network(
 #[tokio::test]
 async fn fetch_media_playlist_from_network(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
     variant_id_0: VariantId,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
     let playlist_manager = PlaylistManager::new(fetch_manager, None);
@@ -93,12 +100,13 @@ async fn fetch_media_playlist_from_network(
 #[tokio::test]
 async fn resolve_url_with_base_override(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let base_url = server.url("/custom/base/")?;
     let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
@@ -121,14 +129,15 @@ async fn resolve_url_with_base_override(
 #[tokio::test]
 async fn fetch_media_playlist_for_different_variants(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
     variant_id_0: VariantId,
     variant_id_1: VariantId,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let fetch_manager = FetchManager::new(asset_root.clone(), assets.clone(), net.clone());
     let playlist_manager = PlaylistManager::new(fetch_manager, None);
@@ -155,12 +164,13 @@ async fn fetch_media_playlist_for_different_variants(
 #[tokio::test]
 async fn playlist_manager_caching_behavior(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
     let playlist_manager = PlaylistManager::new(fetch_manager, None);
@@ -184,11 +194,12 @@ async fn playlist_manager_caching_behavior(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn playlist_manager_error_handling_invalid_url(
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
     let playlist_manager = PlaylistManager::new(fetch_manager, None);
@@ -211,12 +222,13 @@ async fn playlist_manager_error_handling_invalid_url(
 #[tokio::test]
 async fn resolve_multiple_relative_urls(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     let base_url = server.url("/base/")?;
     let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
@@ -249,12 +261,13 @@ async fn resolve_multiple_relative_urls(
 #[tokio::test]
 async fn playlist_manager_with_different_base_urls(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     // Test with no base URL
     let fetch_manager_no_base = FetchManager::new(asset_root.clone(), assets.clone(), net.clone());

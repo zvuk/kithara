@@ -17,8 +17,13 @@ async fn test_server() -> TestServer {
 }
 
 #[fixture]
-async fn test_assets() -> (TestAssets, kithara_net::HttpClient) {
-    create_test_cache_and_net()
+fn assets_fixture() -> TestAssets {
+    create_test_assets()
+}
+
+#[fixture]
+fn net_fixture() -> kithara_net::HttpClient {
+    create_test_net()
 }
 
 #[fixture]
@@ -33,12 +38,11 @@ fn hls_options() -> HlsOptions {
 #[tokio::test]
 async fn hls_vod_completes_and_stream_closes(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
     hls_options: HlsOptions,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, _net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
 
@@ -81,12 +85,11 @@ async fn hls_vod_completes_and_stream_closes(
 #[tokio::test]
 async fn hls_stream_can_be_cancelled_early(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
     hls_options: HlsOptions,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, _net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
 
@@ -128,12 +131,11 @@ async fn hls_stream_can_be_cancelled_early(
 #[tokio::test]
 async fn hls_stream_resumes_after_drop(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
     hls_options: HlsOptions,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, _net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
 
@@ -168,12 +170,11 @@ async fn hls_stream_resumes_after_drop(
 #[tokio::test]
 async fn hls_multiple_sessions_independent(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
     hls_options: HlsOptions,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, _net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
 
@@ -207,11 +208,10 @@ async fn hls_multiple_sessions_independent(
 #[tokio::test]
 async fn hls_stream_with_different_options(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, _net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
 
@@ -236,11 +236,10 @@ async fn hls_stream_with_different_options(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn hls_stream_error_handling_invalid_url(
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
     hls_options: HlsOptions,
 ) -> HlsResult<()> {
-    let (assets, _net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
 
     // Try to open HLS with invalid URL
     let invalid_url = "http://invalid-domain-that-does-not-exist-12345.com/master.m3u8";

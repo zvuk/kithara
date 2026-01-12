@@ -135,6 +135,7 @@ impl BaseStream {
             let _ = events.send(PipelineEvent::VariantApplied {
                 from: from_variant,
                 to: to_variant,
+                reason: crate::AbrReason::Initial,
             });
 
             if start_from == 0 {
@@ -229,6 +230,7 @@ impl BaseStream {
         let _ = self.events.send(PipelineEvent::VariantSelected {
             from,
             to: variant_index,
+            reason: crate::AbrReason::ManualOverride,
         });
         self.inner = Self::variant_stream(
             self.fetch.clone(),
