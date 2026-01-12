@@ -76,53 +76,24 @@ impl FetchManager {
         base_url: &Url,
         key_context: Option<&KeyContext>,
     ) -> HlsResult<Bytes> {
-        let segment = media_playlist
-            .segments
-            .get(segment_index)
-            .ok_or_else(|| HlsError::SegmentNotFound(format!("Index {}", segment_index)))?;
-
-        let segment_uri = &segment.uri;
-        let segment_url = base_url
-            .join(segment_uri)
-            .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)))?;
-
-        trace!(
-            asset_root = %self.asset_root,
-            segment_index,
-            base_url = %base_url,
-            segment_uri = %segment_uri,
-            segment_url = %segment_url,
-            "kithara-hls fetch_segment begin"
-        );
-
-        if key_context.is_some() {
-            return Err(HlsError::Unimplemented);
-        }
-
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
-        let fetch = Self::fetch_streaming_to_bytes_internal(
-            &self.asset_root,
-            &self.assets,
-            &self.net,
-            &segment_url,
-            &key.rel_path(),
-            Some(segment_index),
-        )
-        .await?;
-
-        let out = fetch.bytes;
-
-        trace!(
-            asset_root = %self.asset_root,
-            segment_index,
-            bytes = out.len(),
-            "kithara-hls fetch_segment done"
-        );
-
-        Ok(out)
+        Ok(self
+            .fetch_segment_internal(media_playlist, segment_index, base_url, key_context)
+            .await?
+            .bytes)
     }
 
     pub async fn fetch_segment_with_meta(
+        &self,
+        media_playlist: &MediaPlaylist,
+        segment_index: usize,
+        base_url: &Url,
+        key_context: Option<&KeyContext>,
+    ) -> HlsResult<FetchBytes> {
+        self.fetch_segment_internal(media_playlist, segment_index, base_url, key_context)
+            .await
+    }
+
+    async fn fetch_segment_internal(
         &self,
         media_playlist: &MediaPlaylist,
         segment_index: usize,
@@ -139,21 +110,12 @@ impl FetchManager {
             .join(segment_uri)
             .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)))?;
 
-        trace!(
-            asset_root = %self.asset_root,
-            segment_index,
-            base_url = %base_url,
-            segment_uri = %segment_uri,
-            segment_url = %segment_url,
-            "kithara-hls fetch_segment_with_meta begin"
-        );
-
         if key_context.is_some() {
             return Err(HlsError::Unimplemented);
         }
 
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
-        let fetch = Self::fetch_streaming_to_bytes_internal(
+        Self::fetch_streaming_to_bytes_internal(
             &self.asset_root,
             &self.assets,
             &self.net,
@@ -161,35 +123,11 @@ impl FetchManager {
             &key.rel_path(),
             Some(segment_index),
         )
-        .await?;
-
-        trace!(
-            asset_root = %self.asset_root,
-            segment_index,
-            bytes = fetch.bytes.len(),
-            duration_ms = fetch.duration.as_millis(),
-            "kithara-hls fetch_segment_with_meta done"
-        );
-
-        Ok(fetch)
+        .await
     }
 
     pub async fn fetch_init_segment(&self, init_url: &Url) -> HlsResult<Bytes> {
-        trace!(
-            asset_root = %self.asset_root,
-            init_url = %init_url,
-            variant_id = 0usize,
-            "kithara-hls fetch_init_segment begin"
-        );
-        let out = self.fetch_init_segment_resource(0, init_url).await?.bytes;
-        trace!(
-            asset_root = %self.asset_root,
-            init_url = %init_url,
-            variant_id = 0usize,
-            bytes = out.len(),
-            "kithara-hls fetch_init_segment done"
-        );
-        Ok(out)
+        Ok(self.fetch_init_segment_resource(0, init_url).await?.bytes)
     }
 
     pub async fn fetch_init_segment_resource(
@@ -198,14 +136,6 @@ impl FetchManager {
         url: &Url,
     ) -> HlsResult<FetchBytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
-
-        trace!(
-            asset_root = %self.asset_root,
-            variant_id,
-            url = %url,
-            rel_path = %key.rel_path(),
-            "kithara-hls fetch_init_segment_resource"
-        );
 
         Self::fetch_streaming_to_bytes_internal(
             &self.asset_root,
@@ -224,14 +154,6 @@ impl FetchManager {
         url: &Url,
     ) -> HlsResult<FetchBytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
-
-        trace!(
-            asset_root = %self.asset_root,
-            variant_id,
-            url = %url,
-            rel_path = %key.rel_path(),
-            "kithara-hls fetch_media_segment_resource"
-        );
 
         Self::fetch_streaming_to_bytes_internal(
             &self.asset_root,
@@ -259,12 +181,6 @@ impl FetchManager {
         url: &Url,
         events: Option<broadcast::Sender<HlsEvent>>,
     ) -> HlsResult<StreamingAssetResource> {
-        trace!(
-            asset_root = %self.asset_root,
-            variant_id,
-            url = %url,
-            "kithara-hls open_init_streaming_resource"
-        );
         self.open_streaming_resource_with_writer(url, variant_id, events, None)
             .await
     }
@@ -285,13 +201,6 @@ impl FetchManager {
         events: Option<broadcast::Sender<HlsEvent>>,
         segment_index: Option<usize>,
     ) -> HlsResult<StreamingAssetResource> {
-        trace!(
-            asset_root = %self.asset_root,
-            variant_id,
-            url = %url,
-            "kithara-hls open_media_streaming_resource"
-        );
-
         self.open_streaming_resource_with_writer(url, variant_id, events, segment_index)
             .await
     }

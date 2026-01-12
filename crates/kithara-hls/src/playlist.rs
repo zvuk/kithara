@@ -187,19 +187,8 @@ impl PlaylistManager {
     }
 
     pub async fn fetch_master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
-        debug!(url = %url, "kithara-hls: fetch_master_playlist begin");
-
-        let basename = uri_basename_no_query(url.as_str()).ok_or_else(|| {
-            HlsError::InvalidUrl("Failed to derive master playlist basename".into())
-        })?;
-        let bytes = self.fetch_playlist_atomic(url, basename).await?;
-        debug!(
-            url = %url,
-            bytes = bytes.len(),
-            "kithara-hls: fetch_master_playlist got bytes"
-        );
-
-        parse_master_playlist(&bytes)
+        self.fetch_and_parse(url, "master_playlist", parse_master_playlist)
+            .await
     }
 
     pub async fn fetch_media_playlist(
@@ -207,29 +196,13 @@ impl PlaylistManager {
         url: &Url,
         variant_id: VariantId,
     ) -> HlsResult<MediaPlaylist> {
-        debug!(url = %url, "kithara-hls: fetch_media_playlist begin");
-
-        let basename = uri_basename_no_query(url.as_str()).ok_or_else(|| {
-            HlsError::InvalidUrl("Failed to derive media playlist basename".into())
-        })?;
-        let bytes = self.fetch_playlist_atomic(url, basename).await?;
-        debug!(
-            url = %url,
-            bytes = bytes.len(),
-            "kithara-hls: fetch_media_playlist got bytes"
-        );
-
-        parse_media_playlist(&bytes, variant_id)
+        self.fetch_and_parse(url, "media_playlist", |bytes| {
+            parse_media_playlist(bytes, variant_id)
+        })
+        .await
     }
 
     pub fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
-        trace!(
-            base = %base,
-            target = %target,
-            base_override = self.base_url.as_ref().map(|u| u.as_str()),
-            "kithara-hls: resolve_url begin"
-        );
-
         let resolved = if let Some(ref base_url) = self.base_url {
             base_url.join(target).map_err(|e| {
                 HlsError::InvalidUrl(format!("Failed to resolve URL with base override: {e}"))
@@ -239,19 +212,22 @@ impl PlaylistManager {
                 .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve URL: {e}")))?
         };
 
-        trace!(resolved = %resolved, "kithara-hls: resolve_url done");
         Ok(resolved)
+    }
+
+    async fn fetch_and_parse<T, F>(&self, url: &Url, label: &str, parse: F) -> HlsResult<T>
+    where
+        F: Fn(&[u8]) -> HlsResult<T>,
+    {
+        let basename = uri_basename_no_query(url.as_str())
+            .ok_or_else(|| HlsError::InvalidUrl(format!("Failed to derive {label} basename")))?;
+        let bytes = self.fetch_playlist_atomic(url, basename).await?;
+
+        parse(&bytes)
     }
 
     async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
-
-        debug!(
-            url = %url,
-            asset_root = %self.asset_root,
-            rel_path = %rel_path,
-            "kithara-hls: playlist fetch (atomic) begin"
-        );
 
         let cancel = CancellationToken::new();
         let res = self.assets.open_atomic_resource(&key, cancel).await?;
