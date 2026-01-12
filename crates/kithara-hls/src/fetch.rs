@@ -153,7 +153,7 @@ impl FetchManager {
         }
 
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
-        let mut fetch = Self::fetch_streaming_to_bytes_internal(
+        let fetch = Self::fetch_streaming_to_bytes_internal(
             &self.asset_root,
             &self.assets,
             &self.net,

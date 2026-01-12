@@ -44,16 +44,24 @@ use std::collections::HashMap;
 // - Run with at least `RUST_LOG=kithara_hls=info` to see them.
 //
 // This module is intentionally self-contained and does not introduce speculative helpers.
-use std::{ops::Range, sync::Arc, time::Duration};
+use std::{
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_assets::ResourceKey;
-use kithara_storage::StreamingResourceExt;
-use kithara_stream::{
-    Source, StreamError as KitharaIoError, StreamResult as KitharaIoResult, WaitOutcome,
+use kithara_assets::{AssetResource, DiskAssetStore, EvictAssets, LeaseGuard, ResourceKey};
+use kithara_storage::{StreamingResource, StreamingResourceExt, WaitOutcome};
+use kithara_stream::{Source, StreamError as KitharaIoError, StreamResult as KitharaIoResult};
+use tokio::{
+    sync::{OnceCell, RwLock},
+    time::sleep,
 };
-use tokio::sync::{OnceCell, RwLock};
 use tracing::{debug, info, trace, warn};
 use url::Url;
 
@@ -71,18 +79,13 @@ pub struct HlsSessionSource {
     asset_root: String,
     state: OnceCell<State>,
     prefetch_started: OnceCell<tokio::task::JoinHandle<()>>,
-    prefetch_next: Arc<std::sync::atomic::AtomicUsize>,
+    prefetch_next: Arc<AtomicUsize>,
     prefetch_window: usize,
     resource_cache: Arc<
         RwLock<
             HashMap<
                 usize,
-                kithara_assets::AssetResource<
-                    kithara_storage::StreamingResource,
-                    kithara_assets::LeaseGuard<
-                        kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>,
-                    >,
-                >,
+                AssetResource<StreamingResource, LeaseGuard<EvictAssets<DiskAssetStore>>>,
             >,
         >,
     >,
@@ -97,13 +100,8 @@ struct State {
 }
 
 /// Cache for opened streaming resources to avoid reopening the same segment multiple times
-type ResourceCache = HashMap<
-    usize,
-    kithara_assets::AssetResource<
-        kithara_storage::StreamingResource,
-        kithara_assets::LeaseGuard<kithara_assets::EvictAssets<kithara_assets::DiskAssetStore>>,
-    >,
->;
+type ResourceCache =
+    HashMap<usize, AssetResource<StreamingResource, LeaseGuard<EvictAssets<DiskAssetStore>>>>;
 
 #[derive(Clone, Debug)]
 struct SegmentDesc {
@@ -133,7 +131,7 @@ impl HlsSessionSource {
             asset_root,
             state: OnceCell::new(),
             prefetch_started: OnceCell::new(),
-            prefetch_next: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            prefetch_next: Arc::new(AtomicUsize::new(0)),
             prefetch_window,
             resource_cache: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -336,7 +334,7 @@ impl HlsSessionSource {
                         async move {
                             tokio::spawn(async move {
                                 loop {
-                                    let start = next.load(std::sync::atomic::Ordering::Relaxed);
+                                    let start = next.load(Ordering::Relaxed);
                                     if start >= urls.len() {
                                         break;
                                     }
@@ -360,7 +358,7 @@ impl HlsSessionSource {
                                     if end >= urls.len() {
                                         break;
                                     }
-                                    tokio::time::sleep(Duration::from_millis(25)).await;
+                                    sleep(Duration::from_millis(25)).await;
                                 }
                             })
                         }
@@ -399,6 +397,36 @@ impl HlsSessionSource {
         Some((lo, seg_off))
     }
 
+    async fn resource_or_open(
+        &self,
+        state: &State,
+        segment_index: usize,
+    ) -> HlsResult<AssetResource<StreamingResource, LeaseGuard<EvictAssets<DiskAssetStore>>>> {
+        let seg = state
+            .segments
+            .get(segment_index)
+            .ok_or_else(|| HlsError::PlaylistParse("segment index out of bounds".to_string()))?;
+
+        if let Some(cached) = self
+            .resource_cache
+            .read()
+            .await
+            .get(&segment_index)
+            .cloned()
+        {
+            return Ok(cached);
+        }
+
+        let opened = self
+            .fetch_manager
+            .open_media_streaming_resource(state.variant_index, &seg.url)
+            .await?;
+
+        let mut cache = self.resource_cache.write().await;
+        cache.entry(segment_index).or_insert_with(|| opened.clone());
+        Ok(opened)
+    }
+
     async fn wait_in_segment(
         &self,
         state: &State,
@@ -422,18 +450,12 @@ impl HlsSessionSource {
             segment_url = %seg.url,
             "HLS wait_in_segment START"
         );
-        let wait_start = std::time::Instant::now();
+        let wait_start = Instant::now();
 
-        // Check cache first
-        let res = loop {
-            let cache = self.resource_cache.read().await;
-            if let Some(cached_res) = cache.get(&segment_index) {
-                info!(segment_index, "HLS using cached resource");
-                break cached_res.clone();
-            }
-            drop(cache);
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        };
+        let res = self
+            .resource_or_open(state, segment_index)
+            .await
+            .map_err(KitharaIoError::Source)?;
 
         let open_duration = wait_start.elapsed();
         info!(
@@ -445,14 +467,14 @@ impl HlsSessionSource {
         // Trigger prefetch for upcoming segments
         self.prefetch_upcoming_segments(state, segment_index).await;
 
-        let wait_start = std::time::Instant::now();
+        let wait_start = Instant::now();
         let result = match res.wait_range(start..end).await {
-            Ok(kithara_storage::WaitOutcome::Ready) => {
+            Ok(WaitOutcome::Ready) => {
                 self.prefetch_next
-                    .fetch_max(segment_index + 1, std::sync::atomic::Ordering::Relaxed);
+                    .fetch_max(segment_index + 1, Ordering::Relaxed);
                 Ok(WaitOutcome::Ready)
             }
-            Ok(kithara_storage::WaitOutcome::Eof) => Ok(WaitOutcome::Eof),
+            Ok(WaitOutcome::Eof) => Ok(WaitOutcome::Eof),
             Err(e) => Err(KitharaIoError::Source(HlsError::Storage(e))),
         };
 
@@ -499,6 +521,7 @@ impl HlsSessionSource {
             if let Some(seg) = state.segments.get(idx) {
                 let url = seg.url.clone();
                 let fm = self.fetch_manager.clone();
+                let cache = self.resource_cache.clone();
                 info!(
                     segment_index = idx,
                     segment_url = %url,
@@ -506,7 +529,15 @@ impl HlsSessionSource {
                     "HLS prefetch (buffered) spawn"
                 );
                 tokio::spawn(async move {
-                    let _ = fm.open_media_streaming_resource(variant_index, &url).await;
+                    match fm.open_media_streaming_resource(variant_index, &url).await {
+                        Ok(res) => {
+                            let mut guard = cache.write().await;
+                            guard.entry(idx).or_insert(res);
+                        }
+                        Err(err) => {
+                            warn!(segment_index = idx, segment_url = %url, %err, "HLS prefetch (buffered) failed");
+                        }
+                    }
                 });
             }
         }
@@ -532,18 +563,12 @@ impl HlsSessionSource {
             segment_url = %seg.url,
             "HLS read_in_segment START"
         );
-        let read_start = std::time::Instant::now();
+        let read_start = Instant::now();
 
-        // Check cache first
-        let res = loop {
-            let cache = self.resource_cache.read().await;
-            if let Some(cached_res) = cache.get(&segment_index) {
-                info!(segment_index, "HLS using cached resource for read");
-                break cached_res.clone();
-            }
-            drop(cache);
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        };
+        let res = self
+            .resource_or_open(state, segment_index)
+            .await
+            .map_err(KitharaIoError::Source)?;
 
         let open_duration = read_start.elapsed();
         info!(
@@ -555,7 +580,7 @@ impl HlsSessionSource {
         // Also trigger prefetch when reading
         self.prefetch_upcoming_segments(state, segment_index).await;
 
-        let read_start = std::time::Instant::now();
+        let read_start = Instant::now();
         let result = res
             .read_at(offset_in_segment, len)
             .await
