@@ -55,7 +55,7 @@ fn test_variant_selection_manual_override(
     variants_from_parsed_playlist: Vec<kithara_hls::abr::Variant>,
 ) {
     let selector = std::sync::Arc::new(|_playlist: &kithara_hls::playlist::MasterPlaylist| Some(2));
-    let controller = AbrController::new(abr_config_default, Some(selector), 0);
+    let controller = AbrController::new(abr_config_default, Some(selector));
 
     let decision = controller.decide_for_master(
         &parsed_master_playlist,
@@ -83,7 +83,7 @@ fn test_manual_selector_different_indices(
     let selector = std::sync::Arc::new(move |_playlist: &kithara_hls::playlist::MasterPlaylist| {
         Some(selector_index)
     });
-    let controller = AbrController::new(abr_config_default, Some(selector), 0);
+    let controller = AbrController::new(abr_config_default, Some(selector));
 
     let decision = controller.decide_for_master(
         &parsed_master_playlist,
@@ -109,7 +109,7 @@ fn test_abr_controller_no_selector(
     parsed_master_playlist: kithara_hls::playlist::MasterPlaylist,
     variants_from_parsed_playlist: Vec<kithara_hls::abr::Variant>,
 ) {
-    let controller = AbrController::new(abr_config_default, None, 0);
+    let controller = AbrController::new(abr_config_default, None);
 
     let decision = controller.decide_for_master(
         &parsed_master_playlist,
@@ -137,7 +137,7 @@ fn test_abr_decision_with_different_conditions(
     variants_from_parsed_playlist: Vec<kithara_hls::abr::Variant>,
 ) {
     let selector = std::sync::Arc::new(|_playlist: &kithara_hls::playlist::MasterPlaylist| Some(1));
-    let controller = AbrController::new(abr_config_default, Some(selector), 0);
+    let controller = AbrController::new(abr_config_default, Some(selector));
 
     let time_since_last_switch = Duration::from_secs_f64(time_since_last_switch_secs);
     let last_switch_time = Instant::now() - time_since_last_switch;
@@ -180,7 +180,7 @@ async fn test_abr_controller_async_usage() {
     // Test that ABR controller can be used in async context
     let config = AbrConfig::default();
     let selector = std::sync::Arc::new(|_playlist: &kithara_hls::playlist::MasterPlaylist| Some(0));
-    let _controller = AbrController::new(config, Some(selector), 0);
+    let _controller = AbrController::new(config, Some(selector));
 
     // Just verify it compiles and can be created in async context
     assert!(true);

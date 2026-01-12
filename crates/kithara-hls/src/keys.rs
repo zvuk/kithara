@@ -1,15 +1,12 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
-use futures::StreamExt;
-use kithara_assets::{AssetStore, ResourceKey};
-use kithara_net::{Headers, HttpClient};
-use kithara_storage::Resource as _;
+use kithara_assets::ResourceKey;
+use kithara_net::Headers;
 use thiserror::Error;
-use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::{HlsResult, KeyContext};
+use crate::{HlsResult, KeyContext, fetch::FetchManager};
 
 #[derive(Debug, Error)]
 pub enum KeyError {
@@ -29,11 +26,11 @@ pub enum KeyError {
     KeyNotFound(String),
 }
 
+#[derive(Clone)]
 pub struct KeyManager {
     asset_root: String,
-    assets: AssetStore,
-    net: HttpClient,
-    key_processor: Option<Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
+    fetch: FetchManager,
+    key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
     key_query_params: Option<HashMap<String, String>>,
     key_request_headers: Option<HashMap<String, String>>,
 }
@@ -41,16 +38,14 @@ pub struct KeyManager {
 impl KeyManager {
     pub fn new(
         asset_root: String,
-        assets: AssetStore,
-        net: HttpClient,
-        key_processor: Option<Box<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
+        fetch: FetchManager,
+        key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
         key_query_params: Option<HashMap<String, String>>,
         key_request_headers: Option<HashMap<String, String>>,
     ) -> Self {
         Self {
             asset_root,
-            assets,
-            net,
+            fetch,
             key_processor,
             key_query_params,
             key_request_headers,
@@ -58,27 +53,6 @@ impl KeyManager {
     }
 
     pub async fn get_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
-
-        let cancel = CancellationToken::new();
-        let res = self.assets.open_atomic_resource(&key, cancel).await?;
-
-        // Best-effort cache read.
-        let cached = res.read().await?;
-        if !cached.is_empty() {
-            let processed = self.process_key(cached, url.clone(), iv)?;
-            return Ok(processed);
-        }
-
-        // Cache miss => fetch and write atomically.
-        let raw_key = self.fetch_raw_key(url).await?;
-        res.write(&raw_key).await?;
-
-        let processed_key = self.process_key(raw_key, url.clone(), iv)?;
-        Ok(processed_key)
-    }
-
-    async fn fetch_raw_key(&self, url: &Url) -> HlsResult<Bytes> {
         let mut fetch_url = url.clone();
 
         if let Some(ref params) = self.key_query_params {
@@ -90,22 +64,21 @@ impl KeyManager {
 
         let headers: Option<Headers> = self.key_request_headers.clone().map(Headers::from);
 
-        let stream = self.net.stream(fetch_url, headers).await?;
-        let mut pinned_stream = Box::pin(stream);
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &fetch_url);
+        let rel_path: String = key.rel_path().to_owned();
+        let raw_key = self
+            .fetch
+            .fetch_key_atomic(&fetch_url, rel_path.as_str(), headers)
+            .await?;
 
-        let mut bytes = Vec::new();
-        while let Some(chunk) = pinned_stream.next().await {
-            let chunk: Bytes = chunk?;
-            bytes.extend_from_slice(&chunk);
-        }
-
-        Ok(Bytes::from(bytes))
+        let processed_key = self.process_key(raw_key, fetch_url, iv)?;
+        Ok(processed_key)
     }
 
     fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
         let context = KeyContext { url, iv };
 
-        if let Some(ref processor) = self.key_processor {
+        if let Some(processor) = &self.key_processor {
             processor(key, context)
         } else {
             Ok(key)

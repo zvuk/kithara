@@ -2,10 +2,10 @@
 
 mod fixture;
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use fixture::*;
-use kithara_hls::{HlsResult, keys::KeyManager};
+use kithara_hls::{HlsResult, fetch::FetchManager, keys::KeyManager};
 use rstest::{fixture, rstest};
 
 // ==================== Fixtures ====================
@@ -13,11 +13,6 @@ use rstest::{fixture, rstest};
 #[fixture]
 async fn test_server() -> TestServer {
     TestServer::new().await
-}
-
-#[fixture]
-async fn test_assets() -> (TestAssets, kithara_net::HttpClient) {
-    create_test_cache_and_net()
 }
 
 #[fixture]
@@ -32,16 +27,16 @@ fn asset_root() -> String {
 #[tokio::test]
 async fn fetch_and_cache_key(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
-    // Note: in the real session code, this is derived from `AssetId::from_url(master_url)`.
-    // For this test we only need a stable namespace.
-    let key_manager = KeyManager::new(asset_root, assets, net, None, None, None);
+    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
+    let key_manager = KeyManager::new(asset_root, fetch_manager, None, None, None);
     let key_url = server.url("/key.bin")?;
 
     // Note: This test assumes the server provides a key endpoint
@@ -56,14 +51,15 @@ async fn fetch_and_cache_key(
 #[tokio::test]
 async fn key_processor_applied(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
-    let processor = Box::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
+    let processor = Arc::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
         // Simple processor that just adds a prefix
         let mut processed = Vec::new();
         processed.extend_from_slice(b"processed:");
@@ -71,7 +67,8 @@ async fn key_processor_applied(
         Ok(bytes::Bytes::from(processed))
     });
 
-    let key_manager = KeyManager::new(asset_root, assets, net, Some(processor), None, None);
+    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
+    let key_manager = KeyManager::new(asset_root, fetch_manager, Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
     let key = key_manager.get_key(&key_url, None).await?;
@@ -85,23 +82,24 @@ async fn key_processor_applied(
 #[tokio::test]
 async fn key_manager_with_different_processors(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
     // Test with uppercase processor
-    let uppercase_processor = Box::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
+    let uppercase_processor = Arc::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
         let upper = key.to_ascii_uppercase();
         Ok(bytes::Bytes::from(upper))
     });
 
+    let fetch_manager = FetchManager::new(asset_root.clone(), assets.clone(), net.clone());
     let key_manager = KeyManager::new(
         asset_root.clone(),
-        assets.clone(),
-        net.clone(),
+        fetch_manager,
         Some(uppercase_processor),
         None,
         None,
@@ -118,13 +116,15 @@ async fn key_manager_with_different_processors(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn key_manager_error_handling(
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
-    let key_manager = KeyManager::new(asset_root, assets, net, None, None, None);
+    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
+    let key_manager = KeyManager::new(asset_root, fetch_manager, None, None, None);
 
     // Try to get key from invalid URL
     let invalid_url =
@@ -144,14 +144,16 @@ async fn key_manager_error_handling(
 #[tokio::test]
 async fn key_manager_caching_behavior(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
-    let key_manager = KeyManager::new(asset_root, assets, net, None, None, None);
+    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
+    let key_manager = KeyManager::new(asset_root, fetch_manager, None, None, None);
     let key_url = server.url("/key.bin")?;
 
     // First fetch
@@ -171,14 +173,15 @@ async fn key_manager_caching_behavior(
 #[tokio::test]
 async fn key_manager_with_context(
     #[future] test_server: TestServer,
-    #[future] test_assets: (TestAssets, kithara_net::HttpClient),
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
     asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let (assets, net) = test_assets.await;
-    let assets = assets.assets().clone();
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
 
-    let processor = Box::new(|key: bytes::Bytes, context: kithara_hls::KeyContext| {
+    let processor = Arc::new(|key: bytes::Bytes, context: kithara_hls::KeyContext| {
         // Use context to modify key
         let mut processed = Vec::new();
         processed.extend_from_slice(b"ctx:");
@@ -190,7 +193,8 @@ async fn key_manager_with_context(
         Ok(bytes::Bytes::from(processed))
     });
 
-    let key_manager = KeyManager::new(asset_root, assets, net, Some(processor), None, None);
+    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
+    let key_manager = KeyManager::new(asset_root, fetch_manager, Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
     // Test without IV

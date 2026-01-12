@@ -9,55 +9,45 @@ pub enum HlsEvent {
         to_variant: usize,
         reason: crate::abr::AbrReason,
     },
-
     VariantApplied {
         from_variant: usize,
         to_variant: usize,
         reason: crate::abr::AbrReason,
     },
-
     SegmentStart {
         variant: usize,
         segment_index: usize,
         byte_offset: u64,
     },
-
     SegmentComplete {
         variant: usize,
         segment_index: usize,
         bytes_transferred: u64,
         duration: Duration,
     },
-
     KeyFetch {
         key_url: String,
         success: bool,
         cached: bool,
     },
-
     BufferLevel {
         level_seconds: f32,
     },
-
     ThroughputSample {
         bytes_per_second: f64,
     },
-
     DownloadProgress {
         offset: u64,
         percent: Option<f32>,
     },
-
     PlaybackProgress {
         position: u64,
         percent: Option<f32>,
     },
-
     Error {
         error: String,
         recoverable: bool,
     },
-
     EndOfStream,
 }
 

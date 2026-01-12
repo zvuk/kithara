@@ -11,9 +11,6 @@ pub mod pipeline;
 pub mod playlist;
 pub mod session;
 
-// Internal modules (exposed for crate tests and internal plumbing).
-pub mod cursor;
-
 // Public API re-exports
 pub use abr::{
     AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
@@ -26,9 +23,8 @@ pub use events::{EventEmitter, HlsEvent};
 pub use fetch::{FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
 pub use pipeline::{
-    AbrStream, BaseStream, DrmStream, PipelineCommand, PipelineError, PipelineEvent,
-    PipelineResult, PrefetchStream, SegmentMeta, SegmentPayload,
-    SegmentStream as PipelineSegmentStream,
+    BaseStream, DrmStream, PipelineError, PipelineEvent, PipelineResult, PrefetchStream,
+    SegmentMeta, SegmentPayload, SegmentStream as PipelineSegmentStream,
 };
 pub use playlist::{PlaylistError, PlaylistManager};
 pub use session::HlsSessionSource;
