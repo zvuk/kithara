@@ -23,9 +23,8 @@ pub use events::{EventEmitter, HlsEvent};
 pub use fetch::{FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
 pub use pipeline::{
-    AbrStream, BaseStream, DrmStream, PipelineCommand, PipelineError, PipelineEvent,
-    PipelineResult, PrefetchStream, SegmentMeta, SegmentPayload,
-    SegmentStream as PipelineSegmentStream,
+    BaseStream, DrmStream, PipelineError, PipelineEvent, PipelineResult, PrefetchStream,
+    SegmentMeta, SegmentPayload, SegmentStream as PipelineSegmentStream,
 };
 pub use playlist::{PlaylistError, PlaylistManager};
 pub use session::HlsSessionSource;

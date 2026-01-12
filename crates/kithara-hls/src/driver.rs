@@ -12,12 +12,11 @@ use url::Url;
 
 use crate::{
     HlsError, HlsOptions, HlsResult,
-    abr::{self},
+    abr::AbrReason,
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
     pipeline::{
-        AbrStream, BaseStream, DrmStream, PipelineError, PipelineEvent, PrefetchStream,
-        SegmentStream,
+        BaseStream, DrmStream, PipelineError, PipelineEvent, PrefetchStream, SegmentStream,
     },
     playlist::PlaylistManager,
 };
@@ -33,13 +32,11 @@ pub struct HlsDriver {
     master_url: Url,
     playlist_manager: Arc<PlaylistManager>,
     fetch_manager: Arc<FetchManager>,
-    // key_manager: Arc<KeyManager>, // Temporarily unused, kept for future DRM support
     event_emitter: Arc<EventEmitter>,
     cancel: CancellationToken,
 }
 
 impl HlsDriver {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         master_url: Url,
         options: HlsOptions,
@@ -70,29 +67,10 @@ impl HlsDriver {
         let master_url = self.master_url.clone();
 
         Box::pin(stream! {
-            // 1) Создаем конфигурацию ABR
-            let abr_config = abr::AbrConfig {
-                min_buffer_for_up_switch_secs: f64::from(opts.abr_min_buffer_for_up_switch),
-                down_switch_buffer_secs: f64::from(opts.abr_down_switch_buffer),
-                throughput_safety_factor: f64::from(opts.abr_throughput_safety_factor),
-                up_hysteresis_ratio: f64::from(opts.abr_up_hysteresis_ratio),
-                down_hysteresis_ratio: f64::from(opts.abr_down_hysteresis_ratio),
-                min_switch_interval: opts.abr_min_switch_interval,
-                initial_variant_index: opts.abr_initial_variant_index,
-                sample_window: std::time::Duration::from_secs(30),
-            };
-
-            // Shared current_variant for ABR + base layer
+            // Shared current_variant for базового слоя
             let current_variant = Arc::new(AtomicUsize::new(
                 opts.abr_initial_variant_index.unwrap_or(0),
             ));
-
-            // Создаем ABR контроллер для начального решения
-            let abr_controller = abr::AbrController::new(
-                abr_config.clone(),
-                opts.variant_stream_selector.clone(),
-                current_variant.clone(),
-            );
 
             // 3) Базовый слой сам загружает мастер и медиаплейлисты.
             let base = match BaseStream::build(
@@ -110,9 +88,8 @@ impl HlsDriver {
                     return;
                 }
             };
-            let abr_layer = AbrStream::new(base, abr_controller);
             let drm_layer = DrmStream::new(
-                abr_layer,
+                base,
                 None,
                 cancel.clone(),
             );
@@ -120,16 +97,17 @@ impl HlsDriver {
             let pipeline = PrefetchStream::new(drm_layer, prefetch_capacity, cancel.clone());
 
             // 6) Подписка на события пайплайна -> HlsEvent.
-            let mut ev_rx = pipeline.event_sender().subscribe();
+            let ev_rx = pipeline.event_sender().subscribe();
             let events_clone = Arc::clone(&events);
             tokio::spawn(async move {
+                let mut ev_rx = ev_rx;
                 while let Ok(ev) = ev_rx.recv().await {
                     match ev {
                         PipelineEvent::VariantSelected { from, to } => {
-                            events_clone.emit_variant_decision(from, to, abr::AbrReason::ManualOverride);
+                            events_clone.emit_variant_decision(from, to, AbrReason::ManualOverride);
                         }
                         PipelineEvent::VariantApplied { from, to } => {
-                            events_clone.emit_variant_applied(from, to, abr::AbrReason::ManualOverride);
+                            events_clone.emit_variant_applied(from, to, AbrReason::ManualOverride);
                         }
                         PipelineEvent::SegmentReady { variant, segment_index } => {
                             events_clone.emit_segment_start(variant, segment_index, 0);
@@ -139,6 +117,9 @@ impl HlsDriver {
                         }
                         PipelineEvent::Prefetched { .. } => {
                             // Нет отдельного HlsEvent, пропускаем.
+                        }
+                        PipelineEvent::StreamReset => {
+                            // Ничего не делаем: событие служебное для внутреннего пайплайна.
                         }
                     }
                 }

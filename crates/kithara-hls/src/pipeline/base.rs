@@ -10,16 +10,16 @@ use std::{
 
 use async_stream::stream;
 use futures::{Stream, StreamExt};
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::types::{
-    PipelineCommand, PipelineError, PipelineEvent, PipelineResult, SegmentMeta, SegmentPayload,
-    SegmentStream,
+    PipelineError, PipelineEvent, PipelineResult, SegmentMeta, SegmentPayload, SegmentStream,
 };
 use crate::{
     HlsError,
+    abr::AbrController,
     fetch::FetchManager,
     playlist::{MediaPlaylist, PlaylistManager, VariantId},
 };
@@ -45,9 +45,8 @@ pub struct BaseStream {
     fetch: Arc<FetchManager>,
     playlists: Arc<PlaylistSet>,
     cancel: CancellationToken,
-    cmd_tx: mpsc::Sender<PipelineCommand>,
-    cmd_rx: mpsc::Receiver<PipelineCommand>,
     events: broadcast::Sender<PipelineEvent>,
+    abr_controller: Option<AbrController>,
     // Shared current variant tracker owned by ABR controller.
     current_variant: Arc<AtomicUsize>,
     previous_variant: usize,
@@ -61,7 +60,16 @@ impl BaseStream {
         current_variant: Arc<AtomicUsize>,
         cancel: CancellationToken,
     ) -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel(64);
+        Self::with_abr_controller(fetch, playlists, current_variant, cancel, None)
+    }
+
+    pub fn with_abr_controller(
+        fetch: Arc<FetchManager>,
+        playlists: Arc<PlaylistSet>,
+        current_variant: Arc<AtomicUsize>,
+        cancel: CancellationToken,
+        abr_controller: Option<AbrController>,
+    ) -> Self {
         let (events, _) = broadcast::channel(256);
         let initial_variant = current_variant.load(Ordering::Relaxed);
         // BaseStream uses the shared current_variant rather than owning its own copy.
@@ -79,9 +87,8 @@ impl BaseStream {
             fetch,
             playlists,
             cancel,
-            cmd_tx,
-            cmd_rx,
             events,
+            abr_controller,
             current_variant,
             previous_variant: initial_variant,
             inner,
@@ -199,37 +206,39 @@ impl BaseStream {
         })
     }
 
-    fn handle_commands(&mut self) -> Result<(), PipelineError> {
-        while let Ok(cmd) = self.cmd_rx.try_recv() {
-            match cmd {
-                PipelineCommand::Seek { segment_index } => {
-                    let variant = self.current_variant.load(Ordering::Relaxed);
-                    self.inner = Self::variant_stream(
-                        self.fetch.clone(),
-                        self.playlists.clone(),
-                        self.events.clone(),
-                        self.previous_variant,
-                        variant,
-                        segment_index,
-                    );
-                    self.previous_variant = variant;
-                }
-                PipelineCommand::ForceVariant { variant_index } => {
-                    let from = self.current_variant.swap(variant_index, Ordering::Relaxed);
-                    self.inner = Self::variant_stream(
-                        self.fetch.clone(),
-                        self.playlists.clone(),
-                        self.events.clone(),
-                        from,
-                        variant_index,
-                        0,
-                    );
-                    self.previous_variant = variant_index;
-                }
-            }
-        }
+    pub fn seek(&mut self, segment_index: usize) {
+        let variant = self.current_variant.load(Ordering::Relaxed);
+        self.inner = Self::variant_stream(
+            self.fetch.clone(),
+            self.playlists.clone(),
+            self.events.clone(),
+            self.previous_variant,
+            variant,
+            segment_index,
+        );
+        self.previous_variant = variant;
+        let _ = self.events.send(PipelineEvent::StreamReset);
+    }
 
-        Ok(())
+    pub fn force_variant(&mut self, variant_index: usize) {
+        let from = self.current_variant.swap(variant_index, Ordering::Relaxed);
+        if let Some(abr) = self.abr_controller.as_mut() {
+            abr.set_current_variant(variant_index);
+        }
+        let _ = self.events.send(PipelineEvent::VariantSelected {
+            from,
+            to: variant_index,
+        });
+        self.inner = Self::variant_stream(
+            self.fetch.clone(),
+            self.playlists.clone(),
+            self.events.clone(),
+            from,
+            variant_index,
+            0,
+        );
+        self.previous_variant = variant_index;
+        let _ = self.events.send(PipelineEvent::StreamReset);
     }
 }
 
@@ -243,19 +252,11 @@ impl Stream for BaseStream {
             return Poll::Ready(None);
         }
 
-        if let Err(err) = this.handle_commands() {
-            return Poll::Ready(Some(Err(err)));
-        }
-
         this.inner.as_mut().poll_next(cx)
     }
 }
 
 impl SegmentStream for BaseStream {
-    fn command_sender(&self) -> mpsc::Sender<PipelineCommand> {
-        self.cmd_tx.clone()
-    }
-
     fn event_sender(&self) -> broadcast::Sender<PipelineEvent> {
         self.events.clone()
     }

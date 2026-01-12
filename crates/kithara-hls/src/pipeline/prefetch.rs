@@ -5,12 +5,10 @@ use std::{
 };
 
 use futures::Stream;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use super::types::{
-    PipelineCommand, PipelineError, PipelineEvent, PipelineResult, SegmentPayload, SegmentStream,
-};
+use super::types::{PipelineError, PipelineEvent, PipelineResult, SegmentPayload, SegmentStream};
 
 /// Prefetch stage: буферизует элементы из нижнего слоя до `capacity`,
 /// заполняет буферы последовательно (один за другим), а не параллельно.
@@ -20,10 +18,7 @@ where
     I: SegmentStream,
 {
     inner: Pin<Box<I>>,
-    inner_cmd: mpsc::Sender<PipelineCommand>,
     events: broadcast::Sender<PipelineEvent>,
-    cmd_tx: mpsc::Sender<PipelineCommand>,
-    cmd_rx: mpsc::Receiver<PipelineCommand>,
     cancel: CancellationToken,
 
     // Основной буфер для выдачи данных потребителю
@@ -41,45 +36,16 @@ where
     I: SegmentStream,
 {
     pub fn new(inner: I, capacity: usize, cancel: CancellationToken) -> Self {
-        let inner_cmd = inner.command_sender();
         let events = inner.event_sender();
-        let (cmd_tx, cmd_rx) = mpsc::channel(64);
 
         Self {
             inner: Box::pin(inner),
-            inner_cmd,
             events,
-            cmd_tx,
-            cmd_rx,
             cancel,
             output_buffer: VecDeque::with_capacity(capacity.max(1)),
             capacity: capacity.max(1),
             ended: false,
         }
-    }
-
-    fn handle_commands(&mut self) -> Result<(), PipelineError> {
-        while let Ok(cmd) = self.cmd_rx.try_recv() {
-            match cmd {
-                PipelineCommand::Seek { segment_index } => {
-                    let _ = self
-                        .inner_cmd
-                        .try_send(PipelineCommand::Seek { segment_index });
-                    // Сбрасываем все буферы при seek
-                    self.output_buffer.clear();
-                    self.ended = false;
-                }
-                PipelineCommand::ForceVariant { variant_index } => {
-                    let _ = self
-                        .inner_cmd
-                        .try_send(PipelineCommand::ForceVariant { variant_index });
-                    // Сбрасываем все буферы при смене варианта
-                    self.output_buffer.clear();
-                    self.ended = false;
-                }
-            }
-        }
-        Ok(())
     }
 
     /// Заполняет буфер до емкости или пока нет новых данных
@@ -116,10 +82,6 @@ where
             return Poll::Ready(Some(Err(PipelineError::Aborted)));
         }
 
-        if let Err(err) = self.handle_commands() {
-            return Poll::Ready(Some(Err(err)));
-        }
-
         // Всегда пытаемся подзаполнить буфер перед выдачей
         self.fill_buffer(cx);
 
@@ -142,10 +104,6 @@ impl<I> SegmentStream for PrefetchStream<I>
 where
     I: SegmentStream,
 {
-    fn command_sender(&self) -> mpsc::Sender<PipelineCommand> {
-        self.cmd_tx.clone()
-    }
-
     fn event_sender(&self) -> broadcast::Sender<PipelineEvent> {
         self.events.clone()
     }

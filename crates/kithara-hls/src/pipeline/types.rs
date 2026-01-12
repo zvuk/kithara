@@ -3,19 +3,10 @@ use std::time::Duration;
 use bytes::Bytes;
 use futures::Stream;
 use thiserror::Error;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 use url::Url;
 
 use crate::HlsError;
-
-/// Команды, которыми управляем всей цепочкой.
-#[derive(Debug, Clone)]
-pub enum PipelineCommand {
-    /// Перейти к указанному индексу сегмента.
-    Seek { segment_index: usize },
-    /// Принудительно выбрать вариант (отключает ABR до следующей команды).
-    ForceVariant { variant_index: usize },
-}
 
 /// Единый тип событий от всех слоёв.
 #[derive(Debug, Clone)]
@@ -39,6 +30,8 @@ pub enum PipelineEvent {
         variant: usize,
         segment_index: usize,
     },
+    /// Поток перезапущен (например, после seek или смены варианта).
+    StreamReset,
 }
 
 /// Метаданные о сегменте.
@@ -70,6 +63,5 @@ pub type PipelineResult<T> = Result<T, PipelineError>;
 
 /// Трейт для слоя: поток сегментов плюс доступ к общим каналам команд и событий.
 pub trait SegmentStream: Stream<Item = PipelineResult<SegmentPayload>> + Send + 'static {
-    fn command_sender(&self) -> mpsc::Sender<PipelineCommand>;
     fn event_sender(&self) -> broadcast::Sender<PipelineEvent>;
 }
