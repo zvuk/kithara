@@ -9,8 +9,6 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-// === Test Fixtures ===
-
 #[fixture]
 fn temp_dir() -> TempDir {
     TempDir::new().expect("Failed to create temp dir")
@@ -27,8 +25,6 @@ fn cancel_token_cancelled() -> CancellationToken {
     token.cancel();
     token
 }
-
-// === Path Method Tests ===
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
@@ -68,8 +64,6 @@ async fn streaming_resource_path_method(temp_dir: TempDir, cancel_token: Cancell
         .expect("Write should succeed");
     assert_eq!(streaming.path(), file_path);
 }
-
-// === AtomicResource Tests ===
 
 #[rstest]
 #[case("simple data", b"Hello, World!")]

@@ -126,16 +126,50 @@ impl BaseStream {
             });
         };
 
+        let init_segment = media_playlist.init_segment.clone();
         let mut enumerated = fetch
             .stream_segment_sequence(media_playlist, &media_url, None)
             .enumerate();
 
         Box::pin(stream! {
+            let init_segment = init_segment.clone();
             // Send VariantApplied event when starting a new variant stream
             let _ = events.send(PipelineEvent::VariantApplied {
                 from: from_variant,
                 to: to_variant,
             });
+
+            if start_from == 0 {
+                if let Some(init) = init_segment {
+                    let init_url = match media_url.join(&init.uri) {
+                        Ok(url) => url,
+                        Err(e) => {
+                            yield Err(PipelineError::Hls(HlsError::InvalidUrl(format!("Failed to resolve init URL: {}", e))));
+                            return;
+                        }
+                    };
+
+                    match fetch.fetch_init_segment_resource(to_variant, &init_url).await {
+                        Ok(init_fetch) => {
+                            let meta = SegmentMeta {
+                                variant: to_variant,
+                                segment_index: usize::MAX,
+                                url: init_url.clone(),
+                                duration: None,
+                            };
+                            let _ = events.send(PipelineEvent::SegmentReady {
+                                variant: to_variant,
+                                segment_index: usize::MAX,
+                            });
+                            yield Ok(SegmentPayload { meta, bytes: init_fetch.bytes });
+                        }
+                        Err(err) => {
+                            yield Err(PipelineError::Hls(err));
+                            return;
+                        }
+                    }
+                }
+            }
 
             while let Some((idx, item)) = enumerated.next().await {
                 if idx < start_from {

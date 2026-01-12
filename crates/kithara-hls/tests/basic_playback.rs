@@ -99,9 +99,7 @@ async fn test_basic_hls_playback(
 
     // 3. Test: Create rodio decoder (this validates the stream format)
     info!("Creating rodio decoder...");
-    let decoder_result = std::thread::spawn(move || rodio::Decoder::new(reader))
-        .join()
-        .expect("Thread panicked");
+    let decoder_result = tokio::task::spawn_blocking(move || rodio::Decoder::new(reader)).await;
 
     match decoder_result {
         Ok(_decoder) => {

@@ -13,7 +13,7 @@ use bytes::Bytes;
 use random_access_disk::RandomAccessDisk;
 use random_access_storage::RandomAccess;
 use rangemap::RangeSet;
-use tokio::sync::{Mutex, Notify};
+use tokio::sync::{Mutex, Notify, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::{Resource, StorageError, StorageResult, StreamingResourceExt, WaitOutcome};
@@ -96,7 +96,7 @@ impl StreamingResource {
                 path: opts.path,
                 cancel: opts.cancel,
                 disk: Mutex::new(disk),
-                state: Mutex::new(State::with_initial_len(opts.initial_len)),
+                state: RwLock::new(State::with_initial_len(opts.initial_len)),
                 notify: Notify::new(),
             }),
         })
@@ -104,7 +104,7 @@ impl StreamingResource {
 
     /// Return current status (best-effort snapshot).
     pub async fn status(&self) -> ResourceStatus {
-        let state = self.inner.state.lock().await;
+        let state = self.inner.state.read().await;
 
         if let Some(_e) = &state.failed {
             return ResourceStatus::Failed;
@@ -126,7 +126,7 @@ impl StreamingResource {
     /// - `Ok(Some(clamped_len))` if clamped.
     /// - `Ok(None)` if EOF is not known (not committed or committed without final_len).
     async fn clamp_len_to_eof(&self, offset: u64, len: usize) -> StorageResult<Option<usize>> {
-        let state = self.inner.state.lock().await;
+        let state = self.inner.state.read().await;
         if !state.sealed {
             return Ok(None);
         }
@@ -178,7 +178,7 @@ impl Resource for StreamingResource {
     async fn read(&self) -> StorageResult<Bytes> {
         // Whole-object reads are only well-defined once committed with a known final_len.
         let final_len = {
-            let state = self.inner.state.lock().await;
+            let state = self.inner.state.read().await;
             if let Some(err) = &state.failed {
                 return Err(StorageError::Failed(err.clone()));
             }
@@ -208,7 +208,7 @@ impl Resource for StreamingResource {
 
     async fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         {
-            let mut state = self.inner.state.lock().await;
+            let mut state = self.inner.state.write().await;
 
             if let Some(err) = &state.failed {
                 return Err(StorageError::Failed(err.clone()));
@@ -224,7 +224,7 @@ impl Resource for StreamingResource {
 
     async fn fail(&self, error: impl Into<String> + Send) -> StorageResult<()> {
         {
-            let mut state = self.inner.state.lock().await;
+            let mut state = self.inner.state.write().await;
             state.failed = Some(error.into());
         }
         self.inner.notify.notify_waiters();
@@ -245,8 +245,8 @@ impl StreamingResourceExt for StreamingResource {
         // Otherwise `wait_range` can block writers from publishing new ranges,
         // and writers can block `wait_range` from being notified (deadlock).
         loop {
-            let should_wait = {
-                let state = self.inner.state.lock().await;
+            let outcome = {
+                let state = self.inner.state.read().await;
 
                 if let Some(err) = &state.failed {
                     return Err(StorageError::Failed(err.clone()));
@@ -258,28 +258,30 @@ impl StreamingResourceExt for StreamingResource {
                 match state.final_len {
                     Some(final_len) => {
                         if start >= final_len {
-                            return Ok(WaitOutcome::Eof);
-                        }
-
-                        // If the range extends beyond EOF, only the part before EOF matters.
-                        let needed_end = end.min(final_len);
-                        if state.is_covered(start..needed_end) {
-                            return Ok(WaitOutcome::Ready);
+                            Some(WaitOutcome::Eof)
+                        } else {
+                            // If the range extends beyond EOF, only the part before EOF matters.
+                            let needed_end = end.min(final_len);
+                            if state.is_covered(start..needed_end) {
+                                Some(WaitOutcome::Ready)
+                            } else {
+                                None
+                            }
                         }
                     }
                     None => {
                         // No known final len: still must be covered.
                         if state.is_covered(start..end) {
-                            return Ok(WaitOutcome::Ready);
+                            Some(WaitOutcome::Ready)
+                        } else {
+                            None
                         }
                     }
                 }
-
-                true
             };
 
-            if !should_wait {
-                continue;
+            if let Some(outcome) = outcome {
+                return Ok(outcome);
             }
 
             tokio::select! {
@@ -329,7 +331,7 @@ impl StreamingResourceExt for StreamingResource {
 
         // Check preconditions before disk write
         {
-            let state = self.inner.state.lock().await;
+            let state = self.inner.state.read().await;
 
             if let Some(err) = &state.failed {
                 return Err(StorageError::Failed(err.clone()));
@@ -351,7 +353,7 @@ impl StreamingResourceExt for StreamingResource {
 
         // Add the range to available after successful disk write
         {
-            let mut state = self.inner.state.lock().await;
+            let mut state = self.inner.state.write().await;
             state.available.insert(pending_range);
         }
 
@@ -364,7 +366,7 @@ struct Inner {
     path: PathBuf,
     cancel: CancellationToken,
     disk: Mutex<RandomAccessDisk>,
-    state: Mutex<State>,
+    state: RwLock<State>,
     notify: Notify,
 }
 
@@ -388,15 +390,19 @@ impl State {
     }
 
     fn with_initial_len(initial_len: Option<u64>) -> Self {
-        let mut s = Self::new();
-        if let Some(len) = initial_len {
-            if len > 0 {
-                s.available.insert(0..len);
+        match initial_len {
+            Some(len) if len > 0 => {
+                let mut available = RangeSet::new();
+                available.insert(0..len);
+                Self {
+                    available,
+                    sealed: true,
+                    final_len: Some(len),
+                    failed: None,
+                }
             }
-            s.sealed = true;
-            s.final_len = Some(len);
+            _ => Self::new(),
         }
-        s
     }
 
     fn is_covered(&self, range: Range<u64>) -> bool {
