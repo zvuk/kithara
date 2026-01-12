@@ -14,13 +14,12 @@ use kithara_net::{Headers, HttpClient, Net as _};
 use kithara_storage::{
     Resource as _, ResourceStatus, StreamingResource, StreamingResourceExt, WaitOutcome,
 };
-use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 use url::Url;
 
 use crate::{
-    HlsError, HlsEvent, HlsResult, KeyContext, abr::ThroughputSampleSource, playlist::MediaPlaylist,
+    HlsError, HlsResult, KeyContext, abr::ThroughputSampleSource, playlist::MediaPlaylist,
 };
 
 pub type SegmentStream<'a> = Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + 'a>>;
@@ -51,13 +50,8 @@ impl FetchManager {
         }
     }
 
-    pub fn net(&self) -> &HttpClient {
-        &self.net
-    }
-
     pub async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
-
         let cancel = CancellationToken::new();
         let res = self.assets.open_atomic_resource(&key, cancel).await?;
 
@@ -141,7 +135,6 @@ impl FetchManager {
     pub async fn probe_content_length(&self, url: &Url) -> HlsResult<Option<u64>> {
         let headers: Headers = self.net.head(url.clone(), None).await?;
 
-        // Helper for case-insensitive lookup
         fn find_content_length(headers: &Headers) -> Option<u64> {
             headers
                 .iter()
@@ -204,7 +197,6 @@ impl FetchManager {
             &self.net,
             &segment_url,
             &key.rel_path(),
-            Some(segment_index),
         )
         .await
     }
@@ -222,7 +214,6 @@ impl FetchManager {
             &self.net,
             url,
             &key.rel_path(),
-            None,
         )
         .await
     }
@@ -236,56 +227,27 @@ impl FetchManager {
             &self.net,
             url,
             &key.rel_path(),
-            None,
         )
         .await
     }
 
     pub async fn open_init_streaming_resource(
         &self,
-        variant_id: usize,
         url: &Url,
     ) -> HlsResult<StreamingAssetResource> {
-        self.open_init_streaming_resource_with_events(variant_id, url, None)
-            .await
-    }
-
-    pub async fn open_init_streaming_resource_with_events(
-        &self,
-        variant_id: usize,
-        url: &Url,
-        events: Option<broadcast::Sender<HlsEvent>>,
-    ) -> HlsResult<StreamingAssetResource> {
-        self.open_streaming_resource_with_writer(url, variant_id, events, None)
-            .await
+        self.open_streaming_resource_with_writer(url).await
     }
 
     pub async fn open_media_streaming_resource(
         &self,
-        variant_id: usize,
         url: &Url,
     ) -> HlsResult<StreamingAssetResource> {
-        self.open_media_streaming_resource_with_events(variant_id, url, None, None)
-            .await
-    }
-
-    pub async fn open_media_streaming_resource_with_events(
-        &self,
-        variant_id: usize,
-        url: &Url,
-        events: Option<broadcast::Sender<HlsEvent>>,
-        segment_index: Option<usize>,
-    ) -> HlsResult<StreamingAssetResource> {
-        self.open_streaming_resource_with_writer(url, variant_id, events, segment_index)
-            .await
+        self.open_streaming_resource_with_writer(url).await
     }
 
     async fn open_streaming_resource_with_writer(
         &self,
         url: &Url,
-        variant_id: usize,
-        events: Option<broadcast::Sender<HlsEvent>>,
-        segment_index: Option<usize>,
     ) -> HlsResult<StreamingAssetResource> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
         let cancel = CancellationToken::new();
@@ -304,18 +266,8 @@ impl FetchManager {
         let net = self.net.clone();
         let url = url.clone();
         let res_for_writer = res.clone();
-        let events_for_writer = events.clone();
-        let content_length_for_progress = self.probe_content_length(&url).await.ok().flatten();
 
-        Self::spawn_stream_writer(
-            net,
-            url,
-            res_for_writer,
-            events_for_writer,
-            Some(variant_id),
-            segment_index,
-            content_length_for_progress,
-        );
+        Self::spawn_stream_writer(net, url, res_for_writer);
 
         Ok(res)
     }
@@ -350,7 +302,7 @@ impl FetchManager {
                 // Use captured fields directly instead of creating new FetchManager
                 let key = ResourceKey::from_url_with_asset_root(asset_root.clone(), &segment_url);
                 let fetch_result = Self::fetch_streaming_to_bytes_internal(
-                    &asset_root, &assets, &net, &segment_url, &key.rel_path(), Some(segment_index)
+                    &asset_root, &assets, &net, &segment_url, &key.rel_path()
                 ).await;
 
                 match fetch_result {
@@ -363,29 +315,8 @@ impl FetchManager {
         })
     }
 
-    fn spawn_stream_writer(
-        net: HttpClient,
-        url: Url,
-        res: StreamingAssetResource,
-        events: Option<broadcast::Sender<HlsEvent>>,
-        variant_id: Option<usize>,
-        segment_index: Option<usize>,
-        content_length_for_progress: Option<u64>,
-    ) {
-        let started_at = Instant::now();
-
+    fn spawn_stream_writer(net: HttpClient, url: Url, res: StreamingAssetResource) {
         tokio::spawn(async move {
-            if let (Some(ev), Some(segment_index), Some(variant_id)) =
-                (&events, segment_index, variant_id)
-            {
-                let _: Result<_, broadcast::error::SendError<HlsEvent>> =
-                    ev.send(HlsEvent::SegmentStart {
-                        variant: variant_id,
-                        segment_index,
-                        byte_offset: 0,
-                    });
-            }
-
             let mut stream = match net.stream(url.clone(), None).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -411,15 +342,6 @@ impl FetchManager {
                             return;
                         }
                         off = off.saturating_add(chunk_len);
-                        if let Some(ev) = &events {
-                            let percent = content_length_for_progress
-                                .map(|len| ((off as f64 / len as f64) * 100.0).min(100.0) as f32);
-                            let _: Result<_, broadcast::error::SendError<HlsEvent>> =
-                                ev.send(HlsEvent::DownloadProgress {
-                                    offset: off,
-                                    percent,
-                                });
-                        }
                     }
                     Err(e) => {
                         warn!(
@@ -435,18 +357,6 @@ impl FetchManager {
             }
 
             let _ = res.commit(Some(off)).await;
-
-            if let (Some(ev), Some(segment_index), Some(variant_id)) =
-                (&events, segment_index, variant_id)
-            {
-                let _: Result<_, broadcast::error::SendError<HlsEvent>> =
-                    ev.send(HlsEvent::SegmentComplete {
-                        variant: variant_id,
-                        segment_index,
-                        bytes_transferred: off,
-                        duration: started_at.elapsed(),
-                    });
-            }
         });
     }
 
@@ -457,7 +367,6 @@ impl FetchManager {
         net: &HttpClient,
         url: &Url,
         rel_path: &str,
-        segment_index: Option<usize>,
     ) -> HlsResult<FetchBytes> {
         let key = ResourceKey::from_url_with_asset_root(asset_root.to_string(), url);
 
@@ -475,7 +384,7 @@ impl FetchManager {
 
         let status = res.inner().status().await;
         if !matches!(status, ResourceStatus::Committed { .. }) {
-            Self::spawn_stream_writer(net, url, res.clone(), None, None, segment_index, None);
+            Self::spawn_stream_writer(net, url, res.clone());
         }
 
         // Read-through to bytes: wait for full content once committed, then read all.

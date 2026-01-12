@@ -326,7 +326,7 @@ impl HlsSessionSource {
                                     let end = (start + window).min(urls.len());
                                     for idx in start..end {
                                         if let Some(url) = urls.get(idx) {
-                                            match fm_all.open_media_streaming_resource(vi, url).await {
+                                            match fm_all.open_media_streaming_resource(url).await {
                                                 Ok(res) => {
                                                     {
                                                         let mut guard = cache.write().await;
@@ -404,7 +404,7 @@ impl HlsSessionSource {
 
         let opened = self
             .fetch_manager
-            .open_media_streaming_resource(state.variant_index, &seg.url)
+            .open_media_streaming_resource(&seg.url)
             .await?;
 
         let mut cache = self.resource_cache.write().await;
@@ -489,7 +489,7 @@ impl HlsSessionSource {
                     "HLS prefetch (continuous) spawn"
                 );
                 tokio::spawn(async move {
-                    let _ = fm.open_media_streaming_resource(variant_index, &url).await;
+                    let _ = fm.open_media_streaming_resource(&url).await;
                 });
             }
             return;
@@ -514,7 +514,7 @@ impl HlsSessionSource {
                     "HLS prefetch (buffered) spawn"
                 );
                 tokio::spawn(async move {
-                    match fm.open_media_streaming_resource(variant_index, &url).await {
+                    match fm.open_media_streaming_resource(&url).await {
                         Ok(res) => {
                             let mut guard = cache.write().await;
                             guard.entry(idx).or_insert(res);

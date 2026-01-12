@@ -134,6 +134,7 @@ impl BaseStream {
         };
 
         let init_segment = media_playlist.init_segment.clone();
+        let segments = media_playlist.segments.clone();
         let mut enumerated = fetch
             .stream_segment_sequence(media_playlist, &media_url, None)
             .enumerate();
@@ -185,11 +186,24 @@ impl BaseStream {
 
                 match item {
                     Ok(bytes) => {
+                        let Some(segment) = segments.get(idx) else {
+                            yield Err(PipelineError::Hls(HlsError::SegmentNotFound(format!("Index {}", idx))));
+                            break;
+                        };
+
+                        let segment_url = match media_url.join(&segment.uri) {
+                            Ok(url) => url,
+                            Err(e) => {
+                                yield Err(PipelineError::Hls(HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e))));
+                                break;
+                            }
+                        };
+
                         let meta = SegmentMeta {
                             variant: to_variant,
                             segment_index: idx,
-                            url: media_url.clone(),
-                            duration: None,
+                            url: segment_url,
+                            duration: Some(segment.duration),
                         };
                         let _ = events.send(PipelineEvent::SegmentReady {
                             variant: to_variant,
