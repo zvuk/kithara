@@ -8,14 +8,14 @@ use futures::Stream;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use super::types::{PipelineError, PipelineEvent, PipelineResult, SegmentPayload, SegmentStream};
+use super::types::{PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentPayload};
 
 /// Prefetch stage: буферизует элементы из нижнего слоя до `capacity`,
 /// заполняет буферы последовательно (один за другим), а не параллельно.
 /// Пробрасывает команды вниз, отправляет событие `Prefetched`, реагирует на cancellation.
 pub struct PrefetchStream<I>
 where
-    I: SegmentStream,
+    I: PipelineStream,
 {
     inner: Pin<Box<I>>,
     events: broadcast::Sender<PipelineEvent>,
@@ -33,7 +33,7 @@ where
 
 impl<I> PrefetchStream<I>
 where
-    I: SegmentStream,
+    I: PipelineStream,
 {
     pub fn new(inner: I, capacity: usize, cancel: CancellationToken) -> Self {
         let events = inner.event_sender();
@@ -73,7 +73,7 @@ where
 
 impl<I> Stream for PrefetchStream<I>
 where
-    I: SegmentStream,
+    I: PipelineStream,
 {
     type Item = PipelineResult<SegmentPayload>;
 
@@ -100,9 +100,9 @@ where
     }
 }
 
-impl<I> SegmentStream for PrefetchStream<I>
+impl<I> PipelineStream for PrefetchStream<I>
 where
-    I: SegmentStream,
+    I: PipelineStream,
 {
     fn event_sender(&self) -> broadcast::Sender<PipelineEvent> {
         self.events.clone()

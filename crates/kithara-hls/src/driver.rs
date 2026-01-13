@@ -9,12 +9,12 @@ use url::Url;
 
 use crate::{
     HlsError, HlsOptions, HlsResult,
-    abr::{AbrConfig, AbrController, AbrReason},
+    abr::{AbrConfig, AbrController},
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
     keys::KeyManager,
     pipeline::{
-        BaseStream, DrmStream, PipelineError, PipelineEvent, PrefetchStream, SegmentStream,
+        BaseStream, DrmStream, PipelineError, PipelineEvent, PipelineStream, PrefetchStream,
     },
     playlist::PlaylistManager,
 };
@@ -82,8 +82,9 @@ impl HlsDriver {
                 AbrController::new(abr_config, opts.variant_stream_selector.clone());
 
             // 3) Базовый слой сам загружает мастер и медиаплейлисты.
+            let base_master_url = master_url.clone();
             let base = match BaseStream::build(
-                master_url.clone(),
+                base_master_url,
                 fetch_manager.clone(),
                 playlist_manager.clone(),
                 abr_controller.clone(),

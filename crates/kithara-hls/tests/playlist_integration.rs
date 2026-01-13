@@ -62,7 +62,7 @@ async fn fetch_master_playlist_from_network(
     let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
     let playlist_manager = PlaylistManager::new(fetch_manager, None);
     let master_url = server.url("/master.m3u8")?;
-    let master_playlist = playlist_manager.fetch_master_playlist(&master_url).await?;
+    let master_playlist = playlist_manager.master_playlist(&master_url).await?;
 
     assert_eq!(master_playlist.variants.len(), 3);
     Ok(())
@@ -87,7 +87,7 @@ async fn fetch_media_playlist_from_network(
     let media_url = server.url("/video/480p/playlist.m3u8")?;
 
     let media_playlist = playlist_manager
-        .fetch_media_playlist(&media_url, variant_id_0)
+        .media_playlist(&media_url, variant_id_0)
         .await?;
 
     let segment_count = media_playlist.segments.len();
@@ -145,14 +145,14 @@ async fn fetch_media_playlist_for_different_variants(
     // Test variant 0
     let media_url_0 = server.url("/video/480p/playlist.m3u8")?;
     let media_playlist_0 = playlist_manager
-        .fetch_media_playlist(&media_url_0, variant_id_0)
+        .media_playlist(&media_url_0, variant_id_0)
         .await?;
     assert_eq!(media_playlist_0.segments.len(), 3);
 
     // Test variant 1 (different playlist)
     let media_url_1 = server.url("/video/720p/playlist.m3u8")?;
     let media_playlist_1 = playlist_manager
-        .fetch_media_playlist(&media_url_1, variant_id_1)
+        .media_playlist(&media_url_1, variant_id_1)
         .await?;
     assert_eq!(media_playlist_1.segments.len(), 3);
 
@@ -177,11 +177,11 @@ async fn playlist_manager_caching_behavior(
     let master_url = server.url("/master.m3u8")?;
 
     // First fetch
-    let master1 = playlist_manager.fetch_master_playlist(&master_url).await?;
+    let master1 = playlist_manager.master_playlist(&master_url).await?;
     assert_eq!(master1.variants.len(), 3);
 
     // Second fetch (should potentially use cache)
-    let master2 = playlist_manager.fetch_master_playlist(&master_url).await?;
+    let master2 = playlist_manager.master_playlist(&master_url).await?;
     assert_eq!(master2.variants.len(), 3);
 
     // Variants should be the same
@@ -209,7 +209,7 @@ async fn playlist_manager_error_handling_invalid_url(
         url::Url::parse("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")
             .map_err(|e| kithara_hls::HlsError::InvalidUrl(e.to_string()))?;
 
-    let result = playlist_manager.fetch_master_playlist(&invalid_url).await;
+    let result = playlist_manager.master_playlist(&invalid_url).await;
 
     // Should fail with network error (or succeed if somehow connects)
     assert!(result.is_ok() || result.is_err());
@@ -274,7 +274,7 @@ async fn playlist_manager_with_different_base_urls(
     let playlist_manager_no_base = PlaylistManager::new(fetch_manager_no_base, None);
     let master_url = server.url("/master.m3u8")?;
     let master_no_base = playlist_manager_no_base
-        .fetch_master_playlist(&master_url)
+        .master_playlist(&master_url)
         .await?;
     assert_eq!(master_no_base.variants.len(), 3);
 
@@ -285,7 +285,7 @@ async fn playlist_manager_with_different_base_urls(
 
     // Fetch should still work with base URL
     let master_with_base = playlist_manager_with_base
-        .fetch_master_playlist(&master_url)
+        .master_playlist(&master_url)
         .await?;
     assert_eq!(master_with_base.variants.len(), 3);
 

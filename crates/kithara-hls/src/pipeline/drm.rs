@@ -8,14 +8,14 @@ use futures::Stream;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use super::types::{PipelineError, PipelineEvent, PipelineResult, SegmentPayload, SegmentStream};
+use super::types::{PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentPayload};
 use crate::{HlsError, keys::KeyManager};
 
 /// DRM-оверлей: расшифровывает сегменты (если задан decryptor), транслирует команды вниз,
 /// публикует событие Decrypted, реагирует на CancellationToken.
 pub struct DrmStream<I>
 where
-    I: SegmentStream,
+    I: PipelineStream,
 {
     inner: Pin<Box<I>>,
     events: broadcast::Sender<PipelineEvent>,
@@ -25,7 +25,7 @@ where
 
 impl<I> DrmStream<I>
 where
-    I: SegmentStream,
+    I: PipelineStream,
 {
     pub fn new(inner: I, key_manager: Option<Arc<KeyManager>>, cancel: CancellationToken) -> Self {
         let events = inner.event_sender();
@@ -46,7 +46,7 @@ where
 
 impl<I> Stream for DrmStream<I>
 where
-    I: SegmentStream,
+    I: PipelineStream,
 {
     type Item = PipelineResult<SegmentPayload>;
 
@@ -78,9 +78,9 @@ where
     }
 }
 
-impl<I> SegmentStream for DrmStream<I>
+impl<I> PipelineStream for DrmStream<I>
 where
-    I: SegmentStream,
+    I: PipelineStream,
 {
     fn event_sender(&self) -> broadcast::Sender<PipelineEvent> {
         self.events.clone()

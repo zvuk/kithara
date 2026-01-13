@@ -70,6 +70,6 @@ pub enum PipelineError {
 pub type PipelineResult<T> = Result<T, PipelineError>;
 
 /// Трейт для слоя: поток сегментов плюс доступ к общим каналам команд и событий.
-pub trait SegmentStream: Stream<Item = PipelineResult<SegmentPayload>> + Send + 'static {
+pub trait PipelineStream: Stream<Item = PipelineResult<SegmentPayload>> + Send + 'static {
     fn event_sender(&self) -> broadcast::Sender<PipelineEvent>;
 }

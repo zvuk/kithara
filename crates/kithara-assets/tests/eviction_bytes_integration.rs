@@ -6,6 +6,7 @@ use bytes::Bytes;
 use kithara_assets::{AssetStore, Assets, EvictConfig, ResourceKey};
 use kithara_storage::Resource;
 use rstest::{fixture, rstest};
+use tokio::task::yield_now;
 use tokio_util::sync::CancellationToken;
 
 fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
@@ -50,6 +51,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
 ) {
     let cancel = cancel_token;
     let store = asset_store_with_100_bytes_limit;
+    let evict = store.base().clone();
 
     // Get the root directory from the store
     let dir = store.root_dir();
@@ -65,7 +67,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     // Asset A: create some data and then explicitly record bytes in LRU via eviction decorator.
     {
         let key_a = ResourceKey::new(asset_a_name.to_string(), "media/a.bin".to_string());
-        let res_a = store
+        let res_a = evict
             .open_atomic_resource(&key_a, cancel.clone())
             .await
             .unwrap();
@@ -79,8 +81,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         // Explicit bytes accounting (MVP for max_bytes):
         // `AssetStore` is `LeaseAssets<EvictAssets<DiskAssetStore>>`, so we can reach `EvictAssets`
         // via `.base()`.
-        store
-            .base()
+        evict
             .touch_asset_bytes(asset_a_name, bytes_a as u64, cancel.clone())
             .await
             .unwrap();
@@ -95,10 +96,13 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         );
     }
 
+    // Allow background unpin to run before the next asset creation.
+    yield_now().await;
+
     // Asset B: create and record bytes.
     {
         let key_b = ResourceKey::new(asset_b_name.to_string(), "media/b.bin".to_string());
-        let res_b = store
+        let res_b = evict
             .open_atomic_resource(&key_b, cancel.clone())
             .await
             .unwrap();
@@ -109,8 +113,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             .unwrap();
         res_b.commit(None).await.unwrap();
 
-        store
-            .base()
+        evict
             .touch_asset_bytes(asset_b_name, bytes_b as u64, cancel.clone())
             .await
             .unwrap();
@@ -125,10 +128,13 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         );
     }
 
+    // Allow background unpin to run before the next asset creation.
+    yield_now().await;
+
     // Asset C: first open for a new asset_root triggers eviction.
     {
         let key_c = ResourceKey::new(asset_c_name.to_string(), "media/c.bin".to_string());
-        let res_c = store
+        let res_c = evict
             .open_atomic_resource(&key_c, cancel.clone())
             .await
             .unwrap();
@@ -180,7 +186,6 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
 #[case(200, 50)] // Over limit with small new asset
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-#[ignore = "eviction logic needs investigation"]
 async fn eviction_corner_cases_different_byte_limits(
     #[case] max_bytes: usize,
     #[case] new_asset_size: usize,
@@ -198,6 +203,7 @@ async fn eviction_corner_cases_different_byte_limits(
     );
 
     let dir = store.root_dir();
+    let evict = store.base().clone();
 
     // Create assets that approach the limit
     let asset_sizes = vec![max_bytes / 3, max_bytes / 3];
@@ -206,7 +212,7 @@ async fn eviction_corner_cases_different_byte_limits(
     for (i, (size, name)) in asset_sizes.iter().zip(asset_names.iter()).enumerate() {
         let key = ResourceKey::new(name.to_string(), format!("data{}.bin", i));
 
-        let res = store
+        let res = evict
             .open_atomic_resource(&key, cancel.clone())
             .await
             .unwrap();
@@ -215,17 +221,16 @@ async fn eviction_corner_cases_different_byte_limits(
             .unwrap();
         res.commit(None).await.unwrap();
 
-        store
-            .base()
+        evict
             .touch_asset_bytes(name, *size as u64, cancel.clone())
             .await
             .unwrap();
     }
 
-    // Create a new asset that should trigger eviction
+    // Create a new asset and account its bytes
     let trigger_key = ResourceKey::new("asset-trigger".to_string(), "trigger.bin".to_string());
 
-    let res = store
+    let res = evict
         .open_atomic_resource(&trigger_key, cancel.clone())
         .await
         .unwrap();
@@ -234,9 +239,25 @@ async fn eviction_corner_cases_different_byte_limits(
         .unwrap();
     res.commit(None).await.unwrap();
 
+    evict
+        .touch_asset_bytes("asset-trigger", new_asset_size as u64, cancel.clone())
+        .await
+        .unwrap();
+
     assert!(exists_asset_dir(dir, "asset-trigger"));
 
-    // At least one old asset should be evicted if we're over the limit
+    // Trigger eviction after accounting the trigger bytes by creating another asset_root.
+    let probe_key = ResourceKey::new("asset-probe".to_string(), "probe.bin".to_string());
+    let probe = evict
+        .open_atomic_resource(&probe_key, cancel.clone())
+        .await
+        .unwrap();
+    probe.write(&Bytes::from_static(b"P")).await.unwrap();
+    probe.commit(None).await.unwrap();
+
+    assert!(exists_asset_dir(dir, "asset-probe"));
+
+    // At least one old asset should be evicted if we're over the limit; otherwise they remain.
     let total_old_size: usize = asset_sizes.iter().sum();
     if total_old_size + new_asset_size > max_bytes {
         let mut evicted_count = 0;
@@ -247,7 +268,15 @@ async fn eviction_corner_cases_different_byte_limits(
         }
         assert!(
             evicted_count > 0,
-            "Should evict at least one asset when over byte limit"
+            "Should evict at least one older asset when over byte limit"
         );
+    } else {
+        for name in &asset_names {
+            assert!(
+                exists_asset_dir(dir, name),
+                "{} should remain when under byte limit",
+                name
+            );
+        }
     }
 }

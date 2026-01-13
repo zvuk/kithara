@@ -6,9 +6,9 @@ use axum::{Router, routing::get};
 use futures::StreamExt;
 use kithara_assets::AssetStore;
 use kithara_hls::{
-    abr::{AbrConfig, AbrController},
+    abr::{AbrConfig, AbrController, AbrReason},
     fetch::FetchManager,
-    pipeline::{BaseStream, PipelineEvent, PrefetchStream, SegmentPayload, SegmentStream},
+    pipeline::{BaseStream, PipelineEvent, PipelineStream, PrefetchStream, SegmentPayload},
     playlist::PlaylistManager,
 };
 use kithara_net::HttpClient;
@@ -160,6 +160,58 @@ async fn basestream_force_variant_switches_output_and_emits_events(
         next.bytes.starts_with(&test_segment_data(1, 0)),
         "first segment after switch should be from variant 1"
     );
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn basestream_emits_abr_events_on_manual_switch(
+    assets_fixture: TestAssets,
+    net_fixture: HttpClient,
+) {
+    let server = TestServer::new().await;
+    let master_url = server.url("/master.m3u8").expect("url");
+
+    let mut stream =
+        build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
+    let mut events: broadcast::Receiver<PipelineEvent> = stream.event_sender().subscribe();
+
+    let first = stream.next().await.expect("item").expect("ok");
+    assert_eq!(first.meta.variant, 0);
+
+    stream.force_variant(2);
+
+    let mut saw_selected = false;
+    let mut saw_applied = false;
+
+    for _ in 0..10 {
+        if let Ok(ev) = timeout(Duration::from_millis(200), events.recv()).await {
+            match ev {
+                Ok(PipelineEvent::VariantSelected { from, to, reason }) => {
+                    assert_eq!(from, 0);
+                    assert_eq!(to, 2);
+                    assert_eq!(reason, AbrReason::ManualOverride);
+                    saw_selected = true;
+                }
+                Ok(PipelineEvent::VariantApplied { from, to, reason }) => {
+                    assert_eq!(from, 0);
+                    assert_eq!(to, 2);
+                    assert_eq!(reason, AbrReason::ManualOverride);
+                    saw_applied = true;
+                }
+                _ => {}
+            }
+        }
+        if saw_selected && saw_applied {
+            break;
+        }
+    }
+
+    assert!(saw_selected, "expected VariantSelected event");
+    assert!(saw_applied, "expected VariantApplied event");
+
+    let next = stream.next().await.expect("item").expect("ok");
+    assert_eq!(next.meta.variant, 2);
 }
 
 #[rstest]

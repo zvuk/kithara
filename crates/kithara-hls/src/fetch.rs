@@ -22,7 +22,7 @@ use crate::{
     HlsError, HlsResult, KeyContext, abr::ThroughputSampleSource, playlist::MediaPlaylist,
 };
 
-pub type SegmentStream<'a> = Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + 'a>>;
+pub type SegmentStream<'a> = Pin<Box<dyn Stream<Item = HlsResult<FetchBytes>> + Send + 'a>>;
 
 pub type StreamingAssetResource =
     AssetResource<StreamingResource, LeaseGuard<EvictAssets<DiskAssetStore>>>;
@@ -290,7 +290,7 @@ impl FetchManager {
                 return;
             }
 
-            for (segment_index, segment) in media_playlist.segments.into_iter().enumerate() {
+            for segment in media_playlist.segments.into_iter() {
                 let segment_url = match base_url.join(&segment.uri) {
                     Ok(url) => url,
                     Err(e) => {
@@ -307,7 +307,7 @@ impl FetchManager {
 
                 match fetch_result {
                     Ok(fetch) => {
-                        yield Ok(fetch.bytes);
+                        yield Ok(fetch);
                     }
                     Err(e) => yield Err(e),
                 }

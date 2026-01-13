@@ -35,6 +35,7 @@ fn select_variant_index(master: &MasterPlaylist, options: &HlsOptions) -> usize 
 use std::{
     collections::HashMap,
     ops::Range,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -44,19 +45,26 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_assets::{AssetResource, DiskAssetStore, EvictAssets, LeaseGuard, ResourceKey};
+use futures::Stream;
+use kithara_assets::{
+    AssetId, AssetResource, AssetStore, DiskAssetStore, EvictAssets, LeaseGuard, ResourceKey,
+};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_storage::{StreamingResource, StreamingResourceExt, WaitOutcome};
 use kithara_stream::{Source, StreamError as KitharaIoError, StreamResult as KitharaIoResult};
 use tokio::{
-    sync::{OnceCell, RwLock},
+    sync::{OnceCell, RwLock, broadcast},
     time::sleep,
 };
 use tracing::{debug, info, trace, warn};
 use url::Url;
 
 use crate::{
-    HlsError, HlsOptions, HlsResult,
+    HlsError, HlsResult, driver,
+    events::HlsEvent,
     fetch::FetchManager,
+    keys::KeyManager,
+    options::HlsOptions,
     playlist::{MasterPlaylist, PlaylistManager, VariantId},
 };
 
@@ -139,7 +147,7 @@ impl HlsSessionSource {
                 // 1) Fetch master playlist.
                 let master = self
                     .playlist_manager
-                    .fetch_master_playlist(&self.master_url)
+                    .master_playlist(&self.master_url)
                     .await?;
 
                 debug!(
@@ -178,7 +186,7 @@ impl HlsSessionSource {
                 // 4) Fetch media playlist.
                 let media = self
                     .playlist_manager
-                    .fetch_media_playlist(&media_url, VariantId(variant_index))
+                    .media_playlist(&media_url, VariantId(variant_index))
                     .await?;
 
                 debug!(
@@ -477,7 +485,6 @@ impl HlsSessionSource {
     /// Prefetch upcoming segments based on prefetch_buffer_size setting
     async fn prefetch_upcoming_segments(&self, state: &State, current_segment_index: usize) {
         let fm = self.fetch_manager.clone();
-        let variant_index = state.variant_index;
 
         let Some(prefetch_size) = self.options.prefetch_buffer_size else {
             let next_index = current_segment_index + 1;
@@ -756,5 +763,45 @@ impl Source for HlsSessionSource {
         // We can only return Some(len) once initialized. `OnceCell` doesn't allow async in `len()`,
         // so return None until `ensure_state()` has been called at least once (e.g. by first read).
         self.state.get().map(|s| s.total_len)
+    }
+}
+
+pub struct HlsSession {
+    pub(crate) asset_id: AssetId,
+    pub(crate) master_url: Url,
+    pub(crate) opts: HlsOptions,
+    pub(crate) assets: AssetStore,
+    #[allow(dead_code)]
+    pub(crate) key_manager: KeyManager,
+    pub(crate) driver: driver::HlsDriver,
+}
+
+impl HlsSession {
+    pub fn asset_id(&self) -> AssetId {
+        self.asset_id
+    }
+
+    pub fn stream(&self) -> Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + '_>> {
+        Box::pin(self.driver.stream())
+    }
+
+    pub fn events(&self) -> broadcast::Receiver<HlsEvent> {
+        self.driver.events()
+    }
+
+    pub async fn source(&self) -> HlsResult<HlsSessionSource> {
+        let asset_root = ResourceKey::asset_root_for_url(&self.master_url);
+        let net = HttpClient::new(NetOptions::default());
+
+        let fetch_manager = FetchManager::new(asset_root.clone(), self.assets.clone(), net);
+        let playlist_manager =
+            PlaylistManager::new(fetch_manager.clone(), self.opts.base_url.clone());
+
+        Ok(HlsSessionSource::new(
+            self.master_url.clone(),
+            self.opts.clone(),
+            playlist_manager,
+            fetch_manager,
+        ))
     }
 }
