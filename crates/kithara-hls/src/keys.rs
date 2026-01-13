@@ -1,7 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
-use kithara_assets::ResourceKey;
+use kithara_assets::AssetsError;
 use kithara_net::Headers;
 use thiserror::Error;
 use url::Url;
@@ -14,7 +14,7 @@ pub enum KeyError {
     Net(#[from] kithara_net::NetError),
 
     #[error("Assets error: {0}")]
-    Assets(#[from] kithara_assets::AssetsError),
+    Assets(#[from] AssetsError),
 
     #[error("Key processing failed: {0}")]
     Processing(String),
@@ -28,7 +28,6 @@ pub enum KeyError {
 
 #[derive(Clone)]
 pub struct KeyManager {
-    asset_root: String,
     fetch: FetchManager,
     key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
     key_query_params: Option<HashMap<String, String>>,
@@ -37,14 +36,12 @@ pub struct KeyManager {
 
 impl KeyManager {
     pub fn new(
-        asset_root: String,
         fetch: FetchManager,
         key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
         key_query_params: Option<HashMap<String, String>>,
         key_request_headers: Option<HashMap<String, String>>,
     ) -> Self {
         Self {
-            asset_root,
             fetch,
             key_processor,
             key_query_params,
@@ -64,8 +61,7 @@ impl KeyManager {
 
         let headers: Option<Headers> = self.key_request_headers.clone().map(Headers::from);
 
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &fetch_url);
-        let rel_path: String = key.rel_path().to_owned();
+        let rel_path = Self::rel_path_from_url(&fetch_url);
         let raw_key = self
             .fetch
             .fetch_key_atomic(&fetch_url, rel_path.as_str(), headers)
@@ -73,6 +69,19 @@ impl KeyManager {
 
         let processed_key = self.process_key(raw_key, fetch_url, iv)?;
         Ok(processed_key)
+    }
+
+    fn rel_path_from_url(url: &Url) -> String {
+        let last = url
+            .path_segments()
+            .and_then(|segments| segments.last())
+            .unwrap_or("index");
+        if let Some((stem, _)) = last.rsplit_once('.') {
+            if !stem.is_empty() {
+                return stem.to_string();
+            }
+        }
+        last.to_string()
     }
 
     fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
@@ -84,6 +93,4 @@ impl KeyManager {
             Ok(key)
         }
     }
-
-    // NOTE: Old cache path logic removed while the new resource-based assets API is being wired in.
 }

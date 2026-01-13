@@ -4,6 +4,11 @@ mod fixture;
 
 use std::{sync::Arc, time::Duration};
 
+use aes::Aes128;
+use cbc::{
+    Decryptor,
+    cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7},
+};
 use fixture::*;
 use kithara_hls::{HlsResult, fetch::FetchManager, keys::KeyManager};
 use rstest::{fixture, rstest};
@@ -15,11 +20,6 @@ async fn test_server() -> TestServer {
     TestServer::new().await
 }
 
-#[fixture]
-fn asset_root() -> String {
-    "test-hls".to_string()
-}
-
 // ==================== Test Cases ====================
 
 #[rstest]
@@ -29,14 +29,13 @@ async fn fetch_and_cache_key(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
     net_fixture: kithara_net::HttpClient,
-    asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
-    let key_manager = KeyManager::new(asset_root, fetch_manager, None, None, None);
+    let fetch_manager = FetchManager::new("test-hls".to_string(), assets, net);
+    let key_manager = KeyManager::new(fetch_manager, None, None, None);
     let key_url = server.url("/key.bin")?;
 
     // Note: This test assumes the server provides a key endpoint
@@ -53,7 +52,6 @@ async fn key_processor_applied(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
     net_fixture: kithara_net::HttpClient,
-    asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
@@ -67,8 +65,8 @@ async fn key_processor_applied(
         Ok(bytes::Bytes::from(processed))
     });
 
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
-    let key_manager = KeyManager::new(asset_root, fetch_manager, Some(processor), None, None);
+    let fetch_manager = FetchManager::new("test-hls".to_string(), assets, net);
+    let key_manager = KeyManager::new(fetch_manager, Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
     let key = key_manager.get_key(&key_url, None).await?;
@@ -84,7 +82,6 @@ async fn key_manager_with_different_processors(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
     net_fixture: kithara_net::HttpClient,
-    asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
@@ -96,14 +93,8 @@ async fn key_manager_with_different_processors(
         Ok(bytes::Bytes::from(upper))
     });
 
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets.clone(), net.clone());
-    let key_manager = KeyManager::new(
-        asset_root.clone(),
-        fetch_manager,
-        Some(uppercase_processor),
-        None,
-        None,
-    );
+    let fetch_manager = FetchManager::new("test-hls".to_string(), assets.clone(), net.clone());
+    let key_manager = KeyManager::new(fetch_manager, Some(uppercase_processor), None, None);
     let key_url = server.url("/key.bin")?;
 
     let key = key_manager.get_key(&key_url, None).await?;
@@ -118,13 +109,12 @@ async fn key_manager_with_different_processors(
 async fn key_manager_error_handling(
     assets_fixture: TestAssets,
     net_fixture: kithara_net::HttpClient,
-    asset_root: String,
 ) -> HlsResult<()> {
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
-    let key_manager = KeyManager::new(asset_root, fetch_manager, None, None, None);
+    let fetch_manager = FetchManager::new("test-hls".to_string(), assets, net);
+    let key_manager = KeyManager::new(fetch_manager, None, None, None);
 
     // Try to get key from invalid URL
     let invalid_url =
@@ -146,14 +136,13 @@ async fn key_manager_caching_behavior(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
     net_fixture: kithara_net::HttpClient,
-    asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
-    let key_manager = KeyManager::new(asset_root, fetch_manager, None, None, None);
+    let fetch_manager = FetchManager::new("test-hls".to_string(), assets, net);
+    let key_manager = KeyManager::new(fetch_manager, None, None, None);
     let key_url = server.url("/key.bin")?;
 
     // First fetch
@@ -175,7 +164,6 @@ async fn key_manager_with_context(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
     net_fixture: kithara_net::HttpClient,
-    asset_root: String,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
@@ -193,8 +181,8 @@ async fn key_manager_with_context(
         Ok(bytes::Bytes::from(processed))
     });
 
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
-    let key_manager = KeyManager::new(asset_root, fetch_manager, Some(processor), None, None);
+    let fetch_manager = FetchManager::new("test-hls".to_string(), assets, net);
+    let key_manager = KeyManager::new(fetch_manager, Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
     // Test without IV
@@ -206,6 +194,38 @@ async fn key_manager_with_context(
     iv[..7].copy_from_slice(b"test-iv");
     let key2 = key_manager.get_key(&key_url, Some(iv)).await?;
     assert!(key2.starts_with(b"ctx:"));
+
+    Ok(())
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn aes128_key_decrypts_ciphertext(
+    #[future] test_server: TestServer,
+    assets_fixture: TestAssets,
+    net_fixture: kithara_net::HttpClient,
+) -> HlsResult<()> {
+    let server = test_server.await;
+    let assets = assets_fixture.assets().clone();
+    let net = net_fixture;
+
+    let fetch_manager = FetchManager::new("test-hls".to_string(), assets, net.clone());
+    let key_manager = KeyManager::new(fetch_manager, None, None, None);
+
+    let key_url = server.url("/aes/key.bin")?;
+    let cipher_url = server.url("/aes/seg0.bin")?;
+    let iv = fixture::aes128_iv();
+
+    let key = key_manager.get_key(&key_url, Some(iv)).await?;
+    assert_eq!(key.len(), 16);
+
+    let mut buf = net.get_bytes(cipher_url, None).await?.to_vec();
+    let decryptor = Decryptor::<Aes128>::new((&key[..16]).into(), (&iv).into());
+    let plain = decryptor
+        .decrypt_padded_mut::<Pkcs7>(&mut buf)
+        .map_err(|e| kithara_hls::HlsError::KeyProcessing(format!("decrypt failed: {e}")))?;
+    assert!(plain.starts_with(fixture::aes128_plaintext_segment().as_slice()));
 
     Ok(())
 }

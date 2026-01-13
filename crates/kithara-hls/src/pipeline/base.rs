@@ -158,9 +158,13 @@ impl BaseStream {
 
             let init_segment = media_playlist.init_segment.clone();
             let segments = media_playlist.segments.clone();
-            let mut enumerated = fetch
-                .stream_segment_sequence(media_playlist, &media_url, None)
-                .enumerate();
+            let mut enumerated = FetchManager::stream_segment_sequence(
+                &*fetch,
+                &media_playlist,
+                &media_url,
+                None,
+            )
+            .enumerate();
 
             let init_segment = init_segment.clone();
             // Send VariantApplied event when starting a new variant stream
@@ -191,8 +195,10 @@ impl BaseStream {
                             let meta = SegmentMeta {
                                 variant: to_variant,
                                 segment_index: usize::MAX,
+                                sequence: media_playlist.media_sequence,
                                 url: init_url,
                                 duration: None,
+                                key: init.key.clone(),
                             };
                             let _ = events.send(PipelineEvent::SegmentReady {
                                 variant: to_variant,
@@ -231,8 +237,10 @@ impl BaseStream {
                         let meta = SegmentMeta {
                             variant: to_variant,
                             segment_index: idx,
+                            sequence: segment.sequence,
                             url: segment_url,
                             duration: Some(fetch_bytes.duration.max(Duration::from_millis(1))),
+                            key: segment.key.clone(),
                         };
                         let _ = events.send(PipelineEvent::SegmentReady {
                             variant: to_variant,

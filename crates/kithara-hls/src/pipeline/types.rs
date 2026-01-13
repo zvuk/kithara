@@ -6,7 +6,7 @@ use thiserror::Error;
 use tokio::sync::broadcast;
 use url::Url;
 
-use crate::{HlsError, abr::AbrReason};
+use crate::{HlsError, abr::AbrReason, playlist::SegmentKey};
 
 /// Единый тип событий от всех слоёв.
 #[derive(Debug, Clone)]
@@ -47,8 +47,10 @@ pub enum PipelineEvent {
 pub struct SegmentMeta {
     pub variant: usize,
     pub segment_index: usize,
+    pub sequence: u64,
     pub url: Url,
     pub duration: Option<Duration>,
+    pub key: Option<SegmentKey>,
 }
 
 /// Полезная нагрузка между слоями.

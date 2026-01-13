@@ -29,7 +29,6 @@ impl HlsSourceContract for HlsSource {
             fetch::FetchManager::new(asset_root.clone(), assets.clone(), net.clone());
         let key_processor = opts.key_processor_cb.clone();
         let key_manager = KeyManager::new(
-            asset_root.clone(),
             fetch_manager.clone(),
             key_processor,
             opts.key_query_params.clone(),

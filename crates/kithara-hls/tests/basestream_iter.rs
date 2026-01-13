@@ -17,7 +17,6 @@ use tokio::{net::TcpListener, sync::broadcast, time::timeout};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-#[path = "fixture.rs"]
 mod fixture;
 use fixture::{
     TestAssets, TestServer, assets_fixture, net_fixture, test_init_data, test_segment_data,

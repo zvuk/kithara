@@ -267,17 +267,17 @@ impl FetchManager {
         let url = url.clone();
         let res_for_writer = res.clone();
 
-        Self::spawn_stream_writer(net, url, res_for_writer);
+        FetchManager::spawn_stream_writer(net, url, res_for_writer);
 
         Ok(res)
     }
 
-    pub fn stream_segment_sequence(
+    pub fn stream_segment_sequence<'a>(
         &self,
-        media_playlist: MediaPlaylist,
+        media_playlist: &'a MediaPlaylist,
         base_url: &Url,
         key_context: Option<&KeyContext>,
-    ) -> SegmentStream<'static> {
+    ) -> SegmentStream<'a> {
         let asset_root = self.asset_root.clone();
         let assets = self.assets.clone();
         let net = self.net.clone();
@@ -290,7 +290,7 @@ impl FetchManager {
                 return;
             }
 
-            for segment in media_playlist.segments.into_iter() {
+            for segment in media_playlist.segments.iter() {
                 let segment_url = match base_url.join(&segment.uri) {
                     Ok(url) => url,
                     Err(e) => {
@@ -299,9 +299,8 @@ impl FetchManager {
                     }
                 };
 
-                // Use captured fields directly instead of creating new FetchManager
                 let key = ResourceKey::from_url_with_asset_root(asset_root.clone(), &segment_url);
-                let fetch_result = Self::fetch_streaming_to_bytes_internal(
+                let fetch_result = FetchManager::fetch_streaming_to_bytes_internal(
                     &asset_root, &assets, &net, &segment_url, &key.rel_path()
                 ).await;
 
@@ -315,7 +314,7 @@ impl FetchManager {
         })
     }
 
-    fn spawn_stream_writer(net: HttpClient, url: Url, res: StreamingAssetResource) {
+    pub(crate) fn spawn_stream_writer(net: HttpClient, url: Url, res: StreamingAssetResource) {
         tokio::spawn(async move {
             let mut stream = match net.stream(url.clone(), None).await {
                 Ok(s) => s,
@@ -361,7 +360,7 @@ impl FetchManager {
     }
 
     // Helper for stream_segment_sequence to avoid creating new FetchManager
-    async fn fetch_streaming_to_bytes_internal(
+    pub(crate) async fn fetch_streaming_to_bytes_internal(
         asset_root: &str,
         assets: &AssetStore,
         net: &HttpClient,
@@ -384,7 +383,7 @@ impl FetchManager {
 
         let status = res.inner().status().await;
         if !matches!(status, ResourceStatus::Committed { .. }) {
-            Self::spawn_stream_writer(net, url, res.clone());
+            FetchManager::spawn_stream_writer(net, url, res.clone());
         }
 
         // Read-through to bytes: wait for full content once committed, then read all.
