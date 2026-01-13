@@ -63,7 +63,7 @@ pub type WriterTask<E> = tokio::task::JoinHandle<Result<(), E>>;
 /// - The engine must be able to create a *single owned session state* and then construct both:
 ///   - a writer task that fills storage/resources
 ///   - a reader stream that drains storage/resources
-///   from that same session state.
+///     from that same session state.
 ///
 /// Why owned?
 /// - Both the writer task and the reader stream are driven by a spawned task and therefore must
@@ -105,7 +105,7 @@ pub trait EngineSource: Send + 'static {
     /// This stream is expected to produce:
     /// - `StreamMsg::Data(Bytes)` for data,
     /// - optional `StreamMsg::Control(C)` and `StreamMsg::Event(Ev)` messages,
-    /// and should terminate on EOF.
+    ///   and should terminate on EOF.
     fn open_reader(
         &mut self,
         state: &Self::State,

@@ -1,14 +1,22 @@
-use std::time::Duration;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+    time::Duration,
+};
 
-use bytes::Bytes;
 use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,
     tags::VariantStream as HlsVariantStreamTag, types::DecryptionKey as HlsDecryptionKey,
 };
 use thiserror::Error;
+use tokio::sync::OnceCell;
 use url::Url;
 
-use crate::{HlsError, HlsResult, fetch::FetchManager};
+use crate::{
+    HlsError, HlsResult,
+    abr::{Variant, variants_from_master},
+    fetch::FetchManager,
+};
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {
     let no_query = uri.split('?').next().unwrap_or(uri);
@@ -160,29 +168,80 @@ pub struct MediaSegment {
 /// Thin wrapper: fetches + parses playlists with caching via `kithara-assets`.
 #[derive(Clone)]
 pub struct PlaylistManager {
-    fetch: FetchManager,
+    fetch: Arc<FetchManager>,
     base_url: Option<Url>,
+    master: Arc<OnceCell<MasterPlaylist>>,
+    variants: Arc<OnceCell<Vec<Variant>>>,
+    media: Arc<RwLock<HashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>>,
 }
 
 impl PlaylistManager {
-    pub fn new(fetch: FetchManager, base_url: Option<Url>) -> Self {
-        Self { fetch, base_url }
+    pub fn new(fetch: Arc<FetchManager>, base_url: Option<Url>) -> Self {
+        Self {
+            fetch,
+            base_url,
+            master: Arc::new(OnceCell::new()),
+            variants: Arc::new(OnceCell::new()),
+            media: Arc::new(RwLock::new(HashMap::new())),
+        }
     }
 
-    pub async fn fetch_master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
-        self.fetch_and_parse(url, "master_playlist", parse_master_playlist)
-            .await
+    pub async fn master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
+        let master = self
+            .master
+            .get_or_try_init(|| async {
+                self.fetch_and_parse(url, "master_playlist", parse_master_playlist)
+                    .await
+            })
+            .await?;
+
+        Ok(master.clone())
     }
 
-    pub async fn fetch_media_playlist(
+    pub async fn variants(&self, url: &Url) -> HlsResult<Vec<Variant>> {
+        if let Some(cached) = self.variants.get() {
+            return Ok(cached.clone());
+        }
+
+        let computed = {
+            let master = self.master_playlist(url).await?;
+            variants_from_master(&master)
+        };
+
+        let _ = self.variants.set(computed.clone());
+        Ok(computed)
+    }
+
+    pub fn master_variants(&self) -> Option<Vec<VariantStream>> {
+        self.master.get().map(|m| m.variants.clone())
+    }
+
+    pub async fn media_playlist(
         &self,
         url: &Url,
         variant_id: VariantId,
     ) -> HlsResult<MediaPlaylist> {
-        self.fetch_and_parse(url, "media_playlist", |bytes| {
-            parse_media_playlist(bytes, variant_id)
-        })
-        .await
+        let cell = {
+            let mut guard = self
+                .media
+                .write()
+                .map_err(|_| HlsError::PlaylistParse("playlist cache poisoned".to_string()))?;
+            guard
+                .entry(variant_id)
+                .or_insert_with(|| Arc::new(OnceCell::new()))
+                .clone()
+        };
+
+        let playlist = cell
+            .get_or_try_init(|| async {
+                self.fetch_and_parse(url, "media_playlist", |bytes| {
+                    parse_media_playlist(bytes, variant_id)
+                })
+                .await
+            })
+            .await?;
+
+        Ok(playlist.clone())
     }
 
     pub fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
@@ -204,13 +263,11 @@ impl PlaylistManager {
     {
         let basename = uri_basename_no_query(url.as_str())
             .ok_or_else(|| HlsError::InvalidUrl(format!("Failed to derive {label} basename")))?;
-        let bytes = self.fetch_playlist_atomic(url, basename).await?;
+        let bytes = Arc::clone(&self.fetch)
+            .fetch_playlist_atomic(url, basename)
+            .await?;
 
         parse(&bytes)
-    }
-
-    async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
-        self.fetch.fetch_playlist_atomic(url, rel_path).await
     }
 }
 
@@ -267,12 +324,11 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
         .map_err(|e| HlsError::PlaylistParse(e.to_string()))?
         .into_owned();
 
-    let target_duration = Some(hls_media.target_duration);
-    let media_sequence = hls_media.media_sequence as u64;
-
     // Treat `#EXT-X-ENDLIST` as the only reliable end-of-stream marker.
     // Some servers set Playlist-Type=VOD or EVENT without a terminal ENDLIST.
     let end_list = input.contains("#EXT-X-ENDLIST");
+    let target_duration = Some(hls_media.target_duration);
+    let media_sequence = hls_media.media_sequence as u64;
 
     fn map_encryption_method(m: &hls_m3u8::types::EncryptionMethod) -> EncryptionMethod {
         match m {

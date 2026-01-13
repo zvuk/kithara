@@ -1,30 +1,32 @@
 #![forbid(unsafe_code)]
 
 pub mod abr;
-mod api;
-mod driver;
+pub mod driver;
 pub mod error;
 pub mod events;
 pub mod fetch;
 pub mod keys;
+pub mod options;
 pub mod pipeline;
 pub mod playlist;
 pub mod session;
+pub mod source;
 
 // Public API re-exports
 pub use abr::{
     AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
     Variant,
 };
-pub use api::{HlsOptions, HlsSession, HlsSource, HlsSourceContract, KeyContext};
 pub use driver::DriverError;
 pub use error::{HlsError, HlsResult};
 pub use events::{EventEmitter, HlsEvent};
 pub use fetch::{FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
+pub use options::{HlsOptions, KeyContext};
 pub use pipeline::{
-    BaseStream, DrmStream, PipelineError, PipelineEvent, PipelineResult, PrefetchStream,
-    SegmentMeta, SegmentPayload, SegmentStream as PipelineSegmentStream,
+    BaseStream, DrmStream, PipelineError, PipelineEvent, PipelineResult, PipelineStream,
+    PrefetchStream, SegmentMeta, SegmentPayload,
 };
 pub use playlist::{PlaylistError, PlaylistManager};
-pub use session::HlsSessionSource;
+pub use session::{HlsSession, HlsSessionSource};
+pub use source::{HlsSource, HlsSourceContract};

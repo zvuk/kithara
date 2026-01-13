@@ -1,6 +1,11 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use aes::Aes128;
 use axum::{Router, routing::get};
+use cbc::{
+    Encryptor,
+    cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
+};
 use kithara_assets::{AssetStore, EvictConfig};
 pub use kithara_hls::HlsError;
 use kithara_net::{HttpClient, NetOptions};
@@ -163,6 +168,8 @@ impl TestServer {
             .route("/init/v1.bin", get(|| async { test_init_data(1) }))
             .route("/init/v2.bin", get(|| async { test_init_data(2) }))
             .route("/key.bin", get(key_endpoint))
+            .route("/aes/key.bin", get(|| async { aes128_key_bytes() }))
+            .route("/aes/seg0.bin", get(|| async { aes128_ciphertext() }))
             .layer(axum::middleware::from_fn(
                 move |req: axum::extract::Request, next: axum::middleware::Next| {
                     let counts = request_counts_clone.clone();
@@ -288,6 +295,31 @@ pub async fn segment_data(
 
 pub fn init_data(variant: usize) -> Vec<u8> {
     format!("V{}-INIT:", variant).into_bytes()
+}
+
+pub fn aes128_key_bytes() -> Vec<u8> {
+    b"0123456789abcdef".to_vec()
+}
+
+pub fn aes128_iv() -> [u8; 16] {
+    [0u8; 16]
+}
+
+pub fn aes128_plaintext_segment() -> Vec<u8> {
+    b"V0-SEG-0:DRM-PLAINTEXT".to_vec()
+}
+
+pub fn aes128_ciphertext() -> Vec<u8> {
+    let key = aes128_key_bytes();
+    let iv = aes128_iv();
+    let mut data = aes128_plaintext_segment();
+    let plain_len = data.len();
+    data.resize(plain_len + 16, 0);
+    let encryptor = Encryptor::<Aes128>::new((&key[..16]).into(), (&iv).into());
+    let cipher = encryptor
+        .encrypt_padded_mut::<Pkcs7>(&mut data, plain_len)
+        .expect("aes128 encrypt");
+    cipher.to_vec()
 }
 
 #[fixture]

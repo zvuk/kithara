@@ -77,8 +77,7 @@ async fn head_length_endpoint() -> impl IntoResponse {
 async fn range_endpoint(headers: HeaderMap) -> impl IntoResponse {
     if let Some(range_header) = headers.get(header::RANGE) {
         let range_str = range_header.to_str().unwrap();
-        if range_str.starts_with("bytes=") {
-            let range = &range_str[6..];
+        if let Some(range) = range_str.strip_prefix("bytes=") {
             let parts: Vec<&str> = range.split('-').collect();
             if parts.len() == 2 {
                 let start_result = parts[0].parse::<u64>();

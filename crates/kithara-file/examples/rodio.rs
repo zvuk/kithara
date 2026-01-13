@@ -42,7 +42,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let reader = SyncReader::new(Arc::new(source));
 
     tokio::spawn(async move {
-        while let Some(msg) = events_rx.recv().await.ok() {
+        while let Ok(msg) = events_rx.recv().await {
             match msg {
                 FileEvent::DownloadProgress { offset, percent } => {
                     info!(offset, ?percent, "Stream event: download");

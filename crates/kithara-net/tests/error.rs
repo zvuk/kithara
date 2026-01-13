@@ -155,7 +155,6 @@ async fn test_from_reqwest_error() {
     let _converter = |e: reqwest::Error| -> NetError { e.into() };
 
     // This is mostly a compile-time test
-    assert!(true);
 }
 
 // Test error cloning
@@ -208,7 +207,7 @@ async fn test_net_result_type() {
     // Test Ok variant
     let ok_result: NetResult<i32> = Ok(42);
     assert!(ok_result.is_ok());
-    assert_eq!(ok_result.unwrap(), 42);
+    assert!(matches!(ok_result, Ok(42)));
 
     // Test Err variant
     let err_result: NetResult<i32> = Err(NetError::Timeout);

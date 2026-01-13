@@ -6,9 +6,9 @@ use axum::{Router, routing::get};
 use futures::StreamExt;
 use kithara_assets::AssetStore;
 use kithara_hls::{
-    abr::{AbrConfig, AbrController},
+    abr::{AbrConfig, AbrController, AbrReason},
     fetch::FetchManager,
-    pipeline::{BaseStream, PipelineEvent, PrefetchStream, SegmentPayload, SegmentStream},
+    pipeline::{BaseStream, PipelineEvent, PipelineStream, PrefetchStream, SegmentPayload},
     playlist::PlaylistManager,
 };
 use kithara_net::HttpClient;
@@ -17,15 +17,21 @@ use tokio::{net::TcpListener, sync::broadcast, time::timeout};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-#[path = "fixture.rs"]
 mod fixture;
 use fixture::{
     TestAssets, TestServer, assets_fixture, net_fixture, test_init_data, test_segment_data,
 };
 
-fn make_fetch_and_playlist(assets: AssetStore, net: HttpClient) -> (FetchManager, PlaylistManager) {
-    let fetch = FetchManager::new("test-asset-root".to_string(), assets, net);
-    let playlist = PlaylistManager::new(fetch.clone(), None::<Url>);
+fn make_fetch_and_playlist(
+    assets: AssetStore,
+    net: HttpClient,
+) -> (Arc<FetchManager>, Arc<PlaylistManager>) {
+    let fetch = Arc::new(FetchManager::new(
+        "test-asset-root".to_string(),
+        assets,
+        net,
+    ));
+    let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
     (fetch, playlist)
 }
 
@@ -45,9 +51,13 @@ async fn build_basestream(
     let abr = make_abr(initial_variant);
     let cancel = CancellationToken::new();
 
-    BaseStream::build(master_url, Arc::new(fetch), Arc::new(playlist), abr, cancel)
-        .await
-        .expect("BaseStream::build should succeed")
+    BaseStream::new(
+        master_url,
+        Arc::clone(&fetch),
+        Arc::clone(&playlist),
+        abr,
+        cancel,
+    )
 }
 
 async fn collect_all(mut stream: BaseStream) -> Vec<SegmentPayload> {
@@ -165,6 +175,58 @@ async fn basestream_force_variant_switches_output_and_emits_events(
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
+async fn basestream_emits_abr_events_on_manual_switch(
+    assets_fixture: TestAssets,
+    net_fixture: HttpClient,
+) {
+    let server = TestServer::new().await;
+    let master_url = server.url("/master.m3u8").expect("url");
+
+    let mut stream =
+        build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
+    let mut events: broadcast::Receiver<PipelineEvent> = stream.event_sender().subscribe();
+
+    let first = stream.next().await.expect("item").expect("ok");
+    assert_eq!(first.meta.variant, 0);
+
+    stream.force_variant(2);
+
+    let mut saw_selected = false;
+    let mut saw_applied = false;
+
+    for _ in 0..10 {
+        if let Ok(ev) = timeout(Duration::from_millis(200), events.recv()).await {
+            match ev {
+                Ok(PipelineEvent::VariantSelected { from, to, reason }) => {
+                    assert_eq!(from, 0);
+                    assert_eq!(to, 2);
+                    assert_eq!(reason, AbrReason::ManualOverride);
+                    saw_selected = true;
+                }
+                Ok(PipelineEvent::VariantApplied { from, to, reason }) => {
+                    assert_eq!(from, 0);
+                    assert_eq!(to, 2);
+                    assert_eq!(reason, AbrReason::ManualOverride);
+                    saw_applied = true;
+                }
+                _ => {}
+            }
+        }
+        if saw_selected && saw_applied {
+            break;
+        }
+    }
+
+    assert!(saw_selected, "expected VariantSelected event");
+    assert!(saw_applied, "expected VariantApplied event");
+
+    let next = stream.next().await.expect("item").expect("ok");
+    assert_eq!(next.meta.variant, 2);
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
 async fn basestream_stops_after_cancellation(assets_fixture: TestAssets, net_fixture: HttpClient) {
     let server = TestServer::new().await;
     let master_url = server.url("/master.m3u8").expect("url");
@@ -173,15 +235,13 @@ async fn basestream_stops_after_cancellation(assets_fixture: TestAssets, net_fix
     let abr = make_abr(0);
     let cancel = CancellationToken::new();
 
-    let mut stream = BaseStream::build(
+    let mut stream = BaseStream::new(
         master_url,
-        Arc::new(fetch),
-        Arc::new(playlist),
+        Arc::clone(&fetch),
+        Arc::clone(&playlist),
         abr,
         cancel.clone(),
-    )
-    .await
-    .expect("build");
+    );
 
     let first = stream.next().await.expect("item").expect("ok");
     assert_eq!(first.meta.segment_index, 0);
@@ -229,22 +289,17 @@ async fn basestream_reconnects_and_resumes_same_segment(
     let server = TestServer::new().await;
     let master_url = server.url("/master.m3u8").expect("url");
 
-    let (fetch_mgr, playlist_mgr) =
-        make_fetch_and_playlist(assets_fixture.assets().clone(), net_fixture);
-    let fetch = Arc::new(fetch_mgr);
-    let playlist = Arc::new(playlist_mgr);
+    let (fetch, playlist) = make_fetch_and_playlist(assets_fixture.assets().clone(), net_fixture);
     let abr = make_abr(0);
 
     let cancel1 = CancellationToken::new();
-    let mut stream1 = BaseStream::build(
+    let mut stream1 = BaseStream::new(
         master_url.clone(),
         fetch.clone(),
         playlist.clone(),
         abr.clone(),
         cancel1.clone(),
-    )
-    .await
-    .expect("build");
+    );
 
     let first = stream1.next().await.expect("item").expect("ok");
     assert_eq!(first.meta.segment_index, 0);
@@ -254,9 +309,7 @@ async fn basestream_reconnects_and_resumes_same_segment(
     assert!(ended.is_none(), "stream should end after cancellation");
 
     let cancel2 = CancellationToken::new();
-    let mut stream2 = BaseStream::build(master_url, fetch, playlist, abr, cancel2)
-        .await
-        .expect("rebuild");
+    let mut stream2 = BaseStream::new(master_url, fetch, playlist, abr, cancel2);
 
     stream2.seek(1);
 
@@ -400,8 +453,12 @@ seg/v{}_2.bin
         .expect("valid master url");
 
     let asset_root = format!("basestream-downswitch-{}", addr.port());
-    let fetch = FetchManager::new(asset_root, assets_fixture.assets().clone(), net_fixture);
-    let playlist = PlaylistManager::new(fetch.clone(), None::<Url>);
+    let fetch = Arc::new(FetchManager::new(
+        asset_root,
+        assets_fixture.assets().clone(),
+        net_fixture,
+    ));
+    let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
 
     let mut cfg = AbrConfig::default();
     cfg.initial_variant_index = Some(2);
@@ -413,10 +470,13 @@ seg/v{}_2.bin
     let abr = AbrController::new(cfg, None);
     let cancel = CancellationToken::new();
 
-    let mut stream =
-        BaseStream::build(master_url, Arc::new(fetch), Arc::new(playlist), abr, cancel)
-            .await
-            .expect("build basestream");
+    let mut stream = BaseStream::new(
+        master_url,
+        Arc::clone(&fetch),
+        Arc::clone(&playlist),
+        abr,
+        cancel.clone(),
+    );
 
     let init2 = stream.next().await.unwrap().expect("init v2");
     assert_eq!(init2.meta.variant, 2);
@@ -555,8 +615,12 @@ seg/v{}_2.bin
         .expect("valid master url");
 
     let asset_root = format!("basestream-prefetch-downswitch-{}", addr.port());
-    let fetch = FetchManager::new(asset_root, assets_fixture.assets().clone(), net_fixture);
-    let playlist = PlaylistManager::new(fetch.clone(), None::<Url>);
+    let fetch = Arc::new(FetchManager::new(
+        asset_root,
+        assets_fixture.assets().clone(),
+        net_fixture,
+    ));
+    let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
 
     let mut cfg = AbrConfig::default();
     cfg.initial_variant_index = Some(2);
@@ -568,15 +632,13 @@ seg/v{}_2.bin
     let abr = AbrController::new(cfg, None);
     let cancel = CancellationToken::new();
 
-    let base = BaseStream::build(
+    let base = BaseStream::new(
         master_url,
-        Arc::new(fetch),
-        Arc::new(playlist),
+        Arc::clone(&fetch),
+        Arc::clone(&playlist),
         abr,
         cancel.clone(),
-    )
-    .await
-    .expect("build basestream");
+    );
     let mut stream = PrefetchStream::new(base, 1, cancel);
 
     let init2 = stream.next().await.unwrap().expect("init v2");

@@ -35,6 +35,7 @@ fn select_variant_index(master: &MasterPlaylist, options: &HlsOptions) -> usize 
 use std::{
     collections::HashMap,
     ops::Range,
+    pin::Pin,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -44,25 +45,32 @@ use std::{
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_assets::{AssetResource, DiskAssetStore, EvictAssets, LeaseGuard, ResourceKey};
+use futures::Stream;
+use kithara_assets::{
+    AssetId, AssetResource, AssetStore, DiskAssetStore, EvictAssets, LeaseGuard, ResourceKey,
+};
+use kithara_net::{HttpClient, NetOptions};
 use kithara_storage::{StreamingResource, StreamingResourceExt, WaitOutcome};
 use kithara_stream::{Source, StreamError as KitharaIoError, StreamResult as KitharaIoResult};
 use tokio::{
-    sync::{OnceCell, RwLock},
+    sync::{OnceCell, RwLock, broadcast},
     time::sleep,
 };
 use tracing::{debug, info, trace, warn};
 use url::Url;
 
 use crate::{
-    HlsError, HlsOptions, HlsResult,
+    HlsError, HlsResult,
+    driver::HlsDriver,
+    events::HlsEvent,
     fetch::FetchManager,
+    options::HlsOptions,
     playlist::{MasterPlaylist, PlaylistManager, VariantId},
 };
 
 pub struct HlsSessionSource {
     playlist_manager: PlaylistManager,
-    fetch_manager: FetchManager,
+    fetch_manager: Arc<FetchManager>,
     master_url: Url,
     options: HlsOptions,
     asset_root: String,
@@ -102,7 +110,7 @@ impl HlsSessionSource {
         master_url: Url,
         options: HlsOptions,
         playlist_manager: PlaylistManager,
-        fetch_manager: FetchManager,
+        fetch_manager: Arc<FetchManager>,
     ) -> Self {
         let asset_root = ResourceKey::asset_root_for_url(&master_url);
 
@@ -139,7 +147,7 @@ impl HlsSessionSource {
                 // 1) Fetch master playlist.
                 let master = self
                     .playlist_manager
-                    .fetch_master_playlist(&self.master_url)
+                    .master_playlist(&self.master_url)
                     .await?;
 
                 debug!(
@@ -178,7 +186,7 @@ impl HlsSessionSource {
                 // 4) Fetch media playlist.
                 let media = self
                     .playlist_manager
-                    .fetch_media_playlist(&media_url, VariantId(variant_index))
+                    .media_playlist(&media_url, VariantId(variant_index))
                     .await?;
 
                 debug!(
@@ -303,7 +311,7 @@ impl HlsSessionSource {
                     prefix,
                 };
 
-                let fm_all = self.fetch_manager.clone();
+                let fm_all = Arc::clone(&self.fetch_manager);
                 let urls: Vec<Url> = state.segments.iter().map(|s| s.url.clone()).collect();
                 let vi = state.variant_index;
                 let window = self.prefetch_window;
@@ -316,37 +324,35 @@ impl HlsSessionSource {
                         let urls = urls.clone();
                         let next = next.clone();
                         let cache = cache.clone();
-                        async move {
-                            tokio::spawn(async move {
-                                loop {
-                                    let start = next.load(Ordering::Relaxed);
-                                    if start >= urls.len() {
-                                        break;
-                                    }
-                                    let end = (start + window).min(urls.len());
-                                    for idx in start..end {
-                                        if let Some(url) = urls.get(idx) {
-                                            match fm_all.open_media_streaming_resource(url).await {
-                                                Ok(res) => {
-                                                    {
-                                                        let mut guard = cache.write().await;
-                                                        guard.insert(idx, res);
-                                                    }
-                                                    tracing::debug!(variant = vi, segment_index = idx, %url, "prefetch window filled segment");
+                        std::future::ready(tokio::spawn(async move {
+                            loop {
+                                let start = next.load(Ordering::Relaxed);
+                                if start >= urls.len() {
+                                    break;
+                                }
+                                let end = (start + window).min(urls.len());
+                                for idx in start..end {
+                                    if let Some(url) = urls.get(idx) {
+                                        match fm_all.open_media_streaming_resource(url).await {
+                                            Ok(res) => {
+                                                {
+                                                    let mut guard = cache.write().await;
+                                                    guard.insert(idx, res);
                                                 }
-                                                Err(err) => {
-                                                    tracing::warn!(variant = vi, segment_index = idx, %url, %err, "prefetch window failed");
-                                                }
+                                                tracing::debug!(variant = vi, segment_index = idx, %url, "prefetch window filled segment");
+                                            }
+                                            Err(err) => {
+                                                tracing::warn!(variant = vi, segment_index = idx, %url, %err, "prefetch window failed");
                                             }
                                         }
                                     }
-                                    if end >= urls.len() {
-                                        break;
-                                    }
-                                    sleep(Duration::from_millis(25)).await;
                                 }
-                            })
-                        }
+                                if end >= urls.len() {
+                                    break;
+                                }
+                                sleep(Duration::from_millis(25)).await;
+                            }
+                        }))
                     })
                     .await;
 
@@ -476,8 +482,7 @@ impl HlsSessionSource {
 
     /// Prefetch upcoming segments based on prefetch_buffer_size setting
     async fn prefetch_upcoming_segments(&self, state: &State, current_segment_index: usize) {
-        let fm = self.fetch_manager.clone();
-        let variant_index = state.variant_index;
+        let fm = Arc::clone(&self.fetch_manager);
 
         let Some(prefetch_size) = self.options.prefetch_buffer_size else {
             let next_index = current_segment_index + 1;
@@ -505,7 +510,7 @@ impl HlsSessionSource {
         for idx in start_index..end_index {
             if let Some(seg) = state.segments.get(idx) {
                 let url = seg.url.clone();
-                let fm = self.fetch_manager.clone();
+                let fm = Arc::clone(&self.fetch_manager);
                 let cache = self.resource_cache.clone();
                 info!(
                     segment_index = idx,
@@ -756,5 +761,47 @@ impl Source for HlsSessionSource {
         // We can only return Some(len) once initialized. `OnceCell` doesn't allow async in `len()`,
         // so return None until `ensure_state()` has been called at least once (e.g. by first read).
         self.state.get().map(|s| s.total_len)
+    }
+}
+
+pub struct HlsSession {
+    pub(crate) asset_id: AssetId,
+    pub(crate) master_url: Url,
+    pub(crate) opts: HlsOptions,
+    pub(crate) assets: AssetStore,
+    pub(crate) driver: HlsDriver,
+}
+
+impl HlsSession {
+    pub fn asset_id(&self) -> AssetId {
+        self.asset_id
+    }
+
+    pub fn stream(&self) -> Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + '_>> {
+        Box::pin(self.driver.stream())
+    }
+
+    pub fn events(&self) -> broadcast::Receiver<HlsEvent> {
+        self.driver.events()
+    }
+
+    pub async fn source(&self) -> HlsResult<HlsSessionSource> {
+        let asset_root = ResourceKey::asset_root_for_url(&self.master_url);
+        let net = HttpClient::new(NetOptions::default());
+
+        let fetch_manager = Arc::new(FetchManager::new(
+            asset_root.clone(),
+            self.assets.clone(),
+            net,
+        ));
+        let playlist_manager =
+            PlaylistManager::new(Arc::clone(&fetch_manager), self.opts.base_url.clone());
+
+        Ok(HlsSessionSource::new(
+            self.master_url.clone(),
+            self.opts.clone(),
+            playlist_manager,
+            fetch_manager,
+        ))
     }
 }

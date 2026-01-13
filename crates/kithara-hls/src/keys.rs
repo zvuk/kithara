@@ -1,12 +1,17 @@
 use std::{collections::HashMap, sync::Arc};
 
+use aes::Aes128;
 use bytes::Bytes;
-use kithara_assets::ResourceKey;
+use cbc::{
+    Decryptor,
+    cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7},
+};
+use kithara_assets::AssetsError;
 use kithara_net::Headers;
 use thiserror::Error;
 use url::Url;
 
-use crate::{HlsResult, KeyContext, fetch::FetchManager};
+use crate::{HlsError, HlsResult, KeyContext, fetch::FetchManager};
 
 #[derive(Debug, Error)]
 pub enum KeyError {
@@ -14,7 +19,7 @@ pub enum KeyError {
     Net(#[from] kithara_net::NetError),
 
     #[error("Assets error: {0}")]
-    Assets(#[from] kithara_assets::AssetsError),
+    Assets(#[from] AssetsError),
 
     #[error("Key processing failed: {0}")]
     Processing(String),
@@ -28,8 +33,7 @@ pub enum KeyError {
 
 #[derive(Clone)]
 pub struct KeyManager {
-    asset_root: String,
-    fetch: FetchManager,
+    fetch: Arc<FetchManager>,
     key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
     key_query_params: Option<HashMap<String, String>>,
     key_request_headers: Option<HashMap<String, String>>,
@@ -37,14 +41,12 @@ pub struct KeyManager {
 
 impl KeyManager {
     pub fn new(
-        asset_root: String,
-        fetch: FetchManager,
+        fetch: Arc<FetchManager>,
         key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
         key_query_params: Option<HashMap<String, String>>,
         key_request_headers: Option<HashMap<String, String>>,
     ) -> Self {
         Self {
-            asset_root,
             fetch,
             key_processor,
             key_query_params,
@@ -52,7 +54,7 @@ impl KeyManager {
         }
     }
 
-    pub async fn get_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
+    pub async fn get_raw_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
         let mut fetch_url = url.clone();
 
         if let Some(ref params) = self.key_query_params {
@@ -64,15 +66,49 @@ impl KeyManager {
 
         let headers: Option<Headers> = self.key_request_headers.clone().map(Headers::from);
 
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &fetch_url);
-        let rel_path: String = key.rel_path().to_owned();
-        let raw_key = self
-            .fetch
+        let rel_path = Self::rel_path_from_url(&fetch_url);
+        let raw_key = Arc::clone(&self.fetch)
             .fetch_key_atomic(&fetch_url, rel_path.as_str(), headers)
             .await?;
 
         let processed_key = self.process_key(raw_key, fetch_url, iv)?;
         Ok(processed_key)
+    }
+
+    pub async fn decrypt(
+        &self,
+        url: &Url,
+        iv: Option<[u8; 16]>,
+        ciphertext: Bytes,
+    ) -> HlsResult<Bytes> {
+        let iv = iv.unwrap_or([0u8; 16]);
+        let key = self.get_raw_key(url, Some(iv)).await?;
+        if key.len() != 16 {
+            return Err(HlsError::KeyProcessing(format!(
+                "invalid AES-128 key length: {}",
+                key.len()
+            )));
+        }
+
+        let mut buf = ciphertext.to_vec();
+        let decryptor = Decryptor::<Aes128>::new((&key[..16]).into(), (&iv).into());
+        let plain = decryptor
+            .decrypt_padded_mut::<Pkcs7>(&mut buf)
+            .map_err(|e| HlsError::KeyProcessing(format!("AES-128 decrypt failed: {e}")))?;
+        Ok(Bytes::copy_from_slice(plain))
+    }
+
+    fn rel_path_from_url(url: &Url) -> String {
+        let last = url
+            .path_segments()
+            .and_then(|mut segments| segments.next_back())
+            .unwrap_or("index");
+        if let Some((stem, _)) = last.rsplit_once('.')
+            && !stem.is_empty()
+        {
+            return stem.to_string();
+        }
+        last.to_string()
     }
 
     fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
@@ -84,6 +120,4 @@ impl KeyManager {
             Ok(key)
         }
     }
-
-    // NOTE: Old cache path logic removed while the new resource-based assets API is being wired in.
 }

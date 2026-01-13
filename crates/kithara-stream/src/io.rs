@@ -41,6 +41,13 @@ pub trait Source: Send + Sync + 'static {
     /// - `None` means length is unknown (still seekable via absolute positions, but
     ///   seeking relative to end is unsupported).
     fn len(&self) -> Option<u64>;
+
+    /// Return true if length is known to be zero.
+    ///
+    /// Default implementation derives from `len()`.
+    fn is_empty(&self) -> Option<bool> {
+        self.len().map(|len| len == 0)
+    }
 }
 
 enum WorkerReq<S>
@@ -184,7 +191,7 @@ where
                     err = %e,
                     "Reader::read wait_and_read_at returned error"
                 );
-                std::io::Error::new(std::io::ErrorKind::Other, e.to_string())
+                std::io::Error::other(e.to_string())
             })?;
         let recv_duration = recv_start.elapsed();
         info!(
@@ -263,14 +270,14 @@ where
 
         // If we know length, disallow seeking past EOF to match typical `Read+Seek` expectations
         // for decoders that probe file structure.
-        if let Some(len) = self.source.len() {
-            if new_pos_u64 > len {
-                debug!(new_pos_u64, len, "Reader::seek invalid (past EOF)");
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    StreamError::<S::Error>::InvalidSeek.to_string(),
-                ));
-            }
+        if let Some(len) = self.source.len()
+            && new_pos_u64 > len
+        {
+            debug!(new_pos_u64, len, "Reader::seek invalid (past EOF)");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                StreamError::<S::Error>::InvalidSeek.to_string(),
+            ));
         }
 
         self.pos = new_pos_u64;

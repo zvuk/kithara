@@ -9,12 +9,12 @@ use url::Url;
 
 use crate::{
     HlsError, HlsOptions, HlsResult,
-    abr::{AbrConfig, AbrController, AbrReason},
+    abr::{AbrConfig, AbrController},
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
     keys::KeyManager,
     pipeline::{
-        BaseStream, DrmStream, PipelineError, PipelineEvent, PrefetchStream, SegmentStream,
+        BaseStream, DrmStream, PipelineError, PipelineEvent, PipelineStream, PrefetchStream,
     },
     playlist::PlaylistManager,
 };
@@ -40,16 +40,16 @@ impl HlsDriver {
         master_url: Url,
         options: HlsOptions,
         playlist_manager: PlaylistManager,
-        fetch_manager: FetchManager,
-        key_manager: KeyManager,
+        fetch_manager: Arc<FetchManager>,
+        key_manager: Arc<KeyManager>,
         event_emitter: EventEmitter,
     ) -> Self {
         Self {
             options,
             master_url,
             playlist_manager: Arc::new(playlist_manager),
-            fetch_manager: Arc::new(fetch_manager),
-            key_manager: Arc::new(key_manager),
+            fetch_manager,
+            key_manager: Arc::clone(&key_manager),
             event_emitter: Arc::new(event_emitter),
             cancel: CancellationToken::new(),
         }
@@ -82,21 +82,14 @@ impl HlsDriver {
                 AbrController::new(abr_config, opts.variant_stream_selector.clone());
 
             // 3) Базовый слой сам загружает мастер и медиаплейлисты.
-            let base = match BaseStream::build(
-                master_url.clone(),
+            let base_master_url = master_url.clone();
+            let base = BaseStream::new(
+                base_master_url,
                 fetch_manager.clone(),
                 playlist_manager.clone(),
                 abr_controller.clone(),
                 cancel.clone(),
-            )
-            .await
-            {
-                Ok(base) => base,
-                Err(e) => {
-                    yield Err(e);
-                    return;
-                }
-            };
+            );
             let drm_layer = DrmStream::new(
                 base,
                 Some(Arc::clone(&key_manager)),

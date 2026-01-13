@@ -68,6 +68,7 @@ impl AudioTestServer {
     }
 
     /// Get the base URL of the server
+    #[allow(dead_code)]
     pub fn base_url(&self) -> &str {
         &self.base_url
     }

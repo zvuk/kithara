@@ -11,5 +11,5 @@ pub use base::BaseStream;
 pub use drm::DrmStream;
 pub use prefetch::PrefetchStream;
 pub use types::{
-    PipelineError, PipelineEvent, PipelineResult, SegmentMeta, SegmentPayload, SegmentStream,
+    PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta, SegmentPayload,
 };

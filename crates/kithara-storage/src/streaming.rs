@@ -30,8 +30,11 @@ pub struct DiskOptions {
     /// owning session is cancelled/dropped.
     pub cancel: CancellationToken,
 
-    /// Optional initial length hint. If set, the file may be truncated/extended to this size.
-    /// This is a *hint*, not a hard contract; callers may later `commit(Some(final_len))`.
+    /// Optional initial length hint.
+    ///
+    /// - `Some(len)`: best-effort truncate/extend to `len` before writes.
+    /// - `None`: if the file already exists, its current length is treated as available data
+    ///   (not sealed); nothing is truncated.
     pub initial_len: Option<u64>,
 }
 
@@ -78,6 +81,10 @@ impl fmt::Debug for StreamingResource {
 impl StreamingResource {
     /// Open or create a disk-backed streaming resource.
     ///
+    /// - If `initial_len` is `Some`, the file is truncated/extended accordingly.
+    /// - If `initial_len` is `None` and the file exists, existing bytes are published as available
+    ///   (resource remains unsealed) and nothing is truncated.
+    ///
     /// This does not imply the resource is ready. Callers should write ranges and then `commit`.
     pub async fn open_disk(opts: DiskOptions) -> StorageResult<Self> {
         // Storage-layer responsibility: ensure parent directories exist.
@@ -85,18 +92,26 @@ impl StreamingResource {
             tokio::fs::create_dir_all(parent).await?;
         }
 
+        let existing_len = tokio::fs::metadata(&opts.path).await.ok().map(|m| m.len());
+
         let mut disk = RandomAccessDisk::open(opts.path.clone()).await?;
         if let Some(len) = opts.initial_len {
             // Best-effort sizing. Some backends may create sparse files; that's fine.
             disk.truncate(len).await?;
         }
 
+        let state = match (opts.initial_len, existing_len) {
+            (Some(len), _) => State::with_initial_len(Some(len)),
+            (None, Some(len)) if len > 0 => State::with_available_len(len),
+            _ => State::new(),
+        };
+
         Ok(Self {
             inner: Arc::new(Inner {
                 path: opts.path,
                 cancel: opts.cancel,
                 disk: Mutex::new(disk),
-                state: RwLock::new(State::with_initial_len(opts.initial_len)),
+                state: RwLock::new(state),
                 notify: Notify::new(),
             }),
         })
@@ -297,7 +312,6 @@ impl StreamingResourceExt for StreamingResource {
         };
 
         let len = len.get();
-
         let Some(clamped) = self.clamp_len_to_eof(offset, len).await? else {
             return self.read_exact_len(offset, len).await;
         };
@@ -318,13 +332,12 @@ impl StreamingResourceExt for StreamingResource {
             return Ok(());
         }
 
-        let end =
-            offset
-                .checked_add(data.len() as u64)
-                .ok_or_else(|| StorageError::InvalidRange {
-                    start: offset,
-                    end: offset,
-                })?;
+        let end = offset
+            .checked_add(data.len() as u64)
+            .ok_or(StorageError::InvalidRange {
+                start: offset,
+                end: offset,
+            })?;
 
         // Stash range locally to only publish it after successful disk write.
         let pending_range = offset..end;
@@ -347,9 +360,7 @@ impl StreamingResourceExt for StreamingResource {
             disk.write(offset, data).await.map_err(Into::into)
         };
 
-        if let Err(err) = write_result {
-            return Err(err);
-        }
+        write_result?;
 
         // Add the range to available after successful disk write
         {
@@ -402,6 +413,22 @@ impl State {
                 }
             }
             _ => Self::new(),
+        }
+    }
+
+    fn with_available_len(len: u64) -> Self {
+        if len == 0 {
+            return Self::new();
+        }
+
+        let mut available = RangeSet::new();
+        available.insert(0..len);
+
+        Self {
+            available,
+            sealed: false,
+            final_len: None,
+            failed: None,
         }
     }
 

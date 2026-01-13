@@ -399,13 +399,10 @@ async fn seek_to_end_of_stream_returns_none(#[case] data_len: usize) {
     // in the stream buffer. We'll read until we get None.
     let mut got_some_data = false;
     while let Some(result) = stream.next().await {
-        match result {
-            Ok(StreamMsg::Data(bytes)) => {
-                if !bytes.is_empty() {
-                    got_some_data = true;
-                }
-            }
-            _ => {}
+        if let Ok(StreamMsg::Data(bytes)) = result
+            && !bytes.is_empty()
+        {
+            got_some_data = true;
         }
     }
 
@@ -527,7 +524,7 @@ async fn engine_handle_remains_valid_after_stream_drop(#[case] data: Vec<u8>) {
 
     // Either ChannelClosed (engine stopped) or Ok (engine still running) is acceptable
     match seek_result {
-        Ok(_) | Err(StreamError::ChannelClosed) => {}
+        Ok(()) | Err(StreamError::ChannelClosed) => {}
         Err(e) => panic!("Unexpected error: {:?}", e),
     }
 }

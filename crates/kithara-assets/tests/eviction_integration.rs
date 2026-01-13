@@ -79,20 +79,20 @@ async fn eviction_max_assets_skips_pinned_assets(
         if i == create_count - 1 {
             let res_b = res;
             // Sanity: pins file should contain last asset while handle is alive.
-            if let Ok(pins_json) = std::fs::read_to_string(dir.join("_index/pins.json")) {
-                if let Ok(pins_val) = serde_json::from_str::<serde_json::Value>(&pins_json) {
-                    let pinned = pins_val
-                        .get("pinned")
-                        .and_then(|v| v.as_array())
-                        .expect("pins index must contain `pinned` array");
-                    assert!(
-                        pinned
-                            .iter()
-                            .any(|v| v.as_str() == Some(&format!("asset-{}", i))),
-                        "asset-{} must be pinned while its handle is alive",
-                        i
-                    );
-                }
+            if let Ok(pins_json) = std::fs::read_to_string(dir.join("_index/pins.json"))
+                && let Ok(pins_val) = serde_json::from_str::<serde_json::Value>(&pins_json)
+            {
+                let pinned = pins_val
+                    .get("pinned")
+                    .and_then(|v| v.as_array())
+                    .expect("pins index must contain `pinned` array");
+                assert!(
+                    pinned
+                        .iter()
+                        .any(|v| v.as_str() == Some(&format!("asset-{}", i))),
+                    "asset-{} must be pinned while its handle is alive",
+                    i
+                );
             }
 
             // Asset that should trigger eviction - this should remove oldest non-pinned assets

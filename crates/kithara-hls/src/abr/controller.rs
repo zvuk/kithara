@@ -1,4 +1,4 @@
-use std::time::Instant;
+use std::{cell::Cell, time::Instant};
 
 use super::{AbrConfig, ThroughputEstimator, ThroughputSample, Variant, VariantSelector};
 use crate::playlist::MasterPlaylist;
@@ -29,7 +29,7 @@ pub struct AbrController {
     estimator: ThroughputEstimator,
     current_variant: usize,
     previous_variant: usize,
-    last_switch_at: Option<Instant>,
+    last_switch_at: Cell<Option<Instant>>,
 }
 
 impl AbrController {
@@ -42,7 +42,7 @@ impl AbrController {
             estimator,
             current_variant: initial_variant,
             previous_variant: initial_variant,
-            last_switch_at: None,
+            last_switch_at: Cell::new(None),
         }
     }
 
@@ -83,8 +83,6 @@ impl AbrController {
             };
         }
 
-        let effective_bps = (estimate_bps as f64 / self.cfg.throughput_safety_factor).max(0.0);
-
         let current_bw = variants
             .iter()
             .find(|v| v.variant_index == current)
@@ -94,55 +92,58 @@ impl AbrController {
         let mut by_bw: Vec<Variant> = variants.to_vec();
         by_bw.sort_by_key(|v| v.bandwidth_bps);
 
-        if buffer_level_secs >= self.cfg.min_buffer_for_up_switch_secs {
-            if let Some(candidate) = by_bw
-                .iter()
-                .rev()
-                .find(|v| (v.bandwidth_bps as f64) * self.cfg.up_hysteresis_ratio <= effective_bps)
-            {
-                if candidate.bandwidth_bps > current_bw {
-                    return AbrDecision {
-                        target_variant_index: candidate.variant_index,
-                        reason: AbrReason::UpSwitch,
-                        changed: true,
-                    };
-                }
-            }
-        } else {
-            let up_candidate_exists = by_bw.iter().any(|v| {
-                (v.bandwidth_bps as f64) * self.cfg.up_hysteresis_ratio <= effective_bps
-                    && v.bandwidth_bps > current_bw
-            });
-            if up_candidate_exists {
+        // Adjust throughput by safety factor (similar to reference: adjusted = est * safety)
+        let adjusted_bps = (estimate_bps as f64 * self.cfg.throughput_safety_factor).max(0.0);
+
+        // Best candidate not exceeding adjusted throughput, otherwise lowest
+        let best_under = by_bw
+            .iter()
+            .filter(|v| (v.bandwidth_bps as f64) <= adjusted_bps)
+            .max_by_key(|v| v.bandwidth_bps);
+        let fallback = by_bw.first();
+        let candidate = best_under.or(fallback);
+
+        // If nothing to consider, stay put.
+        let Some(candidate) = candidate else {
+            return AbrDecision {
+                target_variant_index: current,
+                reason: AbrReason::AlreadyOptimal,
+                changed: false,
+            };
+        };
+
+        // Up-switch path
+        if candidate.bandwidth_bps > current_bw {
+            let buffer_ok = self.cfg.min_buffer_for_up_switch_secs <= 0.0
+                || buffer_level_secs >= self.cfg.min_buffer_for_up_switch_secs;
+            let headroom_ok =
+                adjusted_bps >= (candidate.bandwidth_bps as f64) * self.cfg.up_hysteresis_ratio;
+            if buffer_ok && headroom_ok {
+                self.last_switch_at.set(Some(now));
                 return AbrDecision {
-                    target_variant_index: current,
-                    reason: AbrReason::BufferTooLowForUpSwitch,
-                    changed: false,
+                    target_variant_index: candidate.variant_index,
+                    reason: AbrReason::UpSwitch,
+                    changed: true,
                 };
             }
+            return AbrDecision {
+                target_variant_index: current,
+                reason: AbrReason::BufferTooLowForUpSwitch,
+                changed: false,
+            };
         }
 
-        let down_switch_condition = effective_bps
-            < (current_bw as f64) * self.cfg.down_hysteresis_ratio
-            || buffer_level_secs <= self.cfg.down_switch_buffer_secs;
-
-        if down_switch_condition {
-            let candidate = by_bw
-                .iter()
-                .rev()
-                .filter(|v| v.variant_index != current)
-                .find(|v| (v.bandwidth_bps as f64) <= effective_bps)
-                .or_else(|| by_bw.first())
-                .map(|v| v.variant_index);
-
-            if let Some(target) = candidate {
-                if target != current {
-                    return AbrDecision {
-                        target_variant_index: target,
-                        reason: AbrReason::DownSwitch,
-                        changed: true,
-                    };
-                }
+        // Down-switch path
+        if candidate.bandwidth_bps < current_bw {
+            let urgent_down = buffer_level_secs <= self.cfg.down_switch_buffer_secs;
+            let margin_ok = adjusted_bps <= (current_bw as f64) * self.cfg.down_hysteresis_ratio;
+            if urgent_down || margin_ok {
+                self.last_switch_at.set(Some(now));
+                return AbrDecision {
+                    target_variant_index: candidate.variant_index,
+                    reason: AbrReason::DownSwitch,
+                    changed: true,
+                };
             }
         }
 
@@ -160,14 +161,14 @@ impl AbrController {
         buffer_level_secs: f64,
         now: Instant,
     ) -> AbrDecision {
-        if let Some(selector) = self.variant_selector.as_ref() {
-            if let Some(manual) = selector(master_playlist) {
-                return AbrDecision {
-                    target_variant_index: manual,
-                    reason: AbrReason::ManualOverride,
-                    changed: manual != self.current_variant,
-                };
-            }
+        if let Some(selector) = self.variant_selector.as_ref()
+            && let Some(manual) = selector(master_playlist)
+        {
+            return AbrDecision {
+                target_variant_index: manual,
+                reason: AbrReason::ManualOverride,
+                changed: manual != self.current_variant,
+            };
         }
 
         self.decide(variants, buffer_level_secs, now)
@@ -179,11 +180,12 @@ impl AbrController {
         }
         self.previous_variant = self.current_variant;
         self.current_variant = decision.target_variant_index;
-        self.last_switch_at = Some(now);
+        self.last_switch_at.set(Some(now));
     }
 
     fn can_switch_now(&self, now: Instant) -> bool {
         self.last_switch_at
+            .get()
             .map(|t| now.duration_since(t) >= self.cfg.min_switch_interval)
             .unwrap_or(true)
     }
@@ -214,12 +216,14 @@ mod tests {
 
     #[test]
     fn downswitch_on_low_throughput() {
-        let mut cfg = AbrConfig::default();
-        cfg.throughput_safety_factor = 1.5;
-        cfg.min_buffer_for_up_switch_secs = 0.0;
-        cfg.down_switch_buffer_secs = 0.0;
-        cfg.min_switch_interval = Duration::ZERO;
-        cfg.initial_variant_index = Some(2);
+        let cfg = AbrConfig {
+            throughput_safety_factor: 1.5,
+            min_buffer_for_up_switch_secs: 0.0,
+            down_switch_buffer_secs: 0.0,
+            min_switch_interval: Duration::ZERO,
+            initial_variant_index: Some(2),
+            ..AbrConfig::default()
+        };
 
         let mut c = AbrController::new(cfg, None);
         let now = Instant::now();
@@ -238,12 +242,14 @@ mod tests {
 
     #[test]
     fn upswitch_requires_buffer_and_hysteresis() {
-        let mut cfg = AbrConfig::default();
-        cfg.min_buffer_for_up_switch_secs = 10.0;
-        cfg.throughput_safety_factor = 1.5;
-        cfg.up_hysteresis_ratio = 1.3;
-        cfg.min_switch_interval = Duration::ZERO;
-        cfg.initial_variant_index = Some(0);
+        let cfg = AbrConfig {
+            min_buffer_for_up_switch_secs: 10.0,
+            throughput_safety_factor: 1.5,
+            up_hysteresis_ratio: 1.3,
+            min_switch_interval: Duration::ZERO,
+            initial_variant_index: Some(0),
+            ..AbrConfig::default()
+        };
 
         let mut c = AbrController::new(cfg, None);
         let now = Instant::now();
@@ -266,11 +272,13 @@ mod tests {
 
     #[test]
     fn min_switch_interval_prevents_oscillation() {
-        let mut cfg = AbrConfig::default();
-        cfg.min_switch_interval = Duration::from_secs(30);
-        cfg.min_buffer_for_up_switch_secs = 0.0;
-        cfg.down_switch_buffer_secs = 0.0;
-        cfg.initial_variant_index = Some(1);
+        let cfg = AbrConfig {
+            min_switch_interval: Duration::from_secs(30),
+            min_buffer_for_up_switch_secs: 0.0,
+            down_switch_buffer_secs: 0.0,
+            initial_variant_index: Some(1),
+            ..AbrConfig::default()
+        };
 
         let mut c = AbrController::new(cfg, None);
         let now = Instant::now();
@@ -281,12 +289,76 @@ mod tests {
             source: super::super::ThroughputSampleSource::Network,
         });
 
-        let d = c.decide(&variants(), 20.0, now);
-        assert!(d.changed);
-        c.apply(&d, now);
+        let d1 = c.decide(&variants(), 10.0, now);
+        assert_eq!(d1.target_variant_index, 2);
+        assert!(d1.changed);
 
-        let suppressed = c.decide(&variants(), 20.0, now + Duration::from_secs(1));
-        assert!(!suppressed.changed);
-        assert_eq!(suppressed.reason, AbrReason::MinInterval);
+        let d2 = c.decide(&variants(), 10.0, now);
+        assert_eq!(d2.target_variant_index, 1);
+        assert!(!d2.changed);
+        assert_eq!(d2.reason, AbrReason::MinInterval);
+    }
+
+    #[test]
+    fn aggressive_up_switch_without_interval() {
+        let cfg = AbrConfig {
+            min_switch_interval: Duration::ZERO,
+            min_buffer_for_up_switch_secs: 0.0,
+            down_switch_buffer_secs: 0.0,
+            initial_variant_index: Some(0),
+            ..AbrConfig::default()
+        };
+
+        let mut c = AbrController::new(cfg, None);
+        let now = Instant::now();
+        c.push_throughput_sample(ThroughputSample {
+            bytes: 2_000_000 / 8,
+            duration: Duration::from_secs(1),
+            at: now,
+            source: super::super::ThroughputSampleSource::Network,
+        });
+
+        let d = c.decide(&variants(), 0.0, now);
+        assert_eq!(d.target_variant_index, 2);
+        assert!(d.changed);
+        assert_eq!(d.reason, AbrReason::UpSwitch);
+    }
+
+    #[test]
+    fn down_switch_when_buffer_low() {
+        let cfg = AbrConfig {
+            min_switch_interval: Duration::ZERO,
+            initial_variant_index: Some(2),
+            ..AbrConfig::default()
+        };
+
+        let mut c = AbrController::new(cfg, None);
+        let now = Instant::now();
+        c.push_throughput_sample(ThroughputSample {
+            bytes: 30_000,
+            duration: Duration::from_secs(1),
+            at: now,
+            source: super::super::ThroughputSampleSource::Network,
+        });
+
+        let d = c.decide(&variants(), 0.1, now);
+        assert_eq!(d.target_variant_index, 0);
+        assert!(d.changed);
+        assert_eq!(d.reason, AbrReason::DownSwitch);
+    }
+
+    #[test]
+    fn no_change_without_estimate() {
+        let cfg = AbrConfig {
+            initial_variant_index: Some(1),
+            ..AbrConfig::default()
+        };
+        let c = AbrController::new(cfg, None);
+        let now = Instant::now();
+
+        let d = c.decide(&variants(), 5.0, now);
+        assert_eq!(d.target_variant_index, 1);
+        assert!(!d.changed);
+        assert_eq!(d.reason, AbrReason::NoEstimate);
     }
 }
