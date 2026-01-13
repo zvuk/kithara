@@ -58,7 +58,7 @@ kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
-serial_test = "3.0.0"
+serial_test = "3.3.1"
 
 # async/runtime
 tokio = { version = "1.49.0", features = ["full"] }
@@ -102,7 +102,7 @@ aes = "0.8.4"
 cbc = "0.1.2"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10.9"
-tower = "0.5.2"
+tower = "0.5.3"
 tempfile = "3.24.0"
 
 # async traits
