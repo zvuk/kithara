@@ -5,12 +5,13 @@ use std::time::Duration;
 use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::{AssetId, AssetStore, EvictConfig};
+use kithara_assets::{AssetId, AssetStore, AssetStoreBuilder, EvictConfig};
 use kithara_file::{DriverError, FileError, FileSource, FileSourceOptions, SourceError};
 use kithara_storage::StreamingResourceExt;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 
 // ==================== Test Server Fixtures ====================
 
@@ -106,7 +107,11 @@ fn opts_large_buffer() -> FileSourceOptions {
 #[fixture]
 async fn temp_assets() -> AssetStore {
     let temp_dir = TempDir::new().unwrap();
-    AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default())
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path().to_path_buf())
+        .evict_config(EvictConfig::default())
+        .cancel(CancellationToken::new())
+        .build()
 }
 
 #[fixture]
@@ -116,7 +121,11 @@ async fn temp_assets_with_small_limit() -> AssetStore {
         max_bytes: Some(1024), // Small limit for testing eviction
         ..Default::default()
     };
-    AssetStore::with_root_dir(temp_dir.path().to_path_buf(), config)
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path().to_path_buf())
+        .evict_config(config)
+        .cancel(CancellationToken::new())
+        .build()
 }
 
 // ==================== Test Server Fixtures ====================

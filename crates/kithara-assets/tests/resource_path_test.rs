@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use kithara_assets::{AssetStore, Assets, EvictConfig, ResourceKey};
+use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
 use kithara_storage::{Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
@@ -21,14 +21,15 @@ fn cancel_token() -> CancellationToken {
 }
 
 #[fixture]
-fn asset_store(temp_dir: TempDir) -> AssetStore {
-    AssetStore::with_root_dir(
-        temp_dir.path(),
-        EvictConfig {
+fn asset_store(temp_dir: TempDir, cancel_token: CancellationToken) -> AssetStore {
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path())
+        .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
-        },
-    )
+        })
+        .cancel(cancel_token.clone())
+        .build()
 }
 
 // === AssetResource Path Tests ===

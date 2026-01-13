@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
+use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey};
 use kithara_storage::Resource;
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
@@ -30,14 +30,18 @@ fn temp_dir() -> tempfile::TempDir {
 }
 
 #[fixture]
-fn asset_store_with_max_2_assets(temp_dir: tempfile::TempDir) -> AssetStore {
-    AssetStore::with_root_dir(
-        temp_dir.path(),
-        EvictConfig {
+fn asset_store_with_max_2_assets(
+    temp_dir: tempfile::TempDir,
+    cancel_token: CancellationToken,
+) -> AssetStore {
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path())
+        .evict_config(EvictConfig {
             max_assets: Some(2),
             max_bytes: None,
-        },
-    )
+        })
+        .cancel(cancel_token.clone())
+        .build()
 }
 
 #[rstest]
@@ -54,13 +58,14 @@ async fn eviction_max_assets_skips_pinned_assets(
 ) {
     let dir = temp_dir.path();
     let cancel = cancel_token;
-    let store = AssetStore::with_root_dir(
-        temp_dir.path(),
-        EvictConfig {
+    let store = AssetStoreBuilder::new()
+        .root_dir(temp_dir.path())
+        .evict_config(EvictConfig {
             max_assets: Some(max_assets),
             max_bytes: None,
-        },
-    );
+        })
+        .cancel(cancel.clone())
+        .build();
 
     // Create more assets than the limit, keep the last one pinned
     for i in 0..create_count {
@@ -147,13 +152,14 @@ async fn eviction_ignores_missing_index(
     let dir = temp_dir.path();
     let cancel = cancel_token;
 
-    let store = AssetStore::with_root_dir(
-        dir,
-        EvictConfig {
+    let store = AssetStoreBuilder::new()
+        .root_dir(dir)
+        .evict_config(EvictConfig {
             max_assets: Some(2),
             max_bytes: None,
-        },
-    );
+        })
+        .cancel(cancel.clone())
+        .build();
 
     // Create assets without proper LRU tracking (simulate missing/corrupted index)
     for i in 0..asset_count {
@@ -195,13 +201,14 @@ async fn eviction_with_zero_byte_assets(
     let dir = temp_dir.path();
     let cancel = cancel_token;
 
-    let store = AssetStore::with_root_dir(
-        dir,
-        EvictConfig {
+    let store = AssetStoreBuilder::new()
+        .root_dir(dir)
+        .evict_config(EvictConfig {
             max_assets: Some(2),
             max_bytes: None,
-        },
-    );
+        })
+        .cancel(cancel.clone())
+        .build();
 
     // Create assets with zero bytes
     for i in 0..3 {
@@ -253,13 +260,14 @@ async fn eviction_respects_max_assets_limit(
     let dir = temp_dir.path();
     let cancel = cancel_token;
 
-    let store = AssetStore::with_root_dir(
-        dir,
-        EvictConfig {
+    let store = AssetStoreBuilder::new()
+        .root_dir(dir)
+        .evict_config(EvictConfig {
             max_assets: Some(max_assets),
             max_bytes: None,
-        },
-    );
+        })
+        .cancel(cancel.clone())
+        .build();
 
     // Create more assets than the limit
     let mut pinned_handles = Vec::new();

@@ -2,11 +2,12 @@
 
 use std::{error::Error, sync::Arc, time::Duration};
 
-use kithara_assets::{AssetStore, EvictConfig};
+use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig};
 use kithara_hls::{HlsOptions, HlsSource};
 use kithara_stream::SyncReader;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -19,8 +20,17 @@ fn temp_dir() -> TempDir {
 }
 
 #[fixture]
-fn assets(temp_dir: TempDir) -> AssetStore {
-    AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default())
+fn cancel_token() -> CancellationToken {
+    CancellationToken::new()
+}
+
+#[fixture]
+fn assets(temp_dir: TempDir, cancel_token: CancellationToken) -> AssetStore {
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path().to_path_buf())
+        .evict_config(EvictConfig::default())
+        .cancel(cancel_token)
+        .build()
 }
 
 #[fixture]
@@ -259,13 +269,14 @@ async fn test_hls_without_cache(
         .try_init();
 
     // Create assets store with very small cache to simulate limited caching
-    let limited_assets = AssetStore::with_root_dir(
-        temp_dir.path().to_path_buf(),
-        EvictConfig {
+    let limited_assets = AssetStoreBuilder::new()
+        .root_dir(temp_dir.path().to_path_buf())
+        .evict_config(EvictConfig {
             max_assets: Some(1),
             max_bytes: Some(1024), // 1KB cache
-        },
-    );
+        })
+        .cancel(CancellationToken::new())
+        .build();
 
     info!("Testing HLS with limited cache");
 

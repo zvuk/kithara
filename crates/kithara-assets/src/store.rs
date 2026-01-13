@@ -6,7 +6,9 @@ use std::{
 };
 
 use async_trait::async_trait;
+use dashmap::DashMap;
 use kithara_storage::{AtomicOptions, AtomicResource, DiskOptions, StreamingResource};
+use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -32,6 +34,8 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct DiskAssetStore {
     root_dir: PathBuf,
+    master_cancel: CancellationToken,
+    map: DashMap<CacheKey, Arc<ResourceEntry>>,
 }
 
 /// Ready-to-use assets store: `DiskAssetStore` composed with eviction + pin/lease.
@@ -47,19 +51,95 @@ pub type AssetStore = LeaseAssets<EvictAssets<DiskAssetStore>>;
 /// - `EvictAssets` is applied before `LeaseAssets` so eviction is evaluated at "asset creation time"
 ///   without being affected by the new handle's pin.
 /// - `LeaseAssets` provides RAII pinning for opened resources.
-impl AssetStore {
-    pub fn with_root_dir(root_dir: impl Into<PathBuf>, cfg: EvictConfig) -> Self {
-        let base = Arc::new(DiskAssetStore::new(root_dir));
-        let evict = Arc::new(EvictAssets::new(base, cfg));
-        Self::new(evict)
+#[derive(Default)]
+pub struct AssetStoreBuilder {
+    root_dir: Option<PathBuf>,
+    evict_config: Option<EvictConfig>,
+    cancel: Option<CancellationToken>,
+}
+
+impl AssetStoreBuilder {
+    /// Builder with defaults (no root_dir/evict/cancel set).
+    pub fn new() -> Self {
+        Self {
+            root_dir: None,
+            evict_config: None,
+            cancel: None,
+        }
     }
+
+    pub fn evict_config(mut self, cfg: EvictConfig) -> Self {
+        self.evict_config = Some(cfg);
+        self
+    }
+
+    pub fn cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    pub fn root_dir(mut self, root: impl Into<PathBuf>) -> Self {
+        self.root_dir = Some(root.into());
+        self
+    }
+
+    pub fn build(self) -> AssetStore {
+        #[allow(deprecated)]
+        let root_dir = self.root_dir.unwrap_or_else(|| {
+            tempdir()
+                .expect("failed to create AssetStore temp dir")
+                .into_path()
+        });
+        let evict_cfg = self.evict_config.unwrap_or_else(EvictConfig::default);
+        let cancel = self.cancel.unwrap_or_else(CancellationToken::new);
+
+        let base = Arc::new(DiskAssetStore::new(root_dir, cancel));
+        let evict = Arc::new(EvictAssets::new(base, evict_cfg));
+        AssetStore::new(evict)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+enum ResourceKind {
+    Streaming,
+    Atomic,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+struct CacheKey {
+    key: ResourceKey,
+    kind: ResourceKind,
+}
+
+impl CacheKey {
+    fn streaming(key: &ResourceKey) -> Self {
+        Self {
+            key: key.clone(),
+            kind: ResourceKind::Streaming,
+        }
+    }
+
+    fn atomic(key: &ResourceKey) -> Self {
+        Self {
+            key: key.clone(),
+            kind: ResourceKind::Atomic,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum ResourceEntry {
+    Streaming(StreamingResource),
+    Atomic(AtomicResource),
 }
 
 impl DiskAssetStore {
     /// Create a store rooted at `root_dir`.
-    pub fn new(root_dir: impl Into<PathBuf>) -> Self {
+    pub fn new(root_dir: impl Into<PathBuf>, cancel: CancellationToken) -> Self {
         Self {
             root_dir: root_dir.into(),
+            master_cancel: cancel,
+            map: DashMap::new(),
         }
     }
 
@@ -102,8 +182,34 @@ impl Assets for DiskAssetStore {
         key: &ResourceKey,
         cancel: CancellationToken,
     ) -> AssetsResult<AtomicResource> {
+        let _ = cancel;
+        let cache_key = CacheKey::atomic(key);
+
+        if let Some(entry) = self.map.get(&cache_key) {
+            if let ResourceEntry::Atomic(existing) = entry.value().as_ref() {
+                return Ok(existing.clone());
+            }
+        }
+
         let path = self.resource_path(key)?;
-        Ok(AtomicResource::open(AtomicOptions { path, cancel }))
+        let res = AtomicResource::open(AtomicOptions {
+            path,
+            cancel: self.master_cancel.clone(),
+        });
+
+        match self.map.entry(cache_key) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => match entry.get().as_ref() {
+                ResourceEntry::Atomic(existing) => Ok(existing.clone()),
+                ResourceEntry::Streaming(_) => {
+                    entry.insert(Arc::new(ResourceEntry::Atomic(res.clone())));
+                    Ok(res)
+                }
+            },
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                entry.insert(Arc::new(ResourceEntry::Atomic(res.clone())));
+                Ok(res)
+            }
+        }
     }
 
     async fn open_streaming_resource(
@@ -111,14 +217,36 @@ impl Assets for DiskAssetStore {
         key: &ResourceKey,
         cancel: CancellationToken,
     ) -> AssetsResult<StreamingResource> {
+        let _ = cancel;
+        let cache_key = CacheKey::streaming(key);
+
+        if let Some(entry) = self.map.get(&cache_key) {
+            if let ResourceEntry::Streaming(existing) = entry.value().as_ref() {
+                return Ok(existing.clone());
+            }
+        }
+
         let path = self.resource_path(key)?;
         let res = StreamingResource::open_disk(DiskOptions {
             path,
-            cancel,
+            cancel: self.master_cancel.clone(),
             initial_len: None,
         })
         .await?;
-        Ok(res)
+
+        match self.map.entry(cache_key) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => match entry.get().as_ref() {
+                ResourceEntry::Streaming(existing) => Ok(existing.clone()),
+                ResourceEntry::Atomic(_) => {
+                    entry.insert(Arc::new(ResourceEntry::Streaming(res.clone())));
+                    Ok(res)
+                }
+            },
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                entry.insert(Arc::new(ResourceEntry::Streaming(res.clone())));
+                Ok(res)
+            }
+        }
     }
 
     async fn open_pins_index_resource(
@@ -135,6 +263,9 @@ impl Assets for DiskAssetStore {
         }
 
         let path = self.asset_root_path(asset_root)?;
+
+        // Clean cache entries for this asset_root.
+        self.map.retain(|k, _| k.key.asset_root() != asset_root);
 
         // Best-effort: if the directory doesn't exist, treat as already deleted.
         match tokio::fs::remove_dir_all(&path).await {

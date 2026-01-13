@@ -2,7 +2,7 @@
 
 use std::{collections::HashSet, time::Duration};
 
-use kithara_assets::{AssetStore, DiskAssetStore, EvictConfig, PinsIndex};
+use kithara_assets::{AssetStore, AssetStoreBuilder, DiskAssetStore, EvictConfig, PinsIndex};
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
 
@@ -21,19 +21,26 @@ fn temp_dir() -> tempfile::TempDir {
 }
 
 #[fixture]
-fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
-    AssetStore::with_root_dir(
-        temp_dir.path(),
-        EvictConfig {
+fn asset_store_no_limits(
+    temp_dir: tempfile::TempDir,
+    cancel_token: CancellationToken,
+) -> AssetStore {
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path())
+        .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
-        },
-    )
+        })
+        .cancel(cancel_token.clone())
+        .build()
 }
 
 #[fixture]
-fn disk_asset_store(temp_dir: tempfile::TempDir) -> DiskAssetStore {
-    DiskAssetStore::new(temp_dir.path())
+fn disk_asset_store(
+    temp_dir: tempfile::TempDir,
+    cancel_token: CancellationToken,
+) -> DiskAssetStore {
+    DiskAssetStore::new(temp_dir.path(), cancel_token.clone())
 }
 
 #[rstest]
@@ -230,10 +237,10 @@ async fn pins_index_persists_across_store_instances(
     temp_dir: tempfile::TempDir,
 ) {
     let dir = temp_dir.path();
-    let cancel = cancel_token;
+    let cancel = cancel_token.clone();
 
     // Create first store and write pins
-    let base1 = DiskAssetStore::new(dir);
+    let base1 = DiskAssetStore::new(dir, cancel_token.clone());
     let idx1 = PinsIndex::open(&base1, cancel.clone()).await.unwrap();
 
     let mut pins = HashSet::new();
@@ -243,7 +250,7 @@ async fn pins_index_persists_across_store_instances(
     idx1.store(&pins).await.unwrap();
 
     // Create completely new store instance (simulating restart)
-    let base2 = DiskAssetStore::new(dir);
+    let base2 = DiskAssetStore::new(dir, cancel_token);
     let idx2 = PinsIndex::open(&base2, CancellationToken::new())
         .await
         .unwrap();

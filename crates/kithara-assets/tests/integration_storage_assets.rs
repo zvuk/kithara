@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
+use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey};
 use kithara_storage::{Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
@@ -39,14 +39,18 @@ fn temp_dir() -> tempfile::TempDir {
 }
 
 #[fixture]
-fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
-    AssetStore::with_root_dir(
-        temp_dir.path(),
-        EvictConfig {
+fn asset_store_no_limits(
+    temp_dir: tempfile::TempDir,
+    cancel_token: CancellationToken,
+) -> AssetStore {
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path())
+        .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
-        },
-    )
+        })
+        .cancel(cancel_token.clone())
+        .build()
 }
 
 #[rstest]
@@ -217,6 +221,57 @@ async fn mixed_resource_persistence_across_reopen(
         .unwrap();
     let streaming_read = streaming.read_at(0, streaming_payload.len()).await.unwrap();
     assert_eq!(streaming_read, streaming_payload);
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn streaming_resource_concurrent_write_and_read_across_handles(
+    cancel_token: CancellationToken,
+    asset_store_no_limits: AssetStore,
+) {
+    let cancel = cancel_token;
+    let store = asset_store_no_limits;
+
+    let key = ResourceKey::new(
+        "concurrent-asset".to_string(),
+        "media/concurrent.bin".to_string(),
+    );
+    let payload = Bytes::from_static(b"concurrent streaming data");
+    let payload_len = payload.len() as u64;
+
+    let store_reader = store.clone();
+    let cancel_reader = cancel.clone();
+    let key_reader = key.clone();
+    let payload_len_reader = payload_len;
+    let reader = tokio::spawn(async move {
+        let res = store_reader
+            .open_streaming_resource(&key_reader, cancel_reader)
+            .await
+            .unwrap();
+        res.wait_range(0..payload_len_reader).await.unwrap();
+        res.read_at(0, payload_len_reader as usize).await.unwrap()
+    });
+
+    let store_writer = store;
+    let payload_writer = payload.clone();
+    let cancel_writer = cancel;
+    let key_writer = key;
+    let writer = tokio::spawn(async move {
+        let res = store_writer
+            .open_streaming_resource(&key_writer, cancel_writer)
+            .await
+            .unwrap();
+        res.write_at(0, &payload_writer).await.unwrap();
+        res.commit(Some(payload_writer.len() as u64)).await.unwrap();
+        res.wait_range(0..payload_writer.len() as u64)
+            .await
+            .unwrap();
+    });
+
+    let (data_res, _) = tokio::join!(reader, writer);
+    let data = data_res.unwrap();
+    assert_eq!(&*data, &*payload);
 }
 
 #[rstest]

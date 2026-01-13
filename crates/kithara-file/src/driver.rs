@@ -6,7 +6,7 @@ use kithara_assets::{
     AssetId, AssetResource, AssetStore, AssetsError, DiskAssetStore, EvictAssets, LeaseGuard,
 };
 use kithara_net::{HttpClient, Net, NetError};
-use kithara_storage::{StorageError, StreamingResource};
+use kithara_storage::{ResourceStatus, StorageError, StreamingResource};
 use kithara_stream::{
     Engine, EngineHandle, EngineSource, Reader, ReaderError, StreamError, StreamMsg, StreamParams,
     Writer, WriterTask,
@@ -331,6 +331,10 @@ impl EngineSource for FileStream {
         let len = state.len;
 
         Ok(tokio::spawn(async move {
+            if matches!(res.inner().status().await, ResourceStatus::Committed { .. }) {
+                return Ok(());
+            }
+
             let writer = Writer::<_, _, FileEvent>::new(net, url, None, res, cancel).with_event(
                 move |offset, _len| {
                     let percent =

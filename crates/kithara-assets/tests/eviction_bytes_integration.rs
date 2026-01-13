@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, Assets, EvictConfig, ResourceKey};
+use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
 use kithara_storage::Resource;
 use rstest::{fixture, rstest};
 use tokio::task::yield_now;
@@ -24,14 +24,18 @@ fn temp_dir() -> tempfile::TempDir {
 }
 
 #[fixture]
-fn asset_store_with_100_bytes_limit(temp_dir: tempfile::TempDir) -> AssetStore {
-    AssetStore::with_root_dir(
-        temp_dir.path(),
-        EvictConfig {
+fn asset_store_with_100_bytes_limit(
+    temp_dir: tempfile::TempDir,
+    cancel_token: CancellationToken,
+) -> AssetStore {
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path())
+        .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: Some(100),
-        },
-    )
+        })
+        .cancel(cancel_token.clone())
+        .build()
 }
 
 #[rstest]
@@ -194,13 +198,14 @@ async fn eviction_corner_cases_different_byte_limits(
 ) {
     let cancel = cancel_token;
 
-    let store = AssetStore::with_root_dir(
-        temp_dir.path(),
-        EvictConfig {
+    let store = AssetStoreBuilder::new()
+        .root_dir(temp_dir.path())
+        .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: Some(max_bytes as u64),
-        },
-    );
+        })
+        .cancel(cancel.clone())
+        .build();
 
     let dir = store.root_dir();
     let evict = store.base().clone();

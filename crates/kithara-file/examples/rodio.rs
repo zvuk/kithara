@@ -1,9 +1,10 @@
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_assets::{AssetStore, EvictConfig};
+use kithara_assets::{AssetStoreBuilder, EvictConfig};
 use kithara_file::{FileEvent, FileSource, FileSourceOptions};
 use kithara_stream::SyncReader;
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -32,7 +33,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let url: Url = url.parse()?;
 
     let temp_dir = TempDir::new()?;
-    let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
+    let assets = AssetStoreBuilder::new()
+        .root_dir(temp_dir.path().to_path_buf())
+        .evict_config(EvictConfig::default())
+        .cancel(CancellationToken::new())
+        .build();
 
     // Open a file session (async byte source).
     let session = FileSource::open(url, FileSourceOptions::default(), Some(assets)).await?;

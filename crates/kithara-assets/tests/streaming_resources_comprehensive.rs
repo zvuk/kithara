@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
+use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey};
 use kithara_storage::{Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
@@ -19,14 +19,18 @@ fn temp_dir() -> tempfile::TempDir {
 }
 
 #[fixture]
-fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
-    AssetStore::with_root_dir(
-        temp_dir.path(),
-        EvictConfig {
+fn asset_store_no_limits(
+    temp_dir: tempfile::TempDir,
+    cancel_token: CancellationToken,
+) -> AssetStore {
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path())
+        .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
-        },
-    )
+        })
+        .cancel(cancel_token)
+        .build()
 }
 
 #[rstest]

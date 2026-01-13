@@ -60,4 +60,4 @@ pub use index::PinsIndex;
 pub use key::ResourceKey;
 pub use lease::{LeaseAssets, LeaseGuard};
 pub use resource::AssetResource;
-pub use store::{AssetStore, DiskAssetStore};
+pub use store::{AssetStore, AssetStoreBuilder, DiskAssetStore};

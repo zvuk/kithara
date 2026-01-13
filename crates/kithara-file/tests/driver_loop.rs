@@ -5,11 +5,12 @@ use std::time::Duration;
 use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::{AssetStore, EvictConfig};
+use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig};
 use kithara_file::{FileSource, FileSourceOptions};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio::{net::TcpListener, time::timeout};
+use tokio_util::sync::CancellationToken;
 
 // ==================== Test Server Fixtures ====================
 
@@ -157,7 +158,11 @@ fn opts_with_large_buffer() -> FileSourceOptions {
 #[fixture]
 async fn temp_assets() -> AssetStore {
     let temp_dir = TempDir::new().unwrap();
-    AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default())
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path().to_path_buf())
+        .evict_config(EvictConfig::default())
+        .cancel(CancellationToken::new())
+        .build()
 }
 
 // ==================== Test Cases ====================

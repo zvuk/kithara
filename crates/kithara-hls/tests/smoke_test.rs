@@ -2,10 +2,11 @@
 
 use std::time::Duration;
 
-use kithara_assets::{AssetStore, EvictConfig};
+use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig};
 use kithara_hls::{HlsOptions, HlsSource};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
+use tokio_util::sync::CancellationToken;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -19,7 +20,11 @@ fn temp_dir() -> TempDir {
 
 #[fixture]
 fn assets(temp_dir: TempDir) -> AssetStore {
-    AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default())
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path().to_path_buf())
+        .evict_config(EvictConfig::default())
+        .cancel(CancellationToken::new())
+        .build()
 }
 
 #[fixture]
