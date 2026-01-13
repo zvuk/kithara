@@ -7,7 +7,7 @@ use std::{
 
 use async_stream::stream;
 use futures::{Stream, StreamExt};
-use tokio::sync::broadcast;
+use tokio::sync::{OnceCell, broadcast};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -16,10 +16,7 @@ use super::types::{
 };
 use crate::{
     HlsError,
-    abr::{
-        AbrController, AbrReason, ThroughputSample, ThroughputSampleSource, Variant,
-        variants_from_master,
-    },
+    abr::{AbrController, AbrReason, ThroughputSample, ThroughputSampleSource, Variant},
     fetch::FetchManager,
     playlist::{PlaylistManager, VariantId},
 };
@@ -33,7 +30,7 @@ pub struct BaseStream {
     cancel: CancellationToken,
     events: broadcast::Sender<PipelineEvent>,
     abr_controller: AbrController,
-    variants: Vec<Variant>,
+    variants: Arc<OnceCell<Vec<Variant>>>,
     inner: Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>>,
 }
 
@@ -43,9 +40,9 @@ impl BaseStream {
         fetch: Arc<FetchManager>,
         playlist_manager: Arc<PlaylistManager>,
         abr_controller: AbrController,
-        variants: Vec<Variant>,
         cancel: CancellationToken,
     ) -> Self {
+        let variants = Arc::new(OnceCell::new());
         Self::with_abr_controller(
             master_url,
             fetch,
@@ -61,7 +58,7 @@ impl BaseStream {
         fetch: Arc<FetchManager>,
         playlist_manager: Arc<PlaylistManager>,
         abr_controller: AbrController,
-        variants: Vec<Variant>,
+        variants: Arc<OnceCell<Vec<Variant>>>,
         cancel: CancellationToken,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
@@ -72,6 +69,7 @@ impl BaseStream {
             playlist_manager.clone(),
             master_url.clone(),
             events.clone(),
+            Arc::clone(&variants),
             initial_variant,
             initial_variant,
             0,
@@ -90,37 +88,42 @@ impl BaseStream {
         }
     }
 
-    pub async fn build(
-        master_url: Url,
-        fetch: Arc<FetchManager>,
-        playlist_manager: Arc<PlaylistManager>,
-        abr_controller: AbrController,
-        cancel: CancellationToken,
-    ) -> Result<Self, HlsError> {
-        let master_playlist = playlist_manager.master_playlist(&master_url).await?;
-        let variants = variants_from_master(&master_playlist);
-
-        Ok(Self::new(
-            master_url,
-            fetch,
-            playlist_manager,
-            abr_controller,
-            variants,
-            cancel,
-        ))
-    }
-
     fn variant_stream(
         fetch: Arc<FetchManager>,
         playlist_manager: Arc<PlaylistManager>,
         master_url: Url,
         events: broadcast::Sender<PipelineEvent>,
+        variants_cell: Arc<OnceCell<Vec<Variant>>>,
         from_variant: usize,
         to_variant: usize,
         start_from: usize,
         reason: AbrReason,
     ) -> Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>> {
         Box::pin(stream! {
+            let variants = match playlist_manager.variants(&master_url).await {
+                Ok(v) => v,
+                Err(e) => {
+                    yield Err(PipelineError::Hls(e));
+                    return;
+                }
+            };
+
+            if to_variant >= variants.len() {
+                yield Err(PipelineError::Hls(HlsError::VariantNotFound(format!("variant {}", to_variant))));
+                return;
+            }
+
+            if variants_cell.get().is_none() {
+                let _ = variants_cell.set(variants.clone());
+            }
+
+
+
+            if to_variant >= variants.len() {
+                yield Err(PipelineError::Hls(HlsError::VariantNotFound(format!("variant {}", to_variant))));
+                return;
+            }
+
             let master = match playlist_manager.master_playlist(&master_url).await {
                 Ok(m) => m,
                 Err(e) => {
@@ -265,6 +268,7 @@ impl BaseStream {
             self.playlist_manager.clone(),
             self.master_url.clone(),
             self.events.clone(),
+            Arc::clone(&self.variants),
             variant,
             variant,
             segment_index,
@@ -291,6 +295,7 @@ impl BaseStream {
             self.playlist_manager.clone(),
             self.master_url.clone(),
             self.events.clone(),
+            Arc::clone(&self.variants),
             from,
             variant_index,
             0,
@@ -322,9 +327,18 @@ impl Stream for BaseStream {
                         source: ThroughputSampleSource::Network,
                     };
                     this.abr_controller.push_throughput_sample(sample);
+                    let variants = match this.variants.get() {
+                        Some(v) => v,
+                        None => {
+                            return Poll::Ready(Some(Err(PipelineError::Hls(
+                                HlsError::VariantNotFound("variants not initialized".to_string()),
+                            ))));
+                        }
+                    };
+
                     let decision =
                         this.abr_controller
-                            .decide(&this.variants, duration.as_secs_f64(), now);
+                            .decide(variants, duration.as_secs_f64(), now);
                     if decision.changed {
                         let from = this.abr_controller.current_variant();
                         this.abr_controller.apply(&decision, now);
@@ -342,6 +356,7 @@ impl Stream for BaseStream {
                             this.playlist_manager.clone(),
                             this.master_url.clone(),
                             this.events.clone(),
+                            Arc::clone(&this.variants),
                             from,
                             decision.target_variant_index,
                             start_from,

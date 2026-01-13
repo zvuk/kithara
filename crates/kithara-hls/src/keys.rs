@@ -33,7 +33,7 @@ pub enum KeyError {
 
 #[derive(Clone)]
 pub struct KeyManager {
-    fetch: FetchManager,
+    fetch: Arc<FetchManager>,
     key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
     key_query_params: Option<HashMap<String, String>>,
     key_request_headers: Option<HashMap<String, String>>,
@@ -41,7 +41,7 @@ pub struct KeyManager {
 
 impl KeyManager {
     pub fn new(
-        fetch: FetchManager,
+        fetch: Arc<FetchManager>,
         key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
         key_query_params: Option<HashMap<String, String>>,
         key_request_headers: Option<HashMap<String, String>>,
@@ -67,8 +67,7 @@ impl KeyManager {
         let headers: Option<Headers> = self.key_request_headers.clone().map(Headers::from);
 
         let rel_path = Self::rel_path_from_url(&fetch_url);
-        let raw_key = self
-            .fetch
+        let raw_key = Arc::clone(&self.fetch)
             .fetch_key_atomic(&fetch_url, rel_path.as_str(), headers)
             .await?;
 

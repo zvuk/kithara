@@ -4,7 +4,6 @@ use std::{
     time::Duration,
 };
 
-use bytes::Bytes;
 use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,
     tags::VariantStream as HlsVariantStreamTag, types::DecryptionKey as HlsDecryptionKey,
@@ -13,7 +12,11 @@ use thiserror::Error;
 use tokio::sync::OnceCell;
 use url::Url;
 
-use crate::{HlsError, HlsResult, fetch::FetchManager};
+use crate::{
+    HlsError, HlsResult,
+    abr::{Variant, variants_from_master},
+    fetch::FetchManager,
+};
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {
     let no_query = uri.split('?').next().unwrap_or(uri);
@@ -165,18 +168,20 @@ pub struct MediaSegment {
 /// Thin wrapper: fetches + parses playlists with caching via `kithara-assets`.
 #[derive(Clone)]
 pub struct PlaylistManager {
-    fetch: FetchManager,
+    fetch: Arc<FetchManager>,
     base_url: Option<Url>,
     master: Arc<OnceCell<MasterPlaylist>>,
+    variants: Arc<OnceCell<Vec<Variant>>>,
     media: Arc<RwLock<HashMap<VariantId, Arc<OnceCell<MediaPlaylist>>>>>,
 }
 
 impl PlaylistManager {
-    pub fn new(fetch: FetchManager, base_url: Option<Url>) -> Self {
+    pub fn new(fetch: Arc<FetchManager>, base_url: Option<Url>) -> Self {
         Self {
             fetch,
             base_url,
             master: Arc::new(OnceCell::new()),
+            variants: Arc::new(OnceCell::new()),
             media: Arc::new(RwLock::new(HashMap::new())),
         }
     }
@@ -191,6 +196,20 @@ impl PlaylistManager {
             .await?;
 
         Ok(master.clone())
+    }
+
+    pub async fn variants(&self, url: &Url) -> HlsResult<Vec<Variant>> {
+        if let Some(cached) = self.variants.get() {
+            return Ok(cached.clone());
+        }
+
+        let computed = {
+            let master = self.master_playlist(url).await?;
+            variants_from_master(&master)
+        };
+
+        let _ = self.variants.set(computed.clone());
+        Ok(computed)
     }
 
     pub fn master_variants(&self) -> Option<Vec<VariantStream>> {
@@ -244,13 +263,11 @@ impl PlaylistManager {
     {
         let basename = uri_basename_no_query(url.as_str())
             .ok_or_else(|| HlsError::InvalidUrl(format!("Failed to derive {label} basename")))?;
-        let bytes = self.fetch_playlist_atomic(url, basename).await?;
+        let bytes = Arc::clone(&self.fetch)
+            .fetch_playlist_atomic(url, basename)
+            .await?;
 
         parse(&bytes)
-    }
-
-    async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
-        self.fetch.fetch_playlist_atomic(url, rel_path).await
     }
 }
 

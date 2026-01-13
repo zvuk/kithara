@@ -2,7 +2,7 @@
 
 mod fixture;
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use fixture::*;
 use kithara_hls::{
@@ -59,8 +59,8 @@ async fn fetch_master_playlist_from_network(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
-    let playlist_manager = PlaylistManager::new(fetch_manager, None);
+    let fetch_manager = Arc::new(FetchManager::new(asset_root.clone(), assets, net));
+    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), None);
     let master_url = server.url("/master.m3u8")?;
     let master_playlist = playlist_manager.master_playlist(&master_url).await?;
 
@@ -82,8 +82,8 @@ async fn fetch_media_playlist_from_network(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
-    let playlist_manager = PlaylistManager::new(fetch_manager, None);
+    let fetch_manager = Arc::new(FetchManager::new(asset_root.clone(), assets, net));
+    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), None);
     let media_url = server.url("/video/480p/playlist.m3u8")?;
 
     let media_playlist = playlist_manager
@@ -109,8 +109,8 @@ async fn resolve_url_with_base_override(
     let net = net_fixture;
 
     let base_url = server.url("/custom/base/")?;
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
-    let playlist_manager = PlaylistManager::new(fetch_manager, Some(base_url.clone()));
+    let fetch_manager = Arc::new(FetchManager::new(asset_root.clone(), assets, net));
+    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), Some(base_url.clone()));
 
     let relative_url = "video/480p/playlist.m3u8";
     let resolved = playlist_manager.resolve_url(&base_url, relative_url)?;
@@ -139,8 +139,12 @@ async fn fetch_media_playlist_for_different_variants(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets.clone(), net.clone());
-    let playlist_manager = PlaylistManager::new(fetch_manager, None);
+    let fetch_manager = Arc::new(FetchManager::new(
+        asset_root.clone(),
+        assets.clone(),
+        net.clone(),
+    ));
+    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), None);
 
     // Test variant 0
     let media_url_0 = server.url("/video/480p/playlist.m3u8")?;
@@ -172,8 +176,8 @@ async fn playlist_manager_caching_behavior(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
-    let playlist_manager = PlaylistManager::new(fetch_manager, None);
+    let fetch_manager = Arc::new(FetchManager::new(asset_root.clone(), assets, net));
+    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), None);
     let master_url = server.url("/master.m3u8")?;
 
     // First fetch
@@ -201,8 +205,8 @@ async fn playlist_manager_error_handling_invalid_url(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
-    let playlist_manager = PlaylistManager::new(fetch_manager, None);
+    let fetch_manager = Arc::new(FetchManager::new(asset_root.clone(), assets, net));
+    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), None);
 
     // Try to fetch from invalid URL
     let invalid_url =
@@ -231,8 +235,8 @@ async fn resolve_multiple_relative_urls(
     let net = net_fixture;
 
     let base_url = server.url("/base/")?;
-    let fetch_manager = FetchManager::new(asset_root.clone(), assets, net);
-    let playlist_manager = PlaylistManager::new(fetch_manager, Some(base_url.clone()));
+    let fetch_manager = Arc::new(FetchManager::new(asset_root.clone(), assets, net));
+    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), Some(base_url.clone()));
 
     // Test different relative URLs
     let test_cases = vec![
@@ -270,8 +274,12 @@ async fn playlist_manager_with_different_base_urls(
     let net = net_fixture;
 
     // Test with no base URL
-    let fetch_manager_no_base = FetchManager::new(asset_root.clone(), assets.clone(), net.clone());
-    let playlist_manager_no_base = PlaylistManager::new(fetch_manager_no_base, None);
+    let fetch_manager_no_base = Arc::new(FetchManager::new(
+        asset_root.clone(),
+        assets.clone(),
+        net.clone(),
+    ));
+    let playlist_manager_no_base = PlaylistManager::new(fetch_manager_no_base.clone(), None);
     let master_url = server.url("/master.m3u8")?;
     let master_no_base = playlist_manager_no_base
         .master_playlist(&master_url)
@@ -280,8 +288,9 @@ async fn playlist_manager_with_different_base_urls(
 
     // Test with base URL
     let base_url = server.url("/custom/base/")?;
-    let fetch_manager_with_base = FetchManager::new(asset_root.clone(), assets, net);
-    let playlist_manager_with_base = PlaylistManager::new(fetch_manager_with_base, Some(base_url));
+    let fetch_manager_with_base = Arc::new(FetchManager::new(asset_root.clone(), assets, net));
+    let playlist_manager_with_base =
+        PlaylistManager::new(fetch_manager_with_base.clone(), Some(base_url));
 
     // Fetch should still work with base URL
     let master_with_base = playlist_manager_with_base

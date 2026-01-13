@@ -60,17 +60,17 @@ use tracing::{debug, info, trace, warn};
 use url::Url;
 
 use crate::{
-    HlsError, HlsResult, driver,
+    HlsError, HlsResult,
+    driver::HlsDriver,
     events::HlsEvent,
     fetch::FetchManager,
-    keys::KeyManager,
     options::HlsOptions,
     playlist::{MasterPlaylist, PlaylistManager, VariantId},
 };
 
 pub struct HlsSessionSource {
     playlist_manager: PlaylistManager,
-    fetch_manager: FetchManager,
+    fetch_manager: Arc<FetchManager>,
     master_url: Url,
     options: HlsOptions,
     asset_root: String,
@@ -110,7 +110,7 @@ impl HlsSessionSource {
         master_url: Url,
         options: HlsOptions,
         playlist_manager: PlaylistManager,
-        fetch_manager: FetchManager,
+        fetch_manager: Arc<FetchManager>,
     ) -> Self {
         let asset_root = ResourceKey::asset_root_for_url(&master_url);
 
@@ -311,13 +311,13 @@ impl HlsSessionSource {
                     prefix,
                 };
 
-                let fm_all = self.fetch_manager.clone();
+                let fm_all = Arc::clone(&self.fetch_manager);
                 let urls: Vec<Url> = state.segments.iter().map(|s| s.url.clone()).collect();
                 let vi = state.variant_index;
                 let window = self.prefetch_window;
                 let next = self.prefetch_next.clone();
                 let cache = self.resource_cache.clone();
-                let handle = self
+                let _ = self
                     .prefetch_started
                     .get_or_init(move || {
                         let fm_all = fm_all.clone();
@@ -355,7 +355,6 @@ impl HlsSessionSource {
                         }))
                     })
                     .await;
-                let _ = handle;
 
                 Ok::<_, HlsError>(state)
             })
@@ -483,7 +482,7 @@ impl HlsSessionSource {
 
     /// Prefetch upcoming segments based on prefetch_buffer_size setting
     async fn prefetch_upcoming_segments(&self, state: &State, current_segment_index: usize) {
-        let fm = self.fetch_manager.clone();
+        let fm = Arc::clone(&self.fetch_manager);
 
         let Some(prefetch_size) = self.options.prefetch_buffer_size else {
             let next_index = current_segment_index + 1;
@@ -494,10 +493,9 @@ impl HlsSessionSource {
                     segment_url = %url,
                     "HLS prefetch (continuous) spawn"
                 );
-                let _ = tokio::spawn(async move {
+                tokio::spawn(async move {
                     let _ = fm.open_media_streaming_resource(&url).await;
-                })
-                .await;
+                });
             }
             return;
         };
@@ -512,7 +510,7 @@ impl HlsSessionSource {
         for idx in start_index..end_index {
             if let Some(seg) = state.segments.get(idx) {
                 let url = seg.url.clone();
-                let fm = self.fetch_manager.clone();
+                let fm = Arc::clone(&self.fetch_manager);
                 let cache = self.resource_cache.clone();
                 info!(
                     segment_index = idx,
@@ -520,7 +518,7 @@ impl HlsSessionSource {
                     prefetch_buffer_size = prefetch_size,
                     "HLS prefetch (buffered) spawn"
                 );
-                let _ = tokio::spawn(async move {
+                tokio::spawn(async move {
                     match fm.open_media_streaming_resource(&url).await {
                         Ok(res) => {
                             let mut guard = cache.write().await;
@@ -530,8 +528,7 @@ impl HlsSessionSource {
                             warn!(segment_index = idx, segment_url = %url, %err, "HLS prefetch (buffered) failed");
                         }
                     }
-                })
-                .await;
+                });
             }
         }
     }
@@ -772,9 +769,7 @@ pub struct HlsSession {
     pub(crate) master_url: Url,
     pub(crate) opts: HlsOptions,
     pub(crate) assets: AssetStore,
-    #[allow(dead_code)]
-    pub(crate) key_manager: KeyManager,
-    pub(crate) driver: driver::HlsDriver,
+    pub(crate) driver: HlsDriver,
 }
 
 impl HlsSession {
@@ -794,9 +789,13 @@ impl HlsSession {
         let asset_root = ResourceKey::asset_root_for_url(&self.master_url);
         let net = HttpClient::new(NetOptions::default());
 
-        let fetch_manager = FetchManager::new(asset_root.clone(), self.assets.clone(), net);
+        let fetch_manager = Arc::new(FetchManager::new(
+            asset_root.clone(),
+            self.assets.clone(),
+            net,
+        ));
         let playlist_manager =
-            PlaylistManager::new(fetch_manager.clone(), self.opts.base_url.clone());
+            PlaylistManager::new(Arc::clone(&fetch_manager), self.opts.base_url.clone());
 
         Ok(HlsSessionSource::new(
             self.master_url.clone(),
