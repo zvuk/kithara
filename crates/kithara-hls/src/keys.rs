@@ -1,12 +1,17 @@
 use std::{collections::HashMap, sync::Arc};
 
+use aes::Aes128;
 use bytes::Bytes;
+use cbc::{
+    Decryptor,
+    cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7},
+};
 use kithara_assets::AssetsError;
 use kithara_net::Headers;
 use thiserror::Error;
 use url::Url;
 
-use crate::{HlsResult, KeyContext, fetch::FetchManager};
+use crate::{HlsError, HlsResult, KeyContext, fetch::FetchManager};
 
 #[derive(Debug, Error)]
 pub enum KeyError {
@@ -49,7 +54,7 @@ impl KeyManager {
         }
     }
 
-    pub async fn get_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
+    pub async fn get_raw_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
         let mut fetch_url = url.clone();
 
         if let Some(ref params) = self.key_query_params {
@@ -69,6 +74,29 @@ impl KeyManager {
 
         let processed_key = self.process_key(raw_key, fetch_url, iv)?;
         Ok(processed_key)
+    }
+
+    pub async fn decrypt(
+        &self,
+        url: &Url,
+        iv: Option<[u8; 16]>,
+        ciphertext: Bytes,
+    ) -> HlsResult<Bytes> {
+        let iv = iv.unwrap_or([0u8; 16]);
+        let key = self.get_raw_key(url, Some(iv)).await?;
+        if key.len() != 16 {
+            return Err(HlsError::KeyProcessing(format!(
+                "invalid AES-128 key length: {}",
+                key.len()
+            )));
+        }
+
+        let mut buf = ciphertext.to_vec();
+        let decryptor = Decryptor::<Aes128>::new((&key[..16]).into(), (&iv).into());
+        let plain = decryptor
+            .decrypt_padded_mut::<Pkcs7>(&mut buf)
+            .map_err(|e| HlsError::KeyProcessing(format!("AES-128 decrypt failed: {e}")))?;
+        Ok(Bytes::copy_from_slice(plain))
     }
 
     fn rel_path_from_url(url: &Url) -> String {

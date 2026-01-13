@@ -4,11 +4,6 @@ mod fixture;
 
 use std::{sync::Arc, time::Duration};
 
-use aes::Aes128;
-use cbc::{
-    Decryptor,
-    cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7},
-};
 use fixture::*;
 use kithara_hls::{HlsResult, fetch::FetchManager, keys::KeyManager};
 use rstest::{fixture, rstest};
@@ -40,7 +35,7 @@ async fn fetch_and_cache_key(
 
     // Note: This test assumes the server provides a key endpoint
     // In real implementation, the test server would need to serve key data
-    let _key = key_manager.get_key(&key_url, None).await;
+    let _key = key_manager.get_raw_key(&key_url, None).await;
 
     Ok(())
 }
@@ -69,7 +64,7 @@ async fn key_processor_applied(
     let key_manager = KeyManager::new(fetch_manager, Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
-    let key = key_manager.get_key(&key_url, None).await?;
+    let key = key_manager.get_raw_key(&key_url, None).await?;
     assert!(key.starts_with(b"processed:"));
 
     Ok(())
@@ -97,7 +92,7 @@ async fn key_manager_with_different_processors(
     let key_manager = KeyManager::new(fetch_manager, Some(uppercase_processor), None, None);
     let key_url = server.url("/key.bin")?;
 
-    let key = key_manager.get_key(&key_url, None).await?;
+    let key = key_manager.get_raw_key(&key_url, None).await?;
     assert!(key.is_ascii());
 
     Ok(())
@@ -121,7 +116,7 @@ async fn key_manager_error_handling(
         url::Url::parse("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")
             .map_err(|e| kithara_hls::HlsError::InvalidUrl(e.to_string()))?;
 
-    let result = key_manager.get_key(&invalid_url, None).await;
+    let result = key_manager.get_raw_key(&invalid_url, None).await;
 
     // Should fail with network error (or succeed if somehow connects)
     assert!(result.is_ok() || result.is_err());
@@ -146,10 +141,10 @@ async fn key_manager_caching_behavior(
     let key_url = server.url("/key.bin")?;
 
     // First fetch
-    let key1 = key_manager.get_key(&key_url, None).await?;
+    let key1 = key_manager.get_raw_key(&key_url, None).await?;
 
     // Second fetch should potentially use cache
-    let key2 = key_manager.get_key(&key_url, None).await?;
+    let key2 = key_manager.get_raw_key(&key_url, None).await?;
 
     // Keys should be the same (either from cache or re-fetched)
     assert_eq!(key1, key2);
@@ -186,13 +181,13 @@ async fn key_manager_with_context(
     let key_url = server.url("/key.bin")?;
 
     // Test without IV
-    let key1 = key_manager.get_key(&key_url, None).await?;
+    let key1 = key_manager.get_raw_key(&key_url, None).await?;
     assert!(key1.starts_with(b"ctx:"));
 
     // Test with IV
     let mut iv = [0u8; 16];
     iv[..7].copy_from_slice(b"test-iv");
-    let key2 = key_manager.get_key(&key_url, Some(iv)).await?;
+    let key2 = key_manager.get_raw_key(&key_url, Some(iv)).await?;
     assert!(key2.starts_with(b"ctx:"));
 
     Ok(())
@@ -217,14 +212,8 @@ async fn aes128_key_decrypts_ciphertext(
     let cipher_url = server.url("/aes/seg0.bin")?;
     let iv = fixture::aes128_iv();
 
-    let key = key_manager.get_key(&key_url, Some(iv)).await?;
-    assert_eq!(key.len(), 16);
-
-    let mut buf = net.get_bytes(cipher_url, None).await?.to_vec();
-    let decryptor = Decryptor::<Aes128>::new((&key[..16]).into(), (&iv).into());
-    let plain = decryptor
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|e| kithara_hls::HlsError::KeyProcessing(format!("decrypt failed: {e}")))?;
+    let cipher = net.get_bytes(cipher_url, None).await?;
+    let plain = key_manager.decrypt(&key_url, Some(iv), cipher).await?;
     assert!(plain.starts_with(fixture::aes128_plaintext_segment().as_slice()));
 
     Ok(())

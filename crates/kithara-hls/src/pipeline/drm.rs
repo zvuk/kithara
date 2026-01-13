@@ -5,12 +5,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use aes::Aes128;
 use bytes::Bytes;
-use cbc::{
-    Decryptor,
-    cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7},
-};
 use futures::Stream;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -85,33 +80,14 @@ where
             None => return Ok(payload),
         };
 
-        let key_bytes = key_manager
-            .get_key(&key_url, Some(iv))
+        let bytes = key_manager
+            .decrypt(&key_url, Some(iv), payload.bytes)
             .await
             .map_err(PipelineError::Hls)?;
 
-        if key_bytes.len() != 16 {
-            return Err(PipelineError::Hls(HlsError::KeyProcessing(format!(
-                "invalid AES-128 key length: {}",
-                key_bytes.len()
-            ))));
-        }
-
-        let mut buf = payload.bytes.to_vec();
-        let decryptor = Decryptor::<Aes128>::new((&key_bytes[..16]).into(), (&iv).into());
-        let plain = decryptor
-            .decrypt_padded_mut::<Pkcs7>(&mut buf)
-            .map_err(|e| {
-                PipelineError::Hls(HlsError::KeyProcessing(format!(
-                    "AES-128 decrypt failed: {e}"
-                )))
-            })?;
-
-        let out = Bytes::copy_from_slice(plain);
-
         Ok(SegmentPayload {
             meta: payload.meta,
-            bytes: out,
+            bytes,
         })
     }
 

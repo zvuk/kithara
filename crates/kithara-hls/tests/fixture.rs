@@ -314,6 +314,7 @@ pub fn aes128_ciphertext() -> Vec<u8> {
     let iv = aes128_iv();
     let mut data = aes128_plaintext_segment();
     let plain_len = data.len();
+    data.resize(plain_len + 16, 0);
     let encryptor = Encryptor::<Aes128>::new((&key[..16]).into(), (&iv).into());
     let cipher = encryptor
         .encrypt_padded_mut::<Pkcs7>(&mut data, plain_len)
