@@ -6,8 +6,8 @@ use std::{
 };
 
 use async_stream::stream;
-use futures::{Stream, StreamExt};
-use tokio::sync::{OnceCell, broadcast};
+use futures::{Stream, StreamExt, stream};
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -16,7 +16,7 @@ use super::types::{
 };
 use crate::{
     HlsError,
-    abr::{AbrController, AbrReason, ThroughputSample, ThroughputSampleSource, Variant},
+    abr::{AbrController, AbrReason, ThroughputSample, ThroughputSampleSource},
     fetch::FetchManager,
     playlist::{PlaylistManager, VariantId},
 };
@@ -30,7 +30,6 @@ pub struct BaseStream {
     cancel: CancellationToken,
     events: broadcast::Sender<PipelineEvent>,
     abr_controller: AbrController,
-    variants: Arc<OnceCell<Vec<Variant>>>,
     inner: Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>>,
 }
 
@@ -42,15 +41,7 @@ impl BaseStream {
         abr_controller: AbrController,
         cancel: CancellationToken,
     ) -> Self {
-        let variants = Arc::new(OnceCell::new());
-        Self::with_abr_controller(
-            master_url,
-            fetch,
-            playlist_manager,
-            abr_controller,
-            variants,
-            cancel,
-        )
+        Self::with_abr_controller(master_url, fetch, playlist_manager, abr_controller, cancel)
     }
 
     pub fn with_abr_controller(
@@ -58,222 +49,258 @@ impl BaseStream {
         fetch: Arc<FetchManager>,
         playlist_manager: Arc<PlaylistManager>,
         abr_controller: AbrController,
-        variants: Arc<OnceCell<Vec<Variant>>>,
         cancel: CancellationToken,
     ) -> Self {
         let (events, _) = broadcast::channel(256);
         let initial_variant = abr_controller.current_variant();
 
-        let inner = Self::variant_stream(
-            fetch.clone(),
-            playlist_manager.clone(),
-            master_url.clone(),
-            events.clone(),
-            Arc::clone(&variants),
-            initial_variant,
-            initial_variant,
-            0,
-            AbrReason::Initial,
-        );
-
-        Self {
+        let mut base = Self {
             fetch,
             playlist_manager,
             master_url,
             cancel,
             events,
             abr_controller,
-            variants,
-            inner,
-        }
+            inner: empty_stream(),
+        };
+
+        base.inner = base.variant_stream(initial_variant, initial_variant, 0, AbrReason::Initial);
+        base
     }
 
     fn variant_stream(
-        fetch: Arc<FetchManager>,
-        playlist_manager: Arc<PlaylistManager>,
-        master_url: Url,
-        events: broadcast::Sender<PipelineEvent>,
-        variants_cell: Arc<OnceCell<Vec<Variant>>>,
+        &self,
         from_variant: usize,
         to_variant: usize,
         start_from: usize,
         reason: AbrReason,
     ) -> Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>> {
+        let fetch = self.fetch.clone();
+        let playlist_manager = self.playlist_manager.clone();
+        let master_url = self.master_url.clone();
+        let events = self.events.clone();
+        let mut abr_controller = self.abr_controller.clone();
         Box::pin(stream! {
-            let variants = match playlist_manager.variants(&master_url).await {
-                Ok(v) => v,
-                Err(e) => {
-                    yield Err(PipelineError::Hls(e));
-                    return;
-                }
-            };
+            let mut current_from = from_variant;
+            let mut current_to = to_variant;
+            let mut current_start = start_from;
+            let mut current_reason = reason;
 
-            if to_variant >= variants.len() {
-                yield Err(PipelineError::Hls(HlsError::VariantNotFound(format!("variant {}", to_variant))));
-                return;
-            }
-
-            if variants_cell.get().is_none() {
-                let _ = variants_cell.set(variants.clone());
-            }
-
-
-
-            if to_variant >= variants.len() {
-                yield Err(PipelineError::Hls(HlsError::VariantNotFound(format!("variant {}", to_variant))));
-                return;
-            }
-
-            let master = match playlist_manager.master_playlist(&master_url).await {
-                Ok(m) => m,
-                Err(e) => {
-                    yield Err(PipelineError::Hls(e));
-                    return;
-                }
-            };
-
-            let variant_uri = match master.variants.get(to_variant) {
-                Some(v) => v.uri.clone(),
-                None => {
-                    yield Err(PipelineError::Hls(HlsError::VariantNotFound(format!("variant {}", to_variant))));
-                    return;
-                }
-            };
-
-            let media_url = match playlist_manager.resolve_url(&master_url, &variant_uri) {
-                Ok(url) => url,
-                Err(e) => {
-                    yield Err(PipelineError::Hls(e));
-                    return;
-                }
-            };
-
-            let media_playlist = match playlist_manager
-                .media_playlist(&media_url, VariantId(to_variant))
-                .await
-            {
-                Ok(p) => p,
-                Err(e) => {
-                    yield Err(PipelineError::Hls(e));
-                    return;
-                }
-            };
-
-            let init_segment = media_playlist.init_segment.clone();
-            let segments = media_playlist.segments.clone();
-            let mut enumerated = FetchManager::stream_segment_sequence(
-                &*fetch,
-                &media_playlist,
-                &media_url,
-                None,
-            )
-            .enumerate();
-
-            let init_segment = init_segment.clone();
-            // Send VariantApplied event when starting a new variant stream
-            if from_variant != to_variant && !matches!(reason, crate::AbrReason::ManualOverride) {
-                let _ = events.send(PipelineEvent::VariantApplied {
-                    from: from_variant,
-                    to: to_variant,
-                    reason,
-                });
-            }
-
-            let need_init = from_variant != to_variant || start_from == 0;
-            if need_init {
-                if let Some(init) = init_segment {
-                    let init_result = async {
-                        let init_url = media_url
-                            .join(&init.uri)
-                            .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve init URL: {}", e)))?;
-                        let init_fetch = fetch.fetch_init_segment_resource(&init_url).await?;
-                        Ok::<_, HlsError>((init_url, init_fetch.bytes))
+            loop {
+                let variants = match playlist_manager.variants(&master_url).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        yield Err(PipelineError::Hls(e));
+                        return;
                     }
-                    .await;
+                };
 
-                    match init_result {
-                        Ok((init_url, bytes)) => {
-                            let meta = SegmentMeta {
-                                variant: to_variant,
-                                segment_index: usize::MAX,
-                                sequence: media_playlist.media_sequence,
-                                url: init_url,
-                                duration: None,
-                                key: init.key.clone(),
+                if current_to >= variants.len() {
+                    yield Err(PipelineError::Hls(HlsError::VariantNotFound(format!("variant {}", current_to))));
+                    return;
+                }
+
+                if current_from != current_to {
+                    let _ = events.send(PipelineEvent::VariantApplied {
+                        from: current_from,
+                        to: current_to,
+                        reason: current_reason,
+                    });
+                }
+
+                let master = match playlist_manager.master_playlist(&master_url).await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        yield Err(PipelineError::Hls(e));
+                        return;
+                    }
+                };
+
+                let variant_uri = match master.variants.get(current_to) {
+                    Some(v) => v.uri.clone(),
+                    None => {
+                        yield Err(PipelineError::Hls(HlsError::VariantNotFound(format!("variant {}", current_to))));
+                        return;
+                    }
+                };
+
+                let media_url = match playlist_manager.resolve_url(&master_url, &variant_uri) {
+                    Ok(url) => url,
+                    Err(e) => {
+                        yield Err(PipelineError::Hls(e));
+                        return;
+                    }
+                };
+
+                let media_playlist = match playlist_manager
+                    .media_playlist(&media_url, VariantId(current_to))
+                    .await
+                {
+                    Ok(p) => p,
+                    Err(e) => {
+                        yield Err(PipelineError::Hls(e));
+                        return;
+                    }
+                };
+
+                let init_segment = media_playlist.init_segment.clone();
+                let segments = media_playlist.segments.clone();
+
+                let need_init = current_from != current_to || current_start == 0;
+                if need_init {
+                    if let Some(init) = init_segment {
+                        let init_result = async {
+                            let init_url = media_url
+                                .join(&init.uri)
+                                .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve init URL: {}", e)))?;
+                            let init_fetch = fetch.fetch_init_segment_resource(&init_url).await?;
+                            Ok::<_, HlsError>((init_url, init_fetch.bytes))
+                        }
+                        .await;
+
+                        match init_result {
+                            Ok((init_url, bytes)) => {
+                                let meta = SegmentMeta {
+                                    variant: current_to,
+                                    segment_index: usize::MAX,
+                                    sequence: media_playlist.media_sequence,
+                                    url: init_url,
+                                    duration: None,
+                                    key: init.key.clone(),
+                                };
+                                let _ = events.send(PipelineEvent::SegmentReady {
+                                    variant: current_to,
+                                    segment_index: usize::MAX,
+                                });
+                                yield Ok(SegmentPayload { meta, bytes });
+                            }
+                            Err(err) => {
+                                yield Err(PipelineError::Hls(err));
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                let mut enumerated = fetch
+                    .stream_segment_sequence(
+                        &media_playlist,
+                        &media_url,
+                        None,
+                    )
+                    .enumerate();
+
+                let mut switched = false;
+                let mut next_from = current_from;
+                let mut next_to = current_to;
+                let mut next_start = 0;
+                let mut next_reason = current_reason;
+
+                while let Some((idx, item)) = enumerated.next().await {
+                    if idx < current_start {
+                        continue;
+                    }
+
+                    match item {
+                        Ok(fetch_bytes) => {
+                            let Some(segment) = segments.get(idx) else {
+                                yield Err(PipelineError::Hls(HlsError::SegmentNotFound(format!("Index {}", idx))));
+                                break;
                             };
+
+                            let segment_url = match media_url.join(&segment.uri) {
+                                Ok(url) => url,
+                                Err(e) => {
+                                    yield Err(PipelineError::Hls(HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e))));
+                                    break;
+                                }
+                            };
+
+                            let meta = SegmentMeta {
+                                variant: current_to,
+                                segment_index: idx,
+                                sequence: segment.sequence,
+                                url: segment_url,
+                                duration: Some(fetch_bytes.duration.max(Duration::from_millis(1))),
+                                key: segment.key.clone(),
+                            };
+
+                            let now = Instant::now();
+                            let duration = meta
+                                .duration
+                                .unwrap_or(Duration::from_millis(1))
+                                .max(Duration::from_millis(1));
+                            let sample = ThroughputSample {
+                                bytes: fetch_bytes.bytes.len() as u64,
+                                duration,
+                                at: now,
+                                source: ThroughputSampleSource::Network,
+                            };
+                            abr_controller.push_throughput_sample(sample);
+                            let decision =
+                                abr_controller.decide(&variants, duration.as_secs_f64(), now);
+
+                            if decision.changed {
+                                let from = abr_controller.current_variant();
+                                abr_controller.apply(&decision, now);
+                                let _ = events.send(PipelineEvent::VariantSelected {
+                                    from,
+                                    to: decision.target_variant_index,
+                                    reason: decision.reason,
+                                });
+                                let _ = events.send(PipelineEvent::VariantApplied {
+                                    from,
+                                    to: decision.target_variant_index,
+                                    reason: decision.reason,
+                                });
+
+                                next_from = from;
+                                next_to = decision.target_variant_index;
+                                next_start = match meta.segment_index {
+                                    usize::MAX => 0,
+                                    idx => idx.saturating_add(1),
+                                };
+                                next_reason = decision.reason;
+                                switched = true;
+                            }
+
                             let _ = events.send(PipelineEvent::SegmentReady {
-                                variant: to_variant,
-                                segment_index: usize::MAX,
+                                variant: current_to,
+                                segment_index: idx,
                             });
-                            yield Ok(SegmentPayload { meta, bytes });
+                            yield Ok(SegmentPayload {
+                                meta,
+                                bytes: fetch_bytes.bytes,
+                            });
+
+                            if switched {
+                                break;
+                            }
                         }
                         Err(err) => {
                             yield Err(PipelineError::Hls(err));
-                            return;
+                            break;
                         }
                     }
                 }
-            }
 
-            while let Some((idx, item)) = enumerated.next().await {
-                if idx < start_from {
+                if switched {
+                    current_from = next_from;
+                    current_to = next_to;
+                    current_start = next_start;
+                    current_reason = next_reason;
                     continue;
                 }
 
-                match item {
-                    Ok(fetch_bytes) => {
-                        let Some(segment) = segments.get(idx) else {
-                            yield Err(PipelineError::Hls(HlsError::SegmentNotFound(format!("Index {}", idx))));
-                            break;
-                        };
-
-                        let segment_url = match media_url.join(&segment.uri) {
-                            Ok(url) => url,
-                            Err(e) => {
-                                yield Err(PipelineError::Hls(HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e))));
-                                break;
-                            }
-                        };
-
-                        let meta = SegmentMeta {
-                            variant: to_variant,
-                            segment_index: idx,
-                            sequence: segment.sequence,
-                            url: segment_url,
-                            duration: Some(fetch_bytes.duration.max(Duration::from_millis(1))),
-                            key: segment.key.clone(),
-                        };
-                        let _ = events.send(PipelineEvent::SegmentReady {
-                            variant: to_variant,
-                            segment_index: idx,
-                        });
-                        yield Ok(SegmentPayload {
-                            meta,
-                            bytes: fetch_bytes.bytes,
-                        });
-                    }
-                    Err(err) => {
-                        yield Err(PipelineError::Hls(err));
-                        break;
-                    }
-                }
+                break;
             }
         })
     }
 
     pub fn seek(&mut self, segment_index: usize) {
         let variant = self.abr_controller.current_variant();
-        self.inner = Self::variant_stream(
-            self.fetch.clone(),
-            self.playlist_manager.clone(),
-            self.master_url.clone(),
-            self.events.clone(),
-            Arc::clone(&self.variants),
-            variant,
-            variant,
-            segment_index,
-            AbrReason::ManualOverride,
-        );
+        self.inner =
+            self.variant_stream(variant, variant, segment_index, AbrReason::ManualOverride);
         let _ = self.events.send(PipelineEvent::StreamReset);
     }
 
@@ -285,22 +312,17 @@ impl BaseStream {
             to: variant_index,
             reason: crate::AbrReason::ManualOverride,
         });
+        let _ = self.events.send(PipelineEvent::VariantSelected {
+            from,
+            to: variant_index,
+            reason: crate::AbrReason::ManualOverride,
+        });
         let _ = self.events.send(PipelineEvent::VariantApplied {
             from,
             to: variant_index,
             reason: crate::AbrReason::ManualOverride,
         });
-        self.inner = Self::variant_stream(
-            self.fetch.clone(),
-            self.playlist_manager.clone(),
-            self.master_url.clone(),
-            self.events.clone(),
-            Arc::clone(&self.variants),
-            from,
-            variant_index,
-            0,
-            AbrReason::ManualOverride,
-        );
+        self.inner = self.variant_stream(from, variant_index, 0, crate::AbrReason::ManualOverride);
         let _ = self.events.send(PipelineEvent::StreamReset);
     }
 }
@@ -315,62 +337,12 @@ impl Stream for BaseStream {
             return Poll::Ready(None);
         }
 
-        match this.inner.as_mut().poll_next(cx) {
-            Poll::Ready(Some(Ok(payload))) => {
-                if let Some(duration) = payload.meta.duration {
-                    let duration = duration.max(Duration::from_millis(1));
-                    let now = Instant::now();
-                    let sample = ThroughputSample {
-                        bytes: payload.bytes.len() as u64,
-                        duration,
-                        at: now,
-                        source: ThroughputSampleSource::Network,
-                    };
-                    this.abr_controller.push_throughput_sample(sample);
-                    let variants = match this.variants.get() {
-                        Some(v) => v,
-                        None => {
-                            return Poll::Ready(Some(Err(PipelineError::Hls(
-                                HlsError::VariantNotFound("variants not initialized".to_string()),
-                            ))));
-                        }
-                    };
-
-                    let decision =
-                        this.abr_controller
-                            .decide(variants, duration.as_secs_f64(), now);
-                    if decision.changed {
-                        let from = this.abr_controller.current_variant();
-                        this.abr_controller.apply(&decision, now);
-                        let _ = this.events.send(PipelineEvent::VariantSelected {
-                            from,
-                            to: decision.target_variant_index,
-                            reason: decision.reason,
-                        });
-                        let start_from = match payload.meta.segment_index {
-                            usize::MAX => 0,
-                            idx => idx.saturating_add(1),
-                        };
-                        this.inner = Self::variant_stream(
-                            this.fetch.clone(),
-                            this.playlist_manager.clone(),
-                            this.master_url.clone(),
-                            this.events.clone(),
-                            Arc::clone(&this.variants),
-                            from,
-                            decision.target_variant_index,
-                            start_from,
-                            decision.reason,
-                        );
-                        let _ = this.events.send(PipelineEvent::StreamReset);
-                    }
-                }
-
-                Poll::Ready(Some(Ok(payload)))
-            }
-            other => other,
-        }
+        this.inner.as_mut().poll_next(cx)
     }
+}
+
+fn empty_stream() -> Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>> {
+    Box::pin(stream::empty())
 }
 
 impl PipelineStream for BaseStream {

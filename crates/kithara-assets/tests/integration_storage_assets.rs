@@ -101,6 +101,125 @@ async fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
 }
 
 #[rstest]
+#[case("persist-atomic-1", "media/atomic_a.bin", b"atomic data")]
+#[case("persist-atomic-empty", "media/atomic_empty.bin", b"")]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn atomic_resource_persistence(
+    #[case] asset_root: &str,
+    #[case] rel_path: &str,
+    #[case] payload: &[u8],
+    cancel_token: CancellationToken,
+    asset_store_no_limits: AssetStore,
+) {
+    let cancel = cancel_token;
+    let store = asset_store_no_limits;
+    let key = ResourceKey::new(asset_root.to_string(), rel_path.to_string());
+
+    {
+        let res = store
+            .open_atomic_resource(&key, cancel.clone())
+            .await
+            .unwrap();
+        res.write(payload).await.unwrap();
+        res.commit(None).await.unwrap();
+    }
+
+    let res = store.open_atomic_resource(&key, cancel).await.unwrap();
+    let data = res.read().await.unwrap();
+    assert_eq!(&*data, payload);
+}
+
+#[rstest]
+#[case("persist-stream-1", "media/stream1.bin", b"stream payload")]
+#[case("persist-stream-2", "media/stream2.bin", b"more stream data")]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn streaming_resource_persistence(
+    #[case] asset_root: &str,
+    #[case] rel_path: &str,
+    #[case] payload: &[u8],
+    cancel_token: CancellationToken,
+    asset_store_no_limits: AssetStore,
+) {
+    let cancel = cancel_token;
+    let store = asset_store_no_limits;
+    let key = ResourceKey::new(asset_root.to_string(), rel_path.to_string());
+
+    {
+        let res = store
+            .open_streaming_resource(&key, cancel.clone())
+            .await
+            .unwrap();
+        res.write_at(0, payload).await.unwrap();
+        res.commit(Some(payload.len() as u64)).await.unwrap();
+        res.wait_range(0..payload.len() as u64).await.unwrap();
+    }
+
+    let res = store.open_streaming_resource(&key, cancel).await.unwrap();
+    let data = res.read_at(0, payload.len()).await.unwrap();
+    assert_eq!(&*data, payload);
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn mixed_resource_persistence_across_reopen(
+    cancel_token: CancellationToken,
+    asset_store_no_limits: AssetStore,
+) {
+    let cancel = cancel_token;
+    let store = asset_store_no_limits;
+
+    let atomic_key = ResourceKey::new("mixed-asset".to_string(), "meta/index.json".to_string());
+    let streaming_key = ResourceKey::new("mixed-asset".to_string(), "media/data.bin".to_string());
+
+    let atomic_payload = Bytes::from_static(b"{\"idx\":1}");
+    let streaming_payload = Bytes::from_static(b"stream-bytes-123");
+
+    {
+        let atomic = store
+            .open_atomic_resource(&atomic_key, cancel.clone())
+            .await
+            .unwrap();
+        atomic.write(&atomic_payload).await.unwrap();
+        atomic.commit(None).await.unwrap();
+
+        let streaming = store
+            .open_streaming_resource(&streaming_key, cancel.clone())
+            .await
+            .unwrap();
+        streaming.write_at(0, &streaming_payload).await.unwrap();
+        streaming
+            .commit(Some(streaming_payload.len() as u64))
+            .await
+            .unwrap();
+        streaming
+            .wait_range(0..streaming_payload.len() as u64)
+            .await
+            .unwrap();
+    }
+
+    let atomic = store
+        .open_atomic_resource(&atomic_key, cancel.clone())
+        .await
+        .unwrap();
+    let atomic_read = atomic.read().await.unwrap();
+    assert_eq!(atomic_read, atomic_payload);
+
+    let streaming = store
+        .open_streaming_resource(&streaming_key, cancel)
+        .await
+        .unwrap();
+    streaming
+        .wait_range(0..streaming_payload.len() as u64)
+        .await
+        .unwrap();
+    let streaming_read = streaming.read_at(0, streaming_payload.len()).await.unwrap();
+    assert_eq!(streaming_read, streaming_payload);
+}
+
+#[rstest]
 #[case("asset-hls-123", 3)]
 #[case("asset-hls-456", 5)]
 #[case("asset-hls-789", 2)]

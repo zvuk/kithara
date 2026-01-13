@@ -152,7 +152,8 @@ This allows consumers to efficiently wait for data without busy polling.
 
 ### `DiskOptions`
 - `path: PathBuf` — Filesystem path for the resource
-- `create_dir: bool` — Whether to create parent directories
+- `cancel: CancellationToken` — Cancellation for all operations tied to this resource
+- `initial_len: Option<u64>` — If `Some`, truncate/extend to that length; if `None` and the file exists, existing bytes are published as available (resource stays unsealed)
 
 ### `AtomicOptions`
 - `path: PathBuf` — Filesystem path for the resource
@@ -163,26 +164,22 @@ This allows consumers to efficiently wait for data without busy polling.
 ### Creating and using a `StreamingResource`
 ```rust
 use kithara_storage::{StreamingResource, DiskOptions};
-use bytes::Bytes;
 use tokio_util::sync::CancellationToken;
 
-let options = DiskOptions {
-    path: "/path/to/resource".into(),
-    create_dir: true,
-};
-
-let resource = StreamingResource::open(options).await?;
 let cancel = CancellationToken::new();
+let options = DiskOptions::new("/path/to/resource", cancel.clone());
+
+let resource = StreamingResource::open_disk(options).await?;
 
 // Write data progressively
-resource.write_at(0, Bytes::from("hello"), cancel.clone()).await?;
-resource.write_at(5, Bytes::from("world"), cancel.clone()).await?;
+resource.write_at(0, b"hello").await?;
+resource.write_at(5, b"world").await?;
 
 // Read data back
-let data = resource.read_at(0, 10, cancel.clone()).await?;
+let data = resource.read_at(0, 10).await?;
 
 // Wait for a specific range
-resource.wait_range(0..10, cancel.clone()).await?;
+resource.wait_range(0..10).await?;
 ```
 
 ### Creating and using an `AtomicResource`
