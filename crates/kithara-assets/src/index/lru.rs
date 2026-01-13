@@ -213,16 +213,14 @@ impl LruState {
             // Propose evicting this asset.
             out.push(root.clone());
 
-            if simulated_assets > 0 {
-                simulated_assets -= 1;
-            }
+            simulated_assets = simulated_assets.saturating_sub(1);
             if let Some(b) = entry.bytes {
                 simulated_bytes = simulated_bytes.saturating_sub(b);
             }
 
             // Stop if both constraints are satisfied.
-            let satisfied_assets = max_assets.map_or(true, |max| simulated_assets <= max);
-            let satisfied_bytes = max_bytes.map_or(true, |max| simulated_bytes <= max);
+            let satisfied_assets = max_assets.is_none_or(|max| simulated_assets <= max);
+            let satisfied_bytes = max_bytes.is_none_or(|max| simulated_bytes <= max);
             if satisfied_assets && satisfied_bytes {
                 break;
             }

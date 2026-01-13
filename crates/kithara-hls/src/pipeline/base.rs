@@ -168,17 +168,15 @@ impl BaseStream {
 
             let init_segment = init_segment.clone();
             // Send VariantApplied event when starting a new variant stream
-            if from_variant != to_variant {
-                if !matches!(reason, crate::AbrReason::ManualOverride) {
-                    let _ = events.send(PipelineEvent::VariantApplied {
-                        from: from_variant,
-                        to: to_variant,
-                        reason,
-                    });
-                }
+            if from_variant != to_variant && !matches!(reason, crate::AbrReason::ManualOverride) {
+                let _ = events.send(PipelineEvent::VariantApplied {
+                    from: from_variant,
+                    to: to_variant,
+                    reason,
+                });
             }
 
-            let need_init = from_variant != to_variant || (start_from == 0 && from_variant == to_variant);
+            let need_init = from_variant != to_variant || start_from == 0;
             if need_init {
                 if let Some(init) = init_segment {
                     let init_result = async {

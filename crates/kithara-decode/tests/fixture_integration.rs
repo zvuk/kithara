@@ -84,12 +84,10 @@ fn test_embedded_audio_contains_data() {
     // Verify WAV data exists
     let wav_data = audio.wav();
     assert!(!wav_data.is_empty());
-    assert!(wav_data.len() > 0);
 
     // Verify MP3 data exists
     let mp3_data = audio.mp3();
     assert!(!mp3_data.is_empty());
-    assert!(mp3_data.len() > 0);
 
     // MP3 should be larger than WAV (our test MP3 is 2.9MB)
     assert!(mp3_data.len() > wav_data.len());

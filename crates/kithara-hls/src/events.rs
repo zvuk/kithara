@@ -56,6 +56,12 @@ pub struct EventEmitter {
     tx: broadcast::Sender<HlsEvent>,
 }
 
+impl Default for EventEmitter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EventEmitter {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(128);

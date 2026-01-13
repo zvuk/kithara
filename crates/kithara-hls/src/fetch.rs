@@ -196,7 +196,7 @@ impl FetchManager {
             &self.assets,
             &self.net,
             &segment_url,
-            &key.rel_path(),
+            key.rel_path(),
         )
         .await
     }
@@ -206,27 +206,27 @@ impl FetchManager {
     }
 
     pub async fn fetch_init_segment_resource(&self, url: &Url) -> HlsResult<FetchBytes> {
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
 
         Self::fetch_streaming_to_bytes_internal(
             &self.asset_root,
             &self.assets,
             &self.net,
             url,
-            &key.rel_path(),
+            key.rel_path(),
         )
         .await
     }
 
     pub async fn fetch_media_segment_resource(&self, url: &Url) -> HlsResult<FetchBytes> {
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
 
         Self::fetch_streaming_to_bytes_internal(
             &self.asset_root,
             &self.assets,
             &self.net,
             url,
-            &key.rel_path(),
+            key.rel_path(),
         )
         .await
     }
@@ -249,7 +249,7 @@ impl FetchManager {
         &self,
         url: &Url,
     ) -> HlsResult<StreamingAssetResource> {
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &url);
+        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
         let cancel = CancellationToken::new();
         let res = self
             .assets
@@ -301,7 +301,7 @@ impl FetchManager {
 
                 let key = ResourceKey::from_url_with_asset_root(asset_root.clone(), &segment_url);
                 let fetch_result = FetchManager::fetch_streaming_to_bytes_internal(
-                    &asset_root, &assets, &net, &segment_url, &key.rel_path()
+                    &asset_root, &assets, &net, &segment_url, key.rel_path()
                 ).await;
 
                 match fetch_result {

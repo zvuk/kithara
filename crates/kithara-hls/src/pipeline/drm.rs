@@ -5,7 +5,6 @@ use std::{
     task::{Context, Poll},
 };
 
-use bytes::Bytes;
 use futures::Stream;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;

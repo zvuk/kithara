@@ -41,7 +41,7 @@ pub enum ReaderError {
     EmptyAfterReady { offset: u64, len: usize },
 }
 
-/// Generic writer: net stream -> write_at -> commit/fail.
+/// Generic writer: net stream -> `write_at` -> commit/fail.
 ///
 /// Behavior:
 /// - On any error, calls `res.fail(...)` to unblock readers, then returns error.
@@ -90,11 +90,11 @@ where
 
     /// Attach an event callback invoked after each successful chunk write.
     /// `map` builds a user-defined event value; `sink` receives `StreamMsg::Event(event)`.
-    pub fn with_event(
-        mut self,
-        map: impl Fn(u64, usize) -> Ev + Send + Sync + 'static,
-        sink: impl Fn(StreamMsg<(), Ev>) + Send + Sync + 'static,
-    ) -> Self {
+    pub fn with_event<M, S>(mut self, map: M, sink: S) -> Self
+    where
+        M: Fn(u64, usize) -> Ev + Send + Sync + 'static,
+        S: Fn(StreamMsg<(), Ev>) + Send + Sync + 'static,
+    {
         self.map_event = Some(Arc::new(map));
         self.on_event = Some(Arc::new(sink));
         self
@@ -112,7 +112,7 @@ where
 
         loop {
             tokio::select! {
-                _ = self.cancel.cancelled() => {
+                () = self.cancel.cancelled() => {
                     debug!(offset, "writer cancelled");
                     // Do not fail resource on cancel; partial data may be useful.
                     return Ok(());
@@ -172,7 +172,7 @@ where
     }
 }
 
-/// Generic reader: wait_range -> read_at -> yield bytes.
+/// Generic reader: `wait_range` -> `read_at` -> yield bytes.
 ///
 /// Emits only `StreamMsg::Data(Bytes)`; control/events are the caller's responsibility.
 pub struct Reader<R>
@@ -208,34 +208,31 @@ where
             loop {
                 let end = pos.saturating_add(chunk as u64);
 
-                match self.res.wait_range(pos..end).await {
-                    Ok(WaitOutcome::Ready) => {
-                        let bytes = self
-                            .res
-                            .read_at(pos, chunk)
-                            .await
-                            .map_err(ReaderError::Read)
-                            .map_err(StreamError::Source)?;
-
-                        if bytes.is_empty() {
-                            yield Err(StreamError::Source(ReaderError::EmptyAfterReady {
-                                offset: pos,
-                                len: chunk,
-                            }));
-                            return;
-                        }
-
-                        pos = pos.saturating_add(bytes.len() as u64);
-                        yield Ok(StreamMsg::Data(bytes));
-                    }
-                    Ok(WaitOutcome::Eof) => {
-                        return;
-                    }
-                    Err(e) => {
+                let outcome = self.res.wait_range(pos..end).await;
+                let Ok(WaitOutcome::Ready) = outcome else {
+                    if let Err(e) = outcome {
                         yield Err(StreamError::Source(ReaderError::Wait(e)));
-                        return;
                     }
+                    return;
+                };
+
+                let bytes = self
+                    .res
+                    .read_at(pos, chunk)
+                    .await
+                    .map_err(ReaderError::Read)
+                    .map_err(StreamError::Source)?;
+
+                if bytes.is_empty() {
+                    yield Err(StreamError::Source(ReaderError::EmptyAfterReady {
+                        offset: pos,
+                        len: chunk,
+                    }));
+                    return;
                 }
+
+                pos = pos.saturating_add(bytes.len() as u64);
+                yield Ok(StreamMsg::Data(bytes));
             }
         }
     }

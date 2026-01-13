@@ -21,15 +21,7 @@ pub enum StreamMsg<C, E> {
 ///
 /// `offline_mode` is included because it is a shared concern for file and HLS flows.
 /// Enforcement is delegated to the concrete source implementation (e.g. cache-only, no network).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct StreamParams {
     pub offline_mode: bool,
-}
-
-impl Default for StreamParams {
-    fn default() -> Self {
-        Self {
-            offline_mode: false,
-        }
-    }
 }

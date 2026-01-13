@@ -318,13 +318,12 @@ impl StreamingResourceExt for StreamingResource {
             return Ok(());
         }
 
-        let end =
-            offset
-                .checked_add(data.len() as u64)
-                .ok_or_else(|| StorageError::InvalidRange {
-                    start: offset,
-                    end: offset,
-                })?;
+        let end = offset
+            .checked_add(data.len() as u64)
+            .ok_or(StorageError::InvalidRange {
+                start: offset,
+                end: offset,
+            })?;
 
         // Stash range locally to only publish it after successful disk write.
         let pending_range = offset..end;
@@ -347,9 +346,7 @@ impl StreamingResourceExt for StreamingResource {
             disk.write(offset, data).await.map_err(Into::into)
         };
 
-        if let Err(err) = write_result {
-            return Err(err);
-        }
+        write_result?;
 
         // Add the range to available after successful disk write
         {

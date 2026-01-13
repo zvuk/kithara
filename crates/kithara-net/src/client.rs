@@ -212,29 +212,29 @@ mod tests {
 
         let data = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 
-        if let Some(range) = range_header {
-            if let Some(range_str) = range.strip_prefix("bytes=") {
-                if let Some((start_str, end_str)) = range_str.split_once('-') {
-                    let start: usize = start_str.parse().unwrap_or(0);
-                    let end = if end_str.is_empty() {
-                        data.len() - 1
-                    } else {
-                        end_str.parse().unwrap_or(data.len() - 1)
-                    };
+        if let Some(range) = range_header
+            && let Some(range_str) = range.strip_prefix("bytes=")
+            && let Some((start_str, end_str)) = range_str.split_once('-')
+            && let Ok(start) = start_str.parse::<usize>()
+        {
+            let end = if end_str.is_empty() {
+                data.len() - 1
+            } else {
+                end_str.parse().unwrap_or(data.len() - 1)
+            };
 
-                    if start < data.len() && end < data.len() && start <= end {
-                        let slice = &data[start..=end];
-                        return Ok(Response::builder()
-                            .status(StatusCode::PARTIAL_CONTENT)
-                            .header(
-                                "Content-Range",
-                                format!("bytes {}-{}/{}", start, end, data.len()),
-                            )
-                            .body(axum::body::Body::from(Bytes::copy_from_slice(slice)))
-                            .unwrap());
-                    }
-                }
+            if start < data.len() && end < data.len() && start <= end {
+                let slice = &data[start..=end];
+                return Ok(Response::builder()
+                    .status(StatusCode::PARTIAL_CONTENT)
+                    .header(
+                        "Content-Range",
+                        format!("bytes {}-{}/{}", start, end, data.len()),
+                    )
+                    .body(axum::body::Body::from(Bytes::copy_from_slice(slice)))
+                    .unwrap());
             }
+
             Err(StatusCode::BAD_REQUEST)
         } else {
             Ok(Response::builder()
@@ -405,7 +405,7 @@ mod tests {
 
         // Require Authorization header
         match auth_header {
-            Some(token) if token == "Bearer secret-key-token" => {
+            Some("Bearer secret-key-token") => {
                 let key_bytes = vec![
                     0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xfe, 0xdc, 0xba, 0x98, 0x76,
                     0x54, 0x32, 0x10,
@@ -414,30 +414,30 @@ mod tests {
                 // Check for range header
                 let range_header = headers.get("Range").and_then(|h| h.to_str().ok());
 
-                if let Some(range) = range_header {
-                    if let Some(range_str) = range.strip_prefix("bytes=") {
-                        if let Some((start_str, end_str)) = range_str.split_once('-') {
-                            let start: usize = start_str.parse().unwrap_or(0);
-                            let end = if end_str.is_empty() {
-                                key_bytes.len() - 1
-                            } else {
-                                end_str.parse().unwrap_or(key_bytes.len() - 1)
-                            };
+                if let Some(range) = range_header
+                    && let Some(range_str) = range.strip_prefix("bytes=")
+                    && let Some((start_str, end_str)) = range_str.split_once('-')
+                    && let Ok(start) = start_str.parse::<usize>()
+                {
+                    let end = if end_str.is_empty() {
+                        key_bytes.len() - 1
+                    } else {
+                        end_str.parse().unwrap_or(key_bytes.len() - 1)
+                    };
 
-                            if start < key_bytes.len() && end < key_bytes.len() && start <= end {
-                                let slice = &key_bytes[start..=end];
-                                return Ok(Response::builder()
-                                    .status(StatusCode::PARTIAL_CONTENT)
-                                    .header("Content-Type", "application/octet-stream")
-                                    .header(
-                                        "Content-Range",
-                                        format!("bytes {}-{}/{}", start, end, key_bytes.len()),
-                                    )
-                                    .body(axum::body::Body::from(Bytes::copy_from_slice(slice)))
-                                    .unwrap());
-                            }
-                        }
+                    if start < key_bytes.len() && end < key_bytes.len() && start <= end {
+                        let slice = &key_bytes[start..=end];
+                        return Ok(Response::builder()
+                            .status(StatusCode::PARTIAL_CONTENT)
+                            .header("Content-Type", "application/octet-stream")
+                            .header(
+                                "Content-Range",
+                                format!("bytes {}-{}/{}", start, end, key_bytes.len()),
+                            )
+                            .body(axum::body::Body::from(Bytes::copy_from_slice(slice)))
+                            .unwrap());
                     }
+
                     Err(StatusCode::BAD_REQUEST)
                 } else {
                     Ok(Response::builder()
@@ -638,10 +638,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_net_builder_with_custom_options() {
-        let mut opts = NetOptions::default();
-        opts.request_timeout = Duration::from_millis(100);
-        opts.retry_policy =
-            RetryPolicy::new(2, Duration::from_millis(50), Duration::from_millis(200));
+        let opts = NetOptions {
+            request_timeout: Duration::from_millis(100),
+            retry_policy: RetryPolicy::new(
+                2,
+                Duration::from_millis(50),
+                Duration::from_millis(200),
+            ),
+        };
 
         let client = HttpClient::new(opts);
 

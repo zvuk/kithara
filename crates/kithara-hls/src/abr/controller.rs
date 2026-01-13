@@ -161,14 +161,14 @@ impl AbrController {
         buffer_level_secs: f64,
         now: Instant,
     ) -> AbrDecision {
-        if let Some(selector) = self.variant_selector.as_ref() {
-            if let Some(manual) = selector(master_playlist) {
-                return AbrDecision {
-                    target_variant_index: manual,
-                    reason: AbrReason::ManualOverride,
-                    changed: manual != self.current_variant,
-                };
-            }
+        if let Some(selector) = self.variant_selector.as_ref()
+            && let Some(manual) = selector(master_playlist)
+        {
+            return AbrDecision {
+                target_variant_index: manual,
+                reason: AbrReason::ManualOverride,
+                changed: manual != self.current_variant,
+            };
         }
 
         self.decide(variants, buffer_level_secs, now)
@@ -216,12 +216,14 @@ mod tests {
 
     #[test]
     fn downswitch_on_low_throughput() {
-        let mut cfg = AbrConfig::default();
-        cfg.throughput_safety_factor = 1.5;
-        cfg.min_buffer_for_up_switch_secs = 0.0;
-        cfg.down_switch_buffer_secs = 0.0;
-        cfg.min_switch_interval = Duration::ZERO;
-        cfg.initial_variant_index = Some(2);
+        let cfg = AbrConfig {
+            throughput_safety_factor: 1.5,
+            min_buffer_for_up_switch_secs: 0.0,
+            down_switch_buffer_secs: 0.0,
+            min_switch_interval: Duration::ZERO,
+            initial_variant_index: Some(2),
+            ..AbrConfig::default()
+        };
 
         let mut c = AbrController::new(cfg, None);
         let now = Instant::now();
@@ -240,12 +242,14 @@ mod tests {
 
     #[test]
     fn upswitch_requires_buffer_and_hysteresis() {
-        let mut cfg = AbrConfig::default();
-        cfg.min_buffer_for_up_switch_secs = 10.0;
-        cfg.throughput_safety_factor = 1.5;
-        cfg.up_hysteresis_ratio = 1.3;
-        cfg.min_switch_interval = Duration::ZERO;
-        cfg.initial_variant_index = Some(0);
+        let cfg = AbrConfig {
+            min_buffer_for_up_switch_secs: 10.0,
+            throughput_safety_factor: 1.5,
+            up_hysteresis_ratio: 1.3,
+            min_switch_interval: Duration::ZERO,
+            initial_variant_index: Some(0),
+            ..AbrConfig::default()
+        };
 
         let mut c = AbrController::new(cfg, None);
         let now = Instant::now();
@@ -268,11 +272,13 @@ mod tests {
 
     #[test]
     fn min_switch_interval_prevents_oscillation() {
-        let mut cfg = AbrConfig::default();
-        cfg.min_switch_interval = Duration::from_secs(30);
-        cfg.min_buffer_for_up_switch_secs = 0.0;
-        cfg.down_switch_buffer_secs = 0.0;
-        cfg.initial_variant_index = Some(1);
+        let cfg = AbrConfig {
+            min_switch_interval: Duration::from_secs(30),
+            min_buffer_for_up_switch_secs: 0.0,
+            down_switch_buffer_secs: 0.0,
+            initial_variant_index: Some(1),
+            ..AbrConfig::default()
+        };
 
         let mut c = AbrController::new(cfg, None);
         let now = Instant::now();
@@ -295,11 +301,13 @@ mod tests {
 
     #[test]
     fn aggressive_up_switch_without_interval() {
-        let mut cfg = AbrConfig::default();
-        cfg.min_switch_interval = Duration::ZERO;
-        cfg.min_buffer_for_up_switch_secs = 0.0;
-        cfg.down_switch_buffer_secs = 0.0;
-        cfg.initial_variant_index = Some(0);
+        let cfg = AbrConfig {
+            min_switch_interval: Duration::ZERO,
+            min_buffer_for_up_switch_secs: 0.0,
+            down_switch_buffer_secs: 0.0,
+            initial_variant_index: Some(0),
+            ..AbrConfig::default()
+        };
 
         let mut c = AbrController::new(cfg, None);
         let now = Instant::now();
@@ -318,9 +326,11 @@ mod tests {
 
     #[test]
     fn down_switch_when_buffer_low() {
-        let mut cfg = AbrConfig::default();
-        cfg.min_switch_interval = Duration::ZERO;
-        cfg.initial_variant_index = Some(2);
+        let cfg = AbrConfig {
+            min_switch_interval: Duration::ZERO,
+            initial_variant_index: Some(2),
+            ..AbrConfig::default()
+        };
 
         let mut c = AbrController::new(cfg, None);
         let now = Instant::now();
@@ -339,8 +349,10 @@ mod tests {
 
     #[test]
     fn no_change_without_estimate() {
-        let mut cfg = AbrConfig::default();
-        cfg.initial_variant_index = Some(1);
+        let cfg = AbrConfig {
+            initial_variant_index: Some(1),
+            ..AbrConfig::default()
+        };
         let c = AbrController::new(cfg, None);
         let now = Instant::now();
 

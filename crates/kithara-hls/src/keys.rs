@@ -102,12 +102,12 @@ impl KeyManager {
     fn rel_path_from_url(url: &Url) -> String {
         let last = url
             .path_segments()
-            .and_then(|segments| segments.last())
+            .and_then(|mut segments| segments.next_back())
             .unwrap_or("index");
-        if let Some((stem, _)) = last.rsplit_once('.') {
-            if !stem.is_empty() {
-                return stem.to_string();
-            }
+        if let Some((stem, _)) = last.rsplit_once('.')
+            && !stem.is_empty()
+        {
+            return stem.to_string();
         }
         last.to_string()
     }

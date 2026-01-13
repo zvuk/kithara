@@ -206,7 +206,7 @@ async fn eviction_corner_cases_different_byte_limits(
     let evict = store.base().clone();
 
     // Create assets that approach the limit
-    let asset_sizes = vec![max_bytes / 3, max_bytes / 3];
+    let asset_sizes = [max_bytes / 3, max_bytes / 3];
     let asset_names = vec!["asset-corner-1", "asset-corner-2"];
 
     for (i, (size, name)) in asset_sizes.iter().zip(asset_names.iter()).enumerate() {

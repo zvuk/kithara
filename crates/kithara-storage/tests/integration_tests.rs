@@ -506,7 +506,9 @@ async fn streaming_resource_invalid_ranges() {
 
     // Invalid wait ranges
     assert!(matches!(
-        resource.wait_range(10..5).await,
+        resource
+            .wait_range(std::ops::Range { start: 10, end: 5 })
+            .await,
         Err(StorageError::InvalidRange { start: 10, end: 5 })
     ));
     assert!(matches!(

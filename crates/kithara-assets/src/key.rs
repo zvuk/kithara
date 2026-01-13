@@ -38,7 +38,7 @@ impl ResourceKey {
     pub fn from_url_with_asset_root(asset_root: impl Into<String>, url: &Url) -> Self {
         let rel_path = url
             .path_segments()
-            .and_then(|segments| segments.last())
+            .and_then(|mut segments| segments.next_back())
             .filter(|s| !s.is_empty())
             .unwrap_or("index")
             .to_string();

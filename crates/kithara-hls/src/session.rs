@@ -317,46 +317,45 @@ impl HlsSessionSource {
                 let window = self.prefetch_window;
                 let next = self.prefetch_next.clone();
                 let cache = self.resource_cache.clone();
-                let _ = self
+                let handle = self
                     .prefetch_started
                     .get_or_init(move || {
                         let fm_all = fm_all.clone();
                         let urls = urls.clone();
                         let next = next.clone();
                         let cache = cache.clone();
-                        async move {
-                            tokio::spawn(async move {
-                                loop {
-                                    let start = next.load(Ordering::Relaxed);
-                                    if start >= urls.len() {
-                                        break;
-                                    }
-                                    let end = (start + window).min(urls.len());
-                                    for idx in start..end {
-                                        if let Some(url) = urls.get(idx) {
-                                            match fm_all.open_media_streaming_resource(url).await {
-                                                Ok(res) => {
-                                                    {
-                                                        let mut guard = cache.write().await;
-                                                        guard.insert(idx, res);
-                                                    }
-                                                    tracing::debug!(variant = vi, segment_index = idx, %url, "prefetch window filled segment");
+                        std::future::ready(tokio::spawn(async move {
+                            loop {
+                                let start = next.load(Ordering::Relaxed);
+                                if start >= urls.len() {
+                                    break;
+                                }
+                                let end = (start + window).min(urls.len());
+                                for idx in start..end {
+                                    if let Some(url) = urls.get(idx) {
+                                        match fm_all.open_media_streaming_resource(url).await {
+                                            Ok(res) => {
+                                                {
+                                                    let mut guard = cache.write().await;
+                                                    guard.insert(idx, res);
                                                 }
-                                                Err(err) => {
-                                                    tracing::warn!(variant = vi, segment_index = idx, %url, %err, "prefetch window failed");
-                                                }
+                                                tracing::debug!(variant = vi, segment_index = idx, %url, "prefetch window filled segment");
+                                            }
+                                            Err(err) => {
+                                                tracing::warn!(variant = vi, segment_index = idx, %url, %err, "prefetch window failed");
                                             }
                                         }
                                     }
-                                    if end >= urls.len() {
-                                        break;
-                                    }
-                                    sleep(Duration::from_millis(25)).await;
                                 }
-                            })
-                        }
+                                if end >= urls.len() {
+                                    break;
+                                }
+                                sleep(Duration::from_millis(25)).await;
+                            }
+                        }))
                     })
                     .await;
+                let _ = handle;
 
                 Ok::<_, HlsError>(state)
             })
@@ -495,9 +494,10 @@ impl HlsSessionSource {
                     segment_url = %url,
                     "HLS prefetch (continuous) spawn"
                 );
-                tokio::spawn(async move {
+                let _ = tokio::spawn(async move {
                     let _ = fm.open_media_streaming_resource(&url).await;
-                });
+                })
+                .await;
             }
             return;
         };
@@ -520,7 +520,7 @@ impl HlsSessionSource {
                     prefetch_buffer_size = prefetch_size,
                     "HLS prefetch (buffered) spawn"
                 );
-                tokio::spawn(async move {
+                let _ = tokio::spawn(async move {
                     match fm.open_media_streaming_resource(&url).await {
                         Ok(res) => {
                             let mut guard = cache.write().await;
@@ -530,7 +530,8 @@ impl HlsSessionSource {
                             warn!(segment_index = idx, segment_url = %url, %err, "HLS prefetch (buffered) failed");
                         }
                     }
-                });
+                })
+                .await;
             }
         }
     }

@@ -144,7 +144,7 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
         segments.push((seg, i));
     }
 
-    if let Some((seg1, _)) = segments.get(0) {
+    if let Some((seg1, _)) = segments.first() {
         // Write two disjoint ranges in seg1 and read back.
         let a = vec![0xAAu8; 4096];
         let b = vec![0xBBu8; 2048];
