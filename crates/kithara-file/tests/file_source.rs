@@ -468,9 +468,8 @@ async fn cache_through_write_works(
     let resource_key = kithara_assets::ResourceKey::from(&url);
 
     // Open the streaming resource directly to verify it exists
-    let cancel = tokio_util::sync::CancellationToken::new();
     let streaming_resource = assets
-        .open_streaming_resource(&resource_key, cancel.clone())
+        .open_streaming_resource(&resource_key)
         .await
         .expect("Should be able to open cached resource");
 

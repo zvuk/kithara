@@ -50,10 +50,9 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     #[case] asset_a_name: &str,
     #[case] asset_b_name: &str,
     #[case] asset_c_name: &str,
-    cancel_token: CancellationToken,
+    _cancel_token: CancellationToken,
     asset_store_with_100_bytes_limit: AssetStore,
 ) {
-    let cancel = cancel_token;
     let store = asset_store_with_100_bytes_limit;
     let evict = store.base().clone();
 
@@ -71,10 +70,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     // Asset A: create some data and then explicitly record bytes in LRU via eviction decorator.
     {
         let key_a = ResourceKey::new(asset_a_name.to_string(), "media/a.bin".to_string());
-        let res_a = evict
-            .open_atomic_resource(&key_a, cancel.clone())
-            .await
-            .unwrap();
+        let res_a = evict.open_atomic_resource(&key_a).await.unwrap();
 
         res_a
             .write(&Bytes::from(vec![0xAAu8; bytes_a]))
@@ -86,7 +82,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         // `AssetStore` is `LeaseAssets<EvictAssets<DiskAssetStore>>`, so we can reach `EvictAssets`
         // via `.base()`.
         evict
-            .touch_asset_bytes(asset_a_name, bytes_a as u64, cancel.clone())
+            .touch_asset_bytes(asset_a_name, bytes_a as u64)
             .await
             .unwrap();
 
@@ -106,10 +102,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     // Asset B: create and record bytes.
     {
         let key_b = ResourceKey::new(asset_b_name.to_string(), "media/b.bin".to_string());
-        let res_b = evict
-            .open_atomic_resource(&key_b, cancel.clone())
-            .await
-            .unwrap();
+        let res_b = evict.open_atomic_resource(&key_b).await.unwrap();
 
         res_b
             .write(&Bytes::from(vec![0xBBu8; bytes_b]))
@@ -118,7 +111,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         res_b.commit(None).await.unwrap();
 
         evict
-            .touch_asset_bytes(asset_b_name, bytes_b as u64, cancel.clone())
+            .touch_asset_bytes(asset_b_name, bytes_b as u64)
             .await
             .unwrap();
 
@@ -138,10 +131,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     // Asset C: first open for a new asset_root triggers eviction.
     {
         let key_c = ResourceKey::new(asset_c_name.to_string(), "media/c.bin".to_string());
-        let res_c = evict
-            .open_atomic_resource(&key_c, cancel.clone())
-            .await
-            .unwrap();
+        let res_c = evict.open_atomic_resource(&key_c).await.unwrap();
 
         res_c.write(&Bytes::from_static(b"C")).await.unwrap();
         res_c.commit(None).await.unwrap();
@@ -217,35 +207,26 @@ async fn eviction_corner_cases_different_byte_limits(
     for (i, (size, name)) in asset_sizes.iter().zip(asset_names.iter()).enumerate() {
         let key = ResourceKey::new(name.to_string(), format!("data{}.bin", i));
 
-        let res = evict
-            .open_atomic_resource(&key, cancel.clone())
-            .await
-            .unwrap();
+        let res = evict.open_atomic_resource(&key).await.unwrap();
         res.write(&Bytes::from(vec![0x11 * (i + 1) as u8; *size]))
             .await
             .unwrap();
         res.commit(None).await.unwrap();
 
-        evict
-            .touch_asset_bytes(name, *size as u64, cancel.clone())
-            .await
-            .unwrap();
+        evict.touch_asset_bytes(name, *size as u64).await.unwrap();
     }
 
     // Create a new asset and account its bytes
     let trigger_key = ResourceKey::new("asset-trigger".to_string(), "trigger.bin".to_string());
 
-    let res = evict
-        .open_atomic_resource(&trigger_key, cancel.clone())
-        .await
-        .unwrap();
+    let res = evict.open_atomic_resource(&trigger_key).await.unwrap();
     res.write(&Bytes::from(vec![0xFF; new_asset_size]))
         .await
         .unwrap();
     res.commit(None).await.unwrap();
 
     evict
-        .touch_asset_bytes("asset-trigger", new_asset_size as u64, cancel.clone())
+        .touch_asset_bytes("asset-trigger", new_asset_size as u64)
         .await
         .unwrap();
 
@@ -253,10 +234,7 @@ async fn eviction_corner_cases_different_byte_limits(
 
     // Trigger eviction after accounting the trigger bytes by creating another asset_root.
     let probe_key = ResourceKey::new("asset-probe".to_string(), "probe.bin".to_string());
-    let probe = evict
-        .open_atomic_resource(&probe_key, cancel.clone())
-        .await
-        .unwrap();
+    let probe = evict.open_atomic_resource(&probe_key).await.unwrap();
     probe.write(&Bytes::from_static(b"P")).await.unwrap();
     probe.commit(None).await.unwrap();
 

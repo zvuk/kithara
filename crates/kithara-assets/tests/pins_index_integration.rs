@@ -11,54 +11,40 @@ fn pins_path(root: &std::path::Path) -> std::path::PathBuf {
 }
 
 #[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
-
-#[fixture]
 fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
 #[fixture]
-fn asset_store_no_limits(
-    temp_dir: tempfile::TempDir,
-    cancel_token: CancellationToken,
-) -> AssetStore {
+fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
         })
-        .cancel(cancel_token.clone())
         .build()
 }
 
 #[fixture]
-fn disk_asset_store(
-    temp_dir: tempfile::TempDir,
-    cancel_token: CancellationToken,
-) -> DiskAssetStore {
-    DiskAssetStore::new(temp_dir.path(), cancel_token.clone())
+fn disk_asset_store(temp_dir: tempfile::TempDir) -> DiskAssetStore {
+    DiskAssetStore::new(temp_dir.path(), CancellationToken::new())
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn pins_index_missing_returns_default(
-    cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
     disk_asset_store: DiskAssetStore,
 ) {
     let dir = temp_dir.path();
-    let cancel = cancel_token;
     let base = disk_asset_store;
 
     let path = pins_path(dir);
     assert!(!path.exists(), "pins.json must not exist initially");
 
-    let idx = PinsIndex::open(&base, cancel).await.unwrap();
+    let idx = PinsIndex::open(&base).await.unwrap();
     let pins = idx.load().await.unwrap();
 
     assert!(
@@ -71,12 +57,10 @@ async fn pins_index_missing_returns_default(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn pins_index_invalid_json_returns_default(
-    cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
     disk_asset_store: DiskAssetStore,
 ) {
     let dir = temp_dir.path();
-    let cancel = cancel_token;
     let base = disk_asset_store;
 
     // Write a corrupted JSON file directly on disk to simulate index damage.
@@ -87,7 +71,7 @@ async fn pins_index_invalid_json_returns_default(
     std::fs::write(&path, b"{ this is not valid json").unwrap();
     assert!(path.exists(), "pins.json must exist for this test");
 
-    let idx = PinsIndex::open(&base, cancel).await.unwrap();
+    let idx = PinsIndex::open(&base).await.unwrap();
     let pins = idx.load().await.unwrap();
 
     assert!(
@@ -100,15 +84,13 @@ async fn pins_index_invalid_json_returns_default(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn pins_index_roundtrip_store_then_load(
-    cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
     disk_asset_store: DiskAssetStore,
 ) {
     let _dir = temp_dir.path();
-    let cancel = cancel_token;
     let base = disk_asset_store;
 
-    let idx = PinsIndex::open(&base, cancel).await.unwrap();
+    let idx = PinsIndex::open(&base).await.unwrap();
 
     let mut pins = HashSet::new();
     pins.insert("asset-a".to_string());
@@ -117,9 +99,7 @@ async fn pins_index_roundtrip_store_then_load(
     idx.store(&pins).await.unwrap();
 
     // A second instance reading the same underlying resource should see the persisted set.
-    let idx2 = PinsIndex::open(&base, CancellationToken::new())
-        .await
-        .unwrap();
+    let idx2 = PinsIndex::open(&base).await.unwrap();
     let loaded = idx2.load().await.unwrap();
 
     assert_eq!(loaded, pins, "pins index must roundtrip via store/load");
@@ -133,14 +113,12 @@ async fn pins_index_roundtrip_store_then_load(
 #[tokio::test]
 async fn pins_index_store_load_with_different_sets(
     #[case] asset_names: Vec<&str>,
-    cancel_token: CancellationToken,
     _temp_dir: tempfile::TempDir,
     disk_asset_store: DiskAssetStore,
 ) {
-    let cancel = cancel_token;
     let base = disk_asset_store;
 
-    let idx = PinsIndex::open(&base, cancel).await.unwrap();
+    let idx = PinsIndex::open(&base).await.unwrap();
 
     let pins: HashSet<String> = asset_names.iter().map(|s| s.to_string()).collect();
     idx.store(&pins).await.unwrap();
@@ -157,25 +135,21 @@ async fn pins_index_store_load_with_different_sets(
 #[tokio::test]
 async fn pins_index_concurrent_updates_handled_correctly(
     #[case] asset_count: usize,
-    cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
     disk_asset_store: DiskAssetStore,
 ) {
     let _dir = temp_dir.path();
-    let cancel = cancel_token;
     let base = disk_asset_store;
 
     // Create first index and store some pins
-    let idx1 = PinsIndex::open(&base, cancel.clone()).await.unwrap();
+    let idx1 = PinsIndex::open(&base).await.unwrap();
     let pins1: HashSet<String> = (0..asset_count)
         .map(|i| format!("asset-{}", i + 1))
         .collect();
     idx1.store(&pins1).await.unwrap();
 
     // Create second index and load (should see first pins)
-    let idx2 = PinsIndex::open(&base, CancellationToken::new())
-        .await
-        .unwrap();
+    let idx2 = PinsIndex::open(&base).await.unwrap();
     let loaded1 = idx2.load().await.unwrap();
     assert_eq!(loaded1, pins1);
 
@@ -194,14 +168,12 @@ async fn pins_index_concurrent_updates_handled_correctly(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn pins_index_empty_set_stores_and_loads_correctly(
-    cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
     disk_asset_store: DiskAssetStore,
 ) {
-    let cancel = cancel_token;
     let base = disk_asset_store;
 
-    let idx = PinsIndex::open(&base, cancel).await.unwrap();
+    let idx = PinsIndex::open(&base).await.unwrap();
 
     // Store empty set
     let empty_pins = HashSet::new();
@@ -232,16 +204,13 @@ async fn pins_index_empty_set_stores_and_loads_correctly(
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn pins_index_persists_across_store_instances(
-    cancel_token: CancellationToken,
-    temp_dir: tempfile::TempDir,
-) {
+async fn pins_index_persists_across_store_instances(temp_dir: tempfile::TempDir) {
     let dir = temp_dir.path();
-    let cancel = cancel_token.clone();
+    let cancel = CancellationToken::new();
 
     // Create first store and write pins
-    let base1 = DiskAssetStore::new(dir, cancel_token.clone());
-    let idx1 = PinsIndex::open(&base1, cancel.clone()).await.unwrap();
+    let base1 = DiskAssetStore::new(dir, cancel.clone());
+    let idx1 = PinsIndex::open(&base1).await.unwrap();
 
     let mut pins = HashSet::new();
     pins.insert("persisted-asset".to_string());
@@ -250,10 +219,8 @@ async fn pins_index_persists_across_store_instances(
     idx1.store(&pins).await.unwrap();
 
     // Create completely new store instance (simulating restart)
-    let base2 = DiskAssetStore::new(dir, cancel_token);
-    let idx2 = PinsIndex::open(&base2, CancellationToken::new())
-        .await
-        .unwrap();
+    let base2 = DiskAssetStore::new(dir, cancel);
+    let idx2 = PinsIndex::open(&base2).await.unwrap();
 
     let loaded = idx2.load().await.unwrap();
     assert_eq!(loaded, pins, "pins should persist across store instances");

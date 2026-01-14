@@ -45,6 +45,7 @@ pub fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
         .map_err(|e| AssetsError::Canonicalization(e.to_string()))
 }
 
+#[allow(dead_code)]
 pub fn canonicalize_for_resource(url: &Url) -> AssetsResult<String> {
     // Validate that URL has required components for resource identification
     if url.scheme().is_empty() {

@@ -342,7 +342,7 @@ async fn abr_events_channel_functionality(
         .map_err(|e| kithara_hls::HlsError::Driver(e.to_string()))?;
 
     // Should have received at least some events
-    assert!(event_count > 0 || true, "Expected to receive some events");
+    assert!(event_count > 0, "Expected to receive some events");
 
     Ok(())
 }

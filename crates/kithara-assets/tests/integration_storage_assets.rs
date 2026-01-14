@@ -6,7 +6,6 @@ use bytes::Bytes;
 use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey};
 use kithara_storage::{Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
-use tokio_util::sync::CancellationToken;
 
 #[allow(dead_code)]
 fn mp3_bytes() -> Bytes {
@@ -29,27 +28,18 @@ fn read_pins_file(root: &std::path::Path) -> Option<serde_json::Value> {
 }
 
 #[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
-
-#[fixture]
 fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
 #[fixture]
-fn asset_store_no_limits(
-    temp_dir: tempfile::TempDir,
-    cancel_token: CancellationToken,
-) -> AssetStore {
+fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
         })
-        .cancel(cancel_token.clone())
         .build()
 }
 
@@ -63,12 +53,10 @@ async fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
     #[case] size: usize,
-    cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
     asset_store_no_limits: AssetStore,
 ) {
     let dir = temp_dir.path();
-    let cancel = cancel_token;
     let store = asset_store_no_limits;
 
     // MP3 scenario: single wrapped file inside an asset.
@@ -76,10 +64,7 @@ async fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     let payload = Bytes::from((0..size).map(|i| (i % 251) as u8).collect::<Vec<_>>());
 
     // Keep the handle alive while we check the persisted pins file.
-    let res = store
-        .open_atomic_resource(&key, cancel.clone())
-        .await
-        .unwrap();
+    let res = store.open_atomic_resource(&key).await.unwrap();
 
     res.write(&payload).await.unwrap();
     res.commit(None).await.unwrap();
@@ -113,23 +98,18 @@ async fn atomic_resource_persistence(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
     #[case] payload: &[u8],
-    cancel_token: CancellationToken,
     asset_store_no_limits: AssetStore,
 ) {
-    let cancel = cancel_token;
     let store = asset_store_no_limits;
     let key = ResourceKey::new(asset_root.to_string(), rel_path.to_string());
 
     {
-        let res = store
-            .open_atomic_resource(&key, cancel.clone())
-            .await
-            .unwrap();
+        let res = store.open_atomic_resource(&key).await.unwrap();
         res.write(payload).await.unwrap();
         res.commit(None).await.unwrap();
     }
 
-    let res = store.open_atomic_resource(&key, cancel).await.unwrap();
+    let res = store.open_atomic_resource(&key).await.unwrap();
     let data = res.read().await.unwrap();
     assert_eq!(&*data, payload);
 }
@@ -143,24 +123,19 @@ async fn streaming_resource_persistence(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
     #[case] payload: &[u8],
-    cancel_token: CancellationToken,
     asset_store_no_limits: AssetStore,
 ) {
-    let cancel = cancel_token;
     let store = asset_store_no_limits;
     let key = ResourceKey::new(asset_root.to_string(), rel_path.to_string());
 
     {
-        let res = store
-            .open_streaming_resource(&key, cancel.clone())
-            .await
-            .unwrap();
+        let res = store.open_streaming_resource(&key).await.unwrap();
         res.write_at(0, payload).await.unwrap();
         res.commit(Some(payload.len() as u64)).await.unwrap();
         res.wait_range(0..payload.len() as u64).await.unwrap();
     }
 
-    let res = store.open_streaming_resource(&key, cancel).await.unwrap();
+    let res = store.open_streaming_resource(&key).await.unwrap();
     let data = res.read_at(0, payload.len()).await.unwrap();
     assert_eq!(&*data, payload);
 }
@@ -168,11 +143,7 @@ async fn streaming_resource_persistence(
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn mixed_resource_persistence_across_reopen(
-    cancel_token: CancellationToken,
-    asset_store_no_limits: AssetStore,
-) {
-    let cancel = cancel_token;
+async fn mixed_resource_persistence_across_reopen(asset_store_no_limits: AssetStore) {
     let store = asset_store_no_limits;
 
     let atomic_key = ResourceKey::new("mixed-asset".to_string(), "meta/index.json".to_string());
@@ -182,17 +153,11 @@ async fn mixed_resource_persistence_across_reopen(
     let streaming_payload = Bytes::from_static(b"stream-bytes-123");
 
     {
-        let atomic = store
-            .open_atomic_resource(&atomic_key, cancel.clone())
-            .await
-            .unwrap();
+        let atomic = store.open_atomic_resource(&atomic_key).await.unwrap();
         atomic.write(&atomic_payload).await.unwrap();
         atomic.commit(None).await.unwrap();
 
-        let streaming = store
-            .open_streaming_resource(&streaming_key, cancel.clone())
-            .await
-            .unwrap();
+        let streaming = store.open_streaming_resource(&streaming_key).await.unwrap();
         streaming.write_at(0, &streaming_payload).await.unwrap();
         streaming
             .commit(Some(streaming_payload.len() as u64))
@@ -204,17 +169,11 @@ async fn mixed_resource_persistence_across_reopen(
             .unwrap();
     }
 
-    let atomic = store
-        .open_atomic_resource(&atomic_key, cancel.clone())
-        .await
-        .unwrap();
+    let atomic = store.open_atomic_resource(&atomic_key).await.unwrap();
     let atomic_read = atomic.read().await.unwrap();
     assert_eq!(atomic_read, atomic_payload);
 
-    let streaming = store
-        .open_streaming_resource(&streaming_key, cancel)
-        .await
-        .unwrap();
+    let streaming = store.open_streaming_resource(&streaming_key).await.unwrap();
     streaming
         .wait_range(0..streaming_payload.len() as u64)
         .await
@@ -227,10 +186,8 @@ async fn mixed_resource_persistence_across_reopen(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn streaming_resource_concurrent_write_and_read_across_handles(
-    cancel_token: CancellationToken,
     asset_store_no_limits: AssetStore,
 ) {
-    let cancel = cancel_token;
     let store = asset_store_no_limits;
 
     let key = ResourceKey::new(
@@ -241,12 +198,11 @@ async fn streaming_resource_concurrent_write_and_read_across_handles(
     let payload_len = payload.len() as u64;
 
     let store_reader = store.clone();
-    let cancel_reader = cancel.clone();
     let key_reader = key.clone();
     let payload_len_reader = payload_len;
     let reader = tokio::spawn(async move {
         let res = store_reader
-            .open_streaming_resource(&key_reader, cancel_reader)
+            .open_streaming_resource(&key_reader)
             .await
             .unwrap();
         res.wait_range(0..payload_len_reader).await.unwrap();
@@ -255,11 +211,10 @@ async fn streaming_resource_concurrent_write_and_read_across_handles(
 
     let store_writer = store;
     let payload_writer = payload.clone();
-    let cancel_writer = cancel;
     let key_writer = key;
     let writer = tokio::spawn(async move {
         let res = store_writer
-            .open_streaming_resource(&key_writer, cancel_writer)
+            .open_streaming_resource(&key_writer)
             .await
             .unwrap();
         res.write_at(0, &payload_writer).await.unwrap();
@@ -283,12 +238,10 @@ async fn streaming_resource_concurrent_write_and_read_across_handles(
 async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     #[case] asset_root: &str,
     #[case] segment_count: usize,
-    cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
     asset_store_no_limits: AssetStore,
 ) {
     let dir = temp_dir.path();
-    let cancel = cancel_token;
     let store = asset_store_no_limits;
 
     // HLS scenario: many resources under one asset_root.
@@ -297,10 +250,7 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     let playlist_key = ResourceKey::new(asset_root.to_string(), "master.m3u8".to_string());
     let playlist_bytes = Bytes::from_static(b"#EXTM3U\n#EXT-X-VERSION:7\n");
 
-    let playlist = store
-        .open_atomic_resource(&playlist_key, cancel.clone())
-        .await
-        .unwrap();
+    let playlist = store.open_atomic_resource(&playlist_key).await.unwrap();
     playlist.write(&playlist_bytes).await.unwrap();
     playlist.commit(None).await.unwrap();
     assert_eq!(playlist.read().await.unwrap(), playlist_bytes);
@@ -311,10 +261,7 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
         let seg_key =
             ResourceKey::new(asset_root.to_string(), format!("segments/{:04}.m4s", i + 1));
 
-        let seg = store
-            .open_streaming_resource(&seg_key, cancel.clone())
-            .await
-            .unwrap();
+        let seg = store.open_streaming_resource(&seg_key).await.unwrap();
         segments.push((seg, i));
     }
 
@@ -377,19 +324,14 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
 async fn atomic_resource_roundtrip_with_different_paths(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
-    cancel_token: CancellationToken,
     asset_store_no_limits: AssetStore,
 ) {
-    let cancel = cancel_token;
     let store = asset_store_no_limits;
 
     let key = ResourceKey::new(asset_root.to_string(), rel_path.to_string());
     let payload = Bytes::from_static(b"test data for atomic resource");
 
-    let res = store
-        .open_atomic_resource(&key, cancel.clone())
-        .await
-        .unwrap();
+    let res = store.open_atomic_resource(&key).await.unwrap();
 
     res.write(&payload).await.unwrap();
     res.commit(None).await.unwrap();
@@ -408,17 +350,12 @@ async fn streaming_resource_write_read_at_different_positions(
     #[case] offset: u64,
     #[case] size: usize,
     #[case] read_size: usize,
-    cancel_token: CancellationToken,
     asset_store_no_limits: AssetStore,
 ) {
-    let cancel = cancel_token;
     let store = asset_store_no_limits;
 
     let key = ResourceKey::new("streaming-test".to_string(), "data.bin".to_string());
-    let res = store
-        .open_streaming_resource(&key, cancel.clone())
-        .await
-        .unwrap();
+    let res = store.open_streaming_resource(&key).await.unwrap();
 
     // Create test data
     let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
@@ -447,10 +384,8 @@ async fn streaming_resource_write_read_at_different_positions(
 #[tokio::test]
 async fn multiple_resources_same_asset_root_independently_accessible(
     #[case] resource_count: usize,
-    cancel_token: CancellationToken,
     asset_store_no_limits: AssetStore,
 ) {
-    let cancel = cancel_token;
     let store = asset_store_no_limits;
     let asset_root = "multi-resource-asset";
 
@@ -468,10 +403,7 @@ async fn multiple_resources_same_asset_root_independently_accessible(
 
     let mut resources = Vec::new();
     for (i, key) in keys.iter().enumerate() {
-        let res = store
-            .open_atomic_resource(key, cancel.clone())
-            .await
-            .unwrap();
+        let res = store.open_atomic_resource(key).await.unwrap();
 
         let data = Bytes::from(format!("data for file {}", i));
         res.write(&data).await.unwrap();

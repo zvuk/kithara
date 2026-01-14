@@ -45,6 +45,12 @@ impl EngineHandle {
 /// Convenience alias for the engine output stream type.
 pub type EngineStream<C, Ev, E> =
     Pin<Box<dyn FuturesStream<Item = Result<StreamMsg<C, Ev>, StreamError<E>>> + Send + 'static>>;
+pub type ReaderStream<C, Ev, E> = EngineStream<C, Ev, E>;
+pub type StreamResult<C, Ev, E> = Result<StreamMsg<C, Ev>, StreamError<E>>;
+pub type ReaderResult<C, Ev, E> = Result<ReaderStream<C, Ev, E>, StreamError<E>>;
+pub type EngineOut<C, Ev, E> = ReceiverStream<StreamResult<C, Ev, E>>;
+pub type InitFuture<State, Err> =
+    Pin<Box<dyn std::future::Future<Output = Result<State, StreamError<Err>>> + Send + 'static>>;
 
 /// Writer task handle type returned by an [`EngineSource`].
 ///
@@ -89,16 +95,7 @@ pub trait EngineSource: Send + 'static {
     /// Create (or reuse) the owned session state for this source.
     ///
     /// This is called exactly once by the engine at startup.
-    fn init(
-        &mut self,
-        params: StreamParams,
-    ) -> Pin<
-        Box<
-            dyn std::future::Future<Output = Result<Self::State, StreamError<Self::Error>>>
-                + Send
-                + 'static,
-        >,
-    >;
+    fn init(&mut self, params: StreamParams) -> InitFuture<Self::State, Self::Error>;
 
     /// Build a reader stream from the owned session `state`.
     ///
@@ -110,7 +107,7 @@ pub trait EngineSource: Send + 'static {
         &mut self,
         state: &Self::State,
         params: StreamParams,
-    ) -> Result<EngineStream<Self::Control, Self::Event, Self::Error>, StreamError<Self::Error>>;
+    ) -> ReaderResult<Self::Control, Self::Event, Self::Error>;
 
     /// Start (or obtain) the writer task that fills the underlying storage/resources.
     ///
@@ -151,7 +148,7 @@ where
     S: EngineSource,
 {
     handle: EngineHandle,
-    out: ReceiverStream<Result<StreamMsg<S::Control, S::Event>, StreamError<S::Error>>>,
+    out: EngineOut<S::Control, S::Event, S::Error>,
     _task: tokio::task::JoinHandle<()>,
     _phantom: std::marker::PhantomData<S>,
 }

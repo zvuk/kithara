@@ -192,19 +192,22 @@ impl Resource for StreamingResource {
 
     async fn read(&self) -> StorageResult<Bytes> {
         // Whole-object reads are only well-defined once committed with a known final_len.
-        let final_len = {
-            let state = self.inner.state.read().await;
-            if let Some(err) = &state.failed {
-                return Err(StorageError::Failed(err.clone()));
+        let final_len = match self.inner.state.try_read() {
+            Err(err) => {
+                return Err(StorageError::Failed(format!(
+                    "Failed to acquire lock {:?}",
+                    err
+                )));
             }
-            if !state.sealed {
-                return Err(StorageError::Sealed);
+            Ok(state) => {
+                if let Some(err) = &state.failed {
+                    return Err(StorageError::Failed(err.clone()));
+                }
+                if !state.sealed && state.final_len.is_none() {
+                    return Err(StorageError::Sealed);
+                }
+                state.final_len.unwrap_or_default()
             }
-            state.final_len
-        };
-
-        let Some(final_len) = final_len else {
-            return Err(StorageError::Sealed);
         };
 
         if final_len == 0 {

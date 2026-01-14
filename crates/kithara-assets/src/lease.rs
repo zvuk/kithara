@@ -24,23 +24,25 @@ use crate::{
 /// - The pin index resource must be excluded from pinning to avoid recursion.
 ///
 /// This type does **not** do any filesystem/path logic; it uses the base `Assets` abstraction.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LeaseAssets<A>
 where
     A: Assets,
 {
     base: Arc<A>,
     pins: Arc<Mutex<HashSet<String>>>,
+    cancel: CancellationToken,
 }
 
 impl<A> LeaseAssets<A>
 where
     A: Assets,
 {
-    pub fn new(base: Arc<A>) -> Self {
+    pub fn new(base: Arc<A>, cancel: CancellationToken) -> Self {
         Self {
             base,
             pins: Arc::new(Mutex::new(HashSet::new())),
+            cancel,
         }
     }
 
@@ -48,28 +50,21 @@ where
         &self.base
     }
 
-    async fn open_index(&self, cancel: CancellationToken) -> AssetsResult<PinsIndex> {
-        PinsIndex::open(self.base(), cancel).await
+    async fn open_index(&self) -> AssetsResult<PinsIndex> {
+        PinsIndex::open(self.base()).await
     }
 
-    async fn persist_pins_best_effort(
-        &self,
-        cancel: CancellationToken,
-        pins: &HashSet<String>,
-    ) -> AssetsResult<()> {
-        let idx = self.open_index(cancel).await?;
+    async fn persist_pins_best_effort(&self, pins: &HashSet<String>) -> AssetsResult<()> {
+        let idx = self.open_index().await?;
         idx.store(pins).await
     }
 
-    async fn load_pins_best_effort(
-        &self,
-        cancel: CancellationToken,
-    ) -> AssetsResult<HashSet<String>> {
-        let idx = self.open_index(cancel).await?;
+    async fn load_pins_best_effort(&self) -> AssetsResult<HashSet<String>> {
+        let idx = self.open_index().await?;
         idx.load().await
     }
 
-    async fn ensure_loaded_best_effort(&self, cancel: CancellationToken) -> AssetsResult<()> {
+    async fn ensure_loaded_best_effort(&self) -> AssetsResult<()> {
         // Load only once (best-effort). If already loaded, do nothing.
         //
         // We intentionally keep this minimal and deterministic: if the set is empty
@@ -81,7 +76,7 @@ where
             return Ok(());
         }
 
-        let loaded = self.load_pins_best_effort(cancel).await?;
+        let loaded = self.load_pins_best_effort().await?;
         let mut guard = self.pins.lock().expect("pins mutex poisoned");
         // Merge, don't replace, to be resilient to races with concurrent pin/unpin.
         for p in loaded {
@@ -90,12 +85,8 @@ where
         Ok(())
     }
 
-    async fn pin(
-        &self,
-        asset_root: &str,
-        cancel: CancellationToken,
-    ) -> AssetsResult<LeaseGuard<A>> {
-        self.ensure_loaded_best_effort(cancel.clone()).await?;
+    async fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard<A>> {
+        self.ensure_loaded_best_effort().await?;
 
         let snapshot = {
             let mut guard = self.pins.lock().expect("pins mutex poisoned");
@@ -105,25 +96,23 @@ where
 
         // Best-effort persistence: if it fails, we still return a guard, but it will still unpin
         // in-memory on drop. The disk state may lag, but opening resources continues to work.
-        let _ = self
-            .persist_pins_best_effort(cancel.clone(), &snapshot)
-            .await;
+        let _ = self.persist_pins_best_effort(&snapshot).await;
 
         Ok(LeaseGuard {
             owner: self.clone(),
             asset_root: asset_root.to_string(),
-            cancel,
+            cancel: self.cancel.clone(),
         })
     }
 
-    async fn unpin_best_effort(&self, asset_root: &str, cancel: CancellationToken) {
+    async fn unpin_best_effort(&self, asset_root: &str) {
         let snapshot = {
             let mut guard = self.pins.lock().expect("pins mutex poisoned");
             guard.remove(asset_root);
             guard.clone()
         };
 
-        let _ = self.persist_pins_best_effort(cancel, &snapshot).await;
+        let _ = self.persist_pins_best_effort(&snapshot).await;
     }
 
     /// Open an atomic resource via the base store and wrap it into [`AssetResource`]
@@ -131,11 +120,10 @@ where
     pub async fn open_atomic_resource(
         &self,
         key: &ResourceKey,
-        cancel: CancellationToken,
     ) -> AssetsResult<AssetResource<AtomicResource, LeaseGuard<A>>> {
-        let inner = self.base.open_atomic_resource(key, cancel.clone()).await?;
+        let inner = self.base.open_atomic_resource(key).await?;
 
-        let lease = self.pin(&key.asset_root, cancel).await?;
+        let lease = self.pin(&key.asset_root).await?;
         Ok(AssetResource::new(inner, lease))
     }
 
@@ -144,14 +132,10 @@ where
     pub async fn open_streaming_resource(
         &self,
         key: &ResourceKey,
-        cancel: CancellationToken,
     ) -> AssetsResult<AssetResource<StreamingResource, LeaseGuard<A>>> {
-        let inner = self
-            .base
-            .open_streaming_resource(key, cancel.clone())
-            .await?;
+        let inner = self.base.open_streaming_resource(key).await?;
 
-        let lease = self.pin(&key.asset_root, cancel).await?;
+        let lease = self.pin(&key.asset_root).await?;
         Ok(AssetResource::new(inner, lease))
     }
 }
@@ -165,45 +149,31 @@ where
         self.base.root_dir()
     }
 
-    async fn open_atomic_resource(
-        &self,
-        key: &ResourceKey,
-        cancel: CancellationToken,
-    ) -> AssetsResult<AtomicResource> {
+    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<AtomicResource> {
         // Note: This method bypasses pinning and returns a raw resource.
         // The public `open_atomic_resource` method wraps it with a lease guard.
-        self.base.open_atomic_resource(key, cancel).await
+        self.base.open_atomic_resource(key).await
     }
 
-    async fn open_streaming_resource(
-        &self,
-        key: &ResourceKey,
-        cancel: CancellationToken,
-    ) -> AssetsResult<StreamingResource> {
+    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<StreamingResource> {
         // Note: This method bypasses pinning and returns a raw resource.
         // The public `open_streaming_resource` method wraps it with a lease guard.
-        self.base.open_streaming_resource(key, cancel).await
+        self.base.open_streaming_resource(key).await
     }
 
-    async fn open_pins_index_resource(
-        &self,
-        cancel: CancellationToken,
-    ) -> AssetsResult<AtomicResource> {
+    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
         // Pins index must be opened without pinning to avoid recursion
-        self.base.open_pins_index_resource(cancel).await
+        self.base.open_pins_index_resource().await
     }
 
-    async fn delete_asset(&self, asset_root: &str, cancel: CancellationToken) -> AssetsResult<()> {
+    async fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
         // Delete asset through base implementation
-        self.base.delete_asset(asset_root, cancel).await
+        self.base.delete_asset(asset_root).await
     }
 
-    async fn open_lru_index_resource(
-        &self,
-        cancel: CancellationToken,
-    ) -> AssetsResult<AtomicResource> {
+    async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
         // LRU index must be opened without pinning
-        self.base.open_lru_index_resource(cancel).await
+        self.base.open_lru_index_resource().await
     }
 }
 
@@ -240,7 +210,10 @@ where
         let cancel = self.cancel.clone();
 
         tokio::spawn(async move {
-            owner.unpin_best_effort(&asset_root, cancel).await;
+            if cancel.is_cancelled() {
+                return;
+            }
+            owner.unpin_best_effort(&asset_root).await;
         });
     }
 }

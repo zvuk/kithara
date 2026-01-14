@@ -7,7 +7,7 @@
 //! ## Public contract
 //!
 //! The explicit public contract is the [`AssetStore`] type alias.
-//! Everything else should be considered an implementation detail (even if it is currently `pub`).
+//! Everything else should be considered an implementation detail (even if it is currently `pub`), and constructors must propagate the shared cancellation token (use `AssetStore::new`/`AssetStoreBuilder`).
 //!
 //! ## Key mapping (normative)
 //!

@@ -69,14 +69,16 @@ impl HlsDriver {
         let master_url = self.master_url.clone();
 
         Box::pin(stream! {
-            let mut abr_config = AbrConfig::default();
-            abr_config.min_buffer_for_up_switch_secs = opts.abr_min_buffer_for_up_switch as f64;
-            abr_config.down_switch_buffer_secs = opts.abr_down_switch_buffer as f64;
-            abr_config.throughput_safety_factor = opts.abr_throughput_safety_factor as f64;
-            abr_config.up_hysteresis_ratio = opts.abr_up_hysteresis_ratio as f64;
-            abr_config.down_hysteresis_ratio = opts.abr_down_hysteresis_ratio as f64;
-            abr_config.min_switch_interval = opts.abr_min_switch_interval;
-            abr_config.initial_variant_index = opts.abr_initial_variant_index;
+            let abr_config = AbrConfig {
+                min_buffer_for_up_switch_secs: opts.abr_min_buffer_for_up_switch as f64,
+                down_switch_buffer_secs: opts.abr_down_switch_buffer as f64,
+                throughput_safety_factor: opts.abr_throughput_safety_factor as f64,
+                up_hysteresis_ratio: opts.abr_up_hysteresis_ratio as f64,
+                down_hysteresis_ratio: opts.abr_down_switch_buffer as f64,
+                min_switch_interval: opts.abr_min_switch_interval,
+                initial_variant_index: opts.abr_initial_variant_index,
+                ..AbrConfig::default()
+            };
 
             let abr_controller =
                 AbrController::new(abr_config, opts.variant_stream_selector.clone());

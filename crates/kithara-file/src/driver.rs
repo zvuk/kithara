@@ -166,7 +166,7 @@ impl FileStreamState {
         let key = (&url).into();
         let cancel = CancellationToken::new();
         let res = assets
-            .open_streaming_resource(&key, cancel.clone())
+            .open_streaming_resource(&key)
             .await
             .map_err(SourceError::Assets)?;
 

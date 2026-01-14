@@ -37,11 +37,8 @@ impl PinsIndex {
     }
 
     /// Open a `PinsIndex` for the given base assets store.
-    pub async fn open<A: Assets>(
-        assets: &A,
-        cancel: tokio_util::sync::CancellationToken,
-    ) -> AssetsResult<Self> {
-        let res = assets.open_pins_index_resource(cancel).await?;
+    pub async fn open<A: Assets>(assets: &A) -> AssetsResult<Self> {
+        let res = assets.open_pins_index_resource().await?;
         Ok(Self::new(res))
     }
 
@@ -77,6 +74,7 @@ impl PinsIndex {
     }
 
     /// Add `asset_root` to the set and persist immediately.
+    #[allow(dead_code)]
     pub async fn insert(&self, asset_root: &str) -> AssetsResult<()> {
         let mut pins = self.load().await?;
         pins.insert(asset_root.to_string());
@@ -84,6 +82,7 @@ impl PinsIndex {
     }
 
     /// Remove `asset_root` from the set and persist immediately.
+    #[allow(dead_code)]
     pub async fn remove(&self, asset_root: &str) -> AssetsResult<()> {
         let mut pins = self.load().await?;
         pins.remove(asset_root);
@@ -91,6 +90,7 @@ impl PinsIndex {
     }
 
     /// Check whether `asset_root` is pinned (loads from storage).
+    #[allow(dead_code)]
     pub async fn contains(&self, asset_root: &str) -> AssetsResult<bool> {
         let pins = self.load().await?;
         Ok(pins.contains(asset_root))

@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use std::{
+    ops::Deref,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -34,14 +35,30 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct DiskAssetStore {
     root_dir: PathBuf,
-    master_cancel: CancellationToken,
+    cancel: CancellationToken,
     map: DashMap<CacheKey, Arc<ResourceEntry>>,
 }
 
-/// Ready-to-use assets store: `DiskAssetStore` composed with eviction + pin/lease.
-///
-/// This is a type alias (no new wrapper type).
-pub type AssetStore = LeaseAssets<EvictAssets<DiskAssetStore>>;
+#[derive(Clone, Debug)]
+pub struct AssetStore(LeaseAssets<EvictAssets<DiskAssetStore>>);
+
+impl AssetStore {
+    pub fn new(base: Arc<EvictAssets<DiskAssetStore>>, cancel: CancellationToken) -> Self {
+        Self(LeaseAssets::new(base, cancel))
+    }
+
+    pub fn base(&self) -> &EvictAssets<DiskAssetStore> {
+        self.0.base()
+    }
+}
+
+impl Deref for AssetStore {
+    type Target = LeaseAssets<EvictAssets<DiskAssetStore>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 /// Constructor for the ready-to-use [`AssetStore`].
 ///
@@ -90,41 +107,21 @@ impl AssetStoreBuilder {
                 .expect("failed to create AssetStore temp dir")
                 .into_path()
         });
-        let evict_cfg = self.evict_config.unwrap_or_else(EvictConfig::default);
-        let cancel = self.cancel.unwrap_or_else(CancellationToken::new);
+        let evict_cfg = self.evict_config.unwrap_or_default();
+        let cancel = self.cancel.unwrap_or_default();
 
-        let base = Arc::new(DiskAssetStore::new(root_dir, cancel));
-        let evict = Arc::new(EvictAssets::new(base, evict_cfg));
-        AssetStore::new(evict)
+        let base = Arc::new(DiskAssetStore::new(root_dir, cancel.clone()));
+        let evict = Arc::new(EvictAssets::new(base, evict_cfg, cancel.clone()));
+        AssetStore::new(evict, cancel)
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-enum ResourceKind {
-    Streaming,
-    Atomic,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-struct CacheKey {
-    key: ResourceKey,
-    kind: ResourceKind,
-}
-
-impl CacheKey {
-    fn streaming(key: &ResourceKey) -> Self {
-        Self {
-            key: key.clone(),
-            kind: ResourceKind::Streaming,
-        }
-    }
-
-    fn atomic(key: &ResourceKey) -> Self {
-        Self {
-            key: key.clone(),
-            kind: ResourceKind::Atomic,
-        }
-    }
+enum CacheKey {
+    Streaming(ResourceKey),
+    Atomic(ResourceKey),
+    PinsIndex,
+    LruIndex,
 }
 
 #[derive(Clone, Debug)]
@@ -138,7 +135,7 @@ impl DiskAssetStore {
     pub fn new(root_dir: impl Into<PathBuf>, cancel: CancellationToken) -> Self {
         Self {
             root_dir: root_dir.into(),
-            master_cancel: cancel,
+            cancel,
             map: DashMap::new(),
         }
     }
@@ -169,6 +166,56 @@ impl DiskAssetStore {
         let safe = sanitize_rel(asset_root).map_err(|()| AssetsError::InvalidKey)?;
         Ok(self.root_dir.join(safe))
     }
+
+    fn cached_atomic(&self, cache_key: &CacheKey) -> Option<AtomicResource> {
+        self.map
+            .get(cache_key)
+            .and_then(|entry| match entry.value().as_ref() {
+                ResourceEntry::Atomic(res) => Some(res.clone()),
+                ResourceEntry::Streaming(_) => None,
+            })
+    }
+
+    fn store_atomic(&self, cache_key: CacheKey, res: AtomicResource) -> AtomicResource {
+        match self.map.entry(cache_key) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => match entry.get().as_ref() {
+                ResourceEntry::Atomic(existing) => existing.clone(),
+                ResourceEntry::Streaming(_) => {
+                    entry.insert(Arc::new(ResourceEntry::Atomic(res.clone())));
+                    res
+                }
+            },
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                entry.insert(Arc::new(ResourceEntry::Atomic(res.clone())));
+                res
+            }
+        }
+    }
+
+    fn cached_streaming(&self, cache_key: &CacheKey) -> Option<StreamingResource> {
+        self.map
+            .get(cache_key)
+            .and_then(|entry| match entry.value().as_ref() {
+                ResourceEntry::Streaming(res) => Some(res.clone()),
+                ResourceEntry::Atomic(_) => None,
+            })
+    }
+
+    fn store_streaming(&self, cache_key: CacheKey, res: StreamingResource) -> StreamingResource {
+        match self.map.entry(cache_key) {
+            dashmap::mapref::entry::Entry::Occupied(mut entry) => match entry.get().as_ref() {
+                ResourceEntry::Streaming(existing) => existing.clone(),
+                ResourceEntry::Atomic(_) => {
+                    entry.insert(Arc::new(ResourceEntry::Streaming(res.clone())));
+                    res
+                }
+            },
+            dashmap::mapref::entry::Entry::Vacant(entry) => {
+                entry.insert(Arc::new(ResourceEntry::Streaming(res.clone())));
+                res
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -177,95 +224,66 @@ impl Assets for DiskAssetStore {
         &self.root_dir
     }
 
-    async fn open_atomic_resource(
-        &self,
-        key: &ResourceKey,
-        cancel: CancellationToken,
-    ) -> AssetsResult<AtomicResource> {
-        let _ = cancel;
-        let cache_key = CacheKey::atomic(key);
+    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<AtomicResource> {
+        let cache_key = CacheKey::Atomic(key.clone());
 
-        if let Some(entry) = self.map.get(&cache_key) {
-            if let ResourceEntry::Atomic(existing) = entry.value().as_ref() {
-                return Ok(existing.clone());
-            }
+        if let Some(existing) = self.cached_atomic(&cache_key) {
+            return Ok(existing);
         }
 
         let path = self.resource_path(key)?;
         let res = AtomicResource::open(AtomicOptions {
             path,
-            cancel: self.master_cancel.clone(),
+            cancel: self.cancel.clone(),
         });
 
-        match self.map.entry(cache_key) {
-            dashmap::mapref::entry::Entry::Occupied(mut entry) => match entry.get().as_ref() {
-                ResourceEntry::Atomic(existing) => Ok(existing.clone()),
-                ResourceEntry::Streaming(_) => {
-                    entry.insert(Arc::new(ResourceEntry::Atomic(res.clone())));
-                    Ok(res)
-                }
-            },
-            dashmap::mapref::entry::Entry::Vacant(entry) => {
-                entry.insert(Arc::new(ResourceEntry::Atomic(res.clone())));
-                Ok(res)
-            }
-        }
+        Ok(self.store_atomic(cache_key, res))
     }
 
-    async fn open_streaming_resource(
-        &self,
-        key: &ResourceKey,
-        cancel: CancellationToken,
-    ) -> AssetsResult<StreamingResource> {
-        let _ = cancel;
-        let cache_key = CacheKey::streaming(key);
+    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<StreamingResource> {
+        let cache_key = CacheKey::Streaming(key.clone());
 
-        if let Some(entry) = self.map.get(&cache_key) {
-            if let ResourceEntry::Streaming(existing) = entry.value().as_ref() {
-                return Ok(existing.clone());
-            }
+        if let Some(existing) = self.cached_streaming(&cache_key) {
+            return Ok(existing);
         }
 
         let path = self.resource_path(key)?;
         let res = StreamingResource::open_disk(DiskOptions {
             path,
-            cancel: self.master_cancel.clone(),
+            cancel: self.cancel.clone(),
             initial_len: None,
         })
         .await?;
 
-        match self.map.entry(cache_key) {
-            dashmap::mapref::entry::Entry::Occupied(mut entry) => match entry.get().as_ref() {
-                ResourceEntry::Streaming(existing) => Ok(existing.clone()),
-                ResourceEntry::Atomic(_) => {
-                    entry.insert(Arc::new(ResourceEntry::Streaming(res.clone())));
-                    Ok(res)
-                }
-            },
-            dashmap::mapref::entry::Entry::Vacant(entry) => {
-                entry.insert(Arc::new(ResourceEntry::Streaming(res.clone())));
-                Ok(res)
-            }
+        Ok(self.store_streaming(cache_key, res))
+    }
+
+    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
+        if let Some(existing) = self.cached_atomic(&CacheKey::PinsIndex) {
+            return Ok(existing);
         }
-    }
 
-    async fn open_pins_index_resource(
-        &self,
-        cancel: CancellationToken,
-    ) -> AssetsResult<AtomicResource> {
         let path = self.pins_index_path();
-        Ok(AtomicResource::open(AtomicOptions { path, cancel }))
+        let res = AtomicResource::open(AtomicOptions {
+            path,
+            cancel: self.cancel.clone(),
+        });
+
+        Ok(self.store_atomic(CacheKey::PinsIndex, res))
     }
 
-    async fn delete_asset(&self, asset_root: &str, cancel: CancellationToken) -> AssetsResult<()> {
-        if cancel.is_cancelled() {
+    async fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
+        if self.cancel.is_cancelled() {
             return Err(kithara_storage::StorageError::Cancelled.into());
         }
 
         let path = self.asset_root_path(asset_root)?;
 
         // Clean cache entries for this asset_root.
-        self.map.retain(|k, _| k.key.asset_root() != asset_root);
+        self.map.retain(|k, _| match k {
+            CacheKey::Atomic(k) | CacheKey::Streaming(k) => k.asset_root() != asset_root,
+            CacheKey::PinsIndex | CacheKey::LruIndex => true,
+        });
 
         // Best-effort: if the directory doesn't exist, treat as already deleted.
         match tokio::fs::remove_dir_all(&path).await {
@@ -275,12 +293,18 @@ impl Assets for DiskAssetStore {
         }
     }
 
-    async fn open_lru_index_resource(
-        &self,
-        cancel: CancellationToken,
-    ) -> AssetsResult<AtomicResource> {
+    async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
+        if let Some(existing) = self.cached_atomic(&CacheKey::LruIndex) {
+            return Ok(existing);
+        }
+
         let path = self.lru_index_path();
-        Ok(AtomicResource::open(AtomicOptions { path, cancel }))
+        let res = AtomicResource::open(AtomicOptions {
+            path,
+            cancel: self.cancel.clone(),
+        });
+
+        Ok(self.store_atomic(CacheKey::LruIndex, res))
     }
 }
 

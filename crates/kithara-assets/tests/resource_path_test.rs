@@ -6,7 +6,6 @@ use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, Resourc
 use kithara_storage::{Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
-use tokio_util::sync::CancellationToken;
 
 // === Test Fixtures ===
 
@@ -16,19 +15,13 @@ fn temp_dir() -> TempDir {
 }
 
 #[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
-
-#[fixture]
-fn asset_store(temp_dir: TempDir, cancel_token: CancellationToken) -> AssetStore {
+fn asset_store(temp_dir: TempDir) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
         })
-        .cancel(cancel_token.clone())
         .build()
 }
 
@@ -37,13 +30,10 @@ fn asset_store(temp_dir: TempDir, cancel_token: CancellationToken) -> AssetStore
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn asset_resource_atomic_path_method(
-    cancel_token: CancellationToken,
-    asset_store: AssetStore,
-) {
+async fn asset_resource_atomic_path_method(asset_store: AssetStore) {
     let key = ResourceKey::new("test-asset".to_string(), "metadata.json".to_string());
     let asset_resource = asset_store
-        .open_atomic_resource(&key, cancel_token.clone())
+        .open_atomic_resource(&key)
         .await
         .expect("Failed to open atomic resource");
 
@@ -75,13 +65,10 @@ async fn asset_resource_atomic_path_method(
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn asset_resource_streaming_path_method(
-    cancel_token: CancellationToken,
-    asset_store: AssetStore,
-) {
+async fn asset_resource_streaming_path_method(asset_store: AssetStore) {
     let key = ResourceKey::new("test-asset".to_string(), "media.bin".to_string());
     let asset_resource = asset_store
-        .open_streaming_resource(&key, cancel_token.clone())
+        .open_streaming_resource(&key)
         .await
         .expect("Failed to open streaming resource");
 
@@ -113,13 +100,10 @@ async fn asset_resource_streaming_path_method(
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn asset_resource_path_consistency_across_clones(
-    cancel_token: CancellationToken,
-    asset_store: AssetStore,
-) {
+async fn asset_resource_path_consistency_across_clones(asset_store: AssetStore) {
     let key = ResourceKey::new("test-asset".to_string(), "data.bin".to_string());
     let asset_resource = asset_store
-        .open_atomic_resource(&key, cancel_token.clone())
+        .open_atomic_resource(&key)
         .await
         .expect("Failed to open atomic resource");
 
@@ -145,15 +129,12 @@ async fn asset_resource_path_consistency_across_clones(
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn asset_resource_path_reflects_asset_root_and_resource_name(
-    cancel_token: CancellationToken,
-    asset_store: AssetStore,
-) {
+async fn asset_resource_path_reflects_asset_root_and_resource_name(asset_store: AssetStore) {
     let asset_root = "my-asset";
     let resource_name = "subdir/file.txt";
     let key = ResourceKey::new(asset_root.to_string(), resource_name.to_string());
     let asset_resource = asset_store
-        .open_atomic_resource(&key, cancel_token.clone())
+        .open_atomic_resource(&key)
         .await
         .expect("Failed to open atomic resource");
 
@@ -178,22 +159,19 @@ async fn asset_resource_path_reflects_asset_root_and_resource_name(
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn multiple_resources_same_asset_root_have_different_paths(
-    cancel_token: CancellationToken,
-    asset_store: AssetStore,
-) {
+async fn multiple_resources_same_asset_root_have_different_paths(asset_store: AssetStore) {
     let asset_root = "shared-asset";
 
     // Create two different resources in the same asset root
     let key1 = ResourceKey::new(asset_root.to_string(), "resource1.bin".to_string());
     let resource1 = asset_store
-        .open_atomic_resource(&key1, cancel_token.clone())
+        .open_atomic_resource(&key1)
         .await
         .expect("Failed to open resource1");
 
     let key2 = ResourceKey::new(asset_root.to_string(), "resource2.bin".to_string());
     let resource2 = asset_store
-        .open_atomic_resource(&key2, cancel_token.clone())
+        .open_atomic_resource(&key2)
         .await
         .expect("Failed to open resource2");
 

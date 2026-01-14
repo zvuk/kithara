@@ -6,7 +6,6 @@ use bytes::Bytes;
 use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey};
 use kithara_storage::Resource;
 use rstest::{fixture, rstest};
-use tokio_util::sync::CancellationToken;
 
 fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
     root.join(asset_root).exists()
@@ -20,27 +19,18 @@ fn read_pins_file(root: &std::path::Path) -> serde_json::Value {
 }
 
 #[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
-
-#[fixture]
 fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
 #[fixture]
-fn asset_store_with_max_2_assets(
-    temp_dir: tempfile::TempDir,
-    cancel_token: CancellationToken,
-) -> AssetStore {
+fn asset_store_with_max_2_assets(temp_dir: tempfile::TempDir) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
         .evict_config(EvictConfig {
             max_assets: Some(2),
             max_bytes: None,
         })
-        .cancel(cancel_token.clone())
         .build()
 }
 
@@ -53,28 +43,22 @@ fn asset_store_with_max_2_assets(
 async fn eviction_max_assets_skips_pinned_assets(
     #[case] max_assets: usize,
     #[case] create_count: usize,
-    cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
 ) {
     let dir = temp_dir.path();
-    let cancel = cancel_token;
     let store = AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
         .evict_config(EvictConfig {
             max_assets: Some(max_assets),
             max_bytes: None,
         })
-        .cancel(cancel.clone())
         .build();
 
     // Create more assets than the limit, keep the last one pinned
     for i in 0..create_count {
         let key = ResourceKey::new(format!("asset-{}", i), format!("media/{}.bin", i));
 
-        let res = store
-            .open_atomic_resource(&key, cancel.clone())
-            .await
-            .unwrap();
+        let res = store.open_atomic_resource(&key).await.unwrap();
         res.write(&Bytes::from(format!("data-{}", i)))
             .await
             .unwrap();
@@ -105,10 +89,7 @@ async fn eviction_max_assets_skips_pinned_assets(
                 format!("asset-trigger-{}", i),
                 "media/trigger.bin".to_string(),
             );
-            let res_trigger = store
-                .open_atomic_resource(&key_trigger, cancel.clone())
-                .await
-                .unwrap();
+            let res_trigger = store.open_atomic_resource(&key_trigger).await.unwrap();
             res_trigger.write(&Bytes::from("trigger")).await.unwrap();
             res_trigger.commit(None).await.unwrap();
 
@@ -144,13 +125,8 @@ async fn eviction_max_assets_skips_pinned_assets(
 #[case(3)]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn eviction_ignores_missing_index(
-    #[case] asset_count: usize,
-    cancel_token: CancellationToken,
-    temp_dir: tempfile::TempDir,
-) {
+async fn eviction_ignores_missing_index(#[case] asset_count: usize, temp_dir: tempfile::TempDir) {
     let dir = temp_dir.path();
-    let cancel = cancel_token;
 
     let store = AssetStoreBuilder::new()
         .root_dir(dir)
@@ -158,17 +134,13 @@ async fn eviction_ignores_missing_index(
             max_assets: Some(2),
             max_bytes: None,
         })
-        .cancel(cancel.clone())
         .build();
 
     // Create assets without proper LRU tracking (simulate missing/corrupted index)
     for i in 0..asset_count {
         let key = ResourceKey::new(format!("asset-{}", i), format!("data/{}.bin", i));
 
-        let res = store
-            .open_atomic_resource(&key, cancel.clone())
-            .await
-            .unwrap();
+        let res = store.open_atomic_resource(&key).await.unwrap();
         res.write(&Bytes::from(format!("data-{}", i)))
             .await
             .unwrap();
@@ -184,9 +156,7 @@ async fn eviction_ignores_missing_index(
     // Creating one more asset should work without crashing despite missing index
     let trigger_key = ResourceKey::new("trigger-asset".to_string(), "data/trigger.bin".to_string());
 
-    let res = store
-        .open_atomic_resource(&trigger_key, cancel.clone())
-        .await;
+    let res = store.open_atomic_resource(&trigger_key).await;
 
     assert!(res.is_ok(), "Should handle missing LRU index gracefully");
 }
@@ -194,12 +164,8 @@ async fn eviction_ignores_missing_index(
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn eviction_with_zero_byte_assets(
-    cancel_token: CancellationToken,
-    temp_dir: tempfile::TempDir,
-) {
+async fn eviction_with_zero_byte_assets(temp_dir: tempfile::TempDir) {
     let dir = temp_dir.path();
-    let cancel = cancel_token;
 
     let store = AssetStoreBuilder::new()
         .root_dir(dir)
@@ -207,24 +173,20 @@ async fn eviction_with_zero_byte_assets(
             max_assets: Some(2),
             max_bytes: None,
         })
-        .cancel(cancel.clone())
         .build();
 
     // Create assets with zero bytes
     for i in 0..3 {
         let key = ResourceKey::new(format!("zero-asset-{}", i), "empty.bin".to_string());
 
-        let res = store
-            .open_atomic_resource(&key, cancel.clone())
-            .await
-            .unwrap();
+        let res = store.open_atomic_resource(&key).await.unwrap();
         res.write(&Bytes::new()).await.unwrap();
         res.commit(None).await.unwrap();
 
         // Explicitly record zero bytes
         store
             .base()
-            .touch_asset_bytes(&format!("zero-asset-{}", i), 0, cancel.clone())
+            .touch_asset_bytes(&format!("zero-asset-{}", i), 0)
             .await
             .unwrap();
     }
@@ -254,11 +216,9 @@ async fn eviction_respects_max_assets_limit(
     #[case] max_assets: usize,
     #[case] create_count: usize,
     #[case] pinned_count: usize,
-    cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
 ) {
     let dir = temp_dir.path();
-    let cancel = cancel_token;
 
     let store = AssetStoreBuilder::new()
         .root_dir(dir)
@@ -266,17 +226,13 @@ async fn eviction_respects_max_assets_limit(
             max_assets: Some(max_assets),
             max_bytes: None,
         })
-        .cancel(cancel.clone())
         .build();
 
     // Create more assets than the limit
     let mut pinned_handles = Vec::new();
     for i in 0..create_count {
         let key = ResourceKey::new(format!("asset-{}", i), format!("media/{}.bin", i));
-        let res = store
-            .open_atomic_resource(&key, cancel.clone())
-            .await
-            .unwrap();
+        let res = store.open_atomic_resource(&key).await.unwrap();
         res.write(&Bytes::from_static(b"DATA")).await.unwrap();
         res.commit(None).await.unwrap();
 

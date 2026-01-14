@@ -4,7 +4,6 @@ use std::path::Path;
 
 use async_trait::async_trait;
 use kithara_storage::{AtomicResource, StreamingResource};
-use tokio_util::sync::CancellationToken;
 
 use crate::{error::AssetsResult, key::ResourceKey};
 
@@ -37,20 +36,12 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// Open an atomic resource (small object) addressed by `key`.
     ///
     /// This must not perform pinning; pinning is the responsibility of the `LeaseAssets` decorator.
-    async fn open_atomic_resource(
-        &self,
-        key: &ResourceKey,
-        cancel: CancellationToken,
-    ) -> AssetsResult<AtomicResource>;
+    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<AtomicResource>;
 
     /// Open a streaming resource (large object) addressed by `key`.
     ///
     /// This must not perform pinning; pinning is the responsibility of the `LeaseAssets` decorator.
-    async fn open_streaming_resource(
-        &self,
-        key: &ResourceKey,
-        cancel: CancellationToken,
-    ) -> AssetsResult<StreamingResource>;
+    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<StreamingResource>;
 
     /// Open the atomic resource used for persisting the pins index.
     ///
@@ -61,10 +52,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
     ///
     /// Key selection (where this lives on disk) is an implementation detail of the concrete
     /// `Assets` implementation. Higher layers must not construct or assume a `ResourceKey` here.
-    async fn open_pins_index_resource(
-        &self,
-        cancel: CancellationToken,
-    ) -> AssetsResult<AtomicResource>;
+    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource>;
 
     /// Delete an entire asset (all resources under `asset_root`).
     ///
@@ -72,7 +60,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// - This is used by eviction/GC decorators (LRU, quota enforcement).
     /// - Base `Assets` implementations must NOT apply pin/lease semantics here.
     /// - Higher layers must ensure pinned assets are not deleted (decorators enforce this).
-    async fn delete_asset(&self, asset_root: &str, cancel: CancellationToken) -> AssetsResult<()>;
+    async fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
 
     /// Open the atomic resource used for persisting the LRU index.
     ///
@@ -82,10 +70,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
     ///
     /// Key selection (where this lives on disk) is an implementation detail of the concrete
     /// `Assets` implementation.
-    async fn open_lru_index_resource(
-        &self,
-        cancel: CancellationToken,
-    ) -> AssetsResult<AtomicResource>;
+    async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource>;
 
     /// Return the root directory for disk-backed implementations.
     ///

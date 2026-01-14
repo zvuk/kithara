@@ -14,7 +14,6 @@ use kithara_net::{Headers, HttpClient, Net as _};
 use kithara_storage::{
     Resource as _, ResourceStatus, StreamingResource, StreamingResourceExt, WaitOutcome,
 };
-use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 use url::Url;
 
@@ -52,8 +51,7 @@ impl FetchManager {
 
     pub async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
-        let cancel = CancellationToken::new();
-        let res = self.assets.open_atomic_resource(&key, cancel).await?;
+        let res = self.assets.open_atomic_resource(&key).await?;
 
         let cached = res.read().await?;
         if !cached.is_empty() {
@@ -95,9 +93,7 @@ impl FetchManager {
         headers: Option<Headers>,
     ) -> HlsResult<Bytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
-
-        let cancel = CancellationToken::new();
-        let res = self.assets.open_atomic_resource(&key, cancel).await?;
+        let res = self.assets.open_atomic_resource(&key).await?;
 
         let cached = res.read().await?;
         if !cached.is_empty() {
@@ -250,12 +246,7 @@ impl FetchManager {
         url: &Url,
     ) -> HlsResult<StreamingAssetResource> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
-        let cancel = CancellationToken::new();
-        let res = self
-            .assets
-            .open_streaming_resource(&key, cancel.clone())
-            .await?;
-
+        let res = self.assets.open_streaming_resource(&key).await?;
         let status = res.inner().status().await;
 
         // Spawn best-effort writer (net -> storage). Readers will observe availability via the same handle.
@@ -371,9 +362,7 @@ impl FetchManager {
 
         // Intentionally quiet: this path can be called a lot during playback.
         // Keep only warnings/errors and a single "done" summary.
-
-        let cancel = CancellationToken::new();
-        let res = assets.open_streaming_resource(&key, cancel.clone()).await?;
+        let res = assets.open_streaming_resource(&key).await?;
 
         // Spawn a best-effort background writer for this segment.
         // If multiple callers race, extra writers may occur; the resource contract handles `Sealed`
