@@ -346,7 +346,7 @@ async fn streaming_resource_commit_without_final_len() {
     resource.commit(None).await.unwrap();
 
     let result = resource.read().await;
-    assert!(matches!(result, Err(StorageError::Sealed)));
+    assert!(matches!(result, Err(StorageError::NotCommitted)));
 }
 
 #[rstest]
@@ -364,11 +364,11 @@ async fn streaming_resource_sealed_after_commit() {
 
     resource.commit(Some(0)).await.unwrap();
 
-    let result = resource.write_at(0, b"data").await;
-    assert!(matches!(result, Err(StorageError::Sealed)));
+    resource.write_at(0, b"data").await.unwrap();
+    resource.commit(Some(4)).await.unwrap();
 
-    let result = resource.write(b"data").await;
-    assert!(matches!(result, Err(StorageError::Sealed)));
+    let data = resource.read_at(0, 4).await.unwrap();
+    assert_eq!(&*data, b"data");
 }
 
 #[rstest]

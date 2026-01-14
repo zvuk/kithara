@@ -3,30 +3,24 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, EvictConfig, ResourceKey};
+use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey};
 use kithara_storage::{Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
-use tokio_util::sync::CancellationToken;
-
-#[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
 
 #[fixture]
 fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
-#[fixture]
-fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
-    AssetStore::with_root_dir(
-        temp_dir.path(),
-        EvictConfig {
+fn asset_store_with_root(temp_dir: &tempfile::TempDir, asset_root: &str) -> AssetStore {
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path())
+        .asset_root(asset_root)
+        .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
-        },
-    )
+        })
+        .build()
 }
 
 #[rstest]
@@ -40,19 +34,13 @@ async fn streaming_resource_complex_write_patterns(
     #[case] total_size: usize,
     #[case] chunk_size: usize,
     #[case] initial_offset: u64,
-    cancel_token: CancellationToken,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let cancel = cancel_token;
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-complex");
 
-    let key = ResourceKey::new("streaming-complex".to_string(), "data.bin".to_string());
+    let key = ResourceKey::new("data.bin");
 
-    let res = store
-        .open_streaming_resource(&key, cancel.clone())
-        .await
-        .unwrap();
+    let res = store.open_streaming_resource(&key).await.unwrap();
 
     // Write data in chunks at different positions
     let total_chunks = total_size / chunk_size;
@@ -81,28 +69,18 @@ async fn streaming_resource_complex_write_patterns(
 async fn streaming_resource_concurrent_writes(
     #[case] write_count: usize,
     #[case] chunk_size: usize,
-    cancel_token: CancellationToken,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let cancel = cancel_token;
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-concurrent");
 
-    let key = ResourceKey::new(
-        "streaming-concurrent".to_string(),
-        "concurrent.bin".to_string(),
-    );
+    let key = ResourceKey::new("concurrent.bin");
 
-    let res = store
-        .open_streaming_resource(&key, cancel.clone())
-        .await
-        .unwrap();
+    let res = store.open_streaming_resource(&key).await.unwrap();
 
     // Spawn concurrent writes
     let mut handles = Vec::new();
     for i in 0..write_count {
         let handle = tokio::spawn({
-            let _cancel = cancel.clone();
             async move {
                 let offset = (i * chunk_size) as u64;
                 let data: Vec<u8> = (0..chunk_size)
@@ -141,19 +119,13 @@ async fn streaming_resource_concurrent_writes(
 async fn streaming_resource_edge_case_reads(
     #[case] offset: u64,
     #[case] read_size: usize,
-    cancel_token: CancellationToken,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let cancel = cancel_token;
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-edge-reads");
 
-    let key = ResourceKey::new("streaming-edge-reads".to_string(), "edge.bin".to_string());
+    let key = ResourceKey::new("edge.bin");
 
-    let res = store
-        .open_streaming_resource(&key, cancel.clone())
-        .await
-        .unwrap();
+    let res = store.open_streaming_resource(&key).await.unwrap();
 
     // Write initial data
     let data_size = 6144; // Total data size
@@ -184,19 +156,13 @@ async fn streaming_resource_edge_case_reads(
 #[tokio::test]
 async fn streaming_resource_multiple_range_operations(
     #[case] write_ranges: Vec<(usize, usize)>,
-    cancel_token: CancellationToken,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let cancel = cancel_token;
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-multi-range");
 
-    let key = ResourceKey::new("streaming-multi-range".to_string(), "multi.bin".to_string());
+    let key = ResourceKey::new("multi.bin");
 
-    let res = store
-        .open_streaming_resource(&key, cancel.clone())
-        .await
-        .unwrap();
+    let res = store.open_streaming_resource(&key).await.unwrap();
 
     // Write multiple ranges
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
@@ -230,19 +196,13 @@ async fn streaming_resource_multiple_range_operations(
 #[tokio::test]
 async fn streaming_resource_commit_behavior(
     #[case] explicit_commit: bool,
-    cancel_token: CancellationToken,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let cancel = cancel_token;
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-commit");
 
-    let key = ResourceKey::new("streaming-commit".to_string(), "commit.bin".to_string());
+    let key = ResourceKey::new("commit.bin");
 
-    let res = store
-        .open_streaming_resource(&key, cancel.clone())
-        .await
-        .unwrap();
+    let res = store.open_streaming_resource(&key).await.unwrap();
 
     // Write some data
     let data = vec![0xAB; 4096];
@@ -265,10 +225,7 @@ async fn streaming_resource_commit_behavior(
     drop(res);
 
     // Reopen the resource
-    let res_reopened = store
-        .open_streaming_resource(&key, cancel.clone())
-        .await
-        .unwrap();
+    let res_reopened = store.open_streaming_resource(&key).await.unwrap();
 
     // Should be able to read the data (assuming persistence works)
     let final_read = res_reopened.read_at(0, data.len()).await.unwrap();
@@ -283,19 +240,13 @@ async fn streaming_resource_commit_behavior(
 #[tokio::test]
 async fn streaming_resource_zero_length_operations(
     #[case] base_offset: u64,
-    cancel_token: CancellationToken,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let cancel = cancel_token;
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-zero-length");
 
-    let key = ResourceKey::new("streaming-zero-length".to_string(), "zero.bin".to_string());
+    let key = ResourceKey::new("zero.bin");
 
-    let res = store
-        .open_streaming_resource(&key, cancel.clone())
-        .await
-        .unwrap();
+    let res = store.open_streaming_resource(&key).await.unwrap();
 
     // Write some data first
     let data = vec![0xCC; 2048];

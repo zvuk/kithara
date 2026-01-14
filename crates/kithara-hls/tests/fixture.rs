@@ -6,12 +6,13 @@ use cbc::{
     Encryptor,
     cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara_assets::{AssetStore, EvictConfig};
+use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig};
 pub use kithara_hls::HlsError;
 use kithara_net::{HttpClient, NetOptions};
 use rstest::fixture;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 pub type HlsResult<T> = Result<T, HlsError>;
@@ -223,12 +224,21 @@ impl TestAssets {
 }
 
 pub fn create_test_assets() -> TestAssets {
+    create_test_assets_with_root("test-hls")
+}
+
+pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     // NOTE: The assets/cache API has been redesigned.
     // Keep the temp dir alive by storing it inside the returned wrapper.
     let temp_dir = TempDir::new().unwrap();
     let temp_dir = Arc::new(temp_dir);
 
-    let assets = AssetStore::with_root_dir(temp_dir.path().to_path_buf(), EvictConfig::default());
+    let assets = AssetStoreBuilder::new()
+        .root_dir(temp_dir.path().to_path_buf())
+        .asset_root(asset_root)
+        .evict_config(EvictConfig::default())
+        .cancel(CancellationToken::new())
+        .build();
 
     TestAssets {
         assets,

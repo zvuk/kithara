@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use kithara_assets::{AssetId, AssetStore, ResourceKey};
-use kithara_net::{HttpClient, NetOptions};
+use kithara_assets::{AssetId, AssetStoreBuilder, asset_root_for_url};
+use kithara_net::{HttpClient, NetOptions, RetryPolicy};
 use url::Url;
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
 
 #[async_trait]
 pub trait HlsSourceContract: Send + Sync + 'static {
-    async fn open(&self, url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession>;
+    async fn open(&self, url: Url, opts: HlsOptions) -> HlsResult<HlsSession>;
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -22,15 +22,37 @@ pub struct HlsSource;
 
 #[async_trait]
 impl HlsSourceContract for HlsSource {
-    async fn open(&self, url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession> {
+    async fn open(&self, url: Url, opts: HlsOptions) -> HlsResult<HlsSession> {
         let asset_id = AssetId::from_url(&url)?;
-        let asset_root = ResourceKey::asset_root_for_url(&url);
-        let net = HttpClient::new(NetOptions::default());
+        let asset_root = asset_root_for_url(&url);
+        let cancel = opts.cancel.clone().unwrap_or_default();
 
-        let fetch_manager = Arc::new(fetch::FetchManager::new(
-            asset_root.clone(),
+        let mut builder = AssetStoreBuilder::new()
+            .asset_root(&asset_root)
+            .cancel(cancel);
+
+        if let Some(cache_dir) = &opts.cache_dir {
+            builder = builder.root_dir(cache_dir);
+        }
+        if let Some(evict_config) = &opts.evict_config {
+            builder = builder.evict_config(evict_config.clone());
+        }
+
+        let assets = builder.build();
+
+        let net = HttpClient::new(NetOptions {
+            request_timeout: opts.request_timeout,
+            retry_policy: RetryPolicy::new(
+                opts.max_retries,
+                opts.retry_base_delay,
+                opts.max_retry_delay,
+            ),
+        });
+
+        let fetch_manager = Arc::new(fetch::FetchManager::new_with_read_chunk(
             assets.clone(),
             net.clone(),
+            opts.read_chunk_bytes,
         ));
         let key_processor = opts.key_processor_cb.clone();
         let key_manager = Arc::new(KeyManager::new(
@@ -63,7 +85,7 @@ impl HlsSourceContract for HlsSource {
 }
 
 impl HlsSource {
-    pub async fn open(url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession> {
-        HlsSource.open(url, opts, assets).await
+    pub async fn open(url: Url, opts: HlsOptions) -> HlsResult<HlsSession> {
+        HlsSource.open(url, opts).await
     }
 }

@@ -26,11 +26,7 @@ fn make_fetch_and_playlist(
     assets: AssetStore,
     net: HttpClient,
 ) -> (Arc<FetchManager>, Arc<PlaylistManager>) {
-    let fetch = Arc::new(FetchManager::new(
-        "test-asset-root".to_string(),
-        assets,
-        net,
-    ));
+    let fetch = Arc::new(FetchManager::new_with_read_chunk(assets, net, 64 * 1024));
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
     (fetch, playlist)
 }
@@ -55,6 +51,7 @@ async fn build_basestream(
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
+        None,
         abr,
         cancel,
     )
@@ -153,14 +150,14 @@ async fn basestream_force_variant_switches_output_and_emits_events(
     let ev = timeout(Duration::from_millis(200), async {
         loop {
             match events.recv().await {
-                Ok(PipelineEvent::VariantSelected { from, to, .. }) => break (from, to),
+                Ok(PipelineEvent::VariantApplied { from, to, .. }) => break (from, to),
                 Ok(_) => continue,
                 Err(e) => panic!("events channel closed: {e}"),
             }
         }
     })
     .await
-    .expect("expected VariantSelected within timeout");
+    .expect("expected VariantApplied within timeout");
     assert_eq!(ev.0, 0);
     assert_eq!(ev.1, 1);
 
@@ -191,18 +188,11 @@ async fn basestream_emits_abr_events_on_manual_switch(
 
     stream.force_variant(2);
 
-    let mut saw_selected = false;
     let mut saw_applied = false;
 
     for _ in 0..10 {
         if let Ok(ev) = timeout(Duration::from_millis(200), events.recv()).await {
             match ev {
-                Ok(PipelineEvent::VariantSelected { from, to, reason }) => {
-                    assert_eq!(from, 0);
-                    assert_eq!(to, 2);
-                    assert_eq!(reason, AbrReason::ManualOverride);
-                    saw_selected = true;
-                }
                 Ok(PipelineEvent::VariantApplied { from, to, reason }) => {
                     assert_eq!(from, 0);
                     assert_eq!(to, 2);
@@ -212,12 +202,11 @@ async fn basestream_emits_abr_events_on_manual_switch(
                 _ => {}
             }
         }
-        if saw_selected && saw_applied {
+        if saw_applied {
             break;
         }
     }
 
-    assert!(saw_selected, "expected VariantSelected event");
     assert!(saw_applied, "expected VariantApplied event");
 
     let next = stream.next().await.expect("item").expect("ok");
@@ -239,6 +228,7 @@ async fn basestream_stops_after_cancellation(assets_fixture: TestAssets, net_fix
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
+        None,
         abr,
         cancel.clone(),
     );
@@ -297,6 +287,7 @@ async fn basestream_reconnects_and_resumes_same_segment(
         master_url.clone(),
         fetch.clone(),
         playlist.clone(),
+        None,
         abr.clone(),
         cancel1.clone(),
     );
@@ -309,7 +300,7 @@ async fn basestream_reconnects_and_resumes_same_segment(
     assert!(ended.is_none(), "stream should end after cancellation");
 
     let cancel2 = CancellationToken::new();
-    let mut stream2 = BaseStream::new(master_url, fetch, playlist, abr, cancel2);
+    let mut stream2 = BaseStream::new(master_url, fetch, playlist, None, abr, cancel2);
 
     stream2.seek(1);
 
@@ -452,9 +443,7 @@ seg/v{}_2.bin
         .parse()
         .expect("valid master url");
 
-    let asset_root = format!("basestream-downswitch-{}", addr.port());
     let fetch = Arc::new(FetchManager::new(
-        asset_root,
         assets_fixture.assets().clone(),
         net_fixture,
     ));
@@ -474,6 +463,7 @@ seg/v{}_2.bin
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
+        None,
         abr,
         cancel.clone(),
     );
@@ -614,9 +604,7 @@ seg/v{}_2.bin
         .parse()
         .expect("valid master url");
 
-    let asset_root = format!("basestream-prefetch-downswitch-{}", addr.port());
     let fetch = Arc::new(FetchManager::new(
-        asset_root,
         assets_fixture.assets().clone(),
         net_fixture,
     ));
@@ -636,6 +624,7 @@ seg/v{}_2.bin
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
+        None,
         abr,
         cancel.clone(),
     );

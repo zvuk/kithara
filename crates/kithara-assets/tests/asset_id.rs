@@ -91,23 +91,6 @@ fn test_asset_id_errors_on_missing_host(#[case] url_str: &str, #[case] descripti
     );
 }
 
-#[test]
-fn test_asset_id_as_bytes() {
-    let url = Url::parse("https://example.com/audio.mp3").unwrap();
-    let asset_id = AssetId::from_url(&url).unwrap();
-
-    let bytes = asset_id.as_bytes();
-    assert_eq!(bytes.len(), 32, "AssetId should be 32 bytes");
-
-    // Verify that the bytes are consistent
-    let asset_id2 = AssetId::from_url(&url).unwrap();
-    assert_eq!(
-        asset_id.as_bytes(),
-        asset_id2.as_bytes(),
-        "Bytes should be consistent"
-    );
-}
-
 #[rstest]
 #[case("https://example.com/audio.mp3", "Simple URL")]
 #[case(
@@ -122,14 +105,6 @@ fn test_asset_id_creation_success(#[case] url_str: &str, #[case] description: &s
     assert!(
         result.is_ok(),
         "{} should create AssetId successfully",
-        description
-    );
-
-    let asset_id = result.unwrap();
-    assert_eq!(
-        asset_id.as_bytes().len(),
-        32,
-        "{} should produce 32-byte hash",
         description
     );
 }

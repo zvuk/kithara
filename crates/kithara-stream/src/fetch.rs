@@ -49,6 +49,9 @@ pub enum ReaderError {
 /// - On success, commits with final length.
 ///
 /// This is intentionally minimal and storage-agnostic.
+type OnEvent<Ev> = Arc<dyn Fn(StreamMsg<(), Ev>) + Send + Sync>;
+type MapEvent<Ev> = Arc<dyn Fn(u64, usize) -> Ev + Send + Sync>;
+
 pub struct Writer<N, R, Ev>
 where
     N: Net + Send + Sync + 'static,
@@ -60,8 +63,8 @@ where
     headers: Option<Headers>,
     res: Arc<R>,
     cancel: CancellationToken,
-    on_event: Option<Arc<dyn Fn(StreamMsg<(), Ev>) + Send + Sync>>,
-    map_event: Option<Arc<dyn Fn(u64, usize) -> Ev + Send + Sync>>,
+    on_event: Option<OnEvent<Ev>>,
+    map_event: Option<MapEvent<Ev>>,
 }
 
 impl<N, R, Ev> Writer<N, R, Ev>

@@ -1,6 +1,16 @@
-use std::{cell::Cell, time::Instant};
+use std::{
+    cell::Cell,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::{Duration, Instant},
+};
 
-use super::{AbrConfig, ThroughputEstimator, ThroughputSample, Variant, VariantSelector};
+use super::{
+    AbrConfig, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant,
+    VariantSelector,
+};
 use crate::playlist::MasterPlaylist;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,7 +37,7 @@ pub struct AbrController {
     cfg: AbrConfig,
     variant_selector: Option<VariantSelector>,
     estimator: ThroughputEstimator,
-    current_variant: usize,
+    current_variant: Arc<AtomicUsize>,
     previous_variant: usize,
     last_switch_at: Cell<Option<Instant>>,
 }
@@ -40,19 +50,19 @@ impl AbrController {
             cfg,
             variant_selector,
             estimator,
-            current_variant: initial_variant,
+            current_variant: Arc::new(AtomicUsize::new(initial_variant)),
             previous_variant: initial_variant,
             last_switch_at: Cell::new(None),
         }
     }
 
-    pub fn current_variant(&self) -> usize {
-        self.current_variant
+    pub fn current_variant(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.current_variant)
     }
 
     pub fn set_current_variant(&mut self, variant_index: usize) {
-        self.previous_variant = self.current_variant;
-        self.current_variant = variant_index;
+        self.previous_variant = self.current_variant.load(Ordering::Acquire);
+        self.current_variant.store(variant_index, Ordering::Release);
     }
 
     pub fn push_throughput_sample(&mut self, sample: ThroughputSample) {
@@ -65,7 +75,7 @@ impl AbrController {
         buffer_level_secs: f64,
         now: Instant,
     ) -> AbrDecision {
-        let current = self.current_variant;
+        let current = self.current_variant.load(Ordering::Acquire);
 
         let Some(estimate_bps) = self.estimator.estimate_bps() else {
             return AbrDecision {
@@ -167,7 +177,7 @@ impl AbrController {
             return AbrDecision {
                 target_variant_index: manual,
                 reason: AbrReason::ManualOverride,
-                changed: manual != self.current_variant,
+                changed: manual != self.current_variant.load(Ordering::Acquire),
             };
         }
 
@@ -175,12 +185,43 @@ impl AbrController {
     }
 
     pub fn apply(&mut self, decision: &AbrDecision, now: Instant) {
-        if decision.target_variant_index == self.current_variant {
+        let current = self.current_variant.load(Ordering::Acquire);
+        if decision.target_variant_index == current {
             return;
         }
-        self.previous_variant = self.current_variant;
-        self.current_variant = decision.target_variant_index;
+        self.previous_variant = current;
+        self.current_variant
+            .store(decision.target_variant_index, Ordering::Release);
         self.last_switch_at.set(Some(now));
+    }
+
+    /// Process a segment fetch and check if variant switch is needed.
+    /// Returns Some((from, to, reason)) if switch should happen, None otherwise.
+    pub fn process_fetch(
+        &mut self,
+        bytes: usize,
+        duration: Duration,
+        variants: &[Variant],
+    ) -> Option<(usize, usize, AbrReason)> {
+        let now = Instant::now();
+        let sample = ThroughputSample {
+            bytes: bytes as u64,
+            duration,
+            at: now,
+            source: ThroughputSampleSource::Network,
+        };
+
+        let duration_secs = duration.as_secs_f64();
+        self.push_throughput_sample(sample);
+        let decision = self.decide(variants, duration_secs, now);
+
+        if decision.changed {
+            let from = self.current_variant.load(Ordering::Acquire);
+            self.apply(&decision, now);
+            Some((from, decision.target_variant_index, decision.reason))
+        } else {
+            None
+        }
     }
 
     fn can_switch_now(&self, now: Instant) -> bool {

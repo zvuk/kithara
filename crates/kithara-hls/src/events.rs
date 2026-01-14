@@ -4,11 +4,6 @@ use tokio::sync::broadcast;
 
 #[derive(Clone, Debug)]
 pub enum HlsEvent {
-    VariantDecision {
-        from_variant: usize,
-        to_variant: usize,
-        reason: crate::abr::AbrReason,
-    },
     VariantApplied {
         from_variant: usize,
         to_variant: usize,
@@ -70,14 +65,6 @@ impl EventEmitter {
 
     pub fn subscribe(&self) -> broadcast::Receiver<HlsEvent> {
         self.tx.subscribe()
-    }
-
-    pub fn emit_variant_decision(&self, from: usize, to: usize, reason: crate::abr::AbrReason) {
-        let _ = self.tx.send(HlsEvent::VariantDecision {
-            from_variant: from,
-            to_variant: to,
-            reason,
-        });
     }
 
     pub fn emit_variant_applied(&self, from: usize, to: usize, reason: crate::abr::AbrReason) {

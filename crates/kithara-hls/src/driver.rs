@@ -13,9 +13,7 @@ use crate::{
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
     keys::KeyManager,
-    pipeline::{
-        BaseStream, DrmStream, PipelineError, PipelineEvent, PipelineStream, PrefetchStream,
-    },
+    pipeline::{BaseStream, PipelineError, PipelineEvent, PipelineStream, PrefetchStream},
     playlist::PlaylistManager,
 };
 
@@ -69,65 +67,54 @@ impl HlsDriver {
         let master_url = self.master_url.clone();
 
         Box::pin(stream! {
-            let mut abr_config = AbrConfig::default();
-            abr_config.min_buffer_for_up_switch_secs = opts.abr_min_buffer_for_up_switch as f64;
-            abr_config.down_switch_buffer_secs = opts.abr_down_switch_buffer as f64;
-            abr_config.throughput_safety_factor = opts.abr_throughput_safety_factor as f64;
-            abr_config.up_hysteresis_ratio = opts.abr_up_hysteresis_ratio as f64;
-            abr_config.down_hysteresis_ratio = opts.abr_down_hysteresis_ratio as f64;
-            abr_config.min_switch_interval = opts.abr_min_switch_interval;
-            abr_config.initial_variant_index = opts.abr_initial_variant_index;
+            let abr_config = AbrConfig {
+                min_buffer_for_up_switch_secs: opts.abr_min_buffer_for_up_switch as f64,
+                down_switch_buffer_secs: opts.abr_down_switch_buffer as f64,
+                throughput_safety_factor: opts.abr_throughput_safety_factor as f64,
+                up_hysteresis_ratio: opts.abr_up_hysteresis_ratio as f64,
+                down_hysteresis_ratio: opts.abr_down_switch_buffer as f64,
+                min_switch_interval: opts.abr_min_switch_interval,
+                initial_variant_index: opts.abr_initial_variant_index,
+                ..AbrConfig::default()
+            };
 
             let abr_controller =
                 AbrController::new(abr_config, opts.variant_stream_selector.clone());
 
-            // 3) Базовый слой сам загружает мастер и медиаплейлисты.
+            // Base layer loads master/media playlists and decrypts segments when needed.
             let base_master_url = master_url.clone();
             let base = BaseStream::new(
                 base_master_url,
                 fetch_manager.clone(),
                 playlist_manager.clone(),
+                Some(Arc::clone(&key_manager)),
                 abr_controller.clone(),
                 cancel.clone(),
             );
-            let drm_layer = DrmStream::new(
-                base,
-                Some(Arc::clone(&key_manager)),
-                cancel.clone(),
-            );
             let prefetch_capacity = opts.prefetch_buffer_size.unwrap_or(1).max(1);
-            let pipeline = PrefetchStream::new(drm_layer, prefetch_capacity, cancel.clone());
+            let pipeline = PrefetchStream::new(base, prefetch_capacity, cancel.clone());
 
-            // 6) Подписка на события пайплайна -> HlsEvent.
+            // Subscribe to pipeline events and forward to HlsEvent.
             let ev_rx = pipeline.event_sender().subscribe();
             let events_clone = Arc::clone(&events);
             tokio::spawn(async move {
                 let mut ev_rx = ev_rx;
                 while let Ok(ev) = ev_rx.recv().await {
                     match ev {
-                        PipelineEvent::VariantSelected { from, to, reason } => {
-                            events_clone.emit_variant_decision(from, to, reason);
-                        }
                         PipelineEvent::VariantApplied { from, to, reason } => {
                             events_clone.emit_variant_applied(from, to, reason);
                         }
                         PipelineEvent::SegmentReady { variant, segment_index } => {
                             events_clone.emit_segment_start(variant, segment_index, 0);
                         }
-                        PipelineEvent::Decrypted { .. } => {
-                            // Нет отдельного HlsEvent, пропускаем.
-                        }
-                        PipelineEvent::Prefetched { .. } => {
-                            // Нет отдельного HlsEvent, пропускаем.
-                        }
-                        PipelineEvent::StreamReset => {
-                            // Ничего не делаем: событие служебное для внутреннего пайплайна.
+                        PipelineEvent::Decrypted { .. } | PipelineEvent::Prefetched { .. } => {
+                            // No corresponding HlsEvent, skip.
                         }
                     }
                 }
             });
 
-            // 7) Воркер пайплайна пишет байты в очередь; внешний поток читает из неё.
+            // Pipeline worker writes bytes to queue; outer stream reads from it.
             let mut data_stream = Box::pin(pipeline);
             let (tx, mut rx) = mpsc::channel(8);
             tokio::spawn(async move {

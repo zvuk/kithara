@@ -24,4 +24,4 @@ rangemap = { workspace = true }
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
 rstest = { workspace = true }
 tempfile = { workspace = true }
-tokio-test = "0.4.4"
+tokio-test = "0.4.5"
