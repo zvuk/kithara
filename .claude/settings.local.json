@@ -8,7 +8,8 @@
       "Bash(cargo clippy:*)",
       "Bash(cargo build:*)",
       "Bash(timeout 20 cargo run:*)",
-      "Bash(timeout 30 cargo run:*)"
+      "Bash(timeout 30 cargo run:*)",
+      "Bash(cargo run:*)"
     ]
   }
 }

@@ -1,7 +1,6 @@
 use std::{pin::Pin, sync::Arc};
 
 use async_stream::stream;
-use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
@@ -13,7 +12,7 @@ use crate::{
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
     keys::KeyManager,
-    pipeline::{BaseStream, PipelineError, PipelineEvent, PipelineStream},
+    pipeline::{BaseStream, PipelineError, PipelineEvent, PipelineStream, SegmentPayload},
     playlist::PlaylistManager,
 };
 
@@ -57,7 +56,7 @@ impl HlsDriver {
         self.event_emitter.subscribe()
     }
 
-    pub fn stream(&self) -> Pin<Box<dyn Stream<Item = HlsResult<Bytes>> + Send + '_>> {
+    pub fn stream(&self) -> Pin<Box<dyn Stream<Item = HlsResult<SegmentPayload>> + Send + '_>> {
         let playlist_manager = Arc::clone(&self.playlist_manager);
         let fetch_manager = Arc::clone(&self.fetch_manager);
         let key_manager = Arc::clone(&self.key_manager);
@@ -129,7 +128,7 @@ impl HlsDriver {
             while let Some(item) = rx.recv().await {
                 match item {
                     Ok(payload) => {
-                        yield Ok(payload.bytes);
+                        yield Ok(payload);
                     }
                     Err(PipelineError::Hls(e)) => {
                         yield Err(e);

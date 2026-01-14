@@ -57,6 +57,10 @@ impl FetchManager {
         self.assets.asset_root()
     }
 
+    pub fn assets(&self) -> &AssetStore {
+        &self.assets
+    }
+
     pub async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
         self.fetch_atomic_internal(url, rel_path, None, "playlist")
             .await
