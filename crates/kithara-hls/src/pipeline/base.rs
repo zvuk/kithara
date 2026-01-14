@@ -6,6 +6,7 @@ use std::{
 };
 
 use async_stream::stream;
+use bytes::Bytes;
 use futures::{Stream, StreamExt, stream};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -15,17 +16,19 @@ use super::types::{
     PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta, SegmentPayload,
 };
 use crate::{
-    HlsError,
+    HlsError, HlsResult,
     abr::{AbrController, AbrReason, ThroughputSample, ThroughputSampleSource},
     fetch::FetchManager,
-    playlist::{PlaylistManager, VariantId},
+    keys::KeyManager,
+    playlist::{EncryptionMethod, KeyInfo, PlaylistManager, VariantId},
 };
 
-/// Базовый слой: выбирает вариант, итерирует сегменты, реагирует на команды (seek/force/shutdown),
-/// публикует события в общий канал.
+/// Базовый слой: выбирает вариант, итерирует сегменты, расшифровывает при необходимости,
+/// реагирует на команды (seek/force/shutdown), публикует события в общий канал.
 pub struct BaseStream {
     fetch: Arc<FetchManager>,
     playlist_manager: Arc<PlaylistManager>,
+    key_manager: Option<Arc<KeyManager>>,
     master_url: Url,
     cancel: CancellationToken,
     events: broadcast::Sender<PipelineEvent>,
@@ -38,16 +41,7 @@ impl BaseStream {
         master_url: Url,
         fetch: Arc<FetchManager>,
         playlist_manager: Arc<PlaylistManager>,
-        abr_controller: AbrController,
-        cancel: CancellationToken,
-    ) -> Self {
-        Self::with_abr_controller(master_url, fetch, playlist_manager, abr_controller, cancel)
-    }
-
-    pub fn with_abr_controller(
-        master_url: Url,
-        fetch: Arc<FetchManager>,
-        playlist_manager: Arc<PlaylistManager>,
+        key_manager: Option<Arc<KeyManager>>,
         abr_controller: AbrController,
         cancel: CancellationToken,
     ) -> Self {
@@ -57,6 +51,7 @@ impl BaseStream {
         let mut base = Self {
             fetch,
             playlist_manager,
+            key_manager,
             master_url,
             cancel,
             events,
@@ -77,6 +72,7 @@ impl BaseStream {
     ) -> Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>> {
         let fetch = self.fetch.clone();
         let playlist_manager = self.playlist_manager.clone();
+        let key_manager = self.key_manager.clone();
         let master_url = self.master_url.clone();
         let events = self.events.clone();
         let mut abr_controller = self.abr_controller.clone();
@@ -264,13 +260,32 @@ impl BaseStream {
                                 switched = true;
                             }
 
+                            // Decrypt if needed
+                            let final_bytes = if let Some(ref km) = key_manager {
+                                match decrypt_segment(km, &meta, fetch_bytes.bytes).await {
+                                    Ok(decrypted) => {
+                                        let _ = events.send(PipelineEvent::Decrypted {
+                                            variant: meta.variant,
+                                            segment_index: meta.segment_index,
+                                        });
+                                        decrypted
+                                    }
+                                    Err(e) => {
+                                        yield Err(PipelineError::Hls(e));
+                                        break;
+                                    }
+                                }
+                            } else {
+                                fetch_bytes.bytes
+                            };
+
                             let _ = events.send(PipelineEvent::SegmentReady {
                                 variant: current_to,
                                 segment_index: idx,
                             });
                             yield Ok(SegmentPayload {
                                 meta,
-                                bytes: fetch_bytes.bytes,
+                                bytes: final_bytes,
                             });
 
                             if switched {
@@ -325,6 +340,53 @@ impl BaseStream {
         self.inner = self.variant_stream(from, variant_index, 0, crate::AbrReason::ManualOverride);
         let _ = self.events.send(PipelineEvent::StreamReset);
     }
+}
+
+fn resolve_key_url(key_info: &KeyInfo, segment_url: &Url) -> HlsResult<Url> {
+    let key_uri = key_info
+        .uri
+        .as_ref()
+        .ok_or_else(|| HlsError::InvalidUrl("missing key URI".to_string()))?;
+
+    if key_uri.starts_with("http://") || key_uri.starts_with("https://") {
+        Url::parse(key_uri).map_err(|e| HlsError::InvalidUrl(format!("Invalid key URL: {e}")))
+    } else {
+        segment_url
+            .join(key_uri)
+            .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve key URL: {e}")))
+    }
+}
+
+fn derive_iv(key_info: &KeyInfo, sequence: u64) -> [u8; 16] {
+    if let Some(iv) = key_info.iv {
+        return iv;
+    }
+    let mut iv = [0u8; 16];
+    iv[8..].copy_from_slice(&sequence.to_be_bytes());
+    iv
+}
+
+async fn decrypt_segment(
+    key_manager: &KeyManager,
+    meta: &SegmentMeta,
+    bytes: Bytes,
+) -> HlsResult<Bytes> {
+    let Some(ref seg_key) = meta.key else {
+        return Ok(bytes);
+    };
+
+    if !matches!(seg_key.method, EncryptionMethod::Aes128) {
+        return Ok(bytes);
+    }
+
+    let Some(ref key_info) = seg_key.key_info else {
+        return Ok(bytes);
+    };
+
+    let key_url = resolve_key_url(key_info, &meta.url)?;
+    let iv = derive_iv(key_info, meta.sequence);
+
+    key_manager.decrypt(&key_url, Some(iv), bytes).await
 }
 
 impl Stream for BaseStream {

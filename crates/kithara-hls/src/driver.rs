@@ -13,9 +13,7 @@ use crate::{
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
     keys::KeyManager,
-    pipeline::{
-        BaseStream, DrmStream, PipelineError, PipelineEvent, PipelineStream, PrefetchStream,
-    },
+    pipeline::{BaseStream, PipelineError, PipelineEvent, PipelineStream, PrefetchStream},
     playlist::PlaylistManager,
 };
 
@@ -83,22 +81,18 @@ impl HlsDriver {
             let abr_controller =
                 AbrController::new(abr_config, opts.variant_stream_selector.clone());
 
-            // 3) Базовый слой сам загружает мастер и медиаплейлисты.
+            // 3) Базовый слой сам загружает мастер и медиаплейлисты, расшифровывает при необходимости.
             let base_master_url = master_url.clone();
             let base = BaseStream::new(
                 base_master_url,
                 fetch_manager.clone(),
                 playlist_manager.clone(),
+                Some(Arc::clone(&key_manager)),
                 abr_controller.clone(),
                 cancel.clone(),
             );
-            let drm_layer = DrmStream::new(
-                base,
-                Some(Arc::clone(&key_manager)),
-                cancel.clone(),
-            );
             let prefetch_capacity = opts.prefetch_buffer_size.unwrap_or(1).max(1);
-            let pipeline = PrefetchStream::new(drm_layer, prefetch_capacity, cancel.clone());
+            let pipeline = PrefetchStream::new(base, prefetch_capacity, cancel.clone());
 
             // 6) Подписка на события пайплайна -> HlsEvent.
             let ev_rx = pipeline.event_sender().subscribe();

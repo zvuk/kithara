@@ -51,6 +51,7 @@ async fn build_basestream(
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
+        None,
         abr,
         cancel,
     )
@@ -235,6 +236,7 @@ async fn basestream_stops_after_cancellation(assets_fixture: TestAssets, net_fix
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
+        None,
         abr,
         cancel.clone(),
     );
@@ -293,6 +295,7 @@ async fn basestream_reconnects_and_resumes_same_segment(
         master_url.clone(),
         fetch.clone(),
         playlist.clone(),
+        None,
         abr.clone(),
         cancel1.clone(),
     );
@@ -305,7 +308,7 @@ async fn basestream_reconnects_and_resumes_same_segment(
     assert!(ended.is_none(), "stream should end after cancellation");
 
     let cancel2 = CancellationToken::new();
-    let mut stream2 = BaseStream::new(master_url, fetch, playlist, abr, cancel2);
+    let mut stream2 = BaseStream::new(master_url, fetch, playlist, None, abr, cancel2);
 
     stream2.seek(1);
 
@@ -468,6 +471,7 @@ seg/v{}_2.bin
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
+        None,
         abr,
         cancel.clone(),
     );
@@ -628,6 +632,7 @@ seg/v{}_2.bin
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
+        None,
         abr,
         cancel.clone(),
     );
