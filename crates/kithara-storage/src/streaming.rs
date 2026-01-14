@@ -34,7 +34,7 @@ pub struct DiskOptions {
     ///
     /// - `Some(len)`: best-effort truncate/extend to `len` before writes.
     /// - `None`: if the file already exists, its current length is treated as available data
-    ///   (not sealed); nothing is truncated.
+    ///   (resource remains in-progress); nothing is truncated.
     pub initial_len: Option<u64>,
 }
 
@@ -63,7 +63,7 @@ pub enum ResourceStatus {
 /// - `read_at` does **not** wait; callers should use `wait_range` for blocking semantics.
 /// - `wait_range` resolves to `Eof` only after `commit(Some(final_len))` when the requested
 ///   range starts at/after EOF.
-/// - `commit` seals the resource; subsequent writes fail with `Sealed`.
+/// - `commit` publishes an optional EOF hint; writes after commit are allowed.
 /// - `fail` wakes all waiters and causes future waits/writes to fail.
 #[derive(Clone)]
 pub struct StreamingResource {
@@ -83,7 +83,7 @@ impl StreamingResource {
     ///
     /// - If `initial_len` is `Some`, the file is truncated/extended accordingly.
     /// - If `initial_len` is `None` and the file exists, existing bytes are published as available
-    ///   (resource remains unsealed) and nothing is truncated.
+    ///   (resource stays in-progress) and nothing is truncated.
     ///
     /// This does not imply the resource is ready. Callers should write ranges and then `commit`.
     pub async fn open_disk(opts: DiskOptions) -> StorageResult<Self> {
@@ -125,7 +125,7 @@ impl StreamingResource {
             return ResourceStatus::Failed;
         }
 
-        if state.sealed {
+        if state.committed {
             return ResourceStatus::Committed {
                 final_len: state.final_len,
             };
@@ -142,7 +142,7 @@ impl StreamingResource {
     /// - `Ok(None)` if EOF is not known (not committed or committed without final_len).
     async fn clamp_len_to_eof(&self, offset: u64, len: usize) -> StorageResult<Option<usize>> {
         let state = self.inner.state.read().await;
-        if !state.sealed {
+        if !state.committed {
             return Ok(None);
         }
         let Some(final_len) = state.final_len else {
@@ -203,8 +203,8 @@ impl Resource for StreamingResource {
                 if let Some(err) = &state.failed {
                     return Err(StorageError::Failed(err.clone()));
                 }
-                if !state.sealed && state.final_len.is_none() {
-                    return Err(StorageError::Sealed);
+                if !state.committed {
+                    return Err(StorageError::Failed("resource not committed".to_string()));
                 }
                 state.final_len.unwrap_or_default()
             }
@@ -232,7 +232,7 @@ impl Resource for StreamingResource {
                 return Err(StorageError::Failed(err.clone()));
             }
 
-            state.sealed = true;
+            state.committed = true;
             state.final_len = final_len;
         }
 
@@ -352,9 +352,6 @@ impl StreamingResourceExt for StreamingResource {
             if let Some(err) = &state.failed {
                 return Err(StorageError::Failed(err.clone()));
             }
-            if state.sealed {
-                return Err(StorageError::Sealed);
-            }
         }
 
         // Perform disk write
@@ -368,6 +365,10 @@ impl StreamingResourceExt for StreamingResource {
         // Add the range to available after successful disk write
         {
             let mut state = self.inner.state.write().await;
+            if state.committed {
+                state.committed = false;
+                state.final_len = None;
+            }
             state.available.insert(pending_range);
         }
 
@@ -387,7 +388,7 @@ struct Inner {
 #[derive(Debug)]
 struct State {
     available: RangeSet<u64>,
-    sealed: bool,
+    committed: bool,
     final_len: Option<u64>,
     failed: Option<String>,
     // Temporary range published only after successful write.
@@ -397,7 +398,7 @@ impl State {
     fn new() -> Self {
         Self {
             available: RangeSet::new(),
-            sealed: false,
+            committed: false,
             final_len: None,
             failed: None,
         }
@@ -410,7 +411,7 @@ impl State {
                 available.insert(0..len);
                 Self {
                     available,
-                    sealed: true,
+                    committed: true,
                     final_len: Some(len),
                     failed: None,
                 }
@@ -429,7 +430,7 @@ impl State {
 
         Self {
             available,
-            sealed: false,
+            committed: false,
             final_len: None,
             failed: None,
         }

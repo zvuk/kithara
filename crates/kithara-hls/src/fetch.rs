@@ -365,8 +365,8 @@ impl FetchManager {
         let res = assets.open_streaming_resource(&key).await?;
 
         // Spawn a best-effort background writer for this segment.
-        // If multiple callers race, extra writers may occur; the resource contract handles `Sealed`
-        // and failure propagation.
+        // If multiple callers race, extra writers may occur; the resource contract tolerates that
+        // and propagates failures.
         let net = net.clone();
         let url = url.clone();
 

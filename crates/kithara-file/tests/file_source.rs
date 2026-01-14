@@ -473,7 +473,7 @@ async fn cache_through_write_works(
         .await
         .expect("Should be able to open cached resource");
 
-    // Read the data from the resource using read_at since read() requires sealed state
+    // Read the data from the resource using read_at since read() requires commit
     let stored_data = streaming_resource
         .read_at(0, received_data.len())
         .await
