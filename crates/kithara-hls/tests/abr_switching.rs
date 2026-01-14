@@ -56,11 +56,6 @@ async fn abr_upswitch_continues_from_current_segment_index(
                 from_variant,
                 to_variant,
                 ..
-            }
-            | HlsEvent::VariantDecision {
-                from_variant,
-                to_variant,
-                ..
             } => {
                 assert_eq!(from_variant, 0);
                 assert_eq!(to_variant, 2);
@@ -70,10 +65,7 @@ async fn abr_upswitch_continues_from_current_segment_index(
             _ => continue,
         }
     }
-    assert!(
-        found,
-        "expected VariantApplied/VariantDecision to variant 2 within timeout"
-    );
+    assert!(found, "expected VariantApplied to variant 2 within timeout");
 
     Ok(())
 }

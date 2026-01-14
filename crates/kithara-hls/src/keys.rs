@@ -11,7 +11,11 @@ use kithara_net::Headers;
 use thiserror::Error;
 use url::Url;
 
-use crate::{HlsError, HlsResult, KeyContext, fetch::FetchManager};
+use crate::{
+    HlsError, HlsResult, KeyContext,
+    fetch::FetchManager,
+    playlist::{EncryptionMethod, SegmentKey},
+};
 
 #[derive(Debug, Error)]
 pub enum KeyError {
@@ -119,5 +123,59 @@ impl KeyManager {
         } else {
             Ok(key)
         }
+    }
+
+    /// Decrypt segment if encryption key is present.
+    /// Returns bytes unchanged if no encryption or unsupported method.
+    pub async fn decrypt_segment(
+        &self,
+        key: Option<&SegmentKey>,
+        segment_url: &Url,
+        sequence: u64,
+        bytes: Bytes,
+    ) -> HlsResult<Bytes> {
+        let Some(seg_key) = key else {
+            return Ok(bytes);
+        };
+
+        if !matches!(seg_key.method, EncryptionMethod::Aes128) {
+            return Ok(bytes);
+        }
+
+        let Some(ref key_info) = seg_key.key_info else {
+            return Ok(bytes);
+        };
+
+        let key_url = Self::resolve_key_url(key_info, segment_url)?;
+        let iv = Self::derive_iv(key_info, sequence);
+
+        self.decrypt(&key_url, Some(iv), bytes).await
+    }
+
+    fn resolve_key_url(
+        key_info: &crate::playlist::KeyInfo,
+        segment_url: &Url,
+    ) -> HlsResult<Url> {
+        let key_uri = key_info
+            .uri
+            .as_ref()
+            .ok_or_else(|| HlsError::InvalidUrl("missing key URI".to_string()))?;
+
+        if key_uri.starts_with("http://") || key_uri.starts_with("https://") {
+            Url::parse(key_uri).map_err(|e| HlsError::InvalidUrl(format!("Invalid key URL: {e}")))
+        } else {
+            segment_url
+                .join(key_uri)
+                .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve key URL: {e}")))
+        }
+    }
+
+    fn derive_iv(key_info: &crate::playlist::KeyInfo, sequence: u64) -> [u8; 16] {
+        if let Some(iv) = key_info.iv {
+            return iv;
+        }
+        let mut iv = [0u8; 16];
+        iv[8..].copy_from_slice(&sequence.to_be_bytes());
+        iv
     }
 }

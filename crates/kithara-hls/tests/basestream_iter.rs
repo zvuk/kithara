@@ -150,14 +150,14 @@ async fn basestream_force_variant_switches_output_and_emits_events(
     let ev = timeout(Duration::from_millis(200), async {
         loop {
             match events.recv().await {
-                Ok(PipelineEvent::VariantSelected { from, to, .. }) => break (from, to),
+                Ok(PipelineEvent::VariantApplied { from, to, .. }) => break (from, to),
                 Ok(_) => continue,
                 Err(e) => panic!("events channel closed: {e}"),
             }
         }
     })
     .await
-    .expect("expected VariantSelected within timeout");
+    .expect("expected VariantApplied within timeout");
     assert_eq!(ev.0, 0);
     assert_eq!(ev.1, 1);
 
@@ -188,18 +188,11 @@ async fn basestream_emits_abr_events_on_manual_switch(
 
     stream.force_variant(2);
 
-    let mut saw_selected = false;
     let mut saw_applied = false;
 
     for _ in 0..10 {
         if let Ok(ev) = timeout(Duration::from_millis(200), events.recv()).await {
             match ev {
-                Ok(PipelineEvent::VariantSelected { from, to, reason }) => {
-                    assert_eq!(from, 0);
-                    assert_eq!(to, 2);
-                    assert_eq!(reason, AbrReason::ManualOverride);
-                    saw_selected = true;
-                }
                 Ok(PipelineEvent::VariantApplied { from, to, reason }) => {
                     assert_eq!(from, 0);
                     assert_eq!(to, 2);
@@ -209,12 +202,11 @@ async fn basestream_emits_abr_events_on_manual_switch(
                 _ => {}
             }
         }
-        if saw_selected && saw_applied {
+        if saw_applied {
             break;
         }
     }
 
-    assert!(saw_selected, "expected VariantSelected event");
     assert!(saw_applied, "expected VariantApplied event");
 
     let next = stream.next().await.expect("item").expect("ok");

@@ -81,7 +81,7 @@ impl HlsDriver {
             let abr_controller =
                 AbrController::new(abr_config, opts.variant_stream_selector.clone());
 
-            // 3) Базовый слой сам загружает мастер и медиаплейлисты, расшифровывает при необходимости.
+            // Base layer loads master/media playlists and decrypts segments when needed.
             let base_master_url = master_url.clone();
             let base = BaseStream::new(
                 base_master_url,
@@ -94,36 +94,27 @@ impl HlsDriver {
             let prefetch_capacity = opts.prefetch_buffer_size.unwrap_or(1).max(1);
             let pipeline = PrefetchStream::new(base, prefetch_capacity, cancel.clone());
 
-            // 6) Подписка на события пайплайна -> HlsEvent.
+            // Subscribe to pipeline events and forward to HlsEvent.
             let ev_rx = pipeline.event_sender().subscribe();
             let events_clone = Arc::clone(&events);
             tokio::spawn(async move {
                 let mut ev_rx = ev_rx;
                 while let Ok(ev) = ev_rx.recv().await {
                     match ev {
-                        PipelineEvent::VariantSelected { from, to, reason } => {
-                            events_clone.emit_variant_decision(from, to, reason);
-                        }
                         PipelineEvent::VariantApplied { from, to, reason } => {
                             events_clone.emit_variant_applied(from, to, reason);
                         }
                         PipelineEvent::SegmentReady { variant, segment_index } => {
                             events_clone.emit_segment_start(variant, segment_index, 0);
                         }
-                        PipelineEvent::Decrypted { .. } => {
-                            // Нет отдельного HlsEvent, пропускаем.
-                        }
-                        PipelineEvent::Prefetched { .. } => {
-                            // Нет отдельного HlsEvent, пропускаем.
-                        }
-                        PipelineEvent::StreamReset => {
-                            // Ничего не делаем: событие служебное для внутреннего пайплайна.
+                        PipelineEvent::Decrypted { .. } | PipelineEvent::Prefetched { .. } => {
+                            // No corresponding HlsEvent, skip.
                         }
                     }
                 }
             });
 
-            // 7) Воркер пайплайна пишет байты в очередь; внешний поток читает из неё.
+            // Pipeline worker writes bytes to queue; outer stream reads from it.
             let mut data_stream = Box::pin(pipeline);
             let (tx, mut rx) = mpsc::channel(8);
             tokio::spawn(async move {

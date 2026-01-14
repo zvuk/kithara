@@ -8,41 +8,33 @@ use url::Url;
 
 use crate::{HlsError, abr::AbrReason, playlist::SegmentKey};
 
-/// Единый тип событий от всех слоёв.
+/// Events emitted by pipeline layers.
 #[derive(Debug, Clone)]
 pub enum PipelineEvent {
-    /// ABR принял решение переключить вариант (ещё не применён).
-    VariantSelected {
-        from: usize,
-        to: usize,
-        reason: AbrReason,
-    },
-    /// Вариант применён (базовый слой начал выдавать новый вариант).
+    /// Variant switch applied (base layer started emitting new variant).
     VariantApplied {
         from: usize,
         to: usize,
         reason: AbrReason,
     },
-    /// Сегмент готов к выдаче из текущего слоя.
+    /// Segment ready to be yielded from current layer.
     SegmentReady {
         variant: usize,
         segment_index: usize,
     },
-    /// Сегмент успешно расшифрован.
+    /// Segment successfully decrypted.
     Decrypted {
         variant: usize,
         segment_index: usize,
     },
-    /// Сегмент помещён в буфер префетча.
+    /// Segment placed in prefetch buffer.
     Prefetched {
         variant: usize,
         segment_index: usize,
     },
-    /// Поток перезапущен (например, после seek или смены варианта).
-    StreamReset,
 }
 
-/// Метаданные о сегменте.
+/// Segment metadata.
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
     pub variant: usize,
@@ -53,7 +45,7 @@ pub struct SegmentMeta {
     pub key: Option<SegmentKey>,
 }
 
-/// Полезная нагрузка между слоями.
+/// Payload passed between pipeline layers.
 #[derive(Debug, Clone)]
 pub struct SegmentPayload {
     pub meta: SegmentMeta,
@@ -71,7 +63,7 @@ pub enum PipelineError {
 
 pub type PipelineResult<T> = Result<T, PipelineError>;
 
-/// Трейт для слоя: поток сегментов плюс доступ к общим каналам команд и событий.
+/// Trait for pipeline layer: segment stream with access to event channel.
 pub trait PipelineStream: Stream<Item = PipelineResult<SegmentPayload>> + Send + 'static {
     fn event_sender(&self) -> broadcast::Sender<PipelineEvent>;
 }
