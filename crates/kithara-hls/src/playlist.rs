@@ -358,7 +358,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
     let current_key: Option<KeyInfo> = hls_media
         .segments
         .values()
-        .find_map(|seg| seg.keys().get(0).copied())
+        .find_map(|seg| seg.keys().first().copied())
         .and_then(keyinfo_from_decryption_key);
 
     let segments = hls_media
@@ -368,7 +368,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
         .map(|(index, (_idx, seg))| {
             let seg_key: Option<SegmentKey> = seg
                 .keys()
-                .get(0)
+                .first()
                 .copied()
                 .and_then(keyinfo_from_decryption_key)
                 .map(|ki| SegmentKey {
@@ -390,7 +390,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
         seg.map.as_ref().map(|m| {
             let map_key: Option<SegmentKey> = m
                 .keys()
-                .get(0)
+                .first()
                 .copied()
                 .and_then(keyinfo_from_decryption_key)
                 .map(|ki| SegmentKey {

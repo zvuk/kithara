@@ -60,12 +60,12 @@ async fn test_hls_session_creation(
     let session = HlsSource::open(test_stream_url.clone(), hls_options).await?;
     info!("✓ HLS session opened successfully");
 
-    // Test 2: Get source
-    let _source = session.source().await?;
-    info!("✓ HLS source obtained successfully");
-
-    // Test 3: Check events channel
+    // Test 2: Get events channel (before source() consumes session)
     let mut events_rx = session.events();
+
+    // Test 3: Get source (consumes session)
+    let _source = session.source();
+    info!("✓ HLS source obtained successfully");
 
     // Spawn a task to consume events (prevent channel from filling up)
     let events_handle = tokio::spawn(async move {
@@ -81,9 +81,6 @@ async fn test_hls_session_creation(
 
     // Give some time for events to potentially arrive
     tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Drop session to close event channel
-    drop(session);
 
     // Get event count
     let event_count = events_handle.await?;
@@ -116,7 +113,7 @@ async fn test_hls_session_with_different_urls(
     info!("Testing HLS session creation with URL: {}", url);
 
     let session = HlsSource::open(url, hls_options).await?;
-    let _source = session.source().await?;
+    let _source = session.source();
 
     info!("✓ HLS session opened successfully for URL: {}", stream_url);
     Ok(())
@@ -133,10 +130,11 @@ async fn test_hls_session_events_consumption(
     info!("Testing HLS session events consumption");
 
     let session = HlsSource::open(test_stream_url, hls_options).await?;
-    let _source = session.source().await?;
 
-    // Get events channel
+    // Get events channel (before source() consumes session)
     let mut events_rx = session.events();
+
+    let _source = session.source();
 
     // Try to receive events with timeout
     let timeout = Duration::from_millis(500);

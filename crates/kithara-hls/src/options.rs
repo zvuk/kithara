@@ -15,11 +15,16 @@ pub struct KeyContext {
     pub iv: Option<[u8; 16]>,
 }
 
+/// Callback for selecting variant stream index from master playlist.
+pub type VariantSelector = Arc<dyn Fn(&MasterPlaylist) -> Option<usize> + Send + Sync>;
+
+/// Callback for processing encryption keys.
+pub type KeyProcessor = Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct HlsOptions {
     pub base_url: Option<Url>,
-    pub variant_stream_selector:
-        Option<Arc<dyn Fn(&MasterPlaylist) -> Option<usize> + Send + Sync>>,
+    pub variant_stream_selector: Option<VariantSelector>,
     pub abr_initial_variant_index: Option<usize>,
     pub abr_min_buffer_for_up_switch: f32,
     pub abr_down_switch_buffer: f32,
@@ -37,7 +42,7 @@ pub struct HlsOptions {
     pub prefetch_buffer_size: Option<usize>,
     pub live_refresh_interval: Option<Duration>,
     // key processing
-    pub key_processor_cb: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
+    pub key_processor_cb: Option<KeyProcessor>,
     pub key_query_params: Option<HashMap<String, String>>,
     pub key_request_headers: Option<HashMap<String, String>>,
     // asset storage

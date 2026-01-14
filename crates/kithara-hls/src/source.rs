@@ -76,14 +76,11 @@ impl HlsSourceContract for HlsSource {
             event_emitter,
         );
 
-        Ok(HlsSession {
-            master_url: url,
-            opts,
-            assets,
-            playlist_manager,
-            fetch_manager,
-            driver,
-        })
+        // Note: assets, playlist_manager, fetch_manager are used by driver internally.
+        // They are kept alive by Arc inside driver.
+        drop(assets);
+
+        Ok(HlsSession::new(driver))
     }
 }
 

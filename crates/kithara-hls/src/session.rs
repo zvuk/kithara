@@ -5,25 +5,17 @@
 //! HlsSessionSource wraps HlsDriver.stream() and provides random-access via wait_range/read_at.
 //! Data flows: driver.stream() → internal buffer → wait_range/read_at → SyncReader → decoder.
 
-use std::{ops::Range, sync::Arc};
+use std::ops::Range;
 
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use futures::StreamExt;
-use kithara_assets::AssetStore;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{Source, StreamError as KitharaIoError, StreamResult as KitharaIoResult};
+use std::sync::Arc;
 use tokio::sync::{Notify, RwLock, broadcast};
-use url::Url;
 
-use crate::{
-    HlsError,
-    driver::HlsDriver,
-    events::HlsEvent,
-    fetch::FetchManager,
-    options::HlsOptions,
-    playlist::{MasterPlaylist, PlaylistManager},
-};
+use crate::{HlsError, driver::HlsDriver, events::HlsEvent, options::HlsOptions, playlist::MasterPlaylist};
 
 /// Selects the effective variant index to use for this session.
 pub fn select_variant_index(master: &MasterPlaylist, options: &HlsOptions) -> usize {
@@ -168,15 +160,14 @@ impl Source for HlsSessionSource {
 // =============================================================================
 
 pub struct HlsSession {
-    pub(crate) master_url: Url,
-    pub(crate) opts: HlsOptions,
-    pub(crate) assets: AssetStore,
-    pub(crate) playlist_manager: Arc<PlaylistManager>,
-    pub(crate) fetch_manager: Arc<FetchManager>,
-    pub(crate) driver: HlsDriver,
+    driver: HlsDriver,
 }
 
 impl HlsSession {
+    pub(crate) fn new(driver: HlsDriver) -> Self {
+        Self { driver }
+    }
+
     /// Get event receiver for stream events.
     pub fn events(&self) -> broadcast::Receiver<HlsEvent> {
         self.driver.events()

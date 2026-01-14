@@ -14,6 +14,7 @@ use url::Url;
 use crate::{
     HlsError, HlsResult, KeyContext,
     fetch::FetchManager,
+    options::KeyProcessor,
     playlist::{EncryptionMethod, SegmentKey},
 };
 
@@ -38,7 +39,7 @@ pub enum KeyError {
 #[derive(Clone)]
 pub struct KeyManager {
     fetch: Arc<FetchManager>,
-    key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
+    key_processor: Option<KeyProcessor>,
     key_query_params: Option<HashMap<String, String>>,
     key_request_headers: Option<HashMap<String, String>>,
 }
@@ -46,7 +47,7 @@ pub struct KeyManager {
 impl KeyManager {
     pub fn new(
         fetch: Arc<FetchManager>,
-        key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
+        key_processor: Option<KeyProcessor>,
         key_query_params: Option<HashMap<String, String>>,
         key_request_headers: Option<HashMap<String, String>>,
     ) -> Self {

@@ -22,7 +22,7 @@ pub use error::{HlsError, HlsResult};
 pub use events::{EventEmitter, HlsEvent};
 pub use fetch::{FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
-pub use options::{HlsOptions, KeyContext};
+pub use options::{HlsOptions, KeyContext, KeyProcessor, VariantSelector};
 pub use pipeline::{
     BaseStream, PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta,
     SegmentPayload,
