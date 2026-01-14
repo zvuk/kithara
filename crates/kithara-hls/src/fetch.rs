@@ -119,6 +119,20 @@ impl FetchManager {
     }
 
     pub async fn probe_content_length(&self, url: &Url) -> HlsResult<Option<u64>> {
+        // First check if segment is already in cache
+        let key = ResourceKey::from_url(url);
+        if let Ok(res) = self.assets.open_streaming_resource(&key).await {
+            let status = res.inner().status().await;
+            if let ResourceStatus::Committed {
+                final_len: Some(len),
+            } = status
+            {
+                trace!(url = %url, len, "probe_content_length: cache hit");
+                return Ok(Some(len));
+            }
+        }
+
+        // Fall back to HEAD request
         let headers: Headers = self.net.head(url.clone(), None).await?;
 
         fn find_content_length(headers: &Headers) -> Option<u64> {
@@ -224,7 +238,8 @@ impl FetchManager {
         let res = self.assets.open_streaming_resource(&key).await?;
         let status = res.inner().status().await;
 
-        // Spawn best-effort writer (net -> storage). Readers will observe availability via the same handle.
+        // Spawn best-effort writer (net -> storage) only if not already committed.
+        // Multiple writers for same resource are tolerated by storage layer.
         if matches!(status, ResourceStatus::Committed { .. }) {
             return Ok(res);
         }
@@ -271,6 +286,13 @@ impl FetchManager {
 
     pub(crate) fn spawn_stream_writer(net: HttpClient, url: Url, res: StreamingAssetResource) {
         tokio::spawn(async move {
+            let start_time = std::time::Instant::now();
+            trace!(
+                url = %url,
+                timestamp_ms = start_time.elapsed().as_millis(),
+                "kithara-hls segment download: START"
+            );
+
             let mut stream = match net.stream(url.clone(), None).await {
                 Ok(s) => s,
                 Err(e) => {
@@ -311,6 +333,13 @@ impl FetchManager {
             }
 
             let _ = res.commit(Some(off)).await;
+            let elapsed = start_time.elapsed();
+            trace!(
+                url = %url,
+                bytes = off,
+                elapsed_ms = elapsed.as_millis(),
+                "kithara-hls segment download: END"
+            );
         });
     }
 

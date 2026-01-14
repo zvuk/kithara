@@ -14,7 +14,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::default()
-                .add_directive("kithara_hls=info".parse()?)
+                .add_directive("kithara_hls=debug".parse()?)
                 .add_directive("kithara_stream=info".parse()?)
                 .add_directive("kithara_net=info".parse()?)
                 .add_directive("kithara_storage=info".parse()?)
@@ -42,12 +42,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Open an HLS session (async byte source).
     let session = HlsSource::open(url, hls_options).await?;
-    let source = session.source().await?;
+    let events_rx = session.events();
+    let source = session.source();
 
-    let mut events_rx = session.events();
     let reader = SyncReader::new(Arc::new(source));
 
     tokio::spawn(async move {
+        let mut events_rx = events_rx;
         while let Ok(ev) = events_rx.recv().await {
             info!(?ev, "Stream event");
         }

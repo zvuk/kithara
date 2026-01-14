@@ -155,22 +155,23 @@ where
             return;
         }
 
-        // Fast path: if we've already seen it in this process, avoid re-loading LRU on every open.
-        // We still need to update bytes/touch ordering best-effort when possible.
+        // Fast path: if we've already seen this asset_root in this process, skip LRU operations.
+        // mark_seen returns false if the asset_root was already in the set.
+        if !self.mark_seen(asset_root) {
+            return;
+        }
+
+        // First time seeing this asset_root - update LRU and maybe evict.
         let lru = match self.open_lru().await {
             Ok(v) => v,
             Err(_) => return,
         };
 
-        // Determine whether this is a "creation".
-        // This uses persisted LRU, not the in-memory set.
+        // Determine whether this is a "creation" (new entry in persisted LRU).
         let created = match lru.touch(asset_root, bytes_hint).await {
             Ok(created) => created,
             Err(_) => return,
         };
-
-        // Track it locally too.
-        let _ = self.mark_seen(asset_root);
 
         if created {
             self.on_asset_created(asset_root).await;

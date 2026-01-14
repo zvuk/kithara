@@ -3,13 +3,14 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use kithara_assets::{AssetId, AssetStoreBuilder, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::{HttpClient, NetOptions, RetryPolicy};
 use url::Url;
 
 use crate::{
     driver::HlsDriver, error::HlsResult, events, fetch, keys::KeyManager, options::HlsOptions,
-    playlist::PlaylistManager, session::HlsSession,
+    playlist::PlaylistManager,
+    session::HlsSession,
 };
 
 #[async_trait]
@@ -23,13 +24,12 @@ pub struct HlsSource;
 #[async_trait]
 impl HlsSourceContract for HlsSource {
     async fn open(&self, url: Url, opts: HlsOptions) -> HlsResult<HlsSession> {
-        let asset_id = AssetId::from_url(&url)?;
         let asset_root = asset_root_for_url(&url);
         let cancel = opts.cancel.clone().unwrap_or_default();
 
         let mut builder = AssetStoreBuilder::new()
             .asset_root(&asset_root)
-            .cancel(cancel);
+            .cancel(cancel.clone());
 
         if let Some(cache_dir) = &opts.cache_dir {
             builder = builder.root_dir(cache_dir);
@@ -61,24 +61,27 @@ impl HlsSourceContract for HlsSource {
             opts.key_query_params.clone(),
             opts.key_request_headers.clone(),
         ));
-        let playlist_manager =
-            PlaylistManager::new(Arc::clone(&fetch_manager), opts.base_url.clone());
+        let playlist_manager = Arc::new(PlaylistManager::new(
+            Arc::clone(&fetch_manager),
+            opts.base_url.clone(),
+        ));
         let event_emitter = events::EventEmitter::new();
 
         let driver = HlsDriver::new(
             url.clone(),
             opts.clone(),
-            playlist_manager,
+            Arc::clone(&playlist_manager),
             Arc::clone(&fetch_manager),
             Arc::clone(&key_manager),
             event_emitter,
         );
 
         Ok(HlsSession {
-            asset_id,
             master_url: url,
             opts,
             assets,
+            playlist_manager,
+            fetch_manager,
             driver,
         })
     }

@@ -5,7 +5,10 @@
       "mcp__acp__Bash",
       "Bash(cargo check:*)",
       "Bash(cargo test:*)",
-      "Bash(cargo clippy:*)"
+      "Bash(cargo clippy:*)",
+      "Bash(cargo build:*)",
+      "Bash(timeout 20 cargo run:*)",
+      "Bash(timeout 30 cargo run:*)"
     ]
   }
 }

@@ -9,7 +9,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use kithara_storage::WaitOutcome;
-use tracing::{debug, info};
+use tracing::trace;
 
 use crate::error::{StreamError, StreamResult};
 
@@ -91,15 +91,15 @@ where
     /// This must be called from within a Tokio runtime context (e.g. in an async fn before
     /// spawning the blocking consumer).
     pub fn new(source: Arc<S>) -> Self {
-        debug!("kithara-stream::io Reader::new (spawning async worker)");
+        trace!("kithara-stream::io Reader::new (spawning async worker)");
         let len = source.len();
-        debug!(len, "kithara-stream::io Reader created");
+        trace!(len, "kithara-stream::io Reader created");
 
         let (worker_tx, mut worker_rx) = tokio::sync::mpsc::unbounded_channel::<WorkerReq<S>>();
         let src = source.clone();
 
         tokio::spawn(async move {
-            debug!("kithara-stream::io Reader worker started");
+            trace!("kithara-stream::io Reader worker started");
             while let Some(req) = worker_rx.recv().await {
                 match req {
                     WorkerReq::WaitAndReadAt { offset, len, reply } => {
@@ -116,7 +116,7 @@ where
                     }
                 }
             }
-            debug!("kithara-stream::io Reader worker stopped (channel closed)");
+            trace!("kithara-stream::io Reader worker stopped (channel closed)");
         });
 
         Self {
@@ -147,7 +147,7 @@ where
         let offset = self.pos;
         let len = buf.len();
 
-        info!(
+        trace!(
             offset,
             requested_len = len,
             buffer_size = buf.len(),
@@ -167,7 +167,7 @@ where
                 std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
             })?;
         let send_duration = send_start.elapsed();
-        info!(
+        trace!(
             offset,
             send_duration_ms = send_duration.as_millis(),
             "SyncReader::send to worker DONE"
@@ -194,7 +194,7 @@ where
                 std::io::Error::other(e.to_string())
             })?;
         let recv_duration = recv_start.elapsed();
-        info!(
+        trace!(
             offset,
             recv_duration_ms = recv_duration.as_millis(),
             bytes_received = bytes.len(),
@@ -204,12 +204,11 @@ where
         if bytes.is_empty() {
             // Empty bytes means EOF (either from WaitOutcome::Eof or read_at returning empty at EOF)
             let total_duration = read_start.elapsed();
-            info!(
+            trace!(
                 offset,
                 total_duration_ms = total_duration.as_millis(),
                 "SyncReader::read EOF"
             );
-            debug!(offset, "Reader::read reached EOF");
             return Ok(0);
         }
 
@@ -217,20 +216,13 @@ where
         buf[..n].copy_from_slice(&bytes[..n]);
         self.pos = self.pos.saturating_add(n as u64);
         let total_duration = read_start.elapsed();
-        info!(
+        trace!(
             offset,
             total_duration_ms = total_duration.as_millis(),
             requested = len,
             read = n,
             new_pos = self.pos,
             "SyncReader::read DONE"
-        );
-        debug!(
-            offset,
-            requested = len,
-            read = n,
-            new_pos = self.pos,
-            "Reader::read progress"
         );
         Ok(n)
     }
@@ -241,14 +233,14 @@ where
     S: Source,
 {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        debug!(cur = self.pos, ?pos, "Reader::seek enter");
+        trace!(cur = self.pos, ?pos, "Reader::seek enter");
 
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => p as i128,
             SeekFrom::Current(delta) => (self.pos as i128).saturating_add(delta as i128),
             SeekFrom::End(delta) => {
                 let Some(len) = self.source.len() else {
-                    debug!("Reader::seek from end requested but source len is unknown");
+                    trace!("Reader::seek from end requested but source len is unknown");
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::Unsupported,
                         StreamError::<S::Error>::UnknownLength.to_string(),
@@ -259,7 +251,7 @@ where
         };
 
         if new_pos < 0 {
-            debug!(new_pos, "Reader::seek invalid (negative)");
+            trace!(new_pos, "Reader::seek invalid (negative)");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 StreamError::<S::Error>::InvalidSeek.to_string(),
@@ -273,7 +265,7 @@ where
         if let Some(len) = self.source.len()
             && new_pos_u64 > len
         {
-            debug!(new_pos_u64, len, "Reader::seek invalid (past EOF)");
+            trace!(new_pos_u64, len, "Reader::seek invalid (past EOF)");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 StreamError::<S::Error>::InvalidSeek.to_string(),

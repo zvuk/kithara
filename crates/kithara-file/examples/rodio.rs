@@ -1,6 +1,6 @@
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_assets::{AssetStoreBuilder, EvictConfig};
+use kithara_assets::{AssetStoreBuilder, EvictConfig, asset_root_for_url};
 use kithara_file::{FileEvent, FileSource, FileSourceOptions};
 use kithara_stream::SyncReader;
 use tempfile::TempDir;
@@ -35,6 +35,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let temp_dir = TempDir::new()?;
     let assets = AssetStoreBuilder::new()
         .root_dir(temp_dir.path().to_path_buf())
+        .asset_root(asset_root_for_url(&url))
         .evict_config(EvictConfig::default())
         .cancel(CancellationToken::new())
         .build();

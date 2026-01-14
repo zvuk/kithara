@@ -85,15 +85,17 @@ where
     async fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard<A>> {
         self.ensure_loaded_best_effort().await?;
 
-        let snapshot = {
+        let (snapshot, was_new) = {
             let mut guard = self.pins.lock().await;
-            guard.insert(asset_root.to_string());
-            guard.clone()
+            let was_new = guard.insert(asset_root.to_string());
+            (guard.clone(), was_new)
         };
 
-        // Best-effort persistence: if it fails, we still return a guard, but it will still unpin
-        // in-memory on drop. The disk state may lag, but opening resources continues to work.
-        let _ = self.persist_pins_best_effort(&snapshot).await;
+        // Best-effort persistence: only persist if this is a new pin to avoid repeated disk writes.
+        // If it fails, we still return a guard, but it will still unpin in-memory on drop.
+        if was_new {
+            let _ = self.persist_pins_best_effort(&snapshot).await;
+        }
 
         Ok(LeaseGuard {
             owner: self.clone(),

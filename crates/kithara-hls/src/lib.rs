@@ -24,8 +24,8 @@ pub use fetch::{FetchManager, SegmentStream};
 pub use keys::{KeyError, KeyManager};
 pub use options::{HlsOptions, KeyContext};
 pub use pipeline::{
-    BaseStream, PipelineError, PipelineEvent, PipelineResult, PipelineStream, PrefetchStream,
-    SegmentMeta, SegmentPayload,
+    BaseStream, PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta,
+    SegmentPayload,
 };
 pub use playlist::{PlaylistError, PlaylistManager};
 pub use session::{HlsSession, HlsSessionSource};

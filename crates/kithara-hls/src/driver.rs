@@ -13,7 +13,7 @@ use crate::{
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
     keys::KeyManager,
-    pipeline::{BaseStream, PipelineError, PipelineEvent, PipelineStream, PrefetchStream},
+    pipeline::{BaseStream, PipelineError, PipelineEvent, PipelineStream},
     playlist::PlaylistManager,
 };
 
@@ -37,7 +37,7 @@ impl HlsDriver {
     pub fn new(
         master_url: Url,
         options: HlsOptions,
-        playlist_manager: PlaylistManager,
+        playlist_manager: Arc<PlaylistManager>,
         fetch_manager: Arc<FetchManager>,
         key_manager: Arc<KeyManager>,
         event_emitter: EventEmitter,
@@ -45,9 +45,9 @@ impl HlsDriver {
         Self {
             options,
             master_url,
-            playlist_manager: Arc::new(playlist_manager),
+            playlist_manager,
             fetch_manager,
-            key_manager: Arc::clone(&key_manager),
+            key_manager,
             event_emitter: Arc::new(event_emitter),
             cancel: CancellationToken::new(),
         }
@@ -81,50 +81,51 @@ impl HlsDriver {
             let abr_controller =
                 AbrController::new(abr_config, opts.variant_stream_selector.clone());
 
-            // Base layer loads master/media playlists and decrypts segments when needed.
-            let base_master_url = master_url.clone();
             let base = BaseStream::new(
-                base_master_url,
-                fetch_manager.clone(),
-                playlist_manager.clone(),
-                Some(Arc::clone(&key_manager)),
-                abr_controller.clone(),
+                master_url,
+                fetch_manager,
+                playlist_manager,
+                Some(key_manager),
+                abr_controller,
                 cancel.clone(),
             );
+
+            // Prefetch with mpsc backpressure.
             let prefetch_capacity = opts.prefetch_buffer_size.unwrap_or(1).max(1);
-            let pipeline = PrefetchStream::new(base, prefetch_capacity, cancel.clone());
+            let (tx, mut rx) = mpsc::channel(prefetch_capacity);
 
-            // Subscribe to pipeline events and forward to HlsEvent.
-            let ev_rx = pipeline.event_sender().subscribe();
+            // Single background task: reads from BaseStream + forwards events.
+            let mut ev_rx = base.event_sender().subscribe();
             let events_clone = Arc::clone(&events);
+            let cancel_clone = cancel.clone();
             tokio::spawn(async move {
-                let mut ev_rx = ev_rx;
-                while let Ok(ev) = ev_rx.recv().await {
-                    match ev {
-                        PipelineEvent::VariantApplied { from, to, reason } => {
-                            events_clone.emit_variant_applied(from, to, reason);
+                let mut stream = Box::pin(base);
+                loop {
+                    tokio::select! {
+                        biased;
+                        ev = ev_rx.recv() => {
+                            if let Ok(ev) = ev {
+                                match ev {
+                                    PipelineEvent::VariantApplied { from, to, reason } => {
+                                        events_clone.emit_variant_applied(from, to, reason);
+                                    }
+                                    PipelineEvent::SegmentReady { variant, segment_index } => {
+                                        events_clone.emit_segment_start(variant, segment_index, 0);
+                                    }
+                                    PipelineEvent::Decrypted { .. } | PipelineEvent::Prefetched { .. } => {}
+                                }
+                            }
                         }
-                        PipelineEvent::SegmentReady { variant, segment_index } => {
-                            events_clone.emit_segment_start(variant, segment_index, 0);
-                        }
-                        PipelineEvent::Decrypted { .. } | PipelineEvent::Prefetched { .. } => {
-                            // No corresponding HlsEvent, skip.
+                        item = stream.next() => {
+                            let Some(item) = item else { break };
+                            if cancel_clone.is_cancelled() { break }
+                            if tx.send(item).await.is_err() { break }
                         }
                     }
                 }
             });
 
-            // Pipeline worker writes bytes to queue; outer stream reads from it.
-            let mut data_stream = Box::pin(pipeline);
-            let (tx, mut rx) = mpsc::channel(8);
-            tokio::spawn(async move {
-                while let Some(item) = data_stream.next().await {
-                    if tx.send(item).await.is_err() {
-                        break;
-                    }
-                }
-            });
-
+            // Consumer yields items.
             while let Some(item) = rx.recv().await {
                 match item {
                     Ok(payload) => {

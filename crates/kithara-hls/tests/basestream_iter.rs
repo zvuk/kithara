@@ -8,7 +8,7 @@ use kithara_assets::AssetStore;
 use kithara_hls::{
     abr::{AbrConfig, AbrController, AbrReason},
     fetch::FetchManager,
-    pipeline::{BaseStream, PipelineEvent, PipelineStream, PrefetchStream, SegmentPayload},
+    pipeline::{BaseStream, PipelineEvent, PipelineStream, SegmentPayload},
     playlist::PlaylistManager,
 };
 use kithara_net::HttpClient;
@@ -626,23 +626,23 @@ seg/v{}_2.bin
         Arc::clone(&playlist),
         None,
         abr,
-        cancel.clone(),
+        cancel,
     );
-    let mut stream = PrefetchStream::new(base, 1, cancel);
+    let mut stream = Box::pin(base);
 
-    let init2 = stream.next().await.unwrap().expect("init v2");
+    let init2: SegmentPayload = stream.next().await.unwrap().expect("init v2");
     assert_eq!(init2.meta.variant, 2);
     assert_eq!(init2.meta.segment_index, usize::MAX);
 
-    let seg2 = stream.next().await.unwrap().expect("seg0 v2");
+    let seg2: SegmentPayload = stream.next().await.unwrap().expect("seg0 v2");
     assert_eq!(seg2.meta.variant, 2);
     assert_eq!(seg2.meta.segment_index, 0);
 
-    let init1 = stream.next().await.unwrap().expect("init v1");
+    let init1: SegmentPayload = stream.next().await.unwrap().expect("init v1");
     assert_eq!(init1.meta.variant, 1);
     assert_eq!(init1.meta.segment_index, usize::MAX);
 
-    let seg1 = stream.next().await.unwrap().expect("seg1 v1");
+    let seg1: SegmentPayload = stream.next().await.unwrap().expect("seg1 v1");
     assert_eq!(seg1.meta.variant, 1);
     assert_eq!(seg1.meta.segment_index, 1);
 }
