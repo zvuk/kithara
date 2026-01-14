@@ -1,13 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    collections::HashSet,
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashSet, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use kithara_storage::{AtomicResource, StreamingResource};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -70,14 +67,14 @@ where
         // We intentionally keep this minimal and deterministic: if the set is empty
         // we may still be "loaded but empty", but that is acceptable for now because
         // higher layers can repin when they open resources.
-        let should_load = { self.pins.lock().expect("pins mutex poisoned").is_empty() };
+        let should_load = { self.pins.lock().await.is_empty() };
 
         if !should_load {
             return Ok(());
         }
 
         let loaded = self.load_pins_best_effort().await?;
-        let mut guard = self.pins.lock().expect("pins mutex poisoned");
+        let mut guard = self.pins.lock().await;
         // Merge, don't replace, to be resilient to races with concurrent pin/unpin.
         for p in loaded {
             guard.insert(p);
@@ -89,7 +86,7 @@ where
         self.ensure_loaded_best_effort().await?;
 
         let snapshot = {
-            let mut guard = self.pins.lock().expect("pins mutex poisoned");
+            let mut guard = self.pins.lock().await;
             guard.insert(asset_root.to_string());
             guard.clone()
         };
@@ -107,7 +104,7 @@ where
 
     async fn unpin_best_effort(&self, asset_root: &str) {
         let snapshot = {
-            let mut guard = self.pins.lock().expect("pins mutex poisoned");
+            let mut guard = self.pins.lock().await;
             guard.remove(asset_root);
             guard.clone()
         };
