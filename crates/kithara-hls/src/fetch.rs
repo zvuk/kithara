@@ -38,52 +38,31 @@ pub struct FetchManager {
     asset_root: String,
     assets: AssetStore,
     net: HttpClient,
+    read_chunk_bytes: u64,
 }
 
 impl FetchManager {
     pub fn new(asset_root: String, assets: AssetStore, net: HttpClient) -> Self {
+        Self::new_with_read_chunk(asset_root, assets, net, 64 * 1024)
+    }
+
+    pub fn new_with_read_chunk(
+        asset_root: String,
+        assets: AssetStore,
+        net: HttpClient,
+        read_chunk_bytes: u64,
+    ) -> Self {
         Self {
             asset_root,
             assets,
             net,
+            read_chunk_bytes,
         }
     }
 
     pub async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
-        let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
-        let res = self.assets.open_atomic_resource(&key).await?;
-
-        let cached = res.read().await?;
-        if !cached.is_empty() {
-            debug!(
-                url = %url,
-                asset_root = %self.asset_root,
-                rel_path = %rel_path,
-                bytes = cached.len(),
-                "kithara-hls: playlist cache hit"
-            );
-            return Ok(cached);
-        }
-
-        debug!(
-            url = %url,
-            asset_root = %self.asset_root,
-            rel_path = %rel_path,
-            "kithara-hls: playlist cache miss -> fetching from network"
-        );
-
-        let bytes = self.net.get_bytes(url.clone(), None).await?;
-        res.write(&bytes).await?;
-
-        debug!(
-            url = %url,
-            asset_root = %self.asset_root,
-            rel_path = %rel_path,
-            bytes = bytes.len(),
-            "kithara-hls: playlist fetched from network and cached"
-        );
-
-        Ok(bytes)
+        self.fetch_atomic_internal(url, rel_path, None, "playlist")
+            .await
     }
 
     pub async fn fetch_key_atomic(
@@ -91,6 +70,17 @@ impl FetchManager {
         url: &Url,
         rel_path: &str,
         headers: Option<Headers>,
+    ) -> HlsResult<Bytes> {
+        self.fetch_atomic_internal(url, rel_path, headers, "key")
+            .await
+    }
+
+    async fn fetch_atomic_internal(
+        &self,
+        url: &Url,
+        rel_path: &str,
+        headers: Option<Headers>,
+        resource_kind: &str,
     ) -> HlsResult<Bytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
         let res = self.assets.open_atomic_resource(&key).await?;
@@ -102,7 +92,8 @@ impl FetchManager {
                 asset_root = %self.asset_root,
                 rel_path = %rel_path,
                 bytes = cached.len(),
-                "kithara-hls: key cache hit"
+                resource_kind,
+                "kithara-hls: cache hit"
             );
             return Ok(cached);
         }
@@ -111,7 +102,8 @@ impl FetchManager {
             url = %url,
             asset_root = %self.asset_root,
             rel_path = %rel_path,
-            "kithara-hls: key cache miss -> fetching from network"
+            resource_kind,
+            "kithara-hls: cache miss -> fetching from network"
         );
 
         let bytes = self.net.get_bytes(url.clone(), headers).await?;
@@ -122,7 +114,8 @@ impl FetchManager {
             asset_root = %self.asset_root,
             rel_path = %rel_path,
             bytes = bytes.len(),
-            "kithara-hls: key fetched from network and cached"
+            resource_kind,
+            "kithara-hls: fetched from network and cached"
         );
 
         Ok(bytes)
@@ -187,14 +180,9 @@ impl FetchManager {
         }
 
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), &segment_url);
-        Self::fetch_streaming_to_bytes_internal(
-            &self.asset_root,
-            &self.assets,
-            &self.net,
-            &segment_url,
-            key.rel_path(),
-        )
-        .await
+        let rel_path = key.rel_path();
+        self.fetch_streaming_to_bytes_internal(&segment_url, rel_path, &key)
+            .await
     }
 
     pub async fn fetch_init_segment(&self, init_url: &Url) -> HlsResult<Bytes> {
@@ -203,28 +191,18 @@ impl FetchManager {
 
     pub async fn fetch_init_segment_resource(&self, url: &Url) -> HlsResult<FetchBytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
+        let rel_path = key.rel_path();
 
-        Self::fetch_streaming_to_bytes_internal(
-            &self.asset_root,
-            &self.assets,
-            &self.net,
-            url,
-            key.rel_path(),
-        )
-        .await
+        self.fetch_streaming_to_bytes_internal(url, rel_path, &key)
+            .await
     }
 
     pub async fn fetch_media_segment_resource(&self, url: &Url) -> HlsResult<FetchBytes> {
         let key = ResourceKey::from_url_with_asset_root(self.asset_root.clone(), url);
+        let rel_path = key.rel_path();
 
-        Self::fetch_streaming_to_bytes_internal(
-            &self.asset_root,
-            &self.assets,
-            &self.net,
-            url,
-            key.rel_path(),
-        )
-        .await
+        self.fetch_streaming_to_bytes_internal(url, rel_path, &key)
+            .await
     }
 
     pub async fn open_init_streaming_resource(
@@ -264,19 +242,16 @@ impl FetchManager {
     }
 
     pub fn stream_segment_sequence<'a>(
-        &self,
+        &'a self,
         media_playlist: &'a MediaPlaylist,
-        base_url: &Url,
-        key_context: Option<&KeyContext>,
+        base_url: &'a Url,
+        key_context: Option<&'a KeyContext>,
     ) -> SegmentStream<'a> {
-        let asset_root = self.asset_root.clone();
-        let assets = self.assets.clone();
-        let net = self.net.clone();
+        let me = self.clone();
         let base_url = base_url.clone();
-        let key_ctx = key_context.cloned();
 
         Box::pin(async_stream::stream! {
-            if key_ctx.is_some() {
+            if key_context.is_some() {
                 yield Err(HlsError::Unimplemented);
                 return;
             }
@@ -290,17 +265,9 @@ impl FetchManager {
                     }
                 };
 
-                let key = ResourceKey::from_url_with_asset_root(asset_root.clone(), &segment_url);
-                let fetch_result = FetchManager::fetch_streaming_to_bytes_internal(
-                    &asset_root, &assets, &net, &segment_url, key.rel_path()
-                ).await;
-
-                match fetch_result {
-                    Ok(fetch) => {
-                        yield Ok(fetch);
-                    }
-                    Err(e) => yield Err(e),
-                }
+                let key = ResourceKey::from_url_with_asset_root(me.asset_root.clone(), &segment_url);
+                let rel_path = key.rel_path();
+                yield me.fetch_streaming_to_bytes_internal(&segment_url, rel_path, &key).await;
             }
         })
     }
@@ -352,38 +319,43 @@ impl FetchManager {
 
     // Helper for stream_segment_sequence to avoid creating new FetchManager
     pub(crate) async fn fetch_streaming_to_bytes_internal(
-        asset_root: &str,
-        assets: &AssetStore,
-        net: &HttpClient,
+        &self,
         url: &Url,
         rel_path: &str,
+        key: &ResourceKey,
     ) -> HlsResult<FetchBytes> {
-        let key = ResourceKey::from_url_with_asset_root(asset_root.to_string(), url);
-
         // Intentionally quiet: this path can be called a lot during playback.
         // Keep only warnings/errors and a single "done" summary.
-        let res = assets.open_streaming_resource(&key).await?;
+        let res = self.assets.open_streaming_resource(key).await?;
 
         // Spawn a best-effort background writer for this segment.
         // If multiple callers race, extra writers may occur; the resource contract tolerates that
         // and propagates failures.
-        let net = net.clone();
+        let net = self.net.clone();
         let url = url.clone();
 
         let status = res.inner().status().await;
-        if !matches!(status, ResourceStatus::Committed { .. }) {
+        let from_cache = matches!(status, ResourceStatus::Committed { .. });
+        if !from_cache {
             FetchManager::spawn_stream_writer(net, url, res.clone());
         }
+
+        let read_chunk = self.read_chunk_bytes;
+        let mut out = match status {
+            ResourceStatus::Committed {
+                final_len: Some(final_len),
+            } if final_len <= usize::MAX as u64 => Vec::with_capacity(final_len as usize),
+            _ => Vec::with_capacity(read_chunk as usize),
+        };
+
+        let asset_root = &self.asset_root;
 
         // Read-through to bytes: wait for full content once committed, then read all.
         let start = Instant::now();
         let mut offset: u64 = 0;
-        let mut out = Vec::new();
-        let read_chunk: u64 = 64 * 1024;
 
         loop {
             let end = offset.saturating_add(read_chunk);
-
             let outcome = res.wait_range(offset..end).await?;
 
             match outcome {
@@ -420,9 +392,15 @@ impl FetchManager {
             "kithara-hls fetch_streaming_to_bytes done"
         );
 
+        let source = if from_cache {
+            ThroughputSampleSource::Cache
+        } else {
+            ThroughputSampleSource::Network
+        };
+
         Ok(FetchBytes {
             bytes: Bytes::from(out),
-            source: ThroughputSampleSource::Network,
+            source,
             duration,
         })
     }

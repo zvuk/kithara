@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use kithara_assets::{AssetId, AssetStore, ResourceKey};
-use kithara_net::{HttpClient, NetOptions};
+use kithara_net::{HttpClient, NetOptions, RetryPolicy};
 use url::Url;
 
 use crate::{
@@ -25,12 +25,20 @@ impl HlsSourceContract for HlsSource {
     async fn open(&self, url: Url, opts: HlsOptions, assets: AssetStore) -> HlsResult<HlsSession> {
         let asset_id = AssetId::from_url(&url)?;
         let asset_root = ResourceKey::asset_root_for_url(&url);
-        let net = HttpClient::new(NetOptions::default());
+        let net = HttpClient::new(NetOptions {
+            request_timeout: opts.request_timeout,
+            retry_policy: RetryPolicy::new(
+                opts.max_retries,
+                opts.retry_base_delay,
+                opts.max_retry_delay,
+            ),
+        });
 
-        let fetch_manager = Arc::new(fetch::FetchManager::new(
+        let fetch_manager = Arc::new(fetch::FetchManager::new_with_read_chunk(
             asset_root.clone(),
             assets.clone(),
             net.clone(),
+            opts.read_chunk_bytes,
         ));
         let key_processor = opts.key_processor_cb.clone();
         let key_manager = Arc::new(KeyManager::new(

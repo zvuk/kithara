@@ -49,7 +49,7 @@ use futures::Stream;
 use kithara_assets::{
     AssetId, AssetResource, AssetStore, DiskAssetStore, EvictAssets, LeaseGuard, ResourceKey,
 };
-use kithara_net::{HttpClient, NetOptions};
+use kithara_net::{HttpClient, NetOptions, RetryPolicy};
 use kithara_storage::{StreamingResource, StreamingResourceExt, WaitOutcome};
 use kithara_stream::{Source, StreamError as KitharaIoError, StreamResult as KitharaIoResult};
 use tokio::{
@@ -113,7 +113,6 @@ impl HlsSessionSource {
         fetch_manager: Arc<FetchManager>,
     ) -> Self {
         let asset_root = ResourceKey::asset_root_for_url(&master_url);
-
         let prefetch_window = options.prefetch_buffer_size.unwrap_or(1).max(1);
 
         Self {
@@ -787,12 +786,20 @@ impl HlsSession {
 
     pub async fn source(&self) -> HlsResult<HlsSessionSource> {
         let asset_root = ResourceKey::asset_root_for_url(&self.master_url);
-        let net = HttpClient::new(NetOptions::default());
+        let net = HttpClient::new(NetOptions {
+            request_timeout: self.opts.request_timeout,
+            retry_policy: RetryPolicy::new(
+                self.opts.max_retries,
+                self.opts.retry_base_delay,
+                self.opts.max_retry_delay,
+            ),
+        });
 
-        let fetch_manager = Arc::new(FetchManager::new(
+        let fetch_manager = Arc::new(FetchManager::new_with_read_chunk(
             asset_root.clone(),
             self.assets.clone(),
             net,
+            self.opts.read_chunk_bytes,
         ));
         let playlist_manager =
             PlaylistManager::new(Arc::clone(&fetch_manager), self.opts.base_url.clone());

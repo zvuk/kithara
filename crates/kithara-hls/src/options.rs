@@ -31,6 +31,7 @@ pub struct HlsOptions {
     pub retry_base_delay: Duration,
     pub max_retry_delay: Duration,
     pub retry_timeout: Duration,
+    pub read_chunk_bytes: u64,
     pub prefetch_buffer_size: Option<usize>,
     pub live_refresh_interval: Option<Duration>,
     // key processing
@@ -56,6 +57,7 @@ impl Default for HlsOptions {
             retry_base_delay: Duration::from_millis(100),
             max_retry_delay: Duration::from_secs(5),
             retry_timeout: Duration::from_secs(60),
+            read_chunk_bytes: 64 * 1024,
             prefetch_buffer_size: Some(3),
             live_refresh_interval: None,
             key_processor_cb: None,

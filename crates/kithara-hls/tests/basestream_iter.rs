@@ -26,10 +26,11 @@ fn make_fetch_and_playlist(
     assets: AssetStore,
     net: HttpClient,
 ) -> (Arc<FetchManager>, Arc<PlaylistManager>) {
-    let fetch = Arc::new(FetchManager::new(
+    let fetch = Arc::new(FetchManager::new_with_read_chunk(
         "test-asset-root".to_string(),
         assets,
         net,
+        64 * 1024,
     ));
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
     (fetch, playlist)
