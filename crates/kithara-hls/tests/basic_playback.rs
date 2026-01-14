@@ -2,7 +2,7 @@
 
 use std::{error::Error, sync::Arc, time::Duration};
 
-use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig};
+use kithara_assets::EvictConfig;
 use kithara_hls::{HlsOptions, HlsSource};
 use kithara_stream::SyncReader;
 use rstest::{fixture, rstest};
@@ -25,17 +25,13 @@ fn cancel_token() -> CancellationToken {
 }
 
 #[fixture]
-fn assets(temp_dir: TempDir, cancel_token: CancellationToken) -> AssetStore {
-    AssetStoreBuilder::new()
-        .root_dir(temp_dir.path().to_path_buf())
-        .evict_config(EvictConfig::default())
-        .cancel(cancel_token)
-        .build()
-}
-
-#[fixture]
-fn hls_options() -> HlsOptions {
-    HlsOptions::default()
+fn hls_options(temp_dir: TempDir, cancel_token: CancellationToken) -> HlsOptions {
+    HlsOptions {
+        cache_dir: Some(temp_dir.into_path()),
+        evict_config: Some(EvictConfig::default()),
+        cancel: Some(cancel_token),
+        ..Default::default()
+    }
 }
 
 #[fixture]
@@ -76,14 +72,13 @@ fn tracing_setup() {
 async fn test_basic_hls_playback(
     _tracing_setup: (),
     test_stream_url: Url,
-    assets: AssetStore,
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Starting HLS playback test with URL: {}", test_stream_url);
 
     // 1. Test: Open HLS session
     info!("Opening HLS session...");
-    let session = HlsSource::open(test_stream_url.clone(), hls_options, assets).await?;
+    let session = HlsSource::open(test_stream_url.clone(), hls_options).await?;
     info!("✓ HLS session opened successfully");
 
     // 2. Test: Get audio source
@@ -142,7 +137,6 @@ async fn test_basic_hls_playback(
 #[tokio::test]
 async fn test_hls_session_creation(
     test_stream_url: Url,
-    assets: AssetStore,
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
@@ -151,7 +145,7 @@ async fn test_hls_session_creation(
         .try_init();
 
     // Test session creation
-    let session = HlsSource::open(test_stream_url, hls_options, assets).await?;
+    let session = HlsSource::open(test_stream_url, hls_options).await?;
 
     // Test source acquisition
     let _source = session.source().await?;
@@ -177,7 +171,6 @@ async fn test_hls_session_creation(
 #[tokio::test]
 async fn test_hls_with_different_streams(
     #[case] stream_url: &str,
-    assets: AssetStore,
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
@@ -190,7 +183,7 @@ async fn test_hls_with_different_streams(
     let url: Url = stream_url.parse()?;
 
     // Just test that we can open the session
-    let session = HlsSource::open(url, hls_options, assets).await?;
+    let session = HlsSource::open(url, hls_options).await?;
     let _source = session.source().await?;
 
     info!("✓ Stream {} opened successfully", stream_url);
@@ -199,13 +192,11 @@ async fn test_hls_with_different_streams(
 
 /// Test HLS with different options configurations.
 #[rstest]
-#[case(HlsOptions::default())]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_with_different_options(
-    #[case] options: HlsOptions,
     test_stream_url: Url,
-    assets: AssetStore,
+    temp_dir: TempDir,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
@@ -214,8 +205,15 @@ async fn test_hls_with_different_options(
 
     info!("Testing HLS with custom options");
 
+    let options = HlsOptions {
+        cache_dir: Some(temp_dir.into_path()),
+        evict_config: Some(EvictConfig::default()),
+        cancel: Some(CancellationToken::new()),
+        ..Default::default()
+    };
+
     // Test session creation with different options
-    let session = HlsSource::open(test_stream_url, options, assets).await?;
+    let session = HlsSource::open(test_stream_url, options).await?;
     let _source = session.source().await?;
 
     info!("✓ HLS session opened successfully with custom options");
@@ -231,7 +229,6 @@ async fn test_hls_with_different_options(
 #[tokio::test]
 async fn test_hls_invalid_url_handling(
     #[case] invalid_url: &str,
-    assets: AssetStore,
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
@@ -243,7 +240,7 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         // If URL parses, try to open HLS (should fail with network error)
-        let result = HlsSource::open(url, hls_options, assets).await;
+        let result = HlsSource::open(url, hls_options).await;
         // Either Ok (if somehow connects) or Err (expected) is acceptable
         assert!(result.is_ok() || result.is_err());
     } else {
@@ -261,27 +258,27 @@ async fn test_hls_invalid_url_handling(
 async fn test_hls_without_cache(
     test_stream_url: Url,
     temp_dir: TempDir,
-    hls_options: HlsOptions,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
         .with_test_writer()
         .try_init();
 
-    // Create assets store with very small cache to simulate limited caching
-    let limited_assets = AssetStoreBuilder::new()
-        .root_dir(temp_dir.path().to_path_buf())
-        .evict_config(EvictConfig {
+    // Create options with very small cache to simulate limited caching
+    let hls_options = HlsOptions {
+        cache_dir: Some(temp_dir.into_path()),
+        evict_config: Some(EvictConfig {
             max_assets: Some(1),
             max_bytes: Some(1024), // 1KB cache
-        })
-        .cancel(CancellationToken::new())
-        .build();
+        }),
+        cancel: Some(CancellationToken::new()),
+        ..Default::default()
+    };
 
     info!("Testing HLS with limited cache");
 
     // Test session creation with limited cache
-    let session = HlsSource::open(test_stream_url, hls_options, limited_assets).await?;
+    let session = HlsSource::open(test_stream_url, hls_options).await?;
     let _source = session.source().await?;
 
     info!("✓ HLS session opened successfully with limited cache");

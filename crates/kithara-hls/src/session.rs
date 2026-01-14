@@ -46,9 +46,7 @@ use std::{
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use kithara_assets::{
-    AssetId, AssetResource, AssetStore, DiskAssetStore, EvictAssets, LeaseGuard, ResourceKey,
-};
+use kithara_assets::{AssetId, AssetResource, AssetStore, DiskAssetStore, EvictAssets, LeaseGuard};
 use kithara_net::{HttpClient, NetOptions, RetryPolicy};
 use kithara_storage::{StreamingResource, StreamingResourceExt, WaitOutcome};
 use kithara_stream::{Source, StreamError as KitharaIoError, StreamResult as KitharaIoResult};
@@ -73,7 +71,6 @@ pub struct HlsSessionSource {
     fetch_manager: Arc<FetchManager>,
     master_url: Url,
     options: HlsOptions,
-    asset_root: String,
     state: OnceCell<State>,
     prefetch_started: OnceCell<tokio::task::JoinHandle<()>>,
     prefetch_next: Arc<AtomicUsize>,
@@ -112,7 +109,6 @@ impl HlsSessionSource {
         playlist_manager: PlaylistManager,
         fetch_manager: Arc<FetchManager>,
     ) -> Self {
-        let asset_root = ResourceKey::asset_root_for_url(&master_url);
         let prefetch_window = options.prefetch_buffer_size.unwrap_or(1).max(1);
 
         Self {
@@ -120,7 +116,6 @@ impl HlsSessionSource {
             fetch_manager,
             master_url,
             options,
-            asset_root,
             state: OnceCell::new(),
             prefetch_started: OnceCell::new(),
             prefetch_next: Arc::new(AtomicUsize::new(0)),
@@ -129,12 +124,16 @@ impl HlsSessionSource {
         }
     }
 
+    fn asset_root(&self) -> &str {
+        self.fetch_manager.asset_root()
+    }
+
     async fn ensure_state(&self) -> HlsResult<&State> {
         self.state
             .get_or_try_init(|| async {
                 debug!(
                     master_url = %self.master_url,
-                    master_hash = %self.asset_root,
+                    master_hash = %self.asset_root(),
                     "kithara-hls session source init begin"
                 );
 
@@ -248,7 +247,7 @@ impl HlsSessionSource {
                     debug!(
                         segment_index = 0,
                         segment_url = %init_url,
-                        asset_root = %self.asset_root,
+                        asset_root = %self.asset_root(),
                         "kithara-hls session source: init segment indexed"
                     );
 
@@ -296,7 +295,7 @@ impl HlsSessionSource {
                 }
 
                 debug!(
-                    master_hash = %self.asset_root,
+                    master_hash = %self.asset_root(),
                     variant_id = variant_index,
                     segments = segments.len(),
                     total_len,
@@ -785,7 +784,6 @@ impl HlsSession {
     }
 
     pub async fn source(&self) -> HlsResult<HlsSessionSource> {
-        let asset_root = ResourceKey::asset_root_for_url(&self.master_url);
         let net = HttpClient::new(NetOptions {
             request_timeout: self.opts.request_timeout,
             retry_policy: RetryPolicy::new(
@@ -796,7 +794,6 @@ impl HlsSession {
         });
 
         let fetch_manager = Arc::new(FetchManager::new_with_read_chunk(
-            asset_root.clone(),
             self.assets.clone(),
             net,
             self.opts.read_chunk_bytes,

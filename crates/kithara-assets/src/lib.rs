@@ -57,7 +57,7 @@ pub use evict::EvictAssets;
 pub use index::EvictConfig;
 #[cfg(feature = "internal")]
 pub use index::PinsIndex;
-pub use key::ResourceKey;
+pub use key::{ResourceKey, asset_root_for_url};
 pub use lease::{LeaseAssets, LeaseGuard};
 pub use resource::AssetResource;
 pub use store::{AssetStore, AssetStoreBuilder, DiskAssetStore};

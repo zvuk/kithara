@@ -224,6 +224,10 @@ impl TestAssets {
 }
 
 pub fn create_test_assets() -> TestAssets {
+    create_test_assets_with_root("test-hls")
+}
+
+pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     // NOTE: The assets/cache API has been redesigned.
     // Keep the temp dir alive by storing it inside the returned wrapper.
     let temp_dir = TempDir::new().unwrap();
@@ -231,6 +235,7 @@ pub fn create_test_assets() -> TestAssets {
 
     let assets = AssetStoreBuilder::new()
         .root_dir(temp_dir.path().to_path_buf())
+        .asset_root(asset_root)
         .evict_config(EvictConfig::default())
         .cancel(CancellationToken::new())
         .build();

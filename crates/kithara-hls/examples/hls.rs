@@ -1,6 +1,6 @@
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_assets::{AssetStoreBuilder, EvictConfig};
+use kithara_assets::EvictConfig;
 use kithara_hls::{HlsOptions, HlsSource};
 use kithara_stream::SyncReader;
 use tempfile::TempDir;
@@ -32,14 +32,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let url: Url = url.parse()?;
     let temp_dir = TempDir::new()?;
     let cancel = CancellationToken::new();
-    let assets = AssetStoreBuilder::new()
-        .root_dir(temp_dir.path().to_path_buf())
-        .evict_config(EvictConfig::default())
-        .cancel(cancel.clone())
-        .build();
+
+    let hls_options = HlsOptions {
+        cache_dir: Some(temp_dir.path().to_path_buf()),
+        evict_config: Some(EvictConfig::default()),
+        cancel: Some(cancel.clone()),
+        ..Default::default()
+    };
 
     // Open an HLS session (async byte source).
-    let session = HlsSource::open(url, HlsOptions::default(), assets).await?;
+    let session = HlsSource::open(url, hls_options).await?;
     let source = session.source().await?;
 
     let mut events_rx = session.events();

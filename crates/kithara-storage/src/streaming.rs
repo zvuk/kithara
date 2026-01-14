@@ -204,9 +204,12 @@ impl Resource for StreamingResource {
                     return Err(StorageError::Failed(err.clone()));
                 }
                 if !state.committed {
-                    return Err(StorageError::Failed("resource not committed".to_string()));
+                    return Err(StorageError::NotCommitted);
                 }
-                state.final_len.unwrap_or_default()
+                match state.final_len {
+                    Some(len) => len,
+                    None => return Err(StorageError::NotCommitted),
+                }
             }
         };
 

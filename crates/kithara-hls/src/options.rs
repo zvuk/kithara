@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
 
 use bytes::Bytes;
+use kithara_assets::EvictConfig;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::{error::HlsResult, playlist::MasterPlaylist};
@@ -38,6 +40,10 @@ pub struct HlsOptions {
     pub key_processor_cb: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
     pub key_query_params: Option<HashMap<String, String>>,
     pub key_request_headers: Option<HashMap<String, String>>,
+    // asset storage
+    pub cache_dir: Option<PathBuf>,
+    pub evict_config: Option<EvictConfig>,
+    pub cancel: Option<CancellationToken>,
 }
 
 impl Default for HlsOptions {
@@ -63,6 +69,9 @@ impl Default for HlsOptions {
             key_processor_cb: None,
             key_query_params: None,
             key_request_headers: None,
+            cache_dir: None,
+            evict_config: None,
+            cancel: None,
         }
     }
 }

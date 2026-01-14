@@ -19,6 +19,7 @@ fn temp_dir() -> tempfile::TempDir {
 fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
+        .asset_root("test-asset")
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
@@ -28,7 +29,7 @@ fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
 
 #[fixture]
 fn disk_asset_store(temp_dir: tempfile::TempDir) -> DiskAssetStore {
-    DiskAssetStore::new(temp_dir.path(), CancellationToken::new())
+    DiskAssetStore::new(temp_dir.path(), "test-asset", CancellationToken::new())
 }
 
 #[rstest]
@@ -209,7 +210,7 @@ async fn pins_index_persists_across_store_instances(temp_dir: tempfile::TempDir)
     let cancel = CancellationToken::new();
 
     // Create first store and write pins
-    let base1 = DiskAssetStore::new(dir, cancel.clone());
+    let base1 = DiskAssetStore::new(dir, "test-asset", cancel.clone());
     let idx1 = PinsIndex::open(&base1).await.unwrap();
 
     let mut pins = HashSet::new();
@@ -219,7 +220,7 @@ async fn pins_index_persists_across_store_instances(temp_dir: tempfile::TempDir)
     idx1.store(&pins).await.unwrap();
 
     // Create completely new store instance (simulating restart)
-    let base2 = DiskAssetStore::new(dir, cancel);
+    let base2 = DiskAssetStore::new(dir, "test-asset", cancel);
     let idx2 = PinsIndex::open(&base2).await.unwrap();
 
     let loaded = idx2.load().await.unwrap();

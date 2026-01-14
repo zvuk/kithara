@@ -15,6 +15,7 @@ use crate::{
     error::AssetsResult,
     index::{EvictConfig, LruIndex, PinsIndex},
     key::ResourceKey,
+    store::delete_asset_dir,
 };
 
 /// A decorator that enforces LRU eviction with optional per-asset byte accounting.
@@ -141,7 +142,7 @@ where
             }
 
             // Best-effort: delete directory, then best-effort remove from LRU.
-            if self.base.delete_asset(&cand).await.is_ok() {
+            if delete_asset_dir(self.base.root_dir(), &cand).await.is_ok() {
                 let _ = lru.remove(&cand).await;
             }
 
@@ -186,19 +187,25 @@ where
         self.base.root_dir()
     }
 
+    fn asset_root(&self) -> &str {
+        self.base.asset_root()
+    }
+
     async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<AtomicResource> {
         // Asset creation-time eviction decision happens before opening.
         //
         // Note: this decorator is about LRU/quotas and must not wrap/alter resources.
         // Pinning remains the responsibility of the `LeaseAssets` decorator.
-        self.touch_and_maybe_evict(&key.asset_root, None).await;
+        self.touch_and_maybe_evict(self.base.asset_root(), None)
+            .await;
 
         self.base.open_atomic_resource(key).await
     }
 
     async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<StreamingResource> {
         // Asset creation-time eviction decision happens before opening.
-        self.touch_and_maybe_evict(&key.asset_root, None).await;
+        self.touch_and_maybe_evict(self.base.asset_root(), None)
+            .await;
 
         // Delegate to base.
         self.base.open_streaming_resource(key).await
@@ -212,7 +219,7 @@ where
         self.base.open_lru_index_resource().await
     }
 
-    async fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
-        self.base.delete_asset(asset_root).await
+    async fn delete_asset(&self) -> AssetsResult<()> {
+        self.base.delete_asset().await
     }
 }

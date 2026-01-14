@@ -109,6 +109,7 @@ async fn temp_assets() -> AssetStore {
     let temp_dir = TempDir::new().unwrap();
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path().to_path_buf())
+        .asset_root("test-file")
         .evict_config(EvictConfig::default())
         .cancel(CancellationToken::new())
         .build()
@@ -123,6 +124,7 @@ async fn temp_assets_with_small_limit() -> AssetStore {
     };
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path().to_path_buf())
+        .asset_root("test-file")
         .evict_config(config)
         .cancel(CancellationToken::new())
         .build()

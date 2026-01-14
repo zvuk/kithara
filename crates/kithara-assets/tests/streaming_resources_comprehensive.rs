@@ -12,10 +12,10 @@ fn temp_dir() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
-#[fixture]
-fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
+fn asset_store_with_root(temp_dir: &tempfile::TempDir, asset_root: &str) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
+        .asset_root(asset_root)
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
@@ -34,12 +34,11 @@ async fn streaming_resource_complex_write_patterns(
     #[case] total_size: usize,
     #[case] chunk_size: usize,
     #[case] initial_offset: u64,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-complex");
 
-    let key = ResourceKey::new("streaming-complex".to_string(), "data.bin".to_string());
+    let key = ResourceKey::new("data.bin");
 
     let res = store.open_streaming_resource(&key).await.unwrap();
 
@@ -70,15 +69,11 @@ async fn streaming_resource_complex_write_patterns(
 async fn streaming_resource_concurrent_writes(
     #[case] write_count: usize,
     #[case] chunk_size: usize,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-concurrent");
 
-    let key = ResourceKey::new(
-        "streaming-concurrent".to_string(),
-        "concurrent.bin".to_string(),
-    );
+    let key = ResourceKey::new("concurrent.bin");
 
     let res = store.open_streaming_resource(&key).await.unwrap();
 
@@ -124,12 +119,11 @@ async fn streaming_resource_concurrent_writes(
 async fn streaming_resource_edge_case_reads(
     #[case] offset: u64,
     #[case] read_size: usize,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-edge-reads");
 
-    let key = ResourceKey::new("streaming-edge-reads".to_string(), "edge.bin".to_string());
+    let key = ResourceKey::new("edge.bin");
 
     let res = store.open_streaming_resource(&key).await.unwrap();
 
@@ -162,12 +156,11 @@ async fn streaming_resource_edge_case_reads(
 #[tokio::test]
 async fn streaming_resource_multiple_range_operations(
     #[case] write_ranges: Vec<(usize, usize)>,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-multi-range");
 
-    let key = ResourceKey::new("streaming-multi-range".to_string(), "multi.bin".to_string());
+    let key = ResourceKey::new("multi.bin");
 
     let res = store.open_streaming_resource(&key).await.unwrap();
 
@@ -203,12 +196,11 @@ async fn streaming_resource_multiple_range_operations(
 #[tokio::test]
 async fn streaming_resource_commit_behavior(
     #[case] explicit_commit: bool,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-commit");
 
-    let key = ResourceKey::new("streaming-commit".to_string(), "commit.bin".to_string());
+    let key = ResourceKey::new("commit.bin");
 
     let res = store.open_streaming_resource(&key).await.unwrap();
 
@@ -248,12 +240,11 @@ async fn streaming_resource_commit_behavior(
 #[tokio::test]
 async fn streaming_resource_zero_length_operations(
     #[case] base_offset: u64,
-    _temp_dir: tempfile::TempDir,
-    asset_store_no_limits: AssetStore,
+    temp_dir: tempfile::TempDir,
 ) {
-    let store = asset_store_no_limits;
+    let store = asset_store_with_root(&temp_dir, "streaming-zero-length");
 
-    let key = ResourceKey::new("streaming-zero-length".to_string(), "zero.bin".to_string());
+    let key = ResourceKey::new("zero.bin");
 
     let res = store.open_streaming_resource(&key).await.unwrap();
 

@@ -14,10 +14,10 @@ fn temp_dir() -> TempDir {
     TempDir::new().expect("Failed to create temp dir")
 }
 
-#[fixture]
-fn asset_store(temp_dir: TempDir) -> AssetStore {
+fn asset_store_with_root(temp_dir: &TempDir, asset_root: &str) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
+        .asset_root(asset_root)
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
@@ -30,8 +30,9 @@ fn asset_store(temp_dir: TempDir) -> AssetStore {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn asset_resource_atomic_path_method(asset_store: AssetStore) {
-    let key = ResourceKey::new("test-asset".to_string(), "metadata.json".to_string());
+async fn asset_resource_atomic_path_method(temp_dir: TempDir) {
+    let asset_store = asset_store_with_root(&temp_dir, "test-asset");
+    let key = ResourceKey::new("metadata.json");
     let asset_resource = asset_store
         .open_atomic_resource(&key)
         .await
@@ -65,8 +66,9 @@ async fn asset_resource_atomic_path_method(asset_store: AssetStore) {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn asset_resource_streaming_path_method(asset_store: AssetStore) {
-    let key = ResourceKey::new("test-asset".to_string(), "media.bin".to_string());
+async fn asset_resource_streaming_path_method(temp_dir: TempDir) {
+    let asset_store = asset_store_with_root(&temp_dir, "test-asset");
+    let key = ResourceKey::new("media.bin");
     let asset_resource = asset_store
         .open_streaming_resource(&key)
         .await
@@ -100,8 +102,9 @@ async fn asset_resource_streaming_path_method(asset_store: AssetStore) {
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn asset_resource_path_consistency_across_clones(asset_store: AssetStore) {
-    let key = ResourceKey::new("test-asset".to_string(), "data.bin".to_string());
+async fn asset_resource_path_consistency_across_clones(temp_dir: TempDir) {
+    let asset_store = asset_store_with_root(&temp_dir, "test-asset");
+    let key = ResourceKey::new("data.bin");
     let asset_resource = asset_store
         .open_atomic_resource(&key)
         .await
@@ -129,10 +132,11 @@ async fn asset_resource_path_consistency_across_clones(asset_store: AssetStore) 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn asset_resource_path_reflects_asset_root_and_resource_name(asset_store: AssetStore) {
+async fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TempDir) {
     let asset_root = "my-asset";
     let resource_name = "subdir/file.txt";
-    let key = ResourceKey::new(asset_root.to_string(), resource_name.to_string());
+    let asset_store = asset_store_with_root(&temp_dir, asset_root);
+    let key = ResourceKey::new(resource_name);
     let asset_resource = asset_store
         .open_atomic_resource(&key)
         .await
@@ -159,17 +163,18 @@ async fn asset_resource_path_reflects_asset_root_and_resource_name(asset_store: 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn multiple_resources_same_asset_root_have_different_paths(asset_store: AssetStore) {
+async fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TempDir) {
     let asset_root = "shared-asset";
+    let asset_store = asset_store_with_root(&temp_dir, asset_root);
 
     // Create two different resources in the same asset root
-    let key1 = ResourceKey::new(asset_root.to_string(), "resource1.bin".to_string());
+    let key1 = ResourceKey::new("resource1.bin");
     let resource1 = asset_store
         .open_atomic_resource(&key1)
         .await
         .expect("Failed to open resource1");
 
-    let key2 = ResourceKey::new(asset_root.to_string(), "resource2.bin".to_string());
+    let key2 = ResourceKey::new("resource2.bin");
     let resource2 = asset_store
         .open_atomic_resource(&key2)
         .await

@@ -123,7 +123,7 @@ where
     ) -> AssetsResult<AssetResource<AtomicResource, LeaseGuard<A>>> {
         let inner = self.base.open_atomic_resource(key).await?;
 
-        let lease = self.pin(&key.asset_root).await?;
+        let lease = self.pin(self.base.asset_root()).await?;
         Ok(AssetResource::new(inner, lease))
     }
 
@@ -135,7 +135,7 @@ where
     ) -> AssetsResult<AssetResource<StreamingResource, LeaseGuard<A>>> {
         let inner = self.base.open_streaming_resource(key).await?;
 
-        let lease = self.pin(&key.asset_root).await?;
+        let lease = self.pin(self.base.asset_root()).await?;
         Ok(AssetResource::new(inner, lease))
     }
 }
@@ -147,6 +147,10 @@ where
 {
     fn root_dir(&self) -> &Path {
         self.base.root_dir()
+    }
+
+    fn asset_root(&self) -> &str {
+        self.base.asset_root()
     }
 
     async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<AtomicResource> {
@@ -166,9 +170,9 @@ where
         self.base.open_pins_index_resource().await
     }
 
-    async fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
+    async fn delete_asset(&self) -> AssetsResult<()> {
         // Delete asset through base implementation
-        self.base.delete_asset(asset_root).await
+        self.base.delete_asset().await
     }
 
     async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {

@@ -26,12 +26,7 @@ fn make_fetch_and_playlist(
     assets: AssetStore,
     net: HttpClient,
 ) -> (Arc<FetchManager>, Arc<PlaylistManager>) {
-    let fetch = Arc::new(FetchManager::new_with_read_chunk(
-        "test-asset-root".to_string(),
-        assets,
-        net,
-        64 * 1024,
-    ));
+    let fetch = Arc::new(FetchManager::new_with_read_chunk(assets, net, 64 * 1024));
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
     (fetch, playlist)
 }
@@ -453,9 +448,7 @@ seg/v{}_2.bin
         .parse()
         .expect("valid master url");
 
-    let asset_root = format!("basestream-downswitch-{}", addr.port());
     let fetch = Arc::new(FetchManager::new(
-        asset_root,
         assets_fixture.assets().clone(),
         net_fixture,
     ));
@@ -615,9 +608,7 @@ seg/v{}_2.bin
         .parse()
         .expect("valid master url");
 
-    let asset_root = format!("basestream-prefetch-downswitch-{}", addr.port());
     let fetch = Arc::new(FetchManager::new(
-        asset_root,
         assets_fixture.assets().clone(),
         net_fixture,
     ));

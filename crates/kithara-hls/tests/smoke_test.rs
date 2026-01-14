@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig};
+use kithara_assets::EvictConfig;
 use kithara_hls::{HlsOptions, HlsSource};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
@@ -19,17 +19,13 @@ fn temp_dir() -> TempDir {
 }
 
 #[fixture]
-fn assets(temp_dir: TempDir) -> AssetStore {
-    AssetStoreBuilder::new()
-        .root_dir(temp_dir.path().to_path_buf())
-        .evict_config(EvictConfig::default())
-        .cancel(CancellationToken::new())
-        .build()
-}
-
-#[fixture]
-fn hls_options() -> HlsOptions {
-    HlsOptions::default()
+fn hls_options(temp_dir: TempDir) -> HlsOptions {
+    HlsOptions {
+        cache_dir: Some(temp_dir.into_path()),
+        evict_config: Some(EvictConfig::default()),
+        cancel: Some(CancellationToken::new()),
+        ..Default::default()
+    }
 }
 
 #[fixture]
@@ -56,13 +52,12 @@ fn minimal_tracing_setup() {
 async fn test_hls_session_creation(
     _minimal_tracing_setup: (),
     test_stream_url: Url,
-    assets: AssetStore,
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Testing HLS session creation with URL: {}", test_stream_url);
 
     // Test 1: Open HLS session
-    let session = HlsSource::open(test_stream_url.clone(), hls_options, assets.clone()).await?;
+    let session = HlsSource::open(test_stream_url.clone(), hls_options).await?;
     info!("✓ HLS session opened successfully");
 
     // Test 2: Get source
@@ -115,13 +110,12 @@ async fn test_hls_with_local_fixture(
 async fn test_hls_session_with_different_urls(
     #[case] stream_url: &str,
     _minimal_tracing_setup: (),
-    assets: AssetStore,
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let url: Url = stream_url.parse()?;
     info!("Testing HLS session creation with URL: {}", url);
 
-    let session = HlsSource::open(url, hls_options, assets).await?;
+    let session = HlsSource::open(url, hls_options).await?;
     let _source = session.source().await?;
 
     info!("✓ HLS session opened successfully for URL: {}", stream_url);
@@ -134,12 +128,11 @@ async fn test_hls_session_with_different_urls(
 async fn test_hls_session_events_consumption(
     _minimal_tracing_setup: (),
     test_stream_url: Url,
-    assets: AssetStore,
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Testing HLS session events consumption");
 
-    let session = HlsSource::open(test_stream_url, hls_options, assets).await?;
+    let session = HlsSource::open(test_stream_url, hls_options).await?;
     let _source = session.source().await?;
 
     // Get events channel
@@ -172,7 +165,6 @@ async fn test_hls_session_events_consumption(
 #[tokio::test]
 async fn test_hls_invalid_url_handling(
     _minimal_tracing_setup: (),
-    assets: AssetStore,
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Test with invalid URL
@@ -181,7 +173,7 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         // If URL parses, try to open HLS (should fail with network error)
-        let result = HlsSource::open(url, hls_options, assets).await;
+        let result = HlsSource::open(url, hls_options).await;
         // Either Ok (if somehow connects) or Err (expected) is acceptable
         assert!(result.is_ok() || result.is_err());
     } else {
@@ -198,13 +190,12 @@ async fn test_hls_invalid_url_handling(
 async fn test_hls_session_drop_cleanup(
     _minimal_tracing_setup: (),
     test_stream_url: Url,
-    assets: AssetStore,
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     info!("Testing HLS session drop cleanup");
 
     // Create and immediately drop session
-    let session = HlsSource::open(test_stream_url, hls_options, assets).await?;
+    let session = HlsSource::open(test_stream_url, hls_options).await?;
     drop(session);
 
     // Wait a bit to ensure cleanup happens

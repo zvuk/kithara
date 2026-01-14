@@ -21,10 +21,11 @@ use crate::{
     lease::LeaseAssets,
 };
 
-/// Concrete on-disk [`Assets`] implementation.
+/// Concrete on-disk [`Assets`] implementation for a single asset.
 ///
 /// ## Normative
 /// - This type is responsible for mapping [`ResourceKey`] → disk paths under a root directory.
+/// - Each `DiskAssetStore` is scoped to a single `asset_root` (e.g. hash of master playlist URL).
 /// - `kithara-assets` crate does not "invent" keys; it only *maps* them.
 /// - Path mapping must be safe (no absolute paths, no `..`, no empty segments).
 /// - This is not a "cache" by name or responsibility; caching/eviction are higher-level policies.
@@ -35,6 +36,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct DiskAssetStore {
     root_dir: PathBuf,
+    asset_root: String,
     cancel: CancellationToken,
     map: DashMap<CacheKey, Arc<ResourceEntry>>,
 }
@@ -50,6 +52,10 @@ impl AssetStore {
     pub fn base(&self) -> &EvictAssets<DiskAssetStore> {
         self.0.base()
     }
+
+    pub fn asset_root(&self) -> &str {
+        self.0.base().base().asset_root()
+    }
 }
 
 impl Deref for AssetStore {
@@ -62,27 +68,52 @@ impl Deref for AssetStore {
 
 /// Constructor for the ready-to-use [`AssetStore`].
 ///
-/// We use a free function (not `AssetStore::new`) because `AssetStore` is a type alias.
+/// ## Usage
+/// ```ignore
+/// let store = AssetStoreBuilder::new()
+///     .root_dir("/path/to/cache")
+///     .asset_root(asset_root_for_url(&master_url))
+///     .build();
+/// ```
 ///
-/// Decorator order (normative):
+/// ## Decorator order (normative)
 /// - `EvictAssets` is applied before `LeaseAssets` so eviction is evaluated at "asset creation time"
 ///   without being affected by the new handle's pin.
 /// - `LeaseAssets` provides RAII pinning for opened resources.
-#[derive(Default)]
 pub struct AssetStoreBuilder {
     root_dir: Option<PathBuf>,
+    asset_root: Option<String>,
     evict_config: Option<EvictConfig>,
     cancel: Option<CancellationToken>,
 }
 
+impl Default for AssetStoreBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AssetStoreBuilder {
-    /// Builder with defaults (no root_dir/evict/cancel set).
+    /// Builder with defaults (no root_dir/asset_root/evict/cancel set).
     pub fn new() -> Self {
         Self {
             root_dir: None,
+            asset_root: None,
             evict_config: None,
             cancel: None,
         }
+    }
+
+    /// Set the root directory for the asset store.
+    pub fn root_dir(mut self, root: impl Into<PathBuf>) -> Self {
+        self.root_dir = Some(root.into());
+        self
+    }
+
+    /// Set the asset root identifier (e.g. from `asset_root_for_url`).
+    pub fn asset_root(mut self, asset_root: impl Into<String>) -> Self {
+        self.asset_root = Some(asset_root.into());
+        self
     }
 
     pub fn evict_config(mut self, cfg: EvictConfig) -> Self {
@@ -95,22 +126,23 @@ impl AssetStoreBuilder {
         self
     }
 
-    pub fn root_dir(mut self, root: impl Into<PathBuf>) -> Self {
-        self.root_dir = Some(root.into());
-        self
-    }
-
+    /// Build the asset store.
+    ///
+    /// # Panics
+    /// Panics if `asset_root` is not set.
     pub fn build(self) -> AssetStore {
-        #[allow(deprecated)]
         let root_dir = self.root_dir.unwrap_or_else(|| {
             tempdir()
                 .expect("failed to create AssetStore temp dir")
-                .into_path()
+                .keep()
         });
+        let asset_root = self
+            .asset_root
+            .expect("asset_root is required for AssetStoreBuilder");
         let evict_cfg = self.evict_config.unwrap_or_default();
         let cancel = self.cancel.unwrap_or_default();
 
-        let base = Arc::new(DiskAssetStore::new(root_dir, cancel.clone()));
+        let base = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));
         let evict = Arc::new(EvictAssets::new(base, evict_cfg, cancel.clone()));
         AssetStore::new(evict, cancel)
     }
@@ -131,10 +163,15 @@ enum ResourceEntry {
 }
 
 impl DiskAssetStore {
-    /// Create a store rooted at `root_dir`.
-    pub fn new(root_dir: impl Into<PathBuf>, cancel: CancellationToken) -> Self {
+    /// Create a store rooted at `root_dir` for a specific `asset_root`.
+    pub fn new(
+        root_dir: impl Into<PathBuf>,
+        asset_root: impl Into<String>,
+        cancel: CancellationToken,
+    ) -> Self {
         Self {
             root_dir: root_dir.into(),
+            asset_root: asset_root.into(),
             cancel,
             map: DashMap::new(),
         }
@@ -144,9 +181,13 @@ impl DiskAssetStore {
         &self.root_dir
     }
 
+    pub fn asset_root(&self) -> &str {
+        &self.asset_root
+    }
+
     fn resource_path(&self, key: &ResourceKey) -> AssetsResult<PathBuf> {
-        let asset_root = sanitize_rel(&key.asset_root).map_err(|()| AssetsError::InvalidKey)?;
-        let rel_path = sanitize_rel(&key.rel_path).map_err(|()| AssetsError::InvalidKey)?;
+        let asset_root = sanitize_rel(&self.asset_root).map_err(|()| AssetsError::InvalidKey)?;
+        let rel_path = sanitize_rel(key.rel_path()).map_err(|()| AssetsError::InvalidKey)?;
         Ok(self.root_dir.join(asset_root).join(rel_path))
     }
 
@@ -160,11 +201,6 @@ impl DiskAssetStore {
         // The LRU index location is an internal detail of this concrete store.
         // Higher layers must not hardcode keys/paths for it.
         self.root_dir.join("_index").join("lru.json")
-    }
-
-    fn asset_root_path(&self, asset_root: &str) -> AssetsResult<PathBuf> {
-        let safe = sanitize_rel(asset_root).map_err(|()| AssetsError::InvalidKey)?;
-        Ok(self.root_dir.join(safe))
     }
 
     fn cached_atomic(&self, cache_key: &CacheKey) -> Option<AtomicResource> {
@@ -224,6 +260,10 @@ impl Assets for DiskAssetStore {
         &self.root_dir
     }
 
+    fn asset_root(&self) -> &str {
+        &self.asset_root
+    }
+
     async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<AtomicResource> {
         let cache_key = CacheKey::Atomic(key.clone());
 
@@ -272,25 +312,19 @@ impl Assets for DiskAssetStore {
         Ok(self.store_atomic(CacheKey::PinsIndex, res))
     }
 
-    async fn delete_asset(&self, asset_root: &str) -> AssetsResult<()> {
+    async fn delete_asset(&self) -> AssetsResult<()> {
         if self.cancel.is_cancelled() {
             return Err(kithara_storage::StorageError::Cancelled.into());
         }
 
-        let path = self.asset_root_path(asset_root)?;
+        // Clean cache entries for this asset.
+        self.map
+            .retain(|k, _| matches!(k, CacheKey::PinsIndex | CacheKey::LruIndex));
 
-        // Clean cache entries for this asset_root.
-        self.map.retain(|k, _| match k {
-            CacheKey::Atomic(k) | CacheKey::Streaming(k) => k.asset_root() != asset_root,
-            CacheKey::PinsIndex | CacheKey::LruIndex => true,
-        });
-
-        // Best-effort: if the directory doesn't exist, treat as already deleted.
-        match tokio::fs::remove_dir_all(&path).await {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(e.into()),
-        }
+        // Delete the asset directory.
+        delete_asset_dir(&self.root_dir, &self.asset_root)
+            .await
+            .map_err(|e| e.into())
     }
 
     async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
@@ -308,7 +342,23 @@ impl Assets for DiskAssetStore {
     }
 }
 
-fn sanitize_rel(input: &str) -> Result<String, ()> {
+/// Delete an asset directory by `asset_root` directly via filesystem.
+///
+/// This is a low-level operation used by eviction to delete other assets.
+/// It does NOT clear any in-memory caches (the caller is responsible for that if needed).
+pub(crate) async fn delete_asset_dir(root_dir: &Path, asset_root: &str) -> std::io::Result<()> {
+    let safe = sanitize_rel(asset_root).map_err(|()| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid asset_root")
+    })?;
+    let path = root_dir.join(safe);
+    match tokio::fs::remove_dir_all(&path).await {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
+pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
     // Minimal normalization: treat backslashes as separators to avoid Windows traversal surprises.
     let s = input.replace('\\', "/");
     if s.is_empty() || s.starts_with('/') || s.split('/').any(|seg| seg.is_empty() || seg == "..") {

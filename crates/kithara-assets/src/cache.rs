@@ -54,13 +54,13 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// `Assets` implementation. Higher layers must not construct or assume a `ResourceKey` here.
     async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource>;
 
-    /// Delete an entire asset (all resources under `asset_root`).
+    /// Delete the entire asset (all resources under this store's `asset_root`).
     ///
     /// ## Normative
     /// - This is used by eviction/GC decorators (LRU, quota enforcement).
     /// - Base `Assets` implementations must NOT apply pin/lease semantics here.
     /// - Higher layers must ensure pinned assets are not deleted (decorators enforce this).
-    async fn delete_asset(&self, asset_root: &str) -> AssetsResult<()>;
+    async fn delete_asset(&self) -> AssetsResult<()>;
 
     /// Open the atomic resource used for persisting the LRU index.
     ///
@@ -77,4 +77,10 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// For disk-backed implementations, this returns the root directory path.
     /// For in-memory or network-backed implementations, this may return a placeholder path.
     fn root_dir(&self) -> &Path;
+
+    /// Return the asset root identifier for this store.
+    ///
+    /// Each store is scoped to a single asset, identified by this string
+    /// (typically a hash of the master playlist URL).
+    fn asset_root(&self) -> &str;
 }

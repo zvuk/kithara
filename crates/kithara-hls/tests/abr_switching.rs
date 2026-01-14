@@ -21,7 +21,7 @@ async fn abr_upswitch_continues_from_current_segment_index(
     assets_fixture: TestAssets,
 ) -> HlsResult<()> {
     let server = abr_server_default.await;
-    let assets = assets_fixture.assets().clone();
+    let _assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let mut options = HlsOptions::default();
@@ -29,7 +29,7 @@ async fn abr_upswitch_continues_from_current_segment_index(
     options.abr_min_buffer_for_up_switch = 0.0;
     options.abr_min_switch_interval = Duration::ZERO;
 
-    let session = HlsSource::open(master_url, options, assets).await?;
+    let session = HlsSource::open(master_url, options).await?;
     let mut events = session.events();
 
     let mut stream = Box::pin(session.stream());
@@ -90,7 +90,7 @@ async fn abr_downswitch_emits_init_before_next_segment_when_required(
         Duration::from_millis(200),
     )
     .await;
-    let assets = assets_fixture.assets().clone();
+    let _assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let mut options = HlsOptions::default();
@@ -99,7 +99,7 @@ async fn abr_downswitch_emits_init_before_next_segment_when_required(
     options.abr_min_buffer_for_up_switch = 0.0;
     options.prefetch_buffer_size = Some(1);
 
-    let session = HlsSource::open(master_url, options, assets).await?;
+    let session = HlsSource::open(master_url, options).await?;
 
     let mut stream = Box::pin(session.stream());
 
@@ -158,7 +158,7 @@ async fn abr_with_different_bandwidth_configurations(
 ) -> HlsResult<()> {
     let server =
         AbrTestServer::new(master_playlist(v0_bw, v1_bw, v2_bw), init, segment0_delay).await;
-    let assets = assets_fixture.assets().clone();
+    let _assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let mut options = HlsOptions::default();
@@ -166,7 +166,7 @@ async fn abr_with_different_bandwidth_configurations(
     options.abr_min_buffer_for_up_switch = 0.0;
     options.abr_min_switch_interval = Duration::ZERO;
 
-    let session = HlsSource::open(master_url, options, assets).await?;
+    let session = HlsSource::open(master_url, options).await?;
     let mut stream = Box::pin(session.stream());
 
     // Read at least one chunk to ensure stream works
@@ -192,7 +192,7 @@ async fn abr_with_different_initial_variants(
     assets_fixture: TestAssets,
 ) -> HlsResult<()> {
     let server = abr_server_default.await;
-    let assets = assets_fixture.assets().clone();
+    let _assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let mut options = HlsOptions::default();
@@ -200,7 +200,7 @@ async fn abr_with_different_initial_variants(
     options.abr_min_buffer_for_up_switch = 0.0;
     options.abr_min_switch_interval = Duration::ZERO;
 
-    let session = HlsSource::open(master_url, options, assets).await?;
+    let session = HlsSource::open(master_url, options).await?;
     let mut stream = Box::pin(session.stream());
 
     // Read first chunk and verify it's from the expected initial variant
@@ -228,13 +228,13 @@ async fn manual_variant_switching_works(
     assets_fixture: TestAssets,
 ) -> HlsResult<()> {
     let server = abr_server_default.await;
-    let assets = assets_fixture.assets().clone();
+    let _assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let mut options = HlsOptions::default();
     options.abr_initial_variant_index = Some(0);
 
-    let session = HlsSource::open(master_url, options, assets).await?;
+    let session = HlsSource::open(master_url, options).await?;
 
     // Get first segment from variant 0
     let mut stream = Box::pin(session.stream());
@@ -262,7 +262,7 @@ async fn initial_variant_selection_works(
     assets_fixture: TestAssets,
 ) -> HlsResult<()> {
     let server = abr_server_default.await;
-    let assets = assets_fixture.assets().clone();
+    let _assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
 
@@ -270,7 +270,7 @@ async fn initial_variant_selection_works(
     let mut options = HlsOptions::default();
     options.abr_initial_variant_index = Some(1);
 
-    let session = HlsSource::open(master_url, options, assets).await?;
+    let session = HlsSource::open(master_url, options).await?;
     let mut stream = Box::pin(session.stream());
 
     // Should get segment from variant 1
@@ -291,7 +291,7 @@ async fn abr_events_channel_functionality(
     assets_fixture: TestAssets,
 ) -> HlsResult<()> {
     let server = abr_server_default.await;
-    let assets = assets_fixture.assets().clone();
+    let _assets = assets_fixture.assets().clone();
 
     let master_url = server.url("/master.m3u8")?;
     let mut options = HlsOptions::default();
@@ -299,7 +299,7 @@ async fn abr_events_channel_functionality(
     options.abr_min_buffer_for_up_switch = 0.0;
     options.abr_min_switch_interval = Duration::ZERO;
 
-    let session = HlsSource::open(master_url, options, assets).await?;
+    let session = HlsSource::open(master_url, options).await?;
     let mut events = session.events();
 
     // Start reading stream in background to trigger events
