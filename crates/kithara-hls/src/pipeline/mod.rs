@@ -4,6 +4,4 @@ pub mod base;
 pub mod types;
 
 pub use base::BaseStream;
-pub use types::{
-    PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta, SegmentPayload,
-};
+pub use types::{PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta};

@@ -8,7 +8,7 @@ use kithara_assets::AssetStore;
 use kithara_hls::{
     abr::{AbrConfig, AbrController, AbrReason},
     fetch::FetchManager,
-    pipeline::{BaseStream, PipelineEvent, PipelineStream, SegmentPayload},
+    pipeline::{BaseStream, PipelineEvent, PipelineStream, SegmentMeta},
     playlist::PlaylistManager,
 };
 use kithara_net::HttpClient;
@@ -18,9 +18,7 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 mod fixture;
-use fixture::{
-    TestAssets, TestServer, assets_fixture, net_fixture, test_init_data, test_segment_data,
-};
+use fixture::{TestAssets, TestServer, assets_fixture, net_fixture, test_init_data};
 
 fn make_fetch_and_playlist(
     assets: AssetStore,
@@ -57,7 +55,7 @@ async fn build_basestream(
     )
 }
 
-async fn collect_all(mut stream: BaseStream) -> Vec<SegmentPayload> {
+async fn collect_all(mut stream: BaseStream) -> Vec<SegmentMeta> {
     let mut out = Vec::new();
     while let Some(item) = stream.next().await {
         let payload = item.expect("pipeline should yield Ok payloads");
@@ -81,21 +79,14 @@ async fn basestream_iterates_with_init_and_segments(
     let items = collect_all(stream).await;
 
     assert_eq!(items.len(), 4, "init + 3 segments expected");
-    assert_eq!(items[0].meta.segment_index, usize::MAX, "init first");
-    assert_eq!(items[0].meta.variant, 0);
-    assert!(
-        items[0].bytes.starts_with(&test_init_data(0)),
-        "init bytes should match fixture"
-    );
+    assert_eq!(items[0].segment_index, usize::MAX, "init first");
+    assert_eq!(items[0].variant, 0);
+    assert!(items[0].len > 0, "init segment should have non-zero length");
 
-    for (idx, payload) in items.iter().enumerate().skip(1) {
-        assert_eq!(payload.meta.variant, 0);
-        assert_eq!(payload.meta.segment_index, idx - 1);
-        assert!(
-            payload.bytes.starts_with(&test_segment_data(0, idx - 1)),
-            "segment {} should match fixture",
-            idx - 1
-        );
+    for (idx, meta) in items.iter().enumerate().skip(1) {
+        assert_eq!(meta.variant, 0);
+        assert_eq!(meta.segment_index, idx - 1);
+        assert!(meta.len > 0, "segment {} should have non-zero length", idx - 1);
     }
 }
 
@@ -109,12 +100,12 @@ async fn basestream_seek_restarts_from_index(assets_fixture: TestAssets, net_fix
     let mut stream =
         build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
     let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.segment_index, 0);
+    assert_eq!(first.segment_index, 0);
 
     stream.seek(2);
     let after_seek = stream.next().await.expect("item").expect("ok");
-    assert_eq!(after_seek.meta.segment_index, 2);
-    assert_eq!(after_seek.meta.variant, 0);
+    assert_eq!(after_seek.segment_index, 2);
+    assert_eq!(after_seek.variant, 0);
 
     let rest: Vec<_> = stream
         .collect::<Vec<_>>()
@@ -143,7 +134,7 @@ async fn basestream_force_variant_switches_output_and_emits_events(
     let mut events: broadcast::Receiver<PipelineEvent> = stream.event_sender().subscribe();
 
     let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.variant, 0);
+    assert_eq!(first.variant, 0);
 
     stream.force_variant(1);
 
@@ -162,11 +153,8 @@ async fn basestream_force_variant_switches_output_and_emits_events(
     assert_eq!(ev.1, 1);
 
     let next = stream.next().await.expect("item").expect("ok");
-    assert_eq!(next.meta.variant, 1);
-    assert!(
-        next.bytes.starts_with(&test_segment_data(1, 0)),
-        "first segment after switch should be from variant 1"
-    );
+    assert_eq!(next.variant, 1);
+    assert!(next.len > 0, "first segment after switch should have data");
 }
 
 #[rstest]
@@ -184,7 +172,7 @@ async fn basestream_emits_abr_events_on_manual_switch(
     let mut events: broadcast::Receiver<PipelineEvent> = stream.event_sender().subscribe();
 
     let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.variant, 0);
+    assert_eq!(first.variant, 0);
 
     stream.force_variant(2);
 
@@ -210,7 +198,7 @@ async fn basestream_emits_abr_events_on_manual_switch(
     assert!(saw_applied, "expected VariantApplied event");
 
     let next = stream.next().await.expect("item").expect("ok");
-    assert_eq!(next.meta.variant, 2);
+    assert_eq!(next.variant, 2);
 }
 
 #[rstest]
@@ -234,7 +222,7 @@ async fn basestream_stops_after_cancellation(assets_fixture: TestAssets, net_fix
     );
 
     let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.segment_index, 0);
+    assert_eq!(first.segment_index, 0);
     cancel.cancel();
 
     let next = stream.next().await;
@@ -255,7 +243,7 @@ async fn basestream_pause_and_resume_continues_streaming(
         build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
 
     let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.segment_index, 0);
+    assert_eq!(first.segment_index, 0);
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -265,8 +253,8 @@ async fn basestream_pause_and_resume_continues_streaming(
     }
 
     assert_eq!(remaining.len(), 2, "should receive remaining segments");
-    assert_eq!(remaining[0].meta.segment_index, 1);
-    assert_eq!(remaining[1].meta.segment_index, 2);
+    assert_eq!(remaining[0].segment_index, 1);
+    assert_eq!(remaining[1].segment_index, 2);
 }
 
 #[rstest]
@@ -293,7 +281,7 @@ async fn basestream_reconnects_and_resumes_same_segment(
     );
 
     let first = stream1.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.segment_index, 0);
+    assert_eq!(first.segment_index, 0);
 
     cancel1.cancel();
     let ended = stream1.next().await;
@@ -316,12 +304,9 @@ async fn basestream_reconnects_and_resumes_same_segment(
         2,
         "should continue from next segment after reconnect"
     );
-    assert_eq!(remaining[0].meta.segment_index, 1);
-    assert!(
-        remaining[0].bytes.starts_with(&test_segment_data(0, 1)),
-        "resume should yield the same segment data after reconnect"
-    );
-    assert_eq!(remaining[1].meta.segment_index, 2);
+    assert_eq!(remaining[0].segment_index, 1);
+    assert!(remaining[0].len > 0, "resume should yield segment data after reconnect");
+    assert_eq!(remaining[1].segment_index, 2);
 }
 
 #[rstest]
@@ -469,20 +454,20 @@ seg/v{}_2.bin
     );
 
     let init2 = stream.next().await.unwrap().expect("init v2");
-    assert_eq!(init2.meta.variant, 2);
-    assert_eq!(init2.meta.segment_index, usize::MAX);
+    assert_eq!(init2.variant, 2);
+    assert_eq!(init2.segment_index, usize::MAX);
 
     let seg2 = stream.next().await.unwrap().expect("seg0 v2");
-    assert_eq!(seg2.meta.variant, 2);
-    assert_eq!(seg2.meta.segment_index, 0);
+    assert_eq!(seg2.variant, 2);
+    assert_eq!(seg2.segment_index, 0);
 
     let init1 = stream.next().await.unwrap().expect("init v1");
-    assert_eq!(init1.meta.variant, 1);
-    assert_eq!(init1.meta.segment_index, usize::MAX);
+    assert_eq!(init1.variant, 1);
+    assert_eq!(init1.segment_index, usize::MAX);
 
     let seg1 = stream.next().await.unwrap().expect("seg1 v1");
-    assert_eq!(seg1.meta.variant, 1);
-    assert_eq!(seg1.meta.segment_index, 1);
+    assert_eq!(seg1.variant, 1);
+    assert_eq!(seg1.segment_index, 1);
 }
 
 #[rstest]
@@ -630,19 +615,19 @@ seg/v{}_2.bin
     );
     let mut stream = Box::pin(base);
 
-    let init2: SegmentPayload = stream.next().await.unwrap().expect("init v2");
-    assert_eq!(init2.meta.variant, 2);
-    assert_eq!(init2.meta.segment_index, usize::MAX);
+    let init2: SegmentMeta = stream.next().await.unwrap().expect("init v2");
+    assert_eq!(init2.variant, 2);
+    assert_eq!(init2.segment_index, usize::MAX);
 
-    let seg2: SegmentPayload = stream.next().await.unwrap().expect("seg0 v2");
-    assert_eq!(seg2.meta.variant, 2);
-    assert_eq!(seg2.meta.segment_index, 0);
+    let seg2: SegmentMeta = stream.next().await.unwrap().expect("seg0 v2");
+    assert_eq!(seg2.variant, 2);
+    assert_eq!(seg2.segment_index, 0);
 
-    let init1: SegmentPayload = stream.next().await.unwrap().expect("init v1");
-    assert_eq!(init1.meta.variant, 1);
-    assert_eq!(init1.meta.segment_index, usize::MAX);
+    let init1: SegmentMeta = stream.next().await.unwrap().expect("init v1");
+    assert_eq!(init1.variant, 1);
+    assert_eq!(init1.segment_index, usize::MAX);
 
-    let seg1: SegmentPayload = stream.next().await.unwrap().expect("seg1 v1");
-    assert_eq!(seg1.meta.variant, 1);
-    assert_eq!(seg1.meta.segment_index, 1);
+    let seg1: SegmentMeta = stream.next().await.unwrap().expect("seg1 v1");
+    assert_eq!(seg1.variant, 1);
+    assert_eq!(seg1.segment_index, 1);
 }

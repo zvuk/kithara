@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use bytes::Bytes;
 use futures::Stream;
 use thiserror::Error;
 use tokio::sync::broadcast;
@@ -34,7 +33,7 @@ pub enum PipelineEvent {
     },
 }
 
-/// Segment metadata.
+/// Segment metadata (data is on disk, not in memory).
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
     pub variant: usize,
@@ -43,13 +42,8 @@ pub struct SegmentMeta {
     pub url: Url,
     pub duration: Option<Duration>,
     pub key: Option<SegmentKey>,
-}
-
-/// Payload passed between pipeline layers.
-#[derive(Debug, Clone)]
-pub struct SegmentPayload {
-    pub meta: SegmentMeta,
-    pub bytes: Bytes,
+    /// Segment size in bytes.
+    pub len: u64,
 }
 
 #[derive(Debug, Error)]
@@ -64,6 +58,6 @@ pub enum PipelineError {
 pub type PipelineResult<T> = Result<T, PipelineError>;
 
 /// Trait for pipeline layer: segment stream with access to event channel.
-pub trait PipelineStream: Stream<Item = PipelineResult<SegmentPayload>> + Send + 'static {
+pub trait PipelineStream: Stream<Item = PipelineResult<SegmentMeta>> + Send + 'static {
     fn event_sender(&self) -> broadcast::Sender<PipelineEvent>;
 }

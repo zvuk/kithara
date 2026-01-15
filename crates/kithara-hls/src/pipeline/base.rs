@@ -9,14 +9,12 @@ use std::{
 };
 
 use async_stream::stream;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::types::{
-    PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta, SegmentPayload,
-};
+use super::types::{PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta};
 use crate::{
     HlsError, HlsResult,
     abr::{AbrController, AbrDecision, AbrReason},
@@ -133,7 +131,7 @@ pub struct BaseStream {
     events: broadcast::Sender<PipelineEvent>,
     cmd_tx: mpsc::Sender<StreamCommand>,
     current_variant: Arc<AtomicUsize>,
-    inner: Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>>,
+    inner: Pin<Box<dyn Stream<Item = PipelineResult<SegmentMeta>> + Send>>,
 }
 
 impl BaseStream {
@@ -190,7 +188,7 @@ impl BaseStream {
 }
 
 impl Stream for BaseStream {
-    type Item = PipelineResult<SegmentPayload>;
+    type Item = PipelineResult<SegmentMeta>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.get_mut().inner.as_mut().poll_next(cx)
@@ -249,6 +247,7 @@ fn build_segment_meta(
     variant: usize,
     idx: usize,
     duration: Duration,
+    len: u64,
 ) -> HlsResult<SegmentMeta> {
     let segment_url = media_url
         .join(&segment.uri)
@@ -261,6 +260,7 @@ fn build_segment_meta(
         url: segment_url,
         duration: Some(duration),
         key: segment.key.clone(),
+        len,
     })
 }
 
@@ -288,7 +288,7 @@ async fn fetch_init_segment(
     fetch: &FetchManager,
     ctx: &VariantContext,
     variant: usize,
-) -> HlsResult<SegmentPayload> {
+) -> HlsResult<SegmentMeta> {
     let init = ctx
         .playlist
         .init_segment
@@ -300,54 +300,54 @@ async fn fetch_init_segment(
         .join(&init.uri)
         .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve init URL: {}", e)))?;
 
-    let init_bytes = fetch.fetch_init_segment_resource(&init_url).await?.bytes;
+    let fetch_meta = fetch.download_streaming(&init_url).await?;
 
-    let meta = SegmentMeta {
+    Ok(SegmentMeta {
         variant,
         segment_index: usize::MAX,
         sequence: ctx.playlist.media_sequence,
         url: init_url,
-        duration: None,
+        duration: Some(fetch_meta.duration),
         key: init.key.clone(),
-    };
-
-    Ok(SegmentPayload {
-        meta,
-        bytes: init_bytes,
+        len: fetch_meta.len,
     })
 }
 
-async fn prepare_segment_payload(
-    fetch_result: crate::fetch::FetchBytes,
+async fn prepare_segment_meta(
+    fetch: &FetchManager,
     segment: &MediaSegment,
     ctx: &VariantContext,
     variant: usize,
     idx: usize,
     key_manager: &Option<Arc<KeyManager>>,
     events: &broadcast::Sender<PipelineEvent>,
-) -> HlsResult<SegmentPayload> {
-    let duration = fetch_result.duration.max(Duration::from_millis(1));
-    let meta = build_segment_meta(segment, &ctx.media_url, variant, idx, duration)?;
+) -> HlsResult<SegmentMeta> {
+    let segment_url = ctx
+        .media_url
+        .join(&segment.uri)
+        .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)))?;
 
-    let final_bytes = if let Some(km) = key_manager {
-        let decrypted = km
-            .decrypt_segment(meta.key.as_ref(), &meta.url, meta.sequence, fetch_result.bytes)
-            .await?;
-        if meta.key.is_some() {
-            let _ = events.send(PipelineEvent::Decrypted {
-                variant: meta.variant,
-                segment_index: meta.segment_index,
-            });
-        }
-        decrypted
-    } else {
-        fetch_result.bytes
-    };
+    // Wait for segment to be fully downloaded (no bytes in memory).
+    let fetch_meta = fetch.download_streaming(&segment_url).await?;
 
-    Ok(SegmentPayload {
-        meta,
-        bytes: final_bytes,
-    })
+    let duration = fetch_meta.duration.max(Duration::from_millis(1));
+    let meta = build_segment_meta(segment, &ctx.media_url, variant, idx, duration, fetch_meta.len)?;
+
+    // Check if decryption is needed.
+    let needs_decryption = key_manager.is_some() && meta.key.is_some();
+    if needs_decryption {
+        // TODO: Implement disk-based decryption (read → decrypt → write to .dec file).
+        return Err(HlsError::Unimplemented);
+    }
+
+    if meta.key.is_some() {
+        let _ = events.send(PipelineEvent::Decrypted {
+            variant: meta.variant,
+            segment_index: meta.segment_index,
+        });
+    }
+
+    Ok(meta)
 }
 
 // --- Main stream creation ---
@@ -356,7 +356,7 @@ fn create_stream(
     ctx: StreamContext,
     events: broadcast::Sender<PipelineEvent>,
     mut cmd_rx: mpsc::Receiver<StreamCommand>,
-) -> Pin<Box<dyn Stream<Item = PipelineResult<SegmentPayload>> + Send>> {
+) -> Pin<Box<dyn Stream<Item = PipelineResult<SegmentMeta>> + Send>> {
     Box::pin(stream! {
         let StreamContext { master_url, fetch, playlist_manager, key_manager, mut abr, cancel } = ctx;
         let initial_variant = abr.current_variant().load(Ordering::Acquire);
@@ -419,28 +419,13 @@ fn create_stream(
                 }
             }
 
-            // Iterate segments
-            let mut segment_stream = fetch
-                .stream_segment_sequence(&ctx.playlist, &ctx.media_url, None)
-                .enumerate();
+            // Iterate segments (no bytes in memory - data stays on disk).
             let mut switch: Option<SwitchDecision> = None;
 
-            while let Some((idx, item)) = segment_stream.next().await {
+            for idx in state.start_segment..ctx.playlist.segments.len() {
                 if cancel.is_cancelled() {
                     return;
                 }
-
-                if idx < state.start_segment {
-                    continue;
-                }
-
-                let fetch_result = match item {
-                    Ok(r) => r,
-                    Err(e) => {
-                        yield Err(PipelineError::Hls(e));
-                        break;
-                    }
-                };
 
                 let segment = match ctx.playlist.segments.get(idx) {
                     Some(s) => s,
@@ -452,26 +437,26 @@ fn create_stream(
                     }
                 };
 
-                // Check ABR
-                let duration = fetch_result.duration.max(Duration::from_millis(1));
-                if let Some((from, to, reason)) = abr.process_fetch(fetch_result.bytes.len(), duration, &variants) {
-                    let _ = events.send(PipelineEvent::VariantApplied { from, to, reason });
-                    let decision = AbrDecision {
-                        target_variant_index: to,
-                        reason,
-                        changed: true,
-                    };
-                    switch = Some(SwitchDecision::from_abr(&decision, from, idx));
-                }
+                // Prepare segment meta (waits for download, no bytes in memory).
+                match prepare_segment_meta(&fetch, segment, &ctx, state.to, idx, &key_manager, &events).await {
+                    Ok(meta) => {
+                        // Check ABR using segment length from disk.
+                        let duration = meta.duration.unwrap_or(Duration::from_millis(1));
+                        if let Some((from, to, reason)) = abr.process_fetch(meta.len as usize, duration, &variants) {
+                            let _ = events.send(PipelineEvent::VariantApplied { from, to, reason });
+                            let decision = AbrDecision {
+                                target_variant_index: to,
+                                reason,
+                                changed: true,
+                            };
+                            switch = Some(SwitchDecision::from_abr(&decision, from, idx));
+                        }
 
-                // Prepare and yield payload
-                match prepare_segment_payload(fetch_result, segment, &ctx, state.to, idx, &key_manager, &events).await {
-                    Ok(payload) => {
                         let _ = events.send(PipelineEvent::SegmentReady {
                             variant: state.to,
                             segment_index: idx,
                         });
-                        yield Ok(payload);
+                        yield Ok(meta);
                     }
                     Err(e) => {
                         yield Err(PipelineError::Hls(e));

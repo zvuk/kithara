@@ -1,10 +1,9 @@
 #![forbid(unsafe_code)]
 
-//! `kithara-stream::io::Source` adapter for HLS.
+//! HLS session and Source adapter.
 //!
-//! HlsSessionSource builds a segment index from driver.stream() and provides random-access
-//! by reading directly from cached segment files (via FetchManager/AssetStore).
-//! Data flows: driver.stream() → segment index → wait_range/read_at → file read → SyncReader.
+//! HlsSessionSource reads from BaseStream directly (single spawn), builds segment index,
+//! and provides random-access by reading from cached segment files.
 
 use std::{ops::Range, sync::Arc};
 
@@ -18,8 +17,12 @@ use tokio::sync::{Notify, RwLock, broadcast};
 use url::Url;
 
 use crate::{
-    HlsError, driver::HlsDriver, events::HlsEvent, fetch::FetchManager,
-    options::HlsOptions, pipeline::SegmentPayload, playlist::MasterPlaylist,
+    HlsError,
+    events::{EventEmitter, HlsEvent},
+    fetch::FetchManager,
+    options::HlsOptions,
+    pipeline::{BaseStream, PipelineEvent, PipelineStream},
+    playlist::MasterPlaylist,
 };
 
 /// Selects the effective variant index to use for this session.
@@ -34,23 +37,16 @@ pub fn select_variant_index(master: &MasterPlaylist, options: &HlsOptions) -> us
 /// Entry in segment index: maps global byte range to segment file.
 #[derive(Debug, Clone)]
 struct SegmentEntry {
-    /// Start offset in the global stream.
     global_start: u64,
-    /// End offset in the global stream (exclusive).
     global_end: u64,
-    /// Segment URL for ResourceKey lookup.
     url: Url,
 }
 
 /// Segment index state for random-access over HLS stream.
 struct SegmentIndex {
-    /// Segments in order (sorted by global_start).
     segments: Vec<SegmentEntry>,
-    /// Current total length (grows as segments arrive).
     total_len: u64,
-    /// True when stream has ended.
     finished: bool,
-    /// Error message if stream failed.
     error: Option<String>,
 }
 
@@ -75,7 +71,6 @@ impl SegmentIndex {
         self.total_len = global_end;
     }
 
-    /// Find segment containing the given global offset.
     fn find_segment(&self, offset: u64) -> Option<&SegmentEntry> {
         self.segments
             .iter()
@@ -83,7 +78,7 @@ impl SegmentIndex {
     }
 }
 
-/// Source adapter that reads from cached segment files via FetchManager.
+/// Source adapter: single spawn reads from BaseStream, builds index, forwards events.
 pub struct HlsSessionSource {
     index: Arc<RwLock<SegmentIndex>>,
     fetch: Arc<FetchManager>,
@@ -91,43 +86,72 @@ pub struct HlsSessionSource {
 }
 
 impl HlsSessionSource {
-    /// Create a new source that reads from the given driver's stream.
-    pub fn new(driver: HlsDriver, fetch: Arc<FetchManager>) -> Self {
+    /// Create source from BaseStream. Single spawn handles everything.
+    pub(crate) fn new(
+        base_stream: BaseStream,
+        fetch: Arc<FetchManager>,
+        events: Arc<EventEmitter>,
+    ) -> Self {
         let index = Arc::new(RwLock::new(SegmentIndex::new()));
         let notify = Arc::new(Notify::new());
 
         let index_clone = Arc::clone(&index);
         let notify_clone = Arc::clone(&notify);
+        let events_clone = Arc::clone(&events);
 
+        // Single spawn: reads BaseStream, builds index, forwards events.
         tokio::spawn(async move {
-            let mut stream = Box::pin(driver.stream());
+            let mut ev_rx = base_stream.event_sender().subscribe();
+            let mut stream = Box::pin(base_stream);
 
-            while let Some(result) = stream.next().await {
-                match result {
-                    Ok(payload) => {
-                        let SegmentPayload { meta, bytes } = payload;
-                        let len = bytes.len() as u64;
+            loop {
+                tokio::select! {
+                    biased;
 
-                        let mut idx = index_clone.write().await;
-                        idx.add_segment(meta.url, len);
-                        drop(idx);
-                        notify_clone.notify_waiters();
+                    // Forward pipeline events to HlsEvent.
+                    ev = ev_rx.recv() => {
+                        if let Ok(ev) = ev {
+                            match ev {
+                                PipelineEvent::VariantApplied { from, to, reason } => {
+                                    events_clone.emit_variant_applied(from, to, reason);
+                                }
+                                PipelineEvent::SegmentReady { variant, segment_index } => {
+                                    events_clone.emit_segment_start(variant, segment_index, 0);
+                                }
+                                PipelineEvent::Decrypted { .. } | PipelineEvent::Prefetched { .. } => {}
+                            }
+                        }
                     }
-                    Err(e) => {
-                        let mut idx = index_clone.write().await;
-                        idx.error = Some(e.to_string());
-                        idx.finished = true;
-                        drop(idx);
-                        notify_clone.notify_waiters();
-                        return;
+
+                    // Read segments and build index.
+                    item = stream.next() => {
+                        match item {
+                            Some(Ok(meta)) => {
+                                let mut idx = index_clone.write().await;
+                                idx.add_segment(meta.url, meta.len);
+                                drop(idx);
+                                notify_clone.notify_waiters();
+                            }
+                            Some(Err(e)) => {
+                                let mut idx = index_clone.write().await;
+                                idx.error = Some(e.to_string());
+                                idx.finished = true;
+                                drop(idx);
+                                notify_clone.notify_waiters();
+                                break;
+                            }
+                            None => {
+                                let mut idx = index_clone.write().await;
+                                idx.finished = true;
+                                drop(idx);
+                                notify_clone.notify_waiters();
+                                events_clone.emit_end_of_stream();
+                                break;
+                            }
+                        }
                     }
                 }
             }
-
-            let mut idx = index_clone.write().await;
-            idx.finished = true;
-            drop(idx);
-            notify_clone.notify_waiters();
         });
 
         Self { index, fetch, notify }
@@ -147,7 +171,6 @@ impl Source for HlsSessionSource {
                     return Err(KitharaIoError::Source(HlsError::Driver(e.clone())));
                 }
 
-                // Check if we have data covering range.start.
                 if range.start < idx.total_len {
                     return Ok(WaitOutcome::Ready);
                 }
@@ -185,7 +208,6 @@ impl Source for HlsSessionSource {
             (segment.url.clone(), local_offset, segment_len)
         };
 
-        // Open segment file from cache and read.
         let key = ResourceKey::from_url(&segment_url);
         let res = self
             .fetch
@@ -194,7 +216,6 @@ impl Source for HlsSessionSource {
             .await
             .map_err(|e| KitharaIoError::Source(HlsError::Assets(e)))?;
 
-        // Calculate how much to read (don't exceed segment bounds).
         let available_in_segment = segment_len.saturating_sub(local_offset);
         let read_len = (len as u64).min(available_in_segment) as usize;
 
@@ -207,32 +228,40 @@ impl Source for HlsSessionSource {
     }
 
     fn len(&self) -> Option<u64> {
-        // Length is unknown for streaming HLS.
         None
     }
 }
 
 // =============================================================================
-// HlsSession - main entry point
+// HlsSession
 // =============================================================================
 
 pub struct HlsSession {
-    driver: HlsDriver,
+    base_stream: Option<BaseStream>,
     fetch: Arc<FetchManager>,
+    events: Arc<EventEmitter>,
 }
 
 impl HlsSession {
-    pub(crate) fn new(driver: HlsDriver, fetch: Arc<FetchManager>) -> Self {
-        Self { driver, fetch }
+    pub(crate) fn new(
+        base_stream: BaseStream,
+        fetch: Arc<FetchManager>,
+        events: Arc<EventEmitter>,
+    ) -> Self {
+        Self {
+            base_stream: Some(base_stream),
+            fetch,
+            events,
+        }
     }
 
-    /// Get event receiver for stream events.
     pub fn events(&self) -> broadcast::Receiver<HlsEvent> {
-        self.driver.events()
+        self.events.subscribe()
     }
 
-    /// Create a Source for random-access reading (used with SyncReader for rodio).
-    pub fn source(self) -> HlsSessionSource {
-        HlsSessionSource::new(self.driver, self.fetch)
+    /// Create Source for random-access reading. Consumes the session.
+    pub fn source(mut self) -> HlsSessionSource {
+        let base_stream = self.base_stream.take().expect("source() called twice");
+        HlsSessionSource::new(base_stream, self.fetch, self.events)
     }
 }
