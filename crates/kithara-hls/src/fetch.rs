@@ -8,9 +8,8 @@ use kithara_assets::{
     AssetResource, AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard,
     ResourceKey,
 };
-use kithara_net::{Headers, HttpClient, Net as _};
+use kithara_net::{ByteStream, Headers, HttpClient};
 use kithara_storage::{Resource as _, ResourceStatus, StreamingResource, StreamingResourceExt};
-use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 use url::Url;
 
@@ -38,12 +37,12 @@ impl FetchManager {
         &self.assets
     }
 
-    pub async fn fetch_playlist_atomic(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
+    pub async fn fetch_playlist(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
         self.fetch_atomic_internal(url, rel_path, None, "playlist")
             .await
     }
 
-    pub async fn fetch_key_atomic(
+    pub async fn fetch_key(
         &self,
         url: &Url,
         rel_path: &str,
@@ -99,34 +98,60 @@ impl FetchManager {
         Ok(bytes)
     }
 
-    pub async fn probe_content_length(&self, url: &Url) -> HlsResult<Option<u64>> {
+    /// Fetch init segment completely (no bytes in memory, data goes to disk).
+    pub(crate) async fn fetch_init(&self, url: &Url) -> HlsResult<FetchResult> {
         let key = ResourceKey::from_url(url);
-        if let Ok(res) = self.assets.open_streaming_resource(&key).await {
-            let status = res.inner().status().await;
-            if let ResourceStatus::Committed {
-                final_len: Some(len),
-            } = status
-            {
-                trace!(url = %url, len, "probe_content_length: cache hit");
-                return Ok(Some(len));
-            }
+        let res = self.assets.open_streaming_resource(&key).await?;
+
+        let status = res.inner().status().await;
+        let from_cache = matches!(status, ResourceStatus::Committed { .. });
+
+        let start = Instant::now();
+
+        if !from_cache {
+            Self::download_to_resource(&self.net, url, &res).await;
         }
 
-        let headers: Headers = self.net.head(url.clone(), None).await?;
+        let duration = start.elapsed();
 
-        fn find_content_length(headers: &Headers) -> Option<u64> {
-            headers
-                .iter()
-                .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
-                .and_then(|(_, v)| v.parse::<u64>().ok())
+        let bytes = match res.inner().status().await {
+            ResourceStatus::Committed { final_len } => final_len.unwrap_or(0),
+            _ => 0,
+        };
+
+        Ok(FetchResult {
+            bytes,
+            duration,
+            from_cache,
+        })
+    }
+
+    /// Start fetching a segment. Returns cached size if already cached.
+    /// Caller iterates over chunks via `ActiveFetch::next_chunk()`.
+    pub(crate) async fn start_fetch(&self, url: &Url) -> HlsResult<ActiveFetchResult> {
+        let key = ResourceKey::from_url(url);
+        let res = self.assets.open_streaming_resource(&key).await?;
+
+        let status = res.inner().status().await;
+        if let ResourceStatus::Committed { final_len } = status {
+            let len = final_len.unwrap_or(0);
+            trace!(url = %url, len, "start_fetch: cache hit");
+            return Ok(ActiveFetchResult::Cached { bytes: len });
         }
 
-        Ok(find_content_length(&headers))
+        trace!(url = %url, "start_fetch: starting network fetch");
+        let net_stream = self.net.stream(url.clone(), None).await?;
+
+        Ok(ActiveFetchResult::Active(ActiveFetch {
+            net_stream,
+            resource: res,
+            offset: 0,
+        }))
     }
 
     /// Download URL to streaming resource (no spawn, runs in current task).
     async fn download_to_resource(net: &HttpClient, url: &Url, res: &StreamingAssetResource) {
-        let start_time = std::time::Instant::now();
+        let start_time = Instant::now();
         trace!(url = %url, "kithara-hls segment download: START");
 
         let mut stream = match net.stream(url.clone(), None).await {
@@ -166,182 +191,54 @@ impl FetchManager {
             "kithara-hls segment download: END"
         );
     }
-
-    /// Download streaming resource and return metadata (no bytes in memory).
-    pub(crate) async fn download_streaming(&self, url: &Url) -> HlsResult<DownloadResult> {
-        let key = ResourceKey::from_url(url);
-        let res = self.assets.open_streaming_resource(&key).await?;
-
-        let status = res.inner().status().await;
-        let from_cache = matches!(status, ResourceStatus::Committed { .. });
-
-        let start = Instant::now();
-
-        if !from_cache {
-            Self::download_to_resource(&self.net, url, &res).await;
-        }
-
-        let duration = start.elapsed();
-
-        let bytes = match res.inner().status().await {
-            ResourceStatus::Committed { final_len } => final_len.unwrap_or(0),
-            _ => 0,
-        };
-
-        Ok(DownloadResult {
-            bytes,
-            duration,
-            from_cache,
-        })
-    }
-
-    /// Prepare streaming download - returns expected length and download context.
-    ///
-    /// Caller is responsible for driving the download via `drive_download`.
-    pub(crate) async fn prepare_streaming(&self, url: &Url) -> HlsResult<StreamingPrepareResult> {
-        let key = ResourceKey::from_url(url);
-        let res = self.assets.open_streaming_resource(&key).await?;
-
-        let status = res.inner().status().await;
-
-        // Check if already cached
-        if let ResourceStatus::Committed { final_len } = status {
-            let len = final_len.unwrap_or(0);
-            trace!(url = %url, len, "prepare_streaming: cache hit");
-            return Ok(StreamingPrepareResult {
-                expected_len: Some(len),
-                download: None, // No download needed
-            });
-        }
-
-        // Get Content-Length via HEAD request
-        let expected_len = self.probe_content_length(url).await.unwrap_or(None);
-
-        trace!(url = %url, expected_len, "prepare_streaming: prepared");
-
-        Ok(StreamingPrepareResult {
-            expected_len,
-            download: Some(DownloadContext {
-                url: url.clone(),
-                resource: res,
-            }),
-        })
-    }
-
-    /// Drive a prepared download with progress reporting.
-    /// Sends `ChunkProgress` for each downloaded chunk.
-    pub(crate) async fn drive_download_with_progress(
-        &self,
-        ctx: DownloadContext,
-        progress_tx: mpsc::Sender<ChunkProgress>,
-    ) -> DownloadResult {
-        let start = Instant::now();
-        Self::download_to_resource_with_progress(&self.net, &ctx.url, &ctx.resource, progress_tx)
-            .await;
-        let duration = start.elapsed();
-
-        let bytes = match ctx.resource.inner().status().await {
-            ResourceStatus::Committed { final_len } => final_len.unwrap_or(0),
-            _ => 0,
-        };
-
-        DownloadResult {
-            bytes,
-            duration,
-            from_cache: false,
-        }
-    }
-
-    /// Download with progress reporting via channel.
-    async fn download_to_resource_with_progress(
-        net: &HttpClient,
-        url: &Url,
-        res: &StreamingAssetResource,
-        progress_tx: mpsc::Sender<ChunkProgress>,
-    ) {
-        let start_time = Instant::now();
-        trace!(url = %url, "kithara-hls segment download with progress: START");
-
-        let mut stream = match net.stream(url.clone(), None).await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(url = %url, error = %e, "kithara-hls download: net open error");
-                let _ = res.fail(format!("net error: {e}")).await;
-                return;
-            }
-        };
-
-        let mut off: u64 = 0;
-
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(chunk_bytes) => {
-                    let chunk_len = chunk_bytes.len() as u64;
-                    if let Err(e) = res.write_at(off, &chunk_bytes).await {
-                        warn!(url = %url, off, error = %e, "kithara-hls download: write error");
-                        let _ = res.fail(format!("storage write_at error: {e}")).await;
-                        return;
-                    }
-                    off = off.saturating_add(chunk_len);
-
-                    // Report progress with elapsed time from start
-                    let _ = progress_tx.try_send(ChunkProgress {
-                        chunk_bytes: chunk_len,
-                        total_bytes: off,
-                        elapsed_from_start: start_time.elapsed(),
-                    });
-                }
-                Err(e) => {
-                    warn!(url = %url, off, error = %e, "kithara-hls download: stream error");
-                    let _ = res.fail(format!("net stream error: {e}")).await;
-                    return;
-                }
-            }
-        }
-
-        let _ = res.commit(Some(off)).await;
-        trace!(
-            url = %url,
-            bytes = off,
-            elapsed_ms = start_time.elapsed().as_millis(),
-            "kithara-hls segment download with progress: END"
-        );
-    }
 }
 
-/// Result of preparing a streaming download.
-#[derive(Debug)]
-pub struct StreamingPrepareResult {
-    pub expected_len: Option<u64>,
-    pub download: Option<DownloadContext>,
-}
-
-/// Context for driving a download.
-pub struct DownloadContext {
-    pub url: Url,
-    pub resource: StreamingAssetResource,
-}
-
-impl std::fmt::Debug for DownloadContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DownloadContext")
-            .field("url", &self.url)
-            .finish()
-    }
-}
-
-/// Result of a download operation (data stays on disk).
+/// Result of a fetch operation (data stays on disk).
 #[derive(Clone, Debug)]
-pub struct DownloadResult {
+pub struct FetchResult {
     pub bytes: u64,
     pub duration: Duration,
     pub from_cache: bool,
 }
 
-/// Progress report for a single chunk during download.
-#[derive(Clone, Debug)]
-pub struct ChunkProgress {
-    pub chunk_bytes: u64,
-    pub total_bytes: u64,
-    pub elapsed_from_start: Duration,
+/// Result of starting a fetch.
+pub enum ActiveFetchResult {
+    /// Already cached, no fetch needed.
+    Cached { bytes: u64 },
+    /// Active fetch in progress.
+    Active(ActiveFetch),
+}
+
+/// Active fetch context for streaming chunks.
+/// Caller iterates via `next_chunk()` and must call `commit()` when done.
+pub struct ActiveFetch {
+    net_stream: ByteStream,
+    resource: StreamingAssetResource,
+    offset: u64,
+}
+
+impl ActiveFetch {
+    /// Get next chunk (writes to disk, returns bytes written).
+    /// Returns None when fetch is complete.
+    pub async fn next_chunk(&mut self) -> HlsResult<Option<u64>> {
+        match self.net_stream.next().await {
+            Some(Ok(chunk_bytes)) => {
+                let chunk_len = chunk_bytes.len() as u64;
+                self.resource.write_at(self.offset, &chunk_bytes).await?;
+                self.offset += chunk_len;
+                Ok(Some(chunk_len))
+            }
+            Some(Err(e)) => {
+                let _ = self.resource.fail(e.to_string()).await;
+                Err(e.into())
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// Commit download and return total bytes.
+    pub async fn commit(self) -> u64 {
+        let _ = self.resource.commit(Some(self.offset)).await;
+        self.offset
+    }
 }

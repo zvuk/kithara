@@ -71,7 +71,7 @@ impl KeyManager {
         let headers: Option<Headers> = self.key_request_headers.clone().map(Headers::from);
         let rel_path = Self::rel_path_from_url(&fetch_url);
         let raw_key = Arc::clone(&self.fetch)
-            .fetch_key_atomic(&fetch_url, rel_path.as_str(), headers)
+            .fetch_key(&fetch_url, rel_path.as_str(), headers)
             .await?;
 
         let processed_key = self.process_key(raw_key, fetch_url, iv)?;

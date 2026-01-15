@@ -13,7 +13,7 @@ use kithara_hls::{
 };
 use kithara_net::HttpClient;
 use rstest::rstest;
-use tokio::{net::TcpListener, sync::broadcast, time::timeout};
+use tokio::{net::TcpListener, sync::broadcast};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 

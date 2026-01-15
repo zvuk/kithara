@@ -43,20 +43,18 @@ impl SegmentStream {
     ) -> Self {
         let (events, _) = broadcast::channel(32);
         let (cmd_tx, cmd_rx) = mpsc::channel(8);
-        let (throughput_tx, throughput_rx) = mpsc::channel(32);
         let current_variant = abr_controller.current_variant();
 
         let ctx = StreamContext {
             master_url,
             fetch,
             playlist_manager,
-            key_manager,
+            _key_manager: key_manager,
             abr: abr_controller,
             cancel,
-            throughput_rx,
         };
 
-        let inner = create_stream(ctx, events.clone(), cmd_rx, throughput_tx);
+        let inner = create_stream(ctx, events.clone(), cmd_rx);
 
         Self {
             events,

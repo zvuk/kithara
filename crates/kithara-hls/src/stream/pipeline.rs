@@ -1,42 +1,43 @@
 //! Main stream creation logic (async generator).
 
-use std::{pin::Pin, sync::atomic::Ordering};
+use std::{pin::Pin, sync::atomic::Ordering, time::Instant};
 
 use async_stream::stream;
 use futures::Stream;
 use tokio::sync::{broadcast, mpsc};
 
 use super::{
-    commands::{IterState, StreamCommand, process_commands},
-    context::{
-        StreamContext, drive_download_and_report, fetch_init_segment, load_variant_context,
-        prepare_segment_streaming, process_throughput_samples,
-    },
+    commands::{IterState, StreamCommand, SwitchDecision, process_commands},
+    context::{StreamContext, build_segment_meta, fetch_init_segment, load_variant_context},
     types::{PipelineError, PipelineEvent, PipelineResult, SegmentMeta},
 };
-use crate::{HlsError, abr::ThroughputSample};
+use crate::{
+    HlsError,
+    abr::{ThroughputSample, ThroughputSampleSource},
+    fetch::ActiveFetchResult,
+};
+
+/// Minimum bytes to accumulate before pushing a throughput sample.
+const MIN_SAMPLE_BYTES: u64 = 32_000; // 32KB
 
 /// Create the main segment stream.
 pub fn create_stream(
     ctx: StreamContext,
     events: broadcast::Sender<PipelineEvent>,
     mut cmd_rx: mpsc::Receiver<StreamCommand>,
-    throughput_tx: mpsc::Sender<ThroughputSample>,
 ) -> Pin<Box<dyn Stream<Item = PipelineResult<SegmentMeta>> + Send>> {
     Box::pin(stream! {
         let StreamContext {
             master_url,
             fetch,
             playlist_manager,
-            key_manager,
+            _key_manager: _,
             mut abr,
             cancel,
-            mut throughput_rx,
         } = ctx;
 
         let initial_variant = abr.current_variant().load(Ordering::Acquire);
         let mut state = IterState::new(initial_variant);
-        let mut last_segment_index: usize = usize::MAX;
 
         loop {
             if cancel.is_cancelled() {
@@ -53,18 +54,6 @@ pub fn create_stream(
                     return;
                 }
             };
-
-            // Process any pending throughput samples.
-            if let Some(sw) = process_throughput_samples(
-                &mut throughput_rx,
-                &mut abr,
-                &variants,
-                &events,
-                last_segment_index,
-            ) {
-                state.apply_switch(&sw);
-                continue;
-            }
 
             if state.to >= variants.len() {
                 yield Err(PipelineError::Hls(HlsError::VariantNotFound(format!(
@@ -92,7 +81,7 @@ pub fn create_stream(
                     to: state.to,
                     reason: state.reason,
                 });
-                state.from = state.to; // Update so we don't emit again
+                state.from = state.to;
             }
 
             // Yield init segment if needed (variant switch or first segment).
@@ -114,24 +103,12 @@ pub fn create_stream(
                 }
             }
 
-            // Iterate segments with streaming (yield early, then wait for download).
-            let mut switch = None;
+            // Iterate segments with streaming download and direct ABR updates.
+            let mut switch: Option<SwitchDecision> = None;
 
             for idx in state.start_segment..var_ctx.playlist.segments.len() {
                 if cancel.is_cancelled() {
                     return;
-                }
-
-                // Process throughput samples before each segment.
-                if let Some(sw) = process_throughput_samples(
-                    &mut throughput_rx,
-                    &mut abr,
-                    &variants,
-                    &events,
-                    last_segment_index,
-                ) {
-                    switch = Some(sw);
-                    break;
                 }
 
                 let segment = match var_ctx.playlist.segments.get(idx) {
@@ -145,52 +122,135 @@ pub fn create_stream(
                     }
                 };
 
-                // Prepare segment (get expected length, don't wait for download).
-                match prepare_segment_streaming(
-                    &fetch,
-                    segment,
-                    &var_ctx,
-                    state.to,
-                    idx,
-                    &key_manager,
-                    &events,
-                )
-                .await
-                {
-                    Ok(result) => {
-                        let _ = events.send(PipelineEvent::SegmentReady {
-                            variant: state.to,
-                            segment_index: idx,
-                        });
-
-                        // Yield meta early (consumer can start using it).
-                        yield Ok(result.meta);
-                        last_segment_index = idx;
-
-                        // Drive download to completion and report throughput to ABR.
-                        if let Some(download_ctx) = result.download {
-                            drive_download_and_report(&fetch, download_ctx, &throughput_tx).await;
-                        }
+                // Build segment URL.
+                let segment_url = match var_ctx.media_url.join(&segment.uri) {
+                    Ok(url) => url,
+                    Err(e) => {
+                        yield Err(PipelineError::Hls(HlsError::InvalidUrl(format!(
+                            "Failed to resolve segment URL: {}",
+                            e
+                        ))));
+                        break;
                     }
+                };
+
+                // Start timing BEFORE fetch (includes connection time, server delays).
+                let fetch_start = Instant::now();
+
+                // Start fetch (or get cached info).
+                let fetch_result = match fetch.start_fetch(&segment_url).await {
+                    Ok(r) => r,
                     Err(e) => {
                         yield Err(PipelineError::Hls(e));
                         break;
                     }
-                }
+                };
 
-                // Process throughput samples after download.
-                if let Some(sw) = process_throughput_samples(
-                    &mut throughput_rx,
-                    &mut abr,
-                    &variants,
-                    &events,
-                    last_segment_index,
+                // Determine segment length and drive fetch with ABR updates.
+                let segment_len = match fetch_result {
+                    ActiveFetchResult::Cached { bytes } => bytes,
+                    ActiveFetchResult::Active(mut active_fetch) => {
+                        let mut accumulated_bytes = 0u64;
+                        let mut last_report_at = fetch_start;
+
+                        // Iterate over chunks, update ABR directly.
+                        loop {
+                            match active_fetch.next_chunk().await {
+                                Ok(Some(chunk_bytes)) => {
+                                    accumulated_bytes += chunk_bytes;
+
+                                    // Push throughput sample when accumulated enough.
+                                    if accumulated_bytes >= MIN_SAMPLE_BYTES {
+                                        let now = Instant::now();
+                                        let dur = now.duration_since(last_report_at);
+                                        let sample = ThroughputSample {
+                                            bytes: accumulated_bytes,
+                                            duration: dur,
+                                            at: now,
+                                            source: ThroughputSampleSource::Network,
+                                        };
+                                        tracing::debug!(
+                                            bytes = accumulated_bytes,
+                                            duration_ms = dur.as_millis(),
+                                            "ABR: pushing throughput sample"
+                                        );
+                                        abr.push_throughput_sample(sample);
+                                        accumulated_bytes = 0;
+                                        last_report_at = now;
+
+                                        // Check if ABR wants to switch variant.
+                                        let buffer_level = segment.duration.as_secs_f64();
+                                        let decision = abr.decide(&variants, buffer_level, now);
+                                        tracing::debug!(
+                                            target = decision.target_variant_index,
+                                            reason = ?decision.reason,
+                                            changed = decision.changed,
+                                            "ABR: decide result"
+                                        );
+                                        if decision.changed {
+                                            let from = abr.current_variant().load(Ordering::Acquire);
+                                            abr.apply(&decision, now);
+                                            let _ = events.send(PipelineEvent::VariantApplied {
+                                                from,
+                                                to: decision.target_variant_index,
+                                                reason: decision.reason,
+                                            });
+                                            switch = Some(SwitchDecision {
+                                                from,
+                                                to: decision.target_variant_index,
+                                                start_segment: idx.saturating_add(1),
+                                                reason: decision.reason,
+                                            });
+                                        }
+                                    }
+                                }
+                                Ok(None) => break, // Fetch complete
+                                Err(e) => {
+                                    yield Err(PipelineError::Hls(e));
+                                    return;
+                                }
+                            }
+                        }
+
+                        // Push remaining accumulated bytes.
+                        if accumulated_bytes > 0 {
+                            let now = Instant::now();
+                            let sample = ThroughputSample {
+                                bytes: accumulated_bytes,
+                                duration: now.duration_since(last_report_at),
+                                at: now,
+                                source: ThroughputSampleSource::Network,
+                            };
+                            abr.push_throughput_sample(sample);
+                        }
+
+                        active_fetch.commit().await
+                    }
+                };
+
+                // Build and yield segment meta.
+                let meta = match build_segment_meta(
+                    segment,
+                    &var_ctx.media_url,
+                    state.to,
+                    idx,
+                    segment.duration,
+                    segment_len,
                 ) {
-                    switch = Some(sw);
-                    break;
-                }
+                    Ok(m) => m,
+                    Err(e) => {
+                        yield Err(PipelineError::Hls(e));
+                        break;
+                    }
+                };
 
-                // Check commands after yield (process_all = false, single command).
+                let _ = events.send(PipelineEvent::SegmentReady {
+                    variant: state.to,
+                    segment_index: idx,
+                });
+                yield Ok(meta);
+
+                // Check commands after segment (process_all = false, single command).
                 if let Some(sw) = process_commands(&mut cmd_rx, &mut state, &mut abr, false) {
                     switch = Some(sw);
                 }

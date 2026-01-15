@@ -264,7 +264,7 @@ impl PlaylistManager {
         let basename = uri_basename_no_query(url.as_str())
             .ok_or_else(|| HlsError::InvalidUrl(format!("Failed to derive {label} basename")))?;
         let bytes = Arc::clone(&self.fetch)
-            .fetch_playlist_atomic(url, basename)
+            .fetch_playlist(url, basename)
             .await?;
 
         parse(&bytes)
