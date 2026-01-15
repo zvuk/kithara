@@ -12,6 +12,8 @@ use tracing::trace;
 
 use crate::error::{StreamError, StreamResult};
 
+type WorkerReply<E> = tokio::sync::oneshot::Sender<(Vec<u8>, StreamResult<usize, E>)>;
+
 /// Async random-access source contract.
 ///
 /// This is intentionally minimal and does **not** depend on any storage implementation.
@@ -60,7 +62,7 @@ where
     WaitAndReadAt {
         offset: u64,
         buf: Vec<u8>,
-        reply: tokio::sync::oneshot::Sender<(Vec<u8>, StreamResult<usize, S::Error>)>,
+        reply: WorkerReply<S::Error>,
     },
 }
 

@@ -687,7 +687,7 @@ async fn test_range_request_returns_correct_slice() {
     let url = server.url("/range");
 
     let mut stream = client
-        .get_range(url, RangeSpec::new(5, Some(9)), None)
+        .get_range(url, RangeSpec::new(7, Some(11)), None)
         .await
         .unwrap();
     let mut collected = Vec::new();

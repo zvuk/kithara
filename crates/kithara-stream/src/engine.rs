@@ -236,7 +236,7 @@ where
                         }
                     }
 
-                    _ = cancel.cancelled() => {
+                    () = cancel.cancelled() => {
                         if let Some(w) = writer.take() {
                             w.abort();
                             let _ = w.await;

@@ -16,7 +16,7 @@ use crate::{
     keys::KeyManager,
     options::HlsOptions,
     playlist::PlaylistManager,
-    stream::SegmentStream,
+    stream::{SegmentStream, SegmentStreamParams},
 };
 
 /// Opens HLS sources from URLs.
@@ -126,16 +126,16 @@ impl Hls {
         let (events_tx, _) = broadcast::channel::<HlsEvent>(opts.event_capacity);
 
         // Build SegmentStream.
-        let base_stream = SegmentStream::new(
-            url,
-            Arc::clone(&fetch_manager),
+        let base_stream = SegmentStream::new(SegmentStreamParams {
+            master_url: url,
+            fetch: Arc::clone(&fetch_manager),
             playlist_manager,
-            Some(key_manager),
+            key_manager: Some(key_manager),
             abr_controller,
-            events_tx.clone(),
+            events_tx: events_tx.clone(),
             cancel,
-            opts.command_capacity,
-        );
+            command_capacity: opts.command_capacity,
+        });
 
         Ok(HlsSource::new(base_stream, assets, events_tx))
     }

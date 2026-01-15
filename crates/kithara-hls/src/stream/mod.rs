@@ -3,5 +3,5 @@
 mod pipeline;
 pub mod types;
 
-pub use pipeline::SegmentStream;
+pub use pipeline::{SegmentStream, SegmentStreamParams};
 pub use types::{PipelineError, PipelineResult, SegmentMeta};

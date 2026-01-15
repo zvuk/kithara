@@ -28,6 +28,18 @@ use crate::{
     playlist::{MediaPlaylist, MediaSegment, PlaylistManager, VariantId},
 };
 
+/// Parameters for creating a [`SegmentStream`].
+pub struct SegmentStreamParams {
+    pub master_url: Url,
+    pub fetch: Arc<FetchManager>,
+    pub playlist_manager: Arc<PlaylistManager>,
+    pub key_manager: Option<Arc<KeyManager>>,
+    pub abr_controller: AbrController,
+    pub events_tx: broadcast::Sender<HlsEvent>,
+    pub cancel: CancellationToken,
+    pub command_capacity: usize,
+}
+
 /// Base layer: selects variant, iterates segments, decrypts when needed,
 /// responds to commands (seek/force), publishes events.
 pub struct SegmentStream {
@@ -37,27 +49,18 @@ pub struct SegmentStream {
 }
 
 impl SegmentStream {
-    pub fn new(
-        master_url: Url,
-        fetch: Arc<FetchManager>,
-        playlist_manager: Arc<PlaylistManager>,
-        key_manager: Option<Arc<KeyManager>>,
-        abr_controller: AbrController,
-        events_tx: broadcast::Sender<HlsEvent>,
-        cancel: CancellationToken,
-        command_capacity: usize,
-    ) -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel(command_capacity);
-        let current_variant = abr_controller.current_variant();
+    pub fn new(params: SegmentStreamParams) -> Self {
+        let (cmd_tx, cmd_rx) = mpsc::channel(params.command_capacity);
+        let current_variant = params.abr_controller.current_variant();
 
         let inner = create_stream(
-            master_url,
-            fetch,
-            playlist_manager,
-            key_manager,
-            abr_controller,
-            cancel,
-            events_tx,
+            params.master_url,
+            params.fetch,
+            params.playlist_manager,
+            params.key_manager,
+            params.abr_controller,
+            params.cancel,
+            params.events_tx,
             cmd_rx,
         );
 
