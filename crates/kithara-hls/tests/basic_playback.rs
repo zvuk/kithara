@@ -89,8 +89,8 @@ async fn test_basic_hls_playback(
         }
     });
 
-    // Create reader for the stream
-    let reader = SyncReader::new(Arc::new(source));
+    // Create reader for the stream (capacity=8 for bounded backpressure)
+    let reader = SyncReader::new(Arc::new(source), 8);
 
     // 3. Test: Create rodio decoder (this validates the stream format)
     info!("Creating rodio decoder...");

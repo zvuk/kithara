@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let source = Hls::open(url, hls_options).await?;
     let events_rx = source.events();
 
-    let reader = SyncReader::new(Arc::new(source));
+    let reader = SyncReader::new(Arc::new(source), 8);
 
     tokio::spawn(async move {
         let mut events_rx = events_rx;

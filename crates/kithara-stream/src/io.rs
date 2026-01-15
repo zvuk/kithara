@@ -72,12 +72,15 @@ where
 /// - `read()` blocks waiting for an async worker running on a Tokio runtime.
 /// - Do **not** call this from within a Tokio async task (it will block the executor thread).
 ///   Use it from a dedicated blocking thread (e.g. `tokio::task::spawn_blocking` or `std::thread`).
+///
+/// The internal channel is bounded to provide backpressure. When the channel is full,
+/// `read()` will block until space is available.
 pub struct SyncReader<S>
 where
     S: Source,
 {
     source: Arc<S>,
-    worker_tx: tokio::sync::mpsc::UnboundedSender<WorkerReq<S>>,
+    worker_tx: tokio::sync::mpsc::Sender<WorkerReq<S>>,
     pos: u64,
     reusable_buf: Option<Vec<u8>>,
 }
@@ -88,18 +91,26 @@ where
 {
     /// Create a new reader bound to the current Tokio runtime.
     ///
+    /// # Arguments
+    /// * `source` - The async source to read from
+    /// * `channel_capacity` - Bounded channel capacity for backpressure control.
+    ///   When the channel is full, `read()` blocks until space is available.
+    ///
     /// This spawns an async worker on the current Tokio runtime and communicates with it via
     /// channels. This avoids calling `Handle::block_on` from arbitrary threads, which can
     /// deadlock with some executor / storage combinations.
     ///
     /// This must be called from within a Tokio runtime context (e.g. in an async fn before
     /// spawning the blocking consumer).
-    pub fn new(source: Arc<S>) -> Self {
-        trace!("kithara-stream::io Reader::new (spawning async worker)");
+    pub fn new(source: Arc<S>, channel_capacity: usize) -> Self {
+        trace!(
+            channel_capacity,
+            "kithara-stream::io Reader::new (spawning async worker)"
+        );
         let len = source.len();
         trace!(len, "kithara-stream::io Reader created");
 
-        let (worker_tx, mut worker_rx) = tokio::sync::mpsc::unbounded_channel::<WorkerReq<S>>();
+        let (worker_tx, mut worker_rx) = tokio::sync::mpsc::channel::<WorkerReq<S>>(channel_capacity);
         let src = source.clone();
 
         tokio::spawn(async move {
@@ -172,7 +183,7 @@ where
         let (tx, rx) = tokio::sync::oneshot::channel();
         let send_start = std::time::Instant::now();
         self.worker_tx
-            .send(WorkerReq::WaitAndReadAt {
+            .blocking_send(WorkerReq::WaitAndReadAt {
                 offset,
                 buf: worker_buf,
                 reply: tx,
@@ -184,7 +195,7 @@ where
         trace!(
             offset,
             send_duration_ms = send_duration.as_millis(),
-            "SyncReader::send to worker DONE"
+            "SyncReader::blocking_send to worker DONE"
         );
 
         let recv_start = std::time::Instant::now();

@@ -1,9 +1,9 @@
 use std::{
     sync::{
-        Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        Arc,
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use super::{AbrConfig, ThroughputEstimator, ThroughputSample, Variant};
@@ -28,12 +28,18 @@ pub struct AbrDecision {
     pub changed: bool,
 }
 
+/// Value indicating no switch has occurred yet.
+const NO_SWITCH: u64 = 0;
+
 pub struct AbrController {
     cfg: AbrConfig,
     variant_selector: Option<VariantSelector>,
     estimator: ThroughputEstimator,
     current_variant: Arc<AtomicUsize>,
-    last_switch_at: Mutex<Option<Instant>>,
+    /// Reference instant for computing elapsed time (created at controller init).
+    reference_instant: Instant,
+    /// Nanoseconds since `reference_instant` of last switch, or NO_SWITCH if none.
+    last_switch_at_nanos: AtomicU64,
 }
 
 impl AbrController {
@@ -45,8 +51,33 @@ impl AbrController {
             variant_selector,
             estimator,
             current_variant: Arc::new(AtomicUsize::new(initial_variant)),
-            last_switch_at: Mutex::new(None),
+            reference_instant: Instant::now(),
+            last_switch_at_nanos: AtomicU64::new(NO_SWITCH),
         }
+    }
+
+    /// Convert Instant to nanos since reference. Returns at least 1 to distinguish from NO_SWITCH.
+    fn instant_to_nanos(&self, instant: Instant) -> u64 {
+        let nanos = instant
+            .saturating_duration_since(self.reference_instant)
+            .as_nanos() as u64;
+        // Ensure we never return 0 (which means "no switch")
+        nanos.max(1)
+    }
+
+    /// Convert nanos to Instant. Returns None if value is NO_SWITCH.
+    fn nanos_to_instant(&self, nanos: u64) -> Option<Instant> {
+        if nanos == NO_SWITCH {
+            None
+        } else {
+            Some(self.reference_instant + Duration::from_nanos(nanos))
+        }
+    }
+
+    /// Record a switch at the given instant.
+    fn record_switch(&self, now: Instant) {
+        self.last_switch_at_nanos
+            .store(self.instant_to_nanos(now), Ordering::Release);
     }
 
     pub fn current_variant(&self) -> Arc<AtomicUsize> {
@@ -126,7 +157,7 @@ impl AbrController {
             let headroom_ok =
                 adjusted_bps >= (candidate.bandwidth_bps as f64) * self.cfg.up_hysteresis_ratio;
             if buffer_ok && headroom_ok {
-                *self.last_switch_at.lock().expect("lock poisoned") = Some(now);
+                self.record_switch(now);
                 return AbrDecision {
                     target_variant_index: candidate.variant_index,
                     reason: AbrReason::UpSwitch,
@@ -145,7 +176,7 @@ impl AbrController {
             let urgent_down = buffer_level_secs <= self.cfg.down_switch_buffer_secs;
             let margin_ok = adjusted_bps <= (current_bw as f64) * self.cfg.down_hysteresis_ratio;
             if urgent_down || margin_ok {
-                *self.last_switch_at.lock().expect("lock poisoned") = Some(now);
+                self.record_switch(now);
                 return AbrDecision {
                     target_variant_index: candidate.variant_index,
                     reason: AbrReason::DownSwitch,
@@ -188,13 +219,12 @@ impl AbrController {
         }
         self.current_variant
             .store(decision.target_variant_index, Ordering::Release);
-        *self.last_switch_at.lock().expect("lock poisoned") = Some(now);
+        self.record_switch(now);
     }
 
     fn can_switch_now(&self, now: Instant) -> bool {
-        self.last_switch_at
-            .lock()
-            .expect("lock poisoned")
+        let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
+        self.nanos_to_instant(nanos)
             .map(|t| now.duration_since(t) >= self.cfg.min_switch_interval)
             .unwrap_or(true)
     }

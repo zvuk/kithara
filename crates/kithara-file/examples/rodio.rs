@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let source = session.source().await?;
 
     let mut events_rx = source.events();
-    let reader = SyncReader::new(Arc::new(source));
+    let reader = SyncReader::new(Arc::new(source), 8);
 
     tokio::spawn(async move {
         while let Ok(msg) = events_rx.recv().await {
