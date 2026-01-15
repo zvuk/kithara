@@ -116,7 +116,7 @@ pub struct KeyOptions {
 }
 
 /// Configuration options for HLS playback.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct HlsOptions {
     /// Base URL for resolving relative playlist/segment URLs.
     pub base_url: Option<Url>,
@@ -132,4 +132,24 @@ pub struct HlsOptions {
     pub keys: KeyOptions,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
+    /// Capacity of the events broadcast channel.
+    pub event_capacity: usize,
+    /// Capacity of the command mpsc channel.
+    pub command_capacity: usize,
+}
+
+impl Default for HlsOptions {
+    fn default() -> Self {
+        Self {
+            base_url: None,
+            variant_selector: None,
+            abr: AbrOptions::default(),
+            network: NetworkOptions::default(),
+            cache: CacheOptions::default(),
+            keys: KeyOptions::default(),
+            cancel: None,
+            event_capacity: 32,
+            command_capacity: 8,
+        }
+    }
 }

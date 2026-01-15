@@ -55,6 +55,7 @@ async fn build_basestream(
         abr,
         events_tx,
         cancel,
+        8,
     )
 }
 
@@ -77,6 +78,7 @@ async fn build_basestream_with_events(
         abr,
         events_tx,
         cancel,
+        8,
     );
     (stream, events_rx)
 }
@@ -253,6 +255,7 @@ async fn basestream_stops_after_cancellation(assets_fixture: TestAssets, net_fix
         abr,
         events_tx,
         cancel.clone(),
+        8,
     );
 
     let first = stream.next().await.expect("item").expect("ok");
@@ -314,6 +317,7 @@ async fn basestream_reconnects_and_resumes_same_segment(
         abr1,
         events_tx1,
         cancel1.clone(),
+        8,
     );
 
     let first = stream1.next().await.expect("item").expect("ok");
@@ -326,7 +330,8 @@ async fn basestream_reconnects_and_resumes_same_segment(
     let abr2 = make_abr(0);
     let cancel2 = CancellationToken::new();
     let (events_tx2, _) = broadcast::channel::<HlsEvent>(32);
-    let stream2 = SegmentStream::new(master_url, fetch, playlist, None, abr2, events_tx2, cancel2);
+    let stream2 =
+        SegmentStream::new(master_url, fetch, playlist, None, abr2, events_tx2, cancel2, 8);
 
     stream2.seek(1);
 
@@ -494,6 +499,7 @@ seg/v{}_2.bin
         abr,
         events_tx,
         cancel.clone(),
+        8,
     );
 
     let init2 = stream.next().await.unwrap().expect("init v2");
@@ -657,6 +663,7 @@ seg/v{}_2.bin
         abr,
         events_tx,
         cancel,
+        8,
     );
     let mut stream = Box::pin(base);
 

@@ -113,7 +113,6 @@ impl FetchManager {
         }
 
         let duration = start.elapsed();
-
         let bytes = match res.inner().status().await {
             ResourceStatus::Committed { final_len } => final_len.unwrap_or(0),
             _ => 0,

@@ -96,7 +96,7 @@ impl Hls {
         let abr_controller = AbrController::new(abr_config, opts.variant_selector.clone());
 
         // Create events channel.
-        let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
+        let (events_tx, _) = broadcast::channel::<HlsEvent>(opts.event_capacity);
 
         // Build SegmentStream.
         let base_stream = SegmentStream::new(
@@ -107,6 +107,7 @@ impl Hls {
             abr_controller,
             events_tx.clone(),
             cancel,
+            opts.command_capacity,
         );
 
         Ok(HlsSource::new(base_stream, fetch_manager, events_tx))

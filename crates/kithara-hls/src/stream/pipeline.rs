@@ -45,8 +45,9 @@ impl SegmentStream {
         abr_controller: AbrController,
         events_tx: broadcast::Sender<HlsEvent>,
         cancel: CancellationToken,
+        command_capacity: usize,
     ) -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (cmd_tx, cmd_rx) = mpsc::channel(command_capacity);
         let current_variant = abr_controller.current_variant();
 
         let inner = create_stream(
