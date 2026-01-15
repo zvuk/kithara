@@ -29,7 +29,7 @@ async fn fetch_and_cache_key(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = Arc::new(FetchManager::new_with_read_chunk(assets, net, 64 * 1024));
+    let fetch_manager = Arc::new(FetchManager::new(assets, net));
     let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -60,7 +60,7 @@ async fn key_processor_applied(
         Ok(bytes::Bytes::from(processed))
     });
 
-    let fetch_manager = Arc::new(FetchManager::new_with_read_chunk(assets, net, 64 * 1024));
+    let fetch_manager = Arc::new(FetchManager::new(assets, net));
     let key_manager = KeyManager::new(fetch_manager.clone(), Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -88,11 +88,7 @@ async fn key_manager_with_different_processors(
         Ok(bytes::Bytes::from(upper))
     });
 
-    let fetch_manager = Arc::new(FetchManager::new_with_read_chunk(
-        assets.clone(),
-        net.clone(),
-        64 * 1024,
-    ));
+    let fetch_manager = Arc::new(FetchManager::new(assets.clone(), net.clone()));
     let key_manager = KeyManager::new(fetch_manager.clone(), Some(uppercase_processor), None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -112,7 +108,7 @@ async fn key_manager_error_handling(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = Arc::new(FetchManager::new_with_read_chunk(assets, net, 64 * 1024));
+    let fetch_manager = Arc::new(FetchManager::new(assets, net));
     let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
 
     // Try to get key from invalid URL
@@ -140,7 +136,7 @@ async fn key_manager_caching_behavior(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = Arc::new(FetchManager::new_with_read_chunk(assets, net, 64 * 1024));
+    let fetch_manager = Arc::new(FetchManager::new(assets, net));
     let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -180,7 +176,7 @@ async fn key_manager_with_context(
         Ok(bytes::Bytes::from(processed))
     });
 
-    let fetch_manager = Arc::new(FetchManager::new_with_read_chunk(assets, net, 64 * 1024));
+    let fetch_manager = Arc::new(FetchManager::new(assets, net));
     let key_manager = KeyManager::new(fetch_manager.clone(), Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -209,11 +205,7 @@ async fn aes128_key_decrypts_ciphertext(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = Arc::new(FetchManager::new_with_read_chunk(
-        assets,
-        net.clone(),
-        64 * 1024,
-    ));
+    let fetch_manager = Arc::new(FetchManager::new(assets, net.clone()));
     let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
 
     let key_url = server.url("/aes/key.bin")?;

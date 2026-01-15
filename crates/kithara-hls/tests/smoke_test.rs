@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use kithara_assets::EvictConfig;
-use kithara_hls::{HlsOptions, HlsSource};
+use kithara_hls::{CacheOptions, Hls, HlsOptions};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -24,8 +24,10 @@ fn temp_dir() -> TempDir {
 #[fixture]
 fn hls_options(temp_dir: TempDir) -> HlsOptions {
     HlsOptions {
-        cache_dir: Some(temp_dir.into_path()),
-        evict_config: Some(EvictConfig::default()),
+        cache: CacheOptions {
+            cache_dir: Some(temp_dir.path().to_path_buf()),
+            evict_config: Some(EvictConfig::default()),
+        },
         cancel: Some(CancellationToken::new()),
         ..Default::default()
     }
@@ -53,7 +55,7 @@ async fn test_hls_session_creation(
     info!("Testing HLS session creation with URL: {}", test_stream_url);
 
     // Test 1: Open HLS session
-    let session = HlsSource::open(test_stream_url.clone(), hls_options).await?;
+    let session = Hls::open(test_stream_url.clone(), hls_options).await?;
     info!("HLS session opened successfully");
 
     // Test 2: Get events channel (before source() consumes session)
@@ -97,7 +99,7 @@ async fn test_hls_with_local_fixture(
     let url = server.url("/master.m3u8")?;
     info!("Testing HLS with local fixture at: {}", url);
 
-    let session = HlsSource::open(url, hls_options).await?;
+    let session = Hls::open(url, hls_options).await?;
     let _source = session.source();
 
     info!("Local fixture test passed");
@@ -115,7 +117,7 @@ async fn test_hls_session_with_init_segments(
     let url = server.url("/master-init.m3u8")?;
     info!("Testing HLS session with init segments at URL: {}", url);
 
-    let session = HlsSource::open(url, hls_options).await?;
+    let session = Hls::open(url, hls_options).await?;
     let _source = session.source();
 
     info!("HLS session with init segments opened successfully");
@@ -133,7 +135,7 @@ async fn test_hls_session_events_consumption(
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS session events consumption");
 
-    let session = HlsSource::open(test_stream_url, hls_options).await?;
+    let session = Hls::open(test_stream_url, hls_options).await?;
 
     // Get events channel (before source() consumes session)
     let mut events_rx = session.events();
@@ -172,7 +174,7 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         // If URL parses, try to open HLS (should fail with network error)
-        let result = HlsSource::open(url, hls_options).await;
+        let result = Hls::open(url, hls_options).await;
         // Either Ok (if somehow connects) or Err (expected) is acceptable
         assert!(result.is_ok() || result.is_err());
     } else {
@@ -195,7 +197,7 @@ async fn test_hls_session_drop_cleanup(
     info!("Testing HLS session drop cleanup");
 
     // Create and immediately drop session
-    let session = HlsSource::open(test_stream_url, hls_options).await?;
+    let session = Hls::open(test_stream_url, hls_options).await?;
     drop(session);
 
     // Wait a bit to ensure cleanup happens

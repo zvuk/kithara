@@ -2,14 +2,13 @@
 
 use std::{collections::HashSet, path::Path, sync::Arc};
 
-use tokio::sync::Mutex;
-
 use async_trait::async_trait;
 use kithara_storage::{AtomicResource, StorageError};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    base::{delete_asset_dir, Assets},
+    base::{Assets, delete_asset_dir},
     error::AssetsResult,
     index::{EvictConfig, LruIndex, PinsIndex},
     key::ResourceKey,

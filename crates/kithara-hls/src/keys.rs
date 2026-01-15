@@ -153,10 +153,7 @@ impl KeyManager {
         self.decrypt(&key_url, Some(iv), bytes).await
     }
 
-    fn resolve_key_url(
-        key_info: &crate::playlist::KeyInfo,
-        segment_url: &Url,
-    ) -> HlsResult<Url> {
+    fn resolve_key_url(key_info: &crate::playlist::KeyInfo, segment_url: &Url) -> HlsResult<Url> {
         let key_uri = key_info
             .uri
             .as_ref()

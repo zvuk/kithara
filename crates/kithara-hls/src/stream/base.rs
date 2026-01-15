@@ -17,8 +17,8 @@ use url::Url;
 use super::types::{PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta};
 use crate::{
     HlsError, HlsResult,
-    abr::{AbrController, AbrReason},
-    fetch::{DownloadContext, FetchManager, ThroughputSample},
+    abr::{AbrController, AbrReason, ThroughputSample},
+    fetch::{DownloadContext, FetchManager},
     keys::KeyManager,
     playlist::{MediaPlaylist, MediaSegment, PlaylistManager, VariantId},
 };
@@ -115,14 +115,14 @@ struct StreamContext {
 
 /// Base layer: selects variant, iterates segments, decrypts when needed,
 /// responds to commands (seek/force), publishes events.
-pub struct BaseStream {
+pub struct SegmentStream {
     events: broadcast::Sender<PipelineEvent>,
     cmd_tx: mpsc::Sender<StreamCommand>,
     current_variant: Arc<AtomicUsize>,
     inner: Pin<Box<dyn Stream<Item = PipelineResult<SegmentMeta>> + Send>>,
 }
 
-impl BaseStream {
+impl SegmentStream {
     pub fn new(
         master_url: Url,
         fetch: Arc<FetchManager>,
@@ -167,9 +167,10 @@ impl BaseStream {
             to: variant_index,
             reason: AbrReason::ManualOverride,
         });
-        let _ = self
-            .cmd_tx
-            .try_send(StreamCommand::ForceVariant { variant_index, from });
+        let _ = self.cmd_tx.try_send(StreamCommand::ForceVariant {
+            variant_index,
+            from,
+        });
     }
 
     pub fn current_variant(&self) -> usize {
@@ -177,7 +178,7 @@ impl BaseStream {
     }
 }
 
-impl Stream for BaseStream {
+impl Stream for SegmentStream {
     type Item = PipelineResult<SegmentMeta>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -185,7 +186,7 @@ impl Stream for BaseStream {
     }
 }
 
-impl PipelineStream for BaseStream {
+impl PipelineStream for SegmentStream {
     fn event_sender(&self) -> broadcast::Sender<PipelineEvent> {
         self.events.clone()
     }
@@ -203,7 +204,10 @@ fn process_commands(
             StreamCommand::Seek { segment_index } => {
                 state.apply_seek(segment_index);
             }
-            StreamCommand::ForceVariant { variant_index, from } => {
+            StreamCommand::ForceVariant {
+                variant_index,
+                from,
+            } => {
                 state.apply_force_variant(variant_index, from);
                 abr.set_current_variant(variant_index);
             }
@@ -228,7 +232,10 @@ async fn load_variant_context(
         .media_playlist(&media_url, VariantId(variant_index))
         .await?;
 
-    Ok(VariantContext { media_url, playlist })
+    Ok(VariantContext {
+        media_url,
+        playlist,
+    })
 }
 
 fn build_segment_meta(
@@ -267,7 +274,10 @@ fn handle_post_yield_command(
         StreamCommand::Seek { segment_index } => {
             Some(SwitchDecision::from_seek(current_to, segment_index))
         }
-        StreamCommand::ForceVariant { variant_index, from } => {
+        StreamCommand::ForceVariant {
+            variant_index,
+            from,
+        } => {
             abr.set_current_variant(variant_index);
             Some(SwitchDecision::from_force(variant_index, from))
         }
@@ -329,7 +339,14 @@ async fn prepare_segment_streaming(
 
     // Use segment duration from playlist, not download duration.
     let duration = segment.duration;
-    let meta = build_segment_meta(segment, &ctx.media_url, variant, idx, duration, expected_len)?;
+    let meta = build_segment_meta(
+        segment,
+        &ctx.media_url,
+        variant,
+        idx,
+        duration,
+        expected_len,
+    )?;
 
     // Check if decryption is needed.
     let needs_decryption = key_manager.is_some() && meta.key.is_some();
@@ -362,22 +379,7 @@ fn process_throughput_samples(
     let mut switch = None;
     while let Ok(sample) = throughput_rx.try_recv() {
         let duration = sample.duration;
-
-        // Convert fetch::ThroughputSample to abr::ThroughputSample.
-        let abr_sample = crate::abr::ThroughputSample {
-            bytes: sample.bytes,
-            duration: sample.duration,
-            at: sample.at,
-            source: match sample.source {
-                crate::abr::ThroughputSampleSource::Network => {
-                    crate::abr::ThroughputSampleSource::Network
-                }
-                crate::abr::ThroughputSampleSource::Cache => {
-                    crate::abr::ThroughputSampleSource::Cache
-                }
-            },
-        };
-        abr.push_throughput_sample(abr_sample);
+        abr.push_throughput_sample(sample);
 
         // Check for variant switch based on new throughput data.
         let decision = abr.decide(variants, duration.as_secs_f64(), std::time::Instant::now());

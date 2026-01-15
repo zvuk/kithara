@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_assets::{
-    Assets, AssetResource, AssetStore, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard,
+    AssetResource, AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard,
     ResourceKey,
 };
 use kithara_net::{Headers, HttpClient, Net as _};
@@ -13,7 +13,10 @@ use kithara_storage::{Resource as _, ResourceStatus, StreamingResource, Streamin
 use tracing::{debug, trace, warn};
 use url::Url;
 
-use crate::{HlsResult, abr::ThroughputSampleSource};
+use crate::{
+    HlsResult,
+    abr::{ThroughputSample, ThroughputSampleSource},
+};
 
 pub type StreamingAssetResource =
     AssetResource<StreamingResource, LeaseGuard<CachedAssets<EvictAssets<DiskAssetStore>>>>;
@@ -27,11 +30,6 @@ pub struct FetchManager {
 impl FetchManager {
     pub fn new(assets: AssetStore, net: HttpClient) -> Self {
         Self { assets, net }
-    }
-
-    /// Backwards-compatible constructor (read_chunk_bytes is no longer used).
-    pub fn new_with_read_chunk(assets: AssetStore, net: HttpClient, _read_chunk_bytes: u64) -> Self {
-        Self::new(assets, net)
     }
 
     pub fn asset_root(&self) -> &str {
@@ -208,10 +206,7 @@ impl FetchManager {
     /// Prepare streaming download - returns expected length and download context.
     ///
     /// Caller is responsible for driving the download via `drive_download`.
-    pub(crate) async fn prepare_streaming(
-        &self,
-        url: &Url,
-    ) -> HlsResult<StreamingPrepareResult> {
+    pub(crate) async fn prepare_streaming(&self, url: &Url) -> HlsResult<StreamingPrepareResult> {
         let key = ResourceKey::from_url(url);
         let res = self.assets.open_streaming_resource(&key).await?;
 
@@ -281,15 +276,6 @@ impl std::fmt::Debug for DownloadContext {
             .field("url", &self.url)
             .finish()
     }
-}
-
-/// Throughput sample for ABR.
-#[derive(Clone, Debug)]
-pub struct ThroughputSample {
-    pub bytes: u64,
-    pub duration: Duration,
-    pub at: std::time::Instant,
-    pub source: ThroughputSampleSource,
 }
 
 /// Metadata without bytes (data stays on disk).

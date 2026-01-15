@@ -1,29 +1,30 @@
 #![forbid(unsafe_code)]
 
+// Internal modules (exposed for advanced usage and testing)
 pub mod abr;
 pub mod error;
 pub mod events;
 pub mod fetch;
 pub mod keys;
 pub mod options;
-pub mod pipeline;
 pub mod playlist;
 pub mod session;
 pub mod source;
+pub mod stream;
 
-// Public API re-exports
-pub use abr::{
-    AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
-    Variant,
-};
+// ============================================================================
+// Primary public API
+// ============================================================================
+
+// ============================================================================
+// Advanced types (for ABR customization, monitoring, etc.)
+// ============================================================================
+pub use abr::{AbrDecision, AbrReason, ThroughputSample, Variant};
 pub use error::{HlsError, HlsResult};
-pub use events::{EventEmitter, HlsEvent};
-pub use fetch::FetchManager;
-pub use keys::{KeyError, KeyManager};
-pub use options::{HlsOptions, KeyContext, KeyProcessor, VariantSelector};
-pub use pipeline::{
-    BaseStream, PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta,
+pub use events::HlsEvent;
+pub use options::{
+    AbrOptions, CacheOptions, HlsOptions, KeyContext, KeyOptions, KeyProcessor, NetworkOptions,
+    VariantSelector,
 };
-pub use playlist::{PlaylistError, PlaylistManager};
-pub use session::{HlsSession, HlsSessionSource};
-pub use source::HlsSource;
+pub use session::{HlsSession, HlsSource};
+pub use source::Hls;

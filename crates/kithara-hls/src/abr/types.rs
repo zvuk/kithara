@@ -1,7 +1,4 @@
-use std::{
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use crate::playlist::MasterPlaylist;
 
@@ -51,8 +48,6 @@ pub struct Variant {
     pub variant_index: usize,
     pub bandwidth_bps: u64,
 }
-
-pub type VariantSelector = Arc<dyn Fn(&MasterPlaylist) -> Option<usize> + Send + Sync + 'static>;
 
 pub fn variants_from_master(master: &MasterPlaylist) -> Vec<Variant> {
     master

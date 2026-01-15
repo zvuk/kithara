@@ -1,17 +1,13 @@
 use std::{
-    cell::Cell,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use super::{
-    AbrConfig, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant,
-    VariantSelector,
-};
-use crate::playlist::MasterPlaylist;
+use super::{AbrConfig, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant};
+use crate::{options::VariantSelector, playlist::MasterPlaylist};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AbrReason {
@@ -32,14 +28,13 @@ pub struct AbrDecision {
     pub changed: bool,
 }
 
-#[derive(Clone)]
 pub struct AbrController {
     cfg: AbrConfig,
     variant_selector: Option<VariantSelector>,
     estimator: ThroughputEstimator,
     current_variant: Arc<AtomicUsize>,
     previous_variant: usize,
-    last_switch_at: Cell<Option<Instant>>,
+    last_switch_at: Mutex<Option<Instant>>,
 }
 
 impl AbrController {
@@ -52,7 +47,7 @@ impl AbrController {
             estimator,
             current_variant: Arc::new(AtomicUsize::new(initial_variant)),
             previous_variant: initial_variant,
-            last_switch_at: Cell::new(None),
+            last_switch_at: Mutex::new(None),
         }
     }
 
@@ -129,7 +124,7 @@ impl AbrController {
             let headroom_ok =
                 adjusted_bps >= (candidate.bandwidth_bps as f64) * self.cfg.up_hysteresis_ratio;
             if buffer_ok && headroom_ok {
-                self.last_switch_at.set(Some(now));
+                *self.last_switch_at.lock().expect("lock poisoned") = Some(now);
                 return AbrDecision {
                     target_variant_index: candidate.variant_index,
                     reason: AbrReason::UpSwitch,
@@ -148,7 +143,7 @@ impl AbrController {
             let urgent_down = buffer_level_secs <= self.cfg.down_switch_buffer_secs;
             let margin_ok = adjusted_bps <= (current_bw as f64) * self.cfg.down_hysteresis_ratio;
             if urgent_down || margin_ok {
-                self.last_switch_at.set(Some(now));
+                *self.last_switch_at.lock().expect("lock poisoned") = Some(now);
                 return AbrDecision {
                     target_variant_index: candidate.variant_index,
                     reason: AbrReason::DownSwitch,
@@ -192,7 +187,7 @@ impl AbrController {
         self.previous_variant = current;
         self.current_variant
             .store(decision.target_variant_index, Ordering::Release);
-        self.last_switch_at.set(Some(now));
+        *self.last_switch_at.lock().expect("lock poisoned") = Some(now);
     }
 
     /// Process a segment fetch and check if variant switch is needed.
@@ -226,7 +221,8 @@ impl AbrController {
 
     fn can_switch_now(&self, now: Instant) -> bool {
         self.last_switch_at
-            .get()
+            .lock()
+            .expect("lock poisoned")
             .map(|t| now.duration_since(t) >= self.cfg.min_switch_interval)
             .unwrap_or(true)
     }

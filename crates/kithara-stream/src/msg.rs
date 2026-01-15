@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use bytes::Bytes;
+use tokio_util::sync::CancellationToken;
 
 /// Generic "data + control + events" message model.
 ///
@@ -17,11 +18,20 @@ pub enum StreamMsg<C, E> {
     Event(E),
 }
 
-/// Shared parameters for stream creation.
-///
-/// `offline_mode` is included because it is a shared concern for file and HLS flows.
-/// Enforcement is delegated to the concrete source implementation (e.g. cache-only, no network).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct StreamParams {
-    pub offline_mode: bool,
+/// Engine parameters for orchestration.
+#[derive(Debug, Clone)]
+pub struct EngineParams {
+    pub cmd_channel_capacity: usize,
+    pub out_channel_capacity: usize,
+    pub cancel: CancellationToken,
+}
+
+impl Default for EngineParams {
+    fn default() -> Self {
+        Self {
+            cmd_channel_capacity: 16,
+            out_channel_capacity: 32,
+            cancel: CancellationToken::new(),
+        }
+    }
 }

@@ -2,7 +2,7 @@
 
 //! HLS session and Source adapter.
 //!
-//! HlsSessionSource reads from BaseStream directly (single spawn), builds segment index,
+//! HlsSessionSource reads from SegmentStream directly (single spawn), builds segment index,
 //! and provides random-access by reading from cached segment files.
 
 use std::{ops::Range, sync::Arc};
@@ -19,19 +19,8 @@ use crate::{
     HlsError,
     events::{EventEmitter, HlsEvent},
     fetch::FetchManager,
-    options::HlsOptions,
-    pipeline::{BaseStream, PipelineEvent, PipelineStream},
-    playlist::MasterPlaylist,
+    stream::{PipelineEvent, PipelineStream, SegmentStream},
 };
-
-/// Selects the effective variant index to use for this session.
-pub fn select_variant_index(master: &MasterPlaylist, options: &HlsOptions) -> usize {
-    if let Some(selector) = &options.variant_stream_selector {
-        selector(master).unwrap_or_else(|| options.abr_initial_variant_index.unwrap_or(0))
-    } else {
-        options.abr_initial_variant_index.unwrap_or(0)
-    }
-}
 
 /// Entry in segment index: maps global byte range to segment file.
 #[derive(Debug, Clone)]
@@ -77,17 +66,17 @@ impl SegmentIndex {
     }
 }
 
-/// Source adapter: single spawn reads from BaseStream, builds index, forwards events.
-pub struct HlsSessionSource {
+/// Source adapter: single spawn reads from SegmentStream, builds index, forwards events.
+pub struct HlsSource {
     index: Arc<RwLock<SegmentIndex>>,
     fetch: Arc<FetchManager>,
     notify: Arc<Notify>,
 }
 
-impl HlsSessionSource {
-    /// Create source from BaseStream. Single spawn handles everything.
+impl HlsSource {
+    /// Create source from SegmentStream. Single spawn handles everything.
     pub(crate) fn new(
-        base_stream: BaseStream,
+        base_stream: SegmentStream,
         fetch: Arc<FetchManager>,
         events: Arc<EventEmitter>,
     ) -> Self {
@@ -98,7 +87,7 @@ impl HlsSessionSource {
         let notify_clone = Arc::clone(&notify);
         let events_clone = Arc::clone(&events);
 
-        // Single spawn: reads BaseStream, builds index, forwards events.
+        // Single spawn: reads SegmentStream, builds index, forwards events.
         tokio::spawn(async move {
             let mut ev_rx = base_stream.event_sender().subscribe();
             let mut stream = Box::pin(base_stream);
@@ -153,12 +142,16 @@ impl HlsSessionSource {
             }
         });
 
-        Self { index, fetch, notify }
+        Self {
+            index,
+            fetch,
+            notify,
+        }
     }
 }
 
 #[async_trait]
-impl Source for HlsSessionSource {
+impl Source for HlsSource {
     type Error = HlsError;
 
     async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome, HlsError> {
@@ -255,14 +248,14 @@ impl Source for HlsSessionSource {
 // =============================================================================
 
 pub struct HlsSession {
-    base_stream: Option<BaseStream>,
+    base_stream: Option<SegmentStream>,
     fetch: Arc<FetchManager>,
     events: Arc<EventEmitter>,
 }
 
 impl HlsSession {
     pub(crate) fn new(
-        base_stream: BaseStream,
+        base_stream: SegmentStream,
         fetch: Arc<FetchManager>,
         events: Arc<EventEmitter>,
     ) -> Self {
@@ -278,8 +271,8 @@ impl HlsSession {
     }
 
     /// Create Source for random-access reading. Consumes the session.
-    pub fn source(mut self) -> HlsSessionSource {
+    pub fn source(mut self) -> HlsSource {
         let base_stream = self.base_stream.take().expect("source() called twice");
-        HlsSessionSource::new(base_stream, self.fetch, self.events)
+        HlsSource::new(base_stream, self.fetch, self.events)
     }
 }

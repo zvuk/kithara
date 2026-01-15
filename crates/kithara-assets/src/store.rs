@@ -6,10 +6,7 @@ use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    base::DiskAssetStore,
-    cache::CachedAssets,
-    evict::EvictAssets,
-    index::EvictConfig,
+    base::DiskAssetStore, cache::CachedAssets, evict::EvictAssets, index::EvictConfig,
     lease::LeaseAssets,
 };
 

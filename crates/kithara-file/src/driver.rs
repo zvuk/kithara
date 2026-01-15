@@ -9,7 +9,7 @@ use kithara_assets::{
 use kithara_net::{HttpClient, Net, NetError};
 use kithara_storage::{ResourceStatus, StorageError, StreamingResource};
 use kithara_stream::{
-    Engine, EngineHandle, EngineSource, Reader, ReaderError, StreamError, StreamMsg, StreamParams,
+    Engine, EngineHandle, EngineParams, EngineSource, Reader, ReaderError, StreamError, StreamMsg,
     Writer, WriterTask,
 };
 use thiserror::Error;
@@ -110,9 +110,7 @@ impl FileDriver {
             pos: 0,
         };
 
-        let params = StreamParams {
-            offline_mode: false,
-        };
+        let params = EngineParams::default();
         let engine = Engine::new(source, params);
         let handle = engine.handle();
         let stream = engine.into_stream().filter_map(|item| async move {
@@ -207,7 +205,7 @@ impl EngineSource for FileStream {
 
     fn init(
         &mut self,
-        params: StreamParams,
+        _params: EngineParams,
     ) -> Pin<
         Box<
             dyn std::future::Future<Output = Result<Self::State, StreamError<Self::Error>>>
@@ -215,7 +213,6 @@ impl EngineSource for FileStream {
                 + 'static,
         >,
     > {
-        let _offline_mode = params.offline_mode;
         let assets = self.assets.clone();
         let url = self.url.clone();
         let net_client = self.net_client.clone();
@@ -230,7 +227,7 @@ impl EngineSource for FileStream {
     fn open_reader(
         &mut self,
         state: &Self::State,
-        params: StreamParams,
+        _params: EngineParams,
     ) -> Result<
         Pin<
             Box<
@@ -243,7 +240,6 @@ impl EngineSource for FileStream {
     > {
         let start_pos = self.pos;
         let state = state.clone();
-        let _ = params;
 
         Ok(Box::pin(async_stream::stream! {
             let reader_stream = Reader::new(state.res.clone(), start_pos, 64 * 1024).into_stream::<FileEvent>();
@@ -323,7 +319,7 @@ impl EngineSource for FileStream {
     fn start_writer(
         &mut self,
         state: &Self::State,
-        _params: StreamParams,
+        _params: EngineParams,
     ) -> Result<WriterTask<SourceError>, StreamError<SourceError>> {
         let net = self.net_client.clone();
         let url = self.url.clone();

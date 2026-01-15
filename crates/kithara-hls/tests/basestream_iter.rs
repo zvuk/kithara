@@ -8,8 +8,8 @@ use kithara_assets::AssetStore;
 use kithara_hls::{
     abr::{AbrConfig, AbrController, AbrReason},
     fetch::FetchManager,
-    pipeline::{BaseStream, PipelineEvent, PipelineStream, SegmentMeta},
     playlist::PlaylistManager,
+    stream::{PipelineEvent, PipelineStream, SegmentMeta, SegmentStream},
 };
 use kithara_net::HttpClient;
 use rstest::rstest;
@@ -24,7 +24,7 @@ fn make_fetch_and_playlist(
     assets: AssetStore,
     net: HttpClient,
 ) -> (Arc<FetchManager>, Arc<PlaylistManager>) {
-    let fetch = Arc::new(FetchManager::new_with_read_chunk(assets, net, 64 * 1024));
+    let fetch = Arc::new(FetchManager::new(assets, net));
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
     (fetch, playlist)
 }
@@ -40,12 +40,12 @@ async fn build_basestream(
     initial_variant: usize,
     assets: AssetStore,
     net: HttpClient,
-) -> BaseStream {
+) -> SegmentStream {
     let (fetch, playlist) = make_fetch_and_playlist(assets, net);
     let abr = make_abr(initial_variant);
     let cancel = CancellationToken::new();
 
-    BaseStream::new(
+    SegmentStream::new(
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
@@ -55,7 +55,7 @@ async fn build_basestream(
     )
 }
 
-async fn collect_all(mut stream: BaseStream) -> Vec<SegmentMeta> {
+async fn collect_all(mut stream: SegmentStream) -> Vec<SegmentMeta> {
     let mut out = Vec::new();
     while let Some(item) = stream.next().await {
         let payload = item.expect("pipeline should yield Ok payloads");
@@ -86,7 +86,11 @@ async fn basestream_iterates_with_init_and_segments(
     for (idx, meta) in items.iter().enumerate().skip(1) {
         assert_eq!(meta.variant, 0);
         assert_eq!(meta.segment_index, idx - 1);
-        assert!(meta.len > 0, "segment {} should have non-zero length", idx - 1);
+        assert!(
+            meta.len > 0,
+            "segment {} should have non-zero length",
+            idx - 1
+        );
     }
 }
 
@@ -212,7 +216,7 @@ async fn basestream_stops_after_cancellation(assets_fixture: TestAssets, net_fix
     let abr = make_abr(0);
     let cancel = CancellationToken::new();
 
-    let mut stream = BaseStream::new(
+    let mut stream = SegmentStream::new(
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
@@ -268,15 +272,15 @@ async fn basestream_reconnects_and_resumes_same_segment(
     let master_url = server.url("/master.m3u8").expect("url");
 
     let (fetch, playlist) = make_fetch_and_playlist(assets_fixture.assets().clone(), net_fixture);
-    let abr = make_abr(0);
+    let abr1 = make_abr(0);
 
     let cancel1 = CancellationToken::new();
-    let mut stream1 = BaseStream::new(
+    let mut stream1 = SegmentStream::new(
         master_url.clone(),
         fetch.clone(),
         playlist.clone(),
         None,
-        abr.clone(),
+        abr1,
         cancel1.clone(),
     );
 
@@ -287,8 +291,9 @@ async fn basestream_reconnects_and_resumes_same_segment(
     let ended = stream1.next().await;
     assert!(ended.is_none(), "stream should end after cancellation");
 
+    let abr2 = make_abr(0);
     let cancel2 = CancellationToken::new();
-    let mut stream2 = BaseStream::new(master_url, fetch, playlist, None, abr, cancel2);
+    let stream2 = SegmentStream::new(master_url, fetch, playlist, None, abr2, cancel2);
 
     stream2.seek(1);
 
@@ -305,7 +310,10 @@ async fn basestream_reconnects_and_resumes_same_segment(
         "should continue from next segment after reconnect"
     );
     assert_eq!(remaining[0].segment_index, 1);
-    assert!(remaining[0].len > 0, "resume should yield segment data after reconnect");
+    assert!(
+        remaining[0].len > 0,
+        "resume should yield segment data after reconnect"
+    );
     assert_eq!(remaining[1].segment_index, 2);
 }
 
@@ -444,7 +452,7 @@ seg/v{}_2.bin
     let abr = AbrController::new(cfg, None);
     let cancel = CancellationToken::new();
 
-    let mut stream = BaseStream::new(
+    let mut stream = SegmentStream::new(
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
@@ -605,7 +613,7 @@ seg/v{}_2.bin
     let abr = AbrController::new(cfg, None);
     let cancel = CancellationToken::new();
 
-    let base = BaseStream::new(
+    let base = SegmentStream::new(
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),

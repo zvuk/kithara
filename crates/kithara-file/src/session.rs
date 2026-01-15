@@ -108,7 +108,11 @@ impl Source for SessionSource {
     }
 
     async fn read_at(&self, offset: u64, buf: &mut [u8]) -> KitharaIoResult<usize, Self::Error> {
-        trace!(offset, len = buf.len(), "kithara-file SessionSource read_at begin");
+        trace!(
+            offset,
+            len = buf.len(),
+            "kithara-file SessionSource read_at begin"
+        );
         let bytes_read = self
             .res
             .read_at(offset, buf)
