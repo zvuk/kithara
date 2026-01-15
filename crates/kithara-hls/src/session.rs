@@ -8,9 +8,8 @@
 use std::{ops::Range, sync::Arc};
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::ResourceKey;
+use kithara_assets::{Assets, ResourceKey};
 use kithara_storage::{StreamingResourceExt, WaitOutcome};
 use kithara_stream::{Source, StreamError as KitharaIoError, StreamResult as KitharaIoResult};
 use tokio::sync::{Notify, RwLock, broadcast};
@@ -163,7 +162,8 @@ impl Source for HlsSessionSource {
     type Error = HlsError;
 
     async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome, HlsError> {
-        loop {
+        // First wait for segment to be in index
+        let (segment_url, local_range) = loop {
             {
                 let idx = self.index.read().await;
 
@@ -171,8 +171,12 @@ impl Source for HlsSessionSource {
                     return Err(KitharaIoError::Source(HlsError::Driver(e.clone())));
                 }
 
-                if range.start < idx.total_len {
-                    return Ok(WaitOutcome::Ready);
+                // Check if segment covering range.start exists
+                if let Some(segment) = idx.find_segment(range.start) {
+                    let local_start = range.start - segment.global_start;
+                    let local_end = (range.end - segment.global_start)
+                        .min(segment.global_end - segment.global_start);
+                    break (segment.url.clone(), local_start..local_end);
                 }
 
                 if idx.finished {
@@ -181,10 +185,24 @@ impl Source for HlsSessionSource {
             }
 
             self.notify.notified().await;
-        }
+        };
+
+        // Now delegate to StreamingResource.wait_range for byte-level waiting
+        let key = ResourceKey::from_url(&segment_url);
+        let res = self
+            .fetch
+            .assets()
+            .open_streaming_resource(&key)
+            .await
+            .map_err(|e| KitharaIoError::Source(HlsError::Assets(e)))?;
+
+        res.inner()
+            .wait_range(local_range)
+            .await
+            .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))
     }
 
-    async fn read_at(&self, offset: u64, len: usize) -> KitharaIoResult<Bytes, HlsError> {
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> KitharaIoResult<usize, HlsError> {
         let (segment_url, local_offset, segment_len) = {
             let idx = self.index.read().await;
 
@@ -193,7 +211,7 @@ impl Source for HlsSessionSource {
             }
 
             if offset >= idx.total_len {
-                return Ok(Bytes::new());
+                return Ok(0);
             }
 
             let segment = idx.find_segment(offset).ok_or_else(|| {
@@ -217,14 +235,14 @@ impl Source for HlsSessionSource {
             .map_err(|e| KitharaIoError::Source(HlsError::Assets(e)))?;
 
         let available_in_segment = segment_len.saturating_sub(local_offset);
-        let read_len = (len as u64).min(available_in_segment) as usize;
+        let read_len = (buf.len() as u64).min(available_in_segment) as usize;
 
-        let bytes = res
-            .read_at(local_offset, read_len)
+        let bytes_read = res
+            .read_at(local_offset, &mut buf[..read_len])
             .await
             .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?;
 
-        Ok(bytes)
+        Ok(bytes_read)
     }
 
     fn len(&self) -> Option<u64> {

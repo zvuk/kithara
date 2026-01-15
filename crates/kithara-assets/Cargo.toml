@@ -28,3 +28,9 @@ tempfile = { workspace = true }
 rstest = { workspace = true }
 serial_test = { workspace = true }
 kithara-assets = { path = ".", features = ["internal"] }
+dhat = { workspace = true }
+memory-stats = { workspace = true }
+
+[[example]]
+name = "heap_profile"
+required-features = []

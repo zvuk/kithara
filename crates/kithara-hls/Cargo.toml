@@ -25,8 +25,8 @@ cbc = { workspace = true }
 
 [features]
 default = []
-# Future: gate decryption/crypto dependencies behind a feature.
-# aes-decrypt = []
+# Enable memory profiling with dhat allocator
+memprofile = []
 
 [dev-dependencies]
 axum = { workspace = true }
@@ -34,4 +34,14 @@ tempfile = { workspace = true }
 rodio = { workspace = true }
 tracing-subscriber = { workspace = true }
 rstest = { workspace = true }
+dhat = { workspace = true }
+memory-stats = { workspace = true }
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
+
+[[example]]
+name = "hls_memprofile"
+required-features = ["memprofile"]
+
+[[test]]
+name = "memory_profile"
+required-features = ["memprofile"]

@@ -12,7 +12,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey};
+use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
 use kithara_storage::Resource;
 use rstest::{fixture, rstest};
 
@@ -185,6 +185,7 @@ async fn eviction_with_zero_byte_assets(temp_dir: tempfile::TempDir) {
 
         // Explicitly record zero bytes
         store
+            .base()
             .base()
             .touch_asset_bytes(&asset_root, 0)
             .await

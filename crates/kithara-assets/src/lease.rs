@@ -3,12 +3,12 @@
 use std::{collections::HashSet, path::Path, sync::Arc};
 
 use async_trait::async_trait;
-use kithara_storage::{AtomicResource, StreamingResource};
+use kithara_storage::AtomicResource;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    cache::Assets, error::AssetsResult, index::PinsIndex, key::ResourceKey, resource::AssetResource,
+    base::Assets, error::AssetsResult, index::PinsIndex, key::ResourceKey, resource::AssetResource,
 };
 
 /// Decorator that adds "pin (lease) while handle lives" semantics on top of a base [`Assets`].
@@ -113,30 +113,6 @@ where
 
         let _ = self.persist_pins_best_effort(&snapshot).await;
     }
-
-    /// Open an atomic resource via the base store and wrap it into [`AssetResource`]
-    /// holding an RAII lease guard.
-    pub async fn open_atomic_resource(
-        &self,
-        key: &ResourceKey,
-    ) -> AssetsResult<AssetResource<AtomicResource, LeaseGuard<A>>> {
-        let inner = self.base.open_atomic_resource(key).await?;
-
-        let lease = self.pin(self.base.asset_root()).await?;
-        Ok(AssetResource::new(inner, lease))
-    }
-
-    /// Open a streaming resource via the base store and wrap it into [`AssetResource`]
-    /// holding an RAII lease guard.
-    pub async fn open_streaming_resource(
-        &self,
-        key: &ResourceKey,
-    ) -> AssetsResult<AssetResource<StreamingResource, LeaseGuard<A>>> {
-        let inner = self.base.open_streaming_resource(key).await?;
-
-        let lease = self.pin(self.base.asset_root()).await?;
-        Ok(AssetResource::new(inner, lease))
-    }
 }
 
 #[async_trait]
@@ -144,6 +120,9 @@ impl<A> Assets for LeaseAssets<A>
 where
     A: Assets,
 {
+    type StreamingRes = AssetResource<A::StreamingRes, LeaseGuard<A>>;
+    type AtomicRes = AssetResource<A::AtomicRes, LeaseGuard<A>>;
+
     fn root_dir(&self) -> &Path {
         self.base.root_dir()
     }
@@ -152,16 +131,16 @@ where
         self.base.asset_root()
     }
 
-    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<AtomicResource> {
-        // Note: This method bypasses pinning and returns a raw resource.
-        // The public `open_atomic_resource` method wraps it with a lease guard.
-        self.base.open_atomic_resource(key).await
+    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<Self::AtomicRes> {
+        let inner = self.base.open_atomic_resource(key).await?;
+        let lease = self.pin(self.base.asset_root()).await?;
+        Ok(AssetResource::new(inner, lease))
     }
 
-    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<StreamingResource> {
-        // Note: This method bypasses pinning and returns a raw resource.
-        // The public `open_streaming_resource` method wraps it with a lease guard.
-        self.base.open_streaming_resource(key).await
+    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<Self::StreamingRes> {
+        let inner = self.base.open_streaming_resource(key).await?;
+        let lease = self.pin(self.base.asset_root()).await?;
+        Ok(AssetResource::new(inner, lease))
     }
 
     async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {

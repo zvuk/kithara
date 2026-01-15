@@ -7,7 +7,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use kithara_storage::WaitOutcome;
 use tracing::trace;
 
@@ -23,7 +22,7 @@ use crate::error::{StreamError, StreamResult};
 ///   if `range.start` is at/after EOF, OR return error if the source fails/cancels.
 /// - `read_at(offset, len)` must return up to `len` bytes without implicitly waiting.
 ///   If the caller needs blocking semantics it must call `wait_range` first.
-/// - When `offset` is at/after EOF (and EOF is known), `read_at` must return `Bytes::new()`.
+/// - When `offset` is at/after EOF (and EOF is known), `read_at` must return `Ok(0)`.
 #[async_trait]
 pub trait Source: Send + Sync + 'static {
     type Error: std::error::Error + Send + Sync + 'static;
@@ -31,7 +30,11 @@ pub trait Source: Send + Sync + 'static {
     async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>
     where
         Self: Send + Sync;
-    async fn read_at(&self, offset: u64, len: usize) -> StreamResult<Bytes, Self::Error>
+
+    /// Read bytes at `offset` into `buf`.
+    ///
+    /// Returns the number of bytes read. Returns `Ok(0)` for EOF.
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error>
     where
         Self: Send + Sync;
 
@@ -56,8 +59,8 @@ where
 {
     WaitAndReadAt {
         offset: u64,
-        len: usize,
-        reply: tokio::sync::oneshot::Sender<StreamResult<Bytes, S::Error>>,
+        buf: Vec<u8>,
+        reply: tokio::sync::oneshot::Sender<(Vec<u8>, StreamResult<usize, S::Error>)>,
     },
 }
 
@@ -76,6 +79,7 @@ where
     source: Arc<S>,
     worker_tx: tokio::sync::mpsc::UnboundedSender<WorkerReq<S>>,
     pos: u64,
+    reusable_buf: Option<Vec<u8>>,
 }
 
 impl<S> SyncReader<S>
@@ -102,17 +106,22 @@ where
             trace!("kithara-stream::io Reader worker started");
             while let Some(req) = worker_rx.recv().await {
                 match req {
-                    WorkerReq::WaitAndReadAt { offset, len, reply } => {
+                    WorkerReq::WaitAndReadAt {
+                        offset,
+                        mut buf,
+                        reply,
+                    } => {
+                        let len = buf.len();
                         let range = offset..offset.saturating_add(len as u64);
                         let wait_result = src.wait_range(range).await;
 
                         let out = match wait_result {
-                            Ok(WaitOutcome::Ready) => src.read_at(offset, len).await,
-                            Ok(WaitOutcome::Eof) => Ok(Bytes::new()),
+                            Ok(WaitOutcome::Ready) => src.read_at(offset, &mut buf).await,
+                            Ok(WaitOutcome::Eof) => Ok(0),
                             Err(e) => Err(e),
                         };
 
-                        let _ = reply.send(out);
+                        let _ = reply.send((buf, out));
                     }
                 }
             }
@@ -123,6 +132,7 @@ where
             source,
             worker_tx,
             pos: 0,
+            reusable_buf: None,
         }
     }
 
@@ -155,12 +165,16 @@ where
         );
         let read_start = std::time::Instant::now();
 
+        // Take or create reusable buffer
+        let mut worker_buf = self.reusable_buf.take().unwrap_or_default();
+        worker_buf.resize(len, 0);
+
         let (tx, rx) = tokio::sync::oneshot::channel();
         let send_start = std::time::Instant::now();
         self.worker_tx
             .send(WorkerReq::WaitAndReadAt {
                 offset,
-                len,
+                buf: worker_buf,
                 reply: tx,
             })
             .map_err(|_| {
@@ -174,35 +188,38 @@ where
         );
 
         let recv_start = std::time::Instant::now();
-        let bytes = rx
-            .blocking_recv()
-            .map_err(|_| {
-                tracing::error!(
-                    offset,
-                    len,
-                    "Reader::read wait_and_read_at worker reply channel closed"
-                );
-                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
-            })?
-            .map_err(|e: StreamError<S::Error>| {
-                tracing::error!(
-                    offset,
-                    len,
-                    err = %e,
-                    "Reader::read wait_and_read_at returned error"
-                );
-                std::io::Error::other(e.to_string())
-            })?;
+        let (returned_buf, result) = rx.blocking_recv().map_err(|_| {
+            tracing::error!(
+                offset,
+                len,
+                "Reader::read wait_and_read_at worker reply channel closed"
+            );
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
+        })?;
+
+        // Store buffer for reuse
+        self.reusable_buf = Some(returned_buf);
+        let reusable_buf = self.reusable_buf.as_ref().expect("just stored");
+
+        let bytes_read = result.map_err(|e: StreamError<S::Error>| {
+            tracing::error!(
+                offset,
+                len,
+                err = %e,
+                "Reader::read wait_and_read_at returned error"
+            );
+            std::io::Error::other(e.to_string())
+        })?;
+
         let recv_duration = recv_start.elapsed();
         trace!(
             offset,
             recv_duration_ms = recv_duration.as_millis(),
-            bytes_received = bytes.len(),
+            bytes_received = bytes_read,
             "SyncReader::blocking_recv DONE"
         );
 
-        if bytes.is_empty() {
-            // Empty bytes means EOF (either from WaitOutcome::Eof or read_at returning empty at EOF)
+        if bytes_read == 0 {
             let total_duration = read_start.elapsed();
             trace!(
                 offset,
@@ -212,8 +229,8 @@ where
             return Ok(0);
         }
 
-        let n = bytes.len().min(buf.len());
-        buf[..n].copy_from_slice(&bytes[..n]);
+        let n = bytes_read.min(buf.len());
+        buf[..n].copy_from_slice(&reusable_buf[..n]);
         self.pos = self.pos.saturating_add(n as u64);
         let total_duration = read_start.elapsed();
         trace!(

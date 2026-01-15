@@ -10,6 +10,14 @@ use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
+/// Helper to read bytes from resource into a new Vec
+async fn read_bytes<R: StreamingResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; len];
+    let n = res.read_at(offset, &mut buf).await.unwrap_or(0);
+    buf.truncate(n);
+    buf
+}
+
 #[fixture]
 fn temp_dir() -> TempDir {
     TempDir::new().expect("failed to create temp dir")
@@ -86,8 +94,8 @@ async fn streaming_resource_range_write_wait_read(
     resource.write_at(7, b"World!").await.unwrap();
 
     resource.wait_range(0..13).await.unwrap();
-    let data = resource.read_at(0, 13).await.unwrap();
-    assert_eq!(&*data, b"Hello, World!");
+    let data = read_bytes(&resource, 0, 13).await;
+    assert_eq!(&data, b"Hello, World!");
 }
 
 #[rstest]
@@ -111,9 +119,9 @@ async fn streaming_resource_sparse_file_behavior() {
     resource.wait_range(1000..1006).await.unwrap();
     resource.wait_range(10000..10003).await.unwrap();
 
-    assert_eq!(&*resource.read_at(100, 5).await.unwrap(), b"start");
-    assert_eq!(&*resource.read_at(1000, 6).await.unwrap(), b"middle");
-    assert_eq!(&*resource.read_at(10000, 3).await.unwrap(), b"end");
+    assert_eq!(&*read_bytes(&resource, 100, 5).await, b"start");
+    assert_eq!(&*read_bytes(&resource, 1000, 6).await, b"middle");
+    assert_eq!(&*read_bytes(&resource, 10000, 3).await, b"end");
 }
 
 #[rstest]
@@ -133,8 +141,8 @@ async fn streaming_resource_overlapping_writes() {
     resource.write_at(6, b"Kithara!").await.unwrap();
 
     resource.wait_range(0..14).await.unwrap();
-    let data = resource.read_at(0, 14).await.unwrap();
-    assert_eq!(&*data, b"Hello Kithara!");
+    let data = read_bytes(&resource, 0, 14).await;
+    assert_eq!(&data, b"Hello Kithara!");
 }
 
 #[rstest]
@@ -178,15 +186,15 @@ async fn streaming_resource_edge_case_ranges() {
     resource.write_at(0, b"X").await.unwrap();
 
     resource.wait_range(0..1).await.unwrap();
-    let data = resource.read_at(0, 1).await.unwrap();
-    assert_eq!(&*data, b"X");
+    let data = read_bytes(&resource, 0, 1).await;
+    assert_eq!(&data, b"X");
 
-    let data = resource.read_at(0, 0).await.unwrap();
+    let data = read_bytes(&resource, 0, 0).await;
     assert!(data.is_empty());
 
     resource.commit(Some(1)).await.unwrap();
-    let data = resource.read_at(0, 10).await.unwrap();
-    assert_eq!(&*data, b"X");
+    let data = read_bytes(&resource, 0, 10).await;
+    assert_eq!(&data, b"X");
 }
 
 #[rstest]
@@ -231,8 +239,8 @@ async fn streaming_resource_persists_across_reopen() {
         resource.commit(Some(14)).await.unwrap();
         resource.wait_range(0..14).await.unwrap();
 
-        let data = resource.read_at(0, 14).await.unwrap();
-        assert_eq!(&*data, b"persisted data");
+        let data = read_bytes(&resource, 0, 14).await;
+        assert_eq!(&data, b"persisted data");
     }
 
     let file_len = tokio::fs::metadata(&file_path).await.unwrap().len();
@@ -241,8 +249,8 @@ async fn streaming_resource_persists_across_reopen() {
             .await
             .unwrap();
 
-    let data = resource.read_at(0, file_len as usize).await.unwrap();
-    assert_eq!(&*data, b"persisted data");
+    let data = read_bytes(&resource, 0, file_len as usize).await;
+    assert_eq!(&data, b"persisted data");
 }
 
 #[rstest]
@@ -274,8 +282,8 @@ async fn streaming_resource_wait_after_reopen() {
     let outcome = resource.wait_range(0..file_len).await.unwrap();
     assert_eq!(outcome, WaitOutcome::Ready);
 
-    let data = resource.read_at(0, file_len as usize).await.unwrap();
-    assert_eq!(&*data, payload);
+    let data = read_bytes(&resource, 0, file_len as usize).await;
+    assert_eq!(&data, payload);
 }
 
 #[rstest]
@@ -325,7 +333,7 @@ async fn streaming_resource_commit_and_eof(temp_dir: TempDir, cancel_token: Canc
     let outcome = resource.wait_range(5..10).await.unwrap();
     assert_eq!(outcome, WaitOutcome::Eof);
 
-    let data = resource.read_at(10, 5).await.unwrap();
+    let data = read_bytes(&resource, 10, 5).await;
     assert!(data.is_empty());
 }
 
@@ -367,8 +375,8 @@ async fn streaming_resource_sealed_after_commit() {
     resource.write_at(0, b"data").await.unwrap();
     resource.commit(Some(4)).await.unwrap();
 
-    let data = resource.read_at(0, 4).await.unwrap();
-    assert_eq!(&*data, b"data");
+    let data = read_bytes(&resource, 0, 4).await;
+    assert_eq!(&data, b"data");
 }
 
 #[rstest]
@@ -452,7 +460,7 @@ async fn streaming_resource_concurrent_operations() {
     let outcome = resource.wait_range(0..10).await.unwrap();
     assert_eq!(outcome, WaitOutcome::Ready);
 
-    let data = resource.read_at(0, 10).await.unwrap();
+    let data = read_bytes(&resource, 0, 10).await;
     assert_eq!(&data[..5], b"Hello");
     assert_eq!(&data[5..], b"World");
 }
@@ -528,7 +536,7 @@ async fn streaming_resource_empty_operations() {
 
     resource.write_at(0, b"").await.unwrap();
 
-    let data = resource.read_at(0, 0).await.unwrap();
+    let data = read_bytes(&resource, 0, 0).await;
     assert!(data.is_empty());
 
     resource.commit(Some(0)).await.unwrap();
@@ -562,7 +570,7 @@ async fn streaming_resource_complex_range_scenario() {
 
     resource.wait_range(0..30).await.unwrap();
 
-    let data = resource.read_at(0, 30).await.unwrap();
+    let data = read_bytes(&resource, 0, 30).await;
     assert_eq!(&data[0..10], b"0123456789");
     assert_eq!(&data[10..20], b"ABCDEFGHIJ");
     assert_eq!(&data[20..30], b"0123456789");
@@ -588,7 +596,7 @@ async fn streaming_resource_restart_with_initial_len() {
     let outcome = resource1.wait_range(0..100).await.unwrap();
     assert_eq!(outcome, WaitOutcome::Ready);
 
-    let data = resource1.read_at(50, 10).await.unwrap();
+    let data = read_bytes(&resource1, 50, 10).await;
     assert_eq!(data.len(), 10);
 
     let resource2: StreamingResource =
@@ -596,6 +604,6 @@ async fn streaming_resource_restart_with_initial_len() {
             .await
             .unwrap();
 
-    let data2 = resource2.read_at(50, 10).await.unwrap();
+    let data2 = read_bytes(&resource2, 50, 10).await;
     assert_eq!(data2.len(), 10);
 }

@@ -9,7 +9,17 @@
       "Bash(cargo build:*)",
       "Bash(timeout 20 cargo run:*)",
       "Bash(timeout 30 cargo run:*)",
-      "Bash(cargo run:*)"
+      "Bash(cargo run:*)",
+      "Bash(cargo tree:*)",
+      "Bash(RUST_LOG=kithara_hls=trace cargo test:*)",
+      "Bash(git checkout:*)",
+      "Bash(cargo doc:*)",
+      "WebFetch(domain:docs.rs)",
+      "Bash(python3:*)",
+      "WebFetch(domain:github.com)",
+      "Bash(cargo search:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebSearch"
     ]
   }
 }

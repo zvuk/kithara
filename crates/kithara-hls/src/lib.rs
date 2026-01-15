@@ -18,7 +18,7 @@ pub use abr::{
 };
 pub use error::{HlsError, HlsResult};
 pub use events::{EventEmitter, HlsEvent};
-pub use fetch::{FetchManager, SegmentStream};
+pub use fetch::FetchManager;
 pub use keys::{KeyError, KeyManager};
 pub use options::{HlsOptions, KeyContext, KeyProcessor, VariantSelector};
 pub use pipeline::{

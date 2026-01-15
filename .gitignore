@@ -40,3 +40,4 @@ lcov.info
 # Temporary / local environment files
 .env
 .env.*
+dhat-heap.json

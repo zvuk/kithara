@@ -110,8 +110,12 @@ async-trait = "0.1.89"
 
 # storage (range maps + async random-access disk)
 rangemap = { version = "1.7.1", features = ["serde1"] }
-random-access-disk = { version = "3.0.1", default-features = false, features = ["tokio"] }
+random-access-disk = { path = "../random-access-disk", default-features = false, features = ["tokio"] }
 random-access-storage = "5.0.0"
 dashmap = "5.5.3"
+
+# memory profiling
+dhat = "0.3"
+memory-stats = "1.2"
 
 # Optional: unify lint settings later via workspace.metadata or deny.toml.

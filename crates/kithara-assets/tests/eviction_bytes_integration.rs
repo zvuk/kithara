@@ -74,9 +74,9 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             Some(100),
             cancel_token.clone(),
         );
-        let evict_a = store_a.base().clone();
+        let evict_a = store_a.base().base().clone();
         let key_a = ResourceKey::new("media/a.bin");
-        let res_a = evict_a.open_atomic_resource(&key_a).await.unwrap();
+        let res_a = store_a.open_atomic_resource(&key_a).await.unwrap();
 
         res_a
             .write(&Bytes::from(vec![0xAAu8; bytes_a]))
@@ -100,9 +100,9 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             Some(100),
             cancel_token.clone(),
         );
-        let evict_b = store_b.base().clone();
+        let evict_b = store_b.base().base().clone();
         let key_b = ResourceKey::new("media/b.bin");
-        let res_b = evict_b.open_atomic_resource(&key_b).await.unwrap();
+        let res_b = store_b.open_atomic_resource(&key_b).await.unwrap();
 
         res_b
             .write(&Bytes::from(vec![0xBBu8; bytes_b]))
@@ -126,9 +126,8 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             Some(100),
             cancel_token.clone(),
         );
-        let evict_c = store_c.base().clone();
         let key_c = ResourceKey::new("media/c.bin");
-        let res_c = evict_c.open_atomic_resource(&key_c).await.unwrap();
+        let res_c = store_c.open_atomic_resource(&key_c).await.unwrap();
 
         res_c.write(&Bytes::from_static(b"C")).await.unwrap();
         res_c.commit(None).await.unwrap();
@@ -187,10 +186,10 @@ async fn eviction_corner_cases_different_byte_limits(
             Some(max_bytes as u64),
             cancel.clone(),
         );
-        let evict = store.base().clone();
+        let evict = store.base().base().clone();
         let key = ResourceKey::new(format!("data{}.bin", i));
 
-        let res = evict.open_atomic_resource(&key).await.unwrap();
+        let res = store.open_atomic_resource(&key).await.unwrap();
         res.write(&Bytes::from(vec![0x11 * (i + 1) as u8; *size]))
             .await
             .unwrap();
@@ -207,10 +206,10 @@ async fn eviction_corner_cases_different_byte_limits(
             Some(max_bytes as u64),
             cancel.clone(),
         );
-        let evict = store.base().clone();
+        let evict = store.base().base().clone();
         let trigger_key = ResourceKey::new("trigger.bin");
 
-        let res = evict.open_atomic_resource(&trigger_key).await.unwrap();
+        let res = store.open_atomic_resource(&trigger_key).await.unwrap();
         res.write(&Bytes::from(vec![0xFF; new_asset_size]))
             .await
             .unwrap();
@@ -232,9 +231,8 @@ async fn eviction_corner_cases_different_byte_limits(
             Some(max_bytes as u64),
             cancel.clone(),
         );
-        let evict = store.base().clone();
         let probe_key = ResourceKey::new("probe.bin");
-        let probe = evict.open_atomic_resource(&probe_key).await.unwrap();
+        let probe = store.open_atomic_resource(&probe_key).await.unwrap();
         probe.write(&Bytes::from_static(b"P")).await.unwrap();
         probe.commit(None).await.unwrap();
     }

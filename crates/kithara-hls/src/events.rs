@@ -59,7 +59,7 @@ impl Default for EventEmitter {
 
 impl EventEmitter {
     pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(128);
+        let (tx, _) = broadcast::channel(32);
         Self { tx }
     }
 

@@ -3,7 +3,8 @@ use std::{pin::Pin, sync::Arc};
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt, pin_mut};
 use kithara_assets::{
-    AssetId, AssetResource, AssetStore, AssetsError, DiskAssetStore, EvictAssets, LeaseGuard,
+    AssetId, AssetResource, AssetStore, Assets, AssetsError, CachedAssets, DiskAssetStore,
+    EvictAssets, LeaseGuard,
 };
 use kithara_net::{HttpClient, Net, NetError};
 use kithara_storage::{ResourceStatus, StorageError, StreamingResource};
@@ -22,7 +23,8 @@ use crate::{
 };
 
 // Type aliases for complex types
-type AssetResourceType = AssetResource<StreamingResource, LeaseGuard<EvictAssets<DiskAssetStore>>>;
+type AssetResourceType =
+    AssetResource<StreamingResource, LeaseGuard<CachedAssets<EvictAssets<DiskAssetStore>>>>;
 
 #[derive(Debug, Error)]
 pub enum DriverError {
