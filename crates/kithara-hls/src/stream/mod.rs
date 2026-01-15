@@ -1,7 +1,10 @@
 //! HLS layered pipeline: base iteration with ABR and DRM.
 
-pub mod base;
+mod commands;
+mod context;
+mod pipeline;
+mod segment_stream;
 pub mod types;
 
-pub use base::SegmentStream;
+pub use segment_stream::SegmentStream;
 pub use types::{PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta};

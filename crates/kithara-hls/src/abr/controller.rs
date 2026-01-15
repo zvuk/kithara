@@ -3,10 +3,10 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::Instant,
 };
 
-use super::{AbrConfig, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant};
+use super::{AbrConfig, ThroughputEstimator, ThroughputSample, Variant};
 use crate::{options::VariantSelector, playlist::MasterPlaylist};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -33,7 +33,6 @@ pub struct AbrController {
     variant_selector: Option<VariantSelector>,
     estimator: ThroughputEstimator,
     current_variant: Arc<AtomicUsize>,
-    previous_variant: usize,
     last_switch_at: Mutex<Option<Instant>>,
 }
 
@@ -46,7 +45,6 @@ impl AbrController {
             variant_selector,
             estimator,
             current_variant: Arc::new(AtomicUsize::new(initial_variant)),
-            previous_variant: initial_variant,
             last_switch_at: Mutex::new(None),
         }
     }
@@ -56,7 +54,6 @@ impl AbrController {
     }
 
     pub fn set_current_variant(&mut self, variant_index: usize) {
-        self.previous_variant = self.current_variant.load(Ordering::Acquire);
         self.current_variant.store(variant_index, Ordering::Release);
     }
 
@@ -184,39 +181,9 @@ impl AbrController {
         if decision.target_variant_index == current {
             return;
         }
-        self.previous_variant = current;
         self.current_variant
             .store(decision.target_variant_index, Ordering::Release);
         *self.last_switch_at.lock().expect("lock poisoned") = Some(now);
-    }
-
-    /// Process a segment fetch and check if variant switch is needed.
-    /// Returns Some((from, to, reason)) if switch should happen, None otherwise.
-    pub fn process_fetch(
-        &mut self,
-        bytes: usize,
-        duration: Duration,
-        variants: &[Variant],
-    ) -> Option<(usize, usize, AbrReason)> {
-        let now = Instant::now();
-        let sample = ThroughputSample {
-            bytes: bytes as u64,
-            duration,
-            at: now,
-            source: ThroughputSampleSource::Network,
-        };
-
-        let duration_secs = duration.as_secs_f64();
-        self.push_throughput_sample(sample);
-        let decision = self.decide(variants, duration_secs, now);
-
-        if decision.changed {
-            let from = self.current_variant.load(Ordering::Acquire);
-            self.apply(&decision, now);
-            Some((from, decision.target_variant_index, decision.reason))
-        } else {
-            None
-        }
     }
 
     fn can_switch_now(&self, now: Instant) -> bool {

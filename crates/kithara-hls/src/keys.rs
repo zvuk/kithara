@@ -61,7 +61,6 @@ impl KeyManager {
 
     pub async fn get_raw_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
         let mut fetch_url = url.clone();
-
         if let Some(ref params) = self.key_query_params {
             let mut pairs = fetch_url.query_pairs_mut();
             for (key, value) in params {
@@ -70,7 +69,6 @@ impl KeyManager {
         }
 
         let headers: Option<Headers> = self.key_request_headers.clone().map(Headers::from);
-
         let rel_path = Self::rel_path_from_url(&fetch_url);
         let raw_key = Arc::clone(&self.fetch)
             .fetch_key_atomic(&fetch_url, rel_path.as_str(), headers)
