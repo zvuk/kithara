@@ -10,7 +10,7 @@ use std::{
 
 use bytes::Bytes;
 use futures::{StreamExt, stream};
-use kithara_stream::{Engine, EngineSource, StreamError, StreamMsg, StreamParams, WriterTask};
+use kithara_stream::{Engine, EngineParams, EngineSource, StreamError, StreamMsg, WriterTask};
 use rstest::{fixture, rstest};
 use tokio::time::sleep;
 
@@ -78,7 +78,7 @@ impl EngineSource for SeekSource {
 
     fn init(
         &mut self,
-        _params: StreamParams,
+        _params: EngineParams,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<Output = Result<Self::State, StreamError<Self::Error>>>
@@ -97,7 +97,7 @@ impl EngineSource for SeekSource {
     fn open_reader(
         &mut self,
         state: &Self::State,
-        _params: StreamParams,
+        _params: EngineParams,
     ) -> Result<
         kithara_stream::EngineStream<Self::Control, Self::Event, Self::Error>,
         StreamError<Self::Error>,
@@ -114,7 +114,7 @@ impl EngineSource for SeekSource {
     fn start_writer(
         &mut self,
         _state: &Self::State,
-        _params: StreamParams,
+        _params: EngineParams,
     ) -> Result<WriterTask<Self::Error>, StreamError<Self::Error>> {
         Ok(tokio::spawn(async { Ok(()) }))
     }
@@ -162,7 +162,7 @@ impl EngineSource for DropSource {
 
     fn init(
         &mut self,
-        _params: StreamParams,
+        _params: EngineParams,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<Output = Result<Self::State, StreamError<Self::Error>>>
@@ -177,7 +177,7 @@ impl EngineSource for DropSource {
     fn open_reader(
         &mut self,
         _state: &Self::State,
-        _params: StreamParams,
+        _params: EngineParams,
     ) -> Result<
         kithara_stream::EngineStream<Self::Control, Self::Event, Self::Error>,
         StreamError<Self::Error>,
@@ -193,7 +193,7 @@ impl EngineSource for DropSource {
     fn start_writer(
         &mut self,
         state: &Self::State,
-        _params: StreamParams,
+        _params: EngineParams,
     ) -> Result<WriterTask<Self::Error>, StreamError<Self::Error>> {
         let flag = state.clone();
         Ok(tokio::spawn(async move {
@@ -230,7 +230,7 @@ async fn seek_reopens_reader_after_writer_done(
     #[case] seek_pos: u64,
     #[case] second_expected: u8,
 ) {
-    let engine = Engine::new(SeekSource::new(data.clone()), StreamParams::default());
+    let engine = Engine::new(SeekSource::new(data.clone()), EngineParams::default());
     let handle = engine.handle();
     let mut stream = engine.into_stream();
 
@@ -283,7 +283,7 @@ async fn seek_handles_different_positions(
     #[case] initial_reads: usize,
     #[case] seek_pos: u64,
 ) {
-    let engine = Engine::new(SeekSource::new(data.clone()), StreamParams::default());
+    let engine = Engine::new(SeekSource::new(data.clone()), EngineParams::default());
     let handle = engine.handle();
     let mut stream = engine.into_stream();
 
@@ -339,7 +339,7 @@ async fn seek_handles_different_positions(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn engine_streams_all_data_without_seek(#[case] data: Vec<u8>) {
-    let engine = Engine::new(SeekSource::new(data.clone()), StreamParams::default());
+    let engine = Engine::new(SeekSource::new(data.clone()), EngineParams::default());
     let mut stream = engine.into_stream();
 
     let mut received = Vec::new();
@@ -361,7 +361,7 @@ async fn engine_streams_all_data_without_seek(#[case] data: Vec<u8>) {
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn engine_handles_empty_data(#[case] data: Vec<u8>) {
-    let engine = Engine::new(SeekSource::new(data.clone()), StreamParams::default());
+    let engine = Engine::new(SeekSource::new(data.clone()), EngineParams::default());
     let mut stream = engine.into_stream();
 
     // Empty stream should immediately return None
@@ -377,7 +377,7 @@ async fn engine_handles_empty_data(#[case] data: Vec<u8>) {
 #[tokio::test]
 async fn seek_to_end_of_stream_returns_none(#[case] data_len: usize) {
     let data: Vec<u8> = (0..data_len).map(|i| i as u8).collect();
-    let engine = Engine::new(SeekSource::new(data.clone()), StreamParams::default());
+    let engine = Engine::new(SeekSource::new(data.clone()), EngineParams::default());
     let handle = engine.handle();
     let mut stream = engine.into_stream();
 
@@ -433,7 +433,7 @@ async fn dropping_output_aborts_writer(
     abort_flag: Arc<AtomicBool>,
     drop_source_with_flag: DropSource,
 ) {
-    let engine = Engine::new(drop_source_with_flag, StreamParams::default());
+    let engine = Engine::new(drop_source_with_flag, EngineParams::default());
 
     // Take the stream but don't poll it
     let stream = engine.into_stream();
@@ -466,7 +466,7 @@ async fn dropping_output_aborts_writer(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn multiple_seeks_work_correctly(#[case] data: Vec<u8>) {
-    let engine = Engine::new(SeekSource::new(data.clone()), StreamParams::default());
+    let engine = Engine::new(SeekSource::new(data.clone()), EngineParams::default());
     let handle = engine.handle();
     let mut stream = engine.into_stream();
 
@@ -511,7 +511,7 @@ async fn multiple_seeks_work_correctly(#[case] data: Vec<u8>) {
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn engine_handle_remains_valid_after_stream_drop(#[case] data: Vec<u8>) {
-    let engine = Engine::new(SeekSource::new(data.clone()), StreamParams::default());
+    let engine = Engine::new(SeekSource::new(data.clone()), EngineParams::default());
     let handle = engine.handle();
 
     // Create and immediately drop stream
@@ -538,9 +538,8 @@ async fn engine_handle_remains_valid_after_stream_drop(#[case] data: Vec<u8>) {
 #[tokio::test]
 async fn engine_works_with_different_offline_modes(#[case] offline_mode: bool) {
     let data = test_data_long();
-    let params = StreamParams { offline_mode };
-
-    let engine = Engine::new(SeekSource::new(data.clone()), params);
+    let _ = offline_mode;
+    let engine = Engine::new(SeekSource::new(data.clone()), EngineParams::default());
     let mut stream = engine.into_stream();
 
     let mut received = Vec::new();

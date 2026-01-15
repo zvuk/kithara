@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_net::{Headers, Net, NetError};
 use kithara_storage::{Resource, StorageError, StreamingResourceExt, WaitOutcome};
@@ -11,6 +12,57 @@ use tracing::{debug, warn};
 use url::Url;
 
 use crate::{StreamError, StreamMsg};
+
+/// Pool of reusable buffers to avoid allocations on each read.
+#[derive(Debug)]
+pub struct BufPool {
+    bufs: Mutex<Vec<Vec<u8>>>,
+    buf_size: usize,
+}
+
+impl BufPool {
+    pub fn new(buf_size: usize) -> Self {
+        Self {
+            bufs: Mutex::new(Vec::new()),
+            buf_size,
+        }
+    }
+
+    fn take(&self) -> Vec<u8> {
+        self.bufs
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.pop())
+            .unwrap_or_else(|| vec![0u8; self.buf_size])
+    }
+
+    fn put(&self, mut buf: Vec<u8>) {
+        buf.clear();
+        if let Ok(mut guard) = self.bufs.lock() {
+            guard.push(buf);
+        }
+    }
+}
+
+/// Wrapper that returns buffer to pool on drop.
+struct PooledBuf {
+    buf: Vec<u8>,
+    len: usize,
+    pool: Arc<BufPool>,
+}
+
+impl Drop for PooledBuf {
+    fn drop(&mut self) {
+        let buf = std::mem::take(&mut self.buf);
+        self.pool.put(buf);
+    }
+}
+
+impl AsRef<[u8]> for PooledBuf {
+    fn as_ref(&self) -> &[u8] {
+        &self.buf[..self.len]
+    }
+}
 
 /// Error type for the generic writer (fetch loop).
 #[derive(Debug, Error)]
@@ -185,6 +237,7 @@ where
     res: R,
     start_pos: u64,
     chunk_size: usize,
+    pool: Arc<BufPool>,
 }
 
 impl<R> Reader<R>
@@ -196,6 +249,16 @@ where
             res,
             start_pos,
             chunk_size,
+            pool: Arc::new(BufPool::new(chunk_size)),
+        }
+    }
+
+    pub fn with_pool(res: R, start_pos: u64, chunk_size: usize, pool: Arc<BufPool>) -> Self {
+        Self {
+            res,
+            start_pos,
+            chunk_size,
+            pool,
         }
     }
 
@@ -207,6 +270,7 @@ where
     {
         let chunk = self.chunk_size;
         let mut pos = self.start_pos;
+        let pool = self.pool.clone();
         async_stream::stream! {
             loop {
                 let end = pos.saturating_add(chunk as u64);
@@ -219,14 +283,17 @@ where
                     return;
                 };
 
-                let bytes = self
+                let mut buf = pool.take();
+                buf.resize(chunk, 0);
+                let bytes_read = self
                     .res
-                    .read_at(pos, chunk)
+                    .read_at(pos, &mut buf)
                     .await
                     .map_err(ReaderError::Read)
                     .map_err(StreamError::Source)?;
 
-                if bytes.is_empty() {
+                if bytes_read == 0 {
+                    pool.put(buf);
                     yield Err(StreamError::Source(ReaderError::EmptyAfterReady {
                         offset: pos,
                         len: chunk,
@@ -234,8 +301,13 @@ where
                     return;
                 }
 
-                pos = pos.saturating_add(bytes.len() as u64);
-                yield Ok(StreamMsg::Data(bytes));
+                pos = pos.saturating_add(bytes_read as u64);
+                let pooled = PooledBuf {
+                    buf,
+                    len: bytes_read,
+                    pool: pool.clone(),
+                };
+                yield Ok(StreamMsg::Data(Bytes::from_owner(pooled)));
             }
         }
     }

@@ -7,6 +7,14 @@ use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, Resourc
 use kithara_storage::{Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
 
+/// Helper to read bytes from resource into a new Vec
+async fn read_bytes<R: StreamingResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; len];
+    let n = res.read_at(offset, &mut buf).await.unwrap_or(0);
+    buf.truncate(n);
+    buf
+}
+
 #[allow(dead_code)]
 fn mp3_bytes() -> Bytes {
     // Deterministic "mp3-like" payload (we don't parse mp3 here; just bytes).
@@ -135,8 +143,8 @@ async fn streaming_resource_persistence(
     }
 
     let res = store.open_streaming_resource(&key).await.unwrap();
-    let data = res.read_at(0, payload.len()).await.unwrap();
-    assert_eq!(&*data, payload);
+    let data = read_bytes(&res, 0, payload.len()).await;
+    assert_eq!(&data, payload);
 }
 
 #[rstest]
@@ -177,8 +185,8 @@ async fn mixed_resource_persistence_across_reopen(temp_dir: tempfile::TempDir) {
         .wait_range(0..streaming_payload.len() as u64)
         .await
         .unwrap();
-    let streaming_read = streaming.read_at(0, streaming_payload.len()).await.unwrap();
-    assert_eq!(streaming_read, streaming_payload);
+    let streaming_read = read_bytes(&streaming, 0, streaming_payload.len()).await;
+    assert_eq!(&streaming_read, &*streaming_payload);
 }
 
 #[rstest]
@@ -200,7 +208,10 @@ async fn streaming_resource_concurrent_write_and_read_across_handles(temp_dir: t
             .await
             .unwrap();
         res.wait_range(0..payload_len_reader).await.unwrap();
-        res.read_at(0, payload_len_reader as usize).await.unwrap()
+        let mut buf = vec![0u8; payload_len_reader as usize];
+        let n = res.read_at(0, &mut buf).await.unwrap();
+        buf.truncate(n);
+        buf
     });
 
     let store_writer = store;
@@ -220,7 +231,7 @@ async fn streaming_resource_concurrent_write_and_read_across_handles(temp_dir: t
 
     let (data_res, _) = tokio::join!(reader, writer);
     let data = data_res.unwrap();
-    assert_eq!(&*data, &*payload);
+    assert_eq!(&data, &*payload);
 }
 
 #[rstest]
@@ -271,8 +282,8 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
             .await
             .unwrap();
 
-        assert_eq!(seg1.read_at(0, a.len()).await.unwrap(), Bytes::from(a));
-        assert_eq!(seg1.read_at(8192, b.len()).await.unwrap(), Bytes::from(b));
+        assert_eq!(read_bytes(seg1, 0, a.len()).await, a);
+        assert_eq!(read_bytes(seg1, 8192, b.len()).await, b);
     }
 
     if let Some((seg2, _)) = segments.get(1) {
@@ -280,7 +291,7 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
         let c = vec![0xCCu8; 10 * 1024];
         seg2.write_at(0, &c).await.unwrap();
         seg2.wait_range(0..(c.len() as u64)).await.unwrap();
-        assert_eq!(seg2.read_at(0, c.len()).await.unwrap(), Bytes::from(c));
+        assert_eq!(read_bytes(seg2, 0, c.len()).await, c);
     }
 
     // Seal resources (optional but makes the lifecycle explicit).
@@ -359,11 +370,8 @@ async fn streaming_resource_write_read_at_different_positions(
         .unwrap();
 
     // Read back
-    let read_back = res.read_at(offset, read_size.min(size)).await.unwrap();
-    assert_eq!(
-        read_back,
-        Bytes::copy_from_slice(&data[..read_size.min(size)])
-    );
+    let read_back = read_bytes(&res, offset, read_size.min(size)).await;
+    assert_eq!(read_back, &data[..read_size.min(size)]);
 
     res.commit(None).await.unwrap();
 }

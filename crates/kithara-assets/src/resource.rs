@@ -105,8 +105,8 @@ where
         self.inner.wait_range(range).await
     }
 
-    async fn read_at(&self, offset: u64, len: usize) -> Result<Bytes, StorageError> {
-        self.inner.read_at(offset, len).await
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, StorageError> {
+        self.inner.read_at(offset, buf).await
     }
 
     async fn write_at(&self, offset: u64, data: &[u8]) -> Result<(), StorageError> {

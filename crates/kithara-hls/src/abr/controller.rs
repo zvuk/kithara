@@ -1,17 +1,13 @@
 use std::{
-    cell::Cell,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 
-use super::{
-    AbrConfig, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant,
-    VariantSelector,
-};
-use crate::playlist::MasterPlaylist;
+use super::{AbrConfig, ThroughputEstimator, ThroughputSample, Variant};
+use crate::{options::VariantSelector, playlist::MasterPlaylist};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AbrReason {
@@ -32,28 +28,56 @@ pub struct AbrDecision {
     pub changed: bool,
 }
 
-#[derive(Clone)]
+/// Value indicating no switch has occurred yet.
+const NO_SWITCH: u64 = 0;
+
 pub struct AbrController {
     cfg: AbrConfig,
     variant_selector: Option<VariantSelector>,
     estimator: ThroughputEstimator,
     current_variant: Arc<AtomicUsize>,
-    previous_variant: usize,
-    last_switch_at: Cell<Option<Instant>>,
+    /// Reference instant for computing elapsed time (created at controller init).
+    reference_instant: Instant,
+    /// Nanoseconds since `reference_instant` of last switch, or NO_SWITCH if none.
+    last_switch_at_nanos: AtomicU64,
 }
 
 impl AbrController {
     pub fn new(cfg: AbrConfig, variant_selector: Option<VariantSelector>) -> Self {
         let estimator = ThroughputEstimator::new(&cfg);
-        let initial_variant = cfg.initial_variant_index.unwrap_or(0);
+        let initial_variant = cfg.initial_variant();
         Self {
             cfg,
             variant_selector,
             estimator,
             current_variant: Arc::new(AtomicUsize::new(initial_variant)),
-            previous_variant: initial_variant,
-            last_switch_at: Cell::new(None),
+            reference_instant: Instant::now(),
+            last_switch_at_nanos: AtomicU64::new(NO_SWITCH),
         }
+    }
+
+    /// Convert Instant to nanos since reference. Returns at least 1 to distinguish from NO_SWITCH.
+    fn instant_to_nanos(&self, instant: Instant) -> u64 {
+        let nanos = instant
+            .saturating_duration_since(self.reference_instant)
+            .as_nanos() as u64;
+        // Ensure we never return 0 (which means "no switch")
+        nanos.max(1)
+    }
+
+    /// Convert nanos to Instant. Returns None if value is NO_SWITCH.
+    fn nanos_to_instant(&self, nanos: u64) -> Option<Instant> {
+        if nanos == NO_SWITCH {
+            None
+        } else {
+            Some(self.reference_instant + Duration::from_nanos(nanos))
+        }
+    }
+
+    /// Record a switch at the given instant.
+    fn record_switch(&self, now: Instant) {
+        self.last_switch_at_nanos
+            .store(self.instant_to_nanos(now), Ordering::Release);
     }
 
     pub fn current_variant(&self) -> Arc<AtomicUsize> {
@@ -61,8 +85,12 @@ impl AbrController {
     }
 
     pub fn set_current_variant(&mut self, variant_index: usize) {
-        self.previous_variant = self.current_variant.load(Ordering::Acquire);
         self.current_variant.store(variant_index, Ordering::Release);
+    }
+
+    /// Check if ABR is enabled (Auto mode).
+    pub fn is_auto(&self) -> bool {
+        self.cfg.is_auto()
     }
 
     pub fn push_throughput_sample(&mut self, sample: ThroughputSample) {
@@ -129,7 +157,7 @@ impl AbrController {
             let headroom_ok =
                 adjusted_bps >= (candidate.bandwidth_bps as f64) * self.cfg.up_hysteresis_ratio;
             if buffer_ok && headroom_ok {
-                self.last_switch_at.set(Some(now));
+                self.record_switch(now);
                 return AbrDecision {
                     target_variant_index: candidate.variant_index,
                     reason: AbrReason::UpSwitch,
@@ -148,7 +176,7 @@ impl AbrController {
             let urgent_down = buffer_level_secs <= self.cfg.down_switch_buffer_secs;
             let margin_ok = adjusted_bps <= (current_bw as f64) * self.cfg.down_hysteresis_ratio;
             if urgent_down || margin_ok {
-                self.last_switch_at.set(Some(now));
+                self.record_switch(now);
                 return AbrDecision {
                     target_variant_index: candidate.variant_index,
                     reason: AbrReason::DownSwitch,
@@ -189,44 +217,14 @@ impl AbrController {
         if decision.target_variant_index == current {
             return;
         }
-        self.previous_variant = current;
         self.current_variant
             .store(decision.target_variant_index, Ordering::Release);
-        self.last_switch_at.set(Some(now));
-    }
-
-    /// Process a segment fetch and check if variant switch is needed.
-    /// Returns Some((from, to, reason)) if switch should happen, None otherwise.
-    pub fn process_fetch(
-        &mut self,
-        bytes: usize,
-        duration: Duration,
-        variants: &[Variant],
-    ) -> Option<(usize, usize, AbrReason)> {
-        let now = Instant::now();
-        let sample = ThroughputSample {
-            bytes: bytes as u64,
-            duration,
-            at: now,
-            source: ThroughputSampleSource::Network,
-        };
-
-        let duration_secs = duration.as_secs_f64();
-        self.push_throughput_sample(sample);
-        let decision = self.decide(variants, duration_secs, now);
-
-        if decision.changed {
-            let from = self.current_variant.load(Ordering::Acquire);
-            self.apply(&decision, now);
-            Some((from, decision.target_variant_index, decision.reason))
-        } else {
-            None
-        }
+        self.record_switch(now);
     }
 
     fn can_switch_now(&self, now: Instant) -> bool {
-        self.last_switch_at
-            .get()
+        let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
+        self.nanos_to_instant(nanos)
             .map(|t| now.duration_since(t) >= self.cfg.min_switch_interval)
             .unwrap_or(true)
     }
@@ -262,7 +260,7 @@ mod tests {
             min_buffer_for_up_switch_secs: 0.0,
             down_switch_buffer_secs: 0.0,
             min_switch_interval: Duration::ZERO,
-            initial_variant_index: Some(2),
+            mode: crate::options::AbrMode::Auto(Some(2)),
             ..AbrConfig::default()
         };
 
@@ -288,7 +286,7 @@ mod tests {
             throughput_safety_factor: 1.5,
             up_hysteresis_ratio: 1.3,
             min_switch_interval: Duration::ZERO,
-            initial_variant_index: Some(0),
+            mode: crate::options::AbrMode::Auto(Some(0)),
             ..AbrConfig::default()
         };
 
@@ -317,7 +315,7 @@ mod tests {
             min_switch_interval: Duration::from_secs(30),
             min_buffer_for_up_switch_secs: 0.0,
             down_switch_buffer_secs: 0.0,
-            initial_variant_index: Some(1),
+            mode: crate::options::AbrMode::Auto(Some(1)),
             ..AbrConfig::default()
         };
 
@@ -346,7 +344,7 @@ mod tests {
             min_switch_interval: Duration::ZERO,
             min_buffer_for_up_switch_secs: 0.0,
             down_switch_buffer_secs: 0.0,
-            initial_variant_index: Some(0),
+            mode: crate::options::AbrMode::Auto(Some(0)),
             ..AbrConfig::default()
         };
 
@@ -369,7 +367,7 @@ mod tests {
     fn down_switch_when_buffer_low() {
         let cfg = AbrConfig {
             min_switch_interval: Duration::ZERO,
-            initial_variant_index: Some(2),
+            mode: crate::options::AbrMode::Auto(Some(2)),
             ..AbrConfig::default()
         };
 
@@ -391,7 +389,7 @@ mod tests {
     #[test]
     fn no_change_without_estimate() {
         let cfg = AbrConfig {
-            initial_variant_index: Some(1),
+            mode: crate::options::AbrMode::Auto(Some(1)),
             ..AbrConfig::default()
         };
         let c = AbrController::new(cfg, None);

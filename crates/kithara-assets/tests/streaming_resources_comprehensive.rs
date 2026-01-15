@@ -2,10 +2,17 @@
 
 use std::time::Duration;
 
-use bytes::Bytes;
-use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey};
+use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
 use kithara_storage::{Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
+
+/// Helper to read bytes from resource into a new Vec
+async fn read_bytes<R: StreamingResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
+    let mut buf = vec![0u8; len];
+    let n = res.read_at(offset, &mut buf).await.unwrap_or(0);
+    buf.truncate(n);
+    buf
+}
 
 #[fixture]
 fn temp_dir() -> tempfile::TempDir {
@@ -54,8 +61,8 @@ async fn streaming_resource_complex_write_patterns(
             .unwrap();
 
         // Verify the written data
-        let read_back = res.read_at(offset, chunk_size).await.unwrap();
-        assert_eq!(read_back, Bytes::from(data));
+        let read_back = read_bytes(&res, offset, chunk_size).await;
+        assert_eq!(read_back, data);
     }
 
     res.commit(None).await.unwrap();
@@ -136,13 +143,13 @@ async fn streaming_resource_edge_case_reads(
     // Perform edge case read
     if offset < data_size as u64 {
         let expected_size = read_size.min(data_size - offset as usize);
-        let read_back = res.read_at(offset, read_size).await.unwrap();
+        let read_back = read_bytes(&res, offset, read_size).await;
 
         assert_eq!(read_back.len(), expected_size);
 
         if expected_size > 0 {
             let expected_data = &initial_data[offset as usize..offset as usize + expected_size];
-            assert_eq!(read_back, Bytes::copy_from_slice(expected_data));
+            assert_eq!(read_back, expected_data);
         }
     }
 
@@ -175,15 +182,15 @@ async fn streaming_resource_multiple_range_operations(
             .unwrap();
 
         // Verify each write immediately
-        let read_back = res.read_at(offset_u64, *size).await.unwrap();
-        assert_eq!(read_back, Bytes::from(data));
+        let read_back = read_bytes(&res, offset_u64, *size).await;
+        assert_eq!(read_back, data);
     }
 
     // Final verification of all ranges
     for (i, (offset, size)) in write_ranges.iter().enumerate() {
         let expected_data: Vec<u8> = (0..*size).map(|j| ((i * 1000 + j) % 256) as u8).collect();
-        let read_back = res.read_at(*offset as u64, *size).await.unwrap();
-        assert_eq!(read_back, Bytes::from(expected_data));
+        let read_back = read_bytes(&res, *offset as u64, *size).await;
+        assert_eq!(read_back, expected_data);
     }
 
     res.commit(None).await.unwrap();
@@ -210,16 +217,16 @@ async fn streaming_resource_commit_behavior(
     res.wait_range(0..(data.len() as u64)).await.unwrap();
 
     // Verify before commit
-    let read_back = res.read_at(0, data.len()).await.unwrap();
-    assert_eq!(read_back, Bytes::from(data.clone()));
+    let read_back = read_bytes(&res, 0, data.len()).await;
+    assert_eq!(read_back, data);
 
     if explicit_commit {
         res.commit(None).await.unwrap();
     }
 
     // Resource should still be readable
-    let read_back_again = res.read_at(0, data.len()).await.unwrap();
-    assert_eq!(read_back_again, Bytes::from(data.clone()));
+    let read_back_again = read_bytes(&res, 0, data.len()).await;
+    assert_eq!(read_back_again, data);
 
     // Drop resource and verify it's still accessible
     drop(res);
@@ -228,8 +235,8 @@ async fn streaming_resource_commit_behavior(
     let res_reopened = store.open_streaming_resource(&key).await.unwrap();
 
     // Should be able to read the data (assuming persistence works)
-    let final_read = res_reopened.read_at(0, data.len()).await.unwrap();
-    assert_eq!(final_read, Bytes::from(data.clone()));
+    let final_read = read_bytes(&res_reopened, 0, data.len()).await;
+    assert_eq!(final_read, data);
 }
 
 #[rstest]
@@ -256,15 +263,15 @@ async fn streaming_resource_zero_length_operations(
         .unwrap();
 
     // Test zero-length read at various positions
-    let zero_read = res.read_at(base_offset, 0).await.unwrap();
-    assert_eq!(zero_read, Bytes::new());
+    let zero_read = read_bytes(&res, base_offset, 0).await;
+    assert!(zero_read.is_empty());
 
     // Test zero-length write (should be no-op)
     res.write_at(base_offset + 100, &[]).await.unwrap();
 
     // Verify original data is still intact
-    let read_back = res.read_at(base_offset, data.len()).await.unwrap();
-    assert_eq!(read_back, Bytes::from(data));
+    let read_back = read_bytes(&res, base_offset, data.len()).await;
+    assert_eq!(read_back, data);
 
     res.commit(None).await.unwrap();
 }

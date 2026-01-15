@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_assets::{
-    AssetId, AssetResource, AssetStore, AssetsError, DiskAssetStore, EvictAssets, LeaseGuard,
+    AssetId, AssetResource, AssetStore, AssetsError, CachedAssets, DiskAssetStore, EvictAssets,
+    LeaseGuard,
 };
 use kithara_net::{HttpClient, NetError};
 use kithara_storage::{StreamingResource, StreamingResourceExt};
@@ -23,7 +24,8 @@ use crate::{
 };
 
 // Type aliases for complex types
-type AssetResourceType = AssetResource<StreamingResource, LeaseGuard<EvictAssets<DiskAssetStore>>>;
+type AssetResourceType =
+    AssetResource<StreamingResource, LeaseGuard<CachedAssets<EvictAssets<DiskAssetStore>>>>;
 
 #[derive(Debug)]
 pub struct Progress {
@@ -105,15 +107,19 @@ impl Source for SessionSource {
         }
     }
 
-    async fn read_at(&self, offset: u64, len: usize) -> KitharaIoResult<Bytes, Self::Error> {
-        trace!(offset, len, "kithara-file SessionSource read_at begin");
-        let bytes = self
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> KitharaIoResult<usize, Self::Error> {
+        trace!(
+            offset,
+            len = buf.len(),
+            "kithara-file SessionSource read_at begin"
+        );
+        let bytes_read = self
             .res
-            .read_at(offset, len)
+            .read_at(offset, buf)
             .await
             .map_err(|e| KitharaIoError::Source(SourceError::Storage(e)))?;
 
-        let new_pos = offset.saturating_add(bytes.len() as u64);
+        let new_pos = offset.saturating_add(bytes_read as u64);
         self.progress.set_read_pos(new_pos);
         let percent = self
             .len
@@ -125,11 +131,11 @@ impl Source for SessionSource {
 
         trace!(
             offset,
-            requested = len,
-            got = bytes.len(),
+            requested = buf.len(),
+            got = bytes_read,
             "kithara-file SessionSource read_at done"
         );
-        Ok(bytes)
+        Ok(bytes_read)
     }
 
     fn len(&self) -> Option<u64> {

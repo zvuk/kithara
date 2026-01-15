@@ -6,34 +6,33 @@ use axum::{Router, routing::get};
 use futures::StreamExt;
 use kithara_assets::AssetStore;
 use kithara_hls::{
+    AbrMode, HlsEvent,
     abr::{AbrConfig, AbrController, AbrReason},
     fetch::FetchManager,
-    pipeline::{BaseStream, PipelineEvent, PipelineStream, PrefetchStream, SegmentPayload},
     playlist::PlaylistManager,
+    stream::{SegmentMeta, SegmentStream},
 };
 use kithara_net::HttpClient;
 use rstest::rstest;
-use tokio::{net::TcpListener, sync::broadcast, time::timeout};
+use tokio::{net::TcpListener, sync::broadcast};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 mod fixture;
-use fixture::{
-    TestAssets, TestServer, assets_fixture, net_fixture, test_init_data, test_segment_data,
-};
+use fixture::{TestAssets, TestServer, assets_fixture, net_fixture, test_init_data};
 
 fn make_fetch_and_playlist(
     assets: AssetStore,
     net: HttpClient,
 ) -> (Arc<FetchManager>, Arc<PlaylistManager>) {
-    let fetch = Arc::new(FetchManager::new_with_read_chunk(assets, net, 64 * 1024));
+    let fetch = Arc::new(FetchManager::new(assets, net));
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
     (fetch, playlist)
 }
 
 fn make_abr(initial_variant: usize) -> AbrController {
     let mut cfg = AbrConfig::default();
-    cfg.initial_variant_index = Some(initial_variant);
+    cfg.mode = AbrMode::Auto(Some(initial_variant));
     AbrController::new(cfg, None)
 }
 
@@ -42,22 +41,49 @@ async fn build_basestream(
     initial_variant: usize,
     assets: AssetStore,
     net: HttpClient,
-) -> BaseStream {
+) -> SegmentStream {
     let (fetch, playlist) = make_fetch_and_playlist(assets, net);
     let abr = make_abr(initial_variant);
     let cancel = CancellationToken::new();
+    let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 
-    BaseStream::new(
+    SegmentStream::new(
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
         None,
         abr,
+        events_tx,
         cancel,
+        8,
     )
 }
 
-async fn collect_all(mut stream: BaseStream) -> Vec<SegmentPayload> {
+async fn build_basestream_with_events(
+    master_url: Url,
+    initial_variant: usize,
+    assets: AssetStore,
+    net: HttpClient,
+) -> (SegmentStream, broadcast::Receiver<HlsEvent>) {
+    let (fetch, playlist) = make_fetch_and_playlist(assets, net);
+    let abr = make_abr(initial_variant);
+    let cancel = CancellationToken::new();
+    let (events_tx, events_rx) = broadcast::channel::<HlsEvent>(32);
+
+    let stream = SegmentStream::new(
+        master_url,
+        Arc::clone(&fetch),
+        Arc::clone(&playlist),
+        None,
+        abr,
+        events_tx,
+        cancel,
+        8,
+    );
+    (stream, events_rx)
+}
+
+async fn collect_all(mut stream: SegmentStream) -> Vec<SegmentMeta> {
     let mut out = Vec::new();
     while let Some(item) = stream.next().await {
         let payload = item.expect("pipeline should yield Ok payloads");
@@ -81,19 +107,16 @@ async fn basestream_iterates_with_init_and_segments(
     let items = collect_all(stream).await;
 
     assert_eq!(items.len(), 4, "init + 3 segments expected");
-    assert_eq!(items[0].meta.segment_index, usize::MAX, "init first");
-    assert_eq!(items[0].meta.variant, 0);
-    assert!(
-        items[0].bytes.starts_with(&test_init_data(0)),
-        "init bytes should match fixture"
-    );
+    assert_eq!(items[0].segment_index, usize::MAX, "init first");
+    assert_eq!(items[0].variant, 0);
+    assert!(items[0].len > 0, "init segment should have non-zero length");
 
-    for (idx, payload) in items.iter().enumerate().skip(1) {
-        assert_eq!(payload.meta.variant, 0);
-        assert_eq!(payload.meta.segment_index, idx - 1);
+    for (idx, meta) in items.iter().enumerate().skip(1) {
+        assert_eq!(meta.variant, 0);
+        assert_eq!(meta.segment_index, idx - 1);
         assert!(
-            payload.bytes.starts_with(&test_segment_data(0, idx - 1)),
-            "segment {} should match fixture",
+            meta.len > 0,
+            "segment {} should have non-zero length",
             idx - 1
         );
     }
@@ -109,12 +132,12 @@ async fn basestream_seek_restarts_from_index(assets_fixture: TestAssets, net_fix
     let mut stream =
         build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
     let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.segment_index, 0);
+    assert_eq!(first.segment_index, 0);
 
     stream.seek(2);
     let after_seek = stream.next().await.expect("item").expect("ok");
-    assert_eq!(after_seek.meta.segment_index, 2);
-    assert_eq!(after_seek.meta.variant, 0);
+    assert_eq!(after_seek.segment_index, 2);
+    assert_eq!(after_seek.variant, 0);
 
     let rest: Vec<_> = stream
         .collect::<Vec<_>>()
@@ -138,35 +161,36 @@ async fn basestream_force_variant_switches_output_and_emits_events(
     let server = TestServer::new().await;
     let master_url = server.url("/master.m3u8").expect("url");
 
-    let mut stream =
-        build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
-    let mut events: broadcast::Receiver<PipelineEvent> = stream.event_sender().subscribe();
+    let (mut stream, mut events) =
+        build_basestream_with_events(master_url, 0, assets_fixture.assets().clone(), net_fixture)
+            .await;
 
     let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.variant, 0);
+    assert_eq!(first.variant, 0);
 
     stream.force_variant(1);
 
-    let ev = timeout(Duration::from_millis(200), async {
-        loop {
-            match events.recv().await {
-                Ok(PipelineEvent::VariantApplied { from, to, .. }) => break (from, to),
-                Ok(_) => continue,
-                Err(e) => panic!("events channel closed: {e}"),
-            }
-        }
-    })
-    .await
-    .expect("expected VariantApplied within timeout");
-    assert_eq!(ev.0, 0);
-    assert_eq!(ev.1, 1);
-
+    // Event is emitted after successful variant load, which happens on next()
     let next = stream.next().await.expect("item").expect("ok");
-    assert_eq!(next.meta.variant, 1);
-    assert!(
-        next.bytes.starts_with(&test_segment_data(1, 0)),
-        "first segment after switch should be from variant 1"
-    );
+    assert_eq!(next.variant, 1);
+    assert!(next.len > 0, "first segment after switch should have data");
+
+    // Check that VariantApplied event was emitted
+    let mut saw_applied = false;
+    while let Ok(ev) = events.try_recv() {
+        if let HlsEvent::VariantApplied {
+            from_variant,
+            to_variant,
+            ..
+        } = ev
+        {
+            assert_eq!(from_variant, 0);
+            assert_eq!(to_variant, 1);
+            saw_applied = true;
+            break;
+        }
+    }
+    assert!(saw_applied, "expected VariantApplied event");
 }
 
 #[rstest]
@@ -179,38 +203,36 @@ async fn basestream_emits_abr_events_on_manual_switch(
     let server = TestServer::new().await;
     let master_url = server.url("/master.m3u8").expect("url");
 
-    let mut stream =
-        build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
-    let mut events: broadcast::Receiver<PipelineEvent> = stream.event_sender().subscribe();
+    let (mut stream, mut events) =
+        build_basestream_with_events(master_url, 0, assets_fixture.assets().clone(), net_fixture)
+            .await;
 
     let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.variant, 0);
+    assert_eq!(first.variant, 0);
 
     stream.force_variant(2);
 
-    let mut saw_applied = false;
+    // Event is emitted after successful variant load, which happens on next()
+    let next = stream.next().await.expect("item").expect("ok");
+    assert_eq!(next.variant, 2);
 
-    for _ in 0..10 {
-        if let Ok(ev) = timeout(Duration::from_millis(200), events.recv()).await {
-            match ev {
-                Ok(PipelineEvent::VariantApplied { from, to, reason }) => {
-                    assert_eq!(from, 0);
-                    assert_eq!(to, 2);
-                    assert_eq!(reason, AbrReason::ManualOverride);
-                    saw_applied = true;
-                }
-                _ => {}
-            }
-        }
-        if saw_applied {
+    // Check that VariantApplied event was emitted with correct reason
+    let mut saw_applied = false;
+    while let Ok(ev) = events.try_recv() {
+        if let HlsEvent::VariantApplied {
+            from_variant,
+            to_variant,
+            reason,
+        } = ev
+        {
+            assert_eq!(from_variant, 0);
+            assert_eq!(to_variant, 2);
+            assert_eq!(reason, AbrReason::ManualOverride);
+            saw_applied = true;
             break;
         }
     }
-
     assert!(saw_applied, "expected VariantApplied event");
-
-    let next = stream.next().await.expect("item").expect("ok");
-    assert_eq!(next.meta.variant, 2);
 }
 
 #[rstest]
@@ -223,18 +245,21 @@ async fn basestream_stops_after_cancellation(assets_fixture: TestAssets, net_fix
     let (fetch, playlist) = make_fetch_and_playlist(assets_fixture.assets().clone(), net_fixture);
     let abr = make_abr(0);
     let cancel = CancellationToken::new();
+    let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 
-    let mut stream = BaseStream::new(
+    let mut stream = SegmentStream::new(
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
         None,
         abr,
+        events_tx,
         cancel.clone(),
+        8,
     );
 
     let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.segment_index, 0);
+    assert_eq!(first.segment_index, 0);
     cancel.cancel();
 
     let next = stream.next().await;
@@ -255,7 +280,7 @@ async fn basestream_pause_and_resume_continues_streaming(
         build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
 
     let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.segment_index, 0);
+    assert_eq!(first.segment_index, 0);
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -265,8 +290,8 @@ async fn basestream_pause_and_resume_continues_streaming(
     }
 
     assert_eq!(remaining.len(), 2, "should receive remaining segments");
-    assert_eq!(remaining[0].meta.segment_index, 1);
-    assert_eq!(remaining[1].meta.segment_index, 2);
+    assert_eq!(remaining[0].segment_index, 1);
+    assert_eq!(remaining[1].segment_index, 2);
 }
 
 #[rstest]
@@ -280,27 +305,33 @@ async fn basestream_reconnects_and_resumes_same_segment(
     let master_url = server.url("/master.m3u8").expect("url");
 
     let (fetch, playlist) = make_fetch_and_playlist(assets_fixture.assets().clone(), net_fixture);
-    let abr = make_abr(0);
+    let abr1 = make_abr(0);
 
     let cancel1 = CancellationToken::new();
-    let mut stream1 = BaseStream::new(
+    let (events_tx1, _) = broadcast::channel::<HlsEvent>(32);
+    let mut stream1 = SegmentStream::new(
         master_url.clone(),
         fetch.clone(),
         playlist.clone(),
         None,
-        abr.clone(),
+        abr1,
+        events_tx1,
         cancel1.clone(),
+        8,
     );
 
     let first = stream1.next().await.expect("item").expect("ok");
-    assert_eq!(first.meta.segment_index, 0);
+    assert_eq!(first.segment_index, 0);
 
     cancel1.cancel();
     let ended = stream1.next().await;
     assert!(ended.is_none(), "stream should end after cancellation");
 
+    let abr2 = make_abr(0);
     let cancel2 = CancellationToken::new();
-    let mut stream2 = BaseStream::new(master_url, fetch, playlist, None, abr, cancel2);
+    let (events_tx2, _) = broadcast::channel::<HlsEvent>(32);
+    let stream2 =
+        SegmentStream::new(master_url, fetch, playlist, None, abr2, events_tx2, cancel2, 8);
 
     stream2.seek(1);
 
@@ -316,12 +347,12 @@ async fn basestream_reconnects_and_resumes_same_segment(
         2,
         "should continue from next segment after reconnect"
     );
-    assert_eq!(remaining[0].meta.segment_index, 1);
+    assert_eq!(remaining[0].segment_index, 1);
     assert!(
-        remaining[0].bytes.starts_with(&test_segment_data(0, 1)),
-        "resume should yield the same segment data after reconnect"
+        remaining[0].len > 0,
+        "resume should yield segment data after reconnect"
     );
-    assert_eq!(remaining[1].meta.segment_index, 2);
+    assert_eq!(remaining[1].segment_index, 2);
 }
 
 #[rstest]
@@ -450,7 +481,7 @@ seg/v{}_2.bin
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
 
     let mut cfg = AbrConfig::default();
-    cfg.initial_variant_index = Some(2);
+    cfg.mode = AbrMode::Auto(Some(2));
     cfg.min_buffer_for_up_switch_secs = 0.0;
     cfg.down_switch_buffer_secs = 0.0;
     cfg.throughput_safety_factor = 1.0;
@@ -458,31 +489,34 @@ seg/v{}_2.bin
 
     let abr = AbrController::new(cfg, None);
     let cancel = CancellationToken::new();
+    let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 
-    let mut stream = BaseStream::new(
+    let mut stream = SegmentStream::new(
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
         None,
         abr,
+        events_tx,
         cancel.clone(),
+        8,
     );
 
     let init2 = stream.next().await.unwrap().expect("init v2");
-    assert_eq!(init2.meta.variant, 2);
-    assert_eq!(init2.meta.segment_index, usize::MAX);
+    assert_eq!(init2.variant, 2);
+    assert_eq!(init2.segment_index, usize::MAX);
 
     let seg2 = stream.next().await.unwrap().expect("seg0 v2");
-    assert_eq!(seg2.meta.variant, 2);
-    assert_eq!(seg2.meta.segment_index, 0);
+    assert_eq!(seg2.variant, 2);
+    assert_eq!(seg2.segment_index, 0);
 
     let init1 = stream.next().await.unwrap().expect("init v1");
-    assert_eq!(init1.meta.variant, 1);
-    assert_eq!(init1.meta.segment_index, usize::MAX);
+    assert_eq!(init1.variant, 1);
+    assert_eq!(init1.segment_index, usize::MAX);
 
     let seg1 = stream.next().await.unwrap().expect("seg1 v1");
-    assert_eq!(seg1.meta.variant, 1);
-    assert_eq!(seg1.meta.segment_index, 1);
+    assert_eq!(seg1.variant, 1);
+    assert_eq!(seg1.segment_index, 1);
 }
 
 #[rstest]
@@ -611,7 +645,7 @@ seg/v{}_2.bin
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
 
     let mut cfg = AbrConfig::default();
-    cfg.initial_variant_index = Some(2);
+    cfg.mode = AbrMode::Auto(Some(2));
     cfg.min_buffer_for_up_switch_secs = 0.0;
     cfg.down_switch_buffer_secs = 0.0;
     cfg.throughput_safety_factor = 1.0;
@@ -619,30 +653,33 @@ seg/v{}_2.bin
 
     let abr = AbrController::new(cfg, None);
     let cancel = CancellationToken::new();
+    let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 
-    let base = BaseStream::new(
+    let base = SegmentStream::new(
         master_url,
         Arc::clone(&fetch),
         Arc::clone(&playlist),
         None,
         abr,
-        cancel.clone(),
+        events_tx,
+        cancel,
+        8,
     );
-    let mut stream = PrefetchStream::new(base, 1, cancel);
+    let mut stream = Box::pin(base);
 
-    let init2 = stream.next().await.unwrap().expect("init v2");
-    assert_eq!(init2.meta.variant, 2);
-    assert_eq!(init2.meta.segment_index, usize::MAX);
+    let init2: SegmentMeta = stream.next().await.unwrap().expect("init v2");
+    assert_eq!(init2.variant, 2);
+    assert_eq!(init2.segment_index, usize::MAX);
 
-    let seg2 = stream.next().await.unwrap().expect("seg0 v2");
-    assert_eq!(seg2.meta.variant, 2);
-    assert_eq!(seg2.meta.segment_index, 0);
+    let seg2: SegmentMeta = stream.next().await.unwrap().expect("seg0 v2");
+    assert_eq!(seg2.variant, 2);
+    assert_eq!(seg2.segment_index, 0);
 
-    let init1 = stream.next().await.unwrap().expect("init v1");
-    assert_eq!(init1.meta.variant, 1);
-    assert_eq!(init1.meta.segment_index, usize::MAX);
+    let init1: SegmentMeta = stream.next().await.unwrap().expect("init v1");
+    assert_eq!(init1.variant, 1);
+    assert_eq!(init1.segment_index, usize::MAX);
 
-    let seg1 = stream.next().await.unwrap().expect("seg1 v1");
-    assert_eq!(seg1.meta.variant, 1);
-    assert_eq!(seg1.meta.segment_index, 1);
+    let seg1: SegmentMeta = stream.next().await.unwrap().expect("seg1 v1");
+    assert_eq!(seg1.variant, 1);
+    assert_eq!(seg1.segment_index, 1);
 }

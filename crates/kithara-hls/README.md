@@ -10,63 +10,85 @@
 
 ## Public contract (normative)
 
-The public contract is expressed by the following items re-exported from `src/lib.rs`:
+### Entry point
+- `struct Hls` — Factory for creating HLS sessions via `Hls::open(url, options)`
+- `struct HlsSession` — Active HLS session with event access
+- `struct HlsSource` — Random-access source adapter (implements `kithara_stream::Source`)
 
-### Core components
-- `struct HlsSource` — Main entry point for creating HLS sessions
-- `struct HlsSession` — Active HLS session with stream and event access
-- `trait HlsSourceContract` — Trait for HLS source implementations
-
-### Configuration and options
+### Configuration
 - `struct HlsOptions` — Comprehensive configuration for HLS behavior
-- `struct KeyContext` — Context for key processing operations
-
-### Managers and controllers
-- `struct PlaylistManager` — Manages playlist fetching, parsing, and caching
-- `struct FetchManager` — Handles segment fetching with retry logic
-- `struct KeyManager` — Manages encryption key fetching and processing
-- `struct AbrController` — Implements ABR decision logic
-- `struct EventEmitter` — Emits HLS events for monitoring
+- `struct AbrOptions` — ABR-specific configuration
+- `struct NetworkOptions` — Network request configuration
+- `struct CacheOptions` — Cache configuration
+- `struct KeyOptions` — Key processing configuration
 
 ### Events and errors
 - `enum HlsEvent` — Events emitted during HLS playback
 - `enum HlsError` — Error type for HLS operations
 - `type HlsResult<T> = Result<T, HlsError>` — Result alias
 
-## Architecture overview
+### ABR types
+- `struct AbrDecision` — ABR decision result
+- `enum AbrReason` — Reason for ABR decision
+- `struct ThroughputSample` — Network throughput measurement
+- `struct Variant` — Variant (quality level) information
 
-`kithara-hls` implements a modular architecture that coordinates multiple subsystems:
+## Architecture overview
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    HlsSession                           │
-│      (Public API: stream(), events(), source())         │
+│                      Hls::open()                         │
+│              (Creates HlsSession)                        │
 └──────────────────────────┬──────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────┐
-│                    HlsDriver                            │
-│      (Orchestrates all managers and controllers)        │
+│                    HlsSession                            │
+│              (Owns SegmentStream)                        │
+│              .source() → HlsSource                       │
+│              .events() → Receiver<HlsEvent>              │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────┐
+│                   SegmentStream                          │
+│   (Iterates variants and segments, handles ABR)          │
 └─────┬────────────┬────────────┬────────────┬────────────┘
       │            │            │            │
 ┌─────▼─────┐ ┌───▼────┐ ┌─────▼─────┐ ┌───▼──────┐
-│ Playlist  │ │ Fetch  │ │   Key    │ │   ABR   │
+│ Playlist  │ │ Fetch  │ │   Key    │ │   ABR    │
 │ Manager   │ │Manager │ │ Manager  │ │Controller│
 └───────────┘ └────────┘ └──────────┘ └──────────┘
-      │            │            │            │
-┌─────▼─────┐ ┌───▼────┐ ┌─────▼─────┐ ┌───▼──────┐
-│kithara-net│ │kithara-│ │kithara-net│ │Throughput│
-│ (HTTP)    │ │ assets │ │ (HTTP)    │ │  Metrics │
-└───────────┘ └────────┘ └──────────┘ └──────────┘
+      │            │
+┌─────▼─────┐ ┌───▼────┐
+│kithara-net│ │kithara-│
+│ (HTTP)    │ │ assets │
+└───────────┘ └────────┘
 ```
 
-### Key responsibilities
+### Module structure
 
-1. **Playlist management**: Fetches, parses, and caches master/playlist files
-2. **Segment fetching**: Downloads media segments with retry and timeout handling
-3. **Key management**: Handles encryption key fetching and processing
-4. **ABR control**: Monitors network conditions and switches bitrates
-5. **Event emission**: Emits events for UI integration and monitoring
-6. **Storage integration**: Caches all resources via `kithara-assets`
+```
+src/
+  lib.rs              — Public API re-exports
+  error.rs            — HlsError, HlsResult
+  events.rs           — HlsEvent, EventEmitter
+  options.rs          — HlsOptions, AbrOptions, etc.
+  source.rs           — Hls::open() factory
+  session.rs          — HlsSession
+  source_adapter.rs   — HlsSource (implements Source trait)
+  abr/                — ABR logic
+    controller.rs     — AbrController
+    estimator.rs      — ThroughputEstimator
+    types.rs          — Variant, ThroughputSample
+  stream/             — Segment streaming pipeline
+    segment_stream.rs — SegmentStream
+    pipeline.rs       — Main async generator
+    commands.rs       — Seek/ForceVariant commands
+    context.rs        — Helper functions
+    types.rs          — PipelineEvent, SegmentMeta
+  fetch.rs            — FetchManager (internal)
+  keys.rs             — KeyManager (internal)
+  playlist.rs         — PlaylistManager (internal)
+```
 
 ## Core invariants
 
@@ -78,40 +100,61 @@ The public contract is expressed by the following items re-exported from `src/li
 6. **Error resilience**: Robust error handling with retry logic
 7. **Cancellation**: All async operations respect cancellation
 
-## Configuration
+## Example usage
 
-### `HlsOptions` key fields
+### Basic HLS playback
+```rust
+use kithara_hls::{Hls, HlsOptions};
+use url::Url;
 
-- `base_url: Option<Url>` — Base URL for resolving relative URLs
-- `variant_stream_selector: Option<...>` — Custom variant selection logic
-- `abr_*` fields — ABR configuration parameters
-- `request_timeout: Duration` — Network request timeout
-- `max_retries: u32` — Maximum retry attempts
-- `prefetch_buffer_size: usize` — Number of segments to prefetch
-- `key_processor_cb: Option<...>` — Custom key processing callback
-- `key_query_params: Option<HashMap>` — Query parameters for key requests
-- `key_request_headers: Option<HashMap>` — Headers for key requests
+let url = Url::parse("https://example.com/master.m3u8").unwrap();
+let opts = HlsOptions::default();
 
-### ABR Configuration
+// Create HLS session
+let session = Hls::open(url, opts).await?;
 
-- `abr_min_buffer_for_up_switch: f32` — Minimum buffer (seconds) for upgrading
-- `abr_down_switch_buffer: f32` — Buffer threshold (seconds) for downgrading
-- `abr_throughput_safety_factor: f32` — Safety factor for throughput estimates
-- `abr_up_hysteresis_ratio: f32` — Hysteresis ratio for upgrading
-- `abr_down_hysteresis_ratio: f32` — Hysteresis ratio for downgrading
-- `abr_min_switch_interval: Duration` — Minimum time between bitrate switches
+// Subscribe to events
+let mut events = session.events();
+
+// Get random-access source
+let source = session.source();
+
+// Use source with kithara_stream::SyncReader for decoding
+```
+
+### Custom ABR configuration
+```rust
+use kithara_hls::{HlsOptions, AbrOptions};
+use std::time::Duration;
+
+let opts = HlsOptions {
+    abr: AbrOptions {
+        min_buffer_for_up_switch_secs: 15.0,
+        down_switch_buffer_secs: 8.0,
+        throughput_safety_factor: 1.8,
+        up_hysteresis_ratio: 1.4,
+        down_hysteresis_ratio: 0.7,
+        min_switch_interval: Duration::from_secs(20),
+        ..Default::default()
+    },
+    ..Default::default()
+};
+```
 
 ## Events
 
 ### `HlsEvent` variants
 
-- `VariantSwitched { from: usize, to: usize, reason: AbrReason }` — Bitrate switch occurred
-- `SegmentFetched { variant_idx: usize, segment_idx: usize, bytes: u64 }` — Segment downloaded
-- `SegmentPlayed { variant_idx: usize, segment_idx: usize }` — Segment played
-- `BufferLevel { seconds: f32 }` — Current buffer level
-- `ThroughputSample { bytes_per_second: f64 }` — Network throughput sample
-- `PlaylistRefreshed` — Playlist was refreshed
-- `Error(HlsError)` — Error occurred
+- `VariantApplied { from_variant, to_variant, reason }` — Bitrate switch occurred
+- `SegmentStart { variant, segment_index, byte_offset }` — Segment download started
+- `SegmentComplete { variant, segment_index, bytes_transferred, duration }` — Segment downloaded
+- `KeyFetch { key_url, success, cached }` — Key fetch completed
+- `BufferLevel { level_seconds }` — Current buffer level
+- `ThroughputSample { bytes_per_second }` — Network throughput sample
+- `DownloadProgress { offset, percent }` — Download progress
+- `PlaybackProgress { position, percent }` — Playback progress
+- `Error { error, recoverable }` — Error occurred
+- `EndOfStream` — Stream ended
 
 Events are emitted through a broadcast channel accessible via `HlsSession::events()`.
 
@@ -135,134 +178,24 @@ Events are emitted through a broadcast channel accessible via `HlsSession::event
 ## Integration with other Kithara crates
 
 ### `kithara-stream`
-- Can be integrated as an `EngineSource` for byte stream orchestration
-- Uses similar event and error patterns
+- `HlsSource` implements the `Source` trait
+- Can be wrapped with `SyncReader` for synchronous decoding
 
 ### `kithara-net`
-- Uses `Net` trait for all HTTP operations
+- Uses `HttpClient` for all HTTP operations
 - Leverages retry and timeout policies
-- Uses range requests for efficient downloading
 
 ### `kithara-assets`
-- Stores playlists, segments, and keys as assets
-- Uses both `AtomicResource` and `StreamingResource` appropriately
-- Manages asset lifecycle and cleanup
-
-### `kithara-file`
-- Complementary crate for single-file progressive downloads
-- Shares similar architecture patterns
-
-## Example usage
-
-### Basic HLS playback
-```rust
-use kithara_hls::{HlsSource, HlsOptions};
-use kithara_assets::{asset_store, EvictConfig};
-use url::Url;
-
-// Create asset store
-let assets = asset_store("/cache/dir", EvictConfig::default());
-
-// Configure HLS options
-let opts = HlsOptions {
-    base_url: Some(Url::parse("https://example.com/").unwrap()),
-    ..Default::default()
-};
-
-// Create HLS session
-let url = Url::parse("https://example.com/master.m3u8").unwrap();
-let session = HlsSource::open(url, opts, assets).await?;
-
-// Get event receiver
-let mut events = session.events();
-
-// Process the stream
-let mut stream = session.stream();
-while let Some(result) = stream.next().await {
-    match result {
-        Ok(bytes) => {
-            // Process segment bytes
-        }
-        Err(e) => {
-            eprintln!("Stream error: {:?}", e);
-            break;
-        }
-    }
-
-    // Check for events
-    while let Ok(event) = events.try_recv() {
-        match event {
-            HlsEvent::VariantSwitched { from, to, reason } => {
-                println!("Bitrate switched from {} to {}: {:?}", from, to, reason);
-            }
-            HlsEvent::SegmentFetched { variant_idx, segment_idx, bytes } => {
-                println!("Segment {}-{} fetched: {} bytes", variant_idx, segment_idx, bytes);
-            }
-            HlsEvent::BufferLevel { seconds } => {
-                println!("Buffer level: {:.1}s", seconds);
-            }
-            _ => {}
-        }
-    }
-}
-```
-
-### Custom key processing
-```rust
-use kithara_hls::{HlsOptions, KeyContext};
-use bytes::Bytes;
-
-let opts = HlsOptions {
-    key_processor_cb: Some(Arc::new(|bytes: Bytes, ctx: KeyContext| {
-        // Custom key processing logic
-        println!("Processing key from: {}", ctx.url);
-        
-        // Example: decrypt or transform the key
-        let processed = bytes; // In reality, you'd decrypt here
-        
-        Ok(processed)
-    })),
-    ..Default::default()
-};
-```
-
-### Offline playback
-```rust
-use kithara_hls::{HlsSource, HlsOptions};
-
-// Assuming assets were previously cached
-let opts = HlsOptions::default();
-let url = Url::parse("https://example.com/master.m3u8").unwrap();
-
-// The session will use cached resources
-let session = HlsSource::open(url, opts, assets).await?;
-
-// If resources are missing, operations will fail with HlsError::OfflineMiss
-```
-
-### ABR configuration
-```rust
-use kithara_hls::HlsOptions;
-use std::time::Duration;
-
-let opts = HlsOptions {
-    abr_min_buffer_for_up_switch: 15.0, // Need 15s buffer to upgrade
-    abr_down_switch_buffer: 8.0,        // Downgrade if buffer < 8s
-    abr_throughput_safety_factor: 1.8,  // Conservative throughput estimate
-    abr_up_hysteresis_ratio: 1.4,       // Need 40% better throughput to upgrade
-    abr_down_hysteresis_ratio: 0.7,     // Downgrade at 70% of required throughput
-    abr_min_switch_interval: Duration::from_secs(20), // Min 20s between switches
-    ..Default::default()
-};
-```
+- Stores playlists, segments, and keys
+- Uses both `AtomicResource` (playlists, keys) and `StreamingResource` (segments)
+- Manages asset lifecycle with lease/eviction semantics
 
 ## Design philosophy
 
 1. **Modular architecture**: Separated concerns (playlist, fetch, keys, ABR)
-2. **VOD first**: Optimized for Video-on-Demand with full caching
-3. **ABR intelligence**: Sophisticated bitrate adaptation based on multiple factors
-4. **Offline capability**: Full support for offline playback via persistent cache
-5. **Event-driven**: Comprehensive event system for monitoring and UI integration
-6. **Error resilience**: Robust error handling with clear error categories
-7. **Storage integration**: Deep integration with `kithara-assets` for caching
-8. **Configurable**: Extensive configuration options for different use cases
+2. **Hidden internals**: Only public API is exposed, internals are private
+3. **VOD first**: Optimized for Video-on-Demand with full caching
+4. **ABR intelligence**: Sophisticated bitrate adaptation
+5. **Offline capability**: Full support for offline playback
+6. **Event-driven**: Comprehensive event system for monitoring
+7. **Storage integration**: Deep integration with `kithara-assets`

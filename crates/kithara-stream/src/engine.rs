@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, trace};
 
-use crate::{StreamError, StreamMsg, StreamParams};
+use crate::{EngineParams, StreamError, StreamMsg};
 
 /// Commands accepted by [`Engine`].
 ///
@@ -95,7 +95,7 @@ pub trait EngineSource: Send + 'static {
     /// Create (or reuse) the owned session state for this source.
     ///
     /// This is called exactly once by the engine at startup.
-    fn init(&mut self, params: StreamParams) -> InitFuture<Self::State, Self::Error>;
+    fn init(&mut self, params: EngineParams) -> InitFuture<Self::State, Self::Error>;
 
     /// Build a reader stream from the owned session `state`.
     ///
@@ -106,7 +106,7 @@ pub trait EngineSource: Send + 'static {
     fn open_reader(
         &mut self,
         state: &Self::State,
-        params: StreamParams,
+        params: EngineParams,
     ) -> ReaderResult<Self::Control, Self::Event, Self::Error>;
 
     /// Start (or obtain) the writer task that fills the underlying storage/resources.
@@ -115,7 +115,7 @@ pub trait EngineSource: Send + 'static {
     fn start_writer(
         &mut self,
         state: &Self::State,
-        params: StreamParams,
+        params: EngineParams,
     ) -> Result<WriterTask<Self::Error>, StreamError<Self::Error>>;
 
     /// Seek to a byte position (optional).
@@ -168,14 +168,16 @@ impl<S> Engine<S>
 where
     S: EngineSource,
 {
-    pub fn new(mut source: S, params: StreamParams) -> Self {
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<EngineCommand>(16);
-        let (out_tx, out_rx) =
-            mpsc::channel::<Result<StreamMsg<S::Control, S::Event>, StreamError<S::Error>>>(32);
+    pub fn new(mut source: S, params: EngineParams) -> Self {
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<EngineCommand>(params.cmd_channel_capacity);
+        let (out_tx, out_rx) = mpsc::channel::<
+            Result<StreamMsg<S::Control, S::Event>, StreamError<S::Error>>,
+        >(params.out_channel_capacity);
 
         let task = tokio::spawn(async move {
+            let cancel = params.cancel.clone();
             // Initialize owned session state once. Both writer and reader are derived from it.
-            let state = match source.init(params).await {
+            let state = match source.init(params.clone()).await {
                 Ok(s) => s,
                 Err(e) => {
                     let _ = out_tx.send(Err(e)).await;
@@ -184,17 +186,17 @@ where
             };
 
             // Start the writer once (from the owned state).
-            let mut writer: Option<WriterTask<S::Error>> = match source.start_writer(&state, params)
-            {
-                Ok(h) => Some(h),
-                Err(e) => {
-                    let _ = out_tx.send(Err(e)).await;
-                    return;
-                }
-            };
+            let mut writer: Option<WriterTask<S::Error>> =
+                match source.start_writer(&state, params.clone()) {
+                    Ok(h) => Some(h),
+                    Err(e) => {
+                        let _ = out_tx.send(Err(e)).await;
+                        return;
+                    }
+                };
 
             // Open the reader once; on seek we re-open (from the same owned state).
-            let mut reader = match source.open_reader(&state, params) {
+            let mut reader = match source.open_reader(&state, params.clone()) {
                 Ok(s) => s,
                 Err(e) => {
                     let _ = out_tx.send(Err(e)).await;
@@ -206,7 +208,7 @@ where
 
             loop {
                 // Drop-to-stop.
-                if out_tx.is_closed() {
+                if out_tx.is_closed() || cancel.is_cancelled() {
                     if let Some(w) = writer.take() {
                         w.abort();
                         let _ = w.await;
@@ -216,9 +218,7 @@ where
 
                 tokio::select! {
                     // Writer completion branch (one-shot)
-                    w = async {
-                        writer.take()
-                    }, if writer.is_some() => {
+                    w = async { writer.take() }, if writer.is_some() => {
                         if let Some(w) = w {
                             match w.await {
                                 Ok(Ok(())) => trace!("Engine writer completed successfully"),
@@ -236,6 +236,14 @@ where
                         }
                     }
 
+                    _ = cancel.cancelled() => {
+                        if let Some(w) = writer.take() {
+                            w.abort();
+                            let _ = w.await;
+                        }
+                        return;
+                    }
+
                     // Commands (optional)
                     cmd = cmd_rx.recv(), if !commands_closed => {
                         let Some(cmd) = cmd else {
@@ -250,7 +258,7 @@ where
                                     let _ = out_tx.send(Err(e)).await;
                                     continue;
                                 }
-                                match source.open_reader(&state, params) {
+                                match source.open_reader(&state, params.clone()) {
                                     Ok(s) => reader = s,
                                     Err(e) => {
                                         let _ = out_tx.send(Err(e)).await;

@@ -2,7 +2,6 @@
 
 use std::{
     fmt,
-    num::NonZeroUsize,
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
@@ -157,18 +156,6 @@ impl StreamingResource {
         Ok(Some(len.min(max)))
     }
 
-    async fn read_exact_len(&self, offset: u64, len: usize) -> StorageResult<Bytes> {
-        let mut disk = self.inner.disk.lock().await;
-
-        let len: u64 = len.try_into().map_err(|_| StorageError::InvalidRange {
-            start: offset,
-            end: offset,
-        })?;
-
-        let data = disk.read(offset, len).await?;
-        Ok(Bytes::from(data))
-    }
-
     fn validate_range(range: &Range<u64>) -> StorageResult<()> {
         if range.start >= range.end {
             return Err(StorageError::InvalidRange {
@@ -224,7 +211,10 @@ impl Resource for StreamingResource {
                 start: 0,
                 end: final_len,
             })?;
-        self.read_at(0, len_usize).await
+        let mut buf = vec![0u8; len_usize];
+        let bytes_read = self.read_at(0, &mut buf).await?;
+        buf.truncate(bytes_read);
+        Ok(Bytes::from(buf))
     }
 
     async fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
@@ -312,21 +302,21 @@ impl StreamingResourceExt for StreamingResource {
         }
     }
 
-    async fn read_at(&self, offset: u64, len: usize) -> StorageResult<Bytes> {
-        let Some(len) = NonZeroUsize::new(len) else {
-            return Ok(Bytes::new());
-        };
-
-        let len = len.get();
-        let Some(clamped) = self.clamp_len_to_eof(offset, len).await? else {
-            return self.read_exact_len(offset, len).await;
-        };
-
-        if clamped == 0 {
-            return Ok(Bytes::new());
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        if buf.is_empty() {
+            return Ok(0);
         }
 
-        self.read_exact_len(offset, clamped).await
+        let len = buf.len();
+        let read_len = match self.clamp_len_to_eof(offset, len).await? {
+            Some(0) => return Ok(0),
+            Some(clamped) => clamped,
+            None => len,
+        };
+
+        let mut disk = self.inner.disk.lock().await;
+        let bytes_read = disk.read_to(offset, &mut buf[..read_len]).await?;
+        Ok(bytes_read)
     }
 
     async fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {

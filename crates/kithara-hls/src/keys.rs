@@ -14,6 +14,7 @@ use url::Url;
 use crate::{
     HlsError, HlsResult, KeyContext,
     fetch::FetchManager,
+    options::KeyProcessor,
     playlist::{EncryptionMethod, SegmentKey},
 };
 
@@ -38,7 +39,7 @@ pub enum KeyError {
 #[derive(Clone)]
 pub struct KeyManager {
     fetch: Arc<FetchManager>,
-    key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
+    key_processor: Option<KeyProcessor>,
     key_query_params: Option<HashMap<String, String>>,
     key_request_headers: Option<HashMap<String, String>>,
 }
@@ -46,7 +47,7 @@ pub struct KeyManager {
 impl KeyManager {
     pub fn new(
         fetch: Arc<FetchManager>,
-        key_processor: Option<Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>>,
+        key_processor: Option<KeyProcessor>,
         key_query_params: Option<HashMap<String, String>>,
         key_request_headers: Option<HashMap<String, String>>,
     ) -> Self {
@@ -60,7 +61,6 @@ impl KeyManager {
 
     pub async fn get_raw_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
         let mut fetch_url = url.clone();
-
         if let Some(ref params) = self.key_query_params {
             let mut pairs = fetch_url.query_pairs_mut();
             for (key, value) in params {
@@ -69,10 +69,9 @@ impl KeyManager {
         }
 
         let headers: Option<Headers> = self.key_request_headers.clone().map(Headers::from);
-
         let rel_path = Self::rel_path_from_url(&fetch_url);
         let raw_key = Arc::clone(&self.fetch)
-            .fetch_key_atomic(&fetch_url, rel_path.as_str(), headers)
+            .fetch_key(&fetch_url, rel_path.as_str(), headers)
             .await?;
 
         let processed_key = self.process_key(raw_key, fetch_url, iv)?;
@@ -152,10 +151,7 @@ impl KeyManager {
         self.decrypt(&key_url, Some(iv), bytes).await
     }
 
-    fn resolve_key_url(
-        key_info: &crate::playlist::KeyInfo,
-        segment_url: &Url,
-    ) -> HlsResult<Url> {
+    fn resolve_key_url(key_info: &crate::playlist::KeyInfo, segment_url: &Url) -> HlsResult<Url> {
         let key_uri = key_info
             .uri
             .as_ref()

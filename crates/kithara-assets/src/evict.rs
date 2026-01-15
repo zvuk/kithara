@@ -1,21 +1,17 @@
 #![forbid(unsafe_code)]
 
-use std::{
-    collections::HashSet,
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashSet, path::Path, sync::Arc};
 
 use async_trait::async_trait;
-use kithara_storage::{AtomicResource, StorageError, StreamingResource};
+use kithara_storage::{AtomicResource, StorageError};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    cache::Assets,
+    base::{Assets, delete_asset_dir},
     error::AssetsResult,
     index::{EvictConfig, LruIndex, PinsIndex},
     key::ResourceKey,
-    store::delete_asset_dir,
 };
 
 /// A decorator that enforces LRU eviction with optional per-asset byte accounting.
@@ -89,8 +85,8 @@ where
         PinsIndex::open(self.base()).await
     }
 
-    fn mark_seen(&self, asset_root: &str) -> bool {
-        let mut g = self.seen.lock().expect("evict.seen mutex poisoned");
+    async fn mark_seen(&self, asset_root: &str) -> bool {
+        let mut g = self.seen.lock().await;
         g.insert(asset_root.to_string())
     }
 
@@ -155,22 +151,23 @@ where
             return;
         }
 
-        // Fast path: if we've already seen it in this process, avoid re-loading LRU on every open.
-        // We still need to update bytes/touch ordering best-effort when possible.
+        // Fast path: if we've already seen this asset_root in this process, skip LRU operations.
+        // mark_seen returns false if the asset_root was already in the set.
+        if !self.mark_seen(asset_root).await {
+            return;
+        }
+
+        // First time seeing this asset_root - update LRU and maybe evict.
         let lru = match self.open_lru().await {
             Ok(v) => v,
             Err(_) => return,
         };
 
-        // Determine whether this is a "creation".
-        // This uses persisted LRU, not the in-memory set.
+        // Determine whether this is a "creation" (new entry in persisted LRU).
         let created = match lru.touch(asset_root, bytes_hint).await {
             Ok(created) => created,
             Err(_) => return,
         };
-
-        // Track it locally too.
-        let _ = self.mark_seen(asset_root);
 
         if created {
             self.on_asset_created(asset_root).await;
@@ -183,6 +180,9 @@ impl<A> Assets for EvictAssets<A>
 where
     A: Assets,
 {
+    type StreamingRes = A::StreamingRes;
+    type AtomicRes = A::AtomicRes;
+
     fn root_dir(&self) -> &Path {
         self.base.root_dir()
     }
@@ -191,7 +191,7 @@ where
         self.base.asset_root()
     }
 
-    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<AtomicResource> {
+    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<Self::AtomicRes> {
         // Asset creation-time eviction decision happens before opening.
         //
         // Note: this decorator is about LRU/quotas and must not wrap/alter resources.
@@ -202,7 +202,7 @@ where
         self.base.open_atomic_resource(key).await
     }
 
-    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<StreamingResource> {
+    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<Self::StreamingRes> {
         // Asset creation-time eviction decision happens before opening.
         self.touch_and_maybe_evict(self.base.asset_root(), None)
             .await;

@@ -25,3 +25,5 @@ url = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true }
 rstest = { workspace = true }
+memory-stats = { workspace = true }
+axum = { workspace = true }

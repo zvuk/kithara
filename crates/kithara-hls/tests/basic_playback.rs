@@ -3,7 +3,7 @@
 use std::{error::Error, sync::Arc, time::Duration};
 
 use kithara_assets::EvictConfig;
-use kithara_hls::{HlsOptions, HlsSource};
+use kithara_hls::{CacheOptions, Hls, HlsOptions};
 use kithara_stream::SyncReader;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
@@ -11,6 +11,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use url::Url;
+
+mod fixture;
+use fixture::TestServer;
 
 // ==================== Fixtures ====================
 
@@ -27,19 +30,13 @@ fn cancel_token() -> CancellationToken {
 #[fixture]
 fn hls_options(temp_dir: TempDir, cancel_token: CancellationToken) -> HlsOptions {
     HlsOptions {
-        cache_dir: Some(temp_dir.into_path()),
-        evict_config: Some(EvictConfig::default()),
+        cache: CacheOptions {
+            cache_dir: Some(temp_dir.path().to_path_buf()),
+            evict_config: Some(EvictConfig::default()),
+        },
         cancel: Some(cancel_token),
         ..Default::default()
     }
-}
-
-#[fixture]
-fn test_stream_url() -> Url {
-    // Use a public test HLS stream
-    "https://stream.silvercomet.top/hls/master.m3u8"
-        .parse()
-        .unwrap()
 }
 
 #[fixture]
@@ -62,45 +59,38 @@ fn tracing_setup() {
 /// 1. HLS session can be opened
 /// 2. Audio source can be obtained
 /// 3. Rodio decoder can be created from the stream
-/// 4. Audio playback starts (sink is not empty)
 ///
-/// Note: This is an integration test that requires network access.
-/// It uses a public test stream URL.
+/// Note: This test uses a local test server.
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_basic_hls_playback(
     _tracing_setup: (),
-    test_stream_url: Url,
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let server = TestServer::new().await;
+    let test_stream_url = server.url("/master.m3u8")?;
     info!("Starting HLS playback test with URL: {}", test_stream_url);
 
-    // 1. Test: Open HLS session
-    info!("Opening HLS session...");
-    let session = HlsSource::open(test_stream_url.clone(), hls_options).await?;
-    info!("✓ HLS session opened successfully");
-
-    // 2. Test: Get audio source
-    info!("Getting HLS source...");
-    let source = session.source().await?;
-    info!("✓ HLS source obtained successfully");
+    // 1. Test: Open HLS source
+    info!("Opening HLS source...");
+    let source = Hls::open(test_stream_url.clone(), hls_options).await?;
+    info!("HLS source opened successfully");
 
     // Start event monitor in background
-    let mut events_rx = session.events();
+    let mut events_rx = source.events();
     let _events_handle = tokio::spawn(async move {
         let mut event_count = 0;
         while let Ok(ev) = events_rx.recv().await {
             event_count += 1;
             if event_count <= 3 {
-                // Log first few events for debugging
                 info!("Event {}: {:?}", event_count, ev);
             }
         }
     });
 
-    // Create reader for the stream
-    let reader = SyncReader::new(Arc::new(source));
+    // Create reader for the stream (capacity=8 for bounded backpressure)
+    let reader = SyncReader::new(Arc::new(source), 8);
 
     // 3. Test: Create rodio decoder (this validates the stream format)
     info!("Creating rodio decoder...");
@@ -108,21 +98,12 @@ async fn test_basic_hls_playback(
 
     match decoder_result {
         Ok(_decoder) => {
-            info!("✓ Rodio decoder created successfully");
-
-            // 4. Test: Verify decoder produces audio data
-            // We can't actually play audio in a test, but we can verify
-            // the decoder was created successfully which means the stream
-            // format is recognized by Symphonia
-
-            // For integration testing, we could attempt to read some samples,
-            // but for now we'll consider decoder creation as success
+            info!("Rodio decoder created successfully");
             Ok(())
         }
         Err(e) => {
             warn!("Failed to create rodio decoder: {}", e);
-            // Don't fail the test immediately - some streams might not be supported
-            // but we should at least verify the HLS layer works
+            // Test data is not valid audio, so decoder failure is expected
             info!("Note: Rodio decoder failed, but HLS layer is functional");
             Ok(())
         }
@@ -130,13 +111,10 @@ async fn test_basic_hls_playback(
 }
 
 /// Test that verifies HLS session creation without actual playback.
-/// This is useful for testing HLS functionality in CI environments
-/// where audio playback might not be available.
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_session_creation(
-    test_stream_url: Url,
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
@@ -144,14 +122,16 @@ async fn test_hls_session_creation(
         .with_test_writer()
         .try_init();
 
-    // Test session creation
-    let session = HlsSource::open(test_stream_url, hls_options).await?;
+    let server = TestServer::new().await;
+    let test_stream_url = server.url("/master.m3u8")?;
 
-    // Test source acquisition
-    let _source = session.source().await?;
+    // Test source creation
+    let source = Hls::open(test_stream_url, hls_options).await?;
 
     // Test events channel
-    let mut events_rx = session.events();
+    let mut events_rx = source.events();
+
+    let _source = source;
 
     // Spawn a task to consume events (prevent channel from filling up)
     tokio::spawn(async move {
@@ -164,13 +144,11 @@ async fn test_hls_session_creation(
     Ok(())
 }
 
-/// Test with different HLS stream URLs to verify compatibility with various formats.
+/// Test HLS with init segments.
 #[rstest]
-#[case("https://stream.silvercomet.top/hls/master.m3u8")]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn test_hls_with_different_streams(
-    #[case] stream_url: &str,
+async fn test_hls_with_init_segments(
     hls_options: HlsOptions,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
@@ -178,15 +156,13 @@ async fn test_hls_with_different_streams(
         .with_test_writer()
         .try_init();
 
-    info!("Testing HLS stream: {}", stream_url);
+    let server = TestServer::new().await;
+    let url = server.url("/master-init.m3u8")?;
+    info!("Testing HLS with init segments: {}", url);
 
-    let url: Url = stream_url.parse()?;
+    let _source = Hls::open(url, hls_options).await?;
 
-    // Just test that we can open the session
-    let session = HlsSource::open(url, hls_options).await?;
-    let _source = session.source().await?;
-
-    info!("✓ Stream {} opened successfully", stream_url);
+    info!("Stream with init segments opened successfully");
     Ok(())
 }
 
@@ -195,7 +171,6 @@ async fn test_hls_with_different_streams(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_with_different_options(
-    test_stream_url: Url,
     temp_dir: TempDir,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
@@ -203,20 +178,23 @@ async fn test_hls_with_different_options(
         .with_test_writer()
         .try_init();
 
+    let server = TestServer::new().await;
+    let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS with custom options");
 
     let options = HlsOptions {
-        cache_dir: Some(temp_dir.into_path()),
-        evict_config: Some(EvictConfig::default()),
+        cache: CacheOptions {
+            cache_dir: Some(temp_dir.path().to_path_buf()),
+            evict_config: Some(EvictConfig::default()),
+        },
         cancel: Some(CancellationToken::new()),
         ..Default::default()
     };
 
-    // Test session creation with different options
-    let session = HlsSource::open(test_stream_url, options).await?;
-    let _source = session.source().await?;
+    // Test source creation with different options
+    let _source = Hls::open(test_stream_url, options).await?;
 
-    info!("✓ HLS session opened successfully with custom options");
+    info!("HLS source opened successfully with custom options");
     Ok(())
 }
 
@@ -240,7 +218,7 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         // If URL parses, try to open HLS (should fail with network error)
-        let result = HlsSource::open(url, hls_options).await;
+        let result = Hls::open(url, hls_options).await;
         // Either Ok (if somehow connects) or Err (expected) is acceptable
         assert!(result.is_ok() || result.is_err());
     } else {
@@ -251,36 +229,37 @@ async fn test_hls_invalid_url_handling(
     Ok(())
 }
 
-/// Test HLS with empty assets store (should still work for network streaming).
+/// Test HLS with limited cache.
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn test_hls_without_cache(
-    test_stream_url: Url,
-    temp_dir: TempDir,
-) -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn test_hls_without_cache(temp_dir: TempDir) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
         .with_test_writer()
         .try_init();
 
+    let server = TestServer::new().await;
+    let test_stream_url = server.url("/master.m3u8")?;
+
     // Create options with very small cache to simulate limited caching
     let hls_options = HlsOptions {
-        cache_dir: Some(temp_dir.into_path()),
-        evict_config: Some(EvictConfig {
-            max_assets: Some(1),
-            max_bytes: Some(1024), // 1KB cache
-        }),
+        cache: CacheOptions {
+            cache_dir: Some(temp_dir.path().to_path_buf()),
+            evict_config: Some(EvictConfig {
+                max_assets: Some(1),
+                max_bytes: Some(1024), // 1KB cache
+            }),
+        },
         cancel: Some(CancellationToken::new()),
         ..Default::default()
     };
 
     info!("Testing HLS with limited cache");
 
-    // Test session creation with limited cache
-    let session = HlsSource::open(test_stream_url, hls_options).await?;
-    let _source = session.source().await?;
+    // Test source creation with limited cache
+    let _source = Hls::open(test_stream_url, hls_options).await?;
 
-    info!("✓ HLS session opened successfully with limited cache");
+    info!("HLS source opened successfully with limited cache");
     Ok(())
 }

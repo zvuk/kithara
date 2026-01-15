@@ -4,7 +4,7 @@ use std::collections::HashSet;
 
 use kithara_storage::{AtomicResource, Resource};
 
-use crate::{cache::Assets, error::AssetsResult};
+use crate::{base::Assets, error::AssetsResult};
 
 /// Minimal persisted representation of the pins index.
 ///

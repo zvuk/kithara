@@ -1,6 +1,6 @@
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_assets::{AssetStoreBuilder, EvictConfig};
+use kithara_assets::{AssetStoreBuilder, EvictConfig, asset_root_for_url};
 use kithara_file::{FileEvent, FileSource, FileSourceOptions};
 use kithara_stream::SyncReader;
 use tempfile::TempDir;
@@ -9,7 +9,7 @@ use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -21,8 +21,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .add_directive("kithara_assets=info".parse()?)
                 .add_directive(LevelFilter::INFO.into()),
         )
-        .with_line_number(true)
-        .with_file(true)
+        .with_line_number(false)
+        .with_file(false)
         .init();
 
     let url = args().nth(1).unwrap_or_else(|| {
@@ -31,10 +31,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .to_string()
     });
     let url: Url = url.parse()?;
-
     let temp_dir = TempDir::new()?;
     let assets = AssetStoreBuilder::new()
         .root_dir(temp_dir.path().to_path_buf())
+        .asset_root(asset_root_for_url(&url))
         .evict_config(EvictConfig::default())
         .cancel(CancellationToken::new())
         .build();
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let source = session.source().await?;
 
     let mut events_rx = source.events();
-    let reader = SyncReader::new(Arc::new(source));
+    let reader = SyncReader::new(Arc::new(source), 8);
 
     tokio::spawn(async move {
         while let Ok(msg) = events_rx.recv().await {

@@ -28,4 +28,4 @@ pub use error::{StreamError, StreamResult};
 pub use fetch::{Reader, ReaderError, Writer, WriterError};
 pub use io::{Source, SyncReader};
 pub use kithara_storage::WaitOutcome;
-pub use msg::{StreamMsg, StreamParams};
+pub use msg::{EngineParams, StreamMsg};

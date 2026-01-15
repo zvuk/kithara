@@ -64,13 +64,12 @@ pub trait StreamingResourceExt: Resource {
     /// - If the resource is cancelled: returns `StorageError::Cancelled`.
     async fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
 
-    /// Read up to `len` bytes at `offset` **without** implicitly waiting.
+    /// Read bytes at `offset` into `buf` **without** implicitly waiting.
     ///
     /// Callers that need blocking semantics must call `wait_range` first.
     ///
-    /// Implementations should return:
-    /// - `Ok(Bytes::new())` for EOF when committed and `offset >= final_len` (when known).
-    async fn read_at(&self, offset: u64, len: usize) -> StorageResult<Bytes>;
+    /// Returns the number of bytes read. Returns `Ok(0)` for EOF.
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
 
     /// Write bytes at the given offset (HTTP Range response writes).
     async fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;

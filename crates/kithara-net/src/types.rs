@@ -105,6 +105,8 @@ impl RetryPolicy {
 pub struct NetOptions {
     pub request_timeout: Duration,
     pub retry_policy: RetryPolicy,
+    /// Max idle connections per host. Set to 0 to disable pooling and reduce memory.
+    pub pool_max_idle_per_host: usize,
 }
 
 impl Default for NetOptions {
@@ -112,6 +114,7 @@ impl Default for NetOptions {
         Self {
             request_timeout: Duration::from_secs(30),
             retry_policy: RetryPolicy::default(),
+            pool_max_idle_per_host: 0, // Disable pooling for lower memory
         }
     }
 }

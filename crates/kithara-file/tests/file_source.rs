@@ -5,7 +5,7 @@ use std::time::Duration;
 use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::{AssetId, AssetStore, AssetStoreBuilder, EvictConfig};
+use kithara_assets::{AssetId, AssetStore, AssetStoreBuilder, Assets, EvictConfig};
 use kithara_file::{DriverError, FileError, FileSource, FileSourceOptions, SourceError};
 use kithara_storage::StreamingResourceExt;
 use rstest::{fixture, rstest};
@@ -474,12 +474,14 @@ async fn cache_through_write_works(
         .expect("Should be able to open cached resource");
 
     // Read the data from the resource using read_at since read() requires commit
-    let stored_data = streaming_resource
-        .read_at(0, received_data.len())
+    let mut buf = vec![0u8; received_data.len()];
+    let n = streaming_resource
+        .read_at(0, &mut buf)
         .await
         .expect("Should read cached data");
+    buf.truncate(n);
 
-    assert_eq!(stored_data, Bytes::from(received_data));
+    assert_eq!(buf, received_data);
 }
 
 #[rstest]

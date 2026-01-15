@@ -1,32 +1,54 @@
 #![forbid(unsafe_code)]
 
+//! HLS (HTTP Live Streaming) VOD implementation.
+//!
+//! # Overview
+//!
+//! This crate provides transport and caching for HLS VOD streams.
+//! It handles playlist parsing, segment fetching, ABR (Adaptive Bitrate),
+//! and encryption key management.
+//!
+//! # Example
+//!
+//! ```ignore
+//! use kithara_hls::{Hls, HlsOptions};
+//!
+//! let source = Hls::open(url, HlsOptions::default()).await?;
+//! let events_rx = source.events();
+//! ```
+
+// Public modules
 pub mod abr;
-pub mod driver;
 pub mod error;
 pub mod events;
-pub mod fetch;
-pub mod keys;
 pub mod options;
-pub mod pipeline;
-pub mod playlist;
-pub mod session;
-pub mod source;
 
+// Internal modules (exposed for testing, use with caution)
+#[doc(hidden)]
+pub mod fetch;
+#[doc(hidden)]
+pub mod keys;
+#[doc(hidden)]
+pub mod playlist;
+#[doc(hidden)]
+pub mod stream;
+
+// Private modules
+mod adapter;
+mod index;
+mod parsing;
+mod source;
+
+// ============================================================================
 // Public API re-exports
-pub use abr::{
-    AbrConfig, AbrController, AbrDecision, AbrReason, ThroughputSample, ThroughputSampleSource,
-    Variant,
-};
-pub use driver::DriverError;
+// ============================================================================
+
+pub use abr::{AbrDecision, AbrReason, ThroughputSample, Variant};
 pub use error::{HlsError, HlsResult};
-pub use events::{EventEmitter, HlsEvent};
-pub use fetch::{FetchManager, SegmentStream};
-pub use keys::{KeyError, KeyManager};
-pub use options::{HlsOptions, KeyContext};
-pub use pipeline::{
-    BaseStream, PipelineError, PipelineEvent, PipelineResult, PipelineStream, PrefetchStream,
-    SegmentMeta, SegmentPayload,
+pub use events::HlsEvent;
+pub use options::{
+    AbrMode, AbrOptions, CacheOptions, HlsOptions, KeyContext, KeyOptions, KeyProcessor,
+    NetworkOptions, VariantSelector,
 };
-pub use playlist::{PlaylistError, PlaylistManager};
-pub use session::{HlsSession, HlsSessionSource};
-pub use source::{HlsSource, HlsSourceContract};
+pub use adapter::HlsSource;
+pub use source::Hls;

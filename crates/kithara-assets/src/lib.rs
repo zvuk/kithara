@@ -34,20 +34,22 @@
 //! `_index/*` stores small, atomic files (temp → rename) used as best-effort metadata.
 //! Filesystem remains the source of truth; indexes may be missing and can be rebuilt later.
 
+mod base;
 mod cache;
 mod error;
 mod evict;
 mod index;
 mod key;
 mod lease;
+mod processing;
 mod resource;
 mod store;
 
 // Public API - used by other crates
-// Internal types - exported only with "internal" feature flag
-#[cfg(feature = "internal")]
-pub use cache::Assets;
+pub use base::{Assets, DiskAssetStore};
+pub use cache::CachedAssets;
 pub use error::{AssetsError, AssetsResult};
+pub use processing::{ProcessFn, ProcessedResource, ProcessingAssets};
 pub use evict::EvictAssets;
 pub use index::EvictConfig;
 #[cfg(feature = "internal")]
@@ -57,4 +59,4 @@ pub use key::canonicalize_for_asset;
 pub use key::{AssetId, ResourceKey, asset_root_for_url};
 pub use lease::{LeaseAssets, LeaseGuard};
 pub use resource::AssetResource;
-pub use store::{AssetStore, AssetStoreBuilder, DiskAssetStore};
+pub use store::{AssetStore, AssetStoreBuilder};

@@ -1,86 +1,182 @@
 #![forbid(unsafe_code)]
 
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
 use async_trait::async_trait;
-use kithara_storage::{AtomicResource, StreamingResource};
+use dashmap::DashMap;
+use kithara_storage::AtomicResource;
 
-use crate::{error::AssetsResult, key::ResourceKey};
+use crate::{base::Assets, error::AssetsResult, key::ResourceKey};
 
-/// Explicit public contract for the assets abstraction.
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+enum CacheKey {
+    Streaming(ResourceKey),
+    Atomic(ResourceKey),
+    PinsIndex,
+    LruIndex,
+}
+
+#[derive(Clone, Debug)]
+enum CacheEntry<S, A> {
+    Streaming(S),
+    Atomic(A),
+    Index(AtomicResource),
+}
+
+type Cache<S, A> = DashMap<CacheKey, CacheEntry<S, A>>;
+
+/// A decorator that caches opened resources in memory.
 ///
-/// ## What this crate is about (normative)
-///
-/// `kithara-assets` is about *assets* and their *resources*:
-/// - an **asset** is a logical unit that may consist of multiple files/resources
-///   (e.g. MP3 single file, or HLS playlist + many segments + keys),
-/// - a **resource** is addressed by [`ResourceKey`] and can be opened either as:
-///   - **atomic** (small files; read/write atomically),
-///   - **streaming** (large files; random access, progressive read/write).
-///
-/// ## What this crate is NOT about (normative)
-///
-/// This trait does **not** define:
-/// - path layout, directories, filename conventions,
-/// - string munging / sanitization / hashing,
-/// - direct filesystem operations.
-///
-/// All disk mapping must be encapsulated in the concrete implementation behind this trait.
-///
-/// ## Leasing / pinning (normative)
-///
-/// Leasing / pinning is implemented strictly as a decorator (`LeaseAssets`) over a base [`Assets`]
-/// implementation. The base `Assets` does not know about pins.
+/// ## Normative
+/// - Caching is done at the resource level (not asset level).
+/// - Same `ResourceKey` returns the same resource handle.
+/// - Cache is process-scoped and not persisted.
+#[derive(Clone, Debug)]
+pub struct CachedAssets<A>
+where
+    A: Assets,
+{
+    base: Arc<A>,
+    cache: Arc<Cache<A::StreamingRes, A::AtomicRes>>,
+}
+
+impl<A> CachedAssets<A>
+where
+    A: Assets,
+{
+    pub fn new(base: Arc<A>) -> Self {
+        Self {
+            base,
+            cache: Arc::new(DashMap::new()),
+        }
+    }
+
+    pub fn base(&self) -> &A {
+        &self.base
+    }
+}
+
 #[async_trait]
-pub trait Assets: Clone + Send + Sync + 'static {
-    /// Open an atomic resource (small object) addressed by `key`.
-    ///
-    /// This must not perform pinning; pinning is the responsibility of the `LeaseAssets` decorator.
-    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<AtomicResource>;
+impl<A> Assets for CachedAssets<A>
+where
+    A: Assets,
+{
+    type StreamingRes = A::StreamingRes;
+    type AtomicRes = A::AtomicRes;
 
-    /// Open a streaming resource (large object) addressed by `key`.
-    ///
-    /// This must not perform pinning; pinning is the responsibility of the `LeaseAssets` decorator.
-    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<StreamingResource>;
+    fn root_dir(&self) -> &Path {
+        self.base.root_dir()
+    }
 
-    /// Open the atomic resource used for persisting the pins index.
-    ///
-    /// Normative requirements:
-    /// - must be a small atomic file-like resource,
-    /// - must be excluded from pinning (otherwise the lease decorator will recurse),
-    /// - must be stable for the lifetime of this assets instance.
-    ///
-    /// Key selection (where this lives on disk) is an implementation detail of the concrete
-    /// `Assets` implementation. Higher layers must not construct or assume a `ResourceKey` here.
-    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource>;
+    fn asset_root(&self) -> &str {
+        self.base.asset_root()
+    }
 
-    /// Delete the entire asset (all resources under this store's `asset_root`).
-    ///
-    /// ## Normative
-    /// - This is used by eviction/GC decorators (LRU, quota enforcement).
-    /// - Base `Assets` implementations must NOT apply pin/lease semantics here.
-    /// - Higher layers must ensure pinned assets are not deleted (decorators enforce this).
-    async fn delete_asset(&self) -> AssetsResult<()>;
+    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<Self::AtomicRes> {
+        let cache_key = CacheKey::Atomic(key.clone());
 
-    /// Open the atomic resource used for persisting the LRU index.
-    ///
-    /// ## Normative
-    /// - must be a small atomic file-like resource,
-    /// - must be stable for the lifetime of this assets instance.
-    ///
-    /// Key selection (where this lives on disk) is an implementation detail of the concrete
-    /// `Assets` implementation.
-    async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource>;
+        if let Some(entry) = self.cache.get(&cache_key)
+            && let CacheEntry::Atomic(res) = entry.value()
+        {
+            return Ok(res.clone());
+        }
 
-    /// Return the root directory for disk-backed implementations.
-    ///
-    /// For disk-backed implementations, this returns the root directory path.
-    /// For in-memory or network-backed implementations, this may return a placeholder path.
-    fn root_dir(&self) -> &Path;
+        let res = self.base.open_atomic_resource(key).await?;
 
-    /// Return the asset root identifier for this store.
-    ///
-    /// Each store is scoped to a single asset, identified by this string
-    /// (typically a hash of the master playlist URL).
-    fn asset_root(&self) -> &str;
+        match self.cache.entry(cache_key) {
+            dashmap::mapref::entry::Entry::Occupied(e) => {
+                if let CacheEntry::Atomic(existing) = e.get() {
+                    Ok(existing.clone())
+                } else {
+                    Ok(res)
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(e) => {
+                e.insert(CacheEntry::Atomic(res.clone()));
+                Ok(res)
+            }
+        }
+    }
+
+    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<Self::StreamingRes> {
+        let cache_key = CacheKey::Streaming(key.clone());
+
+        if let Some(entry) = self.cache.get(&cache_key)
+            && let CacheEntry::Streaming(res) = entry.value()
+        {
+            return Ok(res.clone());
+        }
+
+        let res = self.base.open_streaming_resource(key).await?;
+
+        match self.cache.entry(cache_key) {
+            dashmap::mapref::entry::Entry::Occupied(e) => {
+                if let CacheEntry::Streaming(existing) = e.get() {
+                    Ok(existing.clone())
+                } else {
+                    Ok(res)
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(e) => {
+                e.insert(CacheEntry::Streaming(res.clone()));
+                Ok(res)
+            }
+        }
+    }
+
+    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
+        if let Some(entry) = self.cache.get(&CacheKey::PinsIndex)
+            && let CacheEntry::Index(res) = entry.value()
+        {
+            return Ok(res.clone());
+        }
+
+        let res = self.base.open_pins_index_resource().await?;
+
+        match self.cache.entry(CacheKey::PinsIndex) {
+            dashmap::mapref::entry::Entry::Occupied(e) => {
+                if let CacheEntry::Index(existing) = e.get() {
+                    Ok(existing.clone())
+                } else {
+                    Ok(res)
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(e) => {
+                e.insert(CacheEntry::Index(res.clone()));
+                Ok(res)
+            }
+        }
+    }
+
+    async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
+        if let Some(entry) = self.cache.get(&CacheKey::LruIndex)
+            && let CacheEntry::Index(res) = entry.value()
+        {
+            return Ok(res.clone());
+        }
+
+        let res = self.base.open_lru_index_resource().await?;
+
+        match self.cache.entry(CacheKey::LruIndex) {
+            dashmap::mapref::entry::Entry::Occupied(e) => {
+                if let CacheEntry::Index(existing) = e.get() {
+                    Ok(existing.clone())
+                } else {
+                    Ok(res)
+                }
+            }
+            dashmap::mapref::entry::Entry::Vacant(e) => {
+                e.insert(CacheEntry::Index(res.clone()));
+                Ok(res)
+            }
+        }
+    }
+
+    async fn delete_asset(&self) -> AssetsResult<()> {
+        // Clear streaming and atomic caches for this asset (keep index entries)
+        self.cache
+            .retain(|k, _| matches!(k, CacheKey::PinsIndex | CacheKey::LruIndex));
+
+        self.base.delete_asset().await
+    }
 }
