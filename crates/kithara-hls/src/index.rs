@@ -6,12 +6,20 @@ use std::cmp::Ordering;
 
 use url::Url;
 
+/// Encryption info for a segment (resolved key URL and IV).
+#[derive(Debug, Clone)]
+pub(crate) struct EncryptionInfo {
+    pub key_url: Url,
+    pub iv: [u8; 16],
+}
+
 /// Entry in segment index: maps global byte range to segment file.
 #[derive(Debug, Clone)]
 pub(crate) struct SegmentEntry {
     pub global_start: u64,
     pub global_end: u64,
     pub url: Url,
+    pub encryption: Option<EncryptionInfo>,
 }
 
 /// Segment index state for random-access over HLS stream.
@@ -32,13 +40,14 @@ impl SegmentIndex {
         }
     }
 
-    pub fn add(&mut self, url: Url, len: u64) {
+    pub fn add(&mut self, url: Url, len: u64, encryption: Option<EncryptionInfo>) {
         let global_start = self.total_len;
         let global_end = global_start + len;
         self.segments.push(SegmentEntry {
             global_start,
             global_end,
             url,
+            encryption,
         });
         self.total_len = global_end;
     }

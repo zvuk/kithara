@@ -1,40 +1,139 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Deref, path::PathBuf, sync::Arc};
+use std::{
+    hash::Hash,
+    marker::PhantomData,
+    ops::Deref,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
+use async_trait::async_trait;
+use kithara_storage::AtomicResource;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    base::DiskAssetStore, cache::CachedAssets, evict::EvictAssets, index::EvictConfig,
+    AssetsResult,
+    base::{Assets, DiskAssetStore},
+    cache::CachedAssets,
+    evict::EvictAssets,
+    index::EvictConfig,
+    key::ResourceKey,
     lease::LeaseAssets,
+    processing::{ProcessFn, ProcessedResource, ProcessingAssets},
 };
 
-#[derive(Clone, Debug)]
-pub struct AssetStore(LeaseAssets<CachedAssets<EvictAssets<DiskAssetStore>>>);
+type InnerStore = LeaseAssets<CachedAssets<EvictAssets<DiskAssetStore>>>;
 
-impl AssetStore {
-    pub fn new(
-        base: Arc<CachedAssets<EvictAssets<DiskAssetStore>>>,
-        cancel: CancellationToken,
-    ) -> Self {
-        Self(LeaseAssets::new(base, cancel))
-    }
+/// Ready-to-use asset store with optional processing layer.
+///
+/// Generic parameter `Ctx` is the context type for the processing callback.
+/// Use `()` (default) for no processing.
+#[derive(Clone)]
+pub struct AssetStore<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()> {
+    inner: InnerStore,
+    processing: Option<Arc<ProcessingAssets<InnerStore, Ctx>>>,
+    _marker: PhantomData<Ctx>,
+}
 
-    pub fn base(&self) -> &CachedAssets<EvictAssets<DiskAssetStore>> {
-        self.0.base()
-    }
-
-    pub fn asset_root(&self) -> &str {
-        self.0.base().base().base().asset_root()
+impl<Ctx: Clone + Hash + Eq + Send + Sync + 'static> std::fmt::Debug for AssetStore<Ctx> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AssetStore")
+            .field("inner", &self.inner)
+            .field("has_processing", &self.processing.is_some())
+            .finish()
     }
 }
 
-impl Deref for AssetStore {
-    type Target = LeaseAssets<CachedAssets<EvictAssets<DiskAssetStore>>>;
+impl<Ctx> AssetStore<Ctx>
+where
+    Ctx: Clone + Hash + Eq + Send + Sync + 'static,
+{
+    fn new(
+        base: Arc<CachedAssets<EvictAssets<DiskAssetStore>>>,
+        cancel: CancellationToken,
+        process_fn: Option<ProcessFn<Ctx>>,
+    ) -> Self {
+        let inner = LeaseAssets::new(base, cancel);
+        let processing = process_fn.map(|f| {
+            Arc::new(ProcessingAssets::new(Arc::new(inner.clone()), f))
+        });
+        Self {
+            inner,
+            processing,
+            _marker: PhantomData,
+        }
+    }
+
+    pub fn base(&self) -> &CachedAssets<EvictAssets<DiskAssetStore>> {
+        self.inner.base()
+    }
+
+    pub fn asset_root(&self) -> &str {
+        self.inner.base().base().base().asset_root()
+    }
+
+    /// Open a processed streaming resource.
+    ///
+    /// Returns error if no processing callback was configured.
+    pub async fn open_processed(
+        &self,
+        key: &ResourceKey,
+        ctx: Ctx,
+    ) -> AssetsResult<Arc<ProcessedResource<<InnerStore as Assets>::StreamingRes, Ctx>>> {
+        let processing = self.processing.as_ref().ok_or(crate::AssetsError::InvalidKey)?;
+        processing.open_processed(key, ctx).await
+    }
+
+    /// Check if processing is enabled.
+    pub fn has_processing(&self) -> bool {
+        self.processing.is_some()
+    }
+}
+
+impl<Ctx: Clone + Hash + Eq + Send + Sync + 'static> Deref for AssetStore<Ctx> {
+    type Target = InnerStore;
 
     fn deref(&self) -> &Self::Target {
-        &self.0
+        &self.inner
+    }
+}
+
+#[async_trait]
+impl<Ctx> Assets for AssetStore<Ctx>
+where
+    Ctx: Clone + Hash + Eq + Send + Sync + 'static,
+{
+    type StreamingRes = <InnerStore as Assets>::StreamingRes;
+    type AtomicRes = <InnerStore as Assets>::AtomicRes;
+
+    fn root_dir(&self) -> &Path {
+        self.inner.root_dir()
+    }
+
+    fn asset_root(&self) -> &str {
+        self.inner.asset_root()
+    }
+
+    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<Self::AtomicRes> {
+        self.inner.open_atomic_resource(key).await
+    }
+
+    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<Self::StreamingRes> {
+        self.inner.open_streaming_resource(key).await
+    }
+
+    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
+        self.inner.open_pins_index_resource().await
+    }
+
+    async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
+        self.inner.open_lru_index_resource().await
+    }
+
+    async fn delete_asset(&self) -> AssetsResult<()> {
+        self.inner.delete_asset().await
     }
 }
 
@@ -42,9 +141,17 @@ impl Deref for AssetStore {
 ///
 /// ## Usage
 /// ```ignore
+/// // Without processing:
 /// let store = AssetStoreBuilder::new()
 ///     .root_dir("/path/to/cache")
 ///     .asset_root(asset_root_for_url(&master_url))
+///     .build();
+///
+/// // With processing callback:
+/// let store = AssetStoreBuilder::new()
+///     .root_dir("/path/to/cache")
+///     .asset_root(asset_root_for_url(&master_url))
+///     .process_fn(my_decrypt_callback)
 ///     .build();
 /// ```
 ///
@@ -52,30 +159,38 @@ impl Deref for AssetStore {
 /// - `EvictAssets` is applied first (evaluates eviction at "asset creation time")
 /// - `CachedAssets` caches opened resources in memory
 /// - `LeaseAssets` provides RAII pinning for opened resources (outermost)
-pub struct AssetStoreBuilder {
+/// - `ProcessingAssets` (if configured) wraps resources for transformation
+pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()> {
     root_dir: Option<PathBuf>,
     asset_root: Option<String>,
     evict_config: Option<EvictConfig>,
     cancel: Option<CancellationToken>,
+    process_fn: Option<ProcessFn<Ctx>>,
 }
 
-impl Default for AssetStoreBuilder {
+impl Default for AssetStoreBuilder<()> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl AssetStoreBuilder {
-    /// Builder with defaults (no root_dir/asset_root/evict/cancel set).
+impl AssetStoreBuilder<()> {
+    /// Builder with defaults (no root_dir/asset_root/evict/cancel/process set).
     pub fn new() -> Self {
         Self {
             root_dir: None,
             asset_root: None,
             evict_config: None,
             cancel: None,
+            process_fn: None,
         }
     }
+}
 
+impl<Ctx> AssetStoreBuilder<Ctx>
+where
+    Ctx: Clone + Hash + Eq + Send + Sync + 'static,
+{
     /// Set the root directory for the asset store.
     pub fn root_dir(mut self, root: impl Into<PathBuf>) -> Self {
         self.root_dir = Some(root.into());
@@ -102,7 +217,7 @@ impl AssetStoreBuilder {
     ///
     /// # Panics
     /// Panics if `asset_root` is not set.
-    pub fn build(self) -> AssetStore {
+    pub fn build(self) -> AssetStore<Ctx> {
         let root_dir = self.root_dir.unwrap_or_else(|| {
             tempdir()
                 .expect("failed to create AssetStore temp dir")
@@ -117,6 +232,24 @@ impl AssetStoreBuilder {
         let base = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));
         let evict = Arc::new(EvictAssets::new(base, evict_cfg, cancel.clone()));
         let cached = Arc::new(CachedAssets::new(evict));
-        AssetStore::new(cached, cancel)
+        AssetStore::new(cached, cancel, self.process_fn)
+    }
+}
+
+impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx> {
+    /// Set the processing callback for transforming resources.
+    ///
+    /// This changes the builder's context type.
+    pub fn process_fn<NewCtx>(self, f: ProcessFn<NewCtx>) -> AssetStoreBuilder<NewCtx>
+    where
+        NewCtx: Clone + Hash + Eq + Send + Sync + 'static,
+    {
+        AssetStoreBuilder {
+            root_dir: self.root_dir,
+            asset_root: self.asset_root,
+            evict_config: self.evict_config,
+            cancel: self.cancel,
+            process_fn: Some(f),
+        }
     }
 }

@@ -41,6 +41,7 @@ mod evict;
 mod index;
 mod key;
 mod lease;
+mod processing;
 mod resource;
 mod store;
 
@@ -48,6 +49,7 @@ mod store;
 pub use base::{Assets, DiskAssetStore};
 pub use cache::CachedAssets;
 pub use error::{AssetsError, AssetsResult};
+pub use processing::{ProcessFn, ProcessedResource, ProcessingAssets};
 pub use evict::EvictAssets;
 pub use index::EvictConfig;
 #[cfg(feature = "internal")]
