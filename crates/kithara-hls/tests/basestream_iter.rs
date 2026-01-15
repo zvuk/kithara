@@ -142,23 +142,22 @@ async fn basestream_force_variant_switches_output_and_emits_events(
 
     stream.force_variant(1);
 
-    let ev = timeout(Duration::from_millis(200), async {
-        loop {
-            match events.recv().await {
-                Ok(PipelineEvent::VariantApplied { from, to, .. }) => break (from, to),
-                Ok(_) => continue,
-                Err(e) => panic!("events channel closed: {e}"),
-            }
-        }
-    })
-    .await
-    .expect("expected VariantApplied within timeout");
-    assert_eq!(ev.0, 0);
-    assert_eq!(ev.1, 1);
-
+    // Event is emitted after successful variant load, which happens on next()
     let next = stream.next().await.expect("item").expect("ok");
     assert_eq!(next.variant, 1);
     assert!(next.len > 0, "first segment after switch should have data");
+
+    // Check that VariantApplied event was emitted
+    let mut saw_applied = false;
+    while let Ok(ev) = events.try_recv() {
+        if let PipelineEvent::VariantApplied { from, to, .. } = ev {
+            assert_eq!(from, 0);
+            assert_eq!(to, 1);
+            saw_applied = true;
+            break;
+        }
+    }
+    assert!(saw_applied, "expected VariantApplied event");
 }
 
 #[rstest]
@@ -180,29 +179,22 @@ async fn basestream_emits_abr_events_on_manual_switch(
 
     stream.force_variant(2);
 
-    let mut saw_applied = false;
+    // Event is emitted after successful variant load, which happens on next()
+    let next = stream.next().await.expect("item").expect("ok");
+    assert_eq!(next.variant, 2);
 
-    for _ in 0..10 {
-        if let Ok(ev) = timeout(Duration::from_millis(200), events.recv()).await {
-            match ev {
-                Ok(PipelineEvent::VariantApplied { from, to, reason }) => {
-                    assert_eq!(from, 0);
-                    assert_eq!(to, 2);
-                    assert_eq!(reason, AbrReason::ManualOverride);
-                    saw_applied = true;
-                }
-                _ => {}
-            }
-        }
-        if saw_applied {
+    // Check that VariantApplied event was emitted with correct reason
+    let mut saw_applied = false;
+    while let Ok(ev) = events.try_recv() {
+        if let PipelineEvent::VariantApplied { from, to, reason } = ev {
+            assert_eq!(from, 0);
+            assert_eq!(to, 2);
+            assert_eq!(reason, AbrReason::ManualOverride);
+            saw_applied = true;
             break;
         }
     }
-
     assert!(saw_applied, "expected VariantApplied event");
-
-    let next = stream.next().await.expect("item").expect("ok");
-    assert_eq!(next.variant, 2);
 }
 
 #[rstest]

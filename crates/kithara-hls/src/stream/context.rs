@@ -2,7 +2,7 @@
 
 use std::{
     sync::{Arc, atomic::Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use tokio::sync::{broadcast, mpsc};
@@ -15,8 +15,8 @@ use super::{
 };
 use crate::{
     HlsError, HlsResult,
-    abr::{AbrController, ThroughputSample, Variant},
-    fetch::{DownloadContext, FetchManager},
+    abr::{AbrController, ThroughputSample, ThroughputSampleSource, Variant},
+    fetch::{ChunkProgress, DownloadContext, FetchManager},
     keys::KeyManager,
     playlist::{MediaPlaylist, MediaSegment, PlaylistManager, VariantId},
 };
@@ -109,16 +109,16 @@ pub async fn fetch_init_segment(
         .join(&init.uri)
         .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve init URL: {}", e)))?;
 
-    let fetch_meta = fetch.download_streaming(&init_url).await?;
+    let download_result = fetch.download_streaming(&init_url).await?;
 
     Ok(SegmentMeta {
         variant,
         segment_index: usize::MAX,
         sequence: ctx.playlist.media_sequence,
         url: init_url,
-        duration: Some(fetch_meta.duration),
+        duration: Some(download_result.duration),
         key: init.key.clone(),
-        len: fetch_meta.len,
+        len: download_result.bytes,
     })
 }
 
@@ -197,12 +197,67 @@ pub fn process_throughput_samples(
     switch
 }
 
-/// Drive download to completion and send throughput sample.
+/// Minimum bytes to accumulate before sending a throughput sample.
+const MIN_SAMPLE_BYTES: u64 = 32_000; // 32KB
+
+/// Drive download to completion and send throughput samples progressively.
+/// Samples are sent as chunks are downloaded, enabling reactive ABR.
 pub async fn drive_download_and_report(
     fetch: &FetchManager,
     download_ctx: DownloadContext,
     throughput_tx: &mpsc::Sender<ThroughputSample>,
 ) {
-    let sample = fetch.drive_download(download_ctx).await;
-    let _ = throughput_tx.send(sample).await;
+    // Create progress channel
+    let (progress_tx, mut progress_rx) = mpsc::channel::<ChunkProgress>(64);
+
+    // Spawn download task
+    let fetch_clone = fetch.clone();
+    let download_handle = tokio::spawn(async move {
+        fetch_clone
+            .drive_download_with_progress(download_ctx, progress_tx)
+            .await
+    });
+
+    // Track accumulated bytes and last reported elapsed time
+    let mut accumulated_bytes = 0u64;
+    let mut last_reported_elapsed = Duration::ZERO;
+    let mut last_progress_elapsed = Duration::ZERO;
+
+    while let Some(progress) = progress_rx.recv().await {
+        accumulated_bytes += progress.chunk_bytes;
+        last_progress_elapsed = progress.elapsed_from_start;
+
+        // Send sample when we've accumulated enough data
+        if accumulated_bytes >= MIN_SAMPLE_BYTES {
+            let duration = progress
+                .elapsed_from_start
+                .saturating_sub(last_reported_elapsed);
+            last_reported_elapsed = progress.elapsed_from_start;
+
+            let sample = ThroughputSample {
+                bytes: accumulated_bytes,
+                duration,
+                at: Instant::now(),
+                source: ThroughputSampleSource::Network,
+            };
+            let _ = throughput_tx.try_send(sample);
+
+            accumulated_bytes = 0;
+        }
+    }
+
+    // Send remaining accumulated data as final sample
+    if accumulated_bytes > 0 {
+        let duration = last_progress_elapsed.saturating_sub(last_reported_elapsed);
+        let sample = ThroughputSample {
+            bytes: accumulated_bytes,
+            duration,
+            at: Instant::now(),
+            source: ThroughputSampleSource::Network,
+        };
+        let _ = throughput_tx.try_send(sample);
+    }
+
+    // Wait for download to complete
+    let _ = download_handle.await;
 }

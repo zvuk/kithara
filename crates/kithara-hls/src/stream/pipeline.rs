@@ -74,14 +74,7 @@ pub fn create_stream(
                 return;
             }
 
-            if state.from != state.to {
-                let _ = events.send(PipelineEvent::VariantApplied {
-                    from: state.from,
-                    to: state.to,
-                    reason: state.reason,
-                });
-            }
-
+            // Load variant context first, then emit event only on success.
             let var_ctx =
                 match load_variant_context(&playlist_manager, &master_url, state.to).await {
                     Ok(c) => c,
@@ -91,9 +84,20 @@ pub fn create_stream(
                     }
                 };
 
+            // Emit event AFTER successful variant load.
+            let variant_switched = state.from != state.to;
+            if variant_switched {
+                let _ = events.send(PipelineEvent::VariantApplied {
+                    from: state.from,
+                    to: state.to,
+                    reason: state.reason,
+                });
+                state.from = state.to; // Update so we don't emit again
+            }
+
             // Yield init segment if needed (variant switch or first segment).
             let need_init = var_ctx.playlist.init_segment.is_some()
-                && (state.from != state.to || state.start_segment == 0);
+                && (variant_switched || state.start_segment == 0);
             if need_init {
                 match fetch_init_segment(&fetch, &var_ctx, state.to).await {
                     Ok(payload) => {

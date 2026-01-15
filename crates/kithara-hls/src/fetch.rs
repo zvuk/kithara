@@ -10,13 +10,11 @@ use kithara_assets::{
 };
 use kithara_net::{Headers, HttpClient, Net as _};
 use kithara_storage::{Resource as _, ResourceStatus, StreamingResource, StreamingResourceExt};
+use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 use url::Url;
 
-use crate::{
-    HlsResult,
-    abr::{ThroughputSample, ThroughputSampleSource},
-};
+use crate::HlsResult;
 
 pub type StreamingAssetResource =
     AssetResource<StreamingResource, LeaseGuard<CachedAssets<EvictAssets<DiskAssetStore>>>>;
@@ -170,7 +168,7 @@ impl FetchManager {
     }
 
     /// Download streaming resource and return metadata (no bytes in memory).
-    pub(crate) async fn download_streaming(&self, url: &Url) -> HlsResult<FetchMeta> {
+    pub(crate) async fn download_streaming(&self, url: &Url) -> HlsResult<DownloadResult> {
         let key = ResourceKey::from_url(url);
         let res = self.assets.open_streaming_resource(&key).await?;
 
@@ -185,21 +183,15 @@ impl FetchManager {
 
         let duration = start.elapsed();
 
-        let final_len = match res.inner().status().await {
+        let bytes = match res.inner().status().await {
             ResourceStatus::Committed { final_len } => final_len.unwrap_or(0),
             _ => 0,
         };
 
-        let source = if from_cache {
-            ThroughputSampleSource::Cache
-        } else {
-            ThroughputSampleSource::Network
-        };
-
-        Ok(FetchMeta {
-            len: final_len,
-            source,
+        Ok(DownloadResult {
+            bytes,
             duration,
+            from_cache,
         })
     }
 
@@ -236,24 +228,84 @@ impl FetchManager {
         })
     }
 
-    /// Drive a prepared download to completion. Returns throughput sample.
-    pub(crate) async fn drive_download(&self, ctx: DownloadContext) -> ThroughputSample {
+    /// Drive a prepared download with progress reporting.
+    /// Sends `ChunkProgress` for each downloaded chunk.
+    pub(crate) async fn drive_download_with_progress(
+        &self,
+        ctx: DownloadContext,
+        progress_tx: mpsc::Sender<ChunkProgress>,
+    ) -> DownloadResult {
         let start = Instant::now();
-        Self::download_to_resource(&self.net, &ctx.url, &ctx.resource).await;
+        Self::download_to_resource_with_progress(&self.net, &ctx.url, &ctx.resource, progress_tx)
+            .await;
         let duration = start.elapsed();
-        let at = Instant::now();
 
-        let final_len = match ctx.resource.inner().status().await {
+        let bytes = match ctx.resource.inner().status().await {
             ResourceStatus::Committed { final_len } => final_len.unwrap_or(0),
             _ => 0,
         };
 
-        ThroughputSample {
-            bytes: final_len,
+        DownloadResult {
+            bytes,
             duration,
-            at,
-            source: ThroughputSampleSource::Network,
+            from_cache: false,
         }
+    }
+
+    /// Download with progress reporting via channel.
+    async fn download_to_resource_with_progress(
+        net: &HttpClient,
+        url: &Url,
+        res: &StreamingAssetResource,
+        progress_tx: mpsc::Sender<ChunkProgress>,
+    ) {
+        let start_time = Instant::now();
+        trace!(url = %url, "kithara-hls segment download with progress: START");
+
+        let mut stream = match net.stream(url.clone(), None).await {
+            Ok(s) => s,
+            Err(e) => {
+                warn!(url = %url, error = %e, "kithara-hls download: net open error");
+                let _ = res.fail(format!("net error: {e}")).await;
+                return;
+            }
+        };
+
+        let mut off: u64 = 0;
+
+        while let Some(chunk_result) = stream.next().await {
+            match chunk_result {
+                Ok(chunk_bytes) => {
+                    let chunk_len = chunk_bytes.len() as u64;
+                    if let Err(e) = res.write_at(off, &chunk_bytes).await {
+                        warn!(url = %url, off, error = %e, "kithara-hls download: write error");
+                        let _ = res.fail(format!("storage write_at error: {e}")).await;
+                        return;
+                    }
+                    off = off.saturating_add(chunk_len);
+
+                    // Report progress with elapsed time from start
+                    let _ = progress_tx.try_send(ChunkProgress {
+                        chunk_bytes: chunk_len,
+                        total_bytes: off,
+                        elapsed_from_start: start_time.elapsed(),
+                    });
+                }
+                Err(e) => {
+                    warn!(url = %url, off, error = %e, "kithara-hls download: stream error");
+                    let _ = res.fail(format!("net stream error: {e}")).await;
+                    return;
+                }
+            }
+        }
+
+        let _ = res.commit(Some(off)).await;
+        trace!(
+            url = %url,
+            bytes = off,
+            elapsed_ms = start_time.elapsed().as_millis(),
+            "kithara-hls segment download with progress: END"
+        );
     }
 }
 
@@ -278,10 +330,18 @@ impl std::fmt::Debug for DownloadContext {
     }
 }
 
-/// Metadata without bytes (data stays on disk).
+/// Result of a download operation (data stays on disk).
 #[derive(Clone, Debug)]
-pub struct FetchMeta {
-    pub len: u64,
-    pub source: ThroughputSampleSource,
+pub struct DownloadResult {
+    pub bytes: u64,
     pub duration: Duration,
+    pub from_cache: bool,
+}
+
+/// Progress report for a single chunk during download.
+#[derive(Clone, Debug)]
+pub struct ChunkProgress {
+    pub chunk_bytes: u64,
+    pub total_bytes: u64,
+    pub elapsed_from_start: Duration,
 }

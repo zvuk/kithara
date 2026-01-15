@@ -21,12 +21,7 @@ use super::{
     pipeline::create_stream,
     types::{PipelineEvent, PipelineResult, PipelineStream, SegmentMeta},
 };
-use crate::{
-    abr::{AbrController, AbrReason},
-    fetch::FetchManager,
-    keys::KeyManager,
-    playlist::PlaylistManager,
-};
+use crate::{abr::AbrController, fetch::FetchManager, keys::KeyManager, playlist::PlaylistManager};
 
 /// Base layer: selects variant, iterates segments, decrypts when needed,
 /// responds to commands (seek/force), publishes events.
@@ -77,13 +72,9 @@ impl SegmentStream {
     }
 
     /// Force switch to a specific variant.
+    /// Note: Event will be emitted by pipeline after successful variant load.
     pub fn force_variant(&self, variant_index: usize) {
-        let from = self.current_variant.swap(variant_index, Ordering::SeqCst);
-        let _ = self.events.send(PipelineEvent::VariantApplied {
-            from,
-            to: variant_index,
-            reason: AbrReason::ManualOverride,
-        });
+        let from = self.current_variant.load(Ordering::SeqCst);
         let _ = self.cmd_tx.try_send(StreamCommand::ForceVariant {
             variant_index,
             from,
