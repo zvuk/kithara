@@ -4,26 +4,40 @@ use std::sync::Arc;
 
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::{HttpClient, NetOptions, RetryPolicy};
+use tokio::sync::broadcast;
 use url::Url;
 
 use crate::{
     abr::{AbrConfig, AbrController},
     error::HlsResult,
-    events::EventEmitter,
+    events::HlsEvent,
     fetch::FetchManager,
     keys::KeyManager,
     options::HlsOptions,
     playlist::PlaylistManager,
-    session::HlsSession,
+    adapter::HlsSource,
     stream::SegmentStream,
 };
 
-/// Opens HLS sessions from URLs.
+/// Opens HLS sources from URLs.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Hls;
 
 impl Hls {
-    pub async fn open(url: Url, opts: HlsOptions) -> HlsResult<HlsSession> {
+    /// Open an HLS stream from a master playlist URL.
+    ///
+    /// Returns `HlsSource` which implements `Source` trait for random-access reading
+    /// and provides event subscription via `events()`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use kithara_hls::{Hls, HlsOptions};
+    ///
+    /// let source = Hls::open(url, HlsOptions::default()).await?;
+    /// let events_rx = source.events();
+    /// ```
+    pub async fn open(url: Url, opts: HlsOptions) -> HlsResult<HlsSource> {
         let asset_root = asset_root_for_url(&url);
         let cancel = opts.cancel.clone().unwrap_or_default();
 
@@ -81,18 +95,20 @@ impl Hls {
 
         let abr_controller = AbrController::new(abr_config, opts.variant_selector.clone());
 
-        // Build SegmentStream directly (no HlsDriver).
+        // Create events channel.
+        let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
+
+        // Build SegmentStream.
         let base_stream = SegmentStream::new(
             url,
             Arc::clone(&fetch_manager),
             playlist_manager,
             Some(key_manager),
             abr_controller,
+            events_tx.clone(),
             cancel,
         );
 
-        let events = Arc::new(EventEmitter::new());
-
-        Ok(HlsSession::new(base_stream, fetch_manager, events))
+        Ok(HlsSource::new(base_stream, fetch_manager, events_tx))
     }
 }

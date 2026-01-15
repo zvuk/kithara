@@ -72,18 +72,13 @@ async fn test_basic_hls_playback(
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Starting HLS playback test with URL: {}", test_stream_url);
 
-    // 1. Test: Open HLS session
-    info!("Opening HLS session...");
-    let session = Hls::open(test_stream_url.clone(), hls_options).await?;
-    info!("HLS session opened successfully");
+    // 1. Test: Open HLS source
+    info!("Opening HLS source...");
+    let source = Hls::open(test_stream_url.clone(), hls_options).await?;
+    info!("HLS source opened successfully");
 
-    // Start event monitor in background (before source() consumes session)
-    let mut events_rx = session.events();
-
-    // 2. Test: Get audio source (consumes session)
-    info!("Getting HLS source...");
-    let source = session.source();
-    info!("HLS source obtained successfully");
+    // Start event monitor in background
+    let mut events_rx = source.events();
     let _events_handle = tokio::spawn(async move {
         let mut event_count = 0;
         while let Ok(ev) = events_rx.recv().await {
@@ -130,14 +125,13 @@ async fn test_hls_session_creation(
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
 
-    // Test session creation
-    let session = Hls::open(test_stream_url, hls_options).await?;
+    // Test source creation
+    let source = Hls::open(test_stream_url, hls_options).await?;
 
-    // Test events channel (before source() consumes session)
-    let mut events_rx = session.events();
+    // Test events channel
+    let mut events_rx = source.events();
 
-    // Test source acquisition (consumes session)
-    let _source = session.source();
+    let _source = source;
 
     // Spawn a task to consume events (prevent channel from filling up)
     tokio::spawn(async move {
@@ -166,8 +160,7 @@ async fn test_hls_with_init_segments(
     let url = server.url("/master-init.m3u8")?;
     info!("Testing HLS with init segments: {}", url);
 
-    let session = Hls::open(url, hls_options).await?;
-    let _source = session.source();
+    let _source = Hls::open(url, hls_options).await?;
 
     info!("Stream with init segments opened successfully");
     Ok(())
@@ -198,11 +191,10 @@ async fn test_hls_with_different_options(
         ..Default::default()
     };
 
-    // Test session creation with different options
-    let session = Hls::open(test_stream_url, options).await?;
-    let _source = session.source();
+    // Test source creation with different options
+    let _source = Hls::open(test_stream_url, options).await?;
 
-    info!("HLS session opened successfully with custom options");
+    info!("HLS source opened successfully with custom options");
     Ok(())
 }
 
@@ -265,10 +257,9 @@ async fn test_hls_without_cache(temp_dir: TempDir) -> Result<(), Box<dyn Error +
 
     info!("Testing HLS with limited cache");
 
-    // Test session creation with limited cache
-    let session = Hls::open(test_stream_url, hls_options).await?;
-    let _source = session.source();
+    // Test source creation with limited cache
+    let _source = Hls::open(test_stream_url, hls_options).await?;
 
-    info!("HLS session opened successfully with limited cache");
+    info!("HLS source opened successfully with limited cache");
     Ok(())
 }

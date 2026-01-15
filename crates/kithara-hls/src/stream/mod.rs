@@ -1,10 +1,7 @@
-//! HLS layered pipeline: base iteration with ABR and DRM.
+//! HLS segment stream: variant selection, segment iteration, ABR, and commands.
 
-mod commands;
-mod context;
 mod pipeline;
-mod segment_stream;
 pub mod types;
 
-pub use segment_stream::SegmentStream;
-pub use types::{PipelineError, PipelineEvent, PipelineResult, PipelineStream, SegmentMeta};
+pub use pipeline::SegmentStream;
+pub use types::{PipelineError, PipelineResult, SegmentMeta};

@@ -1,37 +1,11 @@
+//! Stream types and state management.
+
 use std::time::Duration;
 
-use futures::Stream;
 use thiserror::Error;
-use tokio::sync::broadcast;
 use url::Url;
 
 use crate::{HlsError, abr::AbrReason, playlist::SegmentKey};
-
-/// Events emitted by pipeline layers.
-#[derive(Debug, Clone)]
-pub enum PipelineEvent {
-    /// Variant switch applied (base layer started emitting new variant).
-    VariantApplied {
-        from: usize,
-        to: usize,
-        reason: AbrReason,
-    },
-    /// Segment ready to be yielded from current layer.
-    SegmentReady {
-        variant: usize,
-        segment_index: usize,
-    },
-    /// Segment successfully decrypted.
-    Decrypted {
-        variant: usize,
-        segment_index: usize,
-    },
-    /// Segment placed in prefetch buffer.
-    Prefetched {
-        variant: usize,
-        segment_index: usize,
-    },
-}
 
 /// Segment metadata (data is on disk, not in memory).
 #[derive(Debug, Clone)]
@@ -57,7 +31,75 @@ pub enum PipelineError {
 
 pub type PipelineResult<T> = Result<T, PipelineError>;
 
-/// Trait for pipeline layer: segment stream with access to event channel.
-pub trait PipelineStream: Stream<Item = PipelineResult<SegmentMeta>> + Send + 'static {
-    fn event_sender(&self) -> broadcast::Sender<PipelineEvent>;
+/// Commands for stream control.
+#[derive(Debug)]
+pub enum StreamCommand {
+    Seek { segment_index: usize },
+    ForceVariant { variant_index: usize, from: usize },
+}
+
+/// Playback state for segment iteration.
+#[derive(Clone)]
+pub struct PlaybackState {
+    pub from: usize,
+    pub to: usize,
+    pub start_segment: usize,
+    pub reason: AbrReason,
+}
+
+impl PlaybackState {
+    pub fn new(variant: usize) -> Self {
+        Self {
+            from: variant,
+            to: variant,
+            start_segment: 0,
+            reason: AbrReason::Initial,
+        }
+    }
+
+    pub fn apply_seek(&mut self, segment_index: usize) {
+        self.start_segment = segment_index;
+    }
+
+    pub fn apply_force_variant(&mut self, variant_index: usize, from: usize) {
+        self.from = from;
+        self.to = variant_index;
+        self.start_segment = 0;
+        self.reason = AbrReason::ManualOverride;
+    }
+
+    pub fn apply_switch(&mut self, next: &VariantSwitch) {
+        self.from = next.from;
+        self.to = next.to;
+        self.start_segment = next.start_segment;
+        self.reason = next.reason;
+    }
+}
+
+/// Variant switch decision.
+pub struct VariantSwitch {
+    pub from: usize,
+    pub to: usize,
+    pub start_segment: usize,
+    pub reason: AbrReason,
+}
+
+impl VariantSwitch {
+    pub fn from_seek(current_to: usize, segment_index: usize) -> Self {
+        Self {
+            from: current_to,
+            to: current_to,
+            start_segment: segment_index,
+            reason: AbrReason::ManualOverride,
+        }
+    }
+
+    pub fn from_force(variant_index: usize, from: usize) -> Self {
+        Self {
+            from,
+            to: variant_index,
+            start_segment: 0,
+            reason: AbrReason::ManualOverride,
+        }
+    }
 }

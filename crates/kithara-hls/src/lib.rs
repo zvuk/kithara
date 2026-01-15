@@ -13,8 +13,8 @@
 //! ```ignore
 //! use kithara_hls::{Hls, HlsOptions};
 //!
-//! let session = Hls::open(url, HlsOptions::default()).await?;
-//! let source = session.source();
+//! let source = Hls::open(url, HlsOptions::default()).await?;
+//! let events_rx = source.events();
 //! ```
 
 // Public modules
@@ -34,9 +34,10 @@ pub mod playlist;
 pub mod stream;
 
 // Private modules
-mod session;
+mod adapter;
+mod index;
+mod parsing;
 mod source;
-mod source_adapter;
 
 // ============================================================================
 // Public API re-exports
@@ -49,6 +50,5 @@ pub use options::{
     AbrMode, AbrOptions, CacheOptions, HlsOptions, KeyContext, KeyOptions, KeyProcessor,
     NetworkOptions, VariantSelector,
 };
-pub use session::HlsSession;
+pub use adapter::HlsSource;
 pub use source::Hls;
-pub use source_adapter::HlsSource;

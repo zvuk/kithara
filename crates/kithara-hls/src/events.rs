@@ -2,8 +2,6 @@
 
 use std::time::Duration;
 
-use tokio::sync::broadcast;
-
 use crate::abr::AbrReason;
 
 /// Events emitted during HLS playback.
@@ -48,58 +46,6 @@ pub enum HlsEvent {
     EndOfStream,
 }
 
-/// Event emitter for broadcasting HLS events.
-#[derive(Clone)]
-pub struct EventEmitter {
-    tx: broadcast::Sender<HlsEvent>,
-}
-
-impl Default for EventEmitter {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl EventEmitter {
-    /// Create a new event emitter.
-    pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(32);
-        Self { tx }
-    }
-
-    /// Subscribe to events.
-    pub fn subscribe(&self) -> broadcast::Receiver<HlsEvent> {
-        self.tx.subscribe()
-    }
-
-    /// Emit an event.
-    pub fn emit(&self, event: HlsEvent) {
-        let _ = self.tx.send(event);
-    }
-
-    // Convenience methods (call emit internally)
-
-    pub fn emit_variant_applied(&self, from: usize, to: usize, reason: AbrReason) {
-        self.emit(HlsEvent::VariantApplied {
-            from_variant: from,
-            to_variant: to,
-            reason,
-        });
-    }
-
-    pub fn emit_segment_start(&self, variant: usize, segment: usize, offset: u64) {
-        self.emit(HlsEvent::SegmentStart {
-            variant,
-            segment_index: segment,
-            byte_offset: offset,
-        });
-    }
-
-    pub fn emit_end_of_stream(&self) {
-        self.emit(HlsEvent::EndOfStream);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,29 +73,13 @@ mod tests {
     }
 
     #[test]
-    fn test_subscribe() {
-        let emitter = EventEmitter::new();
-        let mut rx = emitter.subscribe();
-        emitter.emit(HlsEvent::EndOfStream);
+    fn test_broadcast_channel() {
+        use tokio::sync::broadcast;
+
+        let (tx, mut rx) = broadcast::channel::<HlsEvent>(32);
+        let _ = tx.send(HlsEvent::EndOfStream);
 
         let event = rx.try_recv().ok();
         assert!(matches!(event, Some(HlsEvent::EndOfStream)));
-    }
-
-    #[test]
-    fn test_emit_variant_applied() {
-        let emitter = EventEmitter::new();
-        let mut rx = emitter.subscribe();
-        emitter.emit_variant_applied(0, 1, AbrReason::UpSwitch);
-
-        let event = rx.try_recv().ok();
-        assert!(matches!(
-            event,
-            Some(HlsEvent::VariantApplied {
-                from_variant: 0,
-                to_variant: 1,
-                ..
-            })
-        ));
     }
 }

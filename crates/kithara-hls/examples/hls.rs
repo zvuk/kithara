@@ -39,17 +39,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             evict_config: Some(EvictConfig::default()),
         },
         abr: AbrOptions {
-            mode: AbrMode::Manual(3),
+            mode: AbrMode::Manual(0),
             ..Default::default()
         },
         cancel: Some(cancel.clone()),
         ..Default::default()
     };
 
-    // Open an HLS session (async byte source).
-    let session = Hls::open(url, hls_options).await?;
-    let events_rx = session.events();
-    let source = session.source();
+    // Open an HLS source (async byte source).
+    let source = Hls::open(url, hls_options).await?;
+    let events_rx = source.events();
 
     let reader = SyncReader::new(Arc::new(source));
 

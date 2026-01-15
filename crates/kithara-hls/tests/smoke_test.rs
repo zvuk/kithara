@@ -54,33 +54,35 @@ async fn test_hls_session_creation(
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS session creation with URL: {}", test_stream_url);
 
-    // Test 1: Open HLS session
-    let session = Hls::open(test_stream_url.clone(), hls_options).await?;
-    info!("HLS session opened successfully");
+    // Test 1: Open HLS source
+    let source = Hls::open(test_stream_url.clone(), hls_options).await?;
+    info!("HLS source opened successfully");
 
-    // Test 2: Get events channel (before source() consumes session)
-    let mut events_rx = session.events();
+    // Test 2: Get events channel
+    let mut events_rx = source.events();
 
-    // Test 3: Get source (consumes session)
-    let _source = session.source();
+    // Source is ready for use
+    let _source = source;
     info!("HLS source obtained successfully");
 
     // Spawn a task to consume events (prevent channel from filling up)
     let events_handle = tokio::spawn(async move {
         let mut event_count = 0;
-        while let Ok(event) = events_rx.recv().await {
-            event_count += 1;
-            if event_count <= 3 {
-                info!("Event {}: {:?}", event_count, event);
+        loop {
+            match tokio::time::timeout(Duration::from_millis(100), events_rx.recv()).await {
+                Ok(Ok(event)) => {
+                    event_count += 1;
+                    if event_count <= 3 {
+                        info!("Event {}: {:?}", event_count, event);
+                    }
+                }
+                _ => break,
             }
         }
         event_count
     });
 
-    // Give some time for events to potentially arrive
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Get event count
+    // Get event count with timeout
     let event_count = events_handle.await?;
     info!("Total events received: {}", event_count);
 
@@ -99,8 +101,7 @@ async fn test_hls_with_local_fixture(
     let url = server.url("/master.m3u8")?;
     info!("Testing HLS with local fixture at: {}", url);
 
-    let session = Hls::open(url, hls_options).await?;
-    let _source = session.source();
+    let _source = Hls::open(url, hls_options).await?;
 
     info!("Local fixture test passed");
     Ok(())
@@ -117,10 +118,9 @@ async fn test_hls_session_with_init_segments(
     let url = server.url("/master-init.m3u8")?;
     info!("Testing HLS session with init segments at URL: {}", url);
 
-    let session = Hls::open(url, hls_options).await?;
-    let _source = session.source();
+    let _source = Hls::open(url, hls_options).await?;
 
-    info!("HLS session with init segments opened successfully");
+    info!("HLS source with init segments opened successfully");
     Ok(())
 }
 
@@ -135,12 +135,12 @@ async fn test_hls_session_events_consumption(
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS session events consumption");
 
-    let session = Hls::open(test_stream_url, hls_options).await?;
+    let source = Hls::open(test_stream_url, hls_options).await?;
 
-    // Get events channel (before source() consumes session)
-    let mut events_rx = session.events();
+    // Get events channel
+    let mut events_rx = source.events();
 
-    let _source = session.source();
+    let _source = source;
 
     // Try to receive events with timeout
     let timeout = Duration::from_millis(500);
