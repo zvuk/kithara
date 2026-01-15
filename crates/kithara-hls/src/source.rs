@@ -69,13 +69,13 @@ impl Hls {
 
         // Build ABR controller.
         let abr_config = AbrConfig {
+            mode: opts.abr.mode,
             min_buffer_for_up_switch_secs: opts.abr.min_buffer_for_up_switch as f64,
             down_switch_buffer_secs: opts.abr.down_switch_buffer as f64,
             throughput_safety_factor: opts.abr.throughput_safety_factor as f64,
             up_hysteresis_ratio: opts.abr.up_hysteresis_ratio as f64,
             down_hysteresis_ratio: opts.abr.down_hysteresis_ratio as f64,
             min_switch_interval: opts.abr.min_switch_interval,
-            initial_variant_index: opts.abr.initial_variant_index,
             ..AbrConfig::default()
         };
 

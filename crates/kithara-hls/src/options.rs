@@ -21,11 +21,28 @@ pub type VariantSelector = Arc<dyn Fn(&MasterPlaylist) -> Option<usize> + Send +
 /// Callback for processing encryption keys.
 pub type KeyProcessor = Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>;
 
+/// ABR mode selection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AbrMode {
+    /// Automatic bitrate adaptation (ABR enabled).
+    /// Optionally specify initial variant index (defaults to 0).
+    Auto(Option<usize>),
+    /// Manual variant selection (ABR disabled).
+    /// Always use the specified variant index.
+    Manual(usize),
+}
+
+impl Default for AbrMode {
+    fn default() -> Self {
+        Self::Auto(None)
+    }
+}
+
 /// ABR (Adaptive Bitrate) configuration.
 #[derive(Clone, Debug)]
 pub struct AbrOptions {
-    /// Initial variant index to start playback.
-    pub initial_variant_index: Option<usize>,
+    /// ABR mode: Auto (adaptive) or Manual (fixed variant).
+    pub mode: AbrMode,
     /// Minimum buffer level (seconds) required for up-switch.
     pub min_buffer_for_up_switch: f32,
     /// Buffer level (seconds) that triggers down-switch.
@@ -43,7 +60,7 @@ pub struct AbrOptions {
 impl Default for AbrOptions {
     fn default() -> Self {
         Self {
-            initial_variant_index: Some(0),
+            mode: AbrMode::default(),
             min_buffer_for_up_switch: 10.0,
             down_switch_buffer: 5.0,
             throughput_safety_factor: 1.5,

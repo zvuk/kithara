@@ -1,6 +1,6 @@
 use std::time::{Duration, Instant};
 
-use crate::playlist::MasterPlaylist;
+use crate::{options::AbrMode, playlist::MasterPlaylist};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ThroughputSampleSource {
@@ -18,26 +18,42 @@ pub struct ThroughputSample {
 
 #[derive(Clone, Debug)]
 pub struct AbrConfig {
+    pub mode: AbrMode,
     pub min_buffer_for_up_switch_secs: f64,
     pub down_switch_buffer_secs: f64,
     pub throughput_safety_factor: f64,
     pub up_hysteresis_ratio: f64,
     pub down_hysteresis_ratio: f64,
     pub min_switch_interval: Duration,
-    pub initial_variant_index: Option<usize>,
     pub sample_window: Duration,
+}
+
+impl AbrConfig {
+    /// Get initial variant index based on mode.
+    pub fn initial_variant(&self) -> usize {
+        match self.mode {
+            AbrMode::Auto(Some(idx)) => idx,
+            AbrMode::Auto(None) => 0,
+            AbrMode::Manual(idx) => idx,
+        }
+    }
+
+    /// Check if ABR is enabled (Auto mode).
+    pub fn is_auto(&self) -> bool {
+        matches!(self.mode, AbrMode::Auto(_))
+    }
 }
 
 impl Default for AbrConfig {
     fn default() -> Self {
         Self {
+            mode: AbrMode::default(),
             min_buffer_for_up_switch_secs: 10.0,
             down_switch_buffer_secs: 5.0,
             throughput_safety_factor: 1.5,
             up_hysteresis_ratio: 1.3,
             down_hysteresis_ratio: 0.8,
             min_switch_interval: Duration::from_secs(30),
-            initial_variant_index: Some(0),
             sample_window: Duration::from_secs(30),
         }
     }

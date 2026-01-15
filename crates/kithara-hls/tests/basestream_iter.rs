@@ -6,6 +6,7 @@ use axum::{Router, routing::get};
 use futures::StreamExt;
 use kithara_assets::AssetStore;
 use kithara_hls::{
+    AbrMode,
     abr::{AbrConfig, AbrController, AbrReason},
     fetch::FetchManager,
     playlist::PlaylistManager,
@@ -31,7 +32,7 @@ fn make_fetch_and_playlist(
 
 fn make_abr(initial_variant: usize) -> AbrController {
     let mut cfg = AbrConfig::default();
-    cfg.initial_variant_index = Some(initial_variant);
+    cfg.mode = AbrMode::Auto(Some(initial_variant));
     AbrController::new(cfg, None)
 }
 
@@ -435,7 +436,7 @@ seg/v{}_2.bin
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
 
     let mut cfg = AbrConfig::default();
-    cfg.initial_variant_index = Some(2);
+    cfg.mode = AbrMode::Auto(Some(2));
     cfg.min_buffer_for_up_switch_secs = 0.0;
     cfg.down_switch_buffer_secs = 0.0;
     cfg.throughput_safety_factor = 1.0;
@@ -596,7 +597,7 @@ seg/v{}_2.bin
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
 
     let mut cfg = AbrConfig::default();
-    cfg.initial_variant_index = Some(2);
+    cfg.mode = AbrMode::Auto(Some(2));
     cfg.min_buffer_for_up_switch_secs = 0.0;
     cfg.down_switch_buffer_secs = 0.0;
     cfg.throughput_safety_factor = 1.0;

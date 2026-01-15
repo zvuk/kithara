@@ -39,6 +39,10 @@ pub fn create_stream(
         let initial_variant = abr.current_variant().load(Ordering::Acquire);
         let mut state = IterState::new(initial_variant);
 
+        // Buffer tracking: assume real-time playback consumption.
+        let playback_start = Instant::now();
+        let mut buffered_secs: f64 = 0.0;
+
         loop {
             if cancel.is_cancelled() {
                 return;
@@ -178,13 +182,21 @@ pub fn create_stream(
                                         accumulated_bytes = 0;
                                         last_report_at = now;
 
+                                        // Skip ABR decisions in Manual mode.
+                                        if !abr.is_auto() {
+                                            continue;
+                                        }
+
                                         // Check if ABR wants to switch variant.
-                                        let buffer_level = segment.duration.as_secs_f64();
+                                        // Buffer = downloaded duration - elapsed playback time.
+                                        let elapsed = playback_start.elapsed().as_secs_f64();
+                                        let buffer_level = (buffered_secs - elapsed).max(0.0);
                                         let decision = abr.decide(&variants, buffer_level, now);
                                         tracing::debug!(
                                             target = decision.target_variant_index,
                                             reason = ?decision.reason,
                                             changed = decision.changed,
+                                            buffer_level_secs = format!("{:.1}", buffer_level),
                                             "ABR: decide result"
                                         );
                                         if decision.changed {
@@ -243,6 +255,9 @@ pub fn create_stream(
                         break;
                     }
                 };
+
+                // Update buffer: segment downloaded and ready.
+                buffered_secs += segment.duration.as_secs_f64();
 
                 let _ = events.send(PipelineEvent::SegmentReady {
                     variant: state.to,

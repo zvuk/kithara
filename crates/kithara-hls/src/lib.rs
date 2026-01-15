@@ -46,8 +46,8 @@ pub use abr::{AbrDecision, AbrReason, ThroughputSample, Variant};
 pub use error::{HlsError, HlsResult};
 pub use events::HlsEvent;
 pub use options::{
-    AbrOptions, CacheOptions, HlsOptions, KeyContext, KeyOptions, KeyProcessor, NetworkOptions,
-    VariantSelector,
+    AbrMode, AbrOptions, CacheOptions, HlsOptions, KeyContext, KeyOptions, KeyProcessor,
+    NetworkOptions, VariantSelector,
 };
 pub use session::HlsSession;
 pub use source::Hls;

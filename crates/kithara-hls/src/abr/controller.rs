@@ -39,7 +39,7 @@ pub struct AbrController {
 impl AbrController {
     pub fn new(cfg: AbrConfig, variant_selector: Option<VariantSelector>) -> Self {
         let estimator = ThroughputEstimator::new(&cfg);
-        let initial_variant = cfg.initial_variant_index.unwrap_or(0);
+        let initial_variant = cfg.initial_variant();
         Self {
             cfg,
             variant_selector,
@@ -55,6 +55,11 @@ impl AbrController {
 
     pub fn set_current_variant(&mut self, variant_index: usize) {
         self.current_variant.store(variant_index, Ordering::Release);
+    }
+
+    /// Check if ABR is enabled (Auto mode).
+    pub fn is_auto(&self) -> bool {
+        self.cfg.is_auto()
     }
 
     pub fn push_throughput_sample(&mut self, sample: ThroughputSample) {
@@ -225,7 +230,7 @@ mod tests {
             min_buffer_for_up_switch_secs: 0.0,
             down_switch_buffer_secs: 0.0,
             min_switch_interval: Duration::ZERO,
-            initial_variant_index: Some(2),
+            mode: crate::options::AbrMode::Auto(Some(2)),
             ..AbrConfig::default()
         };
 
@@ -251,7 +256,7 @@ mod tests {
             throughput_safety_factor: 1.5,
             up_hysteresis_ratio: 1.3,
             min_switch_interval: Duration::ZERO,
-            initial_variant_index: Some(0),
+            mode: crate::options::AbrMode::Auto(Some(0)),
             ..AbrConfig::default()
         };
 
@@ -280,7 +285,7 @@ mod tests {
             min_switch_interval: Duration::from_secs(30),
             min_buffer_for_up_switch_secs: 0.0,
             down_switch_buffer_secs: 0.0,
-            initial_variant_index: Some(1),
+            mode: crate::options::AbrMode::Auto(Some(1)),
             ..AbrConfig::default()
         };
 
@@ -309,7 +314,7 @@ mod tests {
             min_switch_interval: Duration::ZERO,
             min_buffer_for_up_switch_secs: 0.0,
             down_switch_buffer_secs: 0.0,
-            initial_variant_index: Some(0),
+            mode: crate::options::AbrMode::Auto(Some(0)),
             ..AbrConfig::default()
         };
 
@@ -332,7 +337,7 @@ mod tests {
     fn down_switch_when_buffer_low() {
         let cfg = AbrConfig {
             min_switch_interval: Duration::ZERO,
-            initial_variant_index: Some(2),
+            mode: crate::options::AbrMode::Auto(Some(2)),
             ..AbrConfig::default()
         };
 
@@ -354,7 +359,7 @@ mod tests {
     #[test]
     fn no_change_without_estimate() {
         let cfg = AbrConfig {
-            initial_variant_index: Some(1),
+            mode: crate::options::AbrMode::Auto(Some(1)),
             ..AbrConfig::default()
         };
         let c = AbrController::new(cfg, None);

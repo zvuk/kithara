@@ -1,7 +1,7 @@
 use std::{env::args, error::Error, sync::Arc};
 
 use kithara_assets::EvictConfig;
-use kithara_hls::{CacheOptions, Hls, HlsOptions};
+use kithara_hls::{AbrMode, AbrOptions, CacheOptions, Hls, HlsOptions};
 use kithara_stream::SyncReader;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -37,6 +37,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         cache: CacheOptions {
             cache_dir: Some(temp_dir.path().to_path_buf()),
             evict_config: Some(EvictConfig::default()),
+        },
+        abr: AbrOptions {
+            mode: AbrMode::Manual(3),
+            ..Default::default()
         },
         cancel: Some(cancel.clone()),
         ..Default::default()
