@@ -49,6 +49,7 @@ impl HlsSource {
                 opts.retry_base_delay,
                 opts.max_retry_delay,
             ),
+            ..Default::default()
         });
 
         // Build managers.

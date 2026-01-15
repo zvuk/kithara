@@ -9,7 +9,7 @@ use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -21,8 +21,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .add_directive("kithara_assets=info".parse()?)
                 .add_directive(LevelFilter::INFO.into()),
         )
-        .with_line_number(true)
-        .with_file(true)
+        .with_line_number(false)
+        .with_file(false)
         .init();
 
     let url = args().nth(1).unwrap_or_else(|| {
@@ -31,7 +31,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .to_string()
     });
     let url: Url = url.parse()?;
-
     let temp_dir = TempDir::new()?;
     let assets = AssetStoreBuilder::new()
         .root_dir(temp_dir.path().to_path_buf())

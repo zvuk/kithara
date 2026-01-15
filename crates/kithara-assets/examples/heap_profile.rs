@@ -16,11 +16,18 @@ use tokio_util::sync::CancellationToken;
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+fn print_rss(label: &str) {
+    if let Some(usage) = memory_stats::memory_stats() {
+        println!("[RSS] {}: {} KB", label, usage.physical_mem / 1024);
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let _profiler = dhat::Profiler::new_heap();
 
     println!("=== Heap Profiling kithara-assets ===\n");
+    print_rss("Initial");
 
     // Scenario 1: Create store and resources
     {
@@ -82,6 +89,7 @@ async fn main() {
             stats_after_streaming.curr_blocks,
             stats_after_streaming.curr_bytes - stats_after_atomic.curr_bytes
         );
+        print_rss("After 10 streaming resources");
 
         drop(streaming_handles);
         drop(atomic_handles);
@@ -91,6 +99,7 @@ async fn main() {
             "  After dropping handles: {} bytes in {} blocks",
             stats_after_drop.curr_bytes, stats_after_drop.curr_blocks
         );
+        print_rss("After dropping handles");
     }
 
     println!();

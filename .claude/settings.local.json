@@ -19,7 +19,21 @@
       "WebFetch(domain:github.com)",
       "Bash(cargo search:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(while read frame)",
+      "Bash(do)",
+      "Bash(done)",
+      "Bash(./target/release/examples/hls_memprofile:*)",
+      "Bash(./target/release/examples/heap_profile:*)",
+      "Bash(./target/release/examples/file_memprofile:*)",
+      "Bash(# Check if we can see page cache vs application memory vm_stat)",
+      "Bash(ls:*)",
+      "Bash(pkill:*)",
+      "Bash(xcrun xctrace:*)",
+      "Bash(codesign:*)",
+      "Bash(__NEW_LINE_9e581d3e197592ce__ echo \"\")",
+      "Bash(heap:*)",
+      "Bash(__NEW_LINE_d4e1ea9a6c4dd616__ echo \"\")"
     ]
   }
 }
