@@ -38,6 +38,8 @@ pub struct SegmentStreamParams {
     pub events_tx: broadcast::Sender<HlsEvent>,
     pub cancel: CancellationToken,
     pub command_capacity: usize,
+    /// Minimum bytes to accumulate before pushing a throughput sample.
+    pub min_sample_bytes: u64,
 }
 
 /// Base layer: selects variant, iterates segments, decrypts when needed,
@@ -62,6 +64,7 @@ impl SegmentStream {
             params.cancel,
             params.events_tx,
             cmd_rx,
+            params.min_sample_bytes,
         );
 
         Self {
@@ -234,9 +237,6 @@ fn process_commands(
 // Stream creation (async generator)
 // ============================================================================
 
-/// Minimum bytes to accumulate before pushing a throughput sample.
-const MIN_SAMPLE_BYTES: u64 = 32_000; // 32KB
-
 /// Create the main segment stream.
 #[allow(clippy::too_many_arguments)]
 fn create_stream(
@@ -248,6 +248,7 @@ fn create_stream(
     cancel: CancellationToken,
     events: broadcast::Sender<HlsEvent>,
     mut cmd_rx: mpsc::Receiver<StreamCommand>,
+    min_sample_bytes: u64,
 ) -> Pin<Box<dyn Stream<Item = PipelineResult<SegmentMeta>> + Send>> {
     Box::pin(stream! {
         let initial_variant = abr.current_variant().load(Ordering::Acquire);
@@ -268,16 +269,22 @@ fn create_stream(
             let variants = match playlist_manager.variants(&master_url).await {
                 Ok(v) => v,
                 Err(e) => {
+                    let _ = events.send(HlsEvent::Error {
+                        error: e.to_string(),
+                        recoverable: false,
+                    });
                     yield Err(PipelineError::Hls(e));
                     return;
                 }
             };
 
             if state.to >= variants.len() {
-                yield Err(PipelineError::Hls(HlsError::VariantNotFound(format!(
-                    "variant {}",
-                    state.to
-                ))));
+                let err = HlsError::VariantNotFound(format!("variant {}", state.to));
+                let _ = events.send(HlsEvent::Error {
+                    error: err.to_string(),
+                    recoverable: false,
+                });
+                yield Err(PipelineError::Hls(err));
                 return;
             }
 
@@ -286,6 +293,10 @@ fn create_stream(
                 match load_variant_context(&playlist_manager, &master_url, state.to).await {
                     Ok(c) => c,
                     Err(e) => {
+                        let _ = events.send(HlsEvent::Error {
+                            error: e.to_string(),
+                            recoverable: false,
+                        });
                         yield Err(PipelineError::Hls(e));
                         return;
                     }
@@ -316,6 +327,10 @@ fn create_stream(
                         yield Ok(payload);
                     }
                     Err(e) => {
+                        let _ = events.send(HlsEvent::Error {
+                            error: e.to_string(),
+                            recoverable: false,
+                        });
                         yield Err(PipelineError::Hls(e));
                         return;
                     }
@@ -333,10 +348,12 @@ fn create_stream(
                 let segment = match var_ctx.playlist.segments.get(idx) {
                     Some(s) => s,
                     None => {
-                        yield Err(PipelineError::Hls(HlsError::SegmentNotFound(format!(
-                            "Index {}",
-                            idx
-                        ))));
+                        let err = HlsError::SegmentNotFound(format!("Index {}", idx));
+                        let _ = events.send(HlsEvent::Error {
+                            error: err.to_string(),
+                            recoverable: false,
+                        });
+                        yield Err(PipelineError::Hls(err));
                         break;
                     }
                 };
@@ -345,10 +362,12 @@ fn create_stream(
                 let segment_url = match var_ctx.media_url.join(&segment.uri) {
                     Ok(url) => url,
                     Err(e) => {
-                        yield Err(PipelineError::Hls(HlsError::InvalidUrl(format!(
-                            "Failed to resolve segment URL: {}",
-                            e
-                        ))));
+                        let err = HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e));
+                        let _ = events.send(HlsEvent::Error {
+                            error: err.to_string(),
+                            recoverable: false,
+                        });
+                        yield Err(PipelineError::Hls(err));
                         break;
                     }
                 };
@@ -360,14 +379,24 @@ fn create_stream(
                 let fetch_result = match fetch.start_fetch(&segment_url).await {
                     Ok(r) => r,
                     Err(e) => {
+                        let _ = events.send(HlsEvent::Error {
+                            error: e.to_string(),
+                            recoverable: true, // Network errors may be retryable
+                        });
                         yield Err(PipelineError::Hls(e));
                         break;
                     }
                 };
 
+                // Track total bytes for this segment.
+                let mut total_segment_bytes = 0u64;
+
                 // Determine segment length and drive fetch with ABR updates.
                 let segment_len = match fetch_result {
-                    ActiveFetchResult::Cached { bytes } => bytes,
+                    ActiveFetchResult::Cached { bytes } => {
+                        total_segment_bytes = bytes;
+                        bytes
+                    }
                     ActiveFetchResult::Active(mut active_fetch) => {
                         let mut accumulated_bytes = 0u64;
                         let mut last_report_at = fetch_start;
@@ -377,11 +406,29 @@ fn create_stream(
                             match active_fetch.next_chunk().await {
                                 Ok(Some(chunk_bytes)) => {
                                     accumulated_bytes += chunk_bytes;
+                                    total_segment_bytes += chunk_bytes;
+
+                                    // Emit download progress.
+                                    let _ = events.send(HlsEvent::DownloadProgress {
+                                        offset: total_segment_bytes,
+                                        percent: None, // Per-segment progress, no total percent
+                                    });
 
                                     // Push throughput sample when accumulated enough.
-                                    if accumulated_bytes >= MIN_SAMPLE_BYTES {
+                                    if accumulated_bytes >= min_sample_bytes {
                                         let now = Instant::now();
                                         let dur = now.duration_since(last_report_at);
+                                        let bps = if dur.as_secs_f64() > 0.0 {
+                                            accumulated_bytes as f64 / dur.as_secs_f64()
+                                        } else {
+                                            0.0
+                                        };
+
+                                        // Emit throughput sample event.
+                                        let _ = events.send(HlsEvent::ThroughputSample {
+                                            bytes_per_second: bps,
+                                        });
+
                                         let sample = ThroughputSample {
                                             bytes: accumulated_bytes,
                                             duration: dur,
@@ -391,6 +438,7 @@ fn create_stream(
                                         tracing::debug!(
                                             bytes = accumulated_bytes,
                                             duration_ms = dur.as_millis(),
+                                            bps = format!("{:.0}", bps),
                                             "ABR: pushing throughput sample"
                                         );
                                         abr.push_throughput_sample(sample);
@@ -433,6 +481,10 @@ fn create_stream(
                                 }
                                 Ok(None) => break, // Fetch complete
                                 Err(e) => {
+                                    let _ = events.send(HlsEvent::Error {
+                                        error: e.to_string(),
+                                        recoverable: false,
+                                    });
                                     yield Err(PipelineError::Hls(e));
                                     return;
                                 }
@@ -442,9 +494,18 @@ fn create_stream(
                         // Push remaining accumulated bytes.
                         if accumulated_bytes > 0 {
                             let now = Instant::now();
+                            let dur = now.duration_since(last_report_at);
+                            let bps = if dur.as_secs_f64() > 0.0 {
+                                accumulated_bytes as f64 / dur.as_secs_f64()
+                            } else {
+                                0.0
+                            };
+                            let _ = events.send(HlsEvent::ThroughputSample {
+                                bytes_per_second: bps,
+                            });
                             let sample = ThroughputSample {
                                 bytes: accumulated_bytes,
-                                duration: now.duration_since(last_report_at),
+                                duration: dur,
                                 at: now,
                                 source: ThroughputSampleSource::Network,
                             };
@@ -454,6 +515,15 @@ fn create_stream(
                         active_fetch.commit().await
                     }
                 };
+
+                // Emit segment complete event.
+                let fetch_duration = fetch_start.elapsed();
+                let _ = events.send(HlsEvent::SegmentComplete {
+                    variant: state.to,
+                    segment_index: idx,
+                    bytes_transferred: total_segment_bytes,
+                    duration: fetch_duration,
+                });
 
                 // Build and yield segment meta.
                 let meta = match build_segment_meta(
@@ -466,6 +536,10 @@ fn create_stream(
                 ) {
                     Ok(m) => m,
                     Err(e) => {
+                        let _ = events.send(HlsEvent::Error {
+                            error: e.to_string(),
+                            recoverable: false,
+                        });
                         yield Err(PipelineError::Hls(e));
                         break;
                     }
@@ -473,6 +547,13 @@ fn create_stream(
 
                 // Update buffer: segment downloaded and ready.
                 buffered_secs += segment.duration.as_secs_f64();
+
+                // Emit buffer level (available buffer = downloaded - played).
+                let elapsed = playback_start.elapsed().as_secs_f64();
+                let buffer_level = (buffered_secs - elapsed).max(0.0) as f32;
+                let _ = events.send(HlsEvent::BufferLevel {
+                    level_seconds: buffer_level,
+                });
 
                 let _ = events.send(HlsEvent::SegmentStart {
                     variant: state.to,

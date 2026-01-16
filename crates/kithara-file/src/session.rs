@@ -27,6 +27,7 @@ use crate::{
 type AssetResourceType =
     AssetResource<StreamingResource, LeaseGuard<CachedAssets<EvictAssets<DiskAssetStore>>>>;
 
+/// Progress tracker for download and playback positions.
 #[derive(Debug)]
 pub struct Progress {
     read_pos: std::sync::atomic::AtomicU64,
@@ -52,6 +53,12 @@ impl Progress {
     }
 }
 
+impl Default for Progress {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct SessionSource {
     res: AssetResourceType,
     progress: Arc<Progress>,
@@ -60,7 +67,8 @@ pub struct SessionSource {
 }
 
 impl SessionSource {
-    fn new(
+    /// Create a new session source.
+    pub(crate) fn new(
         res: AssetResourceType,
         progress: Arc<Progress>,
         events: broadcast::Sender<FileEvent>,
@@ -211,12 +219,21 @@ impl FileSession {
 
     fn spawn_download_writer(
         net_client: &HttpClient,
-        driver: &FileDriver,
+        _driver: &FileDriver,
+        state: Arc<FileStreamState>,
+        progress: Arc<Progress>,
+    ) {
+        Self::spawn_download_writer_static(net_client, state, progress);
+    }
+
+    /// Static version of spawn_download_writer for use without FileSession.
+    pub(crate) fn spawn_download_writer_static(
+        net_client: &HttpClient,
         state: Arc<FileStreamState>,
         progress: Arc<Progress>,
     ) {
         let net = net_client.clone();
-        let url = driver.url().clone();
+        let url = state.url().clone();
         let events = state.events().clone();
         let len = state.len();
         let res = state.res().clone();

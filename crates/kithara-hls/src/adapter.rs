@@ -68,6 +68,7 @@ impl HlsSource {
                         notify_clone.notify_waiters();
                     }
                     Err(e) => {
+                        // Error event is already emitted by pipeline.
                         let mut idx = index_clone.write().await;
                         idx.set_error(e.to_string());
                         drop(idx);
@@ -98,6 +99,11 @@ impl HlsSource {
     /// Subscribe to HLS events.
     pub fn events(&self) -> broadcast::Receiver<HlsEvent> {
         self.events_tx.subscribe()
+    }
+
+    /// Get the events sender (for StreamSource implementation).
+    pub(crate) fn events_tx(&self) -> &broadcast::Sender<HlsEvent> {
+        &self.events_tx
     }
 }
 
@@ -168,9 +174,17 @@ impl Source for HlsSource {
         if let Some(enc) = encryption {
             // Encrypted: use open_processed
             let ctx = DecryptContext {
-                key_url: enc.key_url,
+                key_url: enc.key_url.clone(),
                 iv: enc.iv,
             };
+
+            // Emit KeyFetch event.
+            let _ = self.events_tx.send(HlsEvent::KeyFetch {
+                key_url: enc.key_url.to_string(),
+                success: true,
+                cached: false,
+            });
+
             let res = self
                 .assets
                 .open_processed(&key, ctx)
@@ -196,14 +210,15 @@ impl Source for HlsSource {
     }
 
     async fn read_at(&self, offset: u64, buf: &mut [u8]) -> KitharaIoResult<usize, HlsError> {
-        let (segment_url, local_offset, segment_len, encryption) = {
+        let (segment_url, local_offset, segment_len, encryption, total_len) = {
             let idx = self.index.read().await;
 
             if let Some(e) = idx.error() {
                 return Err(KitharaIoError::Source(HlsError::Driver(e.to_string())));
             }
 
-            if offset >= idx.total_len() {
+            let total = idx.total_len();
+            if offset >= total {
                 return Ok(0);
             }
 
@@ -221,6 +236,7 @@ impl Source for HlsSource {
                 local_offset,
                 segment_len,
                 segment.encryption.clone(),
+                total,
             )
         };
 
@@ -228,24 +244,29 @@ impl Source for HlsSource {
         let available_in_segment = segment_len.saturating_sub(local_offset);
         let read_len = (buf.len() as u64).min(available_in_segment) as usize;
 
-        if let Some(enc) = encryption {
+        let bytes_read = if let Some(enc) = encryption {
             // Encrypted: use open_processed
             let ctx = DecryptContext {
-                key_url: enc.key_url,
+                key_url: enc.key_url.clone(),
                 iv: enc.iv,
             };
+
+            // Emit KeyFetch event (we don't know if cached, so assume success after open).
+            let _ = self.events_tx.send(HlsEvent::KeyFetch {
+                key_url: enc.key_url.to_string(),
+                success: true,
+                cached: false, // We don't track this currently
+            });
+
             let res = self
                 .assets
                 .open_processed(&key, ctx)
                 .await
                 .map_err(|e| KitharaIoError::Source(HlsError::Assets(e)))?;
 
-            let bytes_read = res
-                .read_at(local_offset, &mut buf[..read_len])
+            res.read_at(local_offset, &mut buf[..read_len])
                 .await
-                .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?;
-
-            Ok(bytes_read)
+                .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?
         } else {
             // Not encrypted: use regular streaming resource
             let res = self
@@ -254,13 +275,24 @@ impl Source for HlsSource {
                 .await
                 .map_err(|e| KitharaIoError::Source(HlsError::Assets(e)))?;
 
-            let bytes_read = res
-                .read_at(local_offset, &mut buf[..read_len])
+            res.read_at(local_offset, &mut buf[..read_len])
                 .await
-                .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?;
+                .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?
+        };
 
-            Ok(bytes_read)
-        }
+        // Emit playback progress.
+        let new_pos = offset.saturating_add(bytes_read as u64);
+        let percent = if total_len > 0 {
+            Some(((new_pos as f64 / total_len as f64) * 100.0).min(100.0) as f32)
+        } else {
+            None
+        };
+        let _ = self.events_tx.send(HlsEvent::PlaybackProgress {
+            position: new_pos,
+            percent,
+        });
+
+        Ok(bytes_read)
     }
 
     fn len(&self) -> Option<u64> {

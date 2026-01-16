@@ -274,7 +274,6 @@ where
         async_stream::stream! {
             loop {
                 let end = pos.saturating_add(chunk as u64);
-
                 let outcome = self.res.wait_range(pos..end).await;
                 let Ok(WaitOutcome::Ready) = outcome else {
                     if let Err(e) = outcome {

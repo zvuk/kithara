@@ -22,6 +22,7 @@ mod error;
 mod fetch;
 mod io;
 mod msg;
+mod unified;
 
 pub use engine::{Engine, EngineCommand, EngineHandle, EngineSource, EngineStream, WriterTask};
 pub use error::{StreamError, StreamResult};
@@ -29,3 +30,4 @@ pub use fetch::{Reader, ReaderError, Writer, WriterError};
 pub use io::{Source, SyncReader};
 pub use kithara_storage::WaitOutcome;
 pub use msg::{EngineParams, StreamMsg};
+pub use unified::{OpenedSource, Stream, StreamSource};

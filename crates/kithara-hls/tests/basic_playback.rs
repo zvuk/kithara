@@ -2,8 +2,8 @@
 
 use std::{error::Error, sync::Arc, time::Duration};
 
-use kithara_assets::EvictConfig;
-use kithara_hls::{CacheOptions, Hls, HlsOptions};
+use kithara_assets::StoreOptions;
+use kithara_hls::{Hls, HlsParams};
 use kithara_stream::SyncReader;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
@@ -28,15 +28,9 @@ fn cancel_token() -> CancellationToken {
 }
 
 #[fixture]
-fn hls_options(temp_dir: TempDir, cancel_token: CancellationToken) -> HlsOptions {
-    HlsOptions {
-        cache: CacheOptions {
-            cache_dir: Some(temp_dir.path().to_path_buf()),
-            evict_config: Some(EvictConfig::default()),
-        },
-        cancel: Some(cancel_token),
-        ..Default::default()
-    }
+fn hls_params(temp_dir: TempDir, cancel_token: CancellationToken) -> HlsParams {
+    HlsParams::new(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel_token)
 }
 
 #[fixture]
@@ -66,7 +60,7 @@ fn tracing_setup() {
 #[tokio::test]
 async fn test_basic_hls_playback(
     _tracing_setup: (),
-    hls_options: HlsOptions,
+    hls_params: HlsParams,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
@@ -74,7 +68,7 @@ async fn test_basic_hls_playback(
 
     // 1. Test: Open HLS source
     info!("Opening HLS source...");
-    let source = Hls::open(test_stream_url.clone(), hls_options).await?;
+    let source = Hls::open(test_stream_url.clone(), hls_params).await?;
     info!("HLS source opened successfully");
 
     // Start event monitor in background
@@ -115,7 +109,7 @@ async fn test_basic_hls_playback(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_session_creation(
-    hls_options: HlsOptions,
+    hls_params: HlsParams,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
@@ -126,7 +120,7 @@ async fn test_hls_session_creation(
     let test_stream_url = server.url("/master.m3u8")?;
 
     // Test source creation
-    let source = Hls::open(test_stream_url, hls_options).await?;
+    let source = Hls::open(test_stream_url, hls_params).await?;
 
     // Test events channel
     let mut events_rx = source.events();
@@ -149,7 +143,7 @@ async fn test_hls_session_creation(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_with_init_segments(
-    hls_options: HlsOptions,
+    hls_params: HlsParams,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
@@ -160,7 +154,7 @@ async fn test_hls_with_init_segments(
     let url = server.url("/master-init.m3u8")?;
     info!("Testing HLS with init segments: {}", url);
 
-    let _source = Hls::open(url, hls_options).await?;
+    let _source = Hls::open(url, hls_params).await?;
 
     info!("Stream with init segments opened successfully");
     Ok(())
@@ -182,14 +176,8 @@ async fn test_hls_with_different_options(
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS with custom options");
 
-    let options = HlsOptions {
-        cache: CacheOptions {
-            cache_dir: Some(temp_dir.path().to_path_buf()),
-            evict_config: Some(EvictConfig::default()),
-        },
-        cancel: Some(CancellationToken::new()),
-        ..Default::default()
-    };
+    let options = HlsParams::new(StoreOptions::new(temp_dir.path()))
+        .with_cancel(CancellationToken::new());
 
     // Test source creation with different options
     let _source = Hls::open(test_stream_url, options).await?;
@@ -207,7 +195,7 @@ async fn test_hls_with_different_options(
 #[tokio::test]
 async fn test_hls_invalid_url_handling(
     #[case] invalid_url: &str,
-    hls_options: HlsOptions,
+    hls_params: HlsParams,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
@@ -218,7 +206,7 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         // If URL parses, try to open HLS (should fail with network error)
-        let result = Hls::open(url, hls_options).await;
+        let result = Hls::open(url, hls_params).await;
         // Either Ok (if somehow connects) or Err (expected) is acceptable
         assert!(result.is_ok() || result.is_err());
     } else {
@@ -243,22 +231,17 @@ async fn test_hls_without_cache(temp_dir: TempDir) -> Result<(), Box<dyn Error +
     let test_stream_url = server.url("/master.m3u8")?;
 
     // Create options with very small cache to simulate limited caching
-    let hls_options = HlsOptions {
-        cache: CacheOptions {
-            cache_dir: Some(temp_dir.path().to_path_buf()),
-            evict_config: Some(EvictConfig {
-                max_assets: Some(1),
-                max_bytes: Some(1024), // 1KB cache
-            }),
-        },
-        cancel: Some(CancellationToken::new()),
-        ..Default::default()
-    };
+    let hls_params = HlsParams::new(
+        StoreOptions::new(temp_dir.path())
+            .with_max_assets(1)
+            .with_max_bytes(1024), // 1KB cache
+    )
+    .with_cancel(CancellationToken::new());
 
     info!("Testing HLS with limited cache");
 
     // Test source creation with limited cache
-    let _source = Hls::open(test_stream_url, hls_options).await?;
+    let _source = Hls::open(test_stream_url, hls_params).await?;
 
     info!("HLS source opened successfully with limited cache");
     Ok(())

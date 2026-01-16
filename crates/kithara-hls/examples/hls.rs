@@ -1,7 +1,7 @@
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_assets::EvictConfig;
-use kithara_hls::{AbrMode, AbrOptions, CacheOptions, Hls, HlsOptions};
+use kithara_assets::StoreOptions;
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
 use kithara_stream::SyncReader;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -33,21 +33,15 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let temp_dir = TempDir::new()?;
     let cancel = CancellationToken::new();
 
-    let hls_options = HlsOptions {
-        cache: CacheOptions {
-            cache_dir: Some(temp_dir.path().to_path_buf()),
-            evict_config: Some(EvictConfig::default()),
-        },
-        abr: AbrOptions {
+    let hls_params = HlsParams::new(StoreOptions::new(temp_dir.path()))
+        .with_abr(AbrOptions {
             mode: AbrMode::Manual(0),
             ..Default::default()
-        },
-        cancel: Some(cancel.clone()),
-        ..Default::default()
-    };
+        })
+        .with_cancel(cancel.clone());
 
     // Open an HLS source (async byte source).
-    let source = Hls::open(url, hls_options).await?;
+    let source = Hls::open(url, hls_params).await?;
     let events_rx = source.events();
 
     let reader = SyncReader::new(Arc::new(source), 8);

@@ -135,6 +135,7 @@ struct FileStream {
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileStreamState {
+    pub(crate) url: Url,
     pub(crate) cancel: CancellationToken,
     pub(crate) res: AssetResourceType,
     pub(crate) events: broadcast::Sender<FileEvent>,
@@ -173,11 +174,16 @@ impl FileStreamState {
         let (events, _) = broadcast::channel(64);
 
         Ok(Arc::new(FileStreamState {
+            url,
             cancel,
             res,
             events,
             len,
         }))
+    }
+
+    pub(crate) fn url(&self) -> &Url {
+        &self.url
     }
 
     pub(crate) fn res(&self) -> &AssetResourceType {

@@ -11,10 +11,13 @@
 //! # Example
 //!
 //! ```ignore
-//! use kithara_hls::{Hls, HlsOptions};
+//! use kithara_stream::Stream;
+//! use kithara_hls::{Hls, HlsParams};
+//! use kithara_assets::StoreOptions;
 //!
-//! let source = Hls::open(url, HlsOptions::default()).await?;
-//! let events_rx = source.events();
+//! let params = HlsParams::new(StoreOptions::new("/tmp/cache"));
+//! let stream = Stream::<Hls>::open(url, params).await?;
+//! let events = stream.events();  // Receiver<HlsEvent>
 //! ```
 
 // Public modules
@@ -47,8 +50,7 @@ pub use abr::{AbrDecision, AbrReason, ThroughputSample, Variant};
 pub use error::{HlsError, HlsResult};
 pub use events::HlsEvent;
 pub use options::{
-    AbrMode, AbrOptions, CacheOptions, HlsOptions, KeyContext, KeyOptions, KeyProcessor,
-    NetworkOptions, VariantSelector,
+    AbrMode, AbrOptions, HlsParams, KeyContext, KeyOptions, KeyProcessor, VariantSelector,
 };
 pub use adapter::HlsSource;
 pub use source::Hls;

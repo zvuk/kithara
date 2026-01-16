@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use kithara_assets::EvictConfig;
+use kithara_assets::StoreOptions;
+use kithara_net::NetOptions;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -39,10 +40,12 @@ impl Default for AbrMode {
 }
 
 /// ABR (Adaptive Bitrate) configuration.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct AbrOptions {
     /// ABR mode: Auto (adaptive) or Manual (fixed variant).
     pub mode: AbrMode,
+    /// Custom variant selector callback.
+    pub variant_selector: Option<VariantSelector>,
     /// Minimum buffer level (seconds) required for up-switch.
     pub min_buffer_for_up_switch: f32,
     /// Buffer level (seconds) that triggers down-switch.
@@ -55,81 +58,52 @@ pub struct AbrOptions {
     pub down_hysteresis_ratio: f32,
     /// Minimum interval between variant switches.
     pub min_switch_interval: Duration,
+    /// Minimum bytes to accumulate before pushing a throughput sample.
+    pub min_sample_bytes: u64,
 }
 
 impl Default for AbrOptions {
     fn default() -> Self {
         Self {
             mode: AbrMode::default(),
+            variant_selector: None,
             min_buffer_for_up_switch: 10.0,
             down_switch_buffer: 5.0,
             throughput_safety_factor: 1.5,
             up_hysteresis_ratio: 1.3,
             down_hysteresis_ratio: 0.8,
             min_switch_interval: Duration::from_secs(30),
+            min_sample_bytes: 32_000, // 32KB
         }
     }
-}
-
-/// Network and retry configuration.
-#[derive(Clone, Debug)]
-pub struct NetworkOptions {
-    /// Timeout for individual HTTP requests.
-    pub request_timeout: Duration,
-    /// Maximum number of retries for failed requests.
-    pub max_retries: u32,
-    /// Base delay between retries (exponential backoff).
-    pub retry_base_delay: Duration,
-    /// Maximum delay between retries.
-    pub max_retry_delay: Duration,
-}
-
-impl Default for NetworkOptions {
-    fn default() -> Self {
-        Self {
-            request_timeout: Duration::from_secs(30),
-            max_retries: 3,
-            retry_base_delay: Duration::from_millis(100),
-            max_retry_delay: Duration::from_secs(5),
-        }
-    }
-}
-
-/// Cache and storage configuration.
-#[derive(Clone, Debug, Default)]
-pub struct CacheOptions {
-    /// Directory for persistent cache storage.
-    pub cache_dir: Option<PathBuf>,
-    /// Eviction configuration for cache management.
-    pub evict_config: Option<EvictConfig>,
 }
 
 /// Encryption key handling configuration.
 #[derive(Clone, Default)]
 pub struct KeyOptions {
-    /// Custom key processor callback.
-    pub processor: Option<KeyProcessor>,
+    /// Custom key processor callback (internal, for DRM).
+    pub(crate) processor: Option<KeyProcessor>,
     /// Query parameters to append to key URLs.
     pub query_params: Option<HashMap<String, String>>,
     /// Headers to include in key requests.
     pub request_headers: Option<HashMap<String, String>>,
 }
 
-/// Configuration options for HLS playback.
+/// Unified parameters for HLS streaming.
+///
+/// Used with `Stream::<Hls>::open(url, params)` for the unified API.
 #[derive(Clone)]
-pub struct HlsOptions {
-    /// Base URL for resolving relative playlist/segment URLs.
-    pub base_url: Option<Url>,
-    /// Custom variant selector callback.
-    pub variant_selector: Option<VariantSelector>,
+pub struct HlsParams {
+    /// Storage configuration (required).
+    pub store: StoreOptions,
+    /// Network configuration (from kithara-net).
+    pub net: NetOptions,
     /// ABR (Adaptive Bitrate) configuration.
     pub abr: AbrOptions,
-    /// Network and retry configuration.
-    pub network: NetworkOptions,
-    /// Cache and storage configuration.
-    pub cache: CacheOptions,
     /// Encryption key handling configuration.
     pub keys: KeyOptions,
+    /// Base URL for resolving relative playlist/segment URLs.
+    pub base_url: Option<Url>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Capacity of the events broadcast channel.
@@ -138,18 +112,60 @@ pub struct HlsOptions {
     pub command_capacity: usize,
 }
 
-impl Default for HlsOptions {
-    fn default() -> Self {
+impl HlsParams {
+    /// Create new HLS params with the given store options.
+    pub fn new(store: StoreOptions) -> Self {
         Self {
-            base_url: None,
-            variant_selector: None,
+            store,
+            net: NetOptions::default(),
             abr: AbrOptions::default(),
-            network: NetworkOptions::default(),
-            cache: CacheOptions::default(),
             keys: KeyOptions::default(),
+            base_url: None,
             cancel: None,
             event_capacity: 32,
             command_capacity: 8,
         }
+    }
+
+    /// Set network options.
+    pub fn with_net(mut self, net: NetOptions) -> Self {
+        self.net = net;
+        self
+    }
+
+    /// Set ABR options.
+    pub fn with_abr(mut self, abr: AbrOptions) -> Self {
+        self.abr = abr;
+        self
+    }
+
+    /// Set key options.
+    pub fn with_keys(mut self, keys: KeyOptions) -> Self {
+        self.keys = keys;
+        self
+    }
+
+    /// Set base URL.
+    pub fn with_base_url(mut self, base_url: Url) -> Self {
+        self.base_url = Some(base_url);
+        self
+    }
+
+    /// Set cancellation token.
+    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
+        self.cancel = Some(cancel);
+        self
+    }
+
+    /// Set event channel capacity.
+    pub fn with_event_capacity(mut self, capacity: usize) -> Self {
+        self.event_capacity = capacity;
+        self
+    }
+
+    /// Set command channel capacity.
+    pub fn with_command_capacity(mut self, capacity: usize) -> Self {
+        self.command_capacity = capacity;
+        self
     }
 }
