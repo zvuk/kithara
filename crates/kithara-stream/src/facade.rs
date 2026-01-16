@@ -21,8 +21,7 @@ where
 }
 
 /// Result type for opening a source.
-pub type OpenResult<S, E> =
-    Result<OpenedSource<S, E>, StreamError<<S as Source>::Error>>;
+pub type OpenResult<S, E> = Result<OpenedSource<S, E>, StreamError<<S as Source>::Error>>;
 
 /// Trait for stream source factories.
 ///

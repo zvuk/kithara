@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 
 use bytes::Bytes;
-use tokio_util::sync::CancellationToken;
 
 /// Generic "data + control + events" message model.
 ///
@@ -16,22 +15,4 @@ pub enum StreamMsg<C, E> {
     Data(Bytes),
     Control(C),
     Event(E),
-}
-
-/// Engine parameters for orchestration.
-#[derive(Debug, Clone)]
-pub struct EngineParams {
-    pub cmd_channel_capacity: usize,
-    pub out_channel_capacity: usize,
-    pub cancel: CancellationToken,
-}
-
-impl Default for EngineParams {
-    fn default() -> Self {
-        Self {
-            cmd_channel_capacity: 16,
-            out_channel_capacity: 32,
-            cancel: CancellationToken::new(),
-        }
-    }
 }

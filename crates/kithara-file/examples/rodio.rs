@@ -1,7 +1,7 @@
-use std::{env::args, error::Error, sync::Arc};
+use std::{env::args, error::Error};
 
-use kithara_file::{FileEvent, FileParams, FileSource};
-use kithara_stream::{SyncReader, SyncReaderParams};
+use kithara_file::{File, FileEvent, FileParams};
+use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -29,11 +29,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     });
     let url: Url = url.parse()?;
     let params = FileParams::default();
-    let session = FileSource::open(url, params).await?;
-    let source = session.source().await?;
 
-    let mut events_rx = source.events();
-    let reader = SyncReader::new(Arc::new(source), SyncReaderParams::default());
+    let reader =
+        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default()).await?;
+    let mut events_rx = reader.events();
 
     tokio::spawn(async move {
         while let Ok(msg) = events_rx.recv().await {

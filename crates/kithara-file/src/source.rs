@@ -2,64 +2,18 @@
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetId, AssetStoreBuilder, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
-use kithara_stream::{OpenedSource, SourceFactory, StreamError};
+use kithara_stream::{OpenedSource, SourceFactory, StreamError, StreamMsg, Writer};
 use tokio::sync::broadcast;
 use url::Url;
 
 use crate::{
-    FileResult, FileSession,
-    driver::{FileStreamState, SourceError},
+    error::SourceError,
     events::FileEvent,
     options::FileParams,
-    session::{Progress, SessionSource},
+    session::{FileStreamState, Progress, SessionSource},
 };
-
-#[derive(Clone, Copy, Debug, Default)]
-pub struct FileSource;
-
-impl FileSource {
-    /// Open a file source from a URL.
-    ///
-    /// Returns `FileSession` for streaming or random-access reading.
-    ///
-    /// ## Usage
-    ///
-    /// ```ignore
-    /// use kithara_file::{FileSource, FileParams};
-    /// use kithara_assets::StoreOptions;
-    ///
-    /// let params = FileParams::new(StoreOptions::new("/tmp/cache"));
-    /// let session = FileSource::open(url, params).await?;
-    /// let source = session.source().await?;
-    /// ```
-    pub async fn open(url: Url, params: FileParams) -> FileResult<FileSession> {
-        let asset_id = AssetId::from_url(&url)?;
-        let asset_root = asset_root_for_url(&url);
-        let cancel = params.cancel.clone().unwrap_or_default();
-
-        let store = AssetStoreBuilder::new()
-            .root_dir(&params.store.cache_dir)
-            .asset_root(&asset_root)
-            .evict_config(params.store.to_evict_config())
-            .cancel(cancel.clone())
-            .build();
-
-        let net_client = HttpClient::new(params.net.clone());
-
-        let session = FileSession::new(
-            asset_id,
-            url,
-            net_client,
-            Arc::new(store),
-            cancel,
-            params.event_capacity,
-        );
-
-        Ok(session)
-    }
-}
 
 /// Marker type for file streaming with the unified `StreamSource<S>` API.
 ///
@@ -118,11 +72,7 @@ impl SourceFactory for File {
         let (events_tx, _) = broadcast::channel(params.event_capacity);
         let progress = Arc::new(Progress::new());
 
-        crate::session::FileSession::spawn_download_writer_static(
-            &net_client,
-            state.clone(),
-            progress.clone(),
-        );
+        spawn_download_writer(&net_client, state.clone(), progress.clone());
 
         let source = SessionSource::new(
             state.res().clone(),
@@ -136,4 +86,36 @@ impl SourceFactory for File {
             events_tx,
         })
     }
+}
+
+fn spawn_download_writer(
+    net_client: &HttpClient,
+    state: Arc<FileStreamState>,
+    progress: Arc<Progress>,
+) {
+    let net = net_client.clone();
+    let url = state.url().clone();
+    let events = state.events().clone();
+    let len = state.len();
+    let res = state.res().clone();
+    let cancel = state.cancel().clone();
+    let progress_dl = progress.clone();
+
+    tokio::spawn(async move {
+        let writer = Writer::<_, _, FileEvent>::new(net, url, None, res, cancel).with_event(
+            move |offset, _len| {
+                progress_dl.set_download_pos(offset);
+                let percent =
+                    len.map(|len| ((offset as f64 / len as f64) * 100.0).min(100.0) as f32);
+                FileEvent::DownloadProgress { offset, percent }
+            },
+            move |msg| {
+                if let StreamMsg::Event(ev) = msg {
+                    let _ = events.send(ev);
+                }
+            },
+        );
+
+        let _ = writer.run_with_fail().await;
+    });
 }
