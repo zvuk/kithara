@@ -4,8 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_assets::{
-    AssetId, AssetResource, AssetStore, AssetsError, CachedAssets, DiskAssetStore, EvictAssets,
-    LeaseGuard,
+    AssetId, AssetResource, AssetStore, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard,
 };
 use kithara_net::{HttpClient, NetError};
 use kithara_storage::{StreamingResource, StreamingResourceExt};
@@ -14,19 +13,20 @@ use kithara_stream::{
     StreamResult as KitharaIoResult, WaitOutcome, Writer,
 };
 use tokio::sync::{Mutex, broadcast};
+use tokio_util::sync::CancellationToken;
 use tracing::trace;
 use url::Url;
 
 use crate::{
     driver::{DriverError, FileDriver, FileStreamState, SourceError},
     events::FileEvent,
-    options::FileSourceOptions,
 };
 
 // Type aliases for complex types
 type AssetResourceType =
     AssetResource<StreamingResource, LeaseGuard<CachedAssets<EvictAssets<DiskAssetStore>>>>;
 
+/// Progress tracker for download and playback positions.
 #[derive(Debug)]
 pub struct Progress {
     read_pos: std::sync::atomic::AtomicU64,
@@ -52,6 +52,12 @@ impl Progress {
     }
 }
 
+impl Default for Progress {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct SessionSource {
     res: AssetResourceType,
     progress: Arc<Progress>,
@@ -60,7 +66,8 @@ pub struct SessionSource {
 }
 
 impl SessionSource {
-    fn new(
+    /// Create a new session source.
+    pub(crate) fn new(
         res: AssetResourceType,
         progress: Arc<Progress>,
         events: broadcast::Sender<FileEvent>,
@@ -154,15 +161,17 @@ impl FileSession {
         asset_id: AssetId,
         url: Url,
         net_client: HttpClient,
-        options: FileSourceOptions,
-        cache: Option<Arc<AssetStore>>,
+        assets: Arc<AssetStore>,
+        cancel: CancellationToken,
+        event_capacity: usize,
     ) -> Self {
         let driver = Arc::new(FileDriver::new(
             asset_id,
             url,
             net_client.clone(),
-            options,
-            cache,
+            assets,
+            cancel,
+            event_capacity,
         ));
 
         Self {
@@ -194,12 +203,14 @@ impl FileSession {
             driver.assets(),
             self.net_client.clone(),
             driver.url().clone(),
+            driver.cancel().clone(),
+            driver.event_capacity(),
         )
         .await
         .map_err(|e| FileError::Driver(DriverError::Source(e)))?;
 
         let progress = Arc::new(Progress::new());
-        Self::spawn_download_writer(&self.net_client, driver, state.clone(), progress.clone());
+        Self::spawn_download_writer(&self.net_client, state.clone(), progress.clone());
 
         Ok(SessionSource::new(
             state.res().clone(),
@@ -211,12 +222,20 @@ impl FileSession {
 
     fn spawn_download_writer(
         net_client: &HttpClient,
-        driver: &FileDriver,
+        state: Arc<FileStreamState>,
+        progress: Arc<Progress>,
+    ) {
+        Self::spawn_download_writer_static(net_client, state, progress);
+    }
+
+    /// Static version of spawn_download_writer for use without FileSession.
+    pub(crate) fn spawn_download_writer_static(
+        net_client: &HttpClient,
         state: Arc<FileStreamState>,
         progress: Arc<Progress>,
     ) {
         let net = net_client.clone();
-        let url = driver.url().clone();
+        let url = state.url().clone();
         let events = state.events().clone();
         let len = state.len();
         let res = state.res().clone();
@@ -278,7 +297,7 @@ pub enum FileError {
     #[error("Network error: {0}")]
     Net(#[from] NetError),
     #[error("Assets error: {0}")]
-    Assets(#[from] AssetsError),
+    Assets(#[from] kithara_assets::AssetsError),
 }
 
 pub type FileResult<T> = Result<T, FileError>;

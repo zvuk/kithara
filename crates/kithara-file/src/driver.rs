@@ -3,8 +3,8 @@ use std::{pin::Pin, sync::Arc};
 use bytes::Bytes;
 use futures::{Stream as FuturesStream, StreamExt, pin_mut};
 use kithara_assets::{
-    AssetId, AssetResource, AssetStore, Assets, AssetsError, CachedAssets, DiskAssetStore,
-    EvictAssets, LeaseGuard,
+    AssetId, AssetResource, AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets,
+    LeaseGuard,
 };
 use kithara_net::{HttpClient, Net, NetError};
 use kithara_storage::{ResourceStatus, StorageError, StreamingResource};
@@ -17,10 +17,7 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::{
-    events::FileEvent,
-    options::{FileSourceOptions, OptionsError},
-};
+use crate::events::FileEvent;
 
 // Type aliases for complex types
 type AssetResourceType =
@@ -34,9 +31,6 @@ pub enum DriverError {
     #[error("Stream error: {0}")]
     Stream(#[from] StreamError<SourceError>),
 
-    #[error("Options error: {0}")]
-    Options(#[from] OptionsError),
-
     #[error("Seek not supported")]
     SeekNotSupported,
 }
@@ -47,7 +41,7 @@ pub enum SourceError {
     Net(#[from] NetError),
 
     #[error("Assets error: {0}")]
-    Assets(#[from] AssetsError),
+    Assets(#[from] kithara_assets::AssetsError),
 
     #[error("Storage error: {0}")]
     Storage(#[from] StorageError),
@@ -64,8 +58,9 @@ pub struct FileDriver {
     asset_id: AssetId,
     url: Url,
     net_client: HttpClient,
-    _options: FileSourceOptions,
-    assets: Option<Arc<AssetStore>>,
+    assets: Arc<AssetStore>,
+    cancel: CancellationToken,
+    event_capacity: usize,
 }
 
 impl FileDriver {
@@ -73,20 +68,22 @@ impl FileDriver {
         asset_id: AssetId,
         url: Url,
         net_client: HttpClient,
-        options: FileSourceOptions,
-        assets: Option<Arc<AssetStore>>,
+        assets: Arc<AssetStore>,
+        cancel: CancellationToken,
+        event_capacity: usize,
     ) -> Self {
         Self {
             asset_id,
             url,
             net_client,
-            _options: options,
             assets,
+            cancel,
+            event_capacity,
         }
     }
 
-    pub fn assets(&self) -> Option<Arc<AssetStore>> {
-        self.assets.clone()
+    pub fn assets(&self) -> Arc<AssetStore> {
+        Arc::clone(&self.assets)
     }
 
     pub fn url(&self) -> &Url {
@@ -95,6 +92,14 @@ impl FileDriver {
 
     pub fn asset_id(&self) -> AssetId {
         self.asset_id
+    }
+
+    pub fn cancel(&self) -> &CancellationToken {
+        &self.cancel
+    }
+
+    pub fn event_capacity(&self) -> usize {
+        self.event_capacity
     }
 
     pub async fn stream_with_handle(
@@ -106,7 +111,9 @@ impl FileDriver {
         let source = FileStream {
             url: self.url.clone(),
             net_client: self.net_client.clone(),
-            assets: self.assets.clone(),
+            assets: Arc::clone(&self.assets),
+            cancel: self.cancel.clone(),
+            event_capacity: self.event_capacity,
             pos: 0,
         };
 
@@ -129,12 +136,15 @@ impl FileDriver {
 struct FileStream {
     url: Url,
     net_client: HttpClient,
-    assets: Option<Arc<AssetStore>>,
+    assets: Arc<AssetStore>,
+    cancel: CancellationToken,
+    event_capacity: usize,
     pos: u64,
 }
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileStreamState {
+    pub(crate) url: Url,
     pub(crate) cancel: CancellationToken,
     pub(crate) res: AssetResourceType,
     pub(crate) events: broadcast::Sender<FileEvent>,
@@ -143,20 +153,12 @@ pub(crate) struct FileStreamState {
 
 impl FileStreamState {
     pub(crate) async fn create(
-        assets: Option<Arc<AssetStore>>,
+        assets: Arc<AssetStore>,
         net_client: HttpClient,
         url: Url,
+        cancel: CancellationToken,
+        event_capacity: usize,
     ) -> Result<Arc<Self>, SourceError> {
-        let assets = assets.ok_or_else(|| {
-            SourceError::Assets(
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "assets store is required for kithara-file streaming; pass Some(AssetStore) to FileSource::open",
-                )
-                .into(),
-            )
-        })?;
-
         let headers = net_client.head(url.clone(), None).await?;
         let len = headers
             .get("content-length")
@@ -164,20 +166,24 @@ impl FileStreamState {
             .and_then(|v| v.parse::<u64>().ok());
 
         let key = (&url).into();
-        let cancel = CancellationToken::new();
         let res = assets
             .open_streaming_resource(&key)
             .await
             .map_err(SourceError::Assets)?;
 
-        let (events, _) = broadcast::channel(64);
+        let (events, _) = broadcast::channel(event_capacity);
 
         Ok(Arc::new(FileStreamState {
+            url,
             cancel,
             res,
             events,
             len,
         }))
+    }
+
+    pub(crate) fn url(&self) -> &Url {
+        &self.url
     }
 
     pub(crate) fn res(&self) -> &AssetResourceType {
@@ -213,12 +219,14 @@ impl EngineSource for FileStream {
                 + 'static,
         >,
     > {
-        let assets = self.assets.clone();
+        let assets = Arc::clone(&self.assets);
         let url = self.url.clone();
         let net_client = self.net_client.clone();
+        let cancel = self.cancel.clone();
+        let event_capacity = self.event_capacity;
 
         Box::pin(async move {
-            FileStreamState::create(assets, net_client, url)
+            FileStreamState::create(assets, net_client, url, cancel, event_capacity)
                 .await
                 .map_err(StreamError::Source)
         })
@@ -267,7 +275,6 @@ impl EngineSource for FileStream {
                     }
                     item = reader_stream.next() => {
                         let Some(item) = item else {
-                            state.cancel.cancel();
                             return;
                         };
                         match item {
@@ -285,27 +292,22 @@ impl EngineSource for FileStream {
                             Ok(StreamMsg::Control(_)) | Ok(StreamMsg::Event(_)) => {}
                             Err(StreamError::Source(ReaderError::Wait(storage_err)))
                             | Err(StreamError::Source(ReaderError::Read(storage_err))) => {
-                                state.cancel.cancel();
                                 yield Err(StreamError::Source(SourceError::Storage(storage_err)));
                                 return;
                             }
                             Err(StreamError::Source(other)) => {
-                                state.cancel.cancel();
                                 yield Err(StreamError::Source(SourceError::Reader(other.to_string())));
                                 return;
                             }
                             Err(StreamError::WriterJoin(e)) => {
-                                state.cancel.cancel();
                                 yield Err(StreamError::Source(SourceError::Reader(e)));
                                 return;
                             }
                             Err(StreamError::SeekNotSupported) | Err(StreamError::ChannelClosed) => {
-                                state.cancel.cancel();
                                 yield Err(StreamError::Source(SourceError::Reader("reader error".to_string())));
                                 return;
                             }
                             Err(StreamError::InvalidSeek) | Err(StreamError::UnknownLength) => {
-                                state.cancel.cancel();
                                 yield Err(StreamError::Source(SourceError::Reader("invalid seek or unknown length".to_string())));
                                 return;
                             }

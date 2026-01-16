@@ -38,22 +38,54 @@ pub enum StreamCommand {
     ForceVariant { variant_index: usize, from: usize },
 }
 
-/// Playback state for segment iteration.
+/// Variant switch state: tracks current variant and switch decisions.
 #[derive(Clone)]
-pub struct PlaybackState {
+pub struct VariantSwitch {
     pub from: usize,
     pub to: usize,
     pub start_segment: usize,
     pub reason: AbrReason,
 }
 
-impl PlaybackState {
+impl VariantSwitch {
     pub fn new(variant: usize) -> Self {
         Self {
             from: variant,
             to: variant,
             start_segment: 0,
             reason: AbrReason::Initial,
+        }
+    }
+
+    pub fn with_seek(current_to: usize, segment_index: usize) -> Self {
+        Self {
+            from: current_to,
+            to: current_to,
+            start_segment: segment_index,
+            reason: AbrReason::ManualOverride,
+        }
+    }
+
+    pub fn with_force_variant(variant_index: usize, from: usize) -> Self {
+        Self {
+            from,
+            to: variant_index,
+            start_segment: 0,
+            reason: AbrReason::ManualOverride,
+        }
+    }
+
+    pub fn with_abr_switch(
+        from: usize,
+        to: usize,
+        start_segment: usize,
+        reason: AbrReason,
+    ) -> Self {
+        Self {
+            from,
+            to,
+            start_segment,
+            reason,
         }
     }
 
@@ -66,40 +98,5 @@ impl PlaybackState {
         self.to = variant_index;
         self.start_segment = 0;
         self.reason = AbrReason::ManualOverride;
-    }
-
-    pub fn apply_switch(&mut self, next: &VariantSwitch) {
-        self.from = next.from;
-        self.to = next.to;
-        self.start_segment = next.start_segment;
-        self.reason = next.reason;
-    }
-}
-
-/// Variant switch decision.
-pub struct VariantSwitch {
-    pub from: usize,
-    pub to: usize,
-    pub start_segment: usize,
-    pub reason: AbrReason,
-}
-
-impl VariantSwitch {
-    pub fn from_seek(current_to: usize, segment_index: usize) -> Self {
-        Self {
-            from: current_to,
-            to: current_to,
-            start_segment: segment_index,
-            reason: AbrReason::ManualOverride,
-        }
-    }
-
-    pub fn from_force(variant_index: usize, from: usize) -> Self {
-        Self {
-            from,
-            to: variant_index,
-            start_segment: 0,
-            reason: AbrReason::ManualOverride,
-        }
     }
 }

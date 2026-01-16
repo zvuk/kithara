@@ -1,13 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
+use std::{
+    io::{Read, Seek, SeekFrom},
+    time::Duration,
+};
 
 use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::{AssetId, AssetStore, AssetStoreBuilder, Assets, EvictConfig};
-use kithara_file::{DriverError, FileError, FileSource, FileSourceOptions, SourceError};
-use kithara_storage::StreamingResourceExt;
+use kithara_assets::{AssetId, AssetStore, AssetStoreBuilder, EvictConfig, StoreOptions};
+use kithara_file::{DriverError, File, FileError, FileParams, FileSource, SourceError};
+use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -79,27 +82,32 @@ fn example_url_with_different_query() -> url::Url {
     url::Url::parse("https://example.com/audio.mp3?different=xyz").unwrap()
 }
 
-// ==================== FileSourceOptions Fixtures ====================
+// ==================== FileParams Fixtures ====================
 
 #[fixture]
-fn default_opts() -> FileSourceOptions {
-    FileSourceOptions::default()
+fn temp_dir() -> TempDir {
+    TempDir::new().unwrap()
 }
 
 #[fixture]
-fn opts_small_buffer() -> FileSourceOptions {
-    FileSourceOptions {
-        max_buffer_size: Some(16 * 1024),
-        ..Default::default()
-    }
+fn default_params(temp_dir: TempDir) -> FileParams {
+    FileParams::new(StoreOptions::new(temp_dir.path()))
 }
 
 #[fixture]
-fn opts_large_buffer() -> FileSourceOptions {
-    FileSourceOptions {
-        max_buffer_size: Some(4096 * 1024),
-        ..Default::default()
-    }
+fn params_small_buffer(temp_dir: TempDir) -> FileParams {
+    FileParams::new(StoreOptions::new(temp_dir.path())).with_max_buffer_size(16 * 1024)
+}
+
+#[fixture]
+fn params_large_buffer(temp_dir: TempDir) -> FileParams {
+    FileParams::new(StoreOptions::new(temp_dir.path())).with_max_buffer_size(4096 * 1024)
+}
+
+#[fixture]
+fn params_small_limit(temp_dir: TempDir) -> FileParams {
+    let store = StoreOptions::new(temp_dir.path()).with_max_bytes(1024); // Small limit for testing eviction
+    FileParams::new(store)
 }
 
 // ==================== Asset Store Fixtures ====================
@@ -142,11 +150,8 @@ async fn test_server() -> String {
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(5))]
-async fn open_session_creates_asset_id_from_url(
-    example_url: url::Url,
-    default_opts: FileSourceOptions,
-) {
-    let session = FileSource::open(example_url.clone(), default_opts, Some(temp_assets().await))
+async fn open_session_creates_asset_id_from_url(example_url: url::Url, default_params: FileParams) {
+    let session = FileSource::open(example_url.clone(), default_params)
         .await
         .unwrap();
 
@@ -160,13 +165,13 @@ async fn open_session_creates_asset_id_from_url(
 async fn asset_id_is_stable_without_query(
     example_url: url::Url,
     example_url_no_query: url::Url,
-    default_opts: FileSourceOptions,
+    temp_dir: TempDir,
 ) {
-    let assets = temp_assets().await;
-    let session1 = FileSource::open(example_url, default_opts.clone(), Some(assets.clone()))
-        .await
-        .unwrap();
-    let session2 = FileSource::open(example_url_no_query, default_opts, Some(assets))
+    let params1 = FileParams::new(StoreOptions::new(temp_dir.path()));
+    let params2 = FileParams::new(StoreOptions::new(temp_dir.path()));
+
+    let session1 = FileSource::open(example_url, params1).await.unwrap();
+    let session2 = FileSource::open(example_url_no_query, params2)
         .await
         .unwrap();
 
@@ -180,12 +185,11 @@ async fn asset_id_is_stable_without_query(
 #[case("https://example.com/audio.mp3?multiple=params&another=value")]
 #[tokio::test]
 #[timeout(Duration::from_secs(5))]
-async fn asset_id_is_stable_across_different_queries(#[case] url_str: &str) {
+async fn asset_id_is_stable_across_different_queries(#[case] url_str: &str, temp_dir: TempDir) {
     let url = url::Url::parse(url_str).unwrap();
-    let opts = FileSourceOptions::default();
+    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
 
-    let assets = temp_assets().await;
-    let session = FileSource::open(url, opts, Some(assets)).await.unwrap();
+    let session = FileSource::open(url, params).await.unwrap();
 
     // All should have same asset ID (without query)
     let expected_id =
@@ -199,14 +203,14 @@ async fn asset_id_is_stable_across_different_queries(#[case] url_str: &str) {
 #[case("https://different.com/audio.mp3")]
 #[tokio::test]
 #[timeout(Duration::from_secs(5))]
-async fn asset_id_differs_for_different_paths_and_domains(#[case] url_str: &str) {
+async fn asset_id_differs_for_different_paths_and_domains(
+    #[case] url_str: &str,
+    temp_dir: TempDir,
+) {
     let url = url::Url::parse(url_str).unwrap();
-    let opts = FileSourceOptions::default();
+    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
 
-    let assets = temp_assets().await;
-    let session = FileSource::open(url.clone(), opts, Some(assets))
-        .await
-        .unwrap();
+    let session = FileSource::open(url.clone(), params).await.unwrap();
     let expected_id = AssetId::from_url(&url).unwrap();
 
     assert_eq!(session.asset_id(), expected_id);
@@ -217,9 +221,8 @@ async fn asset_id_differs_for_different_paths_and_domains(#[case] url_str: &str)
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(5))]
-async fn session_returns_stream(example_url_no_query: url::Url, default_opts: FileSourceOptions) {
-    let assets = temp_assets().await;
-    let session = FileSource::open(example_url_no_query, default_opts, Some(assets))
+async fn session_returns_stream(example_url_no_query: url::Url, default_params: FileParams) {
+    let session = FileSource::open(example_url_no_query, default_params)
         .await
         .unwrap();
 
@@ -228,17 +231,43 @@ async fn session_returns_stream(example_url_no_query: url::Url, default_opts: Fi
 }
 
 #[rstest]
-#[case(default_opts())]
-#[case(opts_small_buffer())]
-#[case(opts_large_buffer())]
 #[tokio::test]
 #[timeout(Duration::from_secs(5))]
-async fn session_works_with_different_options(
+async fn session_works_with_default_options(
     example_url_no_query: url::Url,
-    #[case] opts: FileSourceOptions,
+    default_params: FileParams,
 ) {
-    let assets = temp_assets().await;
-    let session = FileSource::open(example_url_no_query, opts, Some(assets))
+    let session = FileSource::open(example_url_no_query, default_params)
+        .await
+        .unwrap();
+
+    // AssetId should be valid
+    let _asset_id = session.asset_id();
+}
+
+#[rstest]
+#[tokio::test]
+#[timeout(Duration::from_secs(5))]
+async fn session_works_with_small_buffer(
+    example_url_no_query: url::Url,
+    params_small_buffer: FileParams,
+) {
+    let session = FileSource::open(example_url_no_query, params_small_buffer)
+        .await
+        .unwrap();
+
+    // AssetId should be valid
+    let _asset_id = session.asset_id();
+}
+
+#[rstest]
+#[tokio::test]
+#[timeout(Duration::from_secs(5))]
+async fn session_works_with_large_buffer(
+    example_url_no_query: url::Url,
+    params_large_buffer: FileParams,
+) {
+    let session = FileSource::open(example_url_no_query, params_large_buffer)
         .await
         .unwrap();
 
@@ -256,18 +285,15 @@ async fn session_works_with_different_options(
 #[timeout(Duration::from_secs(10))]
 async fn stream_bytes_from_network(
     #[future] test_server: String,
-    #[future] temp_assets: AssetStore,
+    temp_dir: TempDir,
     #[case] path: &str,
     #[case] expected_data: &[u8],
-    default_opts: FileSourceOptions,
 ) {
     let server_url = test_server.await;
     let url: url::Url = format!("{}{}", server_url, path).parse().unwrap();
-    let assets = temp_assets.await;
+    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
 
-    let session = FileSource::open(url, default_opts, Some(assets))
-        .await
-        .unwrap();
+    let session = FileSource::open(url, params).await.unwrap();
 
     let mut stream = session.stream().await;
     let mut received_data = Vec::new();
@@ -285,20 +311,42 @@ async fn stream_bytes_from_network(
 }
 
 #[rstest]
-#[case(opts_small_buffer())]
-#[case(opts_large_buffer())]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-async fn stream_works_with_different_buffer_sizes(
+async fn stream_works_with_small_buffer(
     #[future] test_server: String,
-    #[future] temp_assets: AssetStore,
-    #[case] opts: FileSourceOptions,
+    params_small_buffer: FileParams,
 ) {
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
-    let assets = temp_assets.await;
 
-    let session = FileSource::open(url, opts, Some(assets)).await.unwrap();
+    let session = FileSource::open(url, params_small_buffer).await.unwrap();
+
+    let mut stream = session.stream().await;
+    let mut received_data = Vec::new();
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.expect("Stream should not error");
+        received_data.extend_from_slice(&chunk);
+    }
+
+    assert_eq!(
+        received_data,
+        b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345"
+    );
+}
+
+#[rstest]
+#[tokio::test]
+#[timeout(Duration::from_secs(10))]
+async fn stream_works_with_large_buffer(
+    #[future] test_server: String,
+    params_large_buffer: FileParams,
+) {
+    let server_url = test_server.await;
+    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+
+    let session = FileSource::open(url, params_large_buffer).await.unwrap();
 
     let mut stream = session.stream().await;
     let mut received_data = Vec::new();
@@ -323,17 +371,14 @@ async fn stream_works_with_different_buffer_sizes(
 #[timeout(Duration::from_secs(10))]
 async fn stream_seek_bytes_repositions_reader(
     #[future] test_server: String,
-    #[future] temp_assets: AssetStore,
+    temp_dir: TempDir,
     #[case] seek_pos: usize,
-    default_opts: FileSourceOptions,
 ) {
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
-    let assets = temp_assets.await;
+    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
 
-    let session = FileSource::open(url, default_opts, Some(assets))
-        .await
-        .unwrap();
+    let session = FileSource::open(url, params).await.unwrap();
 
     let mut stream = session.stream().await;
 
@@ -356,17 +401,12 @@ async fn stream_seek_bytes_repositions_reader(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-async fn stream_handles_network_errors(
-    #[future] temp_assets: AssetStore,
-    default_opts: FileSourceOptions,
-) {
+async fn stream_handles_network_errors(temp_dir: TempDir) {
     // Use a non-existent server to test error handling
     let url = url::Url::parse("http://127.0.0.1:9998/nonexistent.mp3").unwrap();
-    let assets = temp_assets.await;
+    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
 
-    let session = FileSource::open(url, default_opts, Some(assets))
-        .await
-        .unwrap();
+    let session = FileSource::open(url, params).await.unwrap();
 
     let mut stream = session.stream().await;
 
@@ -394,12 +434,12 @@ async fn stream_handles_network_errors(
 #[case("ftp://example.com/audio.mp3")]
 #[tokio::test]
 #[timeout(Duration::from_secs(5))]
-async fn open_fails_with_invalid_url(#[case] invalid_url: &str, default_opts: FileSourceOptions) {
+async fn open_fails_with_invalid_url(#[case] invalid_url: &str, temp_dir: TempDir) {
     let url = url::Url::parse(invalid_url);
 
     if let Ok(url) = url {
-        let assets = temp_assets().await;
-        let result = FileSource::open(url, default_opts, Some(assets)).await;
+        let params = FileParams::new(StoreOptions::new(temp_dir.path()));
+        let result = FileSource::open(url, params).await;
         // Depending on implementation, this might fail or succeed
         // We just verify it doesn't panic
         assert!(result.is_ok() || result.is_err());
@@ -418,18 +458,17 @@ async fn open_fails_with_invalid_url(#[case] invalid_url: &str, default_opts: Fi
 #[timeout(Duration::from_secs(30))]
 async fn cache_through_write_works(
     #[future] test_server: String,
-    #[future] temp_assets: AssetStore,
+    temp_dir: TempDir,
     #[case] path: &str,
-    default_opts: FileSourceOptions,
 ) {
     let server_url = test_server.await;
     let url: url::Url = format!("{}{}", server_url, path).parse().unwrap();
-    let assets = temp_assets.await;
+
+    let params1 = FileParams::new(StoreOptions::new(temp_dir.path()));
+    let params2 = FileParams::new(StoreOptions::new(temp_dir.path()));
 
     // First, open a session and stream data to populate cache
-    let session1 = FileSource::open(url.clone(), default_opts.clone(), Some(assets.clone()))
-        .await
-        .unwrap();
+    let session1 = FileSource::open(url.clone(), params1).await.unwrap();
 
     let mut stream1 = session1.stream().await;
     let mut received_data = Vec::new();
@@ -447,11 +486,9 @@ async fn cache_through_write_works(
     };
     assert_eq!(received_data, expected_data);
 
-    // Now create a new session with the same assets store (simulating a new playback session)
+    // Now create a new session with same params (simulating a new playback session)
     // This should read from cache without network requests
-    let session2 = FileSource::open(url.clone(), default_opts, Some(assets.clone()))
-        .await
-        .unwrap();
+    let session2 = FileSource::open(url.clone(), params2).await.unwrap();
 
     let mut stream2 = session2.stream().await;
     let mut cached_data = Vec::new();
@@ -463,25 +500,175 @@ async fn cache_through_write_works(
 
     // Verify cached data matches original
     assert_eq!(received_data, cached_data);
+}
 
-    // Verify the data is actually stored on disk
-    let resource_key = kithara_assets::ResourceKey::from(&url);
+// ==================== SyncReader<StreamSource<File>> Seek Tests ====================
 
-    // Open the streaming resource directly to verify it exists
-    let streaming_resource = assets
-        .open_streaming_resource(&resource_key)
-        .await
-        .expect("Should be able to open cached resource");
+#[rstest]
+#[case(0, b"ID3\x04\x00")]
+#[case(5, b"\x00\x00\x00\x00T")]
+#[case(10, b"estAu")]
+#[case(22, b"12345")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[timeout(Duration::from_secs(10))]
+async fn stream_file_seek_start_reads_correct_bytes(
+    #[future] test_server: String,
+    temp_dir: TempDir,
+    #[case] seek_pos: u64,
+    #[case] expected: &[u8],
+) {
+    let server_url = test_server.await;
+    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-    // Read the data from the resource using read_at since read() requires commit
-    let mut buf = vec![0u8; received_data.len()];
-    let n = streaming_resource
-        .read_at(0, &mut buf)
-        .await
-        .expect("Should read cached data");
-    buf.truncate(n);
+    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
+    let mut stream =
+        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default())
+            .await
+            .unwrap();
 
-    assert_eq!(buf, received_data);
+    let expected_len = expected.len();
+    let expected_vec = expected.to_vec();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let pos = stream.seek(SeekFrom::Start(seek_pos)).unwrap();
+        assert_eq!(pos, seek_pos);
+
+        let mut buf = vec![0u8; expected_len];
+        let n = stream.read(&mut buf).unwrap();
+        (n, buf)
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(result.0, expected_len);
+    assert_eq!(&result.1[..result.0], &expected_vec[..]);
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[timeout(Duration::from_secs(10))]
+async fn stream_file_seek_current_works(#[future] test_server: String, temp_dir: TempDir) {
+    let server_url = test_server.await;
+    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+
+    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
+    let mut stream =
+        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default())
+            .await
+            .unwrap();
+
+    tokio::task::spawn_blocking(move || {
+        // Read first 5 bytes
+        let mut buf = [0u8; 5];
+        stream.read(&mut buf).unwrap();
+        assert_eq!(&buf, b"ID3\x04\x00");
+
+        // Seek forward 5 bytes (position = 5 + 5 = 10)
+        let pos = stream.seek(SeekFrom::Current(5)).unwrap();
+        assert_eq!(pos, 10);
+
+        // Read from position 10
+        let mut buf = [0u8; 4];
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(&buf, b"estA");
+    })
+    .await
+    .unwrap();
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[timeout(Duration::from_secs(10))]
+async fn stream_file_seek_end_works(#[future] test_server: String, temp_dir: TempDir) {
+    let server_url = test_server.await;
+    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+
+    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
+    let mut stream =
+        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default())
+            .await
+            .unwrap();
+
+    tokio::task::spawn_blocking(move || {
+        // Seek from end (-5 bytes)
+        let pos = stream.seek(SeekFrom::End(-5)).unwrap();
+        // Test data: b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345" = 27 bytes
+        assert_eq!(pos, 22);
+
+        // Read last 5 bytes
+        let mut buf = [0u8; 5];
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, b"12345");
+    })
+    .await
+    .unwrap();
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[timeout(Duration::from_secs(10))]
+async fn stream_file_multiple_seeks_work(#[future] test_server: String, temp_dir: TempDir) {
+    use kithara_stream::{Source, WaitOutcome};
+
+    let server_url = test_server.await;
+    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+
+    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
+    let session = FileSource::open(url, params).await.unwrap();
+    let source = session.source().await.unwrap();
+
+    // Wait for data to be available (writer downloads in background)
+    let outcome = source.wait_range(0..27).await.unwrap();
+    assert!(matches!(outcome, WaitOutcome::Ready));
+
+    // Read from start
+    let mut buf = [0u8; 3];
+    let n = source.read_at(0, &mut buf).await.unwrap();
+    assert_eq!(n, 3);
+    assert_eq!(&buf, b"ID3");
+
+    // Read from middle (position 13 = "Audio")
+    let mut buf = [0u8; 5];
+    let n = source.read_at(13, &mut buf).await.unwrap();
+    assert_eq!(n, 5);
+    assert_eq!(&buf, b"Audio");
+
+    // Read from start again
+    let mut buf = [0u8; 3];
+    let n = source.read_at(0, &mut buf).await.unwrap();
+    assert_eq!(n, 3);
+    assert_eq!(&buf, b"ID3");
+
+    // Read at end (should return 0 bytes)
+    let len = source.len().unwrap();
+    let mut buf = [0u8; 10];
+    let n = source.read_at(len, &mut buf).await.unwrap();
+    assert_eq!(n, 0); // EOF
+}
+
+#[rstest]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[timeout(Duration::from_secs(10))]
+async fn stream_file_seek_past_eof_fails(#[future] test_server: String, temp_dir: TempDir) {
+    let server_url = test_server.await;
+    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+
+    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
+    let mut stream =
+        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default())
+            .await
+            .unwrap();
+
+    tokio::task::spawn_blocking(move || {
+        // Attempt to seek past EOF
+        let result = stream.seek(SeekFrom::Start(1000));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidInput);
+    })
+    .await
+    .unwrap();
 }
 
 #[rstest]
@@ -489,15 +676,16 @@ async fn cache_through_write_works(
 #[timeout(Duration::from_secs(30))]
 async fn cache_with_small_limit_evicts_old_data(
     #[future] test_server: String,
-    #[future] temp_assets_with_small_limit: AssetStore,
-    default_opts: FileSourceOptions,
+    params_small_limit: FileParams,
 ) {
     let server_url = test_server.await;
-    let assets = temp_assets_with_small_limit.await;
+
+    // Clone params for the second session
+    let params2 = params_small_limit.clone();
 
     // First asset - should fit in cache
     let url1: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
-    let session1 = FileSource::open(url1.clone(), default_opts.clone(), Some(assets.clone()))
+    let session1 = FileSource::open(url1.clone(), params_small_limit)
         .await
         .unwrap();
 
@@ -510,9 +698,7 @@ async fn cache_with_small_limit_evicts_old_data(
 
     // Second asset - larger, might cause eviction
     let url2: url::Url = format!("{}/large.bin", server_url).parse().unwrap();
-    let session2 = FileSource::open(url2.clone(), default_opts.clone(), Some(assets.clone()))
-        .await
-        .unwrap();
+    let session2 = FileSource::open(url2.clone(), params2).await.unwrap();
 
     let mut stream2 = session2.stream().await;
     let mut data2 = Vec::new();

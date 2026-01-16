@@ -10,7 +10,7 @@ use kithara_hls::{
     abr::{AbrConfig, AbrController, AbrReason},
     fetch::FetchManager,
     playlist::PlaylistManager,
-    stream::{SegmentMeta, SegmentStream},
+    stream::{PipelineHandle, SegmentMeta, SegmentStream, SegmentStreamParams},
 };
 use kithara_net::HttpClient;
 use rstest::rstest;
@@ -41,22 +41,23 @@ async fn build_basestream(
     initial_variant: usize,
     assets: AssetStore,
     net: HttpClient,
-) -> SegmentStream {
+) -> (PipelineHandle, SegmentStream) {
     let (fetch, playlist) = make_fetch_and_playlist(assets, net);
     let abr = make_abr(initial_variant);
     let cancel = CancellationToken::new();
     let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 
-    SegmentStream::new(
+    SegmentStream::new(SegmentStreamParams {
         master_url,
-        Arc::clone(&fetch),
-        Arc::clone(&playlist),
-        None,
-        abr,
+        fetch: Arc::clone(&fetch),
+        playlist_manager: Arc::clone(&playlist),
+        key_manager: None,
+        abr_controller: abr,
         events_tx,
         cancel,
-        8,
-    )
+        command_capacity: 8,
+        min_sample_bytes: 32_000,
+    })
 }
 
 async fn build_basestream_with_events(
@@ -64,23 +65,24 @@ async fn build_basestream_with_events(
     initial_variant: usize,
     assets: AssetStore,
     net: HttpClient,
-) -> (SegmentStream, broadcast::Receiver<HlsEvent>) {
+) -> (PipelineHandle, SegmentStream, broadcast::Receiver<HlsEvent>) {
     let (fetch, playlist) = make_fetch_and_playlist(assets, net);
     let abr = make_abr(initial_variant);
     let cancel = CancellationToken::new();
     let (events_tx, events_rx) = broadcast::channel::<HlsEvent>(32);
 
-    let stream = SegmentStream::new(
+    let (handle, stream) = SegmentStream::new(SegmentStreamParams {
         master_url,
-        Arc::clone(&fetch),
-        Arc::clone(&playlist),
-        None,
-        abr,
+        fetch: Arc::clone(&fetch),
+        playlist_manager: Arc::clone(&playlist),
+        key_manager: None,
+        abr_controller: abr,
         events_tx,
         cancel,
-        8,
-    );
-    (stream, events_rx)
+        command_capacity: 8,
+        min_sample_bytes: 32_000,
+    });
+    (handle, stream, events_rx)
 }
 
 async fn collect_all(mut stream: SegmentStream) -> Vec<SegmentMeta> {
@@ -102,7 +104,7 @@ async fn basestream_iterates_with_init_and_segments(
     let server = TestServer::new().await;
     let master_url = server.url("/master-init.m3u8").expect("url");
 
-    let stream =
+    let (_handle, stream) =
         build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
     let items = collect_all(stream).await;
 
@@ -129,12 +131,12 @@ async fn basestream_seek_restarts_from_index(assets_fixture: TestAssets, net_fix
     let server = TestServer::new().await;
     let master_url = server.url("/master.m3u8").expect("url");
 
-    let mut stream =
+    let (handle, mut stream) =
         build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
     let first = stream.next().await.expect("item").expect("ok");
     assert_eq!(first.segment_index, 0);
 
-    stream.seek(2);
+    handle.seek(2);
     let after_seek = stream.next().await.expect("item").expect("ok");
     assert_eq!(after_seek.segment_index, 2);
     assert_eq!(after_seek.variant, 0);
@@ -161,14 +163,14 @@ async fn basestream_force_variant_switches_output_and_emits_events(
     let server = TestServer::new().await;
     let master_url = server.url("/master.m3u8").expect("url");
 
-    let (mut stream, mut events) =
+    let (handle, mut stream, mut events) =
         build_basestream_with_events(master_url, 0, assets_fixture.assets().clone(), net_fixture)
             .await;
 
     let first = stream.next().await.expect("item").expect("ok");
     assert_eq!(first.variant, 0);
 
-    stream.force_variant(1);
+    handle.force_variant(1);
 
     // Event is emitted after successful variant load, which happens on next()
     let next = stream.next().await.expect("item").expect("ok");
@@ -203,14 +205,14 @@ async fn basestream_emits_abr_events_on_manual_switch(
     let server = TestServer::new().await;
     let master_url = server.url("/master.m3u8").expect("url");
 
-    let (mut stream, mut events) =
+    let (handle, mut stream, mut events) =
         build_basestream_with_events(master_url, 0, assets_fixture.assets().clone(), net_fixture)
             .await;
 
     let first = stream.next().await.expect("item").expect("ok");
     assert_eq!(first.variant, 0);
 
-    stream.force_variant(2);
+    handle.force_variant(2);
 
     // Event is emitted after successful variant load, which happens on next()
     let next = stream.next().await.expect("item").expect("ok");
@@ -247,16 +249,17 @@ async fn basestream_stops_after_cancellation(assets_fixture: TestAssets, net_fix
     let cancel = CancellationToken::new();
     let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 
-    let mut stream = SegmentStream::new(
+    let (_handle, mut stream) = SegmentStream::new(SegmentStreamParams {
         master_url,
-        Arc::clone(&fetch),
-        Arc::clone(&playlist),
-        None,
-        abr,
+        fetch: Arc::clone(&fetch),
+        playlist_manager: Arc::clone(&playlist),
+        key_manager: None,
+        abr_controller: abr,
         events_tx,
-        cancel.clone(),
-        8,
-    );
+        cancel: cancel.clone(),
+        command_capacity: 8,
+        min_sample_bytes: 32_000,
+    });
 
     let first = stream.next().await.expect("item").expect("ok");
     assert_eq!(first.segment_index, 0);
@@ -276,7 +279,7 @@ async fn basestream_pause_and_resume_continues_streaming(
     let server = TestServer::new().await;
     let master_url = server.url("/master.m3u8").expect("url");
 
-    let mut stream =
+    let (_handle, mut stream) =
         build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
 
     let first = stream.next().await.expect("item").expect("ok");
@@ -309,16 +312,17 @@ async fn basestream_reconnects_and_resumes_same_segment(
 
     let cancel1 = CancellationToken::new();
     let (events_tx1, _) = broadcast::channel::<HlsEvent>(32);
-    let mut stream1 = SegmentStream::new(
-        master_url.clone(),
-        fetch.clone(),
-        playlist.clone(),
-        None,
-        abr1,
-        events_tx1,
-        cancel1.clone(),
-        8,
-    );
+    let (_handle1, mut stream1) = SegmentStream::new(SegmentStreamParams {
+        master_url: master_url.clone(),
+        fetch: fetch.clone(),
+        playlist_manager: playlist.clone(),
+        key_manager: None,
+        abr_controller: abr1,
+        events_tx: events_tx1,
+        cancel: cancel1.clone(),
+        command_capacity: 8,
+        min_sample_bytes: 32_000,
+    });
 
     let first = stream1.next().await.expect("item").expect("ok");
     assert_eq!(first.segment_index, 0);
@@ -330,10 +334,19 @@ async fn basestream_reconnects_and_resumes_same_segment(
     let abr2 = make_abr(0);
     let cancel2 = CancellationToken::new();
     let (events_tx2, _) = broadcast::channel::<HlsEvent>(32);
-    let stream2 =
-        SegmentStream::new(master_url, fetch, playlist, None, abr2, events_tx2, cancel2, 8);
+    let (handle2, stream2) = SegmentStream::new(SegmentStreamParams {
+        master_url,
+        fetch,
+        playlist_manager: playlist,
+        key_manager: None,
+        abr_controller: abr2,
+        events_tx: events_tx2,
+        cancel: cancel2,
+        command_capacity: 8,
+        min_sample_bytes: 32_000,
+    });
 
-    stream2.seek(1);
+    handle2.seek(1);
 
     let remaining: Vec<_> = stream2
         .collect::<Vec<_>>()
@@ -491,16 +504,17 @@ seg/v{}_2.bin
     let cancel = CancellationToken::new();
     let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 
-    let mut stream = SegmentStream::new(
+    let (_handle, mut stream) = SegmentStream::new(SegmentStreamParams {
         master_url,
-        Arc::clone(&fetch),
-        Arc::clone(&playlist),
-        None,
-        abr,
+        fetch: Arc::clone(&fetch),
+        playlist_manager: Arc::clone(&playlist),
+        key_manager: None,
+        abr_controller: abr,
         events_tx,
-        cancel.clone(),
-        8,
-    );
+        cancel: cancel.clone(),
+        command_capacity: 8,
+        min_sample_bytes: 32_000,
+    });
 
     let init2 = stream.next().await.unwrap().expect("init v2");
     assert_eq!(init2.variant, 2);
@@ -655,16 +669,17 @@ seg/v{}_2.bin
     let cancel = CancellationToken::new();
     let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 
-    let base = SegmentStream::new(
+    let (_handle, base) = SegmentStream::new(SegmentStreamParams {
         master_url,
-        Arc::clone(&fetch),
-        Arc::clone(&playlist),
-        None,
-        abr,
+        fetch: Arc::clone(&fetch),
+        playlist_manager: Arc::clone(&playlist),
+        key_manager: None,
+        abr_controller: abr,
         events_tx,
         cancel,
-        8,
-    );
+        command_capacity: 8,
+        min_sample_bytes: 32_000,
+    });
     let mut stream = Box::pin(base);
 
     let init2: SegmentMeta = stream.next().await.unwrap().expect("init v2");

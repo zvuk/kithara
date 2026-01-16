@@ -18,15 +18,8 @@ use crate::{
     events::HlsEvent,
     index::{EncryptionInfo, SegmentIndex},
     playlist::EncryptionMethod,
-    stream::{SegmentMeta, SegmentStream},
+    stream::{PipelineHandle, SegmentMeta, SegmentStream},
 };
-
-/// Context for decryption callback.
-#[derive(Clone, Debug, Hash, Eq, PartialEq)]
-pub struct DecryptContext {
-    pub key_url: Url,
-    pub iv: [u8; 16],
-}
 
 /// HLS source for random-access reading.
 ///
@@ -34,16 +27,18 @@ pub struct DecryptContext {
 /// and provides event subscription.
 pub struct HlsSource {
     index: Arc<RwLock<SegmentIndex>>,
-    assets: AssetStore<DecryptContext>,
+    assets: AssetStore<EncryptionInfo>,
     notify: Arc<Notify>,
     events_tx: broadcast::Sender<HlsEvent>,
+    handle: PipelineHandle,
 }
 
 impl HlsSource {
     /// Create source from SegmentStream. Single spawn reads stream and builds index.
     pub(crate) fn new(
+        handle: PipelineHandle,
         base_stream: SegmentStream,
-        assets: AssetStore<DecryptContext>,
+        assets: AssetStore<EncryptionInfo>,
         events_tx: broadcast::Sender<HlsEvent>,
     ) -> Self {
         let index = Arc::new(RwLock::new(SegmentIndex::new()));
@@ -63,11 +58,18 @@ impl HlsSource {
                     Ok(meta) => {
                         let encryption = extract_encryption_info(&meta);
                         let mut idx = index_clone.write().await;
-                        idx.add(meta.url, meta.len, encryption);
+                        idx.add(
+                            meta.url,
+                            meta.len,
+                            meta.variant,
+                            meta.segment_index,
+                            encryption,
+                        );
                         drop(idx);
                         notify_clone.notify_waiters();
                     }
                     Err(e) => {
+                        // Error event is already emitted by pipeline.
                         let mut idx = index_clone.write().await;
                         idx.set_error(e.to_string());
                         drop(idx);
@@ -92,12 +94,23 @@ impl HlsSource {
             assets,
             notify,
             events_tx,
+            handle,
         }
     }
 
     /// Subscribe to HLS events.
     pub fn events(&self) -> broadcast::Receiver<HlsEvent> {
         self.events_tx.subscribe()
+    }
+
+    /// Get the events sender (for StreamSource implementation).
+    pub(crate) fn events_tx(&self) -> &broadcast::Sender<HlsEvent> {
+        &self.events_tx
+    }
+
+    /// Get pipeline handle for controlling playback.
+    pub fn handle(&self) -> &PipelineHandle {
+        &self.handle
     }
 }
 
@@ -134,8 +147,10 @@ impl Source for HlsSource {
     type Error = HlsError;
 
     async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome, HlsError> {
-        // First wait for segment to be in index.
+        // Wait for segment to be in index for the current variant.
         let (segment_url, local_range, encryption) = loop {
+            let current_var = self.handle.current_variant();
+
             {
                 let idx = self.index.read().await;
 
@@ -143,20 +158,25 @@ impl Source for HlsSource {
                     return Err(KitharaIoError::Source(HlsError::Driver(e.to_string())));
                 }
 
-                // Check if segment covering range.start exists.
-                if let Some(segment) = idx.find(range.start) {
-                    let local_start = range.start - segment.global_start;
-                    let local_end = (range.end - segment.global_start)
-                        .min(segment.global_end - segment.global_start);
-                    break (
-                        segment.url.clone(),
-                        local_start..local_end,
-                        segment.encryption.clone(),
-                    );
+                // Check if segment covering range.start exists for current variant.
+                if let Some(entry) = idx.find(range.start, current_var) {
+                    let local_start = range.start - entry.global_start;
+                    let local_end =
+                        (range.end - entry.global_start).min(entry.global_end - entry.global_start);
+                    break (entry.url, local_start..local_end, entry.encryption);
                 }
 
-                if idx.is_finished() {
+                // Segment not found for current variant.
+                // Try to find segment_index hint from any loaded variant.
+                let seg_idx_hint = idx.find_segment_index_for_offset(range.start);
+
+                if idx.is_finished() && seg_idx_hint.is_none() {
                     return Ok(WaitOutcome::Eof);
+                }
+
+                // If we have a hint, send seek command to pipeline.
+                if let Some(seg_idx) = seg_idx_hint {
+                    self.handle.seek(seg_idx);
                 }
             }
 
@@ -167,10 +187,18 @@ impl Source for HlsSource {
 
         if let Some(enc) = encryption {
             // Encrypted: use open_processed
-            let ctx = DecryptContext {
-                key_url: enc.key_url,
+            let ctx = EncryptionInfo {
+                key_url: enc.key_url.clone(),
                 iv: enc.iv,
             };
+
+            // Emit KeyFetch event.
+            let _ = self.events_tx.send(HlsEvent::KeyFetch {
+                key_url: enc.key_url.to_string(),
+                success: true,
+                cached: false,
+            });
+
             let res = self
                 .assets
                 .open_processed(&key, ctx)
@@ -196,31 +224,49 @@ impl Source for HlsSource {
     }
 
     async fn read_at(&self, offset: u64, buf: &mut [u8]) -> KitharaIoResult<usize, HlsError> {
-        let (segment_url, local_offset, segment_len, encryption) = {
+        let current_var = self.handle.current_variant();
+
+        let (segment_url, local_offset, segment_len, encryption, total_len) = {
             let idx = self.index.read().await;
 
             if let Some(e) = idx.error() {
                 return Err(KitharaIoError::Source(HlsError::Driver(e.to_string())));
             }
 
-            if offset >= idx.total_len() {
+            let total = idx.total_len(current_var);
+            if offset >= total && total > 0 {
                 return Ok(0);
             }
 
-            let segment = idx.find(offset).ok_or_else(|| {
-                KitharaIoError::Source(HlsError::SegmentNotFound(format!(
-                    "No segment for offset {}",
-                    offset
-                )))
-            })?;
+            // Find segment for current variant.
+            let entry = match idx.find(offset, current_var) {
+                Some(e) => e,
+                None => {
+                    // Segment not found for current variant - need to trigger seek.
+                    // First check if we have a hint from another variant.
+                    if let Some(seg_idx) = idx.find_segment_index_for_offset(offset) {
+                        drop(idx);
+                        self.handle.seek(seg_idx);
+                        // Wait for segment to be loaded and retry.
+                        self.notify.notified().await;
+                        return self.read_at(offset, buf).await;
+                    }
 
-            let local_offset = offset - segment.global_start;
-            let segment_len = segment.global_end - segment.global_start;
+                    return Err(KitharaIoError::Source(HlsError::SegmentNotFound(format!(
+                        "No segment for offset {} in variant {}",
+                        offset, current_var
+                    ))));
+                }
+            };
+
+            let local_offset = offset - entry.global_start;
+            let segment_len = entry.global_end - entry.global_start;
             (
-                segment.url.clone(),
+                entry.url,
                 local_offset,
                 segment_len,
-                segment.encryption.clone(),
+                entry.encryption,
+                total,
             )
         };
 
@@ -228,24 +274,29 @@ impl Source for HlsSource {
         let available_in_segment = segment_len.saturating_sub(local_offset);
         let read_len = (buf.len() as u64).min(available_in_segment) as usize;
 
-        if let Some(enc) = encryption {
+        let bytes_read = if let Some(enc) = encryption {
             // Encrypted: use open_processed
-            let ctx = DecryptContext {
-                key_url: enc.key_url,
+            let ctx = EncryptionInfo {
+                key_url: enc.key_url.clone(),
                 iv: enc.iv,
             };
+
+            // Emit KeyFetch event (we don't know if cached, so assume success after open).
+            let _ = self.events_tx.send(HlsEvent::KeyFetch {
+                key_url: enc.key_url.to_string(),
+                success: true,
+                cached: false, // We don't track this currently
+            });
+
             let res = self
                 .assets
                 .open_processed(&key, ctx)
                 .await
                 .map_err(|e| KitharaIoError::Source(HlsError::Assets(e)))?;
 
-            let bytes_read = res
-                .read_at(local_offset, &mut buf[..read_len])
+            res.read_at(local_offset, &mut buf[..read_len])
                 .await
-                .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?;
-
-            Ok(bytes_read)
+                .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?
         } else {
             // Not encrypted: use regular streaming resource
             let res = self
@@ -254,13 +305,24 @@ impl Source for HlsSource {
                 .await
                 .map_err(|e| KitharaIoError::Source(HlsError::Assets(e)))?;
 
-            let bytes_read = res
-                .read_at(local_offset, &mut buf[..read_len])
+            res.read_at(local_offset, &mut buf[..read_len])
                 .await
-                .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?;
+                .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?
+        };
 
-            Ok(bytes_read)
-        }
+        // Emit playback progress.
+        let new_pos = offset.saturating_add(bytes_read as u64);
+        let percent = if total_len > 0 {
+            Some(((new_pos as f64 / total_len as f64) * 100.0).min(100.0) as f32)
+        } else {
+            None
+        };
+        let _ = self.events_tx.send(HlsEvent::PlaybackProgress {
+            position: new_pos,
+            percent,
+        });
+
+        Ok(bytes_read)
     }
 
     fn len(&self) -> Option<u64> {

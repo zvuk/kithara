@@ -5,12 +5,11 @@ use std::time::Duration;
 use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig};
-use kithara_file::{FileSource, FileSourceOptions};
+use kithara_assets::StoreOptions;
+use kithara_file::{FileParams, FileSource};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio::{net::TcpListener, time::timeout};
-use tokio_util::sync::CancellationToken;
 
 // ==================== Test Server Fixtures ====================
 
@@ -130,40 +129,26 @@ impl TestServer {
     }
 }
 
-// ==================== FileSourceOptions Fixtures ====================
+// ==================== FileParams Fixtures ====================
 
 #[fixture]
-fn default_opts() -> FileSourceOptions {
-    FileSourceOptions::default()
+fn temp_dir() -> TempDir {
+    TempDir::new().unwrap()
 }
 
 #[fixture]
-fn opts_with_small_buffer() -> FileSourceOptions {
-    FileSourceOptions {
-        max_buffer_size: Some(16 * 1024),
-        ..Default::default()
-    }
+fn default_params(temp_dir: TempDir) -> FileParams {
+    FileParams::new(StoreOptions::new(temp_dir.path()))
 }
 
 #[fixture]
-fn opts_with_large_buffer() -> FileSourceOptions {
-    FileSourceOptions {
-        max_buffer_size: Some(4096 * 1024),
-        ..Default::default()
-    }
+fn params_with_small_buffer(temp_dir: TempDir) -> FileParams {
+    FileParams::new(StoreOptions::new(temp_dir.path())).with_max_buffer_size(16 * 1024)
 }
 
-// ==================== Asset Store Fixtures ====================
-
 #[fixture]
-async fn temp_assets() -> AssetStore {
-    let temp_dir = TempDir::new().unwrap();
-    AssetStoreBuilder::new()
-        .root_dir(temp_dir.path().to_path_buf())
-        .asset_root("test-file")
-        .evict_config(EvictConfig::default())
-        .cancel(CancellationToken::new())
-        .build()
+fn params_with_large_buffer(temp_dir: TempDir) -> FileParams {
+    FileParams::new(StoreOptions::new(temp_dir.path())).with_max_buffer_size(4096 * 1024)
 }
 
 // ==================== Test Cases ====================
@@ -176,18 +161,14 @@ async fn temp_assets() -> AssetStore {
 #[tokio::test]
 async fn file_stream_downloads_all_bytes_and_closes(
     #[future] test_server: TestServer,
-    #[future] temp_assets: AssetStore,
+    default_params: FileParams,
     #[case] path: &str,
     #[case] expected_data: &[u8],
-    default_opts: FileSourceOptions,
 ) {
     let server = test_server.await;
     let url = server.url(path);
-    let assets = temp_assets.await;
 
-    let session = FileSource::open(url, default_opts, Some(assets))
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     let mut stream = session.stream().await;
     let mut received_data = Vec::new();
@@ -208,18 +189,14 @@ async fn file_stream_downloads_all_bytes_and_closes(
 #[tokio::test]
 async fn file_stream_downloads_chunked_content_and_closes(
     #[future] test_server_with_chunked: TestServer,
-    #[future] temp_assets: AssetStore,
+    default_params: FileParams,
     #[case] path: &str,
     #[case] expected_data: &[u8],
-    default_opts: FileSourceOptions,
 ) {
     let server = test_server_with_chunked.await;
     let url = server.url(path);
-    let assets = temp_assets.await;
 
-    let session = FileSource::open(url, default_opts, Some(assets))
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     let mut stream = session.stream().await;
     let mut received_data = Vec::new();
@@ -240,17 +217,13 @@ async fn file_stream_downloads_chunked_content_and_closes(
 #[timeout(Duration::from_secs(10))]
 async fn file_receiver_drop_cancels_driver(
     #[future] test_server: TestServer,
-    #[future] temp_assets: AssetStore,
+    default_params: FileParams,
     #[case] path: &str,
-    default_opts: FileSourceOptions,
 ) {
     let server = test_server.await;
     let url = server.url(path);
-    let assets = temp_assets.await;
 
-    let session = FileSource::open(url, default_opts, Some(assets))
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Create stream and read one chunk
     let mut stream = session.stream().await;
@@ -277,17 +250,13 @@ async fn file_receiver_drop_cancels_driver(
 #[timeout(Duration::from_secs(10))]
 async fn multiple_streams_from_same_session(
     #[future] test_server: TestServer,
-    #[future] temp_assets: AssetStore,
+    default_params: FileParams,
     #[case] path: &str,
-    default_opts: FileSourceOptions,
 ) {
     let server = test_server.await;
     let url = server.url(path);
-    let assets = temp_assets.await;
 
-    let session = FileSource::open(url, default_opts, Some(assets))
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Create first stream and read some data
     let mut stream1 = session.stream().await;
@@ -310,20 +279,18 @@ async fn multiple_streams_from_same_session(
 }
 
 #[rstest]
-#[case(opts_with_small_buffer())]
-#[case(opts_with_large_buffer())]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-async fn file_stream_works_with_different_buffer_sizes(
+async fn file_stream_works_with_small_buffer(
     #[future] test_server: TestServer,
-    #[future] temp_assets: AssetStore,
-    #[case] opts: FileSourceOptions,
+    params_with_small_buffer: FileParams,
 ) {
     let server = test_server.await;
     let url = server.url("/test.mp3");
-    let assets = temp_assets.await;
 
-    let session = FileSource::open(url, opts, Some(assets)).await.unwrap();
+    let session = FileSource::open(url, params_with_small_buffer)
+        .await
+        .unwrap();
 
     let mut stream = session.stream().await;
     let mut received_data = Vec::new();
@@ -342,18 +309,39 @@ async fn file_stream_works_with_different_buffer_sizes(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-async fn seek_roundtrip_correctness(
+async fn file_stream_works_with_large_buffer(
     #[future] test_server: TestServer,
-    #[future] temp_assets: AssetStore,
-    default_opts: FileSourceOptions,
+    params_with_large_buffer: FileParams,
 ) {
     let server = test_server.await;
     let url = server.url("/test.mp3");
-    let assets = temp_assets.await;
 
-    let session = FileSource::open(url, default_opts, Some(assets))
+    let session = FileSource::open(url, params_with_large_buffer)
         .await
         .unwrap();
+
+    let mut stream = session.stream().await;
+    let mut received_data = Vec::new();
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.expect("Stream should not error");
+        received_data.extend_from_slice(&chunk);
+    }
+
+    assert_eq!(
+        received_data,
+        b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345"
+    );
+}
+
+#[rstest]
+#[tokio::test]
+#[timeout(Duration::from_secs(10))]
+async fn seek_roundtrip_correctness(#[future] test_server: TestServer, default_params: FileParams) {
+    let server = test_server.await;
+    let url = server.url("/test.mp3");
+
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Start streaming first
     let mut stream = session.stream().await;
@@ -399,17 +387,13 @@ async fn seek_roundtrip_correctness(
 #[timeout(Duration::from_secs(10))]
 async fn seek_variants_not_supported(
     #[future] test_server: TestServer,
-    #[future] temp_assets: AssetStore,
+    default_params: FileParams,
     #[case] seek_pos: u64,
-    default_opts: FileSourceOptions,
 ) {
     let server = test_server.await;
     let url = server.url("/test.mp3");
-    let assets = temp_assets.await;
 
-    let session = FileSource::open(url, default_opts, Some(assets))
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Start streaming first
     let mut stream = session.stream().await;
@@ -454,16 +438,12 @@ async fn seek_variants_not_supported(
 #[timeout(Duration::from_secs(10))]
 async fn cancel_behavior_drop_driven(
     #[future] test_server: TestServer,
-    #[future] temp_assets: AssetStore,
-    default_opts: FileSourceOptions,
+    default_params: FileParams,
 ) {
     let server = test_server.await;
     let url = server.url("/test.mp3");
-    let assets = temp_assets.await;
 
-    let session = FileSource::open(url, default_opts, Some(assets))
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Create stream and read some bytes
     let mut stream = session.stream().await;
@@ -507,20 +487,16 @@ async fn cancel_behavior_drop_driven(
 #[timeout(Duration::from_secs(10))]
 async fn seek_contract_invalid_position(
     #[future] test_server: TestServer,
-    #[future] temp_assets: AssetStore,
+    default_params: FileParams,
     #[case] seek_pos: u64,
-    default_opts: FileSourceOptions,
 ) {
     // This test documents the expected behavior for invalid seek positions.
     // Currently, seek is not implemented, so we test the error paths.
 
     let server = test_server.await;
     let url = server.url("/test.mp3");
-    let assets = temp_assets.await;
 
-    let session = FileSource::open(url, default_opts, Some(assets))
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Start streaming first
     let mut stream = session.stream().await;
@@ -550,10 +526,6 @@ async fn seek_contract_invalid_position(
         ))) => {
             // Channel closed - driver might have terminated
         }
-        // TODO: Once seek is implemented, we should also accept:
-        // Err(kithara_file::FileError::Driver(kithara_file::DriverError::Options(
-        //     kithara_file::OptionsError::InvalidSeekPosition(_)
-        // )))
         other => panic!(
             "Expected SeekNotSupported, DriverStopped, or ChannelClosed error, got: {:?}",
             other
@@ -567,7 +539,7 @@ async fn seek_contract_invalid_position(
 #[tokio::test]
 #[timeout(Duration::from_secs(5))]
 #[ignore = "rewrite for kithara-assets + kithara-storage offline semantics"]
-async fn file_offline_replays_from_cache(_default_opts: FileSourceOptions) {
+async fn file_offline_replays_from_cache(_default_params: FileParams) {
     // Legacy test body intentionally removed. The new offline replay contract is:
     // - resources addressed as <cache_root>/<asset_root>/<rel_path>
     // - small objects via AtomicResource (whole-object read/write, atomic replace)

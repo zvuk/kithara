@@ -24,6 +24,57 @@ use crate::{
     processing::{ProcessFn, ProcessedResource, ProcessingAssets},
 };
 
+/// Simplified storage options for creating an asset store.
+///
+/// Used by higher-level crates (kithara-file, kithara-hls) for unified configuration.
+/// This provides a user-friendly API that hides internal details like `asset_root`.
+#[derive(Clone, Debug)]
+pub struct StoreOptions {
+    /// Directory for persistent cache storage (required).
+    pub cache_dir: PathBuf,
+    /// Maximum number of assets to keep (soft cap for LRU eviction).
+    pub max_assets: Option<usize>,
+    /// Maximum bytes to store (soft cap for LRU eviction).
+    pub max_bytes: Option<u64>,
+}
+
+impl Default for StoreOptions {
+    fn default() -> Self {
+        Self::new(std::env::temp_dir().join("kithara"))
+    }
+}
+
+impl StoreOptions {
+    /// Create new store options with the given cache directory.
+    pub fn new(cache_dir: impl Into<PathBuf>) -> Self {
+        Self {
+            cache_dir: cache_dir.into(),
+            max_assets: None,
+            max_bytes: None,
+        }
+    }
+
+    /// Set maximum number of assets to keep.
+    pub fn with_max_assets(mut self, max: usize) -> Self {
+        self.max_assets = Some(max);
+        self
+    }
+
+    /// Set maximum bytes to store.
+    pub fn with_max_bytes(mut self, max: u64) -> Self {
+        self.max_bytes = Some(max);
+        self
+    }
+
+    /// Convert to internal EvictConfig.
+    pub fn to_evict_config(&self) -> EvictConfig {
+        EvictConfig {
+            max_assets: self.max_assets,
+            max_bytes: self.max_bytes,
+        }
+    }
+}
+
 type InnerStore = LeaseAssets<CachedAssets<EvictAssets<DiskAssetStore>>>;
 
 /// Ready-to-use asset store with optional processing layer.
@@ -56,9 +107,8 @@ where
         process_fn: Option<ProcessFn<Ctx>>,
     ) -> Self {
         let inner = LeaseAssets::new(base, cancel);
-        let processing = process_fn.map(|f| {
-            Arc::new(ProcessingAssets::new(Arc::new(inner.clone()), f))
-        });
+        let processing =
+            process_fn.map(|f| Arc::new(ProcessingAssets::new(Arc::new(inner.clone()), f)));
         Self {
             inner,
             processing,
@@ -82,7 +132,10 @@ where
         key: &ResourceKey,
         ctx: Ctx,
     ) -> AssetsResult<Arc<ProcessedResource<<InnerStore as Assets>::StreamingRes, Ctx>>> {
-        let processing = self.processing.as_ref().ok_or(crate::AssetsError::InvalidKey)?;
+        let processing = self
+            .processing
+            .as_ref()
+            .ok_or(crate::AssetsError::InvalidKey)?;
         processing.open_processed(key, ctx).await
     }
 
