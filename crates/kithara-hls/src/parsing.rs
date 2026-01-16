@@ -9,10 +9,6 @@ use hls_m3u8::{
 
 use crate::HlsResult;
 
-// ============================================================================
-// Type definitions
-// ============================================================================
-
 /// Identifies a variant within a parsed master playlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VariantId(pub usize);
@@ -138,10 +134,6 @@ pub struct MediaSegment {
     /// Optional encryption information effective for this segment.
     pub key: Option<SegmentKey>,
 }
-
-// ============================================================================
-// Parsing functions
-// ============================================================================
 
 /// Parses a master playlist (M3U8) into [`MasterPlaylist`].
 pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {

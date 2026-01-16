@@ -10,7 +10,8 @@ use url::Url;
 
 use crate::{
     abr::{AbrConfig, AbrController},
-    adapter::{DecryptContext, HlsSource},
+    adapter::HlsSource,
+    index::EncryptionInfo,
     error::{HlsError, HlsResult},
     events::HlsEvent,
     fetch::FetchManager,
@@ -71,9 +72,9 @@ impl Hls {
         ));
 
         // Build asset store with decryption callback.
-        let decrypt_fn: ProcessFn<DecryptContext> = {
+        let decrypt_fn: ProcessFn<EncryptionInfo> = {
             let km = Arc::clone(&key_manager);
-            Arc::new(move |bytes, ctx: DecryptContext| {
+            Arc::new(move |bytes, ctx: EncryptionInfo| {
                 let km = Arc::clone(&km);
                 Box::pin(async move {
                     km.decrypt(&ctx.key_url, Some(ctx.iv), bytes)
@@ -109,7 +110,7 @@ impl Hls {
         let (events_tx, _) = broadcast::channel::<HlsEvent>(params.event_capacity);
 
         // Build SegmentStream.
-        let base_stream = SegmentStream::new(SegmentStreamParams {
+        let (handle, base_stream) = SegmentStream::new(SegmentStreamParams {
             master_url: url,
             fetch: Arc::clone(&fetch_manager),
             playlist_manager,
@@ -121,7 +122,7 @@ impl Hls {
             min_sample_bytes: params.abr.min_sample_bytes,
         });
 
-        Ok(HlsSource::new(base_stream, assets, events_tx))
+        Ok(HlsSource::new(handle, base_stream, assets, events_tx))
     }
 }
 

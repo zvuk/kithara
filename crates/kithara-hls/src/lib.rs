@@ -53,4 +53,5 @@ pub use options::{
     AbrMode, AbrOptions, HlsParams, KeyContext, KeyOptions, KeyProcessor, VariantSelector,
 };
 pub use adapter::HlsSource;
+pub use index::EncryptionInfo;
 pub use source::Hls;

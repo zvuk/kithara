@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use super::types::{
-    PipelineError, PipelineResult, PlaybackState, SegmentMeta, StreamCommand, VariantSwitch,
+    PipelineError, PipelineResult, VariantSwitch, SegmentMeta, StreamCommand,
 };
 use crate::{
     HlsError, HlsResult,
@@ -42,38 +42,15 @@ pub struct SegmentStreamParams {
     pub min_sample_bytes: u64,
 }
 
-/// Base layer: selects variant, iterates segments, decrypts when needed,
-/// responds to commands (seek/force), publishes events.
-pub struct SegmentStream {
+/// Handle for controlling the pipeline from HlsSource.
+/// Can be cloned and used independently from the stream.
+#[derive(Clone)]
+pub struct PipelineHandle {
     cmd_tx: mpsc::Sender<StreamCommand>,
     current_variant: Arc<AtomicUsize>,
-    inner: Pin<Box<dyn Stream<Item = PipelineResult<SegmentMeta>> + Send>>,
 }
 
-impl SegmentStream {
-    pub fn new(params: SegmentStreamParams) -> Self {
-        let (cmd_tx, cmd_rx) = mpsc::channel(params.command_capacity);
-        let current_variant = params.abr_controller.current_variant();
-
-        let inner = create_stream(
-            params.master_url,
-            params.fetch,
-            params.playlist_manager,
-            params.key_manager,
-            params.abr_controller,
-            params.cancel,
-            params.events_tx,
-            cmd_rx,
-            params.min_sample_bytes,
-        );
-
-        Self {
-            cmd_tx,
-            current_variant,
-            inner,
-        }
-    }
-
+impl PipelineHandle {
     /// Seek to a specific segment index.
     pub fn seek(&self, segment_index: usize) {
         let _ = self.cmd_tx.try_send(StreamCommand::Seek { segment_index });
@@ -91,6 +68,40 @@ impl SegmentStream {
     /// Get current variant index.
     pub fn current_variant(&self) -> usize {
         self.current_variant.load(Ordering::SeqCst)
+    }
+}
+
+/// Base layer: selects variant, iterates segments, decrypts when needed,
+/// responds to commands (seek/force), publishes events.
+pub struct SegmentStream {
+    inner: Pin<Box<dyn Stream<Item = PipelineResult<SegmentMeta>> + Send>>,
+}
+
+impl SegmentStream {
+    /// Create a new segment stream.
+    /// Returns a handle for controlling the pipeline and the stream itself.
+    pub fn new(params: SegmentStreamParams) -> (PipelineHandle, Self) {
+        let (cmd_tx, cmd_rx) = mpsc::channel(params.command_capacity);
+        let current_variant = params.abr_controller.current_variant();
+
+        let handle = PipelineHandle {
+            cmd_tx,
+            current_variant: Arc::clone(&current_variant),
+        };
+
+        let inner = create_stream(
+            params.master_url,
+            params.fetch,
+            params.playlist_manager,
+            params.key_manager,
+            params.abr_controller,
+            params.cancel,
+            params.events_tx,
+            cmd_rx,
+            params.min_sample_bytes,
+        );
+
+        (handle, Self { inner })
     }
 }
 
@@ -195,9 +206,10 @@ async fn fetch_init_segment(
 // ============================================================================
 
 /// Process pending commands from the command channel.
+/// Returns new state if a switch is needed.
 fn process_commands(
     cmd_rx: &mut mpsc::Receiver<StreamCommand>,
-    state: &mut PlaybackState,
+    state: &mut VariantSwitch,
     abr: &mut AbrController,
     process_all: bool,
 ) -> Option<VariantSwitch> {
@@ -209,7 +221,7 @@ fn process_commands(
                 if process_all {
                     state.apply_seek(segment_index);
                 } else {
-                    result = Some(VariantSwitch::from_seek(state.to, segment_index));
+                    result = Some(VariantSwitch::with_seek(state.to, segment_index));
                 }
             }
             StreamCommand::ForceVariant {
@@ -220,7 +232,7 @@ fn process_commands(
                 if process_all {
                     state.apply_force_variant(variant_index, from);
                 } else {
-                    result = Some(VariantSwitch::from_force(variant_index, from));
+                    result = Some(VariantSwitch::with_force_variant(variant_index, from));
                 }
             }
         }
@@ -252,7 +264,7 @@ fn create_stream(
 ) -> Pin<Box<dyn Stream<Item = PipelineResult<SegmentMeta>> + Send>> {
     Box::pin(stream! {
         let initial_variant = abr.current_variant().load(Ordering::Acquire);
-        let mut state = PlaybackState::new(initial_variant);
+        let mut state = VariantSwitch::new(initial_variant);
 
         // Buffer tracking: assume real-time playback consumption.
         let playback_start = Instant::now();
@@ -470,12 +482,12 @@ fn create_stream(
                                                 to_variant: decision.target_variant_index,
                                                 reason: decision.reason,
                                             });
-                                            switch = Some(VariantSwitch {
+                                            switch = Some(VariantSwitch::with_abr_switch(
                                                 from,
-                                                to: decision.target_variant_index,
-                                                start_segment: idx.saturating_add(1),
-                                                reason: decision.reason,
-                                            });
+                                                decision.target_variant_index,
+                                                idx.saturating_add(1),
+                                                decision.reason,
+                                            ));
                                         }
                                     }
                                 }
@@ -573,7 +585,7 @@ fn create_stream(
             }
 
             if let Some(sw) = switch {
-                state.apply_switch(&sw);
+                state = sw;
                 continue;
             }
 
