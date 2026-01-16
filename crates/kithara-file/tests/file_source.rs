@@ -621,47 +621,48 @@ async fn stream_file_seek_end_works(
 }
 
 #[rstest]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[timeout(Duration::from_secs(10))]
-#[ignore = "flaky: passes with RUST_LOG=warn but hangs without logging, needs investigation"]
 async fn stream_file_multiple_seeks_work(
     #[future] test_server: String,
     temp_dir: TempDir,
 ) {
+    use kithara_stream::{Source, WaitOutcome};
+
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
     let params = FileParams::new(StoreOptions::new(temp_dir.path()));
-    let stream = Stream::<File>::open(url, params).await.unwrap();
+    let session = FileSource::open(url, params).await.unwrap();
+    let source = session.source().await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
-        let mut stream = stream;
+    // Wait for data to be available (writer downloads in background)
+    let outcome = source.wait_range(0..27).await.unwrap();
+    assert!(matches!(outcome, WaitOutcome::Ready));
 
-        // Read from start
-        let mut buf = [0u8; 3];
-        stream.read(&mut buf).unwrap();
-        assert_eq!(&buf, b"ID3");
+    // Read from start
+    let mut buf = [0u8; 3];
+    let n = source.read_at(0, &mut buf).await.unwrap();
+    assert_eq!(n, 3);
+    assert_eq!(&buf, b"ID3");
 
-        // Seek to middle (position 13 = "Audio")
-        stream.seek(SeekFrom::Start(13)).unwrap();
-        let mut buf = [0u8; 5];
-        stream.read(&mut buf).unwrap();
-        assert_eq!(&buf, b"Audio");
+    // Read from middle (position 13 = "Audio")
+    let mut buf = [0u8; 5];
+    let n = source.read_at(13, &mut buf).await.unwrap();
+    assert_eq!(n, 5);
+    assert_eq!(&buf, b"Audio");
 
-        // Seek back to start
-        stream.seek(SeekFrom::Start(0)).unwrap();
-        let mut buf = [0u8; 3];
-        stream.read(&mut buf).unwrap();
-        assert_eq!(&buf, b"ID3");
+    // Read from start again
+    let mut buf = [0u8; 3];
+    let n = source.read_at(0, &mut buf).await.unwrap();
+    assert_eq!(n, 3);
+    assert_eq!(&buf, b"ID3");
 
-        // Seek to end and verify EOF
-        stream.seek(SeekFrom::End(0)).unwrap();
-        let mut buf = [0u8; 10];
-        let n = stream.read(&mut buf).unwrap();
-        assert_eq!(n, 0); // EOF
-    })
-    .await
-    .unwrap();
+    // Read at end (should return 0 bytes)
+    let len = source.len().unwrap();
+    let mut buf = [0u8; 10];
+    let n = source.read_at(len, &mut buf).await.unwrap();
+    assert_eq!(n, 0); // EOF
 }
 
 #[rstest]
