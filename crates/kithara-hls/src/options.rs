@@ -91,7 +91,7 @@ pub struct KeyOptions {
 
 /// Unified parameters for HLS streaming.
 ///
-/// Used with `Stream::<Hls>::open(url, params)` for the unified API.
+/// Used with `StreamSource::<Hls>::open(url, params)` for the unified API.
 #[derive(Clone)]
 pub struct HlsParams {
     /// Storage configuration (required).
@@ -110,6 +110,12 @@ pub struct HlsParams {
     pub event_capacity: usize,
     /// Capacity of the command mpsc channel.
     pub command_capacity: usize,
+}
+
+impl Default for HlsParams {
+    fn default() -> Self {
+        Self::new(StoreOptions::default())
+    }
 }
 
 impl HlsParams {

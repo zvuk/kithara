@@ -78,7 +78,7 @@ pub struct SyncReaderParams {
 impl Default for SyncReaderParams {
     fn default() -> Self {
         Self {
-            chunk_size: 64 * 1024,  // 64KB
+            chunk_size: 64 * 1024, // 64KB
             prefetch_chunks: 4,
         }
     }
@@ -191,7 +191,12 @@ impl<S: Source> PrefetchWorker<S> {
         match read_result {
             Ok(n) => {
                 buf.truncate(n);
-                trace!(file_pos = self.read_pos, bytes = n, epoch = self.epoch, "Worker: prefetched");
+                trace!(
+                    file_pos = self.read_pos,
+                    bytes = n,
+                    epoch = self.epoch,
+                    "Worker: prefetched"
+                );
                 if !self.send_chunk(buf, n == 0).await {
                     return PrefetchResult::Stop;
                 }
@@ -292,8 +297,7 @@ where
         let prefetch_chunks = params.prefetch_chunks.max(2);
         trace!(
             prefetch_chunks,
-            chunk_size,
-            "SyncReader::new (spawning prefetch worker)"
+            chunk_size, "SyncReader::new (spawning prefetch worker)"
         );
 
         let (cmd_tx, cmd_rx) = kanal::bounded_async::<WorkerCmd>(4);
@@ -319,6 +323,11 @@ where
 
     pub fn into_source(self) -> Arc<S> {
         self.source
+    }
+
+    /// Get reference to the underlying source.
+    pub(crate) fn source_ref(&self) -> &S {
+        &self.source
     }
 
     /// Wait for and consume data from prefetch buffer.

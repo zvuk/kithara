@@ -4,35 +4,42 @@ use std::sync::Arc;
 
 use kithara_assets::{AssetStoreBuilder, ProcessFn, asset_root_for_url};
 use kithara_net::HttpClient;
-use kithara_stream::{OpenedSource, StreamError, StreamSource};
+use kithara_stream::{OpenedSource, SourceFactory, StreamError};
 use tokio::sync::broadcast;
 use url::Url;
 
 use crate::{
     abr::{AbrConfig, AbrController},
     adapter::HlsSource,
-    index::EncryptionInfo,
     error::{HlsError, HlsResult},
     events::HlsEvent,
     fetch::FetchManager,
+    index::EncryptionInfo,
     keys::KeyManager,
     options::HlsParams,
     playlist::PlaylistManager,
     stream::{SegmentStream, SegmentStreamParams},
 };
 
-/// Marker type for HLS streaming with the unified `Stream<S>` API.
+/// Marker type for HLS streaming with the unified `StreamSource<S>` API.
 ///
 /// ## Usage
 ///
 /// ```ignore
-/// use kithara_stream::Stream;
+/// use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
 /// use kithara_hls::{Hls, HlsParams};
-/// use kithara_assets::StoreOptions;
 ///
-/// let params = HlsParams::new(StoreOptions::new("/tmp/cache"));
-/// let stream = Stream::<Hls>::open(url, params).await?;
-/// let events = stream.events();  // Receiver<HlsEvent>
+/// // Async source with events
+/// let source = StreamSource::<Hls>::open(url, HlsParams::default()).await?;
+/// let events = source.events();  // Receiver<HlsEvent>
+///
+/// // Sync reader for decoders (Read + Seek)
+/// let reader = SyncReader::<StreamSource<Hls>>::open(
+///     url,
+///     HlsParams::default(),
+///     SyncReaderParams::default()
+/// ).await?;
+/// let events = reader.events();
 /// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Hls;
@@ -126,7 +133,7 @@ impl Hls {
     }
 }
 
-impl StreamSource for Hls {
+impl SourceFactory for Hls {
     type Params = HlsParams;
     type Event = HlsEvent;
     type SourceImpl = HlsSource;

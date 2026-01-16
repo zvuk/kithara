@@ -143,14 +143,12 @@ fn default_params(temp_dir: TempDir) -> FileParams {
 
 #[fixture]
 fn params_with_small_buffer(temp_dir: TempDir) -> FileParams {
-    FileParams::new(StoreOptions::new(temp_dir.path()))
-        .with_max_buffer_size(16 * 1024)
+    FileParams::new(StoreOptions::new(temp_dir.path())).with_max_buffer_size(16 * 1024)
 }
 
 #[fixture]
 fn params_with_large_buffer(temp_dir: TempDir) -> FileParams {
-    FileParams::new(StoreOptions::new(temp_dir.path()))
-        .with_max_buffer_size(4096 * 1024)
+    FileParams::new(StoreOptions::new(temp_dir.path())).with_max_buffer_size(4096 * 1024)
 }
 
 // ==================== Test Cases ====================
@@ -170,9 +168,7 @@ async fn file_stream_downloads_all_bytes_and_closes(
     let server = test_server.await;
     let url = server.url(path);
 
-    let session = FileSource::open(url, default_params)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     let mut stream = session.stream().await;
     let mut received_data = Vec::new();
@@ -200,9 +196,7 @@ async fn file_stream_downloads_chunked_content_and_closes(
     let server = test_server_with_chunked.await;
     let url = server.url(path);
 
-    let session = FileSource::open(url, default_params)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     let mut stream = session.stream().await;
     let mut received_data = Vec::new();
@@ -229,9 +223,7 @@ async fn file_receiver_drop_cancels_driver(
     let server = test_server.await;
     let url = server.url(path);
 
-    let session = FileSource::open(url, default_params)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Create stream and read one chunk
     let mut stream = session.stream().await;
@@ -264,9 +256,7 @@ async fn multiple_streams_from_same_session(
     let server = test_server.await;
     let url = server.url(path);
 
-    let session = FileSource::open(url, default_params)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Create first stream and read some data
     let mut stream1 = session.stream().await;
@@ -298,7 +288,9 @@ async fn file_stream_works_with_small_buffer(
     let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    let session = FileSource::open(url, params_with_small_buffer).await.unwrap();
+    let session = FileSource::open(url, params_with_small_buffer)
+        .await
+        .unwrap();
 
     let mut stream = session.stream().await;
     let mut received_data = Vec::new();
@@ -324,7 +316,9 @@ async fn file_stream_works_with_large_buffer(
     let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    let session = FileSource::open(url, params_with_large_buffer).await.unwrap();
+    let session = FileSource::open(url, params_with_large_buffer)
+        .await
+        .unwrap();
 
     let mut stream = session.stream().await;
     let mut received_data = Vec::new();
@@ -343,16 +337,11 @@ async fn file_stream_works_with_large_buffer(
 #[rstest]
 #[tokio::test]
 #[timeout(Duration::from_secs(10))]
-async fn seek_roundtrip_correctness(
-    #[future] test_server: TestServer,
-    default_params: FileParams,
-) {
+async fn seek_roundtrip_correctness(#[future] test_server: TestServer, default_params: FileParams) {
     let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    let session = FileSource::open(url, default_params)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Start streaming first
     let mut stream = session.stream().await;
@@ -404,9 +393,7 @@ async fn seek_variants_not_supported(
     let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    let session = FileSource::open(url, default_params)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Start streaming first
     let mut stream = session.stream().await;
@@ -456,9 +443,7 @@ async fn cancel_behavior_drop_driven(
     let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    let session = FileSource::open(url, default_params)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Create stream and read some bytes
     let mut stream = session.stream().await;
@@ -511,9 +496,7 @@ async fn seek_contract_invalid_position(
     let server = test_server.await;
     let url = server.url("/test.mp3");
 
-    let session = FileSource::open(url, default_params)
-        .await
-        .unwrap();
+    let session = FileSource::open(url, default_params).await.unwrap();
 
     // Start streaming first
     let mut stream = session.stream().await;

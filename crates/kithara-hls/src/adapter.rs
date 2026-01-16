@@ -58,7 +58,13 @@ impl HlsSource {
                     Ok(meta) => {
                         let encryption = extract_encryption_info(&meta);
                         let mut idx = index_clone.write().await;
-                        idx.add(meta.url, meta.len, meta.variant, meta.segment_index, encryption);
+                        idx.add(
+                            meta.url,
+                            meta.len,
+                            meta.variant,
+                            meta.segment_index,
+                            encryption,
+                        );
                         drop(idx);
                         notify_clone.notify_waiters();
                     }
@@ -255,7 +261,13 @@ impl Source for HlsSource {
 
             let local_offset = offset - entry.global_start;
             let segment_len = entry.global_end - entry.global_start;
-            (entry.url, local_offset, segment_len, entry.encryption, total)
+            (
+                entry.url,
+                local_offset,
+                segment_len,
+                entry.encryption,
+                total,
+            )
         };
 
         let key = ResourceKey::from_url(&segment_url);

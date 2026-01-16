@@ -23,8 +23,7 @@ fn temp_dir() -> TempDir {
 
 #[fixture]
 fn hls_params(temp_dir: TempDir) -> HlsParams {
-    HlsParams::new(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new())
+    HlsParams::new(StoreOptions::new(temp_dir.path())).with_cancel(CancellationToken::new())
 }
 
 #[fixture]

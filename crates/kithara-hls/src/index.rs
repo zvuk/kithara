@@ -2,7 +2,10 @@
 //!
 //! Multi-variant index: each variant has its own segment index with independent byte offsets.
 
-use std::{cmp::Ordering, collections::{BTreeMap, HashMap}};
+use std::{
+    cmp::Ordering,
+    collections::{BTreeMap, HashMap},
+};
 
 use url::Url;
 
@@ -70,13 +73,26 @@ impl VariantIndex {
         }
     }
 
-    fn add(&mut self, url: Url, len: u64, segment_index: usize, encryption: Option<EncryptionInfo>) {
+    fn add(
+        &mut self,
+        url: Url,
+        len: u64,
+        segment_index: usize,
+        encryption: Option<EncryptionInfo>,
+    ) {
         let key = if segment_index == usize::MAX {
             SegmentKey::Init
         } else {
             SegmentKey::Media(segment_index)
         };
-        self.segments.insert(key, SegmentData { url, len, encryption });
+        self.segments.insert(
+            key,
+            SegmentData {
+                url,
+                len,
+                encryption,
+            },
+        );
     }
 
     /// Find segment by byte offset.

@@ -49,7 +49,6 @@ mod store;
 pub use base::{Assets, DiskAssetStore};
 pub use cache::CachedAssets;
 pub use error::{AssetsError, AssetsResult};
-pub use processing::{ProcessFn, ProcessedResource, ProcessingAssets};
 pub use evict::EvictAssets;
 pub use index::EvictConfig;
 #[cfg(feature = "internal")]
@@ -58,5 +57,6 @@ pub use index::PinsIndex;
 pub use key::canonicalize_for_asset;
 pub use key::{AssetId, ResourceKey, asset_root_for_url};
 pub use lease::{LeaseAssets, LeaseGuard};
+pub use processing::{ProcessFn, ProcessedResource, ProcessingAssets};
 pub use resource::AssetResource;
 pub use store::{AssetStore, AssetStoreBuilder, StoreOptions};

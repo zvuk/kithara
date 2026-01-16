@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use kithara_assets::{AssetId, AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
-use kithara_stream::{OpenedSource, StreamError, StreamSource};
+use kithara_stream::{OpenedSource, SourceFactory, StreamError};
 use tokio::sync::broadcast;
 use url::Url;
 
@@ -61,23 +61,30 @@ impl FileSource {
     }
 }
 
-/// Marker type for file streaming with the unified `Stream<S>` API.
+/// Marker type for file streaming with the unified `StreamSource<S>` API.
 ///
 /// ## Usage
 ///
 /// ```ignore
-/// use kithara_stream::Stream;
+/// use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
 /// use kithara_file::{File, FileParams};
-/// use kithara_assets::StoreOptions;
 ///
-/// let params = FileParams::new(StoreOptions::new("/tmp/cache"));
-/// let stream = Stream::<File>::open(url, params).await?;
-/// let events = stream.events();  // Receiver<FileEvent>
+/// // Async source with events
+/// let source = StreamSource::<File>::open(url, FileParams::default()).await?;
+/// let events = source.events();  // Receiver<FileEvent>
+///
+/// // Sync reader for decoders (Read + Seek)
+/// let reader = SyncReader::<StreamSource<File>>::open(
+///     url,
+///     FileParams::default(),
+///     SyncReaderParams::default()
+/// ).await?;
+/// let events = reader.events();
 /// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct File;
 
-impl StreamSource for File {
+impl SourceFactory for File {
     type Params = FileParams;
     type Event = FileEvent;
     type SourceImpl = SessionSource;
@@ -98,10 +105,15 @@ impl StreamSource for File {
 
         let net_client = HttpClient::new(params.net.clone());
 
-        let state =
-            FileStreamState::create(Arc::new(store), net_client.clone(), url, cancel.clone(), params.event_capacity)
-                .await
-                .map_err(StreamError::Source)?;
+        let state = FileStreamState::create(
+            Arc::new(store),
+            net_client.clone(),
+            url,
+            cancel.clone(),
+            params.event_capacity,
+        )
+        .await
+        .map_err(StreamError::Source)?;
 
         let (events_tx, _) = broadcast::channel(params.event_capacity);
         let progress = Arc::new(Progress::new());

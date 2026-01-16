@@ -38,6 +38,12 @@ pub struct StoreOptions {
     pub max_bytes: Option<u64>,
 }
 
+impl Default for StoreOptions {
+    fn default() -> Self {
+        Self::new(std::env::temp_dir().join("kithara"))
+    }
+}
+
 impl StoreOptions {
     /// Create new store options with the given cache directory.
     pub fn new(cache_dir: impl Into<PathBuf>) -> Self {
@@ -101,9 +107,8 @@ where
         process_fn: Option<ProcessFn<Ctx>>,
     ) -> Self {
         let inner = LeaseAssets::new(base, cancel);
-        let processing = process_fn.map(|f| {
-            Arc::new(ProcessingAssets::new(Arc::new(inner.clone()), f))
-        });
+        let processing =
+            process_fn.map(|f| Arc::new(ProcessingAssets::new(Arc::new(inner.clone()), f)));
         Self {
             inner,
             processing,
@@ -127,7 +132,10 @@ where
         key: &ResourceKey,
         ctx: Ctx,
     ) -> AssetsResult<Arc<ProcessedResource<<InnerStore as Assets>::StreamingRes, Ctx>>> {
-        let processing = self.processing.as_ref().ok_or(crate::AssetsError::InvalidKey)?;
+        let processing = self
+            .processing
+            .as_ref()
+            .ok_or(crate::AssetsError::InvalidKey)?;
         processing.open_processed(key, ctx).await
     }
 

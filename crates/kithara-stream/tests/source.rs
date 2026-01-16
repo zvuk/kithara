@@ -329,10 +329,9 @@ async fn seek_past_eof_fails(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
     let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
-    let result =
-        tokio::task::spawn_blocking(move || reader.seek(SeekFrom::Start(data_len + 10)))
-            .await
-            .unwrap();
+    let result = tokio::task::spawn_blocking(move || reader.seek(SeekFrom::Start(data_len + 10)))
+        .await
+        .unwrap();
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -345,10 +344,9 @@ async fn seek_negative_position_fails(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
     let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
-    let result =
-        tokio::task::spawn_blocking(move || reader.seek(SeekFrom::Current(-100)))
-            .await
-            .unwrap();
+    let result = tokio::task::spawn_blocking(move || reader.seek(SeekFrom::Current(-100)))
+        .await
+        .unwrap();
 
     assert!(result.is_err());
     let err = result.unwrap_err();

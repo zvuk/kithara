@@ -8,17 +8,16 @@ use std::{
 use tokio::sync::OnceCell;
 use url::Url;
 
-use crate::{
-    HlsError, HlsResult,
-    abr::{Variant, variants_from_master},
-    fetch::FetchManager,
-};
-
 // Re-export parsing types and functions for external use
 pub use crate::parsing::{
     CodecInfo, ContainerFormat, EncryptionMethod, InitSegment, KeyInfo, MasterPlaylist,
     MediaPlaylist, MediaSegment, SegmentKey, VariantId, VariantStream, parse_master_playlist,
     parse_media_playlist,
+};
+use crate::{
+    HlsError, HlsResult,
+    abr::{Variant, variants_from_master},
+    fetch::FetchManager,
 };
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {

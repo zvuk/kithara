@@ -1,10 +1,7 @@
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_assets::StoreOptions;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
 use kithara_stream::{SyncReader, SyncReaderParams};
-use tempfile::TempDir;
-use tokio_util::sync::CancellationToken;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -30,15 +27,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .unwrap_or_else(|| "https://stream.silvercomet.top/hls/master.m3u8".to_string());
 
     let url: Url = url.parse()?;
-    let temp_dir = TempDir::new()?;
-    let cancel = CancellationToken::new();
-
-    let hls_params = HlsParams::new(StoreOptions::new(temp_dir.path()))
-        .with_abr(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..Default::default()
-        })
-        .with_cancel(cancel.clone());
+    let hls_params = HlsParams::default().with_abr(AbrOptions {
+        mode: AbrMode::Manual(0),
+        ..Default::default()
+    });
 
     // Open an HLS source (async byte source).
     let source = Hls::open(url, hls_params).await?;

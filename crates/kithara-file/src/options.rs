@@ -4,8 +4,8 @@ use tokio_util::sync::CancellationToken;
 
 /// Unified parameters for file streaming.
 ///
-/// Used with `Stream::<File>::open(url, params)` for the unified API,
-/// and with `FileSource::open(url, params)` for direct usage.
+/// Used with `StreamSource::<File>::open(url, params)` or
+/// `SyncReader::<StreamSource<File>>::open(url, params, reader_params)`.
 #[derive(Clone, Debug)]
 pub struct FileParams {
     /// Storage configuration (required).
@@ -20,6 +20,12 @@ pub struct FileParams {
     pub event_capacity: usize,
     /// Capacity of the command mpsc channel.
     pub command_capacity: usize,
+}
+
+impl Default for FileParams {
+    fn default() -> Self {
+        Self::new(StoreOptions::default())
+    }
 }
 
 impl FileParams {

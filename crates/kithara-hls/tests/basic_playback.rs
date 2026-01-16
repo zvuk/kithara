@@ -29,8 +29,7 @@ fn cancel_token() -> CancellationToken {
 
 #[fixture]
 fn hls_params(temp_dir: TempDir, cancel_token: CancellationToken) -> HlsParams {
-    HlsParams::new(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
+    HlsParams::new(StoreOptions::new(temp_dir.path())).with_cancel(cancel_token)
 }
 
 #[fixture]
@@ -176,8 +175,8 @@ async fn test_hls_with_different_options(
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS with custom options");
 
-    let options = HlsParams::new(StoreOptions::new(temp_dir.path()))
-        .with_cancel(CancellationToken::new());
+    let options =
+        HlsParams::new(StoreOptions::new(temp_dir.path())).with_cancel(CancellationToken::new());
 
     // Test source creation with different options
     let _source = Hls::open(test_stream_url, options).await?;

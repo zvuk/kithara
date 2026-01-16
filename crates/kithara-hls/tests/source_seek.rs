@@ -53,8 +53,7 @@ fn hls_params_fixed_variant(temp_dir: TempDir, cancel_token: CancellationToken) 
 fn tracing_setup() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::default()
-                .add_directive("warn".parse().unwrap()),
+            tracing_subscriber::EnvFilter::default().add_directive("warn".parse().unwrap()),
         )
         .with_test_writer()
         .try_init();
@@ -88,9 +87,9 @@ fn all_segments_data() -> Vec<u8> {
 // ==================== HlsSource::read_at Tests ====================
 
 #[rstest]
-#[case(0, 10)]  // Start of first segment
+#[case(0, 10)] // Start of first segment
 #[case(10, 10)] // Middle of first segment
-#[case(20, 6)]  // End of first segment
+#[case(20, 6)] // End of first segment
 #[timeout(Duration::from_secs(10))]
 #[tokio::test]
 async fn hls_source_read_at_within_first_segment(
@@ -154,10 +153,7 @@ async fn hls_source_read_at_second_segment(
 #[rstest]
 #[timeout(Duration::from_secs(10))]
 #[tokio::test]
-async fn hls_source_read_at_third_segment(
-    _tracing_setup: (),
-    hls_params_fixed_variant: HlsParams,
-) {
+async fn hls_source_read_at_third_segment(_tracing_setup: (), hls_params_fixed_variant: HlsParams) {
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
@@ -249,10 +245,7 @@ async fn hls_sync_reader_seek_to_segment_start(
 #[rstest]
 #[timeout(Duration::from_secs(10))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hls_sync_reader_seek_current(
-    _tracing_setup: (),
-    hls_params_fixed_variant: HlsParams,
-) {
+async fn hls_sync_reader_seek_current(_tracing_setup: (), hls_params_fixed_variant: HlsParams) {
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
@@ -282,10 +275,7 @@ async fn hls_sync_reader_seek_current(
 #[rstest]
 #[timeout(Duration::from_secs(10))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn hls_sync_reader_multiple_seeks(
-    _tracing_setup: (),
-    hls_params_fixed_variant: HlsParams,
-) {
+async fn hls_sync_reader_multiple_seeks(_tracing_setup: (), hls_params_fixed_variant: HlsParams) {
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
@@ -490,7 +480,10 @@ async fn hls_seek_different_variants_return_different_data(
 
         assert_eq!(&buf_v0, b"V0-SEG-0:");
         assert_eq!(&buf_v1, b"V1-SEG-0:");
-        assert_ne!(&buf_v0, &buf_v1, "Different variants should have different data");
+        assert_ne!(
+            &buf_v0, &buf_v1,
+            "Different variants should have different data"
+        );
 
         // Seek and verify both return their respective variant data
         reader_v0.seek(SeekFrom::Start(0)).unwrap();

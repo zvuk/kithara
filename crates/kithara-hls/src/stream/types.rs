@@ -75,7 +75,12 @@ impl VariantSwitch {
         }
     }
 
-    pub fn with_abr_switch(from: usize, to: usize, start_segment: usize, reason: AbrReason) -> Self {
+    pub fn with_abr_switch(
+        from: usize,
+        to: usize,
+        start_segment: usize,
+        reason: AbrReason,
+    ) -> Self {
         Self {
             from,
             to,

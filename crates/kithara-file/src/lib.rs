@@ -5,13 +5,19 @@
 //! # Example
 //!
 //! ```ignore
-//! use kithara_stream::Stream;
+//! use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
 //! use kithara_file::{File, FileParams};
-//! use kithara_assets::StoreOptions;
 //!
-//! let params = FileParams::new(StoreOptions::new("/tmp/cache"));
-//! let stream = Stream::<File>::open(url, params).await?;
-//! let events = stream.events();  // Receiver<FileEvent>
+//! // Async source with events
+//! let source = StreamSource::<File>::open(url, FileParams::default()).await?;
+//! let events = source.events();  // Receiver<FileEvent>
+//!
+//! // Sync reader for decoders (Read + Seek)
+//! let reader = SyncReader::<StreamSource<File>>::open(
+//!     url,
+//!     FileParams::default(),
+//!     SyncReaderParams::default()
+//! ).await?;
 //! ```
 
 mod driver;

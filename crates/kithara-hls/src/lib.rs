@@ -11,13 +11,19 @@
 //! # Example
 //!
 //! ```ignore
-//! use kithara_stream::Stream;
+//! use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
 //! use kithara_hls::{Hls, HlsParams};
-//! use kithara_assets::StoreOptions;
 //!
-//! let params = HlsParams::new(StoreOptions::new("/tmp/cache"));
-//! let stream = Stream::<Hls>::open(url, params).await?;
-//! let events = stream.events();  // Receiver<HlsEvent>
+//! // Async source with events
+//! let source = StreamSource::<Hls>::open(url, HlsParams::default()).await?;
+//! let events = source.events();  // Receiver<HlsEvent>
+//!
+//! // Sync reader for decoders (Read + Seek)
+//! let reader = SyncReader::<StreamSource<Hls>>::open(
+//!     url,
+//!     HlsParams::default(),
+//!     SyncReaderParams::default()
+//! ).await?;
 //! ```
 
 // Public modules
@@ -47,11 +53,11 @@ mod source;
 // ============================================================================
 
 pub use abr::{AbrDecision, AbrReason, ThroughputSample, Variant};
+pub use adapter::HlsSource;
 pub use error::{HlsError, HlsResult};
 pub use events::HlsEvent;
+pub use index::EncryptionInfo;
 pub use options::{
     AbrMode, AbrOptions, HlsParams, KeyContext, KeyOptions, KeyProcessor, VariantSelector,
 };
-pub use adapter::HlsSource;
-pub use index::EncryptionInfo;
 pub use source::Hls;

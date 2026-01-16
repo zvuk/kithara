@@ -1,9 +1,7 @@
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_assets::StoreOptions;
 use kithara_file::{FileEvent, FileParams, FileSource};
 use kithara_stream::{SyncReader, SyncReaderParams};
-use tempfile::TempDir;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -30,10 +28,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .to_string()
     });
     let url: Url = url.parse()?;
-    let temp_dir = TempDir::new()?;
-    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
-
-    // Open a file session (async byte source).
+    let params = FileParams::default();
     let session = FileSource::open(url, params).await?;
     let source = session.source().await?;
 

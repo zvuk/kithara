@@ -18,9 +18,7 @@ use crate::{AssetsResult, ResourceKey, base::Assets};
 ///
 /// Takes raw bytes and context, returns transformed bytes.
 pub type ProcessFn<Ctx> = Arc<
-    dyn Fn(Bytes, Ctx) -> Pin<Box<dyn Future<Output = Result<Bytes, String>> + Send>>
-        + Send
-        + Sync,
+    dyn Fn(Bytes, Ctx) -> Pin<Box<dyn Future<Output = Result<Bytes, String>> + Send>> + Send + Sync,
 >;
 
 /// A streaming resource wrapper that buffers and transforms content.
@@ -257,7 +255,11 @@ where
         let inner = self.inner.open_streaming_resource(key).await?;
 
         // Create processed wrapper
-        let processed = Arc::new(ProcessedResource::new(inner, ctx, Arc::clone(&self.process)));
+        let processed = Arc::new(ProcessedResource::new(
+            inner,
+            ctx,
+            Arc::clone(&self.process),
+        ));
 
         // Cache and return
         self.cache.insert(cache_key, Arc::clone(&processed));

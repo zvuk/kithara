@@ -16,9 +16,7 @@ use tokio::sync::{broadcast, mpsc};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::types::{
-    PipelineError, PipelineResult, VariantSwitch, SegmentMeta, StreamCommand,
-};
+use super::types::{PipelineError, PipelineResult, SegmentMeta, StreamCommand, VariantSwitch};
 use crate::{
     HlsError, HlsResult,
     abr::{AbrController, ThroughputSample, ThroughputSampleSource},
