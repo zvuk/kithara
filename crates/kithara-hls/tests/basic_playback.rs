@@ -217,6 +217,58 @@ async fn test_hls_invalid_url_handling(
     Ok(())
 }
 
+/// Test that INIT segment comes first in byte stream (offset 0).
+/// This is critical for fMP4 HLS where decoder needs moov box before mdat.
+#[rstest]
+#[timeout(Duration::from_secs(5))]
+#[tokio::test]
+async fn test_init_segment_at_stream_start(
+    hls_params: HlsParams,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
+        .with_test_writer()
+        .try_init();
+
+    let server = TestServer::new().await;
+    let url = server.url("/master-init.m3u8")?;
+    info!("Testing INIT segment at stream start: {}", url);
+
+    let source = Arc::new(Hls::open(url, hls_params).await?);
+
+    // Wait for INIT and first segment to be loaded.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Read from offset 0 - should get INIT data, not SEG-0.
+    // INIT data for variant 0: "V0-INIT:TEST_INIT_DATA" (22 bytes)
+    let mut buf = [0u8; 32];
+    let n = kithara_stream::Source::read_at(source.as_ref(), 0, &mut buf).await?;
+    assert!(n > 0, "Should read data from offset 0");
+
+    let data = &buf[..n];
+    assert!(
+        data.starts_with(b"V0-INIT:"),
+        "Offset 0 should contain INIT data, got: {:?}",
+        String::from_utf8_lossy(&data[..data.len().min(20)])
+    );
+
+    // INIT is 22 bytes. Read from offset 22 - should get SEG-0.
+    let init_len = 22u64;
+    let n = kithara_stream::Source::read_at(source.as_ref(), init_len, &mut buf).await?;
+    assert!(n > 0, "Should read data from offset after INIT");
+
+    let data = &buf[..n];
+    assert!(
+        data.starts_with(b"V0-SEG-0:"),
+        "Offset {} should contain SEG-0 data, got: {:?}",
+        init_len,
+        String::from_utf8_lossy(&data[..data.len().min(20)])
+    );
+
+    info!("INIT segment correctly at stream start");
+    Ok(())
+}
+
 /// Test HLS with limited cache.
 #[rstest]
 #[timeout(Duration::from_secs(5))]

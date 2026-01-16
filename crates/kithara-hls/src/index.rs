@@ -2,7 +2,7 @@
 //!
 //! Multi-variant index: each variant has its own segment index with independent byte offsets.
 
-use std::collections::{BTreeMap, HashMap};
+use std::{cmp::Ordering, collections::{BTreeMap, HashMap}};
 
 use url::Url;
 
@@ -12,6 +12,31 @@ use url::Url;
 pub struct EncryptionInfo {
     pub key_url: Url,
     pub iv: [u8; 16],
+}
+
+/// Key for segment storage in BTreeMap.
+/// Ordering: Init < Media(0) < Media(1) < ...
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SegmentKey {
+    Init,
+    Media(usize),
+}
+
+impl PartialOrd for SegmentKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for SegmentKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (SegmentKey::Init, SegmentKey::Init) => Ordering::Equal,
+            (SegmentKey::Init, SegmentKey::Media(_)) => Ordering::Less,
+            (SegmentKey::Media(_), SegmentKey::Init) => Ordering::Greater,
+            (SegmentKey::Media(a), SegmentKey::Media(b)) => a.cmp(b),
+        }
+    }
 }
 
 /// Internal segment data stored in the index.
@@ -33,9 +58,9 @@ pub(crate) struct SegmentEntry {
 }
 
 /// Index for a single variant.
-/// Segments are stored in BTreeMap by segment_index to support out-of-order additions.
+/// Segments stored in BTreeMap with SegmentKey ordering: Init < Media(0) < Media(1) < ...
 struct VariantIndex {
-    segments: BTreeMap<usize, SegmentData>,
+    segments: BTreeMap<SegmentKey, SegmentData>,
 }
 
 impl VariantIndex {
@@ -46,43 +71,47 @@ impl VariantIndex {
     }
 
     fn add(&mut self, url: Url, len: u64, segment_index: usize, encryption: Option<EncryptionInfo>) {
-        self.segments.insert(
-            segment_index,
-            SegmentData {
-                url,
-                len,
-                encryption,
-            },
-        );
+        let key = if segment_index == usize::MAX {
+            SegmentKey::Init
+        } else {
+            SegmentKey::Media(segment_index)
+        };
+        self.segments.insert(key, SegmentData { url, len, encryption });
     }
 
     /// Find segment by byte offset.
-    /// Computes offsets on the fly from ordered segment_index.
-    /// Returns None if there are gaps in segment indices (missing earlier segments).
+    /// INIT segment (if present) comes first at offset 0.
+    /// Returns None if there are gaps in media segment indices.
     fn find(&self, offset: u64) -> Option<SegmentEntry> {
         let mut cumulative = 0u64;
-        let mut expected_seg_idx = 0usize;
+        let mut expected_media_idx = 0usize;
 
-        for (&seg_idx, data) in &self.segments {
-            // If there's a gap (missing earlier segments), we can't compute correct offsets.
-            // Return None to indicate we need more data loaded.
-            if seg_idx > expected_seg_idx {
-                return None;
+        for (key, data) in &self.segments {
+            // Gap detection for media segments.
+            if let SegmentKey::Media(idx) = key {
+                if *idx > expected_media_idx {
+                    return None;
+                }
+                expected_media_idx = idx + 1;
             }
 
             let global_start = cumulative;
             let global_end = cumulative + data.len;
+
             if offset >= global_start && offset < global_end {
+                let segment_index = match key {
+                    SegmentKey::Init => usize::MAX,
+                    SegmentKey::Media(idx) => *idx,
+                };
                 return Some(SegmentEntry {
                     global_start,
                     global_end,
                     url: data.url.clone(),
-                    segment_index: seg_idx,
+                    segment_index,
                     encryption: data.encryption.clone(),
                 });
             }
             cumulative = global_end;
-            expected_seg_idx = seg_idx + 1;
         }
         None
     }
