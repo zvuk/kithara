@@ -1,45 +1,11 @@
-use std::time::Duration;
-
 use kithara_assets::StoreOptions;
 use kithara_net::NetOptions;
-use thiserror::Error;
 use tokio_util::sync::CancellationToken;
-
-#[derive(Debug, Error)]
-pub enum OptionsError {
-    #[error("Invalid seek position: {0}")]
-    InvalidSeekPosition(u64),
-}
-
-/// Options for file source streaming.
-/// Range seek is always enabled; only buffer and timeout are configurable here.
-#[derive(Clone, Debug, Default)]
-pub struct FileSourceOptions {
-    /// Maximum buffer size for streaming (bytes)
-    pub max_buffer_size: Option<usize>,
-    /// Timeout for network operations
-    pub network_timeout: Option<Duration>,
-}
-
-impl FileSourceOptions {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn with_max_buffer_size(mut self, size: usize) -> Self {
-        self.max_buffer_size = Some(size);
-        self
-    }
-
-    pub fn with_network_timeout(mut self, timeout: Duration) -> Self {
-        self.network_timeout = Some(timeout);
-        self
-    }
-}
 
 /// Unified parameters for file streaming.
 ///
-/// Used with `Stream::<File>::open(url, params)` for the unified API.
+/// Used with `Stream::<File>::open(url, params)` for the unified API,
+/// and with `FileSource::open(url, params)` for direct usage.
 #[derive(Clone, Debug)]
 pub struct FileParams {
     /// Storage configuration (required).
@@ -52,6 +18,8 @@ pub struct FileParams {
     pub cancel: Option<CancellationToken>,
     /// Capacity of the events broadcast channel.
     pub event_capacity: usize,
+    /// Capacity of the command mpsc channel.
+    pub command_capacity: usize,
 }
 
 impl FileParams {
@@ -63,6 +31,7 @@ impl FileParams {
             max_buffer_size: None,
             cancel: None,
             event_capacity: 32,
+            command_capacity: 8,
         }
     }
 
@@ -87,6 +56,12 @@ impl FileParams {
     /// Set event channel capacity.
     pub fn with_event_capacity(mut self, capacity: usize) -> Self {
         self.event_capacity = capacity;
+        self
+    }
+
+    /// Set command channel capacity.
+    pub fn with_command_capacity(mut self, capacity: usize) -> Self {
+        self.command_capacity = capacity;
         self
     }
 }

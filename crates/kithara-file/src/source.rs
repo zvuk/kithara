@@ -2,58 +2,62 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
-use kithara_assets::{AssetId, AssetStore, AssetStoreBuilder, asset_root_for_url};
-use kithara_net::{HttpClient, NetOptions};
+use kithara_assets::{AssetId, AssetStoreBuilder, asset_root_for_url};
+use kithara_net::HttpClient;
 use kithara_stream::{OpenedSource, StreamError, StreamSource};
 use tokio::sync::broadcast;
 use url::Url;
 
 use crate::{
-    FileResult, FileSession, FileSourceOptions,
+    FileResult, FileSession,
     driver::{FileStreamState, SourceError},
     events::FileEvent,
     options::FileParams,
     session::{Progress, SessionSource},
 };
 
-#[async_trait]
-pub trait FileSourceContract: Send + Sync + 'static {
-    async fn open(
-        &self,
-        url: Url,
-        opts: FileSourceOptions,
-        cache: Option<AssetStore>,
-    ) -> FileResult<FileSession>;
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FileSource;
 
-#[async_trait]
-impl FileSourceContract for FileSource {
-    async fn open(
-        &self,
-        url: Url,
-        opts: FileSourceOptions,
-        cache: Option<AssetStore>,
-    ) -> FileResult<FileSession> {
+impl FileSource {
+    /// Open a file source from a URL.
+    ///
+    /// Returns `FileSession` for streaming or random-access reading.
+    ///
+    /// ## Usage
+    ///
+    /// ```ignore
+    /// use kithara_file::{FileSource, FileParams};
+    /// use kithara_assets::StoreOptions;
+    ///
+    /// let params = FileParams::new(StoreOptions::new("/tmp/cache"));
+    /// let session = FileSource::open(url, params).await?;
+    /// let source = session.source().await?;
+    /// ```
+    pub async fn open(url: Url, params: FileParams) -> FileResult<FileSession> {
         let asset_id = AssetId::from_url(&url)?;
-        let net_client = HttpClient::new(NetOptions::default());
+        let asset_root = asset_root_for_url(&url);
+        let cancel = params.cancel.clone().unwrap_or_default();
 
-        let session = FileSession::new(asset_id, url, net_client, opts, cache.map(Arc::new));
+        let store = AssetStoreBuilder::new()
+            .root_dir(&params.store.cache_dir)
+            .asset_root(&asset_root)
+            .evict_config(params.store.to_evict_config())
+            .cancel(cancel.clone())
+            .build();
+
+        let net_client = HttpClient::new(params.net.clone());
+
+        let session = FileSession::new(
+            asset_id,
+            url,
+            net_client,
+            Arc::new(store),
+            cancel,
+            params.event_capacity,
+        );
 
         Ok(session)
-    }
-}
-
-impl FileSource {
-    pub async fn open(
-        url: Url,
-        opts: FileSourceOptions,
-        cache: Option<AssetStore>,
-    ) -> FileResult<FileSession> {
-        FileSource.open(url, opts, cache).await
     }
 }
 
@@ -94,9 +98,10 @@ impl StreamSource for File {
 
         let net_client = HttpClient::new(params.net.clone());
 
-        let state = FileStreamState::create(Some(Arc::new(store)), net_client.clone(), url)
-            .await
-            .map_err(StreamError::Source)?;
+        let state =
+            FileStreamState::create(Arc::new(store), net_client.clone(), url, cancel.clone(), params.event_capacity)
+                .await
+                .map_err(StreamError::Source)?;
 
         let (events_tx, _) = broadcast::channel(params.event_capacity);
         let progress = Arc::new(Progress::new());

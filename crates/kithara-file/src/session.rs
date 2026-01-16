@@ -4,8 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_assets::{
-    AssetId, AssetResource, AssetStore, AssetsError, CachedAssets, DiskAssetStore, EvictAssets,
-    LeaseGuard,
+    AssetId, AssetResource, AssetStore, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard,
 };
 use kithara_net::{HttpClient, NetError};
 use kithara_storage::{StreamingResource, StreamingResourceExt};
@@ -14,13 +13,13 @@ use kithara_stream::{
     StreamResult as KitharaIoResult, WaitOutcome, Writer,
 };
 use tokio::sync::{Mutex, broadcast};
+use tokio_util::sync::CancellationToken;
 use tracing::trace;
 use url::Url;
 
 use crate::{
     driver::{DriverError, FileDriver, FileStreamState, SourceError},
     events::FileEvent,
-    options::FileSourceOptions,
 };
 
 // Type aliases for complex types
@@ -162,15 +161,17 @@ impl FileSession {
         asset_id: AssetId,
         url: Url,
         net_client: HttpClient,
-        options: FileSourceOptions,
-        cache: Option<Arc<AssetStore>>,
+        assets: Arc<AssetStore>,
+        cancel: CancellationToken,
+        event_capacity: usize,
     ) -> Self {
         let driver = Arc::new(FileDriver::new(
             asset_id,
             url,
             net_client.clone(),
-            options,
-            cache,
+            assets,
+            cancel,
+            event_capacity,
         ));
 
         Self {
@@ -202,12 +203,14 @@ impl FileSession {
             driver.assets(),
             self.net_client.clone(),
             driver.url().clone(),
+            driver.cancel().clone(),
+            driver.event_capacity(),
         )
         .await
         .map_err(|e| FileError::Driver(DriverError::Source(e)))?;
 
         let progress = Arc::new(Progress::new());
-        Self::spawn_download_writer(&self.net_client, driver, state.clone(), progress.clone());
+        Self::spawn_download_writer(&self.net_client, state.clone(), progress.clone());
 
         Ok(SessionSource::new(
             state.res().clone(),
@@ -219,7 +222,6 @@ impl FileSession {
 
     fn spawn_download_writer(
         net_client: &HttpClient,
-        _driver: &FileDriver,
         state: Arc<FileStreamState>,
         progress: Arc<Progress>,
     ) {
@@ -295,7 +297,7 @@ pub enum FileError {
     #[error("Network error: {0}")]
     Net(#[from] NetError),
     #[error("Assets error: {0}")]
-    Assets(#[from] AssetsError),
+    Assets(#[from] kithara_assets::AssetsError),
 }
 
 pub type FileResult<T> = Result<T, FileError>;

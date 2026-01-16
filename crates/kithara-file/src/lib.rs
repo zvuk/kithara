@@ -22,6 +22,6 @@ mod source;
 
 pub use driver::{DriverError, SourceError};
 pub use events::FileEvent;
-pub use options::{FileParams, FileSourceOptions, OptionsError};
+pub use options::FileParams;
 pub use session::{FileError, FileResult, FileSession, Progress, SessionSource};
-pub use source::{File, FileSource, FileSourceContract};
+pub use source::{File, FileSource};
