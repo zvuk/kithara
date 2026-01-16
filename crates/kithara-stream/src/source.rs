@@ -84,6 +84,167 @@ impl Default for SyncReaderParams {
     }
 }
 
+/// Result of receiving a command: seek position or channel closed.
+enum CmdResult {
+    Seek(u64, u64),
+    Closed,
+}
+
+/// Receive command from channel.
+async fn recv_cmd(cmd_rx: &kanal::AsyncReceiver<WorkerCmd>) -> CmdResult {
+    match cmd_rx.recv().await {
+        Ok(WorkerCmd::Seek { pos, epoch }) => CmdResult::Seek(pos, epoch),
+        Err(_) => CmdResult::Closed,
+    }
+}
+
+/// Worker state for prefetching.
+struct PrefetchWorker<S: Source> {
+    src: Arc<S>,
+    cmd_rx: kanal::AsyncReceiver<WorkerCmd>,
+    data_tx: kanal::AsyncSender<PrefetchChunk>,
+    chunk_size: usize,
+    read_pos: u64,
+    epoch: u64,
+}
+
+/// Result of a single prefetch iteration.
+enum PrefetchResult {
+    Continue,
+    Eof,
+    Stop,
+}
+
+impl<S: Source> PrefetchWorker<S> {
+    fn new(
+        src: Arc<S>,
+        cmd_rx: kanal::AsyncReceiver<WorkerCmd>,
+        data_tx: kanal::AsyncSender<PrefetchChunk>,
+        chunk_size: usize,
+    ) -> Self {
+        Self {
+            src,
+            cmd_rx,
+            data_tx,
+            chunk_size,
+            read_pos: 0,
+            epoch: 0,
+        }
+    }
+
+    fn handle_seek(&mut self, pos: u64, epoch: u64) {
+        trace!(from = self.read_pos, to = pos, epoch, "Worker: seek");
+        self.read_pos = pos;
+        self.epoch = epoch;
+    }
+
+    fn drain_pending_seeks(&mut self) {
+        while let Ok(Some(WorkerCmd::Seek { pos, epoch })) = self.cmd_rx.try_recv() {
+            self.handle_seek(pos, epoch);
+        }
+    }
+
+    async fn send_chunk(&self, data: Vec<u8>, is_eof: bool) -> bool {
+        let chunk = PrefetchChunk {
+            file_pos: self.read_pos,
+            data,
+            is_eof,
+            epoch: self.epoch,
+        };
+        self.data_tx.send(chunk).await.is_ok()
+    }
+
+    async fn prefetch_one(&mut self) -> PrefetchResult {
+        self.drain_pending_seeks();
+
+        // Wait for data, read it, send chunk - all interruptible by seek
+        let range = self.read_pos..self.read_pos.saturating_add(self.chunk_size as u64);
+
+        let wait_result = tokio::select! {
+            biased;
+            cmd = recv_cmd(&self.cmd_rx) => return self.handle_cmd(cmd),
+            result = self.src.wait_range(range) => result,
+        };
+
+        match wait_result {
+            Ok(WaitOutcome::Ready) => {}
+            Ok(WaitOutcome::Eof) => {
+                trace!(pos = self.read_pos, epoch = self.epoch, "Worker: EOF");
+                let _ = self.send_chunk(Vec::new(), true).await;
+                return PrefetchResult::Eof;
+            }
+            Err(e) => {
+                tracing::error!(err = %e, "Worker: wait_range error");
+                return PrefetchResult::Stop;
+            }
+        }
+
+        // Data is ready, now read it
+        let mut buf = vec![0u8; self.chunk_size];
+
+        let read_result = tokio::select! {
+            biased;
+            cmd = recv_cmd(&self.cmd_rx) => return self.handle_cmd(cmd),
+            result = self.src.read_at(self.read_pos, &mut buf) => result,
+        };
+
+        match read_result {
+            Ok(n) => {
+                buf.truncate(n);
+                trace!(file_pos = self.read_pos, bytes = n, epoch = self.epoch, "Worker: prefetched");
+                if !self.send_chunk(buf, n == 0).await {
+                    return PrefetchResult::Stop;
+                }
+                self.read_pos = self.read_pos.saturating_add(n as u64);
+                PrefetchResult::Continue
+            }
+            Err(e) => {
+                tracing::error!(err = %e, "Worker: read_at error");
+                let _ = self.send_chunk(Vec::new(), true).await;
+                PrefetchResult::Stop
+            }
+        }
+    }
+
+    fn handle_cmd(&mut self, cmd: CmdResult) -> PrefetchResult {
+        match cmd {
+            CmdResult::Seek(pos, epoch) => {
+                self.handle_seek(pos, epoch);
+                PrefetchResult::Continue
+            }
+            CmdResult::Closed => PrefetchResult::Stop,
+        }
+    }
+
+    async fn wait_for_seek(&mut self) -> bool {
+        match self.cmd_rx.recv().await {
+            Ok(WorkerCmd::Seek { pos, epoch }) => {
+                self.handle_seek(pos, epoch);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    async fn run(mut self) {
+        trace!("SyncReader worker started");
+
+        loop {
+            match self.prefetch_one().await {
+                PrefetchResult::Continue => {}
+                PrefetchResult::Eof => {
+                    if !self.wait_for_seek().await {
+                        break;
+                    }
+                }
+                PrefetchResult::Stop => break,
+            }
+        }
+
+        trace!("SyncReader worker stopped");
+    }
+}
+
 /// Sync `Read + Seek` adapter over a [`Source`].
 ///
 /// This is designed specifically to satisfy consumers like `rodio::Decoder`.
@@ -137,111 +298,9 @@ where
 
         let (cmd_tx, cmd_rx) = kanal::bounded_async::<WorkerCmd>(4);
         let (data_tx, data_rx) = kanal::bounded::<PrefetchChunk>(prefetch_chunks);
-        let data_tx_async = data_tx.to_async();
-        let src = source.clone();
 
-        tokio::spawn(async move {
-            trace!("SyncReader worker started");
-            let mut read_pos: u64 = 0;
-            let mut current_epoch: u64 = 0;
-
-            'outer: loop {
-                // Check for seek commands (non-blocking drain)
-                while let Ok(Some(cmd)) = cmd_rx.try_recv() {
-                    match cmd {
-                        WorkerCmd::Seek { pos, epoch } => {
-                            trace!(from = read_pos, to = pos, epoch, "Worker: seek command");
-                            read_pos = pos;
-                            current_epoch = epoch;
-                        }
-                    }
-                }
-
-                // Prefetch next chunk
-                let range = read_pos..read_pos.saturating_add(chunk_size as u64);
-                let wait_result = src.wait_range(range).await;
-
-                // Check for seek again after potentially long wait
-                // Drain all pending seeks, use the latest one
-                let mut seek_pending = false;
-                while let Ok(Some(cmd)) = cmd_rx.try_recv() {
-                    match cmd {
-                        WorkerCmd::Seek { pos, epoch } => {
-                            trace!(from = read_pos, to = pos, epoch, "Worker: seek after wait");
-                            read_pos = pos;
-                            current_epoch = epoch;
-                            seek_pending = true;
-                        }
-                    }
-                }
-                if seek_pending {
-                    continue 'outer;
-                }
-
-                match wait_result {
-                    Ok(WaitOutcome::Ready) => {
-                        let mut buf = vec![0u8; chunk_size];
-                        match src.read_at(read_pos, &mut buf).await {
-                            Ok(n) => {
-                                buf.truncate(n);
-                                let chunk = PrefetchChunk {
-                                    file_pos: read_pos,
-                                    data: buf,
-                                    is_eof: n == 0,
-                                    epoch: current_epoch,
-                                };
-                                trace!(
-                                    file_pos = read_pos,
-                                    bytes = n,
-                                    epoch = current_epoch,
-                                    "Worker: prefetched chunk"
-                                );
-                                read_pos = read_pos.saturating_add(n as u64);
-                                if data_tx_async.send(chunk).await.is_err() {
-                                    trace!("Worker: data channel closed");
-                                    break;
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!(err = %e, "Worker: read_at error");
-                                let chunk = PrefetchChunk {
-                                    file_pos: read_pos,
-                                    data: Vec::new(),
-                                    is_eof: true,
-                                    epoch: current_epoch,
-                                };
-                                let _ = data_tx_async.send(chunk).await;
-                                break;
-                            }
-                        }
-                    }
-                    Ok(WaitOutcome::Eof) => {
-                        trace!(pos = read_pos, epoch = current_epoch, "Worker: EOF");
-                        let chunk = PrefetchChunk {
-                            file_pos: read_pos,
-                            data: Vec::new(),
-                            is_eof: true,
-                            epoch: current_epoch,
-                        };
-                        let _ = data_tx_async.send(chunk).await;
-                        // Don't break - wait for seek command that may restart reading
-                        match cmd_rx.recv().await {
-                            Ok(WorkerCmd::Seek { pos, epoch }) => {
-                                trace!(from = read_pos, to = pos, epoch, "Worker: seek after EOF");
-                                read_pos = pos;
-                                current_epoch = epoch;
-                            }
-                            Err(_) => break,
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!(err = %e, "Worker: wait_range error");
-                        break;
-                    }
-                }
-            }
-            trace!("SyncReader worker stopped");
-        });
+        let worker = PrefetchWorker::new(source.clone(), cmd_rx, data_tx.to_async(), chunk_size);
+        tokio::spawn(worker.run());
 
         Self {
             source,
