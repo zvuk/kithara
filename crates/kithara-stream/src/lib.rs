@@ -30,4 +30,4 @@ pub use facade::{OpenedSource, Stream, StreamSource};
 pub use kithara_storage::WaitOutcome;
 pub use msg::{EngineParams, StreamMsg};
 pub use pipe::{Reader, ReaderError, Writer, WriterError};
-pub use source::{Source, SyncReader};
+pub use source::{Source, SyncReader, SyncReaderParams};

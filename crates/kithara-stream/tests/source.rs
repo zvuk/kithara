@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use kithara_stream::{Source, StreamResult, SyncReader, WaitOutcome};
+use kithara_stream::{Source, StreamResult, SyncReader, SyncReaderParams, WaitOutcome};
 use rstest::{fixture, rstest};
 
 /// Test error type.
@@ -125,7 +125,7 @@ async fn seek_start_reads_correct_bytes(
     #[case] expected: &[u8],
 ) {
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
     let expected_len = expected.len();
     let expected_vec = expected.to_vec();
 
@@ -148,7 +148,7 @@ async fn seek_start_reads_correct_bytes(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data.clone()));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let result = tokio::task::spawn_blocking(move || {
         // Read some bytes first
@@ -177,7 +177,7 @@ async fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_current_forward(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let result = tokio::task::spawn_blocking(move || {
         // Read 5 bytes (position = 5)
@@ -205,7 +205,7 @@ async fn seek_current_forward(test_data: Vec<u8>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_current_backward(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let result = tokio::task::spawn_blocking(move || {
         // Read 10 bytes (position = 10)
@@ -232,7 +232,7 @@ async fn seek_current_backward(test_data: Vec<u8>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let pos = tokio::task::spawn_blocking(move || {
         // Read 10 bytes
@@ -262,7 +262,7 @@ async fn seek_end_reads_correct_bytes(
 ) {
     let data_len = test_data.len();
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let expected_pos = (data_len as i64 + offset) as u64;
     let expected_len = expected.len();
@@ -288,7 +288,7 @@ async fn seek_end_reads_correct_bytes(
 async fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let result = tokio::task::spawn_blocking(move || {
         let pos = reader.seek(SeekFrom::End(0)).unwrap();
@@ -309,7 +309,7 @@ async fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
     let source = Arc::new(UnknownLenSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let result = tokio::task::spawn_blocking(move || reader.seek(SeekFrom::End(-5)))
         .await
@@ -327,7 +327,7 @@ async fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
 async fn seek_past_eof_fails(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let result =
         tokio::task::spawn_blocking(move || reader.seek(SeekFrom::Start(data_len + 10)))
@@ -343,7 +343,7 @@ async fn seek_past_eof_fails(test_data: Vec<u8>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_negative_position_fails(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let result =
         tokio::task::spawn_blocking(move || reader.seek(SeekFrom::Current(-100)))
@@ -359,7 +359,7 @@ async fn seek_negative_position_fails(test_data: Vec<u8>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let result = tokio::task::spawn_blocking(move || reader.seek(SeekFrom::End(10)))
         .await
@@ -377,7 +377,7 @@ async fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
 async fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
     let data = test_data.clone();
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let results = tokio::task::spawn_blocking(move || {
         let mut results = Vec::new();
@@ -418,7 +418,7 @@ async fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn position_tracks_correctly(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let positions = tokio::task::spawn_blocking(move || {
         let mut positions = Vec::new();
@@ -456,7 +456,7 @@ async fn position_tracks_correctly(test_data: Vec<u8>) {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let (n, pos) = tokio::task::spawn_blocking(move || {
         reader.seek(SeekFrom::Start(10)).unwrap();
@@ -481,7 +481,7 @@ async fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
 async fn seek_exact_to_last_byte(small_data: Vec<u8>) {
     let len = small_data.len() as u64;
     let source = Arc::new(MemSource::new(small_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let result = tokio::task::spawn_blocking(move || {
         // Seek to last byte
@@ -504,7 +504,7 @@ async fn seek_exact_to_last_byte(small_data: Vec<u8>) {
 async fn seek_to_exact_eof_returns_zero_on_read(small_data: Vec<u8>) {
     let len = small_data.len() as u64;
     let source = Arc::new(MemSource::new(small_data));
-    let mut reader = SyncReader::new(source, 4);
+    let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let n = tokio::task::spawn_blocking(move || {
         // Seek to exactly EOF

@@ -23,7 +23,7 @@ use std::{
 use tokio::sync::broadcast;
 use url::Url;
 
-use crate::{Source, StreamError, SyncReader};
+use crate::{Source, StreamError, SyncReader, SyncReaderParams};
 
 /// Result of opening a stream source.
 pub struct OpenedSource<S, E>
@@ -89,7 +89,7 @@ impl<S: StreamSource> Stream<S> {
         params: S::Params,
     ) -> Result<Self, StreamError<<S::SourceImpl as Source>::Error>> {
         let opened = S::open(url, params).await?;
-        let reader = SyncReader::new(opened.source, 16);
+        let reader = SyncReader::new(opened.source, SyncReaderParams::default());
         Ok(Self {
             reader,
             events_tx: opened.events_tx,

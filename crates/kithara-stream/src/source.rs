@@ -8,11 +8,10 @@ use std::{
 
 use async_trait::async_trait;
 use kithara_storage::WaitOutcome;
+use tokio::sync::mpsc;
 use tracing::trace;
 
 use crate::error::{StreamError, StreamResult};
-
-type WorkerReply<E> = tokio::sync::oneshot::Sender<(Vec<u8>, StreamResult<usize, E>)>;
 
 /// Async random-access source contract.
 ///
@@ -55,36 +54,67 @@ pub trait Source: Send + Sync + 'static {
     }
 }
 
-enum WorkerReq<S>
-where
-    S: Source,
-{
-    WaitAndReadAt {
-        offset: u64,
-        buf: Vec<u8>,
-        reply: WorkerReply<S::Error>,
-    },
+/// Command from `SyncReader` to worker.
+enum WorkerCmd {
+    Seek { pos: u64, epoch: u64 },
+}
+
+/// Prefetched data chunk from worker.
+struct PrefetchChunk {
+    file_pos: u64,
+    data: Vec<u8>,
+    is_eof: bool,
+    epoch: u64,
+}
+
+/// Configuration for `SyncReader`.
+#[derive(Debug, Clone)]
+pub struct SyncReaderParams {
+    /// Size of each prefetch chunk in bytes.
+    pub chunk_size: usize,
+    /// Number of chunks to prefetch ahead.
+    pub prefetch_chunks: usize,
+}
+
+impl Default for SyncReaderParams {
+    fn default() -> Self {
+        Self {
+            chunk_size: 64 * 1024,  // 64KB
+            prefetch_chunks: 4,
+        }
+    }
 }
 
 /// Sync `Read + Seek` adapter over a [`Source`].
 ///
 /// This is designed specifically to satisfy consumers like `rodio::Decoder`.
 ///
-/// Blocking behavior:
-/// - `read()` blocks waiting for an async worker running on a Tokio runtime.
-/// - Do **not** call this from within a Tokio async task (it will block the executor thread).
-///   Use it from a dedicated blocking thread (e.g. `tokio::task::spawn_blocking` or `std::thread`).
+/// Non-blocking behavior:
+/// - `read()` returns immediately with available data from prefetch buffer.
+/// - If no data is available yet, returns 0 (underrun) instead of blocking.
+/// - An async worker prefetches data ahead of the read position.
 ///
-/// The internal channel is bounded to provide backpressure. When the channel is full,
-/// `read()` will block until space is available.
+/// This design ensures the audio thread is never blocked by I/O operations.
 pub struct SyncReader<S>
 where
     S: Source,
 {
     source: Arc<S>,
-    worker_tx: tokio::sync::mpsc::Sender<WorkerReq<S>>,
+    cmd_tx: mpsc::Sender<WorkerCmd>,
+    data_rx: mpsc::Receiver<PrefetchChunk>,
+    current_chunk: Option<CurrentChunk>,
     pos: u64,
-    reusable_buf: Option<Vec<u8>>,
+    epoch: u64,
+    eof_reached: bool,
+    error: Option<String>,
+}
+
+/// Current chunk being consumed by reader.
+struct CurrentChunk {
+    file_pos: u64,
+    data: Vec<u8>,
+    offset: usize,
+    epoch: u64,
 }
 
 impl<S> SyncReader<S>
@@ -93,59 +123,128 @@ where
 {
     /// Create a new reader bound to the current Tokio runtime.
     ///
-    /// # Arguments
-    /// * `source` - The async source to read from
-    /// * `channel_capacity` - Bounded channel capacity for backpressure control.
-    ///   When the channel is full, `read()` blocks until space is available.
+    /// This spawns an async worker that continuously prefetches data ahead of the
+    /// current read position. The worker communicates via channels using non-blocking
+    /// `try_recv()` on the reader side.
     ///
-    /// This spawns an async worker on the current Tokio runtime and communicates with it via
-    /// channels. This avoids calling `Handle::block_on` from arbitrary threads, which can
-    /// deadlock with some executor / storage combinations.
-    ///
-    /// This must be called from within a Tokio runtime context (e.g. in an async fn before
-    /// spawning the blocking consumer).
-    pub fn new(source: Arc<S>, channel_capacity: usize) -> Self {
+    /// This must be called from within a Tokio runtime context.
+    pub fn new(source: Arc<S>, params: SyncReaderParams) -> Self {
+        let chunk_size = params.chunk_size.max(4096);
+        let prefetch_chunks = params.prefetch_chunks.max(2);
         trace!(
-            channel_capacity,
-            "kithara-stream::io Reader::new (spawning async worker)"
+            prefetch_chunks,
+            chunk_size,
+            "SyncReader::new (spawning prefetch worker)"
         );
-        let len = source.len();
-        trace!(len, "kithara-stream::io Reader created");
 
-        let (worker_tx, mut worker_rx) = tokio::sync::mpsc::channel::<WorkerReq<S>>(channel_capacity);
+        let (cmd_tx, mut cmd_rx) = mpsc::channel::<WorkerCmd>(4);
+        let (data_tx, data_rx) = mpsc::channel::<PrefetchChunk>(prefetch_chunks);
         let src = source.clone();
 
         tokio::spawn(async move {
-            trace!("kithara-stream::io Reader worker started");
-            while let Some(req) = worker_rx.recv().await {
-                match req {
-                    WorkerReq::WaitAndReadAt {
-                        offset,
-                        mut buf,
-                        reply,
-                    } => {
-                        let len = buf.len();
-                        let range = offset..offset.saturating_add(len as u64);
-                        let wait_result = src.wait_range(range).await;
+            trace!("SyncReader worker started");
+            let mut read_pos: u64 = 0;
+            let mut current_epoch: u64 = 0;
 
-                        let out = match wait_result {
-                            Ok(WaitOutcome::Ready) => src.read_at(offset, &mut buf).await,
-                            Ok(WaitOutcome::Eof) => Ok(0),
-                            Err(e) => Err(e),
+            loop {
+                // Check for seek command (non-blocking drain)
+                while let Ok(cmd) = cmd_rx.try_recv() {
+                    match cmd {
+                        WorkerCmd::Seek { pos, epoch } => {
+                            trace!(from = read_pos, to = pos, epoch, "Worker: seek command");
+                            read_pos = pos;
+                            current_epoch = epoch;
+                        }
+                    }
+                }
+
+                // Wait for space in data channel or command
+                tokio::select! {
+                    biased;
+
+                    Some(cmd) = cmd_rx.recv() => {
+                        match cmd {
+                            WorkerCmd::Seek { pos, epoch } => {
+                                trace!(from = read_pos, to = pos, epoch, "Worker: seek command");
+                                read_pos = pos;
+                                current_epoch = epoch;
+                            }
+                        }
+                    }
+
+                    permit = data_tx.reserve() => {
+                        let Ok(permit) = permit else {
+                            trace!("Worker: data channel closed, stopping");
+                            break;
                         };
 
-                        let _ = reply.send((buf, out));
+                        let range = read_pos..read_pos.saturating_add(chunk_size as u64);
+                        let wait_result = src.wait_range(range.clone()).await;
+
+                        match wait_result {
+                            Ok(WaitOutcome::Ready) => {
+                                let mut buf = vec![0u8; chunk_size];
+                                match src.read_at(read_pos, &mut buf).await {
+                                    Ok(n) => {
+                                        buf.truncate(n);
+                                        let chunk = PrefetchChunk {
+                                            file_pos: read_pos,
+                                            data: buf,
+                                            is_eof: n == 0,
+                                            epoch: current_epoch,
+                                        };
+                                        trace!(
+                                            file_pos = read_pos,
+                                            bytes = n,
+                                            epoch = current_epoch,
+                                            "Worker: prefetched chunk"
+                                        );
+                                        read_pos = read_pos.saturating_add(n as u64);
+                                        permit.send(chunk);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!(err = %e, "Worker: read_at error");
+                                        let chunk = PrefetchChunk {
+                                            file_pos: read_pos,
+                                            data: Vec::new(),
+                                            is_eof: true,
+                                            epoch: current_epoch,
+                                        };
+                                        permit.send(chunk);
+                                        break;
+                                    }
+                                }
+                            }
+                            Ok(WaitOutcome::Eof) => {
+                                trace!(pos = read_pos, epoch = current_epoch, "Worker: EOF");
+                                let chunk = PrefetchChunk {
+                                    file_pos: read_pos,
+                                    data: Vec::new(),
+                                    is_eof: true,
+                                    epoch: current_epoch,
+                                };
+                                permit.send(chunk);
+                            }
+                            Err(e) => {
+                                tracing::error!(err = %e, "Worker: wait_range error");
+                                break;
+                            }
+                        }
                     }
                 }
             }
-            trace!("kithara-stream::io Reader worker stopped (channel closed)");
+            trace!("SyncReader worker stopped");
         });
 
         Self {
             source,
-            worker_tx,
+            cmd_tx,
+            data_rx,
+            current_chunk: None,
             pos: 0,
-            reusable_buf: None,
+            epoch: 0,
+            eof_reached: false,
+            error: None,
         }
     }
 
@@ -155,6 +254,77 @@ where
 
     pub fn into_source(self) -> Arc<S> {
         self.source
+    }
+
+    /// Try to get data from current chunk or fetch next chunk (non-blocking).
+    fn try_read_chunk(&mut self, buf: &mut [u8]) -> Option<usize> {
+        // First, try to read from current chunk
+        if let Some(ref mut chunk) = self.current_chunk {
+            if chunk.epoch == self.epoch && chunk.file_pos + chunk.offset as u64 == self.pos {
+                let remaining = chunk.data.len() - chunk.offset;
+                if remaining > 0 {
+                    let n = remaining.min(buf.len());
+                    buf[..n].copy_from_slice(&chunk.data[chunk.offset..chunk.offset + n]);
+                    chunk.offset += n;
+                    return Some(n);
+                }
+            }
+            // Chunk exhausted or epoch/position mismatch, discard it
+            self.current_chunk = None;
+        }
+
+        // Try to get next chunk (non-blocking)
+        loop {
+            match self.data_rx.try_recv() {
+                Ok(chunk) => {
+                    // Skip chunks from old epochs
+                    if chunk.epoch != self.epoch {
+                        trace!(
+                            chunk_epoch = chunk.epoch,
+                            reader_epoch = self.epoch,
+                            "Skipping old epoch chunk"
+                        );
+                        continue;
+                    }
+
+                    if chunk.is_eof && chunk.data.is_empty() {
+                        self.eof_reached = true;
+                        return Some(0);
+                    }
+
+                    // Check if chunk matches our position
+                    if chunk.file_pos == self.pos {
+                        let n = chunk.data.len().min(buf.len());
+                        buf[..n].copy_from_slice(&chunk.data[..n]);
+
+                        if n < chunk.data.len() {
+                            self.current_chunk = Some(CurrentChunk {
+                                file_pos: chunk.file_pos,
+                                data: chunk.data,
+                                offset: n,
+                                epoch: chunk.epoch,
+                            });
+                        }
+                        return Some(n);
+                    }
+
+                    // Position mismatch - stale chunk, skip it
+                    trace!(
+                        chunk_pos = chunk.file_pos,
+                        reader_pos = self.pos,
+                        "Skipping stale chunk"
+                    );
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    // No data available yet
+                    return None;
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    self.error = Some("Worker disconnected".to_string());
+                    return Some(0);
+                }
+            }
+        }
     }
 }
 
@@ -167,94 +337,41 @@ where
             return Ok(0);
         }
 
-        let offset = self.pos;
-        let len = buf.len();
-
-        trace!(
-            offset,
-            requested_len = len,
-            buffer_size = buf.len(),
-            "SyncReader::read START"
-        );
-        let read_start = std::time::Instant::now();
-
-        // Take or create reusable buffer
-        let mut worker_buf = self.reusable_buf.take().unwrap_or_default();
-        worker_buf.resize(len, 0);
-
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        let send_start = std::time::Instant::now();
-        self.worker_tx
-            .blocking_send(WorkerReq::WaitAndReadAt {
-                offset,
-                buf: worker_buf,
-                reply: tx,
-            })
-            .map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
-            })?;
-        let send_duration = send_start.elapsed();
-        trace!(
-            offset,
-            send_duration_ms = send_duration.as_millis(),
-            "SyncReader::blocking_send to worker DONE"
-        );
-
-        let recv_start = std::time::Instant::now();
-        let (returned_buf, result) = rx.blocking_recv().map_err(|_| {
-            tracing::error!(
-                offset,
-                len,
-                "Reader::read wait_and_read_at worker reply channel closed"
-            );
-            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "Reader worker stopped")
-        })?;
-
-        // Store buffer for reuse
-        self.reusable_buf = Some(returned_buf);
-        let reusable_buf = self.reusable_buf.as_ref().expect("just stored");
-
-        let bytes_read = result.map_err(|e: StreamError<S::Error>| {
-            tracing::error!(
-                offset,
-                len,
-                err = %e,
-                "Reader::read wait_and_read_at returned error"
-            );
-            std::io::Error::other(e.to_string())
-        })?;
-
-        let recv_duration = recv_start.elapsed();
-        trace!(
-            offset,
-            recv_duration_ms = recv_duration.as_millis(),
-            bytes_received = bytes_read,
-            "SyncReader::blocking_recv DONE"
-        );
-
-        if bytes_read == 0 {
-            let total_duration = read_start.elapsed();
-            trace!(
-                offset,
-                total_duration_ms = total_duration.as_millis(),
-                "SyncReader::read EOF"
-            );
+        if self.eof_reached {
             return Ok(0);
         }
 
-        let n = bytes_read.min(buf.len());
-        buf[..n].copy_from_slice(&reusable_buf[..n]);
-        self.pos = self.pos.saturating_add(n as u64);
-        let total_duration = read_start.elapsed();
-        trace!(
-            offset,
-            total_duration_ms = total_duration.as_millis(),
-            requested = len,
-            read = n,
-            new_pos = self.pos,
-            "SyncReader::read DONE"
-        );
-        Ok(n)
+        if let Some(ref err) = self.error {
+            return Err(std::io::Error::other(err.clone()));
+        }
+
+        // Wait for data using spin-wait (no mutex contention with worker)
+        let mut spins = 0u32;
+        loop {
+            match self.try_read_chunk(buf) {
+                Some(0) => {
+                    trace!(pos = self.pos, "SyncReader::read EOF");
+                    return Ok(0);
+                }
+                Some(n) => {
+                    self.pos = self.pos.saturating_add(n as u64);
+                    trace!(bytes = n, new_pos = self.pos, "SyncReader::read OK");
+                    return Ok(n);
+                }
+                None => {
+                    // No data yet - spin-wait without mutex
+                    spins = spins.saturating_add(1);
+                    if spins < 100 {
+                        std::hint::spin_loop();
+                    } else if spins < 1000 {
+                        std::thread::yield_now();
+                    } else {
+                        // Sleep briefly to reduce CPU usage while waiting
+                        std::thread::sleep(std::time::Duration::from_micros(100));
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -263,14 +380,14 @@ where
     S: Source,
 {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        trace!(cur = self.pos, ?pos, "Reader::seek enter");
+        trace!(cur = self.pos, ?pos, "SyncReader::seek enter");
 
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => p as i128,
             SeekFrom::Current(delta) => (self.pos as i128).saturating_add(delta as i128),
             SeekFrom::End(delta) => {
                 let Some(len) = self.source.len() else {
-                    trace!("Reader::seek from end requested but source len is unknown");
+                    trace!("SyncReader::seek from end but source len unknown");
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::Unsupported,
                         StreamError::<S::Error>::UnknownLength.to_string(),
@@ -281,7 +398,7 @@ where
         };
 
         if new_pos < 0 {
-            trace!(new_pos, "Reader::seek invalid (negative)");
+            trace!(new_pos, "SyncReader::seek invalid (negative)");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 StreamError::<S::Error>::InvalidSeek.to_string(),
@@ -290,19 +407,40 @@ where
 
         let new_pos_u64 = new_pos as u64;
 
-        // If we know length, disallow seeking past EOF to match typical `Read+Seek` expectations
-        // for decoders that probe file structure.
         if let Some(len) = self.source.len()
             && new_pos_u64 > len
         {
-            trace!(new_pos_u64, len, "Reader::seek invalid (past EOF)");
+            trace!(new_pos_u64, len, "SyncReader::seek invalid (past EOF)");
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 StreamError::<S::Error>::InvalidSeek.to_string(),
             ));
         }
 
+        // Update position
+        let old_pos = self.pos;
         self.pos = new_pos_u64;
+
+        // If position changed, notify worker with new epoch
+        if new_pos_u64 != old_pos {
+            self.epoch = self.epoch.wrapping_add(1);
+            self.current_chunk = None;
+            self.eof_reached = false;
+            self.error = None;
+
+            // Send seek command to worker (non-blocking try_send)
+            let _ = self.cmd_tx.try_send(WorkerCmd::Seek {
+                pos: new_pos_u64,
+                epoch: self.epoch,
+            });
+            trace!(
+                from = old_pos,
+                to = new_pos_u64,
+                epoch = self.epoch,
+                "SyncReader::seek sent to worker"
+            );
+        }
+
         Ok(self.pos)
     }
 }
