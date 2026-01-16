@@ -2,7 +2,7 @@ use std::{env::args, error::Error, sync::Arc};
 
 use kithara_assets::{AssetStoreBuilder, EvictConfig, asset_root_for_url};
 use kithara_file::{FileEvent, FileSource, FileSourceOptions};
-use kithara_stream::SyncReader;
+use kithara_stream::{SyncReader, SyncReaderParams};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, metadata::LevelFilter};
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let source = session.source().await?;
 
     let mut events_rx = source.events();
-    let reader = SyncReader::new(Arc::new(source), 8);
+    let reader = SyncReader::new(Arc::new(source), SyncReaderParams::default());
 
     tokio::spawn(async move {
         while let Ok(msg) = events_rx.recv().await {

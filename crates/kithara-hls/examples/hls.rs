@@ -2,7 +2,7 @@ use std::{env::args, error::Error, sync::Arc};
 
 use kithara_assets::StoreOptions;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
-use kithara_stream::SyncReader;
+use kithara_stream::{SyncReader, SyncReaderParams};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, metadata::LevelFilter};
@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let source = Hls::open(url, hls_params).await?;
     let events_rx = source.events();
 
-    let reader = SyncReader::new(Arc::new(source), 8);
+    let reader = SyncReader::new(Arc::new(source), SyncReaderParams::default());
 
     tokio::spawn(async move {
         let mut events_rx = events_rx;

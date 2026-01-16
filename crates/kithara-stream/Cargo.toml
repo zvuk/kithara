@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 bytes = { workspace = true }
 futures = { workspace = true }
+kanal = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }

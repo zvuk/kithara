@@ -8,7 +8,6 @@ use std::{
 
 use async_trait::async_trait;
 use kithara_storage::WaitOutcome;
-use tokio::sync::mpsc;
 use tracing::trace;
 
 use crate::error::{StreamError, StreamResult};
@@ -100,13 +99,12 @@ where
     S: Source,
 {
     source: Arc<S>,
-    cmd_tx: mpsc::Sender<WorkerCmd>,
-    data_rx: mpsc::Receiver<PrefetchChunk>,
+    cmd_tx: kanal::AsyncSender<WorkerCmd>,
+    data_rx: kanal::Receiver<PrefetchChunk>,
     current_chunk: Option<CurrentChunk>,
     pos: u64,
     epoch: u64,
     eof_reached: bool,
-    error: Option<String>,
 }
 
 /// Current chunk being consumed by reader.
@@ -137,8 +135,9 @@ where
             "SyncReader::new (spawning prefetch worker)"
         );
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<WorkerCmd>(4);
-        let (data_tx, data_rx) = mpsc::channel::<PrefetchChunk>(prefetch_chunks);
+        let (cmd_tx, cmd_rx) = kanal::bounded_async::<WorkerCmd>(4);
+        let (data_tx, data_rx) = kanal::bounded::<PrefetchChunk>(prefetch_chunks);
+        let data_tx_async = data_tx.to_async();
         let src = source.clone();
 
         tokio::spawn(async move {
@@ -146,9 +145,9 @@ where
             let mut read_pos: u64 = 0;
             let mut current_epoch: u64 = 0;
 
-            loop {
-                // Check for seek command (non-blocking drain)
-                while let Ok(cmd) = cmd_rx.try_recv() {
+            'outer: loop {
+                // Check for seek commands (non-blocking drain)
+                while let Ok(Some(cmd)) = cmd_rx.try_recv() {
                     match cmd {
                         WorkerCmd::Seek { pos, epoch } => {
                             trace!(from = read_pos, to = pos, epoch, "Worker: seek command");
@@ -158,78 +157,86 @@ where
                     }
                 }
 
-                // Wait for space in data channel or command
-                tokio::select! {
-                    biased;
+                // Prefetch next chunk
+                let range = read_pos..read_pos.saturating_add(chunk_size as u64);
+                let wait_result = src.wait_range(range).await;
 
-                    Some(cmd) = cmd_rx.recv() => {
-                        match cmd {
-                            WorkerCmd::Seek { pos, epoch } => {
-                                trace!(from = read_pos, to = pos, epoch, "Worker: seek command");
-                                read_pos = pos;
-                                current_epoch = epoch;
-                            }
+                // Check for seek again after potentially long wait
+                // Drain all pending seeks, use the latest one
+                let mut seek_pending = false;
+                while let Ok(Some(cmd)) = cmd_rx.try_recv() {
+                    match cmd {
+                        WorkerCmd::Seek { pos, epoch } => {
+                            trace!(from = read_pos, to = pos, epoch, "Worker: seek after wait");
+                            read_pos = pos;
+                            current_epoch = epoch;
+                            seek_pending = true;
                         }
                     }
+                }
+                if seek_pending {
+                    continue 'outer;
+                }
 
-                    permit = data_tx.reserve() => {
-                        let Ok(permit) = permit else {
-                            trace!("Worker: data channel closed, stopping");
-                            break;
-                        };
-
-                        let range = read_pos..read_pos.saturating_add(chunk_size as u64);
-                        let wait_result = src.wait_range(range.clone()).await;
-
-                        match wait_result {
-                            Ok(WaitOutcome::Ready) => {
-                                let mut buf = vec![0u8; chunk_size];
-                                match src.read_at(read_pos, &mut buf).await {
-                                    Ok(n) => {
-                                        buf.truncate(n);
-                                        let chunk = PrefetchChunk {
-                                            file_pos: read_pos,
-                                            data: buf,
-                                            is_eof: n == 0,
-                                            epoch: current_epoch,
-                                        };
-                                        trace!(
-                                            file_pos = read_pos,
-                                            bytes = n,
-                                            epoch = current_epoch,
-                                            "Worker: prefetched chunk"
-                                        );
-                                        read_pos = read_pos.saturating_add(n as u64);
-                                        permit.send(chunk);
-                                    }
-                                    Err(e) => {
-                                        tracing::error!(err = %e, "Worker: read_at error");
-                                        let chunk = PrefetchChunk {
-                                            file_pos: read_pos,
-                                            data: Vec::new(),
-                                            is_eof: true,
-                                            epoch: current_epoch,
-                                        };
-                                        permit.send(chunk);
-                                        break;
-                                    }
+                match wait_result {
+                    Ok(WaitOutcome::Ready) => {
+                        let mut buf = vec![0u8; chunk_size];
+                        match src.read_at(read_pos, &mut buf).await {
+                            Ok(n) => {
+                                buf.truncate(n);
+                                let chunk = PrefetchChunk {
+                                    file_pos: read_pos,
+                                    data: buf,
+                                    is_eof: n == 0,
+                                    epoch: current_epoch,
+                                };
+                                trace!(
+                                    file_pos = read_pos,
+                                    bytes = n,
+                                    epoch = current_epoch,
+                                    "Worker: prefetched chunk"
+                                );
+                                read_pos = read_pos.saturating_add(n as u64);
+                                if data_tx_async.send(chunk).await.is_err() {
+                                    trace!("Worker: data channel closed");
+                                    break;
                                 }
                             }
-                            Ok(WaitOutcome::Eof) => {
-                                trace!(pos = read_pos, epoch = current_epoch, "Worker: EOF");
+                            Err(e) => {
+                                tracing::error!(err = %e, "Worker: read_at error");
                                 let chunk = PrefetchChunk {
                                     file_pos: read_pos,
                                     data: Vec::new(),
                                     is_eof: true,
                                     epoch: current_epoch,
                                 };
-                                permit.send(chunk);
-                            }
-                            Err(e) => {
-                                tracing::error!(err = %e, "Worker: wait_range error");
+                                let _ = data_tx_async.send(chunk).await;
                                 break;
                             }
                         }
+                    }
+                    Ok(WaitOutcome::Eof) => {
+                        trace!(pos = read_pos, epoch = current_epoch, "Worker: EOF");
+                        let chunk = PrefetchChunk {
+                            file_pos: read_pos,
+                            data: Vec::new(),
+                            is_eof: true,
+                            epoch: current_epoch,
+                        };
+                        let _ = data_tx_async.send(chunk).await;
+                        // Don't break - wait for seek command that may restart reading
+                        match cmd_rx.recv().await {
+                            Ok(WorkerCmd::Seek { pos, epoch }) => {
+                                trace!(from = read_pos, to = pos, epoch, "Worker: seek after EOF");
+                                read_pos = pos;
+                                current_epoch = epoch;
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!(err = %e, "Worker: wait_range error");
+                        break;
                     }
                 }
             }
@@ -244,7 +251,6 @@ where
             pos: 0,
             epoch: 0,
             eof_reached: false,
-            error: None,
         }
     }
 
@@ -256,8 +262,9 @@ where
         self.source
     }
 
-    /// Try to get data from current chunk or fetch next chunk (non-blocking).
-    fn try_read_chunk(&mut self, buf: &mut [u8]) -> Option<usize> {
+    /// Wait for and consume data from prefetch buffer.
+    /// Uses kanal's efficient blocking `recv()` with thread parking.
+    fn recv_chunk(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         // First, try to read from current chunk
         if let Some(ref mut chunk) = self.current_chunk {
             if chunk.epoch == self.epoch && chunk.file_pos + chunk.offset as u64 == self.pos {
@@ -266,65 +273,72 @@ where
                     let n = remaining.min(buf.len());
                     buf[..n].copy_from_slice(&chunk.data[chunk.offset..chunk.offset + n]);
                     chunk.offset += n;
-                    return Some(n);
+                    return Ok(n);
                 }
             }
             // Chunk exhausted or epoch/position mismatch, discard it
             self.current_chunk = None;
         }
 
-        // Try to get next chunk (non-blocking)
+        // Wait for matching chunk (blocking)
         loop {
-            match self.data_rx.try_recv() {
+            match self.data_rx.recv() {
                 Ok(chunk) => {
-                    // Skip chunks from old epochs
-                    if chunk.epoch != self.epoch {
-                        trace!(
-                            chunk_epoch = chunk.epoch,
-                            reader_epoch = self.epoch,
-                            "Skipping old epoch chunk"
-                        );
-                        continue;
+                    if let Some(n) = self.process_chunk(chunk, buf) {
+                        return Ok(n);
                     }
-
-                    if chunk.is_eof && chunk.data.is_empty() {
-                        self.eof_reached = true;
-                        return Some(0);
-                    }
-
-                    // Check if chunk matches our position
-                    if chunk.file_pos == self.pos {
-                        let n = chunk.data.len().min(buf.len());
-                        buf[..n].copy_from_slice(&chunk.data[..n]);
-
-                        if n < chunk.data.len() {
-                            self.current_chunk = Some(CurrentChunk {
-                                file_pos: chunk.file_pos,
-                                data: chunk.data,
-                                offset: n,
-                                epoch: chunk.epoch,
-                            });
-                        }
-                        return Some(n);
-                    }
-
-                    // Position mismatch - stale chunk, skip it
-                    trace!(
-                        chunk_pos = chunk.file_pos,
-                        reader_pos = self.pos,
-                        "Skipping stale chunk"
-                    );
+                    // Chunk was stale, continue waiting
                 }
-                Err(mpsc::error::TryRecvError::Empty) => {
-                    // No data available yet
-                    return None;
-                }
-                Err(mpsc::error::TryRecvError::Disconnected) => {
-                    self.error = Some("Worker disconnected".to_string());
-                    return Some(0);
+                Err(_) => {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::UnexpectedEof,
+                        "Worker stopped",
+                    ));
                 }
             }
         }
+    }
+
+    /// Process a received chunk, returning Some(bytes) if valid or None if stale.
+    fn process_chunk(&mut self, chunk: PrefetchChunk, buf: &mut [u8]) -> Option<usize> {
+        // Skip chunks from old epochs
+        if chunk.epoch != self.epoch {
+            trace!(
+                chunk_epoch = chunk.epoch,
+                reader_epoch = self.epoch,
+                "Skipping old epoch chunk"
+            );
+            return None;
+        }
+
+        if chunk.is_eof && chunk.data.is_empty() {
+            self.eof_reached = true;
+            return Some(0);
+        }
+
+        // Check if chunk matches our position
+        if chunk.file_pos == self.pos {
+            let n = chunk.data.len().min(buf.len());
+            buf[..n].copy_from_slice(&chunk.data[..n]);
+
+            if n < chunk.data.len() {
+                self.current_chunk = Some(CurrentChunk {
+                    file_pos: chunk.file_pos,
+                    data: chunk.data,
+                    offset: n,
+                    epoch: chunk.epoch,
+                });
+            }
+            return Some(n);
+        }
+
+        // Position mismatch - stale chunk
+        trace!(
+            chunk_pos = chunk.file_pos,
+            reader_pos = self.pos,
+            "Skipping stale chunk"
+        );
+        None
     }
 }
 
@@ -341,37 +355,15 @@ where
             return Ok(0);
         }
 
-        if let Some(ref err) = self.error {
-            return Err(std::io::Error::other(err.clone()));
+        // Wait for data using kanal's efficient blocking (thread parking, no spin)
+        let n = self.recv_chunk(buf)?;
+        if n > 0 {
+            self.pos = self.pos.saturating_add(n as u64);
+            trace!(bytes = n, new_pos = self.pos, "SyncReader::read OK");
+        } else {
+            trace!(pos = self.pos, "SyncReader::read EOF");
         }
-
-        // Wait for data using spin-wait (no mutex contention with worker)
-        let mut spins = 0u32;
-        loop {
-            match self.try_read_chunk(buf) {
-                Some(0) => {
-                    trace!(pos = self.pos, "SyncReader::read EOF");
-                    return Ok(0);
-                }
-                Some(n) => {
-                    self.pos = self.pos.saturating_add(n as u64);
-                    trace!(bytes = n, new_pos = self.pos, "SyncReader::read OK");
-                    return Ok(n);
-                }
-                None => {
-                    // No data yet - spin-wait without mutex
-                    spins = spins.saturating_add(1);
-                    if spins < 100 {
-                        std::hint::spin_loop();
-                    } else if spins < 1000 {
-                        std::thread::yield_now();
-                    } else {
-                        // Sleep briefly to reduce CPU usage while waiting
-                        std::thread::sleep(std::time::Duration::from_micros(100));
-                    }
-                }
-            }
-        }
+        Ok(n)
     }
 }
 
@@ -426,9 +418,8 @@ where
             self.epoch = self.epoch.wrapping_add(1);
             self.current_chunk = None;
             self.eof_reached = false;
-            self.error = None;
 
-            // Send seek command to worker (non-blocking try_send)
+            // Send seek command to worker (non-blocking)
             let _ = self.cmd_tx.try_send(WorkerCmd::Seek {
                 pos: new_pos_u64,
                 epoch: self.epoch,

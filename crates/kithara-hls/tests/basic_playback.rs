@@ -4,7 +4,7 @@ use std::{error::Error, sync::Arc, time::Duration};
 
 use kithara_assets::StoreOptions;
 use kithara_hls::{Hls, HlsParams};
-use kithara_stream::SyncReader;
+use kithara_stream::{SyncReader, SyncReaderParams};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -83,8 +83,8 @@ async fn test_basic_hls_playback(
         }
     });
 
-    // Create reader for the stream (capacity=8 for bounded backpressure)
-    let reader = SyncReader::new(Arc::new(source), 8);
+    // Create reader for the stream
+    let reader = SyncReader::new(Arc::new(source), SyncReaderParams::default());
 
     // 3. Test: Create rodio decoder (this validates the stream format)
     info!("Creating rodio decoder...");
