@@ -19,15 +19,15 @@
 
 mod engine;
 mod error;
-mod fetch;
-mod io;
+mod facade;
 mod msg;
-mod unified;
+mod pipe;
+mod source;
 
 pub use engine::{Engine, EngineCommand, EngineHandle, EngineSource, EngineStream, WriterTask};
 pub use error::{StreamError, StreamResult};
-pub use fetch::{Reader, ReaderError, Writer, WriterError};
-pub use io::{Source, SyncReader};
+pub use facade::{OpenedSource, Stream, StreamSource};
 pub use kithara_storage::WaitOutcome;
 pub use msg::{EngineParams, StreamMsg};
-pub use unified::{OpenedSource, Stream, StreamSource};
+pub use pipe::{Reader, ReaderError, Writer, WriterError};
+pub use source::{Source, SyncReader};
