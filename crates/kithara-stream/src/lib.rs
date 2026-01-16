@@ -22,6 +22,7 @@ mod error;
 mod facade;
 mod msg;
 mod pipe;
+mod prefetch;
 mod source;
 mod stream_source;
 
@@ -31,5 +32,8 @@ pub use facade::{OpenedSource, SourceFactory};
 pub use kithara_storage::WaitOutcome;
 pub use msg::{EngineParams, StreamMsg};
 pub use pipe::{Reader, ReaderError, Writer, WriterError};
+pub use prefetch::{
+    PrefetchConsumer, PrefetchResult, PrefetchSource, PrefetchWorker, PrefetchedItem,
+};
 pub use source::{Source, SyncReader, SyncReaderParams};
 pub use stream_source::StreamSource;
