@@ -10,7 +10,8 @@ use std::{
 
 use async_trait::async_trait;
 use kithara_decode::SourceReader;
-use kithara_stream::{MediaInfo, Source, StreamError, StreamResult, WaitOutcome};
+use kithara_stream::{MediaInfo, Source, StreamResult, WaitOutcome};
+use rstest::{fixture, rstest};
 
 // ==================== Mock Source ====================
 
@@ -37,7 +38,10 @@ struct MemorySourceError;
 impl Source for MemorySource {
     type Error = MemorySourceError;
 
-    async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
+    async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>
+    where
+        Self: Send + Sync,
+    {
         if range.start >= self.data.len() as u64 {
             Ok(WaitOutcome::Eof)
         } else {
@@ -45,7 +49,10 @@ impl Source for MemorySource {
         }
     }
 
-    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error>
+    where
+        Self: Send + Sync,
+    {
         let offset = offset as usize;
         if offset >= self.data.len() {
             return Ok(0);
@@ -65,239 +72,295 @@ impl Source for MemorySource {
     }
 }
 
+// ==================== Fixtures ====================
+
+#[fixture]
+fn hello_source() -> Arc<MemorySource> {
+    Arc::new(MemorySource::from_str("Hello, World!"))
+}
+
+#[fixture]
+fn digits_source() -> Arc<MemorySource> {
+    Arc::new(MemorySource::from_str("0123456789"))
+}
+
+#[fixture]
+fn alpha_source() -> Arc<MemorySource> {
+    Arc::new(MemorySource::from_str("ABCDEFGHIJ"))
+}
+
+#[fixture]
+fn empty_source() -> Arc<MemorySource> {
+    Arc::new(MemorySource::new(vec![]))
+}
+
+#[fixture]
+fn large_source() -> Arc<MemorySource> {
+    let data: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
+    Arc::new(MemorySource::new(data))
+}
+
 // ==================== SourceReader Tests ====================
 
+#[rstest]
 #[tokio::test]
-async fn source_reader_read_sequential() {
-    let source = Arc::new(MemorySource::from_str("Hello, World!"));
-    let mut reader = SourceReader::new(source);
+async fn read_sequential(hello_source: Arc<MemorySource>) {
+    let source = hello_source;
 
-    let mut buf = [0u8; 5];
-    let n = reader.read(&mut buf).unwrap();
-    assert_eq!(n, 5);
-    assert_eq!(&buf, b"Hello");
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
 
-    let n = reader.read(&mut buf).unwrap();
-    assert_eq!(n, 5);
-    assert_eq!(&buf, b", Wor");
+        let mut buf = [0u8; 5];
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, b"Hello");
 
-    let n = reader.read(&mut buf).unwrap();
-    assert_eq!(n, 3);
-    assert_eq!(&buf[..3], b"ld!");
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, b", Wor");
+
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(&buf[..3], b"ld!");
+    })
+    .await;
+
+    result.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn source_reader_read_all() {
+async fn read_all() {
     let source = Arc::new(MemorySource::from_str("Test data"));
-    let mut reader = SourceReader::new(source);
 
-    let mut buf = Vec::new();
-    let n = reader.read_to_end(&mut buf).unwrap();
-    assert_eq!(n, 9);
-    assert_eq!(&buf, b"Test data");
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
+
+        let mut buf = Vec::new();
+        let n = reader.read_to_end(&mut buf).unwrap();
+        assert_eq!(n, 9);
+        assert_eq!(&buf, b"Test data");
+    })
+    .await;
+
+    result.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn source_reader_read_eof() {
+async fn read_eof() {
     let source = Arc::new(MemorySource::from_str("Short"));
-    let mut reader = SourceReader::new(source);
 
-    // Read all data
-    let mut buf = [0u8; 100];
-    let n = reader.read(&mut buf).unwrap();
-    assert_eq!(n, 5);
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
 
-    // Next read should return 0 (EOF)
-    let n = reader.read(&mut buf).unwrap();
-    assert_eq!(n, 0);
+        let mut buf = [0u8; 100];
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 5);
+
+        // Next read should return 0 (EOF)
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 0);
+    })
+    .await;
+
+    result.unwrap();
 }
 
+#[rstest]
+#[case::start(SeekFrom::Start(5), 5, "567")]
+#[case::current_forward(SeekFrom::Current(2), 5, "567")]
+#[case::end(SeekFrom::End(-3), 7, "789")]
 #[tokio::test]
-async fn source_reader_seek_start() {
-    let source = Arc::new(MemorySource::from_str("0123456789"));
-    let mut reader = SourceReader::new(source);
+async fn seek_operations(
+    digits_source: Arc<MemorySource>,
+    #[case] seek_from: SeekFrom,
+    #[case] expected_pos: u64,
+    #[case] expected_data: &str,
+) {
+    let source = digits_source;
+    let expected = expected_data.as_bytes().to_vec();
 
-    // Read some data
-    let mut buf = [0u8; 3];
-    reader.read(&mut buf).unwrap();
-    assert_eq!(&buf, b"012");
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
 
-    // Seek to position 5
-    let pos = reader.seek(SeekFrom::Start(5)).unwrap();
-    assert_eq!(pos, 5);
+        // Read initial 3 bytes to set position
+        let mut buf = [0u8; 3];
+        reader.read(&mut buf).unwrap();
 
-    // Read from new position
-    reader.read(&mut buf).unwrap();
-    assert_eq!(&buf, b"567");
+        // Perform seek
+        let pos = reader.seek(seek_from).unwrap();
+        assert_eq!(pos, expected_pos);
+
+        // Read and verify
+        reader.read(&mut buf).unwrap();
+        assert_eq!(&buf[..], &expected[..]);
+    })
+    .await;
+
+    result.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn source_reader_seek_current() {
-    let source = Arc::new(MemorySource::from_str("0123456789"));
-    let mut reader = SourceReader::new(source);
+async fn seek_current_negative(digits_source: Arc<MemorySource>) {
+    let source = digits_source;
 
-    // Read to position 3
-    let mut buf = [0u8; 3];
-    reader.read(&mut buf).unwrap();
-    assert_eq!(reader.position(), 3);
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
 
-    // Seek forward 2 from current
-    let pos = reader.seek(SeekFrom::Current(2)).unwrap();
-    assert_eq!(pos, 5);
+        let mut buf = [0u8; 5];
+        reader.read(&mut buf).unwrap();
+        assert_eq!(reader.position(), 5);
 
-    // Read from new position
-    reader.read(&mut buf).unwrap();
-    assert_eq!(&buf, b"567");
+        let pos = reader.seek(SeekFrom::Current(-3)).unwrap();
+        assert_eq!(pos, 2);
+
+        reader.read(&mut buf).unwrap();
+        assert_eq!(&buf, b"23456");
+    })
+    .await;
+
+    result.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn source_reader_seek_current_negative() {
-    let source = Arc::new(MemorySource::from_str("0123456789"));
-    let mut reader = SourceReader::new(source);
-
-    // Read to position 5
-    let mut buf = [0u8; 5];
-    reader.read(&mut buf).unwrap();
-    assert_eq!(reader.position(), 5);
-
-    // Seek back 3 from current
-    let pos = reader.seek(SeekFrom::Current(-3)).unwrap();
-    assert_eq!(pos, 2);
-
-    // Read from new position
-    reader.read(&mut buf).unwrap();
-    assert_eq!(&buf, b"23456");
-}
-
-#[tokio::test]
-async fn source_reader_seek_end() {
-    let source = Arc::new(MemorySource::from_str("0123456789"));
-    let mut reader = SourceReader::new(source);
-
-    // Seek to 3 bytes before end
-    let pos = reader.seek(SeekFrom::End(-3)).unwrap();
-    assert_eq!(pos, 7);
-
-    // Read remaining
-    let mut buf = [0u8; 3];
-    let n = reader.read(&mut buf).unwrap();
-    assert_eq!(n, 3);
-    assert_eq!(&buf, b"789");
-}
-
-#[tokio::test]
-async fn source_reader_seek_to_zero() {
+async fn seek_to_zero() {
     let source = Arc::new(MemorySource::from_str("Hello"));
-    let mut reader = SourceReader::new(source);
 
-    // Read all
-    let mut buf = [0u8; 5];
-    reader.read(&mut buf).unwrap();
-    assert_eq!(reader.position(), 5);
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
 
-    // Seek back to start
-    let pos = reader.seek(SeekFrom::Start(0)).unwrap();
-    assert_eq!(pos, 0);
+        let mut buf = [0u8; 5];
+        reader.read(&mut buf).unwrap();
+        assert_eq!(reader.position(), 5);
 
-    // Read again
-    reader.read(&mut buf).unwrap();
-    assert_eq!(&buf, b"Hello");
+        let pos = reader.seek(SeekFrom::Start(0)).unwrap();
+        assert_eq!(pos, 0);
+
+        reader.read(&mut buf).unwrap();
+        assert_eq!(&buf, b"Hello");
+    })
+    .await;
+
+    result.unwrap();
 }
 
+#[rstest]
+#[case::past_eof(SeekFrom::Start(100))]
+#[case::negative(SeekFrom::Current(-10))]
 #[tokio::test]
-async fn source_reader_seek_past_eof_fails() {
+async fn seek_invalid_fails(#[case] seek_from: SeekFrom) {
     let source = Arc::new(MemorySource::from_str("Short"));
-    let mut reader = SourceReader::new(source);
 
-    // Seek past EOF should fail
-    let result = reader.seek(SeekFrom::Start(100));
-    assert!(result.is_err());
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
+        let result = reader.seek(seek_from);
+        assert!(result.is_err());
+    })
+    .await;
+
+    result.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn source_reader_seek_negative_fails() {
+async fn position_tracking(digits_source: Arc<MemorySource>) {
+    let source = digits_source;
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
+
+        assert_eq!(reader.position(), 0);
+
+        let mut buf = [0u8; 3];
+        reader.read(&mut buf).unwrap();
+        assert_eq!(reader.position(), 3);
+
+        reader.seek(SeekFrom::Start(7)).unwrap();
+        assert_eq!(reader.position(), 7);
+
+        reader.read(&mut buf).unwrap();
+        assert_eq!(reader.position(), 10);
+    })
+    .await;
+
+    result.unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn empty_read() {
     let source = Arc::new(MemorySource::from_str("Test"));
-    let mut reader = SourceReader::new(source);
 
-    // Seek to negative position should fail
-    let result = reader.seek(SeekFrom::Current(-10));
-    assert!(result.is_err());
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
+
+        let mut buf = [];
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 0);
+        assert_eq!(reader.position(), 0);
+    })
+    .await;
+
+    result.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn source_reader_position_tracking() {
-    let source = Arc::new(MemorySource::from_str("0123456789"));
-    let mut reader = SourceReader::new(source);
+async fn empty_source_read(empty_source: Arc<MemorySource>) {
+    let source = empty_source;
 
-    assert_eq!(reader.position(), 0);
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
 
-    let mut buf = [0u8; 3];
-    reader.read(&mut buf).unwrap();
-    assert_eq!(reader.position(), 3);
+        let mut buf = [0u8; 10];
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 0);
+    })
+    .await;
 
-    reader.seek(SeekFrom::Start(7)).unwrap();
-    assert_eq!(reader.position(), 7);
-
-    reader.read(&mut buf).unwrap();
-    assert_eq!(reader.position(), 10);
+    result.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn source_reader_empty_read() {
-    let source = Arc::new(MemorySource::from_str("Test"));
-    let mut reader = SourceReader::new(source);
+async fn large_data_read(large_source: Arc<MemorySource>) {
+    let expected: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
+    let source = large_source;
 
-    // Empty buffer read returns 0
-    let mut buf = [];
-    let n = reader.read(&mut buf).unwrap();
-    assert_eq!(n, 0);
-    assert_eq!(reader.position(), 0);
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
+
+        let mut result = Vec::new();
+        reader.read_to_end(&mut result).unwrap();
+
+        assert_eq!(result, expected);
+    })
+    .await;
+
+    result.unwrap();
 }
 
+#[rstest]
 #[tokio::test]
-async fn source_reader_empty_source() {
-    let source = Arc::new(MemorySource::new(vec![]));
-    let mut reader = SourceReader::new(source);
+async fn multiple_seeks_and_reads(alpha_source: Arc<MemorySource>) {
+    let source = alpha_source;
 
-    let mut buf = [0u8; 10];
-    let n = reader.read(&mut buf).unwrap();
-    assert_eq!(n, 0);
-}
+    let result = tokio::task::spawn_blocking(move || {
+        let mut reader = SourceReader::new(source);
+        let mut buf = [0u8; 2];
 
-#[tokio::test]
-async fn source_reader_large_data() {
-    // Test with larger data to verify chunked reading
-    let data: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
-    let source = Arc::new(MemorySource::new(data.clone()));
-    let mut reader = SourceReader::new(source);
+        let test_cases = [(0u64, b"AB"), (4, b"EF"), (8, b"IJ"), (2, b"CD")];
 
-    let mut result = Vec::new();
-    reader.read_to_end(&mut result).unwrap();
+        for (pos, expected) in test_cases {
+            reader.seek(SeekFrom::Start(pos)).unwrap();
+            reader.read(&mut buf).unwrap();
+            assert_eq!(&buf, expected);
+        }
+    })
+    .await;
 
-    assert_eq!(result, data);
-}
-
-#[tokio::test]
-async fn source_reader_multiple_seeks_and_reads() {
-    let source = Arc::new(MemorySource::from_str("ABCDEFGHIJ"));
-    let mut reader = SourceReader::new(source);
-
-    let mut buf = [0u8; 2];
-
-    // Read at various positions
-    reader.seek(SeekFrom::Start(0)).unwrap();
-    reader.read(&mut buf).unwrap();
-    assert_eq!(&buf, b"AB");
-
-    reader.seek(SeekFrom::Start(4)).unwrap();
-    reader.read(&mut buf).unwrap();
-    assert_eq!(&buf, b"EF");
-
-    reader.seek(SeekFrom::Start(8)).unwrap();
-    reader.read(&mut buf).unwrap();
-    assert_eq!(&buf, b"IJ");
-
-    reader.seek(SeekFrom::Start(2)).unwrap();
-    reader.read(&mut buf).unwrap();
-    assert_eq!(&buf, b"CD");
+    result.unwrap();
 }

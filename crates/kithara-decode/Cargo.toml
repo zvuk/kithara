@@ -30,6 +30,8 @@ kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 tempfile = { workspace = true }
 rodio = { workspace = true }
+async-trait = { workspace = true }
+rstest = { workspace = true }
 
 [[example]]
 name = "file_decode"

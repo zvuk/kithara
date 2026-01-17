@@ -23,11 +23,13 @@ const TINY_WAV_BYTES: &[u8] = include_bytes!("fixtures/silence_1s.wav");
 const TEST_MP3_BYTES: &[u8] = include_bytes!("fixtures/test.mp3");
 
 /// Test server for serving audio fixtures
+#[allow(dead_code)]
 pub struct AudioTestServer {
     base_url: String,
     request_counts: Arc<std::sync::Mutex<HashMap<String, usize>>>,
 }
 
+#[allow(dead_code)]
 impl AudioTestServer {
     /// Create a new test server
     pub async fn new() -> Self {
@@ -95,6 +97,7 @@ impl AudioTestServer {
 }
 
 /// Handler for WAV endpoint
+#[allow(dead_code)]
 async fn wav_endpoint() -> Response<Body> {
     Response::builder()
         .status(StatusCode::OK)
@@ -105,6 +108,7 @@ async fn wav_endpoint() -> Response<Body> {
 }
 
 /// Handler for MP3 endpoint
+#[allow(dead_code)]
 async fn mp3_endpoint() -> Response<Body> {
     Response::builder()
         .status(StatusCode::OK)
