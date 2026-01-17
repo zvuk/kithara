@@ -1,169 +1,161 @@
 # `kithara-stream` — streaming orchestration primitives
 
 `kithara-stream` provides generic orchestration primitives for byte streams in Kithara.
-It handles the coordination between async producers (network, disk) and async consumers,
-with support for in-band control messages and seek commands.
+It handles the coordination between async producers (network, disk) and sync consumers (decoders),
+with support for seek commands and prefetch buffering.
 
 ## Design goals
 
-- **Generic over message types**: Supports custom `Control` and `Event` types defined by higher-level crates
-- **Deadlock-free orchestration**: Coordinates writer (fetch → storage) and reader (storage → consumer) tasks
-- **Async-first API**: Primary surface is an async `Stream<Item = Result<StreamMsg<C, Ev>, StreamError<E>>>`
-- **Seek support**: Best-effort byte seek with clear semantics for seekable vs non-seekable sources
+- **Async Source trait**: Generic async random-access byte reading
+- **SyncReader adapter**: Bridges async `Source` to sync `Read + Seek` for decoders
+- **Prefetch worker**: Background prefetching with epoch-based invalidation on seek
+- **SourceFactory pattern**: Unified API for creating sources (`StreamSource<S>`)
 - **Backpressure**: Bounded buffering prevents unbounded memory growth
 
 ## Public contract (normative)
 
 The public contract is expressed by the following items re-exported from `src/lib.rs`:
 
-### Core orchestration
-- `struct Engine<S>` — Main orchestration engine that manages writer and reader tasks
-- `struct EngineHandle` — Handle for controlling a running `Engine` (send seek commands)
-- `trait EngineSource` — Source abstraction that `Engine` uses to fetch data
-- `type EngineStream<C, Ev, E>` — Output stream type from `Engine`
+### Core abstractions
+- `trait Source` — Async random-access byte source with `wait_range()` and `read_at()`
+- `struct SyncReader<S>` — Sync `Read + Seek` adapter over async `Source`
+- `struct SyncReaderParams` — Configuration for prefetch buffer size
 
-### Lower-level components
-- `struct Writer` — Async writer that accepts byte chunks and writes to storage
-- `struct Reader` — Async reader that reads from storage and produces byte stream
-- `enum StreamMsg<C, Ev>` — Messages emitted by the stream (Data, Control, or Event)
-- `struct StreamParams` — Configuration parameters for stream orchestration
+### Source creation
+- `trait SourceFactory` — Factory for creating sources with unified API
+- `struct StreamSource<S>` — Wrapper that holds `Arc<Source>` and event channel
+- `struct OpenedSource` — Result of opening a source (source + events channel)
 
-### Error handling
-- `enum StreamError<E>` — Generic error type that wraps source errors `E`
+### Prefetch infrastructure
+- `trait PrefetchSource` — Generic source for prefetch worker
+- `struct PrefetchWorker<S>` — Background worker with epoch tracking
+- `struct PrefetchedItem<C>` — Chunk with epoch for invalidation
+- `struct PrefetchConsumer` — Consumer-side epoch tracking
+
+### Support types
+- `enum StreamMsg<C, Ev>` — Messages (Data, Control, Event)
+- `struct Writer` — Async writer for download tasks
+- `struct Reader` — Async reader from storage
+- `enum StreamError<E>` — Generic error wrapper
+- `struct MediaInfo` — Codec/container information for decoders
 
 ## Architecture overview
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                    Engine (orchestrator)                    │
-│  ┌─────────────┐        ┌──────────────┐        ┌─────────┐ │
-│  │  EngineSource │──────▶│    Writer    │──────▶│ Storage │ │
-│  └─────────────┘        └──────────────┘        └─────────┘ │
-│         │                           │                │       │
-│         │                    ┌──────▼──────┐         │       │
-│         │                    │   Reader    │◀────────┘       │
-│         │                    └──────┬──────┘                 │
-│         │                           │                        │
-│  ┌──────▼──────┐             ┌──────▼──────┐                 │
-│  │Control Handle│             │ Output Stream│                │
-│  └─────────────┘             └─────────────┘                 │
+│                    StreamSource<S>                          │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ SourceFactory::open() → OpenedSource                 │   │
+│  │   - Arc<SourceImpl>  (implements Source trait)       │   │
+│  │   - broadcast::Sender<Event>                         │   │
+│  └──────────────────────────────────────────────────────┘   │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────────┐
+│                    SyncReader<S>                            │
+│  ┌────────────────┐    ┌─────────────┐    ┌──────────────┐  │
+│  │ PrefetchWorker │───▶│ kanal chan  │───▶│ Read + Seek  │  │
+│  │   (async)      │    │ (bounded)   │    │   (sync)     │  │
+│  └────────────────┘    └─────────────┘    └──────────────┘  │
+│         │                                        │          │
+│         │◀────── seek command ───────────────────┘          │
+│         │        (epoch increment)                          │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Key invariants
 
-1. **Stop semantics**: Dropping the consumer stream stops the orchestration loop
-2. **Handle optional**: Engine continues running even if all control handles are dropped
-3. **Backpressure**: Writer blocks when internal buffers are full
-4. **Error propagation**: Source errors are propagated as `StreamError<E>` without boxing
-5. **Seek best-effort**: `EngineHandle::seek_bytes()` works if source supports it
+1. **Epoch tracking**: Seek increments epoch; stale chunks are discarded
+2. **Non-blocking reads**: `SyncReader::read()` uses prefetch buffer, never blocks on I/O
+3. **Backpressure**: Bounded channel limits memory usage
+4. **EOF signaling**: Empty chunk with `is_eof=true` signals end of stream
 
 ## Usage patterns
 
-### Basic orchestration
+### Opening a source with StreamSource
 ```rust
-use kithara_stream::{Engine, EngineSource, EngineHandle, StreamParams};
+use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
+use kithara_file::{File, FileParams};
 
-// Create an EngineSource implementation
-let source = MySource::new();
+// Open source (async)
+let source = StreamSource::<File>::open(url, FileParams::default()).await?;
 
-// Build and run the engine
-let (engine, handle, stream) = Engine::build(source, StreamParams::default());
+// Subscribe to events
+let mut events = source.events();
 
-// Spawn the engine task
-tokio::spawn(engine.run());
+// Create sync reader for decoder
+let reader = SyncReader::new(source.into_inner(), SyncReaderParams::default());
+```
 
-// Use the stream
-while let Some(msg) = stream.next().await {
-    match msg {
-        Ok(StreamMsg::Data(bytes)) => { /* process bytes */ }
-        Ok(StreamMsg::Control(ctrl)) => { /* process control message */ }
-        Ok(StreamMsg::Event(ev)) => { /* process event */ }
-        Err(e) => { /* handle error */ }
+### Implementing Source trait
+```rust
+use kithara_stream::{Source, StreamError, StreamResult, WaitOutcome};
+use async_trait::async_trait;
+
+struct MySource { /* ... */ }
+
+#[async_trait]
+impl Source for MySource {
+    type Error = MyError;
+
+    async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
+        // Wait until range is available or EOF
+        Ok(WaitOutcome::Ready)
     }
-}
 
-// Seek if supported
-if let Ok(()) = handle.seek_bytes(1024).await {
-    // Seek succeeded
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
+        // Read bytes at offset (non-blocking after wait_range)
+        Ok(bytes_read)
+    }
+
+    fn len(&self) -> Option<u64> {
+        Some(total_length) // or None for streaming
+    }
+
+    fn media_info(&self) -> Option<MediaInfo> {
+        // Optional: provide codec hint for decoders
+        None
+    }
 }
 ```
 
-### Implementing `EngineSource`
+### Implementing SourceFactory
 ```rust
-use kithara_stream::{EngineSource, WriterTask, StreamError};
-use bytes::Bytes;
+use kithara_stream::{SourceFactory, OpenedSource, StreamError};
 
-struct MySource;
+struct MySourceType;
 
-#[async_trait::async_trait]
-impl EngineSource for MySource {
-    type Error = MyError;
-    type Control = MyControl;
+impl SourceFactory for MySourceType {
+    type Params = MyParams;
     type Event = MyEvent;
+    type SourceImpl = MySource;
 
     async fn open(
-        &self,
-        params: StreamParams,
-    ) -> Result<(WriterTask<Self::Control, Self::Event, Self::Error>, Self::Control), StreamError<Self::Error>> {
-        // Create writer and return it with initial control state
-        Ok((writer, initial_control))
-    }
-
-    async fn seek_bytes(
-        &self,
-        pos: u64,
-        control: &mut Self::Control,
-    ) -> Result<(), StreamError<Self::Error>> {
-        // Implement seek if supported
-        Ok(())
-    }
-
-    fn supports_seek(&self) -> bool {
-        true // or false if not supported
+        url: Url,
+        params: Self::Params,
+    ) -> Result<OpenedSource<Self::SourceImpl, Self::Event>, StreamError<SourceError>> {
+        let source = MySource::new(url, params).await?;
+        let (events_tx, _) = broadcast::channel(16);
+        Ok(OpenedSource {
+            source: Arc::new(source),
+            events_tx,
+        })
     }
 }
 ```
-
-## Message types
-
-`StreamMsg<C, Ev>` can carry three kinds of payloads:
-
-1. **`Data(Bytes)`** — Raw byte chunks from the source
-2. **`Control(C)`** — Control messages (e.g., playlist updates, quality changes)
-3. **`Event(Ev)`** — Events mapped from source-specific metadata
-
-This allows higher-level crates to define their own control protocols while
-keeping the orchestration layer generic.
 
 ## Integration with other Kithara crates
 
-- **`kithara-net`**: Provides HTTP-based `EngineSource` implementations
-- **`kithara-hls`**: Uses `Engine` for HLS segment fetching with playlist control messages
-- **`kithara-file`**: Uses `Engine` for progressive file downloads
-- **`kithara-storage`**: Used by `Writer`/`Reader` for persistent storage
+- **`kithara-file`**: Implements `SourceFactory` for progressive HTTP downloads
+- **`kithara-hls`**: Implements `SourceFactory` for HLS streams with ABR
+- **`kithara-decode`**: Uses `SyncReader` with Symphonia for audio decoding
+- **`kithara-storage`**: Used by sources for persistent caching
 
-## Error handling philosophy
+## Error handling
 
-`StreamError<E>` is generic over the source error type `E`. This allows:
+`StreamError<E>` is generic over the source error type `E`:
 
-- Source errors to be propagated without loss of type information
-- Pattern matching on specific error variants from the source
-- No `Box<dyn Error>` in the public API
-
-Common error cases:
 - `StreamError::Source(E)` — Wrapped source error
-- `StreamError::ChannelClosed` — Control channel was closed
-- `StreamError::Cancelled` — Operation was cancelled
-
-## Transition from legacy API
-
-This crate previously contained a legacy `Source`/`Stream` orchestrator. The new `Engine` API
-provides:
-
-- Better separation of concerns (writer vs reader)
-- Support for in-band control messages
-- More explicit error handling
-- Cleaner shutdown semantics
-
-Legacy types are still available via re-exports but new code should use `Engine`.
+- `StreamError::InvalidSeek` — Invalid seek position
+- `StreamError::UnknownLength` — Seek from end requires known length
+- `StreamError::ChannelClosed` — Internal channel closed

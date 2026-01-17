@@ -9,7 +9,7 @@ use std::{
 use async_trait::async_trait;
 use kithara_storage::WaitOutcome;
 use tokio::sync::mpsc;
-use tracing::trace;
+use tracing::{debug, trace, warn};
 
 use crate::{
     error::{StreamError, StreamResult},
@@ -86,7 +86,7 @@ impl Default for SyncReaderParams {
     }
 }
 
-/// Byte chunk with position information.
+/// Byte chunk with position.
 #[derive(Debug, Clone)]
 pub struct ByteChunk {
     /// Position in source where this chunk starts.
@@ -135,6 +135,12 @@ impl<S: Source> PrefetchSource for BytePrefetchSource<S> {
         // Wait for data
         let range = self.read_pos..self.read_pos.saturating_add(self.chunk_size as u64);
 
+        debug!(
+            start = range.start,
+            end = range.end,
+            epoch = self.epoch,
+            "BytePrefetchSource: waiting for range"
+        );
         let wait_result = self.src.wait_range(range).await;
 
         match wait_result {
@@ -309,6 +315,7 @@ where
         }
 
         // Wait for matching chunk (non-blocking loop with yield)
+        let mut spin_count: u64 = 0;
         loop {
             match self.data_rx.try_recv() {
                 Ok(Some(item)) => {
@@ -319,6 +326,15 @@ where
                 }
                 Ok(None) => {
                     // No data yet, yield and retry
+                    spin_count += 1;
+                    if spin_count.is_multiple_of(10_000_000) {
+                        warn!(
+                            pos = self.pos,
+                            epoch = self.epoch,
+                            spin_count,
+                            "SyncReader: spinning waiting for data"
+                        );
+                    }
                     std::thread::yield_now();
                 }
                 Err(_) => {

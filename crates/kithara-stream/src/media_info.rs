@@ -160,10 +160,7 @@ mod tests {
             AudioCodec::from_hls_codec("mp4a.40.34"),
             Some(AudioCodec::Mp3)
         );
-        assert_eq!(
-            AudioCodec::from_hls_codec("mp4a.69"),
-            Some(AudioCodec::Mp3)
-        );
+        assert_eq!(AudioCodec::from_hls_codec("mp4a.69"), Some(AudioCodec::Mp3));
     }
 
     #[test]

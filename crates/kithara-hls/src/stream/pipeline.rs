@@ -40,17 +40,26 @@ pub struct SegmentStreamParams {
     pub min_sample_bytes: u64,
 }
 
+/// Sentinel value meaning "no next variant".
+const NO_NEXT_VARIANT: usize = usize::MAX;
+
 /// Handle for controlling the pipeline from HlsSource.
 /// Can be cloned and used independently from the stream.
 #[derive(Clone)]
 pub struct PipelineHandle {
     cmd_tx: mpsc::Sender<StreamCommand>,
+    /// Variant currently being read by decoder.
     current_variant: Arc<AtomicUsize>,
+    /// Next variant to switch to (set by ABR), or NO_NEXT_VARIANT if none.
+    next_variant: Arc<AtomicUsize>,
 }
 
 impl PipelineHandle {
     /// Seek to a specific segment index.
+    /// If ABR switch is pending, commits the switch first.
     pub fn seek(&self, segment_index: usize) {
+        // Commit pending ABR switch on seek.
+        self.commit_variant_switch();
         let _ = self.cmd_tx.try_send(StreamCommand::Seek { segment_index });
     }
 
@@ -63,9 +72,35 @@ impl PipelineHandle {
         });
     }
 
-    /// Get current variant index.
+    /// Get current variant index (variant being read).
     pub fn current_variant(&self) -> usize {
         self.current_variant.load(Ordering::SeqCst)
+    }
+
+    /// Get next variant if ABR requested a switch, or None.
+    pub fn next_variant(&self) -> Option<usize> {
+        let v = self.next_variant.load(Ordering::SeqCst);
+        if v == NO_NEXT_VARIANT { None } else { Some(v) }
+    }
+
+    /// Set next variant (called by ABR when it decides to switch).
+    pub fn set_next_variant(&self, variant: usize) {
+        self.next_variant.store(variant, Ordering::SeqCst);
+    }
+
+    /// Commit switch: current = next, next = None.
+    /// Called by adapter when it's ready to switch.
+    pub fn commit_variant_switch(&self) {
+        let next = self.next_variant.load(Ordering::SeqCst);
+        if next != NO_NEXT_VARIANT {
+            self.current_variant.store(next, Ordering::SeqCst);
+            self.next_variant.store(NO_NEXT_VARIANT, Ordering::SeqCst);
+            tracing::info!(
+                from = self.current_variant.load(Ordering::SeqCst),
+                to = next,
+                "Committed variant switch"
+            );
+        }
     }
 }
 
@@ -80,11 +115,20 @@ impl SegmentStream {
     /// Returns a handle for controlling the pipeline and the stream itself.
     pub fn new(params: SegmentStreamParams) -> (PipelineHandle, Self) {
         let (cmd_tx, cmd_rx) = mpsc::channel(params.command_capacity);
-        let current_variant = params.abr_controller.current_variant();
+        // Get initial variant from ABR, but create independent atomic for reading.
+        // ABR's current_variant = target for download.
+        // Handle's current_variant = what decoder is reading.
+        let initial_variant = params
+            .abr_controller
+            .current_variant()
+            .load(Ordering::Acquire);
+
+        let next_variant = Arc::new(AtomicUsize::new(NO_NEXT_VARIANT));
 
         let handle = PipelineHandle {
             cmd_tx,
-            current_variant: Arc::clone(&current_variant),
+            current_variant: Arc::new(AtomicUsize::new(initial_variant)),
+            next_variant: Arc::clone(&next_variant),
         };
 
         let inner = create_stream(
@@ -97,6 +141,7 @@ impl SegmentStream {
             params.events_tx,
             cmd_rx,
             params.min_sample_bytes,
+            next_variant,
         );
 
         (handle, Self { inner })
@@ -214,10 +259,21 @@ fn process_commands(
     let mut result = None;
 
     while let Ok(cmd) = cmd_rx.try_recv() {
+        tracing::debug!(
+            ?cmd,
+            process_all,
+            state_start_segment = state.start_segment,
+            "Processing command"
+        );
         match cmd {
             StreamCommand::Seek { segment_index } => {
                 if process_all {
                     state.apply_seek(segment_index);
+                    tracing::debug!(
+                        segment_index,
+                        state_start_segment = state.start_segment,
+                        "Applied seek (process_all)"
+                    );
                 } else {
                     result = Some(VariantSwitch::with_seek(state.to, segment_index));
                 }
@@ -259,6 +315,7 @@ fn create_stream(
     events: broadcast::Sender<HlsEvent>,
     mut cmd_rx: mpsc::Receiver<StreamCommand>,
     min_sample_bytes: u64,
+    next_variant: Arc<AtomicUsize>,
 ) -> Pin<Box<dyn Stream<Item = PipelineResult<SegmentMeta>> + Send>> {
     Box::pin(stream! {
         let initial_variant = abr.current_variant().load(Ordering::Acquire);
@@ -312,6 +369,12 @@ fn create_stream(
                     }
                 };
 
+            tracing::debug!(
+                state_start_segment = state.start_segment,
+                variant = state.to,
+                "After variant context load"
+            );
+
             // Emit event AFTER successful variant load.
             let variant_switched = state.from != state.to;
             if variant_switched {
@@ -326,6 +389,12 @@ fn create_stream(
             // Yield init segment if needed (variant switch or first segment).
             let need_init = var_ctx.playlist.init_segment.is_some()
                 && (variant_switched || state.start_segment == 0);
+            tracing::debug!(
+                need_init,
+                variant_switched,
+                state_start_segment = state.start_segment,
+                "Init segment check"
+            );
             if need_init {
                 match fetch_init_segment(&fetch, &var_ctx, state.to).await {
                     Ok(payload) => {
@@ -349,6 +418,13 @@ fn create_stream(
 
             // Iterate segments with streaming download and direct ABR updates.
             let mut switch: Option<VariantSwitch> = None;
+
+            tracing::debug!(
+                start_segment = state.start_segment,
+                segments_len = var_ctx.playlist.segments.len(),
+                variant = state.to,
+                "Starting segment iteration"
+            );
 
             for idx in state.start_segment..var_ctx.playlist.segments.len() {
                 if cancel.is_cancelled() {
@@ -475,6 +551,9 @@ fn create_stream(
                                         if decision.changed {
                                             let from = abr.current_variant().load(Ordering::Acquire);
                                             abr.apply(&decision, now);
+                                            // Set next_variant for deferred switch.
+                                            // Decoder will commit switch when ready.
+                                            next_variant.store(decision.target_variant_index, Ordering::SeqCst);
                                             let _ = events.send(HlsEvent::VariantApplied {
                                                 from_variant: from,
                                                 to_variant: decision.target_variant_index,
@@ -582,11 +661,30 @@ fn create_stream(
                 }
             }
 
+            tracing::debug!(
+                switch_pending = switch.is_some(),
+                last_segment = state.start_segment,
+                variant = state.to,
+                "Segment loop ended"
+            );
+
             if let Some(sw) = switch {
+                tracing::debug!(
+                    from = sw.from,
+                    to = sw.to,
+                    start_segment = sw.start_segment,
+                    "Continuing with variant switch"
+                );
                 state = sw;
+                tracing::debug!(
+                    state_start_segment = state.start_segment,
+                    state_to = state.to,
+                    "State after assignment"
+                );
                 continue;
             }
 
+            tracing::debug!(variant = state.to, "No more segments, ending stream");
             break;
         }
     })

@@ -9,7 +9,16 @@ use std::{
 
 use url::Url;
 
-use crate::parsing::CodecInfo;
+/// Detect container format from segment URL extension.
+fn detect_container_from_url(url: &Url) -> Option<DetectedContainer> {
+    let path = url.path();
+    let ext = path.rsplit('.').next()?.to_lowercase();
+    match ext.as_str() {
+        "ts" | "m2ts" => Some(DetectedContainer::MpegTs),
+        "mp4" | "m4s" | "m4a" | "m4v" => Some(DetectedContainer::Fmp4),
+        _ => None,
+    }
+}
 
 /// Encryption info for a segment (resolved key URL and IV).
 /// Also used as context for decryption callback in `AssetStore`.
@@ -66,22 +75,19 @@ pub(crate) struct SegmentEntry {
 /// Segments stored in BTreeMap with SegmentKey ordering: Init < Media(0) < Media(1) < ...
 struct VariantIndex {
     segments: BTreeMap<SegmentKey, SegmentData>,
-    /// Codec info from master playlist (if available).
-    codec_info: Option<CodecInfo>,
+    /// Container format detected from init/first segment URL.
+    detected_container: Option<DetectedContainer>,
+    /// First media segment index (for ABR switch support).
+    /// When ABR switches mid-stream, we start from segment N, not 0.
+    first_media_segment: Option<usize>,
 }
 
 impl VariantIndex {
     fn new() -> Self {
         Self {
             segments: BTreeMap::new(),
-            codec_info: None,
-        }
-    }
-
-    fn with_codec_info(codec_info: Option<CodecInfo>) -> Self {
-        Self {
-            segments: BTreeMap::new(),
-            codec_info,
+            detected_container: None,
+            first_media_segment: None,
         }
     }
 
@@ -95,8 +101,20 @@ impl VariantIndex {
         let key = if segment_index == usize::MAX {
             SegmentKey::Init
         } else {
+            // Track first media segment for ABR switch support
+            if self.first_media_segment.is_none() {
+                self.first_media_segment = Some(segment_index);
+            }
             SegmentKey::Media(segment_index)
         };
+
+        // Detect container from init segment or first media segment
+        if self.detected_container.is_none()
+            && (key == SegmentKey::Init || self.first_media_segment == Some(segment_index))
+        {
+            self.detected_container = detect_container_from_url(&url);
+        }
+
         self.segments.insert(
             key,
             SegmentData {
@@ -107,12 +125,17 @@ impl VariantIndex {
         );
     }
 
+    fn detected_container(&self) -> Option<DetectedContainer> {
+        self.detected_container
+    }
+
     /// Find segment by byte offset.
     /// INIT segment (if present) comes first at offset 0.
     /// Returns None if there are gaps in media segment indices.
     fn find(&self, offset: u64) -> Option<SegmentEntry> {
         let mut cumulative = 0u64;
-        let mut expected_media_idx = 0usize;
+        // Start from first_media_segment (supports ABR switch mid-stream)
+        let mut expected_media_idx = self.first_media_segment.unwrap_or(0);
 
         for (key, data) in &self.segments {
             // Gap detection for media segments.
@@ -149,6 +172,13 @@ impl VariantIndex {
     }
 }
 
+/// Container format detected from segment URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectedContainer {
+    MpegTs,
+    Fmp4,
+}
+
 /// Multi-variant segment index.
 pub(crate) struct SegmentIndex {
     variants: HashMap<usize, VariantIndex>,
@@ -180,6 +210,13 @@ impl SegmentIndex {
             .add(url, len, segment_index, encryption);
     }
 
+    /// Get detected container for a variant (if available).
+    pub fn detected_container(&self, variant: usize) -> Option<DetectedContainer> {
+        self.variants
+            .get(&variant)
+            .and_then(|v| v.detected_container())
+    }
+
     /// Find segment by offset for the specified variant.
     /// Returns owned SegmentEntry (computed on the fly).
     pub fn find(&self, offset: u64, variant: usize) -> Option<SegmentEntry> {
@@ -188,9 +225,14 @@ impl SegmentIndex {
 
     /// Find segment_index by offset in any loaded variant.
     /// Used as a hint for seek when the current variant doesn't have the needed segment.
+    /// Returns None for init segments (usize::MAX) - they are loaded automatically on variant switch.
     pub fn find_segment_index_for_offset(&self, offset: u64) -> Option<usize> {
         for variant_idx in self.variants.values() {
             if let Some(entry) = variant_idx.find(offset) {
+                // Don't return init segment index - init is handled by variant switch
+                if entry.segment_index == usize::MAX {
+                    continue;
+                }
                 return Some(entry.segment_index);
             }
         }
@@ -217,19 +259,5 @@ impl SegmentIndex {
     pub fn set_error(&mut self, error: String) {
         self.error = Some(error);
         self.finished = true;
-    }
-
-    /// Set codec info for a variant (from master playlist).
-    pub fn set_codec_info(&mut self, variant: usize, codec_info: Option<CodecInfo>) {
-        let codec_info_clone = codec_info.clone();
-        self.variants
-            .entry(variant)
-            .or_insert_with(|| VariantIndex::with_codec_info(codec_info_clone))
-            .codec_info = codec_info;
-    }
-
-    /// Get codec info for the specified variant.
-    pub fn codec_info(&self, variant: usize) -> Option<&CodecInfo> {
-        self.variants.get(&variant)?.codec_info.as_ref()
     }
 }

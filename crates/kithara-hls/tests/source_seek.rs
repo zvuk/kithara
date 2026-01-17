@@ -626,10 +626,11 @@ async fn hls_seek_after_real_abr_switch_returns_new_variant_data(
         assert_eq!(n, 9);
 
         // Verify data comes from the NEW variant after ABR switch
-        let expected_prefix = format!("V{}-SEG-0:", new_variant);
-        assert_eq!(
-            &buf_after_seek[..],
-            expected_prefix.as_bytes(),
+        // Note: after ABR switch mid-stream, the first segment may not be segment 0
+        // (e.g., if we switched at segment 1, first_media_segment will be 1)
+        let expected_variant_prefix = format!("V{}-SEG-", new_variant);
+        assert!(
+            buf_after_seek.starts_with(expected_variant_prefix.as_bytes()),
             "After ABR switch and seek, data should come from variant {}, got: {:?}",
             new_variant,
             String::from_utf8_lossy(&buf_after_seek)

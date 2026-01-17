@@ -119,6 +119,8 @@ pub struct MediaPlaylist {
     pub end_list: bool,
     /// Informational: first key found in the playlist (if any).
     pub current_key: Option<KeyInfo>,
+    /// Container format detected from segment/init URIs.
+    pub detected_container: Option<ContainerFormat>,
 }
 
 /// One media segment entry.
@@ -251,7 +253,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
         .find_map(|seg| seg.keys().first().copied())
         .and_then(keyinfo_from_decryption_key);
 
-    let segments = hls_media
+    let segments: Vec<MediaSegment> = hls_media
         .segments
         .iter()
         .enumerate()
@@ -295,6 +297,16 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
         })
     });
 
+    // Detect container from init segment or first segment URI
+    let detected_container = init_segment
+        .as_ref()
+        .and_then(|init| detect_container_from_uri(&init.uri))
+        .or_else(|| {
+            segments
+                .first()
+                .and_then(|seg| detect_container_from_uri(&seg.uri))
+        });
+
     Ok(MediaPlaylist {
         segments,
         target_duration,
@@ -302,5 +314,6 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
         media_sequence,
         end_list,
         current_key,
+        detected_container,
     })
 }
