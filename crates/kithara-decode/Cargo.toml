@@ -5,17 +5,18 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-kithara-assets = { workspace = true }
 kithara-stream = { workspace = true }
 thiserror = { workspace = true }
 kanal = { workspace = true }
 symphonia = { workspace = true }
 tokio = { workspace = true }
+rodio = { workspace = true, optional = true }
+tracing = { workspace = true }
 
 [features]
 default = []
-# Future: optional resampling support can be gated behind a feature.
-# resample = []
+# Enable rodio::Source adapter for playback
+rodio = ["dep:rodio"]
 
 [dev-dependencies]
 tokio = { workspace = true }
@@ -25,3 +26,15 @@ reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+kithara-file = { workspace = true }
+kithara-hls = { workspace = true }
+tempfile = { workspace = true }
+rodio = { workspace = true }
+
+[[example]]
+name = "file_decode"
+required-features = ["rodio"]
+
+[[example]]
+name = "hls_decode"
+required-features = ["rodio"]

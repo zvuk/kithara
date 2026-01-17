@@ -4,48 +4,36 @@
 //!
 //! ## Architecture
 //!
-//! - [`types`] - Core types, errors, and traits
-//! - [`symphonia`] - Symphonia-based decoding (SymphoniaDecoder, convert utilities)
+//! - [`AudioPipeline`] - Async pipeline running decoder in spawn_blocking
+//! - [`SymphoniaDecoder`] - Symphonia-based audio decoder
+//! - [`SourceReader`] - Sync Read+Seek adapter over async Source
+//! - [`AudioSyncReader`] - rodio::Source adapter (requires `rodio` feature)
 //!
-//! ## Sample Types
+//! ## Usage
 //!
-//! Primary output is `f32` (recommended for processing).
-//! `convert_to_i16()` available for i16 output when needed.
+//! ```ignore
+//! // Create pipeline directly from async Source
+//! let mut pipeline = AudioPipeline::open(source_arc).await?;
 //!
-//! ## PcmChunk Invariants
-//!
-//! [`PcmChunk<T>`] maintains these invariants:
-//! - **Frame alignment**: `pcm.len() % channels == 0`
-//! - **Valid specs**: `channels > 0` and `sample_rate > 0`
-//! - **Interleaved layout**: Samples are stored as LRLRLR... for stereo
+//! // Get audio receiver for playback
+//! let audio_rx = pipeline.take_audio_receiver().unwrap();
+//! let audio_source = AudioSyncReader::new(audio_rx, pipeline.spec());
+//! ```
 
 #![forbid(unsafe_code)]
 
 // Public API exports
+#[cfg(feature = "rodio")]
+pub use audio_sync_reader::AudioSyncReader;
+pub use pipeline_v2::{AudioPipeline, PipelineCommand};
+pub use source_reader::SourceReader;
 pub use symphonia_mod::{CachedCodecInfo, SymphoniaDecoder};
-pub use types::{
-    AudioSource, AudioSpec, ChannelCount, DecodeCommand, DecodeError, DecodeResult,
-    DecoderSettings, MediaSource, PcmChunk, PcmSpec, ReadSeek, SampleRate,
-};
+pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};
 
 // Internal modules
+#[cfg(feature = "rodio")]
+mod audio_sync_reader;
+mod pipeline_v2;
+mod source_reader;
 mod symphonia_mod;
 mod types;
-
-// Legacy modules (MVP placeholders, to be removed)
-mod decoder;
-mod engine;
-mod pipeline;
-mod symphonia_glue;
-
-pub use decoder::Decoder;
-pub use engine::DecodeEngine;
-pub use pipeline::AudioStream;
-
-// Test-only module
-#[cfg(test)]
-mod test_helpers;
-
-// Re-export test helpers for convenience in tests
-#[cfg(test)]
-pub use test_helpers::{FakeAudioSource, TestMediaSource};
