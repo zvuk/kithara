@@ -54,7 +54,7 @@ pub enum AudioCodec {
 /// - File extension
 /// - HTTP Content-Type header
 /// - Container metadata
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MediaInfo {
     /// Container format (fMP4, MPEG-TS, etc.)
     pub container: Option<ContainerFormat>,
@@ -67,7 +67,7 @@ pub struct MediaInfo {
 }
 
 impl MediaInfo {
-    /// Create empty MediaInfo.
+    /// Create empty `MediaInfo`.
     pub fn new() -> Self {
         Self::default()
     }
@@ -101,11 +101,11 @@ impl AudioCodec {
     /// Parse from HLS CODECS attribute value.
     ///
     /// Examples:
-    /// - `mp4a.40.2` -> AacLc
-    /// - `mp4a.40.5` -> AacHe
-    /// - `mp4a.40.29` -> AacHeV2
-    /// - `mp4a.40.34` -> Mp3
-    /// - `mp4a.69` or `mp4a.6B` -> Mp3
+    /// - `mp4a.40.2` -> `AacLc`
+    /// - `mp4a.40.5` -> `AacHe`
+    /// - `mp4a.40.29` -> `AacHeV2`
+    /// - `mp4a.40.34` -> `Mp3`
+    /// - `mp4a.69` or `mp4a.6B` -> `Mp3`
     pub fn from_hls_codec(codec: &str) -> Option<Self> {
         let codec_lower = codec.to_lowercase();
 

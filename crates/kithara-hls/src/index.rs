@@ -9,6 +9,8 @@ use std::{
 
 use url::Url;
 
+use crate::parsing::CodecInfo;
+
 /// Encryption info for a segment (resolved key URL and IV).
 /// Also used as context for decryption callback in `AssetStore`.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -64,12 +66,22 @@ pub(crate) struct SegmentEntry {
 /// Segments stored in BTreeMap with SegmentKey ordering: Init < Media(0) < Media(1) < ...
 struct VariantIndex {
     segments: BTreeMap<SegmentKey, SegmentData>,
+    /// Codec info from master playlist (if available).
+    codec_info: Option<CodecInfo>,
 }
 
 impl VariantIndex {
     fn new() -> Self {
         Self {
             segments: BTreeMap::new(),
+            codec_info: None,
+        }
+    }
+
+    fn with_codec_info(codec_info: Option<CodecInfo>) -> Self {
+        Self {
+            segments: BTreeMap::new(),
+            codec_info,
         }
     }
 
@@ -205,5 +217,19 @@ impl SegmentIndex {
     pub fn set_error(&mut self, error: String) {
         self.error = Some(error);
         self.finished = true;
+    }
+
+    /// Set codec info for a variant (from master playlist).
+    pub fn set_codec_info(&mut self, variant: usize, codec_info: Option<CodecInfo>) {
+        let codec_info_clone = codec_info.clone();
+        self.variants
+            .entry(variant)
+            .or_insert_with(|| VariantIndex::with_codec_info(codec_info_clone))
+            .codec_info = codec_info;
+    }
+
+    /// Get codec info for the specified variant.
+    pub fn codec_info(&self, variant: usize) -> Option<&CodecInfo> {
+        self.variants.get(&variant)?.codec_info.as_ref()
     }
 }

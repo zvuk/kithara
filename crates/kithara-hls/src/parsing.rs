@@ -6,6 +6,7 @@ use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,
     tags::VariantStream as HlsVariantStreamTag, types::DecryptionKey as HlsDecryptionKey,
 };
+use kithara_stream::AudioCodec;
 
 use crate::HlsResult;
 
@@ -29,8 +30,8 @@ pub enum ContainerFormat {
 pub struct CodecInfo {
     /// The raw `CODECS="..."` string from the playlist.
     pub codecs: Option<String>,
-    /// A best-effort guess at the audio codec.
-    pub audio_codec: Option<String>,
+    /// Parsed audio codec from the CODECS string.
+    pub audio_codec: Option<AudioCodec>,
     /// A best-effort guess at the container format.
     pub container: Option<ContainerFormat>,
 }
@@ -135,6 +136,18 @@ pub struct MediaSegment {
     pub key: Option<SegmentKey>,
 }
 
+/// Detect container format from URI extension.
+fn detect_container_from_uri(uri: &str) -> Option<ContainerFormat> {
+    let path = uri.split('?').next().unwrap_or(uri);
+    let ext = path.rsplit('.').next()?.to_lowercase();
+
+    match ext.as_str() {
+        "ts" | "m2ts" => Some(ContainerFormat::Ts),
+        "mp4" | "m4s" | "m4a" | "m4v" => Some(ContainerFormat::Fmp4),
+        _ => None,
+    }
+}
+
 /// Parses a master playlist (M3U8) into [`MasterPlaylist`].
 pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
     let input =
@@ -163,10 +176,22 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
                 }
             };
 
-            let codec = codecs_str.map(|c| CodecInfo {
-                codecs: Some(c),
-                audio_codec: None,
-                container: None,
+            let codec = codecs_str.map(|c| {
+                // Parse audio codec from CODECS string
+                // CODECS can contain multiple codecs separated by comma (e.g., "avc1.42c00d,mp4a.40.2")
+                let audio_codec = c
+                    .split(',')
+                    .map(|s| s.trim())
+                    .find_map(AudioCodec::from_hls_codec);
+
+                // Determine container format from URI extension
+                let container = detect_container_from_uri(&uri);
+
+                CodecInfo {
+                    codecs: Some(c),
+                    audio_codec,
+                    container,
+                }
             });
 
             VariantStream {

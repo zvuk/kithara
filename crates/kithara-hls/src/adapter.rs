@@ -9,7 +9,10 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use kithara_assets::{AssetStore, Assets, ResourceKey};
 use kithara_storage::{StreamingResourceExt, WaitOutcome};
-use kithara_stream::{Source, StreamError as KitharaIoError, StreamResult as KitharaIoResult};
+use kithara_stream::{
+    ContainerFormat as StreamContainerFormat, MediaInfo, Source,
+    StreamError as KitharaIoError, StreamResult as KitharaIoResult,
+};
 use tokio::sync::{Notify, RwLock, broadcast};
 use url::Url;
 
@@ -17,6 +20,7 @@ use crate::{
     HlsError,
     events::HlsEvent,
     index::{EncryptionInfo, SegmentIndex},
+    parsing::{CodecInfo, ContainerFormat},
     playlist::EncryptionMethod,
     stream::{PipelineHandle, SegmentMeta, SegmentStream},
 };
@@ -31,6 +35,9 @@ pub struct HlsSource {
     notify: Arc<Notify>,
     events_tx: broadcast::Sender<HlsEvent>,
     handle: PipelineHandle,
+    /// Codec info for each variant (indexed by variant number).
+    /// Populated from master playlist, read-only after creation.
+    variant_codecs: Arc<Vec<Option<CodecInfo>>>,
 }
 
 impl HlsSource {
@@ -40,8 +47,10 @@ impl HlsSource {
         base_stream: SegmentStream,
         assets: AssetStore<EncryptionInfo>,
         events_tx: broadcast::Sender<HlsEvent>,
+        variant_codecs: Vec<Option<CodecInfo>>,
     ) -> Self {
         let index = Arc::new(RwLock::new(SegmentIndex::new()));
+        let variant_codecs = Arc::new(variant_codecs);
         let notify = Arc::new(Notify::new());
 
         let index_clone = Arc::clone(&index);
@@ -95,6 +104,7 @@ impl HlsSource {
             notify,
             events_tx,
             handle,
+            variant_codecs,
         }
     }
 
@@ -327,5 +337,24 @@ impl Source for HlsSource {
 
     fn len(&self) -> Option<u64> {
         None
+    }
+
+    fn media_info(&self) -> Option<MediaInfo> {
+        let variant = self.handle.current_variant();
+        let codec_info = self.variant_codecs.get(variant)?.as_ref()?;
+
+        // Convert local ContainerFormat to kithara_stream's ContainerFormat
+        let container = match codec_info.container {
+            Some(ContainerFormat::Fmp4) => Some(StreamContainerFormat::Fmp4),
+            Some(ContainerFormat::Ts) => Some(StreamContainerFormat::MpegTs),
+            Some(ContainerFormat::Other) | None => None,
+        };
+
+        Some(MediaInfo {
+            container,
+            codec: codec_info.audio_codec,
+            sample_rate: None,
+            channels: None,
+        })
     }
 }
