@@ -13,6 +13,7 @@
 
 mod error;
 mod facade;
+mod media_info;
 mod msg;
 mod pipe;
 mod prefetch;
@@ -22,6 +23,7 @@ mod stream_source;
 pub use error::{StreamError, StreamResult};
 pub use facade::{OpenResult, OpenedSource, SourceFactory};
 pub use kithara_storage::WaitOutcome;
+pub use media_info::{AudioCodec, ContainerFormat, MediaInfo};
 pub use msg::StreamMsg;
 pub use pipe::{Reader, ReaderError, Writer, WriterError};
 pub use prefetch::{

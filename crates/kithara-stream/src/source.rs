@@ -13,6 +13,7 @@ use tracing::trace;
 
 use crate::{
     error::{StreamError, StreamResult},
+    media_info::MediaInfo,
     prefetch::{PrefetchSource, PrefetchWorker, PrefetchedItem},
 };
 
@@ -54,6 +55,16 @@ pub trait Source: Send + Sync + 'static {
     /// Default implementation derives from `len()`.
     fn is_empty(&self) -> Option<bool> {
         self.len().map(|len| len == 0)
+    }
+
+    /// Return media format information if known.
+    ///
+    /// This allows decoders to skip probing when format is known
+    /// (e.g., from HLS playlist CODECS attribute).
+    ///
+    /// Default implementation returns `None`.
+    fn media_info(&self) -> Option<MediaInfo> {
+        None
     }
 }
 
