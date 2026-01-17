@@ -1,24 +1,14 @@
 use std::time::Duration;
 
-use dasp::sample::Sample as DaspSample;
-use symphonia::core::audio::{conv::ConvertibleSample, sample::Sample as SymphoniaSample};
-
 use crate::{
     AudioSource, DecodeCommand, DecodeResult, DecoderSettings, MediaSource, PcmChunk, PcmSpec,
     symphonia_glue::SymphoniaSession,
 };
 
-/// Symphonia-based decode engine that implements AudioSource
-///
-/// This is the core engine that:
-/// - Manages Symphonia session (format reader + decoder)
-/// - Reads and decodes packets to PCM
-/// - Handles seek operations and decoder resets
-/// - Converts between different sample formats
-/// - Provides codec switch safety through reset/reopen
+/// Symphonia-based decode engine (MVP placeholder)
 pub struct DecodeEngine<T>
 where
-    T: DaspSample + SymphoniaSample + ConvertibleSample + Send + 'static,
+    T: Send + 'static,
 {
     /// Symphonia session containing format reader and decoder
     session: Option<SymphoniaSession>,
@@ -40,7 +30,7 @@ where
 
 impl<T> DecodeEngine<T>
 where
-    T: DaspSample + SymphoniaSample + ConvertibleSample + Send + 'static,
+    T: Send + 'static,
 {
     /// Create a new decode engine with given media source and settings
     ///
@@ -115,7 +105,7 @@ where
 
 impl<T> AudioSource<T> for DecodeEngine<T>
 where
-    T: DaspSample + SymphoniaSample + ConvertibleSample + Send + 'static,
+    T: Send + 'static,
 {
     fn output_spec(&self) -> Option<PcmSpec> {
         self.output_spec()

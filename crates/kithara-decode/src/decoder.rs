@@ -1,21 +1,11 @@
 use std::time::Duration;
 
-use dasp::sample::Sample as DaspSample;
-use symphonia::core::audio::{conv::ConvertibleSample, sample::Sample as SymphoniaSample};
-
 use crate::{AudioSource, DecodeCommand, DecodeEngine, DecodeResult, DecoderSettings, MediaSource};
 
-/// Low-level decoder state machine around Symphonia
-///
-/// This is the core decoder that handles:
-/// - Format probing and track selection
-/// - Packet decoding to PCM
-/// - Sample format conversion to generic type T
-/// - Seek operations and decoder resets
-/// - Codec switch handling (reset/reopen)
+/// Low-level decoder state machine around Symphonia (MVP placeholder)
 pub struct Decoder<T>
 where
-    T: DaspSample + SymphoniaSample + ConvertibleSample + Send + 'static,
+    T: Send + 'static,
 {
     engine: DecodeEngine<T>,
     track_id: u32,
@@ -24,7 +14,7 @@ where
 
 impl<T> Decoder<T>
 where
-    T: DaspSample + SymphoniaSample + ConvertibleSample + Send + 'static,
+    T: Send + 'static,
 {
     /// Create a new decoder with the given media source and settings
     pub fn new(source: Box<dyn MediaSource>, settings: DecoderSettings) -> DecodeResult<Self> {
@@ -85,7 +75,7 @@ where
 
 impl<T> AudioSource<T> for Decoder<T>
 where
-    T: DaspSample + SymphoniaSample + ConvertibleSample + Send + 'static,
+    T: Send + 'static,
 {
     fn output_spec(&self) -> Option<crate::PcmSpec> {
         self.output_spec()

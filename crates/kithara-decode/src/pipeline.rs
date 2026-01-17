@@ -1,19 +1,9 @@
-use dasp::sample::Sample as DaspSample;
-use symphonia::core::audio::{conv::ConvertibleSample, sample::Sample as SymphoniaSample};
-
 use crate::{AudioSource, DecodeCommand, DecodeError, DecodeResult, PcmChunk, PcmSpec};
 
-/// High-level async audio stream with bounded backpressure
-///
-/// This component provides:
-/// - Async consumer API for PCM chunks
-/// - Bounded queue with backpressure (producer waits when full)
-/// - Non-blocking consumer (returns Pending when empty)
-/// - Command forwarding to worker (seek, etc.)
-/// - EOS and fatal error termination semantics
+/// High-level async audio stream with bounded backpressure (MVP placeholder)
 pub struct AudioStream<T>
 where
-    T: DaspSample + SymphoniaSample + ConvertibleSample + Send + 'static,
+    T: Send + 'static,
 {
     /// Command sender for sending commands to worker
     command_sender: kanal::Sender<DecodeCommand>,
@@ -28,7 +18,7 @@ where
 
 impl<T> AudioStream<T>
 where
-    T: DaspSample + SymphoniaSample + ConvertibleSample + Send + 'static,
+    T: Send + 'static,
 {
     /// Create a new AudioStream with given source and bounded queue size
     ///

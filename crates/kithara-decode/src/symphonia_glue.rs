@@ -71,12 +71,9 @@ impl SymphoniaSession {
         })
     }
 
-    /// Convert Symphonia audio buffer to interleaved PCM samples of type T
-    pub fn convert_audio_buffer<T>() -> DecodeResult<Vec<T>>
-    where
-        T: dasp::sample::Sample,
-    {
-        // MVP placeholder - will be implemented with Symphonia
+    /// Convert Symphonia audio buffer to interleaved PCM samples (placeholder)
+    pub fn convert_audio_buffer_f32() -> DecodeResult<Vec<f32>> {
+        // MVP placeholder - use symphonia_mod::convert_to_f32 instead
         Ok(vec![])
     }
 }

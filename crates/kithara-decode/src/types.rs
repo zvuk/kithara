@@ -1,11 +1,7 @@
 use std::{fmt, time::Duration};
 
-use dasp::sample::Sample as DaspSample;
 use kithara_assets::AssetsError;
-use symphonia::core::{
-    audio::{conv::ConvertibleSample, sample::Sample as SymphoniaSample},
-    errors::Error as SymphoniaError,
-};
+use symphonia::core::errors::Error as SymphoniaError;
 use thiserror::Error;
 
 /// Main decode error type
@@ -220,13 +216,10 @@ impl std::io::Seek for MediaSourceAdapter {
 ///
 /// # Generic Parameter T
 /// T is the sample type (e.g., f32, i16). Must implement:
-/// - dasp::Sample (for sample manipulation)
-/// - symphonia::core::audio::sample::Sample (for Symphonia conversion)
-/// - symphonia::core::audio::conv::ConvertibleSample (for format conversion)
 /// - Send + 'static (for threading)
 pub trait AudioSource<T>
 where
-    T: DaspSample + SymphoniaSample + ConvertibleSample + Send + 'static,
+    T: Send + 'static,
 {
     /// Get current output specification if known
     fn output_spec(&self) -> Option<PcmSpec>;
