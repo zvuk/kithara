@@ -116,6 +116,11 @@ impl Hls {
         // Create events channel.
         let (events_tx, _) = broadcast::channel::<HlsEvent>(params.event_capacity);
 
+        // Load master playlist to extract variant codec info.
+        let master = playlist_manager.master_playlist(&url).await?;
+        let variant_codecs: Vec<Option<_>> =
+            master.variants.iter().map(|v| v.codec.clone()).collect();
+
         // Build SegmentStream.
         let (handle, base_stream) = SegmentStream::new(SegmentStreamParams {
             master_url: url,
@@ -129,7 +134,13 @@ impl Hls {
             min_sample_bytes: params.abr.min_sample_bytes,
         });
 
-        Ok(HlsSource::new(handle, base_stream, assets, events_tx))
+        Ok(HlsSource::new(
+            handle,
+            base_stream,
+            assets,
+            events_tx,
+            variant_codecs,
+        ))
     }
 }
 

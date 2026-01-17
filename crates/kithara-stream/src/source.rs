@@ -8,9 +8,14 @@ use std::{
 
 use async_trait::async_trait;
 use kithara_storage::WaitOutcome;
-use tracing::trace;
+use tokio::sync::mpsc;
+use tracing::{debug, trace, warn};
 
-use crate::error::{StreamError, StreamResult};
+use crate::{
+    error::{StreamError, StreamResult},
+    media_info::MediaInfo,
+    prefetch::{PrefetchSource, PrefetchWorker, PrefetchedItem},
+};
 
 /// Async random-access source contract.
 ///
@@ -51,19 +56,16 @@ pub trait Source: Send + Sync + 'static {
     fn is_empty(&self) -> Option<bool> {
         self.len().map(|len| len == 0)
     }
-}
 
-/// Command from `SyncReader` to worker.
-enum WorkerCmd {
-    Seek { pos: u64, epoch: u64 },
-}
-
-/// Prefetched data chunk from worker.
-struct PrefetchChunk {
-    file_pos: u64,
-    data: Vec<u8>,
-    is_eof: bool,
-    epoch: u64,
+    /// Return media format information if known.
+    ///
+    /// This allows decoders to skip probing when format is known
+    /// (e.g., from HLS playlist CODECS attribute).
+    ///
+    /// Default implementation returns `None`.
+    fn media_info(&self) -> Option<MediaInfo> {
+        None
+    }
 }
 
 /// Configuration for `SyncReader`.
@@ -84,169 +86,132 @@ impl Default for SyncReaderParams {
     }
 }
 
-/// Result of receiving a command: seek position or channel closed.
-enum CmdResult {
-    Seek(u64, u64),
-    Closed,
+/// Byte chunk with position.
+#[derive(Debug, Clone)]
+pub struct ByteChunk {
+    /// Position in source where this chunk starts.
+    pub file_pos: u64,
+    /// Chunk data.
+    pub data: Vec<u8>,
 }
 
-/// Receive command from channel.
-async fn recv_cmd(cmd_rx: &kanal::AsyncReceiver<WorkerCmd>) -> CmdResult {
-    match cmd_rx.recv().await {
-        Ok(WorkerCmd::Seek { pos, epoch }) => CmdResult::Seek(pos, epoch),
-        Err(_) => CmdResult::Closed,
-    }
+/// Seek command for byte source.
+#[derive(Debug, Clone, Copy)]
+pub struct ByteSeekCmd {
+    /// Target position.
+    pub pos: u64,
+    /// Epoch to synchronize with reader.
+    pub epoch: u64,
 }
 
-/// Worker state for prefetching.
-struct PrefetchWorker<S: Source> {
+/// Prefetch source adapter for `Source` trait.
+///
+/// This wraps a `Source` and implements `PrefetchSource` to work with the generic
+/// `PrefetchWorker`.
+pub struct BytePrefetchSource<S: Source> {
     src: Arc<S>,
-    cmd_rx: kanal::AsyncReceiver<WorkerCmd>,
-    data_tx: kanal::AsyncSender<PrefetchChunk>,
     chunk_size: usize,
     read_pos: u64,
     epoch: u64,
 }
 
-/// Result of a single prefetch iteration.
-enum PrefetchResult {
-    Continue,
-    Eof,
-    Stop,
-}
-
-impl<S: Source> PrefetchWorker<S> {
-    fn new(
-        src: Arc<S>,
-        cmd_rx: kanal::AsyncReceiver<WorkerCmd>,
-        data_tx: kanal::AsyncSender<PrefetchChunk>,
-        chunk_size: usize,
-    ) -> Self {
+impl<S: Source> BytePrefetchSource<S> {
+    /// Create a new byte prefetch source.
+    pub fn new(src: Arc<S>, chunk_size: usize) -> Self {
         Self {
             src,
-            cmd_rx,
-            data_tx,
             chunk_size,
             read_pos: 0,
             epoch: 0,
         }
     }
+}
 
-    fn handle_seek(&mut self, pos: u64, epoch: u64) {
-        trace!(from = self.read_pos, to = pos, epoch, "Worker: seek");
-        self.read_pos = pos;
-        self.epoch = epoch;
-    }
+impl<S: Source> PrefetchSource for BytePrefetchSource<S> {
+    type Chunk = ByteChunk;
+    type Command = ByteSeekCmd;
 
-    fn drain_pending_seeks(&mut self) {
-        while let Ok(Some(WorkerCmd::Seek { pos, epoch })) = self.cmd_rx.try_recv() {
-            self.handle_seek(pos, epoch);
-        }
-    }
-
-    async fn send_chunk(&self, data: Vec<u8>, is_eof: bool) -> bool {
-        let chunk = PrefetchChunk {
-            file_pos: self.read_pos,
-            data,
-            is_eof,
-            epoch: self.epoch,
-        };
-        self.data_tx.send(chunk).await.is_ok()
-    }
-
-    async fn prefetch_one(&mut self) -> PrefetchResult {
-        self.drain_pending_seeks();
-
-        // Wait for data, read it, send chunk - all interruptible by seek
+    async fn fetch_next(&mut self) -> Option<Self::Chunk> {
+        // Wait for data
         let range = self.read_pos..self.read_pos.saturating_add(self.chunk_size as u64);
 
-        let wait_result = tokio::select! {
-            biased;
-            cmd = recv_cmd(&self.cmd_rx) => return self.handle_cmd(cmd),
-            result = self.src.wait_range(range) => result,
-        };
+        debug!(
+            start = range.start,
+            end = range.end,
+            epoch = self.epoch,
+            "BytePrefetchSource: waiting for range"
+        );
+        let wait_result = self.src.wait_range(range).await;
 
         match wait_result {
             Ok(WaitOutcome::Ready) => {}
             Ok(WaitOutcome::Eof) => {
-                trace!(pos = self.read_pos, epoch = self.epoch, "Worker: EOF");
-                let _ = self.send_chunk(Vec::new(), true).await;
-                return PrefetchResult::Eof;
+                trace!(
+                    pos = self.read_pos,
+                    epoch = self.epoch,
+                    "BytePrefetchSource: EOF"
+                );
+                return None;
             }
             Err(e) => {
-                tracing::error!(err = %e, "Worker: wait_range error");
-                return PrefetchResult::Stop;
+                tracing::error!(err = %e, "BytePrefetchSource: wait_range error");
+                return None;
             }
         }
 
-        // Data is ready, now read it
+        // Read data
         let mut buf = vec![0u8; self.chunk_size];
-
-        let read_result = tokio::select! {
-            biased;
-            cmd = recv_cmd(&self.cmd_rx) => return self.handle_cmd(cmd),
-            result = self.src.read_at(self.read_pos, &mut buf) => result,
-        };
+        let read_result = self.src.read_at(self.read_pos, &mut buf).await;
 
         match read_result {
-            Ok(n) => {
+            Ok(n) if n > 0 => {
                 buf.truncate(n);
+                let chunk = ByteChunk {
+                    file_pos: self.read_pos,
+                    data: buf,
+                };
                 trace!(
                     file_pos = self.read_pos,
                     bytes = n,
                     epoch = self.epoch,
-                    "Worker: prefetched"
+                    "BytePrefetchSource: fetched"
                 );
-                if !self.send_chunk(buf, n == 0).await {
-                    return PrefetchResult::Stop;
-                }
                 self.read_pos = self.read_pos.saturating_add(n as u64);
-                PrefetchResult::Continue
+                Some(chunk)
+            }
+            Ok(_) => {
+                // n == 0 means EOF
+                trace!(pos = self.read_pos, "BytePrefetchSource: EOF (read 0)");
+                None
             }
             Err(e) => {
-                tracing::error!(err = %e, "Worker: read_at error");
-                let _ = self.send_chunk(Vec::new(), true).await;
-                PrefetchResult::Stop
+                tracing::error!(err = %e, "BytePrefetchSource: read_at error");
+                None
             }
         }
     }
 
-    fn handle_cmd(&mut self, cmd: CmdResult) -> PrefetchResult {
-        match cmd {
-            CmdResult::Seek(pos, epoch) => {
-                self.handle_seek(pos, epoch);
-                PrefetchResult::Continue
-            }
-            CmdResult::Closed => PrefetchResult::Stop,
-        }
+    fn handle_command(&mut self, cmd: Self::Command) -> u64 {
+        trace!(
+            from = self.read_pos,
+            to = cmd.pos,
+            epoch = cmd.epoch,
+            "BytePrefetchSource: seek"
+        );
+        self.read_pos = cmd.pos;
+        self.epoch = cmd.epoch;
+        self.epoch
     }
 
-    async fn wait_for_seek(&mut self) -> bool {
-        match self.cmd_rx.recv().await {
-            Ok(WorkerCmd::Seek { pos, epoch }) => {
-                self.handle_seek(pos, epoch);
-                true
-            }
-            Err(_) => false,
-        }
+    fn epoch(&self) -> u64 {
+        self.epoch
     }
 
-    async fn run(mut self) {
-        trace!("SyncReader worker started");
-
-        loop {
-            match self.prefetch_one().await {
-                PrefetchResult::Continue => {}
-                PrefetchResult::Eof => {
-                    if !self.wait_for_seek().await {
-                        break;
-                    }
-                }
-                PrefetchResult::Stop => break,
-            }
+    fn eof_chunk(&self) -> Self::Chunk {
+        ByteChunk {
+            file_pos: self.read_pos,
+            data: Vec::new(),
         }
-
-        trace!("SyncReader worker stopped");
     }
 }
 
@@ -265,8 +230,8 @@ where
     S: Source,
 {
     source: Arc<S>,
-    cmd_tx: kanal::AsyncSender<WorkerCmd>,
-    data_rx: kanal::Receiver<PrefetchChunk>,
+    cmd_tx: mpsc::Sender<ByteSeekCmd>,
+    data_rx: kanal::Receiver<PrefetchedItem<ByteChunk>>,
     current_chunk: Option<CurrentChunk>,
     pos: u64,
     epoch: u64,
@@ -300,10 +265,11 @@ where
             chunk_size, "SyncReader::new (spawning prefetch worker)"
         );
 
-        let (cmd_tx, cmd_rx) = kanal::bounded_async::<WorkerCmd>(4);
-        let (data_tx, data_rx) = kanal::bounded::<PrefetchChunk>(prefetch_chunks);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ByteSeekCmd>(4);
+        let (data_tx, data_rx) = kanal::bounded::<PrefetchedItem<ByteChunk>>(prefetch_chunks);
 
-        let worker = PrefetchWorker::new(source.clone(), cmd_rx, data_tx.to_async(), chunk_size);
+        let prefetch_source = BytePrefetchSource::new(source.clone(), chunk_size);
+        let worker = PrefetchWorker::new(prefetch_source, cmd_rx, data_tx.to_async());
         tokio::spawn(worker.run());
 
         Self {
@@ -348,14 +314,28 @@ where
             self.current_chunk = None;
         }
 
-        // Wait for matching chunk (blocking)
+        // Wait for matching chunk (non-blocking loop with yield)
+        let mut spin_count: u64 = 0;
         loop {
-            match self.data_rx.recv() {
-                Ok(chunk) => {
-                    if let Some(n) = self.process_chunk(chunk, buf) {
+            match self.data_rx.try_recv() {
+                Ok(Some(item)) => {
+                    if let Some(n) = self.process_item(item, buf) {
                         return Ok(n);
                     }
-                    // Chunk was stale, continue waiting
+                    // Item was stale, continue waiting
+                }
+                Ok(None) => {
+                    // No data yet, yield and retry
+                    spin_count += 1;
+                    if spin_count.is_multiple_of(10_000_000) {
+                        warn!(
+                            pos = self.pos,
+                            epoch = self.epoch,
+                            spin_count,
+                            "SyncReader: spinning waiting for data"
+                        );
+                    }
+                    std::thread::yield_now();
                 }
                 Err(_) => {
                     return Err(std::io::Error::new(
@@ -367,22 +347,25 @@ where
         }
     }
 
-    /// Process a received chunk, returning Some(bytes) if valid or None if stale.
-    fn process_chunk(&mut self, chunk: PrefetchChunk, buf: &mut [u8]) -> Option<usize> {
-        // Skip chunks from old epochs
-        if chunk.epoch != self.epoch {
+    /// Process a received prefetched item, returning Some(bytes) if valid or None if stale.
+    fn process_item(&mut self, item: PrefetchedItem<ByteChunk>, buf: &mut [u8]) -> Option<usize> {
+        // Skip items from old epochs
+        if item.epoch != self.epoch {
             trace!(
-                chunk_epoch = chunk.epoch,
+                item_epoch = item.epoch,
                 reader_epoch = self.epoch,
-                "Skipping old epoch chunk"
+                "Skipping old epoch item"
             );
             return None;
         }
 
-        if chunk.is_eof && chunk.data.is_empty() {
+        // Check EOF marker (empty data with is_eof flag or empty chunk at expected position)
+        if item.is_eof || item.data.data.is_empty() {
             self.eof_reached = true;
             return Some(0);
         }
+
+        let chunk = item.data;
 
         // Check if chunk matches our position
         if chunk.file_pos == self.pos {
@@ -394,7 +377,7 @@ where
                     file_pos: chunk.file_pos,
                     data: chunk.data,
                     offset: n,
-                    epoch: chunk.epoch,
+                    epoch: item.epoch,
                 });
             }
             return Some(n);
@@ -487,8 +470,9 @@ where
             self.current_chunk = None;
             self.eof_reached = false;
 
-            // Send seek command to worker (non-blocking)
-            let _ = self.cmd_tx.try_send(WorkerCmd::Seek {
+            // Send seek command to worker (blocking to ensure delivery)
+            // Epoch is passed in command to ensure synchronization even if commands are lost
+            let _ = self.cmd_tx.blocking_send(ByteSeekCmd {
                 pos: new_pos_u64,
                 epoch: self.epoch,
             });

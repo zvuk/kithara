@@ -6,7 +6,7 @@ use thiserror::Error;
 ///
 /// Notes:
 /// - `Source(E)` is for domain-specific failures (network/storage/etc) surfaced by a concrete
-///   `EngineSource` implementation.
+///   `Source` implementation.
 /// - `ChannelClosed` is returned when the consumer dropped the output stream or the command
 ///   channel is no longer available.
 /// - `SeekNotSupported` is for sources that don't implement seek.

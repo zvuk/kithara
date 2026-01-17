@@ -6,6 +6,7 @@ use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,
     tags::VariantStream as HlsVariantStreamTag, types::DecryptionKey as HlsDecryptionKey,
 };
+use kithara_stream::AudioCodec;
 
 use crate::HlsResult;
 
@@ -29,8 +30,8 @@ pub enum ContainerFormat {
 pub struct CodecInfo {
     /// The raw `CODECS="..."` string from the playlist.
     pub codecs: Option<String>,
-    /// A best-effort guess at the audio codec.
-    pub audio_codec: Option<String>,
+    /// Parsed audio codec from the CODECS string.
+    pub audio_codec: Option<AudioCodec>,
     /// A best-effort guess at the container format.
     pub container: Option<ContainerFormat>,
 }
@@ -118,6 +119,8 @@ pub struct MediaPlaylist {
     pub end_list: bool,
     /// Informational: first key found in the playlist (if any).
     pub current_key: Option<KeyInfo>,
+    /// Container format detected from segment/init URIs.
+    pub detected_container: Option<ContainerFormat>,
 }
 
 /// One media segment entry.
@@ -133,6 +136,18 @@ pub struct MediaSegment {
     pub duration: Duration,
     /// Optional encryption information effective for this segment.
     pub key: Option<SegmentKey>,
+}
+
+/// Detect container format from URI extension.
+fn detect_container_from_uri(uri: &str) -> Option<ContainerFormat> {
+    let path = uri.split('?').next().unwrap_or(uri);
+    let ext = path.rsplit('.').next()?.to_lowercase();
+
+    match ext.as_str() {
+        "ts" | "m2ts" => Some(ContainerFormat::Ts),
+        "mp4" | "m4s" | "m4a" | "m4v" => Some(ContainerFormat::Fmp4),
+        _ => None,
+    }
 }
 
 /// Parses a master playlist (M3U8) into [`MasterPlaylist`].
@@ -163,10 +178,22 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
                 }
             };
 
-            let codec = codecs_str.map(|c| CodecInfo {
-                codecs: Some(c),
-                audio_codec: None,
-                container: None,
+            let codec = codecs_str.map(|c| {
+                // Parse audio codec from CODECS string
+                // CODECS can contain multiple codecs separated by comma (e.g., "avc1.42c00d,mp4a.40.2")
+                let audio_codec = c
+                    .split(',')
+                    .map(|s| s.trim())
+                    .find_map(AudioCodec::from_hls_codec);
+
+                // Determine container format from URI extension
+                let container = detect_container_from_uri(&uri);
+
+                CodecInfo {
+                    codecs: Some(c),
+                    audio_codec,
+                    container,
+                }
             });
 
             VariantStream {
@@ -226,7 +253,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
         .find_map(|seg| seg.keys().first().copied())
         .and_then(keyinfo_from_decryption_key);
 
-    let segments = hls_media
+    let segments: Vec<MediaSegment> = hls_media
         .segments
         .iter()
         .enumerate()
@@ -270,6 +297,16 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
         })
     });
 
+    // Detect container from init segment or first segment URI
+    let detected_container = init_segment
+        .as_ref()
+        .and_then(|init| detect_container_from_uri(&init.uri))
+        .or_else(|| {
+            segments
+                .first()
+                .and_then(|seg| detect_container_from_uri(&seg.uri))
+        });
+
     Ok(MediaPlaylist {
         segments,
         target_duration,
@@ -277,5 +314,6 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
         media_sequence,
         end_list,
         current_key,
+        detected_container,
     })
 }

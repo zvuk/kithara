@@ -1,117 +1,39 @@
 //! # Kithara Decode
 //!
-//! Audio decoding library with generic sample type support.
+//! Audio decoding library built on Symphonia.
 //!
 //! ## Architecture
 //!
-//! This crate is organized into several modules with clear separation of concerns:
+//! - [`AudioPipeline`] - Async pipeline running decoder in spawn_blocking
+//! - [`SymphoniaDecoder`] - Symphonia-based audio decoder
+//! - [`SourceReader`] - Sync Read+Seek adapter over async Source
+//! - [`AudioSyncReader`] - rodio::Source adapter (requires `rodio` feature)
 //!
-//! - [`types`] - Core types, errors, and traits
-//! - [`symphonia_glue`] - Centralized Symphonia integration logic
-//! - [`engine`] - Low-level Symphonia-based decode engine
-//! - [`decoder`] - Decoder state machine wrapper
-//! - [`pipeline`] - High-level async audio stream with backpressure
-//! - [`test_helpers`] - Test utilities and fixtures (cfg(test) only)
+//! ## Usage
 //!
-//! ## Sample Type `T`
+//! ```ignore
+//! // Create pipeline directly from async Source
+//! let mut pipeline = AudioPipeline::open(source_arc).await?;
 //!
-//! The generic parameter `T` represents the audio sample type. Common choices:
-//! - `f32` - 32-bit float samples (recommended for processing)
-//! - `i16` - 16-bit integer samples (common in audio files)
-//!
-//! `T` must implement these traits:
-//! - `dasp::sample::Sample` - for sample manipulation
-//! - `symphonia::core::audio::sample::Sample` - for Symphonia integration  
-//! - `symphonia::core::audio::conv::ConvertibleSample` - for format conversion
-//! - `Send + 'static` - for threading support
-//!
-//! ## PcmChunk Invariants
-//!
-//! [`PcmChunk<T>`] maintains these invariants:
-//! - **Frame alignment**: `pcm.len() % channels == 0`
-//! - **Valid specs**: `channels > 0` and `sample_rate > 0`
-//! - **Interleaved layout**: Samples are stored as LRLRLR... for stereo
-//!
-//! Breaking these invariants will result in decode errors.
-//!
-//! ## Command Semantics
-//!
-//! [`DecodeCommand`] represents control operations:
-//! - `Seek(Duration)` - Best-effort absolute seek
-//!   - May not be frame-accurate depending on format
-//!   - Next chunk reflects new position
-//!   - Should not deadlock or hang
-//!
-//! ## Basic Usage
-//!
-//! ```rust,no_run,ignore
-//! use kithara_decode::{Decoder, DecoderSettings};
-//! use std::time::Duration;
-//!
-//! // Create decoder from media source
-//! let settings = DecoderSettings::default();
-//! let mut decoder = Decoder::<f32>::new(source, settings)?;
-//!
-//! // Decode audio
-//! while let Some(chunk) = decoder.next()? {
-//!     println!("Got {} frames of audio", chunk.frames());
-//! }
-//! # Ok::<(), Box<dyn std::error::Error>>(())
-//! ```
-//!
-//! ## Pipeline Usage
-//!
-//! For async processing with backpressure:
-//! ```rust,no_run,ignore
-//! use kithara_decode::{AudioStream, DecoderSettings};
-//!
-//! let mut stream = AudioStream::new(source, 10)?; // 10 chunk buffer
-//!
-//! while let Some(chunk) = stream.next_chunk().await? {
-//!     // Process chunk...
-//! }
-//! # Ok::<(), Box<dyn std::error::Error>>(())
-//! ```
-//!
-//! ## Pipeline Usage
-//!
-//! For async processing with backpressure:
-//! ```rust,no_run,ignore
-//! use kithara_decode::{AudioStream, DecoderSettings};
-//!
-//! let source = /* your AudioSource implementation */;
-//! let mut stream = AudioStream::new(source, 10)?; // 10 chunk buffer
-//!
-//! while let Some(chunk) = stream.next_chunk().await? {
-//!     // Process chunk...
-//! }
-//! # Ok::<(), Box<dyn std::error::Error>>(())
+//! // Get audio receiver for playback
+//! let audio_rx = pipeline.take_audio_receiver().unwrap();
+//! let audio_source = AudioSyncReader::new(audio_rx, pipeline.spec());
 //! ```
 
 #![forbid(unsafe_code)]
 
-pub use dasp::sample::Sample as DaspSample;
-pub use decoder::Decoder;
-pub use engine::DecodeEngine;
-pub use pipeline::AudioStream;
-pub use symphonia::core::audio::{conv::ConvertibleSample, sample::Sample as SymphoniaSample};
 // Public API exports
-pub use types::{
-    AudioSource, AudioSpec, ChannelCount, DecodeCommand, DecodeError, DecodeResult,
-    DecoderSettings, MediaSource, PcmChunk, PcmSpec, ReadSeek, SampleRate,
-};
+#[cfg(feature = "rodio")]
+pub use audio_sync_reader::AudioSyncReader;
+pub use pipeline_v2::{AudioPipeline, PipelineCommand};
+pub use source_reader::SourceReader;
+pub use symphonia_mod::{CachedCodecInfo, SymphoniaDecoder};
+pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};
 
 // Internal modules
-mod decoder;
-mod engine;
-mod pipeline;
-mod symphonia_glue;
+#[cfg(feature = "rodio")]
+mod audio_sync_reader;
+mod pipeline_v2;
+mod source_reader;
+mod symphonia_mod;
 mod types;
-
-// Test-only module
-#[cfg(test)]
-mod test_helpers;
-
-// Re-export test helpers for convenience in tests
-#[cfg(test)]
-pub use test_helpers::{FakeAudioSource, TestMediaSource};

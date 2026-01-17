@@ -8,7 +8,8 @@ use tokio::sync::broadcast;
 use url::Url;
 
 use crate::{
-    Source, StreamError, StreamResult, SyncReader, SyncReaderParams, facade::SourceFactory,
+    MediaInfo, Source, StreamError, StreamResult, SyncReader, SyncReaderParams,
+    facade::SourceFactory,
 };
 
 /// Unified stream source wrapper providing `Source` trait and event access.
@@ -80,6 +81,10 @@ impl<S: SourceFactory> Source for StreamSource<S> {
 
     fn len(&self) -> Option<u64> {
         self.inner.len()
+    }
+
+    fn media_info(&self) -> Option<MediaInfo> {
+        self.inner.media_info()
     }
 }
 

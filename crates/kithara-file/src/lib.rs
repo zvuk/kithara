@@ -20,14 +20,14 @@
 //! ).await?;
 //! ```
 
-mod driver;
+mod error;
 mod events;
 mod options;
 mod session;
 mod source;
 
-pub use driver::{DriverError, SourceError};
+pub use error::SourceError;
 pub use events::FileEvent;
 pub use options::FileParams;
-pub use session::{FileError, FileResult, FileSession, Progress, SessionSource};
-pub use source::{File, FileSource};
+pub use session::{Progress, SessionSource};
+pub use source::File;

@@ -1,25 +1,21 @@
 # `kithara-file` — progressive file download and playback
 
-`kithara-file` provides progressive download and playback capabilities for single-file media resources (MP3, AAC, etc.) in Kithara. It implements the `EngineSource` contract from `kithara-stream` to orchestrate HTTP downloads with support for seeking, caching, and event-driven playback.
+`kithara-file` provides progressive download and playback capabilities for single-file media resources (MP3, AAC, etc.) in Kithara. It implements the `SourceFactory` trait from `kithara-stream` to provide HTTP downloads with seeking, caching, and event-driven playback.
 
 ## Public contract (normative)
 
 The public contract is expressed by the following items re-exported from `src/lib.rs`:
 
 ### Core components
-- `struct FileSource` — Implementation of `EngineSource` for progressive file downloads
-- `struct FileSession` — Active download session with control interface
-- `struct FileSourceContract` — Builder for creating `FileSource` instances
+- `struct File` — Marker type implementing `SourceFactory` trait
+- `struct SessionSource` — Implementation of `Source` trait for file streams
+- `struct Progress` — Progress tracker for download and playback positions
 
-### Configuration and options
-- `struct FileSourceOptions` — Configuration for file source behavior
-- `enum OptionsError` — Error type for option validation
+### Configuration
+- `struct FileParams` — Configuration for file source (cache, network, cancellation)
 
 ### Events and errors
-- `enum FileEvent` — Events emitted during file download/playback
-- `enum FileError` — Error type for file operations
-- `type FileResult<T> = Result<T, FileError>` — Result alias
-- `enum DriverError` — Error type for driver operations
+- `enum FileEvent` — Events emitted during download/playback
 - `enum SourceError` — Error type for source operations
 
 ## Architecture overview
@@ -29,12 +25,13 @@ The public contract is expressed by the following items re-exported from `src/li
 ```
 ┌─────────────────────────────────────────────────────────┐
 │                    kithara-stream                       │
-│                    (Engine/EngineSource)                │
+│              (StreamSource<File>, SyncReader)           │
 └──────────────────────────┬──────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────┐
 │                    kithara-file                         │
-│      (FileSource implements EngineSource)               │
+│      (File implements SourceFactory)                    │
+│      (SessionSource implements Source)                  │
 └─────────────┬─────────────────────────────┬─────────────┘
               │                             │
 ┌─────────────▼─────────────┐   ┌──────────▼─────────────┐
@@ -46,203 +43,108 @@ The public contract is expressed by the following items re-exported from `src/li
 ### Key responsibilities
 
 1. **HTTP progressive download**: Downloads files with range request support
-2. **Seek coordination**: Handles seek commands by restarting downloads at new positions
+2. **Seek support**: Random access via `Source::wait_range()` and `read_at()`
 3. **Storage integration**: Writes downloaded data to `kithara-assets` storage
-4. **Event emission**: Emits progress, completion, and error events
+4. **Event emission**: Emits progress events via broadcast channel
 5. **Session management**: Manages download lifecycle and resource cleanup
 
 ## Core invariants
 
 1. **Progressive playback**: Playback can start before download completes
-2. **Seek support**: Seek commands restart download from new position (if server supports ranges)
+2. **Seek support**: `SyncReader` can seek anywhere; download catches up
 3. **Storage persistence**: Downloaded data persists in `kithara-assets` for offline playback
-4. **Event-driven**: Emits events for download progress, completion, and errors
+4. **Event-driven**: Emits events for download and playback progress
 5. **Cancellation**: All operations respect cancellation tokens
-6. **Error recovery**: Implements retry logic for transient network failures
 
-## `FileSource` as `EngineSource`
+## Usage
 
-`FileSource` implements the `EngineSource` trait from `kithara-stream`, providing:
-
-- **Byte stream orchestration**: Coordinates HTTP download with storage writing
-- **Seek handling**: Restarts download from seek position when requested
-- **Event mapping**: Maps download progress to `FileEvent` types
-- **Error propagation**: Converts `NetError` to `FileError` with context
-
-### Implementation details
-
+### Basic file download and playback
 ```rust
-#[async_trait::async_trait]
-impl EngineSource for FileSource {
-    type Error = FileError;
-    type Control = FileSession;
-    type Event = FileEvent;
+use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
+use kithara_file::{File, FileParams};
 
-    async fn open(
-        &self,
-        params: StreamParams,
-    ) -> Result<(WriterTask<Self::Control, Self::Event, Self::Error>, Self::Control), StreamError<Self::Error>> {
-        // Creates download session and returns control handle
-    }
+// Open source (async)
+let source = StreamSource::<File>::open(url, FileParams::default()).await?;
 
-    async fn seek_bytes(
-        &self,
-        pos: u64,
-        control: &mut Self::Control,
-    ) -> Result<(), StreamError<Self::Error>> {
-        // Restarts download from new position
+// Subscribe to events
+let mut events = source.events();
+tokio::spawn(async move {
+    while let Ok(event) = events.recv().await {
+        match event {
+            FileEvent::DownloadProgress { offset, percent } => {
+                println!("Download: {} bytes ({:?}%)", offset, percent);
+            }
+            FileEvent::PlaybackProgress { position, percent } => {
+                println!("Playback: {} bytes ({:?}%)", position, percent);
+            }
+        }
     }
+});
 
-    fn supports_seek(&self) -> bool {
-        // Returns true if server supports range requests
-    }
-}
+// Create sync reader for decoder
+let reader = SyncReader::new(source.into_inner(), SyncReaderParams::default());
+
+// Use with Symphonia or rodio
 ```
 
-## `FileSession` control interface
+### With AudioPipeline (kithara-decode)
+```rust
+use kithara_decode::{AudioPipeline, AudioSyncReader};
+use kithara_stream::{StreamSource, SyncReaderParams};
+use kithara_file::{File, FileParams};
 
-`FileSession` provides control over an active download:
+let source = StreamSource::<File>::open(url, FileParams::default()).await?;
+let source_arc = Arc::new(source);
 
-- **Progress monitoring**: Query download progress and status
-- **Error handling**: Access download errors if they occur
-- **Resource management**: Manages asset resources and cleanup
-- **Event subscription**: Receive download events
+let mut pipeline = AudioPipeline::open(source_arc, SyncReaderParams::default()).await?;
+let audio_rx = pipeline.take_audio_receiver().unwrap();
+let audio_source = AudioSyncReader::new(audio_rx, pipeline.spec());
 
-## Configuration
-
-### `FileSourceOptions`
-
-- `url: String` — URL of the file to download
-- `asset_id: Option<AssetId>` — Optional asset ID for storage (auto-generated if None)
-- `offline_mode: bool` — Whether to operate in offline mode (no network)
-- `retry_policy: RetryPolicy` — Retry policy for network failures
-- `connect_timeout: Duration` — Connection timeout
-- `read_timeout: Duration` — Read timeout
+// Play via rodio
+let sink = rodio::Sink::connect_new(stream_handle.mixer());
+sink.append(audio_source);
+sink.sleep_until_end();
+```
 
 ## Events
 
 ### `FileEvent` variants
 
-- `Progress { downloaded: u64, total: Option<u64> }` — Download progress update
-- `Complete` — Download completed successfully
-- `Error(FileError)` — Download failed with error
-- `SeekStarted { position: u64 }` — Seek operation started
-- `SeekCompleted { position: u64 }` — Seek operation completed
-
-Events are emitted through the `Engine` stream as `StreamMsg::Event(FileEvent)`.
+- `DownloadProgress { offset: u64, percent: Option<f32> }` — Download position update
+- `PlaybackProgress { position: u64, percent: Option<f32> }` — Playback position update
 
 ## Error handling
 
-### `FileError` categories
+### `SourceError` categories
 
-- `Network(NetError)` — Network-related errors (connection, timeout, HTTP)
-- `Storage(AssetsError)` — Storage-related errors (disk full, permission denied)
-- `InvalidUrl` — Malformed or unsupported URL
-- `InvalidRange` — Invalid byte range requested
-- `Cancelled` — Operation was cancelled
-- `Other` — Other unexpected errors
+- `Net(NetError)` — Network-related errors
+- `Assets(AssetsError)` — Storage-related errors
+- `Storage(StorageError)` — Low-level storage errors
 
 ## Integration with other Kithara crates
 
 ### `kithara-stream`
-- `FileSource` implements `EngineSource`
-- Uses `Engine` for orchestration
-- Emits events through `StreamMsg::Event`
+- `File` implements `SourceFactory`
+- `SessionSource` implements `Source`
+- Works with `StreamSource<File>` and `SyncReader`
 
 ### `kithara-net`
-- Uses `Net` trait for HTTP operations
+- Uses `HttpClient` for HTTP operations
 - Leverages range request support for seeking
-- Uses retry and timeout policies
 
 ### `kithara-assets`
-- Stores downloaded files as assets
+- Stores downloaded files as streaming resources
 - Uses `StreamingResource` for progressive storage
-- Manages asset lifecycle and cleanup
+- Manages asset lifecycle via `AssetStore`
 
 ### `kithara-decode`
-- Can decode downloaded audio files
-- Uses the same asset storage for playback
-
-## Example usage
-
-### Basic file download and playback
-```rust
-use kithara_file::{FileSource, FileSourceContract, FileSourceOptions};
-use kithara_stream::{Engine, StreamParams};
-use std::time::Duration;
-
-// Create file source
-let options = FileSourceOptions {
-    url: "https://example.com/audio.mp3".to_string(),
-    asset_id: None, // Auto-generate asset ID
-    offline_mode: false,
-    retry_policy: Default::default(),
-    connect_timeout: Duration::from_secs(10),
-    read_timeout: Duration::from_secs(30),
-};
-
-let source = FileSourceContract::new(options).build();
-
-// Create and run engine
-let (engine, handle, stream) = Engine::build(source, StreamParams::default());
-tokio::spawn(engine.run());
-
-// Process stream
-while let Some(msg) = stream.next().await {
-    match msg {
-        Ok(StreamMsg::Data(bytes)) => {
-            // Process audio data
-        }
-        Ok(StreamMsg::Event(event)) => {
-            match event {
-                FileEvent::Progress { downloaded, total } => {
-                    println!("Progress: {}/{:?}", downloaded, total);
-                }
-                FileEvent::Complete => {
-                    println!("Download complete");
-                }
-                FileEvent::Error(e) => {
-                    eprintln!("Download error: {:?}", e);
-                }
-                _ => {}
-            }
-        }
-        Err(e) => {
-            eprintln!("Stream error: {:?}", e);
-        }
-    }
-}
-```
-
-### Seeking during playback
-```rust
-// Seek to 30 seconds into the file (assuming 128kbps MP3)
-let bytes_per_second = 16000; // Approximate for 128kbps
-let seek_position = 30 * bytes_per_second;
-
-if let Err(e) = handle.seek_bytes(seek_position).await {
-    eprintln!("Seek failed: {:?}", e);
-}
-```
-
-### Offline mode
-```rust
-let options = FileSourceOptions {
-    url: "https://example.com/audio.mp3".to_string(),
-    asset_id: Some(existing_asset_id),
-    offline_mode: true, // Only read from cache, no network
-    ..Default::default()
-};
-
-let source = FileSourceContract::new(options).build();
-// Will fail if asset doesn't exist in cache
-```
+- `SyncReader` works with `SymphoniaDecoder`
+- `AudioPipeline` orchestrates decoding
 
 ## Design philosophy
 
 1. **Progressive first**: Designed for streaming playback during download
 2. **Seek support**: Full seek support for interactive playback
 3. **Storage integration**: Tight integration with `kithara-assets` for persistence
-4. **Event-driven**: Rich event system for UI integration
-5. **Error resilience**: Robust error handling and recovery
-6. **Composable**: Works with other Kithara crates as part of larger system
+4. **Event-driven**: Event system for UI integration
+5. **Composable**: Works with other Kithara crates as part of larger system

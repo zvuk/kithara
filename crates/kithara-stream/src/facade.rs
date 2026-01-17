@@ -20,6 +20,9 @@ where
     pub events_tx: broadcast::Sender<E>,
 }
 
+/// Result type for opening a source.
+pub type OpenResult<S, E> = Result<OpenedSource<S, E>, StreamError<<S as Source>::Error>>;
+
 /// Trait for stream source factories.
 ///
 /// Implementations create sources from URLs and parameters.
@@ -45,10 +48,5 @@ pub trait SourceFactory: Send + Sync + 'static {
     fn open(
         url: Url,
         params: Self::Params,
-    ) -> impl Future<
-        Output = Result<
-            OpenedSource<Self::SourceImpl, Self::Event>,
-            StreamError<<Self::SourceImpl as Source>::Error>,
-        >,
-    > + Send;
+    ) -> impl Future<Output = OpenResult<Self::SourceImpl, Self::Event>> + Send;
 }
