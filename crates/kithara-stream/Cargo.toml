@@ -23,6 +23,7 @@ kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
 kithara-storage = { workspace = true }
 url = { workspace = true }
+buffer-pool = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }

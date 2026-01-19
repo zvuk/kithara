@@ -72,6 +72,7 @@ bytes = "1.11.0"
 ringbuf = "0.4.8"
 async-stream = "0.3.6"
 parking_lot = "0.12"
+buffer-pool = "0.1"
 
 # http/url
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "stream"] }

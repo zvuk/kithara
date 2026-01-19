@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let url: Url = url.parse()?;
 
     // Default speed 0.5 = 2x slower
-    let speed: f32 = args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1.9);
+    let speed: f32 = args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1.0);
 
     info!("Opening HLS stream: {}", url);
     info!("Playback speed: {}x ({}x slower)", speed, 1.0 / speed);

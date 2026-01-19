@@ -27,6 +27,10 @@ pub(crate) struct ResamplerProcessor {
     // Accumulated input buffer (planar format) - keeps leftover samples between process() calls
     input_buffer: Vec<Vec<f32>>,
     output_spec: PcmSpec,
+    // Reusable temporary buffers to avoid allocations on each process() call
+    temp_input_slice: Vec<Vec<f32>>,
+    temp_output_bufs: Vec<Vec<f32>>,
+    temp_output_all: Vec<Vec<f32>>,
 }
 
 impl ResamplerProcessor {
@@ -46,6 +50,9 @@ impl ResamplerProcessor {
             current_speed,
             input_buffer: vec![Vec::new(); channels],
             output_spec,
+            temp_input_slice: Vec::with_capacity(channels),
+            temp_output_bufs: Vec::with_capacity(channels),
+            temp_output_all: vec![Vec::new(); channels],
         };
 
         processor.update_resampler_if_needed(current_speed);
@@ -192,26 +199,35 @@ impl ResamplerProcessor {
         let resampler = self.resampler.as_mut()?;
         let input_frames = resampler.input_frames_next();
         let channels = self.channels;
-        let mut all_output = vec![Vec::new(); channels];
+
+        // Clear and prepare temporary buffers for reuse
+        for buf in &mut self.temp_output_all {
+            buf.clear();
+        }
 
         // Process all complete chunks from accumulated buffer
         while self.input_buffer[0].len() >= input_frames {
-            let mut input_slice: Vec<Vec<f32>> = Vec::with_capacity(channels);
+            // Reuse temp_input_slice
+            self.temp_input_slice.clear();
             for ch in 0..channels {
-                input_slice.push(self.input_buffer[ch][..input_frames].to_vec());
+                self.temp_input_slice.push(self.input_buffer[ch][..input_frames].to_vec());
             }
 
-            let input_refs: Vec<&[f32]> = input_slice.iter().map(|v| v.as_slice()).collect();
+            let input_refs: Vec<&[f32]> = self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
             let output_frames = resampler.output_frames_next();
-            let mut output_bufs: Vec<Vec<f32>> =
-                (0..channels).map(|_| vec![0.0; output_frames]).collect();
+
+            // Reuse temp_output_bufs
+            self.temp_output_bufs.clear();
+            for _ in 0..channels {
+                self.temp_output_bufs.push(vec![0.0; output_frames]);
+            }
             let mut output_refs: Vec<&mut [f32]> =
-                output_bufs.iter_mut().map(|v| v.as_mut_slice()).collect();
+                self.temp_output_bufs.iter_mut().map(|v| v.as_mut_slice()).collect();
 
             match resampler.process_into_buffer(&input_refs, &mut output_refs, None) {
                 Ok((_, out_len)) => {
-                    for (ch, buf) in output_bufs.iter().enumerate() {
-                        all_output[ch].extend_from_slice(&buf[..out_len]);
+                    for (ch, buf) in self.temp_output_bufs.iter().enumerate() {
+                        self.temp_output_all[ch].extend_from_slice(&buf[..out_len]);
                     }
                     // Remove processed samples from buffer
                     for buf in &mut self.input_buffer {
@@ -225,7 +241,7 @@ impl ResamplerProcessor {
             }
         }
 
-        if all_output[0].is_empty() {
+        if self.temp_output_all[0].is_empty() {
             // Not enough data yet, return None (will accumulate more)
             trace!(
                 buffered = self.input_buffer[0].len(),
@@ -235,7 +251,7 @@ impl ResamplerProcessor {
             return None;
         }
 
-        let interleaved = self.interleave(&all_output);
+        let interleaved = self.interleave(&self.temp_output_all);
         Some(PcmChunk::new(self.output_spec, interleaved))
     }
 
@@ -284,17 +300,22 @@ impl ResamplerProcessor {
 
         debug!(buffered, padding_needed, "Flushing resampler buffer");
 
-        let mut input_slice: Vec<Vec<f32>> = Vec::with_capacity(channels);
+        // Reuse temp_input_slice
+        self.temp_input_slice.clear();
         for ch in 0..channels {
-            input_slice.push(self.input_buffer[ch][..input_frames].to_vec());
+            self.temp_input_slice.push(self.input_buffer[ch][..input_frames].to_vec());
         }
 
-        let input_refs: Vec<&[f32]> = input_slice.iter().map(|v| v.as_slice()).collect();
+        let input_refs: Vec<&[f32]> = self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
         let output_frames = resampler.output_frames_next();
-        let mut output_bufs: Vec<Vec<f32>> =
-            (0..channels).map(|_| vec![0.0; output_frames]).collect();
+
+        // Reuse temp_output_bufs
+        self.temp_output_bufs.clear();
+        for _ in 0..channels {
+            self.temp_output_bufs.push(vec![0.0; output_frames]);
+        }
         let mut output_refs: Vec<&mut [f32]> =
-            output_bufs.iter_mut().map(|v| v.as_mut_slice()).collect();
+            self.temp_output_bufs.iter_mut().map(|v| v.as_mut_slice()).collect();
 
         match resampler.process_into_buffer(&input_refs, &mut output_refs, None) {
             Ok((_, out_len)) => {
@@ -313,12 +334,15 @@ impl ResamplerProcessor {
                     return None;
                 }
 
-                let mut all_output = vec![Vec::new(); channels];
-                for (ch, buf) in output_bufs.iter().enumerate() {
-                    all_output[ch].extend_from_slice(&buf[..frames_to_use]);
+                // Reuse temp_output_all
+                for buf in &mut self.temp_output_all {
+                    buf.clear();
+                }
+                for (ch, buf) in self.temp_output_bufs.iter().enumerate() {
+                    self.temp_output_all[ch].extend_from_slice(&buf[..frames_to_use]);
                 }
 
-                let interleaved = self.interleave(&all_output);
+                let interleaved = self.interleave(&self.temp_output_all);
                 Some(PcmChunk::new(self.output_spec, interleaved))
             }
             Err(e) => {

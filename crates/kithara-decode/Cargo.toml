@@ -16,6 +16,7 @@ rubato = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
 async-trait = { workspace = true }
+buffer-pool = { workspace = true }
 
 [features]
 default = []
