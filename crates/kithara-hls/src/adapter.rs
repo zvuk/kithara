@@ -157,6 +157,7 @@ fn extract_encryption_info(meta: &SegmentMeta) -> Option<EncryptionInfo> {
 
 #[async_trait]
 impl Source for HlsSource {
+    type Item = u8;
     type Error = HlsError;
 
     async fn wait_range(&self, range: Range<u64>) -> KitharaIoResult<WaitOutcome, HlsError> {

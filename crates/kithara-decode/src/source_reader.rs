@@ -11,16 +11,22 @@ use std::{
 use kithara_stream::{MediaInfo, Source, StreamError, WaitOutcome};
 use tokio::runtime::Handle;
 
-/// Sync reader over async Source.
+/// Sync reader over async byte Source.
 ///
 /// Uses `block_on` to wait for data. Simple and direct.
-pub struct SourceReader<S: Source> {
+pub struct SourceReader<S>
+where
+    S: Source<Item = u8>,
+{
     source: Arc<S>,
     pos: u64,
     rt: Handle,
 }
 
-impl<S: Source> SourceReader<S> {
+impl<S> SourceReader<S>
+where
+    S: Source<Item = u8>,
+{
     /// Create a new reader.
     ///
     /// Must be called from within a Tokio runtime context.
@@ -45,7 +51,10 @@ impl<S: Source> SourceReader<S> {
     }
 }
 
-impl<S: Source> Read for SourceReader<S> {
+impl<S> Read for SourceReader<S>
+where
+    S: Source<Item = u8>,
+{
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -81,7 +90,10 @@ impl<S: Source> Read for SourceReader<S> {
     }
 }
 
-impl<S: Source> Seek for SourceReader<S> {
+impl<S> Seek for SourceReader<S>
+where
+    S: Source<Item = u8>,
+{
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => p as i128,

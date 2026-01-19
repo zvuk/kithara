@@ -39,7 +39,7 @@ impl AudioPipeline {
     /// The pipeline monitors source.media_info() and recreates decoder on codec changes.
     pub async fn open<S>(source: Arc<S>) -> DecodeResult<Self>
     where
-        S: Source,
+        S: Source<Item = u8>,
     {
         let is_streaming = source.len().is_none();
 
@@ -166,13 +166,15 @@ where
 }
 
 /// Main pipeline loop running in blocking context.
-fn run_pipeline<S: Source>(
+fn run_pipeline<S>(
     source: Arc<S>,
     mut decoder: SymphoniaDecoder,
     cmd_rx: Receiver<PipelineCommand>,
     audio_tx: Sender<PcmChunk<f32>>,
     rt_handle: Handle,
-) {
+) where
+    S: Source<Item = u8>,
+{
     debug!(
         sample_rate = decoder.spec().sample_rate,
         channels = decoder.spec().channels,
@@ -270,12 +272,15 @@ fn run_pipeline<S: Source>(
 }
 
 /// Recreate decoder with new SourceReader for ABR switch.
-fn recreate_decoder<S: Source>(
+fn recreate_decoder<S>(
     source: &Arc<S>,
     media_info: Option<&MediaInfo>,
     rt_handle: &Handle,
     is_streaming: bool,
-) -> DecodeResult<SymphoniaDecoder> {
+) -> DecodeResult<SymphoniaDecoder>
+where
+    S: Source<Item = u8>,
+{
     // Enter tokio context for SourceReader (it needs Handle::current())
     let _guard = rt_handle.enter();
 
