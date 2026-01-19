@@ -17,6 +17,7 @@ tracing = { workspace = true }
 parking_lot = { workspace = true }
 async-trait = { workspace = true }
 buffer-pool = { workspace = true }
+ringbuf = { workspace = true }
 
 [features]
 default = []

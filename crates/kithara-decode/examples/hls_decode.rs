@@ -118,7 +118,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     );
 
     // Create rodio adapter from buffer
-    let audio_source = AudioSyncReader::new(pipeline.buffer().clone(), output_spec);
+    let audio_source = AudioSyncReader::new(
+        pipeline.consumer().clone(),
+        pipeline.buffer().clone(),
+        output_spec,
+    );
 
     // Play via rodio in blocking thread
     let handle = tokio::task::spawn_blocking(move || {

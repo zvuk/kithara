@@ -6,6 +6,8 @@
 
 use std::{sync::Arc, time::Duration};
 
+use parking_lot::Mutex;
+use ringbuf::traits::Consumer;
 use tracing::trace;
 
 use crate::{PcmBuffer, PcmSpec};
@@ -14,12 +16,12 @@ use crate::{PcmBuffer, PcmSpec};
 ///
 /// Implements `Iterator<Item=f32>` and `rodio::Source` traits.
 pub struct AudioSyncReader {
-    /// Shared PCM buffer.
+    /// Ring buffer consumer for reading samples.
+    consumer: Arc<Mutex<ringbuf::HeapCons<f32>>>,
+    /// Shared PCM buffer for metadata.
     buffer: Arc<PcmBuffer>,
     /// Audio specification.
     spec: PcmSpec,
-    /// Current sample offset (not frame offset).
-    sample_offset: u64,
     /// End of stream reached.
     eof: bool,
     /// Internal read buffer.
@@ -31,17 +33,22 @@ pub struct AudioSyncReader {
 }
 
 impl AudioSyncReader {
-    /// Create a new AudioSyncReader from a pipeline buffer.
+    /// Create a new AudioSyncReader from a pipeline consumer.
     ///
     /// # Arguments
-    /// - `buffer`: Shared PCM buffer from Pipeline
+    /// - `consumer`: Ring buffer consumer from Pipeline
+    /// - `buffer`: Shared PCM buffer for metadata
     /// - `spec`: Audio specification (should match buffer spec)
-    pub fn new(buffer: Arc<PcmBuffer>, spec: PcmSpec) -> Self {
+    pub fn new(
+        consumer: Arc<Mutex<ringbuf::HeapCons<f32>>>,
+        buffer: Arc<PcmBuffer>,
+        spec: PcmSpec,
+    ) -> Self {
         const BUFFER_SIZE: usize = 8192; // Samples, not frames
         Self {
+            consumer,
             buffer,
             spec,
-            sample_offset: 0,
             eof: false,
             read_buffer: vec![0.0; BUFFER_SIZE],
             buffer_offset: 0,
@@ -54,24 +61,23 @@ impl AudioSyncReader {
         self.spec
     }
 
-    /// Read more samples from buffer into internal buffer.
+    /// Read more samples from ring buffer into internal buffer.
     fn fill_buffer(&mut self) -> bool {
         if self.eof {
             return false;
         }
 
-        let channels = self.spec.channels as u64;
-        let frame_offset = self.sample_offset / channels;
-
         // Wait for data with polling
         let mut attempts = 0;
         const MAX_ATTEMPTS: u32 = 1000;
         loop {
-            let n = self.buffer.read_samples(frame_offset, &mut self.read_buffer);
+            let mut consumer = self.consumer.lock();
+            let n = consumer.pop_slice(&mut self.read_buffer);
+            drop(consumer);
+
             if n > 0 {
                 self.buffer_samples = n;
                 self.buffer_offset = 0;
-                self.sample_offset += n as u64;
                 return true;
             }
 

@@ -10,6 +10,7 @@ use std::sync::{
 
 use kanal::{Receiver, Sender};
 use kithara_stream::{MediaInfo, Source};
+use ringbuf::{HeapRb, traits::{Producer, Split}};
 use tokio::{runtime::Handle, task::JoinHandle};
 use tracing::{debug, error, info, trace};
 
@@ -60,6 +61,8 @@ pub struct Pipeline {
     cmd_tx: Sender<PipelineCommand>,
     /// Shared PCM buffer for decoded audio.
     buffer: Arc<PcmBuffer>,
+    /// Ring buffer consumer for reading decoded samples.
+    consumer: Arc<parking_lot::Mutex<ringbuf::HeapCons<f32>>>,
     /// Output specification.
     output_spec: PcmSpec,
     /// Current speed (lock-free, stored as f32 bits in u32).
@@ -118,8 +121,10 @@ impl Pipeline {
         // Channels for communication
         let (cmd_tx, cmd_rx) = kanal::bounded::<PipelineCommand>(4);
 
-        // Shared buffer for decoded PCM
-        let buffer = Arc::new(PcmBuffer::new(output_spec));
+        // Shared buffer for decoded PCM with ring buffer
+        let (buffer, consumer) = PcmBuffer::new(output_spec);
+        let buffer = Arc::new(buffer);
+        let consumer = Arc::new(parking_lot::Mutex::new(consumer));
 
         // Speed control (lock-free)
         let speed = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
@@ -147,6 +152,7 @@ impl Pipeline {
             task_handle: Some(task_handle),
             cmd_tx,
             buffer,
+            consumer,
             output_spec,
             speed,
         })
@@ -177,6 +183,11 @@ impl Pipeline {
         &self.buffer
     }
 
+    /// Get the ring buffer consumer for reading samples.
+    pub fn consumer(&self) -> &Arc<parking_lot::Mutex<ringbuf::HeapCons<f32>>> {
+        &self.consumer
+    }
+
     /// Stop the pipeline.
     pub fn stop(&self) {
         let _ = self.cmd_tx.send(PipelineCommand::Stop);
@@ -201,12 +212,16 @@ impl Drop for Pipeline {
 
 /// Shared PCM buffer for decoded audio samples.
 ///
-/// Stores decoded PCM chunks in memory with metadata for random access.
+/// Hybrid approach:
+/// - Ring buffer for streaming (AudioSyncReader) - limited memory
+/// - Vec for random access (PcmSource) - backwards compatible
 pub struct PcmBuffer {
     /// Output specification.
     spec: PcmSpec,
-    /// All decoded samples (interleaved).
+    /// All decoded samples for random access (backwards compatible).
     samples: parking_lot::RwLock<Vec<f32>>,
+    /// Ring buffer producer for streaming.
+    producer: parking_lot::Mutex<ringbuf::HeapProd<f32>>,
     /// Total frames written.
     frames_written: AtomicU64,
     /// Whether EOF has been reached.
@@ -214,13 +229,28 @@ pub struct PcmBuffer {
 }
 
 impl PcmBuffer {
-    fn new(spec: PcmSpec) -> Self {
-        Self {
+    /// Create new PCM buffer with hybrid storage.
+    ///
+    /// Returns (PcmBuffer with producer + Vec, consumer for streaming).
+    /// Ring buffer size: 10 seconds of audio at target sample rate.
+    fn new(spec: PcmSpec) -> (Self, ringbuf::HeapCons<f32>) {
+        // Calculate ring buffer size: 10 seconds of audio
+        let buffer_seconds = 10;
+        let samples_per_sec = spec.sample_rate as usize * spec.channels as usize;
+        let buffer_size = samples_per_sec * buffer_seconds;
+
+        let rb = HeapRb::<f32>::new(buffer_size);
+        let (producer, consumer) = rb.split();
+
+        let buffer = Self {
             spec,
             samples: parking_lot::RwLock::new(Vec::new()),
+            producer: parking_lot::Mutex::new(producer),
             frames_written: AtomicU64::new(0),
             eof: AtomicBool::new(false),
-        }
+        };
+
+        (buffer, consumer)
     }
 
     /// Get PCM specification.
@@ -238,7 +268,7 @@ impl PcmBuffer {
         self.eof.load(Ordering::Relaxed)
     }
 
-    /// Read samples at given frame offset.
+    /// Read samples at given frame offset (for random access).
     ///
     /// Returns number of samples read (not frames).
     pub fn read_samples(&self, frame_offset: u64, buf: &mut [f32]) -> usize {
@@ -256,11 +286,28 @@ impl PcmBuffer {
         to_read
     }
 
-    /// Append a PCM chunk to the buffer.
+    /// Append a PCM chunk to both Vec and ring buffer.
+    ///
+    /// Vec: for random access (grows unbounded - backwards compatible).
+    /// Ring buffer: for streaming (limited size - memory efficient).
     fn append(&self, chunk: &PcmChunk<f32>) {
+        // Append to Vec for random access
         let mut samples = self.samples.write();
         samples.extend_from_slice(&chunk.pcm);
         drop(samples);
+
+        // Push to ring buffer for streaming
+        let mut producer = self.producer.lock();
+        let pushed = producer.push_slice(&chunk.pcm);
+
+        if pushed < chunk.pcm.len() {
+            trace!(
+                wanted = chunk.pcm.len(),
+                pushed,
+                "Ring buffer full, some samples dropped (Vec still has all data)"
+            );
+        }
+        drop(producer);
 
         let frames = chunk.frames() as u64;
         self.frames_written.fetch_add(frames, Ordering::Relaxed);

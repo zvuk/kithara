@@ -207,19 +207,24 @@ impl ResamplerProcessor {
 
         // Process all complete chunks from accumulated buffer
         while self.input_buffer[0].len() >= input_frames {
-            // Reuse temp_input_slice
-            self.temp_input_slice.clear();
+            // Reuse temp_input_slice - resize instead of creating new Vec
+            if self.temp_input_slice.len() < channels {
+                self.temp_input_slice.resize_with(channels, Vec::new);
+            }
             for ch in 0..channels {
-                self.temp_input_slice.push(self.input_buffer[ch][..input_frames].to_vec());
+                self.temp_input_slice[ch].clear();
+                self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
             }
 
             let input_refs: Vec<&[f32]> = self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
             let output_frames = resampler.output_frames_next();
 
-            // Reuse temp_output_bufs
-            self.temp_output_bufs.clear();
-            for _ in 0..channels {
-                self.temp_output_bufs.push(vec![0.0; output_frames]);
+            // Reuse temp_output_bufs - resize instead of creating new Vec
+            if self.temp_output_bufs.len() < channels {
+                self.temp_output_bufs.resize_with(channels, Vec::new);
+            }
+            for ch in 0..channels {
+                self.temp_output_bufs[ch].resize(output_frames, 0.0);
             }
             let mut output_refs: Vec<&mut [f32]> =
                 self.temp_output_bufs.iter_mut().map(|v| v.as_mut_slice()).collect();
@@ -300,19 +305,24 @@ impl ResamplerProcessor {
 
         debug!(buffered, padding_needed, "Flushing resampler buffer");
 
-        // Reuse temp_input_slice
-        self.temp_input_slice.clear();
+        // Reuse temp_input_slice - resize instead of creating new Vec
+        if self.temp_input_slice.len() < channels {
+            self.temp_input_slice.resize_with(channels, Vec::new);
+        }
         for ch in 0..channels {
-            self.temp_input_slice.push(self.input_buffer[ch][..input_frames].to_vec());
+            self.temp_input_slice[ch].clear();
+            self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
         }
 
         let input_refs: Vec<&[f32]> = self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
         let output_frames = resampler.output_frames_next();
 
-        // Reuse temp_output_bufs
-        self.temp_output_bufs.clear();
-        for _ in 0..channels {
-            self.temp_output_bufs.push(vec![0.0; output_frames]);
+        // Reuse temp_output_bufs - resize instead of creating new Vec
+        if self.temp_output_bufs.len() < channels {
+            self.temp_output_bufs.resize_with(channels, Vec::new);
+        }
+        for ch in 0..channels {
+            self.temp_output_bufs[ch].resize(output_frames, 0.0);
         }
         let mut output_refs: Vec<&mut [f32]> =
             self.temp_output_bufs.iter_mut().map(|v| v.as_mut_slice()).collect();

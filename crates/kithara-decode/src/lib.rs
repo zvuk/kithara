@@ -22,7 +22,7 @@
 //! let audio_rx = resampler.take_audio_receiver().unwrap();
 //!
 //! // Create rodio adapter
-//! let audio_source = AudioSyncReader::new(audio_rx, resampler.output_spec());
+//! let audio_source = AudioSyncReader::new(consumer, buffer, spec);
 //!
 //! // Speed control (lock-free)
 //! resampler.set_speed(1.5);
