@@ -2,6 +2,7 @@
 
 use std::{
     io::{Read, Seek, SeekFrom},
+    sync::Arc,
     time::Duration,
 };
 
@@ -9,9 +10,7 @@ use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use kithara_assets::StoreOptions;
 use kithara_file::{File, FileParams};
-use kithara_stream::{
-    Source, SourceFactory, StreamSource, SyncReader, SyncReaderParams, WaitOutcome,
-};
+use kithara_stream::{Source, StreamSource, SyncReader, SyncReaderParams, WaitOutcome};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -81,29 +80,29 @@ async fn stream_source_file_read_at_works(#[future] test_server: String, temp_di
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
     let params = FileParams::new(StoreOptions::new(temp_dir.path()));
-    let opened = File::open(url, params).await.unwrap();
-    let source = opened.source;
+    let source = StreamSource::<File>::open(url, params).await.unwrap();
+    let source = Arc::new(source);
 
     // Wait for data to be available
-    let outcome = source.wait_range(0..27).await.unwrap();
+    let outcome = Source::wait_range(source.as_ref(), 0..27).await.unwrap();
     assert!(matches!(outcome, WaitOutcome::Ready));
 
     // Read from start
     let mut buf = [0u8; 3];
-    let n = source.read_at(0, &mut buf).await.unwrap();
+    let n = Source::read_at(source.as_ref(), 0, &mut buf).await.unwrap();
     assert_eq!(n, 3);
     assert_eq!(&buf, b"ID3");
 
     // Read from middle
     let mut buf = [0u8; 5];
-    let n = source.read_at(13, &mut buf).await.unwrap();
+    let n = Source::read_at(source.as_ref(), 13, &mut buf).await.unwrap();
     assert_eq!(n, 5);
     assert_eq!(&buf, b"Audio");
 
     // Read at end
-    let len = source.len().unwrap();
+    let len = Source::len(source.as_ref()).unwrap();
     let mut buf = [0u8; 10];
-    let n = source.read_at(len, &mut buf).await.unwrap();
+    let n = Source::read_at(source.as_ref(), len, &mut buf).await.unwrap();
     assert_eq!(n, 0); // EOF
 }
 

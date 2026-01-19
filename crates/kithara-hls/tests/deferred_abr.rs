@@ -20,7 +20,7 @@ use std::{
 
 use kithara_assets::StoreOptions;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams, events::HlsEvent};
-use kithara_stream::{Source, SyncReader, SyncReaderParams, WaitOutcome};
+use kithara_stream::{StreamSource, Source, SyncReader, SyncReaderParams, WaitOutcome};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -131,7 +131,7 @@ async fn sequential_read_after_abr_switch_continues_from_old_variant(
             ..AbrOptions::default()
         });
 
-    let source = Hls::open(url, params).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
     let mut events = source.events();
 
     // Read first few bytes to establish position
@@ -208,7 +208,7 @@ async fn seek_backward_after_abr_switch_returns_new_variant(
             ..AbrOptions::default()
         });
 
-    let source = Hls::open(url, params).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
     let mut events = source.events();
     let source = Arc::new(source);
 
@@ -302,7 +302,7 @@ async fn seek_forward_after_abr_switch_triggers_switch(
             ..AbrOptions::default()
         });
 
-    let source = Hls::open(url, params).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
     let mut events = source.events();
     let source = Arc::new(source);
 
@@ -387,7 +387,7 @@ async fn manual_variant_returns_correct_data(
             ..AbrOptions::default()
         });
 
-    let source = Hls::open(url, params).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
 
     let outcome = source.wait_range(0..10).await.unwrap();
     assert_eq!(outcome, WaitOutcome::Ready);
@@ -429,7 +429,7 @@ async fn sequential_read_across_segments_maintains_variant(
             ..AbrOptions::default()
         });
 
-    let source = Hls::open(url, params).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
     let source = Arc::new(source);
 
     // Read all three segments sequentially
@@ -487,7 +487,7 @@ async fn after_seek_sequential_reads_maintain_variant(
             ..AbrOptions::default()
         });
 
-    let source = Hls::open(url, params).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
     let source = Arc::new(source);
 
     let result = tokio::task::spawn_blocking(move || {
@@ -547,7 +547,7 @@ async fn multiple_seeks_maintain_correct_variant(
             ..AbrOptions::default()
         });
 
-    let source = Hls::open(url, params).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
     let source = Arc::new(source);
 
     let result = tokio::task::spawn_blocking(move || {
@@ -614,7 +614,7 @@ async fn seek_to_segment_boundary_reads_correct_segment(
             ..AbrOptions::default()
         });
 
-    let source = Hls::open(url, params).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
     let source = Arc::new(source);
 
     let result = tokio::task::spawn_blocking(move || {

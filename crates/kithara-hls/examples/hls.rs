@@ -1,7 +1,7 @@
 use std::{env::args, error::Error, sync::Arc};
 
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
-use kithara_stream::{SyncReader, SyncReaderParams};
+use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -33,7 +33,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     });
 
     // Open an HLS source (async byte source).
-    let source = Hls::open(url, hls_params).await?;
+    let source = StreamSource::<Hls>::open(url, hls_params).await?;
     let events_rx = source.events();
 
     let reader = SyncReader::new(Arc::new(source), SyncReaderParams::default());

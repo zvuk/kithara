@@ -49,7 +49,10 @@ impl Hls {
     ///
     /// Returns `HlsSource` which implements `Source` trait for random-access reading
     /// and provides event subscription via `events()`.
-    pub async fn open(url: Url, params: HlsParams) -> HlsResult<HlsSource> {
+    ///
+    /// # Note
+    /// This method is internal. Use `StreamSource::<Hls>::open(url, params)` instead.
+    pub(crate) async fn open(url: Url, params: HlsParams) -> HlsResult<HlsSource> {
         let asset_root = asset_root_for_url(&url);
         let cancel = params.cancel.clone().unwrap_or_default();
 
