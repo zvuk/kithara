@@ -5,6 +5,7 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
+use kithara_bufpool::SharedPool;
 use rubato::{
     Resampler as RubatoResampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType,
     WindowFunction,
@@ -31,10 +32,17 @@ pub(crate) struct ResamplerProcessor {
     temp_input_slice: Vec<Vec<f32>>,
     temp_output_bufs: Vec<Vec<f32>>,
     temp_output_all: Vec<Vec<f32>>,
+    pool: SharedPool<32, Vec<f32>>,
 }
 
 impl ResamplerProcessor {
-    pub fn new(source_rate: u32, target_rate: u32, channels: usize, speed: Arc<AtomicU32>) -> Self {
+    pub fn new(
+        source_rate: u32,
+        target_rate: u32,
+        channels: usize,
+        speed: Arc<AtomicU32>,
+        pool: SharedPool<32, Vec<f32>>,
+    ) -> Self {
         let current_speed = f32::from_bits(speed.load(Ordering::Relaxed));
         let output_spec = PcmSpec {
             sample_rate: target_rate,
@@ -53,6 +61,7 @@ impl ResamplerProcessor {
             temp_input_slice: Vec::with_capacity(channels),
             temp_output_bufs: Vec::with_capacity(channels),
             temp_output_all: vec![Vec::new(); channels],
+            pool,
         };
 
         processor.update_resampler_if_needed(current_speed);
@@ -97,7 +106,12 @@ impl ResamplerProcessor {
                 target_rate = self.target_rate,
                 "Passthrough mode"
             );
-            return Some(PcmChunk::new(self.output_spec, chunk.pcm.clone()));
+            // Use pool to avoid allocation
+            let buf = self.pool.get_with(|b| {
+                b.clear();
+                b.extend_from_slice(&chunk.pcm);
+            });
+            return Some(PcmChunk::new(self.output_spec, buf.into_inner()));
         }
 
         trace!(
@@ -273,7 +287,11 @@ impl ResamplerProcessor {
         }
 
         let frames = planar[0].len();
-        let mut result = Vec::with_capacity(frames * self.channels);
+        // Use pool to avoid allocation
+        let mut result = self.pool.get_with(|b| {
+            b.clear();
+            b.reserve(frames * self.channels);
+        });
 
         for frame_idx in 0..frames {
             for channel in planar.iter().take(self.channels) {
@@ -281,7 +299,7 @@ impl ResamplerProcessor {
             }
         }
 
-        result
+        result.into_inner()
     }
 
     /// Flush remaining data from buffer (called at end of stream).
@@ -371,31 +389,35 @@ mod tests {
         Arc::new(AtomicU32::new(speed.to_bits()))
     }
 
+    fn make_test_pool() -> SharedPool<32, Vec<f32>> {
+        SharedPool::<32, Vec<f32>>::new(10, 32 * 1024)
+    }
+
     #[test]
     fn test_passthrough_same_rate() {
         let speed = make_speed_atomic(1.0);
-        let processor = ResamplerProcessor::new(44100, 44100, 2, speed);
+        let processor = ResamplerProcessor::new(44100, 44100, 2, speed, make_test_pool());
         assert!(processor.is_passthrough());
     }
 
     #[test]
     fn test_no_passthrough_different_rate() {
         let speed = make_speed_atomic(1.0);
-        let processor = ResamplerProcessor::new(48000, 44100, 2, speed);
+        let processor = ResamplerProcessor::new(48000, 44100, 2, speed, make_test_pool());
         assert!(!processor.is_passthrough());
     }
 
     #[test]
     fn test_no_passthrough_speed_not_one() {
         let speed = make_speed_atomic(1.5);
-        let processor = ResamplerProcessor::new(44100, 44100, 2, speed);
+        let processor = ResamplerProcessor::new(44100, 44100, 2, speed, make_test_pool());
         assert!(!processor.is_passthrough());
     }
 
     #[test]
     fn test_passthrough_processing() {
         let speed = make_speed_atomic(1.0);
-        let mut processor = ResamplerProcessor::new(44100, 44100, 2, speed);
+        let mut processor = ResamplerProcessor::new(44100, 44100, 2, speed, make_test_pool());
 
         let chunk = PcmChunk::new(
             PcmSpec {
@@ -415,7 +437,7 @@ mod tests {
     #[test]
     fn test_output_spec() {
         let speed = make_speed_atomic(1.0);
-        let processor = ResamplerProcessor::new(48000, 44100, 2, speed);
+        let processor = ResamplerProcessor::new(48000, 44100, 2, speed, make_test_pool());
         assert_eq!(processor.output_spec.sample_rate, 44100);
         assert_eq!(processor.output_spec.channels, 2);
     }
@@ -423,7 +445,7 @@ mod tests {
     #[test]
     fn test_dynamic_speed_change() {
         let speed = make_speed_atomic(1.0);
-        let mut processor = ResamplerProcessor::new(44100, 44100, 2, speed.clone());
+        let mut processor = ResamplerProcessor::new(44100, 44100, 2, speed.clone(), make_test_pool());
         assert!(processor.is_passthrough());
 
         speed.store(1.5_f32.to_bits(), Ordering::Relaxed);
@@ -443,7 +465,7 @@ mod tests {
     #[test]
     fn test_accumulates_small_chunks() {
         let speed = make_speed_atomic(1.0);
-        let mut processor = ResamplerProcessor::new(48000, 44100, 2, speed);
+        let mut processor = ResamplerProcessor::new(48000, 44100, 2, speed, make_test_pool());
 
         // Send small chunk (less than DEFAULT_CHUNK_SIZE)
         let small_chunk = PcmChunk::new(
@@ -465,7 +487,7 @@ mod tests {
     #[test]
     fn test_processes_large_chunks() {
         let speed = make_speed_atomic(1.0);
-        let mut processor = ResamplerProcessor::new(48000, 44100, 2, speed);
+        let mut processor = ResamplerProcessor::new(48000, 44100, 2, speed, make_test_pool());
 
         // Send large chunk (more than DEFAULT_CHUNK_SIZE)
         let large_chunk = PcmChunk::new(
@@ -487,7 +509,7 @@ mod tests {
     #[test]
     fn test_source_rate_change_resets_resampler() {
         let speed = make_speed_atomic(1.0);
-        let mut processor = ResamplerProcessor::new(48000, 44100, 2, speed);
+        let mut processor = ResamplerProcessor::new(48000, 44100, 2, speed, make_test_pool());
 
         // First chunk at 48kHz
         let chunk1 = PcmChunk::new(
@@ -518,7 +540,7 @@ mod tests {
     #[test]
     fn test_no_data_loss_across_chunks() {
         let speed = make_speed_atomic(1.0);
-        let mut processor = ResamplerProcessor::new(48000, 44100, 2, speed);
+        let mut processor = ResamplerProcessor::new(48000, 44100, 2, speed, make_test_pool());
 
         let mut total_input_frames = 0;
         let mut total_output_frames = 0;
@@ -557,7 +579,7 @@ mod tests {
     fn test_speed_affects_output_count() {
         // Same source and target rate, but speed != 1.0
         let speed = make_speed_atomic(2.0); // 2x speed
-        let mut processor = ResamplerProcessor::new(44100, 44100, 2, speed);
+        let mut processor = ResamplerProcessor::new(44100, 44100, 2, speed, make_test_pool());
 
         // Should NOT be passthrough because speed != 1.0
         assert!(
@@ -608,7 +630,7 @@ mod tests {
     fn test_speed_half_doubles_output() {
         // Same source and target rate, speed = 0.5 (half speed = 2x duration)
         let speed = make_speed_atomic(0.5);
-        let mut processor = ResamplerProcessor::new(44100, 44100, 2, speed);
+        let mut processor = ResamplerProcessor::new(44100, 44100, 2, speed, make_test_pool());
 
         assert!(
             !processor.is_passthrough(),

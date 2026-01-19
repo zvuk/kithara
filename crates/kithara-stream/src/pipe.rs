@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
-use buffer_pool::{Pool, Pooled};
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
+use kithara_bufpool::{PooledSliceOwned, SharedPool};
 use kithara_net::{Headers, Net, NetError};
 use kithara_storage::{Resource, StorageError, StreamingResourceExt, WaitOutcome};
 use thiserror::Error;
@@ -14,27 +14,6 @@ use url::Url;
 
 use crate::{StreamError, StreamMsg};
 
-/// Global buffer pool (32 shards, limit 1024 buffers per shard, trim at 128KB).
-static BUF_POOL: OnceLock<&'static Pool<32, Vec<u8>>> = OnceLock::new();
-
-fn global_buf_pool() -> &'static Pool<32, Vec<u8>> {
-    *BUF_POOL.get_or_init(|| {
-        let pool = Pool::<32, Vec<u8>>::new(1024, 128 * 1024);
-        Box::leak(Box::new(pool))
-    })
-}
-
-/// Wrapper that holds pooled buffer with length information.
-struct PooledBuf {
-    buf: Pooled<Vec<u8>>,
-    len: usize,
-}
-
-impl AsRef<[u8]> for PooledBuf {
-    fn as_ref(&self) -> &[u8] {
-        &self.buf[..self.len]
-    }
-}
 
 /// Error type for the generic writer (fetch loop).
 #[derive(Debug, Error)]
@@ -209,17 +188,19 @@ where
     res: R,
     start_pos: u64,
     chunk_size: usize,
+    pool: SharedPool<32, Vec<u8>>,
 }
 
 impl<R> Reader<R>
 where
     R: StreamingResourceExt + Send + Sync + 'static,
 {
-    pub fn new(res: R, start_pos: u64, chunk_size: usize) -> Self {
+    pub fn new(res: R, start_pos: u64, chunk_size: usize, pool: SharedPool<32, Vec<u8>>) -> Self {
         Self {
             res,
             start_pos,
             chunk_size,
+            pool,
         }
     }
 
@@ -231,11 +212,12 @@ where
     {
         let chunk = self.chunk_size;
         let mut pos = self.start_pos;
-        let pool = global_buf_pool();
+        let res = self.res;
+        let pool = self.pool;
         async_stream::stream! {
             loop {
                 let end = pos.saturating_add(chunk as u64);
-                let outcome = self.res.wait_range(pos..end).await;
+                let outcome = res.wait_range(pos..end).await;
                 let Ok(WaitOutcome::Ready) = outcome else {
                     if let Err(e) = outcome {
                         yield Err(StreamError::Source(ReaderError::Wait(e)));
@@ -244,8 +226,7 @@ where
                 };
 
                 let mut buf = pool.get_with(|b| b.resize(chunk, 0));
-                let bytes_read = self
-                    .res
+                let bytes_read = res
                     .read_at(pos, &mut buf)
                     .await
                     .map_err(ReaderError::Read)
@@ -260,10 +241,7 @@ where
                 }
 
                 pos = pos.saturating_add(bytes_read as u64);
-                let pooled = PooledBuf {
-                    buf,
-                    len: bytes_read,
-                };
+                let pooled = PooledSliceOwned::new(buf, bytes_read);
                 yield Ok(StreamMsg::Data(Bytes::from_owner(pooled)));
             }
         }

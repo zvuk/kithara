@@ -129,6 +129,9 @@ impl Pipeline {
         // Speed control (lock-free)
         let speed = Arc::new(AtomicU32::new(1.0_f32.to_bits()));
 
+        // Create shared buffer pool for resampler
+        let pool = kithara_bufpool::SharedPool::<32, Vec<f32>>::new(1024, 32 * 1024);
+
         // Get runtime handle for decoder recreation
         let rt_handle = Handle::current();
 
@@ -144,6 +147,7 @@ impl Pipeline {
                 cmd_rx,
                 buffer_clone,
                 speed_clone,
+                pool,
                 rt_handle,
             );
         });
@@ -363,6 +367,7 @@ fn run_unified_pipeline<S>(
     cmd_rx: Receiver<PipelineCommand>,
     buffer: Arc<PcmBuffer>,
     speed: Arc<AtomicU32>,
+    pool: kithara_bufpool::SharedPool<32, Vec<f32>>,
     rt_handle: Handle,
 ) where
     S: Source<Item = u8>,
@@ -384,6 +389,7 @@ fn run_unified_pipeline<S>(
         target_sample_rate,
         channels,
         speed.clone(),
+        pool,
     );
 
     let mut chunks_processed: u64 = 0;

@@ -22,8 +22,8 @@ tracing = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
 kithara-storage = { workspace = true }
+kithara-bufpool = { workspace = true }
 url = { workspace = true }
-buffer-pool = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
