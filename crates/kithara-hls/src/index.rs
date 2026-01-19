@@ -75,6 +75,10 @@ pub(crate) struct SegmentEntry {
 /// Segments stored in BTreeMap with SegmentKey ordering: Init < Media(0) < Media(1) < ...
 struct VariantIndex {
     segments: BTreeMap<SegmentKey, SegmentData>,
+    /// Base byte offset for this variant (for ABR switch continuity).
+    /// When switching to this variant from another, base_offset is set to
+    /// the last read position, ensuring continuous global offset namespace.
+    base_offset: u64,
     /// Container format detected from init/first segment URL.
     detected_container: Option<DetectedContainer>,
     /// First media segment index (for ABR switch support).
@@ -86,6 +90,7 @@ impl VariantIndex {
     fn new() -> Self {
         Self {
             segments: BTreeMap::new(),
+            base_offset: 0,
             detected_container: None,
             first_media_segment: None,
         }
@@ -129,10 +134,12 @@ impl VariantIndex {
         self.detected_container
     }
 
-    /// Find segment by byte offset.
+    /// Find segment by byte offset (local to this variant).
     /// INIT segment (if present) comes first at offset 0.
     /// Returns None if there are gaps in media segment indices.
-    fn find(&self, offset: u64) -> Option<SegmentEntry> {
+    ///
+    /// Returns SegmentEntry with local offsets (caller must add base_offset).
+    fn find(&self, local_offset: u64) -> Option<SegmentEntry> {
         let mut cumulative = 0u64;
         // Start from first_media_segment (supports ABR switch mid-stream)
         let mut expected_media_idx = self.first_media_segment.unwrap_or(0);
@@ -146,23 +153,23 @@ impl VariantIndex {
                 expected_media_idx = idx + 1;
             }
 
-            let global_start = cumulative;
-            let global_end = cumulative + data.len;
+            let local_start = cumulative;
+            let local_end = cumulative + data.len;
 
-            if offset >= global_start && offset < global_end {
+            if local_offset >= local_start && local_offset < local_end {
                 let segment_index = match key {
                     SegmentKey::Init => usize::MAX,
                     SegmentKey::Media(idx) => *idx,
                 };
                 return Some(SegmentEntry {
-                    global_start,
-                    global_end,
+                    global_start: local_start,
+                    global_end: local_end,
                     url: data.url.clone(),
                     segment_index,
                     encryption: data.encryption.clone(),
                 });
             }
-            cumulative = global_end;
+            cumulative = local_end;
         }
         None
     }
@@ -195,7 +202,27 @@ impl SegmentIndex {
         }
     }
 
+    /// Set base offset for a variant.
+    ///
+    /// Used during ABR switch to ensure continuous global offset namespace.
+    /// When switching from variant A to variant B, call this with the last
+    /// read position in variant A.
+    pub fn set_variant_base_offset(&mut self, variant: usize, base_offset: u64) {
+        if let Some(variant_idx) = self.variants.get_mut(&variant) {
+            tracing::debug!(
+                variant,
+                old_base = variant_idx.base_offset,
+                new_base = base_offset,
+                "Setting variant base offset"
+            );
+            variant_idx.base_offset = base_offset;
+        }
+    }
+
     /// Add a segment to the variant's index.
+    ///
+    /// If this is the first segment for a NEW variant (ABR switch),
+    /// automatically sets base_offset to ensure continuous global offset space.
     pub fn add(
         &mut self,
         url: Url,
@@ -204,10 +231,41 @@ impl SegmentIndex {
         segment_index: usize,
         encryption: Option<EncryptionInfo>,
     ) {
-        self.variants
+        // Check if this is a new variant
+        let is_new_variant = !self.variants.contains_key(&variant);
+
+        // If new variant, calculate max_offset from existing variants BEFORE borrowing
+        let base_offset_for_new = if is_new_variant {
+            let max_offset = self.variants
+                .iter()
+                .map(|(_, v)| v.base_offset + v.total_len())
+                .max()
+                .unwrap_or(0);
+
+            if max_offset > 0 {
+                tracing::debug!(
+                    variant,
+                    base_offset = max_offset,
+                    "Auto-setting base offset for new variant (ABR switch)"
+                );
+                Some(max_offset)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let variant_idx = self.variants
             .entry(variant)
-            .or_insert_with(VariantIndex::new)
-            .add(url, len, segment_index, encryption);
+            .or_insert_with(VariantIndex::new);
+
+        // Set base offset for new variant
+        if let Some(base) = base_offset_for_new {
+            variant_idx.base_offset = base;
+        }
+
+        variant_idx.add(url, len, segment_index, encryption);
     }
 
     /// Get detected container for a variant (if available).
@@ -219,8 +277,23 @@ impl SegmentIndex {
 
     /// Find segment by offset for the specified variant.
     /// Returns owned SegmentEntry (computed on the fly).
+    ///
+    /// Handles variant base offsets for ABR switch continuity:
+    /// - Converts global offset to variant-local offset
+    /// - Finds segment in variant's index
+    /// - Converts result back to global offset space
     pub fn find(&self, offset: u64, variant: usize) -> Option<SegmentEntry> {
-        self.variants.get(&variant)?.find(offset)
+        let variant_idx = self.variants.get(&variant)?;
+        let base_offset = variant_idx.base_offset;
+        let local_offset = offset.saturating_sub(base_offset);
+
+        let mut entry = variant_idx.find(local_offset)?;
+
+        // Adjust global offsets by adding base offset
+        entry.global_start = entry.global_start.saturating_add(base_offset);
+        entry.global_end = entry.global_end.saturating_add(base_offset);
+
+        Some(entry)
     }
 
     /// Find segment_index by offset in any loaded variant.
@@ -240,8 +313,13 @@ impl SegmentIndex {
     }
 
     /// Total length for the specified variant (or 0 if variant not loaded).
+    ///
+    /// Returns base_offset + variant's local total length, ensuring continuous
+    /// global offset space across ABR switches.
     pub fn total_len(&self, variant: usize) -> u64 {
-        self.variants.get(&variant).map_or(0, |v| v.total_len())
+        self.variants.get(&variant).map_or(0, |v| {
+            v.base_offset.saturating_add(v.total_len())
+        })
     }
 
     pub fn is_finished(&self) -> bool {

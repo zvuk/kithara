@@ -9,6 +9,7 @@ members = [
     "crates/kithara-storage",
     "crates/kithara-assets",
     "crates/kithara-bufpool",
+    "crates/kithara-worker",
 ]
 
 [workspace.lints.rustdoc]
@@ -52,13 +53,14 @@ categories = ["multimedia::audio"]
 [workspace.dependencies]
 # workspace crates (path deps)
 kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
-kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
+kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.1.0" }
+kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
-kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
-kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
+kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
-kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.1.0" }
+kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
+kithara-worker = { path = "crates/kithara-worker", version = "0.1.0" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.3.1"
 

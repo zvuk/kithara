@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     });
     let url: Url = url.parse()?;
 
-    let speed: f32 = args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(0.5);
+    let speed: f32 = args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1.0);
 
     info!("Opening file: {}", url);
     info!("Playback speed: {}x", speed);
@@ -84,13 +84,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     );
 
     // Set playback speed
-    pipeline.set_speed(speed)?;
+    pipeline.set_speed(speed).await?;
 
-    info!(
-        target_rate = TARGET_SAMPLE_RATE,
-        speed,
-        "Speed configured"
-    );
+    info!(target_rate = TARGET_SAMPLE_RATE, speed, "Speed configured");
 
     // Create rodio adapter from buffer
     let audio_source = AudioSyncReader::new(

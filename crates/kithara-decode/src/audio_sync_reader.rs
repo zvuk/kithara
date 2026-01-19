@@ -8,7 +8,7 @@ use std::{sync::Arc, time::Duration};
 
 use parking_lot::Mutex;
 use ringbuf::traits::Consumer;
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::{PcmBuffer, PcmSpec};
 
@@ -76,6 +76,7 @@ impl AudioSyncReader {
             drop(consumer);
 
             if n > 0 {
+                debug!(samples = n, "AudioSyncReader: read from ring buffer");
                 self.buffer_samples = n;
                 self.buffer_offset = 0;
                 return true;
@@ -83,6 +84,7 @@ impl AudioSyncReader {
 
             // Check if EOF
             if self.buffer.is_eof() {
+                debug!("AudioSyncReader: EOF detected");
                 self.eof = true;
                 return false;
             }
@@ -91,6 +93,7 @@ impl AudioSyncReader {
             attempts += 1;
             if attempts > MAX_ATTEMPTS {
                 // Timeout
+                debug!("AudioSyncReader: timeout waiting for data");
                 self.eof = true;
                 return false;
             }

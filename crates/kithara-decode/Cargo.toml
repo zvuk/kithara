@@ -8,6 +8,7 @@ license = "MIT OR Apache-2.0"
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-worker = { workspace = true }
 thiserror = { workspace = true }
 kanal = { workspace = true }
 symphonia = { workspace = true }

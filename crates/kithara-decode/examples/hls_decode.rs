@@ -108,7 +108,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     );
 
     // Set playback speed
-    pipeline.set_speed(speed)?;
+    pipeline.set_speed(speed).await?;
 
     info!(
         target_rate = TARGET_SAMPLE_RATE,

@@ -8,14 +8,14 @@ use std::sync::{
     atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
 };
 
-use kanal::{Receiver, Sender};
-use kithara_stream::{MediaInfo, Source};
+use kithara_stream::{MediaInfo, Source, SyncReader, SyncReaderParams};
+use kithara_worker::{SimpleItem, SyncWorker, SyncWorkerSource};
 use ringbuf::{HeapRb, traits::{Producer, Split}};
-use tokio::{runtime::Handle, task::JoinHandle};
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    DecodeError, DecodeResult, PcmChunk, PcmSpec, SourceReader, SymphoniaDecoder,
+    DecodeError, DecodeResult, PcmChunk, PcmSpec, SymphoniaDecoder,
     resampler::ResamplerProcessor,
 };
 
@@ -26,6 +26,101 @@ pub enum PipelineCommand {
     Stop,
     /// Set playback speed (0.5 - 2.0).
     SetSpeed(f32),
+}
+
+/// Decode source that processes entire pipeline: decoder → resampler → effects.
+///
+/// This implements `SyncWorkerSource` and is run by `SyncWorker`.
+/// Uses SyncReader which internally has AsyncWorker for byte prefetch.
+struct DecodeSource {
+    /// Symphonia decoder.
+    decoder: SymphoniaDecoder,
+    /// Resampler processor.
+    resampler: ResamplerProcessor,
+    /// Output specification (target format after resampling).
+    output_spec: PcmSpec,
+}
+
+impl DecodeSource {
+    fn new(
+        decoder: SymphoniaDecoder,
+        source_spec: PcmSpec,
+        target_sample_rate: u32,
+        speed: Arc<AtomicU32>,
+        pool: kithara_bufpool::SharedPool<32, Vec<f32>>,
+    ) -> Self {
+        let channels = source_spec.channels as usize;
+        let resampler = ResamplerProcessor::new(
+            source_spec.sample_rate,
+            target_sample_rate,
+            channels,
+            speed,
+            pool,
+        );
+
+        let output_spec = PcmSpec {
+            sample_rate: target_sample_rate,
+            channels: source_spec.channels,
+        };
+
+        Self {
+            decoder,
+            resampler,
+            output_spec,
+        }
+    }
+}
+
+impl SyncWorkerSource for DecodeSource {
+    type Chunk = PcmChunk<f32>;
+    type Command = PipelineCommand;
+
+    fn fetch_next(&mut self) -> Option<Self::Chunk> {
+        loop {
+            // Decode next chunk (blocking operation, SyncReader is safe in blocking context)
+            match self.decoder.next_chunk() {
+                Ok(Some(decoded_chunk)) => {
+                    trace!(frames = decoded_chunk.frames(), "Decoded chunk");
+
+                    // Resample if needed
+                    if let Some(resampled) = self.resampler.process(&decoded_chunk) {
+                        return Some(resampled);
+                    }
+                    // Not enough data yet for resampler, continue
+                    continue;
+                }
+                Ok(None) => {
+                    // End of stream - flush resampler
+                    if let Some(final_chunk) = self.resampler.flush() {
+                        info!("Pipeline: flushing resampler");
+                        return Some(final_chunk);
+                    }
+
+                    info!("Pipeline: end of stream");
+                    return None;
+                }
+                Err(e) => {
+                    error!(err = %e, "Pipeline decode error");
+                    return None;
+                }
+            }
+        }
+    }
+
+    fn handle_command(&mut self, cmd: Self::Command) {
+        match cmd {
+            PipelineCommand::Stop => {
+                debug!("DecodeSource: received Stop command");
+            }
+            PipelineCommand::SetSpeed(new_speed) => {
+                debug!(new_speed, "DecodeSource: speed command processed");
+            }
+        }
+    }
+
+    fn eof_chunk(&self) -> Self::Chunk {
+        PcmChunk::new(self.output_spec, Vec::new())
+    }
 }
 
 /// Unified audio processing pipeline.
@@ -58,7 +153,7 @@ pub struct Pipeline {
     /// Handle to the blocking processing task.
     task_handle: Option<JoinHandle<()>>,
     /// Command sender.
-    cmd_tx: Sender<PipelineCommand>,
+    cmd_tx: tokio::sync::mpsc::Sender<PipelineCommand>,
     /// Shared PCM buffer for decoded audio.
     buffer: Arc<PcmBuffer>,
     /// Ring buffer consumer for reading decoded samples.
@@ -104,10 +199,11 @@ impl Pipeline {
             source.media_info()
         };
 
+        // Create SyncReader (must be in tokio runtime context)
+        let reader = SyncReader::new(source.clone(), SyncReaderParams::default());
+
         // Create initial decoder in blocking context
-        let source_for_decoder = source.clone();
         let (decoder, source_spec) = tokio::task::spawn_blocking(move || {
-            let reader = SourceReader::new(source_for_decoder);
             create_decoder(reader, initial_media_info.as_ref(), is_streaming)
         })
         .await
@@ -119,7 +215,8 @@ impl Pipeline {
         };
 
         // Channels for communication
-        let (cmd_tx, cmd_rx) = kanal::bounded::<PipelineCommand>(4);
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<PipelineCommand>(4);
+        let (data_tx, data_rx) = kanal::bounded::<SimpleItem<PcmChunk<f32>>>(8);
 
         // Shared buffer for decoded PCM with ring buffer
         let (buffer, consumer) = PcmBuffer::new(output_spec);
@@ -132,24 +229,34 @@ impl Pipeline {
         // Create shared buffer pool for resampler
         let pool = kithara_bufpool::SharedPool::<32, Vec<f32>>::new(1024, 32 * 1024);
 
-        // Get runtime handle for decoder recreation
-        let rt_handle = Handle::current();
+        // Create decode source
+        let decode_source = DecodeSource::new(
+            decoder,
+            source_spec,
+            target_sample_rate,
+            speed.clone(),
+            pool,
+        );
 
-        // Spawn unified processing task
+        // Create worker
+        let worker = SyncWorker::new(decode_source, cmd_rx, data_tx);
+
+        // Spawn worker in blocking task (log decoder source info too)
+        let worker_handle = tokio::task::spawn_blocking(move || {
+            debug!("SyncWorker starting");
+            worker.run();
+            debug!("SyncWorker finished");
+        });
+
+        // Spawn consumer in async task
         let buffer_clone = buffer.clone();
-        let speed_clone = speed.clone();
-        let task_handle = tokio::task::spawn_blocking(move || {
-            run_unified_pipeline(
-                source,
-                decoder,
-                source_spec,
-                target_sample_rate,
-                cmd_rx,
-                buffer_clone,
-                speed_clone,
-                pool,
-                rt_handle,
-            );
+        let consumer_handle = tokio::spawn(async move {
+            run_consumer_async(data_rx, buffer_clone).await;
+        });
+
+        // Combine both handles
+        let task_handle = tokio::spawn(async move {
+            let _ = tokio::join!(worker_handle, consumer_handle);
         });
 
         Ok(Self {
@@ -173,11 +280,12 @@ impl Pipeline {
     }
 
     /// Set playback speed (0.5 - 2.0).
-    pub fn set_speed(&self, speed: f32) -> DecodeResult<()> {
+    pub async fn set_speed(&self, speed: f32) -> DecodeResult<()> {
         let clamped = speed.clamp(0.5, 2.0);
         self.speed.store(clamped.to_bits(), Ordering::Relaxed);
         self.cmd_tx
             .send(PipelineCommand::SetSpeed(clamped))
+            .await
             .map_err(|_| DecodeError::Io(std::io::Error::other("Pipeline stopped")))?;
         Ok(())
     }
@@ -193,8 +301,8 @@ impl Pipeline {
     }
 
     /// Stop the pipeline.
-    pub fn stop(&self) {
-        let _ = self.cmd_tx.send(PipelineCommand::Stop);
+    pub async fn stop(&self) {
+        let _ = self.cmd_tx.send(PipelineCommand::Stop).await;
     }
 
     /// Wait for pipeline to finish.
@@ -210,7 +318,7 @@ impl Pipeline {
 
 impl Drop for Pipeline {
     fn drop(&mut self) {
-        let _ = self.cmd_tx.send(PipelineCommand::Stop);
+        let _ = self.cmd_tx.try_send(PipelineCommand::Stop);
     }
 }
 
@@ -357,171 +465,41 @@ where
     Ok((decoder, spec))
 }
 
-/// Main unified pipeline loop.
-#[allow(clippy::too_many_arguments)]
-fn run_unified_pipeline<S>(
-    source: Arc<S>,
-    mut decoder: SymphoniaDecoder,
-    source_spec: PcmSpec,
-    target_sample_rate: u32,
-    cmd_rx: Receiver<PipelineCommand>,
+/// Consumer that receives PCM chunks from worker and writes to buffer.
+async fn run_consumer_async(
+    data_rx: kanal::Receiver<SimpleItem<PcmChunk<f32>>>,
     buffer: Arc<PcmBuffer>,
-    speed: Arc<AtomicU32>,
-    pool: kithara_bufpool::SharedPool<32, Vec<f32>>,
-    rt_handle: Handle,
-) where
-    S: Source<Item = u8>,
-{
-    debug!(
-        source_rate = source_spec.sample_rate,
-        target_rate = target_sample_rate,
-        channels = source_spec.channels,
-        "Unified pipeline started"
-    );
+) {
+    debug!("Consumer started");
 
-    let is_streaming = source.len().is_none();
-    let mut decoder_media_info = source.media_info();
+    let async_rx = data_rx.as_async();
 
-    // Create resampler processor
-    let channels = source_spec.channels as usize;
-    let mut resampler = ResamplerProcessor::new(
-        source_spec.sample_rate,
-        target_sample_rate,
-        channels,
-        speed.clone(),
-        pool,
-    );
-
-    let mut chunks_processed: u64 = 0;
-
+    // Consume all data from channel
+    let mut chunks_received = 0;
     loop {
-        // Check for commands (non-blocking)
-        if let Ok(Some(cmd)) = cmd_rx.try_recv() {
-            match cmd {
-                PipelineCommand::Stop => {
-                    info!(chunks_processed, "Pipeline stopped by command");
+        match async_rx.recv().await {
+            Ok(item) => {
+                if item.is_eof {
+                    debug!("Consumer: received EOF marker");
+                    buffer.set_eof();
                     break;
                 }
-                PipelineCommand::SetSpeed(new_speed) => {
-                    debug!(new_speed, "Speed command processed");
-                }
+
+                buffer.append(&item.data);
+                chunks_received += 1;
             }
-        }
-
-        // Decode next chunk
-        match decoder.next_chunk() {
-            Ok(Some(decoded_chunk)) => {
-                trace!(
-                    frames = decoded_chunk.frames(),
-                    "Decoded chunk"
-                );
-
-                // Resample if needed
-                let output_chunk = if let Some(resampled) = resampler.process(&decoded_chunk) {
-                    resampled
-                } else {
-                    // Not enough data yet for resampler, continue
-                    continue;
-                };
-
-                // Write to buffer
-                buffer.append(&output_chunk);
-                chunks_processed += 1;
-            }
-            Ok(None) => {
-                // End of stream - check if media info changed (ABR switch)
-                let current_media_info = source.media_info();
-                if current_media_info != decoder_media_info
-                    && let Some(ref new_info) = current_media_info
-                {
-                    info!(
-                        new_codec = ?new_info.codec,
-                        chunks_processed,
-                        "End of data, media info changed - recreating decoder"
-                    );
-                    match recreate_decoder(&source, Some(new_info), &rt_handle, is_streaming) {
-                        Ok(new_decoder) => {
-                            decoder = new_decoder;
-                            decoder_media_info = source.media_info();
-                            info!("Decoder recreated");
-                            continue;
-                        }
-                        Err(e) => {
-                            error!(err = %e, "Failed to recreate decoder");
-                            break;
-                        }
-                    }
-                }
-
-                // Flush resampler
-                if let Some(final_chunk) = resampler.flush() {
-                    buffer.append(&final_chunk);
-                }
-
-                info!(chunks_processed, "Pipeline: end of stream");
-                buffer.set_eof();
-                break;
-            }
-            Err(e) => {
-                // Decode error - check if media info changed
-                let current_media_info = source.media_info();
-                if current_media_info != decoder_media_info
-                    && let Some(ref new_info) = current_media_info
-                {
-                    info!(
-                        err = %e,
-                        new_codec = ?new_info.codec,
-                        "Decode error, media info changed - recreating decoder"
-                    );
-                    match recreate_decoder(&source, Some(new_info), &rt_handle, is_streaming) {
-                        Ok(new_decoder) => {
-                            decoder = new_decoder;
-                            decoder_media_info = source.media_info();
-                            continue;
-                        }
-                        Err(recreate_err) => {
-                            error!(err = %recreate_err, "Failed to recreate decoder");
-                            break;
-                        }
-                    }
-                }
-                error!(err = %e, chunks_processed, "Pipeline decode error");
+            Err(_) => {
+                debug!("Consumer: channel closed");
                 break;
             }
         }
     }
 
-    info!(chunks_processed, "Unified pipeline stopped");
-}
+    info!(chunks_received, "Consumer stopped");
 
-/// Recreate decoder for ABR switch.
-fn recreate_decoder<S>(
-    source: &Arc<S>,
-    media_info: Option<&MediaInfo>,
-    rt_handle: &Handle,
-    is_streaming: bool,
-) -> DecodeResult<SymphoniaDecoder>
-where
-    S: Source<Item = u8>,
-{
-    let _guard = rt_handle.enter();
-    debug!("Creating new SourceReader for decoder recreation");
-    let reader = SourceReader::new(source.clone());
-
-    if is_streaming {
-        if let Some(info) = media_info
-            && info.codec.is_some()
-        {
-            debug!(?info, "Recreating streaming decoder from media_info");
-            return SymphoniaDecoder::new_from_media_info(reader, info, true);
-        }
-        debug!("Recreating streaming decoder with probe");
-        return SymphoniaDecoder::new_with_probe(reader, None);
-    }
-
-    if let Some(info) = media_info {
-        SymphoniaDecoder::new_from_media_info(reader, info, false)
-    } else {
-        SymphoniaDecoder::new_with_probe(reader, None)
+    // Mark EOF if not already marked
+    if !buffer.is_eof() {
+        buffer.set_eof();
     }
 }
+

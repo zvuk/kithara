@@ -14,7 +14,7 @@ use tracing::{debug, trace, warn};
 use crate::{
     error::{StreamError, StreamResult},
     media_info::MediaInfo,
-    prefetch::{PrefetchSource, PrefetchWorker, PrefetchedItem},
+    prefetch::{PrefetchWorker, PrefetchedItem},
 };
 
 /// Async random-access source contract.
@@ -154,7 +154,7 @@ where
     }
 }
 
-impl<S> PrefetchSource for BytePrefetchSource<S>
+impl<S> kithara_worker::AsyncWorkerSource for BytePrefetchSource<S>
 where
     S: Source<Item = u8>,
 {
@@ -494,9 +494,16 @@ where
         let old_pos = self.pos;
         self.pos = new_pos_u64;
 
-        // If position changed, notify worker with new epoch
+        // If position changed, notify worker with new epoch for backward seeks only
         if new_pos_u64 != old_pos {
-            self.epoch = self.epoch.wrapping_add(1);
+            let is_backward = new_pos_u64 < old_pos;
+
+            // Only increment epoch for backward seeks (user-initiated)
+            // Forward seeks (variant switch, buffering) preserve epoch
+            if is_backward {
+                self.epoch = self.epoch.wrapping_add(1);
+            }
+
             self.current_chunk = None;
             self.eof_reached = false;
 
@@ -510,6 +517,7 @@ where
                 from = old_pos,
                 to = new_pos_u64,
                 epoch = self.epoch,
+                backward = is_backward,
                 "SyncReader::seek sent to worker"
             );
         }
