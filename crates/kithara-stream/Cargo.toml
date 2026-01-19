@@ -9,19 +9,21 @@ description = "Streaming orchestration (source -> bytes stream) with command/con
 workspace = true
 
 [dependencies]
+async-stream = { workspace = true }
+async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 kanal = { workspace = true }
+kithara-assets = { workspace = true }
+kithara-bufpool = { workspace = true }
+kithara-net = { workspace = true }
+kithara-storage = { workspace = true }
+kithara-worker = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
-async-stream = { workspace = true }
-async-trait = { workspace = true }
 tracing = { workspace = true }
-kithara-assets = { workspace = true }
-kithara-net = { workspace = true }
-kithara-storage = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]

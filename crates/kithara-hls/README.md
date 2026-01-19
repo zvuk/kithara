@@ -11,9 +11,9 @@
 ## Public contract (normative)
 
 ### Entry point
-- `struct Hls` — Factory for creating HLS sessions via `Hls::open(url, options)`
-- `struct HlsSession` — Active HLS session with event access
+- `struct Hls` — Type parameter for `StreamSource::<Hls>::open(url, params)`
 - `struct HlsSource` — Random-access source adapter (implements `kithara_stream::Source`)
+- `StreamSource::<Hls>` — Unified source interface with event subscription
 
 ### Configuration
 - `struct HlsOptions` — Comprehensive configuration for HLS behavior
@@ -36,17 +36,16 @@
 ## Architecture overview
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                      Hls::open()                         │
-│              (Creates HlsSession)                        │
-└──────────────────────────┬──────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│           StreamSource::<Hls>::open()                    │
+│              (Creates HlsSource)                         │
+└──────────────────────────┬───────────────────────────────┘
                            │
-┌──────────────────────────▼──────────────────────────────┐
-│                    HlsSession                            │
-│              (Owns SegmentStream)                        │
-│              .source() → HlsSource                       │
+┌──────────────────────────▼───────────────────────────────┐
+│                   StreamSource<Hls>                      │
+│              (Wraps HlsSource)                           │
 │              .events() → Receiver<HlsEvent>              │
-└──────────────────────────┬──────────────────────────────┘
+└──────────────────────────┬───────────────────────────────┘
                            │
 ┌──────────────────────────▼──────────────────────────────┐
 │                   SegmentStream                          │
@@ -72,7 +71,7 @@ src/
   error.rs            — HlsError, HlsResult
   events.rs           — HlsEvent, EventEmitter
   options.rs          — HlsOptions, AbrOptions, etc.
-  source.rs           — Hls::open() factory
+  source.rs           — Hls factory (SourceFactory impl)
   session.rs          — HlsSession
   source_adapter.rs   — HlsSource (implements Source trait)
   abr/                — ABR logic
@@ -104,20 +103,18 @@ src/
 
 ### Basic HLS playback
 ```rust
-use kithara_hls::{Hls, HlsOptions};
+use kithara_hls::{Hls, HlsParams};
+use kithara_stream::StreamSource;
 use url::Url;
 
 let url = Url::parse("https://example.com/master.m3u8").unwrap();
-let opts = HlsOptions::default();
+let params = HlsParams::default();
 
-// Create HLS session
-let session = Hls::open(url, opts).await?;
+// Open HLS source
+let source = StreamSource::<Hls>::open(url, params).await?;
 
 // Subscribe to events
-let mut events = session.events();
-
-// Get random-access source
-let source = session.source();
+let mut events = source.events();
 
 // Use source with kithara_stream::SyncReader for decoding
 ```

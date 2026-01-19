@@ -62,7 +62,9 @@ impl NetError {
                 // Check for common network error patterns
                 http_err_str.contains("timeout") ||
                 http_err_str.contains("connection") ||
-                http_err_str.contains("network")
+                http_err_str.contains("network") ||
+                http_err_str.contains("decoding") ||  // Body decode errors
+                http_err_str.contains("body")         // Body read errors
             }
             NetError::Timeout => true,
             NetError::RetryExhausted { .. } => false,

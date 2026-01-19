@@ -8,6 +8,8 @@ members = [
     "crates/kithara-stream",
     "crates/kithara-storage",
     "crates/kithara-assets",
+    "crates/kithara-bufpool",
+    "crates/kithara-worker",
 ]
 
 [workspace.lints.rustdoc]
@@ -51,12 +53,14 @@ categories = ["multimedia::audio"]
 [workspace.dependencies]
 # workspace crates (path deps)
 kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
-kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
+kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.1.0" }
+kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
-kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
-kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
+kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
+kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
+kithara-worker = { path = "crates/kithara-worker", version = "0.1.0" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.3.1"
 
@@ -71,6 +75,7 @@ kanal = "0.1.1"
 bytes = "1.11.0"
 ringbuf = "0.4.8"
 async-stream = "0.3.6"
+parking_lot = "0.12"
 
 # http/url
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "stream"] }
@@ -84,6 +89,7 @@ hls_m3u8 = "0.5.1"
 symphonia = { git = "https://github.com/pdeljanov/Symphonia.git", branch="dev-0.6", features = ["all", "opt-simd"] }
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
 rodio = "0.21.1"
+rubato = "0.15"
 
 # errors/logging/metrics
 thiserror = "2.0.17"

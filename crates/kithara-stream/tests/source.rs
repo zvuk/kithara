@@ -35,6 +35,7 @@ impl MemSource {
 
 #[async_trait]
 impl Source for MemSource {
+    type Item = u8;
     type Error = TestError;
 
     async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
@@ -73,6 +74,7 @@ impl UnknownLenSource {
 
 #[async_trait]
 impl Source for UnknownLenSource {
+    type Item = u8;
     type Error = TestError;
 
     async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {

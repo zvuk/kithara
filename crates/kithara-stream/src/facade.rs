@@ -12,7 +12,7 @@ use crate::{Source, StreamError};
 /// Result of opening a stream source.
 pub struct OpenedSource<S, E>
 where
-    S: Source,
+    S: Source<Item = u8>,
 {
     /// The opened source implementing random-access byte reading.
     pub source: Arc<S>,
@@ -39,8 +39,8 @@ pub trait SourceFactory: Send + Sync + 'static {
     /// Event type emitted by this source.
     type Event: Clone + Send + 'static;
 
-    /// Concrete source type implementing random-access reads.
-    type SourceImpl: Source + Send + Sync;
+    /// Concrete source type implementing random-access byte reads.
+    type SourceImpl: Source<Item = u8> + Send + Sync;
 
     /// Open a stream from the given URL with the provided parameters.
     ///

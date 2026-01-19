@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use kithara_assets::StoreOptions;
 use kithara_hls::{Hls, HlsParams};
+use kithara_stream::StreamSource;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -48,7 +49,7 @@ async fn test_hls_session_creation(
     info!("Testing HLS session creation with URL: {}", test_stream_url);
 
     // Test 1: Open HLS source
-    let source = Hls::open(test_stream_url.clone(), hls_params).await?;
+    let source = StreamSource::<Hls>::open(test_stream_url.clone(), hls_params).await?;
     info!("HLS source opened successfully");
 
     // Test 2: Get events channel
@@ -94,7 +95,7 @@ async fn test_hls_with_local_fixture(
     let url = server.url("/master.m3u8")?;
     info!("Testing HLS with local fixture at: {}", url);
 
-    let _source = Hls::open(url, hls_params).await?;
+    let _source = StreamSource::<Hls>::open(url, hls_params).await?;
 
     info!("Local fixture test passed");
     Ok(())
@@ -111,7 +112,7 @@ async fn test_hls_session_with_init_segments(
     let url = server.url("/master-init.m3u8")?;
     info!("Testing HLS session with init segments at URL: {}", url);
 
-    let _source = Hls::open(url, hls_params).await?;
+    let _source = StreamSource::<Hls>::open(url, hls_params).await?;
 
     info!("HLS source with init segments opened successfully");
     Ok(())
@@ -128,7 +129,7 @@ async fn test_hls_session_events_consumption(
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS session events consumption");
 
-    let source = Hls::open(test_stream_url, hls_params).await?;
+    let source = StreamSource::<Hls>::open(test_stream_url, hls_params).await?;
 
     // Get events channel
     let mut events_rx = source.events();
@@ -167,7 +168,7 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         // If URL parses, try to open HLS (should fail with network error)
-        let result = Hls::open(url, hls_params).await;
+        let result = StreamSource::<Hls>::open(url, hls_params).await;
         // Either Ok (if somehow connects) or Err (expected) is acceptable
         assert!(result.is_ok() || result.is_err());
     } else {
@@ -190,7 +191,7 @@ async fn test_hls_session_drop_cleanup(
     info!("Testing HLS session drop cleanup");
 
     // Create and immediately drop session
-    let session = Hls::open(test_stream_url, hls_params).await?;
+    let session = StreamSource::<Hls>::open(test_stream_url, hls_params).await?;
     drop(session);
 
     // Wait a bit to ensure cleanup happens

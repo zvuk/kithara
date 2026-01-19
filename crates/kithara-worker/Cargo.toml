@@ -1,0 +1,13 @@
+[package]
+name = "kithara-worker"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+futures = { workspace = true }
+kanal = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

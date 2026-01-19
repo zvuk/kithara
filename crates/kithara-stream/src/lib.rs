@@ -27,7 +27,9 @@ pub use media_info::{AudioCodec, ContainerFormat, MediaInfo};
 pub use msg::StreamMsg;
 pub use pipe::{Reader, ReaderError, Writer, WriterError};
 pub use prefetch::{
-    PrefetchConsumer, PrefetchResult, PrefetchSource, PrefetchWorker, PrefetchedItem,
+    AlwaysValid, BlockingSource, BlockingWorker, EpochItem, EpochValidator, ItemValidator,
+    PrefetchConsumer, PrefetchResult, PrefetchSource, PrefetchWorker, PrefetchedItem, SimpleItem,
+    WorkerItem,
 };
 pub use source::{Source, SyncReader, SyncReaderParams};
 pub use stream_source::StreamSource;

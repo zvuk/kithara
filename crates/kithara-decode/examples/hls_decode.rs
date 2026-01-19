@@ -1,21 +1,28 @@
 //! Example: Play audio from an HLS stream using kithara-decode.
 //!
-//! This demonstrates the integration between kithara-hls and kithara-decode.
-//! AudioPipeline works directly with Source and uses media_info() for codec detection.
+//! This demonstrates the integration between kithara-hls and kithara-decode,
+//! including resampling and speed control (plays at 0.5x speed by default).
 //!
 //! Run with:
 //! ```
-//! cargo run -p kithara-decode --example hls_decode --features rodio [URL]
+//! cargo run -p kithara-decode --example hls_decode --features rodio [URL] [SPEED]
 //! ```
+//!
+//! Speed is optional (default 0.5 = 2x slower). Examples:
+//! - 0.5 for half speed (2x slower)
+//! - 1.0 for normal speed
+//! - 2.0 for double speed
 
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_decode::{AudioPipeline, AudioSyncReader};
+use kithara_decode::{AudioSyncReader, Pipeline};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
 use kithara_stream::StreamSource;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
+
+const TARGET_SAMPLE_RATE: u32 = 44100;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -38,7 +45,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .unwrap_or_else(|| "https://stream.silvercomet.top/hls/master.m3u8".to_string());
     let url: Url = url.parse()?;
 
+    // Default speed 0.5 = 2x slower
+    let speed: f32 = args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1.0);
+
     info!("Opening HLS stream: {}", url);
+    info!("Playback speed: {}x ({}x slower)", speed, 1.0 / speed);
 
     let hls_params = HlsParams::default().with_abr(AbrOptions {
         mode: AbrMode::Auto(Some(0)),
@@ -86,21 +97,32 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Creating audio pipeline...");
 
-    // Create pipeline directly from Source
-    let mut pipeline = AudioPipeline::open(source_arc).await?;
+    // Create unified pipeline (decoder + resampler in one)
+    let pipeline = Pipeline::open(source_arc, TARGET_SAMPLE_RATE).await?;
 
+    let output_spec = pipeline.output_spec();
     info!(
-        sample_rate = pipeline.spec().sample_rate,
-        channels = pipeline.spec().channels,
+        sample_rate = output_spec.sample_rate,
+        channels = output_spec.channels,
         "Pipeline created"
     );
 
-    // Create AudioSyncReader from pipeline
-    let spec = pipeline.spec();
-    let audio_rx = pipeline
-        .take_audio_receiver()
-        .ok_or("Audio receiver already taken")?;
-    let audio_source = AudioSyncReader::new(audio_rx, spec);
+    // Set playback speed
+    pipeline.set_speed(speed).await?;
+
+    info!(
+        target_rate = TARGET_SAMPLE_RATE,
+        speed,
+        "Speed configured ({}x slower playback)",
+        1.0 / speed
+    );
+
+    // Create rodio adapter from buffer
+    let audio_source = AudioSyncReader::new(
+        pipeline.consumer().clone(),
+        pipeline.buffer().clone(),
+        output_spec,
+    );
 
     // Play via rodio in blocking thread
     let handle = tokio::task::spawn_blocking(move || {
@@ -109,7 +131,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         sink.set_volume(0.3);
         sink.append(audio_source);
 
-        info!("Playing...");
+        info!("Playing at {}x speed ({}x slower)...", speed, 1.0 / speed);
         sink.sleep_until_end();
 
         info!("Playback complete");

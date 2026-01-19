@@ -1,21 +1,27 @@
 //! Example: Play audio from a progressive HTTP file using kithara-decode.
 //!
-//! This demonstrates the integration between kithara-file and kithara-decode.
-//! AudioPipeline works directly with Source.
+//! This demonstrates the integration between kithara-file and kithara-decode,
+//! including optional resampling and speed control.
 //!
 //! Run with:
 //! ```
-//! cargo run -p kithara-decode --example file_decode --features rodio [URL]
+//! cargo run -p kithara-decode --example file_decode --features rodio [URL] [SPEED]
 //! ```
+//!
+//! Speed is optional (default 1.0). Examples:
+//! - 1.5 for 1.5x playback speed
+//! - 0.75 for 0.75x playback speed
 
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_decode::{AudioPipeline, AudioSyncReader};
+use kithara_decode::{AudioSyncReader, Pipeline};
 use kithara_file::{File, FileEvent, FileParams};
 use kithara_stream::StreamSource;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
+
+const TARGET_SAMPLE_RATE: u32 = 44100;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -39,7 +45,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     });
     let url: Url = url.parse()?;
 
+    let speed: f32 = args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1.0);
+
     info!("Opening file: {}", url);
+    info!("Playback speed: {}x", speed);
 
     let params = FileParams::default();
 
@@ -64,21 +73,27 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Creating audio pipeline...");
 
-    // Create pipeline directly from Source
-    let mut pipeline = AudioPipeline::open(source_arc).await?;
+    // Create unified pipeline (decoder + resampler in one)
+    let pipeline = Pipeline::open(source_arc, TARGET_SAMPLE_RATE).await?;
 
+    let output_spec = pipeline.output_spec();
     info!(
-        sample_rate = pipeline.spec().sample_rate,
-        channels = pipeline.spec().channels,
+        sample_rate = output_spec.sample_rate,
+        channels = output_spec.channels,
         "Pipeline created"
     );
 
-    // Create AudioSyncReader from pipeline
-    let spec = pipeline.spec();
-    let audio_rx = pipeline
-        .take_audio_receiver()
-        .ok_or("Audio receiver already taken")?;
-    let audio_source = AudioSyncReader::new(audio_rx, spec);
+    // Set playback speed
+    pipeline.set_speed(speed).await?;
+
+    info!(target_rate = TARGET_SAMPLE_RATE, speed, "Speed configured");
+
+    // Create rodio adapter from buffer
+    let audio_source = AudioSyncReader::new(
+        pipeline.consumer().clone(),
+        pipeline.buffer().clone(),
+        output_spec,
+    );
 
     // Play via rodio in blocking thread
     let handle = tokio::task::spawn_blocking(move || {
@@ -86,7 +101,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
         sink.append(audio_source);
 
-        info!("Playing...");
+        info!("Playing at {}x speed...", speed);
         sink.sleep_until_end();
 
         info!("Playback complete");

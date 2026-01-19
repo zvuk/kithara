@@ -4,7 +4,7 @@ use std::{error::Error, sync::Arc, time::Duration};
 
 use kithara_assets::StoreOptions;
 use kithara_hls::{Hls, HlsParams};
-use kithara_stream::{SyncReader, SyncReaderParams};
+use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -67,7 +67,7 @@ async fn test_basic_hls_playback(
 
     // 1. Test: Open HLS source
     info!("Opening HLS source...");
-    let source = Hls::open(test_stream_url.clone(), hls_params).await?;
+    let source = StreamSource::<Hls>::open(test_stream_url.clone(), hls_params).await?;
     info!("HLS source opened successfully");
 
     // Start event monitor in background
@@ -119,7 +119,7 @@ async fn test_hls_session_creation(
     let test_stream_url = server.url("/master.m3u8")?;
 
     // Test source creation
-    let source = Hls::open(test_stream_url, hls_params).await?;
+    let source = StreamSource::<Hls>::open(test_stream_url, hls_params).await?;
 
     // Test events channel
     let mut events_rx = source.events();
@@ -153,7 +153,7 @@ async fn test_hls_with_init_segments(
     let url = server.url("/master-init.m3u8")?;
     info!("Testing HLS with init segments: {}", url);
 
-    let _source = Hls::open(url, hls_params).await?;
+    let _source = StreamSource::<Hls>::open(url, hls_params).await?;
 
     info!("Stream with init segments opened successfully");
     Ok(())
@@ -179,7 +179,7 @@ async fn test_hls_with_different_options(
         HlsParams::new(StoreOptions::new(temp_dir.path())).with_cancel(CancellationToken::new());
 
     // Test source creation with different options
-    let _source = Hls::open(test_stream_url, options).await?;
+    let _source = StreamSource::<Hls>::open(test_stream_url, options).await?;
 
     info!("HLS source opened successfully with custom options");
     Ok(())
@@ -205,7 +205,7 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         // If URL parses, try to open HLS (should fail with network error)
-        let result = Hls::open(url, hls_params).await;
+        let result = StreamSource::<Hls>::open(url, hls_params).await;
         // Either Ok (if somehow connects) or Err (expected) is acceptable
         assert!(result.is_ok() || result.is_err());
     } else {
@@ -233,7 +233,7 @@ async fn test_init_segment_at_stream_start(
     let url = server.url("/master-init.m3u8")?;
     info!("Testing INIT segment at stream start: {}", url);
 
-    let source = Arc::new(Hls::open(url, hls_params).await?);
+    let source = Arc::new(StreamSource::<Hls>::open(url, hls_params).await?);
 
     // Wait for INIT and first segment to be loaded.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -292,7 +292,7 @@ async fn test_hls_without_cache(temp_dir: TempDir) -> Result<(), Box<dyn Error +
     info!("Testing HLS with limited cache");
 
     // Test source creation with limited cache
-    let _source = Hls::open(test_stream_url, hls_params).await?;
+    let _source = StreamSource::<Hls>::open(test_stream_url, hls_params).await?;
 
     info!("HLS source opened successfully with limited cache");
     Ok(())

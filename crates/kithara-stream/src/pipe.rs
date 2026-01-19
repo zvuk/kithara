@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
+use kithara_bufpool::{PooledSliceOwned, SharedPool};
 use kithara_net::{Headers, Net, NetError};
 use kithara_storage::{Resource, StorageError, StreamingResourceExt, WaitOutcome};
 use thiserror::Error;
@@ -13,56 +14,6 @@ use url::Url;
 
 use crate::{StreamError, StreamMsg};
 
-/// Pool of reusable buffers to avoid allocations on each read.
-#[derive(Debug)]
-pub struct BufPool {
-    bufs: Mutex<Vec<Vec<u8>>>,
-    buf_size: usize,
-}
-
-impl BufPool {
-    pub fn new(buf_size: usize) -> Self {
-        Self {
-            bufs: Mutex::new(Vec::new()),
-            buf_size,
-        }
-    }
-
-    fn take(&self) -> Vec<u8> {
-        self.bufs
-            .lock()
-            .ok()
-            .and_then(|mut guard| guard.pop())
-            .unwrap_or_else(|| vec![0u8; self.buf_size])
-    }
-
-    fn put(&self, mut buf: Vec<u8>) {
-        buf.clear();
-        if let Ok(mut guard) = self.bufs.lock() {
-            guard.push(buf);
-        }
-    }
-}
-
-/// Wrapper that returns buffer to pool on drop.
-struct PooledBuf {
-    buf: Vec<u8>,
-    len: usize,
-    pool: Arc<BufPool>,
-}
-
-impl Drop for PooledBuf {
-    fn drop(&mut self) {
-        let buf = std::mem::take(&mut self.buf);
-        self.pool.put(buf);
-    }
-}
-
-impl AsRef<[u8]> for PooledBuf {
-    fn as_ref(&self) -> &[u8] {
-        &self.buf[..self.len]
-    }
-}
 
 /// Error type for the generic writer (fetch loop).
 #[derive(Debug, Error)]
@@ -237,23 +188,14 @@ where
     res: R,
     start_pos: u64,
     chunk_size: usize,
-    pool: Arc<BufPool>,
+    pool: SharedPool<32, Vec<u8>>,
 }
 
 impl<R> Reader<R>
 where
     R: StreamingResourceExt + Send + Sync + 'static,
 {
-    pub fn new(res: R, start_pos: u64, chunk_size: usize) -> Self {
-        Self {
-            res,
-            start_pos,
-            chunk_size,
-            pool: Arc::new(BufPool::new(chunk_size)),
-        }
-    }
-
-    pub fn with_pool(res: R, start_pos: u64, chunk_size: usize, pool: Arc<BufPool>) -> Self {
+    pub fn new(res: R, start_pos: u64, chunk_size: usize, pool: SharedPool<32, Vec<u8>>) -> Self {
         Self {
             res,
             start_pos,
@@ -270,11 +212,12 @@ where
     {
         let chunk = self.chunk_size;
         let mut pos = self.start_pos;
-        let pool = self.pool.clone();
+        let res = self.res;
+        let pool = self.pool;
         async_stream::stream! {
             loop {
                 let end = pos.saturating_add(chunk as u64);
-                let outcome = self.res.wait_range(pos..end).await;
+                let outcome = res.wait_range(pos..end).await;
                 let Ok(WaitOutcome::Ready) = outcome else {
                     if let Err(e) = outcome {
                         yield Err(StreamError::Source(ReaderError::Wait(e)));
@@ -282,17 +225,14 @@ where
                     return;
                 };
 
-                let mut buf = pool.take();
-                buf.resize(chunk, 0);
-                let bytes_read = self
-                    .res
+                let mut buf = pool.get_with(|b| b.resize(chunk, 0));
+                let bytes_read = res
                     .read_at(pos, &mut buf)
                     .await
                     .map_err(ReaderError::Read)
                     .map_err(StreamError::Source)?;
 
                 if bytes_read == 0 {
-                    pool.put(buf);
                     yield Err(StreamError::Source(ReaderError::EmptyAfterReady {
                         offset: pos,
                         len: chunk,
@@ -301,11 +241,7 @@ where
                 }
 
                 pos = pos.saturating_add(bytes_read as u64);
-                let pooled = PooledBuf {
-                    buf,
-                    len: bytes_read,
-                    pool: pool.clone(),
-                };
+                let pooled = PooledSliceOwned::new(buf, bytes_read);
                 yield Ok(StreamMsg::Data(Bytes::from_owner(pooled)));
             }
         }

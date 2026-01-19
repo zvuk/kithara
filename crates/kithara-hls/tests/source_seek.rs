@@ -17,7 +17,7 @@ use std::{
 
 use kithara_assets::StoreOptions;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
-use kithara_stream::{Source, SyncReader, SyncReaderParams, WaitOutcome};
+use kithara_stream::{StreamSource, Source, SyncReader, SyncReaderParams, WaitOutcome};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -101,7 +101,7 @@ async fn hls_source_read_at_within_first_segment(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let source = Hls::open(url, hls_params_fixed_variant).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, hls_params_fixed_variant).await.unwrap();
 
     // Wait for data to be available
     let range = offset..(offset + len as u64);
@@ -129,7 +129,7 @@ async fn hls_source_read_at_second_segment(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let source = Hls::open(url, hls_params_fixed_variant).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, hls_params_fixed_variant).await.unwrap();
 
     // Segment 0 is 26 bytes, so offset 26 starts segment 1
     let offset = 26u64;
@@ -157,7 +157,7 @@ async fn hls_source_read_at_third_segment(_tracing_setup: (), hls_params_fixed_v
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let source = Hls::open(url, hls_params_fixed_variant).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, hls_params_fixed_variant).await.unwrap();
 
     // Segment 0 = 26 bytes, Segment 1 = 26 bytes, so offset 52 starts segment 2
     let offset = 52u64;
@@ -188,7 +188,7 @@ async fn hls_source_read_at_eof_returns_zero(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let source = Hls::open(url, hls_params_fixed_variant).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, hls_params_fixed_variant).await.unwrap();
 
     // Total size = 26 * 3 = 78 bytes
     let total_size = 78u64;
@@ -221,7 +221,7 @@ async fn hls_sync_reader_seek_to_segment_start(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let source = Arc::new(Hls::open(url, hls_params_fixed_variant).await.unwrap());
+    let source = Arc::new(StreamSource::<Hls>::open(url, hls_params_fixed_variant).await.unwrap());
     let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let expected_len = expected_prefix.len();
@@ -249,7 +249,7 @@ async fn hls_sync_reader_seek_current(_tracing_setup: (), hls_params_fixed_varia
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let source = Arc::new(Hls::open(url, hls_params_fixed_variant).await.unwrap());
+    let source = Arc::new(StreamSource::<Hls>::open(url, hls_params_fixed_variant).await.unwrap());
     let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     tokio::task::spawn_blocking(move || {
@@ -279,7 +279,7 @@ async fn hls_sync_reader_multiple_seeks(_tracing_setup: (), hls_params_fixed_var
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let source = Arc::new(Hls::open(url, hls_params_fixed_variant).await.unwrap());
+    let source = Arc::new(StreamSource::<Hls>::open(url, hls_params_fixed_variant).await.unwrap());
     let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     tokio::task::spawn_blocking(move || {
@@ -320,7 +320,7 @@ async fn hls_sync_reader_read_all_then_seek_back(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let source = Arc::new(Hls::open(url, hls_params_fixed_variant).await.unwrap());
+    let source = Arc::new(StreamSource::<Hls>::open(url, hls_params_fixed_variant).await.unwrap());
     let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let expected = all_segments_data();
@@ -375,7 +375,7 @@ async fn hls_with_manual_abr_uses_fixed_variant(
             ..AbrOptions::default()
         });
 
-    let source = Arc::new(Hls::open(url, params).await.unwrap());
+    let source = Arc::new(StreamSource::<Hls>::open(url, params).await.unwrap());
     let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     tokio::task::spawn_blocking(move || {
@@ -402,7 +402,7 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
 
     info!("Testing seek across all segments with fixed ABR");
 
-    let source = Arc::new(Hls::open(url, hls_params_fixed_variant).await.unwrap());
+    let source = Arc::new(StreamSource::<Hls>::open(url, hls_params_fixed_variant).await.unwrap());
     let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
     let expected = all_segments_data();
@@ -465,8 +465,8 @@ async fn hls_seek_different_variants_return_different_data(
         });
 
     // Open both sources
-    let source_v0 = Arc::new(Hls::open(url.clone(), params_v0).await.unwrap());
-    let source_v1 = Arc::new(Hls::open(url, params_v1).await.unwrap());
+    let source_v0 = Arc::new(StreamSource::<Hls>::open(url.clone(), params_v0).await.unwrap());
+    let source_v1 = Arc::new(StreamSource::<Hls>::open(url, params_v1).await.unwrap());
 
     let mut reader_v0 = SyncReader::new(source_v0, SyncReaderParams::default());
     let mut reader_v1 = SyncReader::new(source_v1, SyncReaderParams::default());
@@ -543,7 +543,7 @@ async fn hls_seek_after_real_abr_switch_returns_new_variant_data(
             ..AbrOptions::default()
         });
 
-    let source = Hls::open(url, params).await.unwrap();
+    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
     let mut events = source.events();
 
     // Wait for variant switch event

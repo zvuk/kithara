@@ -36,6 +36,7 @@ struct MemorySourceError;
 
 #[async_trait]
 impl Source for MemorySource {
+    type Item = u8;
     type Error = MemorySourceError;
 
     async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>

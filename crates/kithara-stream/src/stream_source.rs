@@ -69,13 +69,14 @@ impl<S: SourceFactory> StreamSource<S> {
 
 #[async_trait]
 impl<S: SourceFactory> Source for StreamSource<S> {
+    type Item = u8;
     type Error = <S::SourceImpl as Source>::Error;
 
     async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
         self.inner.wait_range(range).await
     }
 
-    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
+    async fn read_at(&self, offset: u64, buf: &mut [Self::Item]) -> StreamResult<usize, Self::Error> {
         self.inner.read_at(offset, buf).await
     }
 

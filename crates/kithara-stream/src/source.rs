@@ -14,40 +14,61 @@ use tracing::{debug, trace, warn};
 use crate::{
     error::{StreamError, StreamResult},
     media_info::MediaInfo,
-    prefetch::{PrefetchSource, PrefetchWorker, PrefetchedItem},
+    prefetch::{PrefetchWorker, PrefetchedItem},
 };
 
 /// Async random-access source contract.
 ///
 /// This is intentionally minimal and does **not** depend on any storage implementation.
-/// `kithara-file` / `kithara-hls` should implement this for their internal byte providers.
+/// `kithara-file` / `kithara-hls` should implement this for their internal providers.
+///
+/// Generic over `Item` type:
+/// - `Source<Item=u8>` for byte sources (files, HTTP streams)
+/// - `Source<Item=f32>` for PCM audio sources (decoded audio)
 ///
 /// Normative:
 /// - `wait_range(range)` must block until the entire `range` is readable, OR return `Eof`
 ///   if `range.start` is at/after EOF, OR return error if the source fails/cancels.
-/// - `read_at(offset, len)` must return up to `len` bytes without implicitly waiting.
+/// - `read_at(offset, len)` must return up to `len` items without implicitly waiting.
 ///   If the caller needs blocking semantics it must call `wait_range` first.
 /// - When `offset` is at/after EOF (and EOF is known), `read_at` must return `Ok(0)`.
+/// - For byte sources: offset and length are in bytes.
+/// - For PCM sources: offset and length are in samples.
 #[async_trait]
 pub trait Source: Send + Sync + 'static {
+    /// Type of items this source produces.
+    ///
+    /// - `u8` for byte sources (files, HTTP streams)
+    /// - `f32` for PCM audio sources (decoded audio samples)
+    type Item: Send + 'static;
+
     type Error: std::error::Error + Send + Sync + 'static;
 
+    /// Wait for a range of items to be available.
+    ///
+    /// - For byte sources: range in bytes
+    /// - For PCM sources: range in samples
     async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>
     where
         Self: Send + Sync;
 
-    /// Read bytes at `offset` into `buf`.
+    /// Read items at `offset` into `buf`.
     ///
-    /// Returns the number of bytes read. Returns `Ok(0)` for EOF.
-    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error>
+    /// Returns the number of items read. Returns `Ok(0)` for EOF.
+    ///
+    /// - For byte sources: reads bytes
+    /// - For PCM sources: reads samples
+    async fn read_at(&self, offset: u64, buf: &mut [Self::Item]) -> StreamResult<usize, Self::Error>
     where
         Self: Send + Sync;
 
-    /// Return known total length if available.
+    /// Return known total length in units of `Item` if available.
     ///
     /// - `Some(len)` enables `SeekFrom::End(..)` and validation for seeking past EOF.
     /// - `None` means length is unknown (still seekable via absolute positions, but
     ///   seeking relative to end is unsupported).
+    /// - For byte sources: length in bytes
+    /// - For PCM sources: length in samples
     fn len(&self) -> Option<u64>;
 
     /// Return true if length is known to be zero.
@@ -104,18 +125,24 @@ pub struct ByteSeekCmd {
     pub epoch: u64,
 }
 
-/// Prefetch source adapter for `Source` trait.
+/// Prefetch source adapter for byte `Source` trait.
 ///
-/// This wraps a `Source` and implements `PrefetchSource` to work with the generic
+/// This wraps a `Source<Item=u8>` and implements `PrefetchSource` to work with the generic
 /// `PrefetchWorker`.
-pub struct BytePrefetchSource<S: Source> {
+pub struct BytePrefetchSource<S>
+where
+    S: Source<Item = u8>,
+{
     src: Arc<S>,
     chunk_size: usize,
     read_pos: u64,
     epoch: u64,
 }
 
-impl<S: Source> BytePrefetchSource<S> {
+impl<S> BytePrefetchSource<S>
+where
+    S: Source<Item = u8>,
+{
     /// Create a new byte prefetch source.
     pub fn new(src: Arc<S>, chunk_size: usize) -> Self {
         Self {
@@ -127,7 +154,10 @@ impl<S: Source> BytePrefetchSource<S> {
     }
 }
 
-impl<S: Source> PrefetchSource for BytePrefetchSource<S> {
+impl<S> kithara_worker::AsyncWorkerSource for BytePrefetchSource<S>
+where
+    S: Source<Item = u8>,
+{
     type Chunk = ByteChunk;
     type Command = ByteSeekCmd;
 
@@ -215,7 +245,7 @@ impl<S: Source> PrefetchSource for BytePrefetchSource<S> {
     }
 }
 
-/// Sync `Read + Seek` adapter over a [`Source`].
+/// Sync `Read + Seek` adapter over a byte [`Source`].
 ///
 /// This is designed specifically to satisfy consumers like `rodio::Decoder`.
 ///
@@ -227,7 +257,7 @@ impl<S: Source> PrefetchSource for BytePrefetchSource<S> {
 /// This design ensures the audio thread is never blocked by I/O operations.
 pub struct SyncReader<S>
 where
-    S: Source,
+    S: Source<Item = u8>,
 {
     source: Arc<S>,
     cmd_tx: mpsc::Sender<ByteSeekCmd>,
@@ -248,7 +278,7 @@ struct CurrentChunk {
 
 impl<S> SyncReader<S>
 where
-    S: Source,
+    S: Source<Item = u8>,
 {
     /// Create a new reader bound to the current Tokio runtime.
     ///
@@ -395,7 +425,7 @@ where
 
 impl<S> Read for SyncReader<S>
 where
-    S: Source,
+    S: Source<Item = u8>,
 {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
@@ -420,7 +450,7 @@ where
 
 impl<S> Seek for SyncReader<S>
 where
-    S: Source,
+    S: Source<Item = u8>,
 {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         trace!(cur = self.pos, ?pos, "SyncReader::seek enter");
@@ -464,9 +494,16 @@ where
         let old_pos = self.pos;
         self.pos = new_pos_u64;
 
-        // If position changed, notify worker with new epoch
+        // If position changed, notify worker with new epoch for backward seeks only
         if new_pos_u64 != old_pos {
-            self.epoch = self.epoch.wrapping_add(1);
+            let is_backward = new_pos_u64 < old_pos;
+
+            // Only increment epoch for backward seeks (user-initiated)
+            // Forward seeks (variant switch, buffering) preserve epoch
+            if is_backward {
+                self.epoch = self.epoch.wrapping_add(1);
+            }
+
             self.current_chunk = None;
             self.eof_reached = false;
 
@@ -480,6 +517,7 @@ where
                 from = old_pos,
                 to = new_pos_u64,
                 epoch = self.epoch,
+                backward = is_backward,
                 "SyncReader::seek sent to worker"
             );
         }

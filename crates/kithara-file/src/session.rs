@@ -141,6 +141,7 @@ impl SessionSource {
 
 #[async_trait]
 impl Source for SessionSource {
+    type Item = u8;
     type Error = SourceError;
 
     async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
