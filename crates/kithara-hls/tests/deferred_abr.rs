@@ -593,9 +593,9 @@ async fn multiple_seeks_maintain_correct_variant(
 
 /// Test: Seek to exact segment boundary works correctly.
 #[rstest]
-#[case(0)]   // Start of segment 0
-#[case(26)]  // Start of segment 1
-#[case(52)]  // Start of segment 2
+#[case(0)] // Start of segment 0
+#[case(26)] // Start of segment 1
+#[case(52)] // Start of segment 2
 #[timeout(Duration::from_secs(10))]
 #[tokio::test]
 async fn seek_to_segment_boundary_reads_correct_segment(

@@ -256,8 +256,7 @@ fn streaming_mode_wav(audio: EmbeddedAudio, wav_media_info: MediaInfo) {
     let reader = Cursor::new(audio.wav());
 
     // is_streaming = true
-    let mut decoder =
-        SymphoniaDecoder::new_from_media_info(reader, &wav_media_info, true).unwrap();
+    let mut decoder = SymphoniaDecoder::new_from_media_info(reader, &wav_media_info, true).unwrap();
 
     let chunk = decoder.next_chunk().unwrap();
     assert!(chunk.is_some());

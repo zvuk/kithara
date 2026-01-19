@@ -73,7 +73,8 @@ impl AudioPipeline {
 
         // Channels for communication
         let (cmd_tx, cmd_rx) = kanal::bounded::<PipelineCommand>(4);
-        let (audio_tx, audio_rx) = kanal::bounded::<PcmChunk<f32>>(8);
+        // Large buffer to prevent backpressure from blocking HTTP downloads
+        let (audio_tx, audio_rx) = kanal::bounded::<PcmChunk<f32>>(64);
 
         // Get runtime handle for decoder recreation on ABR switch
         let rt_handle = Handle::current();

@@ -221,10 +221,7 @@ async fn drop_stops_pipeline(wav_source: Arc<MemoryAudioSource>) {
     })
     .await;
 
-    assert!(
-        result.is_ok(),
-        "Receiver should close after pipeline drop"
-    );
+    assert!(result.is_ok(), "Receiver should close after pipeline drop");
 }
 
 // ==================== ABR Switch Mock Source ====================

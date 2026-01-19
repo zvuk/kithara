@@ -84,7 +84,7 @@ impl Net for HttpClient {
     ) -> Result<crate::ByteStream, NetError> {
         let req = self.inner.get(url.clone());
         let req = Self::apply_headers(req, headers);
-        let req = req.timeout(self.options.request_timeout);
+        // No timeout for streaming - downloads can take arbitrary time
 
         let resp = req.send().await.map_err(NetError::from)?;
         let status = resp.status();
@@ -113,7 +113,7 @@ impl Net for HttpClient {
             .get(url.clone())
             .header("Range", range.to_header_value());
         req = Self::apply_headers(req, headers);
-        req = req.timeout(self.options.request_timeout);
+        // No timeout for streaming - downloads can take arbitrary time
 
         let resp = req.send().await.map_err(NetError::from)?;
         let status = resp.status();
