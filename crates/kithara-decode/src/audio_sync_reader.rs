@@ -1,50 +1,95 @@
 //! AudioSyncReader: rodio-compatible audio source adapter.
 //!
-//! Reads decoded audio from AudioPipeline channel and implements rodio::Source.
+//! Reads decoded audio from Pipeline buffer and implements rodio::Source.
 //!
 //! This module is only available when the `rodio` feature is enabled.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use kanal::Receiver;
-use tracing::{debug, trace};
+use tracing::trace;
 
-use crate::{PcmChunk, PcmSpec};
+use crate::{PcmBuffer, PcmSpec};
 
-/// rodio-compatible audio source that reads from a pipeline channel.
+/// rodio-compatible audio source that reads from a pipeline buffer.
 ///
 /// Implements `Iterator<Item=f32>` and `rodio::Source` traits.
 pub struct AudioSyncReader {
-    /// Receiver for decoded audio chunks.
-    audio_rx: Receiver<PcmChunk<f32>>,
-    /// Current chunk being consumed.
-    current_chunk: Option<ChunkState>,
+    /// Shared PCM buffer.
+    buffer: Arc<PcmBuffer>,
     /// Audio specification.
     spec: PcmSpec,
+    /// Current sample offset (not frame offset).
+    sample_offset: u64,
     /// End of stream reached.
     eof: bool,
-}
-
-/// State for current chunk being consumed.
-struct ChunkState {
-    samples: Vec<f32>,
-    offset: usize,
+    /// Internal read buffer.
+    read_buffer: Vec<f32>,
+    /// Current position in read buffer.
+    buffer_offset: usize,
+    /// Samples available in read buffer.
+    buffer_samples: usize,
 }
 
 impl AudioSyncReader {
-    /// Create a new AudioSyncReader from a pipeline audio receiver.
-    pub fn new(audio_rx: Receiver<PcmChunk<f32>>, spec: PcmSpec) -> Self {
+    /// Create a new AudioSyncReader from a pipeline buffer.
+    ///
+    /// # Arguments
+    /// - `buffer`: Shared PCM buffer from Pipeline
+    /// - `spec`: Audio specification (should match buffer spec)
+    pub fn new(buffer: Arc<PcmBuffer>, spec: PcmSpec) -> Self {
+        const BUFFER_SIZE: usize = 8192; // Samples, not frames
         Self {
-            audio_rx,
-            current_chunk: None,
+            buffer,
             spec,
+            sample_offset: 0,
             eof: false,
+            read_buffer: vec![0.0; BUFFER_SIZE],
+            buffer_offset: 0,
+            buffer_samples: 0,
         }
     }
 
     /// Get the audio specification.
     pub fn spec(&self) -> PcmSpec {
         self.spec
+    }
+
+    /// Read more samples from buffer into internal buffer.
+    fn fill_buffer(&mut self) -> bool {
+        if self.eof {
+            return false;
+        }
+
+        let channels = self.spec.channels as u64;
+        let frame_offset = self.sample_offset / channels;
+
+        // Wait for data with polling
+        let mut attempts = 0;
+        const MAX_ATTEMPTS: u32 = 1000;
+        loop {
+            let n = self.buffer.read_samples(frame_offset, &mut self.read_buffer);
+            if n > 0 {
+                self.buffer_samples = n;
+                self.buffer_offset = 0;
+                self.sample_offset += n as u64;
+                return true;
+            }
+
+            // Check if EOF
+            if self.buffer.is_eof() {
+                self.eof = true;
+                return false;
+            }
+
+            // Wait a bit for more data
+            attempts += 1;
+            if attempts > MAX_ATTEMPTS {
+                // Timeout
+                self.eof = true;
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_micros(100));
+        }
     }
 }
 
@@ -56,48 +101,37 @@ impl Iterator for AudioSyncReader {
             return None;
         }
 
-        loop {
-            // Try to get sample from current chunk
-            if let Some(ref mut state) = self.current_chunk {
-                if state.offset < state.samples.len() {
-                    let sample = state.samples[state.offset];
-                    state.offset += 1;
-                    return Some(sample);
-                }
-                // Chunk exhausted
-                self.current_chunk = None;
-            }
+        // Try to get sample from current buffer
+        if self.buffer_offset < self.buffer_samples {
+            let sample = self.read_buffer[self.buffer_offset];
+            self.buffer_offset += 1;
+            return Some(sample);
+        }
 
-            // Need new chunk from channel
-            match self.audio_rx.recv() {
-                Ok(chunk) => {
-                    trace!(
-                        samples = chunk.samples().len(),
-                        frames = chunk.frames(),
-                        "AudioSyncReader received chunk"
-                    );
-                    self.current_chunk = Some(ChunkState {
-                        samples: chunk.into_samples(),
-                        offset: 0,
-                    });
-                }
-                Err(_) => {
-                    // Channel closed = end of stream
-                    debug!("AudioSyncReader: channel closed, EOF");
-                    self.eof = true;
-                    return None;
-                }
+        // Buffer exhausted, need more data
+        if self.fill_buffer() {
+            // Successfully filled buffer
+            if self.buffer_offset < self.buffer_samples {
+                let sample = self.read_buffer[self.buffer_offset];
+                self.buffer_offset += 1;
+                return Some(sample);
             }
         }
+
+        // EOF or timeout
+        trace!("AudioSyncReader: EOF");
+        None
     }
 }
 
 impl rodio::Source for AudioSyncReader {
     fn current_span_len(&self) -> Option<usize> {
-        // Return remaining samples in current chunk if available
-        self.current_chunk
-            .as_ref()
-            .map(|state| state.samples.len() - state.offset)
+        // Return remaining samples in internal buffer
+        if self.buffer_samples > self.buffer_offset {
+            Some(self.buffer_samples - self.buffer_offset)
+        } else {
+            None
+        }
     }
 
     fn channels(&self) -> u16 {

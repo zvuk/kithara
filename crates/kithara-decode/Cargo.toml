@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 kithara-stream = { workspace = true }
+kithara-storage = { workspace = true }
 thiserror = { workspace = true }
 kanal = { workspace = true }
 symphonia = { workspace = true }
@@ -13,6 +14,8 @@ tokio = { workspace = true }
 rodio = { workspace = true, optional = true }
 rubato = { workspace = true }
 tracing = { workspace = true }
+parking_lot = { workspace = true }
+async-trait = { workspace = true }
 
 [features]
 default = []

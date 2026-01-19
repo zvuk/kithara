@@ -33,8 +33,8 @@
 // Public API exports
 #[cfg(feature = "rodio")]
 pub use audio_sync_reader::AudioSyncReader;
-pub use pipeline_v2::{AudioPipeline, PipelineCommand};
-pub use resampler::{ResamplerCommand, ResamplerPipeline};
+pub use pcm_source::PcmSource;
+pub use pipeline::{PcmBuffer, Pipeline, PipelineCommand};
 pub use source_reader::SourceReader;
 pub use symphonia_mod::{CachedCodecInfo, SymphoniaDecoder};
 pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};
@@ -42,7 +42,8 @@ pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};
 // Internal modules
 #[cfg(feature = "rodio")]
 mod audio_sync_reader;
-mod pipeline_v2;
+mod pcm_source;
+mod pipeline;
 pub mod resampler;
 mod source_reader;
 mod symphonia_mod;

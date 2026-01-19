@@ -14,7 +14,7 @@
 
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_decode::{AudioPipeline, AudioSyncReader, ResamplerPipeline};
+use kithara_decode::{AudioSyncReader, Pipeline};
 use kithara_file::{File, FileEvent, FileParams};
 use kithara_stream::StreamSource;
 use tracing::{info, metadata::LevelFilter};
@@ -73,35 +73,27 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Creating audio pipeline...");
 
-    // Create pipeline directly from Source
-    let mut pipeline = AudioPipeline::open(source_arc).await?;
+    // Create unified pipeline (decoder + resampler in one)
+    let pipeline = Pipeline::open(source_arc, TARGET_SAMPLE_RATE).await?;
 
+    let output_spec = pipeline.output_spec();
     info!(
-        sample_rate = pipeline.spec().sample_rate,
-        channels = pipeline.spec().channels,
-        "Decoder created"
+        sample_rate = output_spec.sample_rate,
+        channels = output_spec.channels,
+        "Pipeline created"
     );
 
-    // Get decoder output and create resampler
-    let decoder_rx = pipeline
-        .take_audio_receiver()
-        .ok_or("Audio receiver already taken")?;
-
-    let mut resampler = ResamplerPipeline::new(decoder_rx, pipeline.spec(), TARGET_SAMPLE_RATE);
-    resampler.set_speed(speed);
+    // Set playback speed
+    pipeline.set_speed(speed)?;
 
     info!(
-        source_rate = pipeline.spec().sample_rate,
         target_rate = TARGET_SAMPLE_RATE,
         speed,
-        "Resampler created"
+        "Speed configured"
     );
 
-    // Get resampler output and create rodio adapter
-    let audio_rx = resampler
-        .take_audio_receiver()
-        .ok_or("Resampler receiver already taken")?;
-    let audio_source = AudioSyncReader::new(audio_rx, resampler.output_spec());
+    // Create rodio adapter from buffer
+    let audio_source = AudioSyncReader::new(pipeline.buffer().clone(), output_spec);
 
     // Play via rodio in blocking thread
     let handle = tokio::task::spawn_blocking(move || {
