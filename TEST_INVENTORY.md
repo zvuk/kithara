@@ -20,19 +20,22 @@
 
 ### Unit-тесты в tests/ (требуют переноса в src/)
 
-- [ ] `tests/resource_path_test.rs` (192 строки) → `src/lib.rs` или `src/key.rs`
-  - Тестирует валидацию путей ресурсов (чистая логика)
-  - Критерии unit-теста: изолированная функция, без I/O, быстрые тесты
-
-- [ ] `tests/asset_id.rs` (110 строк) → `src/lib.rs` или `src/key.rs`
-  - Тестирует создание и валидацию ResourceKey
-  - Критерии unit-теста: изолированная структура, без I/O
+- [ ] `tests/asset_id.rs` (110 строк) → `src/lib.rs`
+  - Тестирует AssetId::from_url() изолированно
+  - Критерии unit-теста: чистая логика без I/O, уже использует rstest
+  - ✓ Правильно классифицирован
 
 - [ ] `tests/canonicalization.rs` (63 строки) → `src/lib.rs`
-  - Тестирует нормализацию путей
-  - Критерии unit-теста: чистая функция преобразования
+  - Тестирует canonicalize_for_asset() изолированно
+  - Критерии unit-теста: чистая логика без I/O, уже использует rstest
+  - ✓ Правильно классифицирован
 
 ### Integration-тесты (правильно в tests/)
+
+- [x] `tests/resource_path_test.rs` (192 строки)
+  - Тестирует path() метод AssetResource с реальной FS
+  - ✓ Правильно: integration тест с tempdir и I/O
+  - **Примечание**: изначально классифицирован как unit-тест, но это integration
 
 - [x] `tests/integration_storage_assets.rs` (594 строки)
   - Тестирует интеграцию DiskAssetStore с файловой системой
@@ -60,7 +63,7 @@
 
 ### Проблемы
 
-- **Unit в tests/**: 3 файла (365 строк) требуют переноса в src/
+- **Unit в tests/**: 2 файла (173 строки) требуют переноса в src/
 - **Покрытие**: нет unit-тестов для базовых функций в src/
 - **Дублирование**: нет
 - **Монолиты**: нет
@@ -92,12 +95,14 @@
 - Tests в tests/: 10 файлов
 - Tests в src/: 1 файл
 
-### Unit-тесты в tests/ (требуют переноса в src/)
+### Unit-тесты в tests/ (ПЕРЕСМОТРЕНО: это integration-тесты)
 
-- [ ] `tests/pipeline_unit_test.rs` (227 строк) → `src/pipeline.rs`
-  - Тестирует DecodeSource изолированно с SimpleMockDecoder
-  - Критерии unit-теста: mock decoder, без реального I/O
-  - **Примечание**: использует fixture, но тесты изолированы
+- [x] `tests/pipeline_unit_test.rs` (227 строк) - ОСТАЕТСЯ в tests/
+  - **Пересмотрено**: это integration-тесты, не unit-тесты
+  - Использует async/tokio, sleep(), каналы, сложный Pipeline
+  - Mock decoder не делает их unit-тестами
+  - Критерии integration-теста: ✓ async runtime, ✓ не детерминистично, ✓ сложная система
+  - ✓ Правильно: остается в tests/
 
 ### Integration-тесты (правильно в tests/)
 
@@ -142,8 +147,7 @@
 
 ### Проблемы
 
-- **Unit в tests/**: 1 файл (227 строк) требует переноса в src/
-- **Дублирование**: возможно дублирование между `pipeline_unit_test.rs` и тестами в `src/pipeline.rs`
+- **Нет проблем**: все тесты правильно классифицированы
 
 ---
 
@@ -388,15 +392,13 @@
 
 | Крейт | Файл | Строк | Целевой файл в src/ |
 |-------|------|-------|---------------------|
-| kithara-assets | resource_path_test.rs | 192 | src/lib.rs или src/key.rs |
-| kithara-assets | asset_id.rs | 110 | src/lib.rs или src/key.rs |
-| kithara-assets | canonicalization.rs | 63 | src/lib.rs |
-| kithara-decode | pipeline_unit_test.rs | 227 | src/pipeline.rs |
+| kithara-assets | asset_id.rs | 110 | src/key.rs |
+| kithara-assets | canonicalization.rs | 63 | src/key.rs |
 | kithara-hls | unit_tests.rs | 315 | src/abr/controller.rs, src/index.rs |
 | kithara-hls | driver_test.rs | 107 | src/lib.rs или src/adapter.rs |
 | kithara-net | types.rs | 371 | src/types.rs |
 | kithara-net | error.rs | 295 | src/error.rs |
-| **Итого** | **8 файлов** | **1,680** | |
+| **Итого** | **6 файлов** | **1,261** | |
 
 ### 2. Integration-тесты в src/ (требуют переноса в tests/)
 
