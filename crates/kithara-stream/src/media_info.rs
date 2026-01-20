@@ -109,16 +109,16 @@ impl AudioCodec {
     pub fn from_hls_codec(codec: &str) -> Option<Self> {
         let codec_lower = codec.to_lowercase();
 
-        if codec_lower.starts_with("mp4a.40.2") {
-            Some(Self::AacLc)
+        // Check longer prefixes first to avoid false matches
+        if codec_lower.starts_with("mp4a.40.29") {
+            Some(Self::AacHeV2)
+        } else if codec_lower.starts_with("mp4a.40.34") {
+            Some(Self::Mp3)
         } else if codec_lower.starts_with("mp4a.40.5") {
             Some(Self::AacHe)
-        } else if codec_lower.starts_with("mp4a.40.29") {
-            Some(Self::AacHeV2)
-        } else if codec_lower.starts_with("mp4a.40.34")
-            || codec_lower.starts_with("mp4a.69")
-            || codec_lower.starts_with("mp4a.6b")
-        {
+        } else if codec_lower.starts_with("mp4a.40.2") {
+            Some(Self::AacLc)
+        } else if codec_lower.starts_with("mp4a.69") || codec_lower.starts_with("mp4a.6b") {
             Some(Self::Mp3)
         } else if codec_lower.starts_with("flac") || codec_lower.starts_with("fLaC") {
             Some(Self::Flac)
@@ -136,35 +136,33 @@ impl AudioCodec {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn parse_hls_aac_lc() {
-        assert_eq!(
-            AudioCodec::from_hls_codec("mp4a.40.2"),
-            Some(AudioCodec::AacLc)
-        );
-    }
-
-    #[test]
-    fn parse_hls_aac_he() {
-        assert_eq!(
-            AudioCodec::from_hls_codec("mp4a.40.5"),
-            Some(AudioCodec::AacHe)
-        );
-    }
-
-    #[test]
-    fn parse_hls_mp3() {
-        assert_eq!(
-            AudioCodec::from_hls_codec("mp4a.40.34"),
-            Some(AudioCodec::Mp3)
-        );
-        assert_eq!(AudioCodec::from_hls_codec("mp4a.69"), Some(AudioCodec::Mp3));
-    }
-
-    #[test]
-    fn parse_unknown_codec() {
-        assert_eq!(AudioCodec::from_hls_codec("unknown"), None);
+    #[rstest]
+    #[case("mp4a.40.2", Some(AudioCodec::AacLc), "AAC-LC standard")]
+    #[case("MP4A.40.2", Some(AudioCodec::AacLc), "AAC-LC uppercase")]
+    #[case("mp4a.40.5", Some(AudioCodec::AacHe), "AAC-HE")]
+    #[case("mp4a.40.29", Some(AudioCodec::AacHeV2), "AAC-HE v2")]
+    #[case("mp4a.40.34", Some(AudioCodec::Mp3), "MP3 via mp4a.40.34")]
+    #[case("mp4a.69", Some(AudioCodec::Mp3), "MP3 via mp4a.69")]
+    #[case("mp4a.6B", Some(AudioCodec::Mp3), "MP3 via mp4a.6B uppercase")]
+    #[case("mp4a.6b", Some(AudioCodec::Mp3), "MP3 via mp4a.6b")]
+    #[case("flac", Some(AudioCodec::Flac), "FLAC lowercase")]
+    #[case("FLAC", Some(AudioCodec::Flac), "FLAC uppercase")]
+    #[case("fLaC", Some(AudioCodec::Flac), "FLAC mixed case")]
+    #[case("vorbis", Some(AudioCodec::Vorbis), "Vorbis")]
+    #[case("opus", Some(AudioCodec::Opus), "Opus")]
+    #[case("alac", Some(AudioCodec::Alac), "ALAC")]
+    #[case("unknown", None, "Unknown codec")]
+    #[case("", None, "Empty string")]
+    #[case("mp4a", None, "Incomplete codec string")]
+    fn test_hls_codec_parsing(
+        #[case] codec_str: &str,
+        #[case] expected: Option<AudioCodec>,
+        #[case] _description: &str,
+    ) {
+        assert_eq!(AudioCodec::from_hls_codec(codec_str), expected);
     }
 }
