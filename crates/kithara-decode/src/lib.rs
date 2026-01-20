@@ -49,4 +49,5 @@ mod pipeline;
 pub mod resampler;
 mod source_reader;
 mod symphonia_mod;
+mod traits;
 mod types;

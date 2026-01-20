@@ -532,6 +532,24 @@ impl PcmBuffer {
     }
 }
 
+impl crate::traits::PcmBufferTrait for PcmBuffer {
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+
+    fn frames_written(&self) -> u64 {
+        self.frames_written.load(Ordering::Relaxed)
+    }
+
+    fn is_eof(&self) -> bool {
+        self.eof.load(Ordering::Relaxed)
+    }
+
+    fn read_samples(&self, frame_offset: u64, buf: &mut [f32]) -> usize {
+        self.read_samples(frame_offset, buf)
+    }
+}
+
 /// Create decoder from source reader and media info.
 fn create_decoder<R>(
     reader: R,
