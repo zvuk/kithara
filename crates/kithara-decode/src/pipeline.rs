@@ -12,7 +12,7 @@ use std::{
 };
 
 use kithara_stream::{MediaInfo, Source, SyncReader, SyncReaderParams};
-use kithara_worker::{SimpleItem, SyncWorker, SyncWorkerSource};
+use kithara_worker::{Fetch, SimpleItem, SyncWorker, SyncWorkerSource, Worker};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, trace};
 
@@ -85,7 +85,7 @@ impl<D: Decoder> SyncWorkerSource for DecodeSource<D> {
     type Chunk = PcmChunk<f32>;
     type Command = PipelineCommand;
 
-    fn fetch_next(&mut self) -> Option<Self::Chunk> {
+    fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
         loop {
             // Decode next chunk (blocking operation, SyncReader is safe in blocking context)
             match self.decoder.next_chunk() {
@@ -96,14 +96,14 @@ impl<D: Decoder> SyncWorkerSource for DecodeSource<D> {
                     match &mut self.resampler {
                         Some(resampler) => {
                             if let Some(resampled) = resampler.process(&decoded_chunk) {
-                                return Some(resampled);
+                                return Fetch::new(resampled, false, 0);
                             }
                             // Not enough data yet for resampler, continue
                             continue;
                         }
                         None => {
                             // No resampling - return decoded chunk as-is
-                            return Some(decoded_chunk);
+                            return Fetch::new(decoded_chunk, false, 0);
                         }
                     }
                 }
@@ -112,16 +112,16 @@ impl<D: Decoder> SyncWorkerSource for DecodeSource<D> {
                     if let Some(resampler) = &mut self.resampler {
                         if let Some(final_chunk) = resampler.flush() {
                             info!("Pipeline: flushing resampler");
-                            return Some(final_chunk);
+                            return Fetch::new(final_chunk, true, 0);
                         }
                     }
 
                     info!("Pipeline: end of stream");
-                    return None;
+                    return Fetch::new(PcmChunk::new(self.output_spec, Vec::new()), true, 0);
                 }
                 Err(e) => {
                     error!(err = %e, "Pipeline decode error");
-                    return None;
+                    return Fetch::new(PcmChunk::new(self.output_spec, Vec::new()), true, 0);
                 }
             }
         }
@@ -136,10 +136,6 @@ impl<D: Decoder> SyncWorkerSource for DecodeSource<D> {
                 debug!(new_speed, "DecodeSource: speed command processed");
             }
         }
-    }
-
-    fn eof_chunk(&self) -> Self::Chunk {
-        PcmChunk::new(self.output_spec, Vec::new())
     }
 }
 
@@ -264,22 +260,15 @@ impl Pipeline<SymphoniaDecoder> {
         // Create worker
         let worker = SyncWorker::new(decode_source, cmd_rx, data_tx);
 
-        // Spawn worker in blocking task (log decoder source info too)
-        let worker_handle = tokio::task::spawn_blocking(move || {
-            debug!("SyncWorker starting");
-            worker.run();
-            debug!("SyncWorker finished");
-        });
-
-        // Spawn consumer in async task
+        // Spawn worker and consumer tasks
         let buffer_clone = buffer.clone();
-        let consumer_handle = tokio::spawn(async move {
-            run_consumer_async(data_rx, buffer_clone).await;
-        });
-
-        // Combine both handles
         let task_handle = tokio::spawn(async move {
-            let _ = tokio::join!(worker_handle, consumer_handle);
+            debug!("SyncWorker starting");
+            let (_, _) = tokio::join!(
+                worker.run(),
+                run_consumer_async(data_rx, buffer_clone)
+            );
+            debug!("SyncWorker finished");
         });
 
         Ok(Self {
@@ -341,22 +330,15 @@ impl<D: Decoder> Pipeline<D> {
         // Create worker
         let worker = SyncWorker::new(decode_source, cmd_rx, data_tx);
 
-        // Spawn worker in blocking task
-        let worker_handle = tokio::task::spawn_blocking(move || {
-            debug!("SyncWorker starting");
-            worker.run();
-            debug!("SyncWorker finished");
-        });
-
-        // Spawn consumer in async task
+        // Spawn worker and consumer tasks
         let buffer_clone = buffer.clone();
-        let consumer_handle = tokio::spawn(async move {
-            run_consumer_async(data_rx, buffer_clone).await;
-        });
-
-        // Combine both handles
         let task_handle = tokio::spawn(async move {
-            let _ = tokio::join!(worker_handle, consumer_handle);
+            debug!("SyncWorker starting");
+            let (_, _) = tokio::join!(
+                worker.run(),
+                run_consumer_async(data_rx, buffer_clone)
+            );
+            debug!("SyncWorker finished");
         });
 
         Ok(Self {
@@ -619,6 +601,469 @@ async fn run_consumer_async(
     // Mark EOF if not already marked
     if !buffer.is_eof() {
         buffer.set_eof();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::PcmChunk;
+    use rstest::*;
+    use std::time::Duration;
+
+    /// Simple mock decoder for testing.
+    struct MockDecoder {
+        spec: PcmSpec,
+        chunks: Vec<PcmChunk<f32>>,
+        current: usize,
+    }
+
+    impl MockDecoder {
+        fn new(spec: PcmSpec, chunks: Vec<PcmChunk<f32>>) -> Self {
+            Self {
+                spec,
+                chunks,
+                current: 0,
+            }
+        }
+
+        fn with_single_chunk(sample_rate: u32, channels: u16, sample_count: usize) -> Self {
+            let spec = PcmSpec {
+                sample_rate,
+                channels,
+            };
+            let samples = vec![0.5f32; sample_count * channels as usize];
+            let chunk = PcmChunk::new(spec, samples);
+            Self::new(spec, vec![chunk])
+        }
+
+        fn with_multiple_chunks(
+            sample_rate: u32,
+            channels: u16,
+            chunk_count: usize,
+            samples_per_chunk: usize,
+        ) -> Self {
+            let spec = PcmSpec {
+                sample_rate,
+                channels,
+            };
+            let chunks: Vec<_> = (0..chunk_count)
+                .map(|i| {
+                    let value = (i as f32) * 0.1;
+                    let samples = vec![value; samples_per_chunk * channels as usize];
+                    PcmChunk::new(spec, samples)
+                })
+                .collect();
+            Self::new(spec, chunks)
+        }
+    }
+
+    impl Decoder for MockDecoder {
+        fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+            if self.current < self.chunks.len() {
+                let chunk = self.chunks[self.current].clone();
+                self.current += 1;
+                Ok(Some(chunk))
+            } else {
+                Ok(None)
+            }
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+    }
+
+    // ============================================================================
+    // Pipeline Creation Tests
+    // ============================================================================
+
+    #[rstest]
+    #[case(44100, 2, 100, "44100Hz stereo")]
+    #[case(48000, 2, 100, "48000Hz stereo")]
+    #[case(44100, 1, 100, "44100Hz mono")]
+    #[timeout(Duration::from_secs(2))]
+    #[tokio::test]
+    async fn test_pipeline_with_decoder(
+        #[case] sample_rate: u32,
+        #[case] channels: u16,
+        #[case] sample_count: usize,
+        #[case] _desc: &str,
+    ) {
+        let decoder = MockDecoder::with_single_chunk(sample_rate, channels, sample_count);
+        let source_spec = PcmSpec {
+            sample_rate,
+            channels,
+        };
+
+        let pipeline = Pipeline::with_decoder(decoder, source_spec, sample_rate)
+            .await
+            .unwrap();
+
+        assert_eq!(pipeline.buffer().spec(), source_spec);
+        assert!(!pipeline.buffer().is_eof());
+
+        pipeline.stop().await;
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(2))]
+    #[tokio::test]
+    async fn test_pipeline_processes_all_chunks() {
+        let decoder = MockDecoder::with_multiple_chunks(44100, 2, 5, 100);
+        let source_spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+
+        let pipeline = Pipeline::with_decoder(decoder, source_spec, 44100)
+            .await
+            .unwrap();
+
+        // Wait for processing
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let buffer = pipeline.buffer();
+        assert!(buffer.frames_written() > 0);
+
+        pipeline.stop().await;
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(2))]
+    #[tokio::test]
+    async fn test_pipeline_eof_reached() {
+        let decoder = MockDecoder::with_single_chunk(44100, 2, 100);
+        let source_spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+
+        let pipeline = Pipeline::with_decoder(decoder, source_spec, 44100)
+            .await
+            .unwrap();
+
+        // Wait for EOF
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        assert!(pipeline.buffer().is_eof());
+
+        pipeline.stop().await;
+    }
+
+    // ============================================================================
+    // Pipeline Resampling Tests
+    // ============================================================================
+
+    #[rstest]
+    #[case(44100, 48000, "upsample 44.1kHz to 48kHz")]
+    #[case(48000, 44100, "downsample 48kHz to 44.1kHz")]
+    #[case(44100, 44100, "no resampling")]
+    #[timeout(Duration::from_secs(2))]
+    #[tokio::test]
+    async fn test_pipeline_resampling(
+        #[case] input_rate: u32,
+        #[case] output_rate: u32,
+        #[case] _desc: &str,
+    ) {
+        let decoder = MockDecoder::with_single_chunk(input_rate, 2, 1000);
+        let source_spec = PcmSpec {
+            sample_rate: input_rate,
+            channels: 2,
+        };
+
+        let pipeline = Pipeline::with_decoder(decoder, source_spec, output_rate)
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        assert_eq!(pipeline.buffer().spec().sample_rate, output_rate);
+
+        pipeline.stop().await;
+    }
+
+    // ============================================================================
+    // Pipeline Speed Control Tests
+    // ============================================================================
+
+    #[rstest]
+    #[case(0.5, "half speed")]
+    #[case(1.0, "normal speed")]
+    #[case(1.5, "1.5x speed")]
+    #[case(2.0, "double speed")]
+    #[timeout(Duration::from_secs(2))]
+    #[tokio::test]
+    async fn test_pipeline_set_speed(#[case] speed: f32, #[case] _desc: &str) {
+        let decoder = MockDecoder::with_single_chunk(44100, 2, 100);
+        let source_spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+
+        let pipeline = Pipeline::with_decoder(decoder, source_spec, 44100)
+            .await
+            .unwrap();
+
+        pipeline.set_speed(speed);
+
+        pipeline.stop().await;
+    }
+
+    // ============================================================================
+    // Pipeline Buffer Access Tests
+    // ============================================================================
+
+    #[rstest]
+    #[timeout(Duration::from_secs(2))]
+    #[tokio::test]
+    async fn test_pipeline_buffer_access() {
+        let decoder = MockDecoder::with_single_chunk(44100, 2, 1000);
+        let source_spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+
+        let pipeline = Pipeline::with_decoder(decoder, source_spec, 44100)
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let buffer = pipeline.buffer();
+        assert_eq!(buffer.spec(), source_spec);
+        assert!(buffer.frames_written() > 0);
+
+        pipeline.stop().await;
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(2))]
+    #[tokio::test]
+    async fn test_pipeline_stop_and_wait() {
+        let decoder = MockDecoder::with_multiple_chunks(44100, 2, 10, 100);
+        let source_spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+
+        let pipeline = Pipeline::with_decoder(decoder, source_spec, 44100)
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        pipeline.stop().await;
+    }
+
+    // ============================================================================
+    // PcmBuffer Tests
+    // ============================================================================
+
+    #[rstest]
+    #[case(44100, 2, "44100Hz stereo")]
+    #[case(48000, 2, "48000Hz stereo")]
+    #[case(44100, 1, "44100Hz mono")]
+    fn test_pcm_buffer_new(#[case] sample_rate: u32, #[case] channels: u16, #[case] _desc: &str) {
+        let spec = PcmSpec {
+            sample_rate,
+            channels,
+        };
+
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        assert_eq!(buffer.spec(), spec);
+        assert_eq!(buffer.frames_written(), 0);
+        assert!(!buffer.is_eof());
+    }
+
+    #[rstest]
+    fn test_pcm_buffer_append() {
+        let spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        let samples = vec![0.5f32; 200];
+        let chunk = PcmChunk::new(spec, samples);
+
+        buffer.append(&chunk);
+
+        assert_eq!(buffer.frames_written(), 100);
+    }
+
+    #[rstest]
+    fn test_pcm_buffer_read_samples() {
+        let spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        let samples = vec![0.7f32; 200];
+        let chunk = PcmChunk::new(spec, samples);
+        buffer.append(&chunk);
+
+        let mut read_buf = vec![0.0f32; 100];
+        let read_count = buffer.read_samples(0, &mut read_buf);
+
+        assert_eq!(read_count, 100);
+        assert!((read_buf[0] - 0.7f32).abs() < 1e-6);
+    }
+
+    #[rstest]
+    fn test_pcm_buffer_read_samples_beyond_available() {
+        let spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        let samples = vec![0.5f32; 200];
+        let chunk = PcmChunk::new(spec, samples);
+        buffer.append(&chunk);
+
+        let mut read_buf = vec![0.0f32; 500];
+        let read_count = buffer.read_samples(0, &mut read_buf);
+
+        assert_eq!(read_count, 200);
+    }
+
+    #[rstest]
+    fn test_pcm_buffer_read_samples_with_offset() {
+        let spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        let samples = vec![0.5f32; 200];
+        let chunk = PcmChunk::new(spec, samples);
+        buffer.append(&chunk);
+
+        let mut read_buf = vec![0.0f32; 100];
+        let read_count = buffer.read_samples(25, &mut read_buf);
+
+        assert_eq!(read_count, 100);
+    }
+
+    #[rstest]
+    fn test_pcm_buffer_set_eof() {
+        let spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        assert!(!buffer.is_eof());
+
+        buffer.set_eof();
+
+        assert!(buffer.is_eof());
+    }
+
+    #[rstest]
+    fn test_pcm_buffer_multiple_appends() {
+        let spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        for i in 0..5 {
+            let samples = vec![(i as f32) * 0.1; 200];
+            let chunk = PcmChunk::new(spec, samples);
+            buffer.append(&chunk);
+        }
+
+        assert_eq!(buffer.frames_written(), 500);
+    }
+
+    #[rstest]
+    fn test_pcm_buffer_read_after_multiple_appends() {
+        let spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        let samples1 = vec![0.3f32; 200];
+        let chunk1 = PcmChunk::new(spec, samples1);
+        buffer.append(&chunk1);
+
+        let samples2 = vec![0.7f32; 200];
+        let chunk2 = PcmChunk::new(spec, samples2);
+        buffer.append(&chunk2);
+
+        let mut read_buf = vec![0.0f32; 200];
+        let read_count = buffer.read_samples(50, &mut read_buf);
+
+        assert_eq!(read_count, 200);
+        assert!((read_buf[0] - 0.3f32).abs() < 1e-6);
+        assert!((read_buf[150] - 0.7f32).abs() < 1e-6);
+    }
+
+    #[rstest]
+    fn test_pcm_buffer_trait_spec() {
+        let spec = PcmSpec {
+            sample_rate: 48000,
+            channels: 2,
+        };
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        let trait_spec = crate::traits::PcmBufferTrait::spec(&buffer);
+        assert_eq!(trait_spec, spec);
+    }
+
+    #[rstest]
+    fn test_pcm_buffer_trait_frames_written() {
+        let spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        let samples = vec![0.5f32; 200];
+        let chunk = PcmChunk::new(spec, samples);
+        buffer.append(&chunk);
+
+        let frames = crate::traits::PcmBufferTrait::frames_written(&buffer);
+        assert_eq!(frames, 100);
+    }
+
+    #[rstest]
+    fn test_pcm_buffer_trait_is_eof() {
+        let spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        assert!(!crate::traits::PcmBufferTrait::is_eof(&buffer));
+
+        buffer.set_eof();
+
+        assert!(crate::traits::PcmBufferTrait::is_eof(&buffer));
+    }
+
+    #[rstest]
+    fn test_pcm_buffer_trait_read_samples() {
+        let spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+        let (buffer, _rx) = PcmBuffer::new(spec);
+
+        let samples = vec![0.8f32; 200];
+        let chunk = PcmChunk::new(spec, samples);
+        buffer.append(&chunk);
+
+        let mut read_buf = vec![0.0f32; 100];
+        let read_count = crate::traits::PcmBufferTrait::read_samples(&buffer, 0, &mut read_buf);
+
+        assert_eq!(read_count, 100);
+        assert!((read_buf[0] - 0.8f32).abs() < 1e-6);
     }
 }
 

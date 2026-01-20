@@ -2,8 +2,10 @@
 //!
 //! Tests the full worker implementation with async and sync workers.
 
+use async_trait::async_trait;
 use kithara_worker::{
-    AsyncWorker, AsyncWorkerSource, EpochItem, SimpleItem, SyncWorker, SyncWorkerSource,
+    AsyncWorker, AsyncWorkerSource, EpochItem, Fetch, SimpleItem, SyncWorker, SyncWorkerSource,
+    Worker,
 };
 use tokio::sync::mpsc;
 
@@ -25,17 +27,18 @@ impl TestAsyncSource {
     }
 }
 
+#[async_trait]
 impl AsyncWorkerSource for TestAsyncSource {
     type Chunk = i32;
     type Command = usize; // seek position
 
-    async fn fetch_next(&mut self) -> Option<Self::Chunk> {
+    async fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
         if self.pos >= self.data.len() {
-            return None;
+            return Fetch::new(0, true, self.epoch);
         }
         let val = self.data[self.pos];
         self.pos += 1;
-        Some(val)
+        Fetch::new(val, false, self.epoch)
     }
 
     fn handle_command(&mut self, cmd: Self::Command) -> u64 {
@@ -46,10 +49,6 @@ impl AsyncWorkerSource for TestAsyncSource {
 
     fn epoch(&self) -> u64 {
         self.epoch
-    }
-
-    fn eof_chunk(&self) -> Self::Chunk {
-        0 // EOF marker for i32
     }
 }
 
@@ -109,21 +108,17 @@ impl SyncWorkerSource for TestSyncSource {
     type Chunk = i32;
     type Command = usize; // seek position
 
-    fn fetch_next(&mut self) -> Option<Self::Chunk> {
+    fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
         if self.pos >= self.data.len() {
-            return None;
+            return Fetch::new(0, true, 0);
         }
         let val = self.data[self.pos];
         self.pos += 1;
-        Some(val)
+        Fetch::new(val, false, 0)
     }
 
     fn handle_command(&mut self, cmd: Self::Command) {
         self.pos = cmd;
-    }
-
-    fn eof_chunk(&self) -> Self::Chunk {
-        0 // EOF marker for i32
     }
 }
 
@@ -134,7 +129,7 @@ async fn test_sync_worker_basic() {
     let (data_tx, data_rx) = kanal::bounded::<SimpleItem<i32>>(4);
 
     let worker = SyncWorker::new(source, cmd_rx, data_tx);
-    tokio::task::spawn_blocking(move || worker.run());
+    tokio::spawn(async move { worker.run().await });
 
     let async_rx = data_rx.as_async();
 

@@ -3,7 +3,11 @@ name = "kithara-worker"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+test-utils = []
+
 [dependencies]
+async-trait = { workspace = true }
 futures = { workspace = true }
 kanal = { workspace = true }
 tokio = { workspace = true }

@@ -8,6 +8,7 @@ use std::{
 
 use async_trait::async_trait;
 use kithara_storage::WaitOutcome;
+use kithara_worker::{Fetch, Worker};
 use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
@@ -154,6 +155,7 @@ where
     }
 }
 
+#[async_trait]
 impl<S> kithara_worker::AsyncWorkerSource for BytePrefetchSource<S>
 where
     S: Source<Item = u8>,
@@ -161,7 +163,7 @@ where
     type Chunk = ByteChunk;
     type Command = ByteSeekCmd;
 
-    async fn fetch_next(&mut self) -> Option<Self::Chunk> {
+    async fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
         // Wait for data
         let range = self.read_pos..self.read_pos.saturating_add(self.chunk_size as u64);
 
@@ -181,11 +183,25 @@ where
                     epoch = self.epoch,
                     "BytePrefetchSource: EOF"
                 );
-                return None;
+                return Fetch::new(
+                    ByteChunk {
+                        file_pos: self.read_pos,
+                        data: Vec::new(),
+                    },
+                    true,
+                    self.epoch,
+                );
             }
             Err(e) => {
                 tracing::error!(err = %e, "BytePrefetchSource: wait_range error");
-                return None;
+                return Fetch::new(
+                    ByteChunk {
+                        file_pos: self.read_pos,
+                        data: Vec::new(),
+                    },
+                    true,
+                    self.epoch,
+                );
             }
         }
 
@@ -207,16 +223,30 @@ where
                     "BytePrefetchSource: fetched"
                 );
                 self.read_pos = self.read_pos.saturating_add(n as u64);
-                Some(chunk)
+                Fetch::new(chunk, false, self.epoch)
             }
             Ok(_) => {
                 // n == 0 means EOF
                 trace!(pos = self.read_pos, "BytePrefetchSource: EOF (read 0)");
-                None
+                Fetch::new(
+                    ByteChunk {
+                        file_pos: self.read_pos,
+                        data: Vec::new(),
+                    },
+                    true,
+                    self.epoch,
+                )
             }
             Err(e) => {
                 tracing::error!(err = %e, "BytePrefetchSource: read_at error");
-                None
+                Fetch::new(
+                    ByteChunk {
+                        file_pos: self.read_pos,
+                        data: Vec::new(),
+                    },
+                    true,
+                    self.epoch,
+                )
             }
         }
     }
@@ -235,13 +265,6 @@ where
 
     fn epoch(&self) -> u64 {
         self.epoch
-    }
-
-    fn eof_chunk(&self) -> Self::Chunk {
-        ByteChunk {
-            file_pos: self.read_pos,
-            data: Vec::new(),
-        }
     }
 }
 
@@ -300,7 +323,7 @@ where
 
         let prefetch_source = BytePrefetchSource::new(source.clone(), chunk_size);
         let worker = PrefetchWorker::new(prefetch_source, cmd_rx, data_tx.to_async());
-        tokio::spawn(worker.run());
+        tokio::spawn(async move { worker.run().await });
 
         Self {
             source,
