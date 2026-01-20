@@ -1,0 +1,68 @@
+# cargo-tarpaulin configuration for code coverage
+# https://github.com/xd009642/tarpaulin
+
+[report]
+# Output formats
+out = ["Html", "Xml", "Lcov"]
+
+[run]
+# Exclude patterns
+exclude = [
+    "*/tests/*",           # Exclude integration test files
+    "*/examples/*",        # Exclude examples
+    "*/benches/*",         # Exclude benchmarks
+    "*/target/*",          # Exclude build artifacts
+]
+
+# Exclude files by glob pattern
+exclude-files = [
+    "tests/",
+    "examples/",
+    "benches/",
+]
+
+# Timeout for slow tests (5 minutes)
+timeout = "300"
+
+# Run types: Tests + Doctests
+run-types = ["Tests", "Doctests"]
+
+# Number of parallel test threads
+test-threads = 4
+
+# Follow symbolic links
+follow-exec = false
+
+# Count hits in tests
+count = true
+
+# All packages in workspace
+all = true
+
+# Workspace mode
+workspace = true
+
+# Ignore panics in coverage
+ignore-panics = false
+
+# Post-test-delay to avoid race conditions
+post-test-delay = 0
+
+[report.html]
+# HTML output directory
+output-dir = "target/coverage/html"
+
+[report.xml]
+# XML (Cobertura) output directory for codecov
+output-dir = "target/coverage"
+
+[report.lcov]
+# LCOV output directory
+output-dir = "target/coverage"
+
+# Note: On macOS, tarpaulin has limited support.
+# Use Docker or run in GitHub Actions (Linux) for accurate coverage:
+#   docker run --security-opt seccomp=unconfined \
+#     -v "${PWD}:/volume" \
+#     xd009642/tarpaulin:latest \
+#     cargo tarpaulin
