@@ -388,4 +388,104 @@ mod tests {
 
         assert!(result.is_err());
     }
+
+    #[tokio::test]
+    async fn test_matcher_url_path_matching() {
+        let temp_dir = TempDir::new().unwrap();
+        let assets = AssetStoreBuilder::new()
+            .asset_root("test")
+            .root_dir(temp_dir.path())
+            .build();
+
+        let mut mock_net = MockNet::new();
+        let master_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
+        let media_content = b"#EXTINF:4.0\nseg0.bin\n";
+
+        mock_net
+            .expect_get_bytes()
+            .withf(|url, _| url.path().ends_with("/master.m3u8"))
+            .times(1)
+            .returning(move |_, _| Ok(Bytes::from_static(master_content)));
+
+        mock_net
+            .expect_get_bytes()
+            .withf(|url, _| url.path().ends_with("/v0.m3u8"))
+            .times(1)
+            .returning(move |_, _| Ok(Bytes::from_static(media_content)));
+
+        let fetch_manager = FetchManager::with_net(assets, mock_net);
+
+        let master_url = Url::parse("http://example.com/master.m3u8").unwrap();
+        let master: HlsResult<Bytes> = fetch_manager
+            .fetch_playlist(&master_url, "master.m3u8")
+            .await;
+        assert!(master.is_ok());
+
+        let media_url = Url::parse("http://example.com/v0.m3u8").unwrap();
+        let media: HlsResult<Bytes> = fetch_manager
+            .fetch_playlist(&media_url, "v0.m3u8")
+            .await;
+        assert!(media.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_matcher_url_domain_matching() {
+        let temp_dir = TempDir::new().unwrap();
+        let assets = AssetStoreBuilder::new()
+            .asset_root("test")
+            .root_dir(temp_dir.path())
+            .build();
+
+        let mut mock_net = MockNet::new();
+        let content = b"test content";
+
+        mock_net
+            .expect_get_bytes()
+            .withf(|url, _| url.host_str() == Some("cdn1.example.com"))
+            .returning(move |_, _| Ok(Bytes::from_static(content)));
+
+        let fetch_manager = FetchManager::with_net(assets, mock_net);
+
+        let url = Url::parse("http://cdn1.example.com/file.m3u8").unwrap();
+        let result: HlsResult<Bytes> = fetch_manager.fetch_playlist(&url, "file.m3u8").await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_matcher_headers_matching() {
+        use kithara_net::Headers;
+        use std::collections::HashMap;
+
+        let temp_dir = TempDir::new().unwrap();
+        let assets = AssetStoreBuilder::new()
+            .asset_root("test")
+            .root_dir(temp_dir.path())
+            .build();
+
+        let mut mock_net = MockNet::new();
+        let key_content = vec![0u8; 16];
+
+        mock_net
+            .expect_get_bytes()
+            .withf(|_, headers| {
+                if let Some(h) = headers {
+                    h.get("Authorization").is_some()
+                } else {
+                    false
+                }
+            })
+            .returning(move |_, _| Ok(Bytes::from(key_content.clone())));
+
+        let fetch_manager = FetchManager::with_net(assets, mock_net);
+
+        let url = Url::parse("http://example.com/key.bin").unwrap();
+        let mut headers_map = HashMap::new();
+        headers_map.insert("Authorization".to_string(), "Bearer token".to_string());
+        let headers = Some(Headers::from(headers_map));
+
+        let result: HlsResult<Bytes> = fetch_manager.fetch_key(&url, "key.bin", headers).await;
+
+        assert!(result.is_ok());
+    }
 }
