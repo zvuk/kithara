@@ -5,6 +5,9 @@ use bytes::Bytes;
 use futures::Stream;
 use url::Url;
 
+#[cfg(test)]
+use mockall::automock;
+
 use crate::{
     error::NetError,
     retry::{DefaultRetryPolicy, RetryNet},
@@ -14,6 +17,7 @@ use crate::{
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>;
 
+#[cfg_attr(test, automock)]
 #[async_trait]
 pub trait Net: Send + Sync {
     /// Get all bytes from a URL
