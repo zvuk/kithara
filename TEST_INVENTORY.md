@@ -175,18 +175,18 @@
 - Tests в tests/: 12 файлов
 - Tests в src/: 4 файла
 
-### Unit-тесты в tests/ (требуют переноса в src/)
+### Unit-тесты в tests/ (частично перенесены)
 
-- [ ] `tests/unit_tests.rs` (315 строк) → `src/abr/controller.rs` и `src/index.rs`
-  - Тестирует AbrController и SegmentIndex изолированно
-  - Критерии unit-теста: чистая логика без I/O
-  - **Разбить на**:
-    - ABR тесты → `src/abr/controller.rs`
-    - SegmentIndex тесты → `src/index.rs`
+- [x] `tests/unit_tests.rs` (315 строк) → `src/parsing.rs`
+  - ✓ Перенесено: 13 тестов (23 с rstest параметризацией)
+  - Тестирует parse_master_playlist, parse_media_playlist, VariantId
+  - Все тесты проходят
 
-- [ ] `tests/driver_test.rs` (107 строк) → `src/lib.rs` или `src/adapter.rs`
-  - Тестирует инициализацию HlsDriver
-  - Критерии unit-теста: проверка state transitions без I/O
+- [x] `tests/driver_test.rs` (107 строк) - ОСТАЕТСЯ в tests/
+  - **Пересмотрено**: это integration-тесты, не unit-тесты
+  - Использует async/tokio, AbrTestServer (HTTP), sleep(), реальный I/O
+  - Тестирует полную интеграцию Hls::open с чтением данных
+  - ✓ Правильно: остается в tests/
 
 ### Integration-тесты (правильно в tests/)
 
@@ -250,7 +250,7 @@
 
 ### Проблемы
 
-- **Unit в tests/**: 2 файла (422 строки) требуют переноса в src/
+- **Unit в tests/**: ~~2 файла~~ 1 файл (315 строк) ✓ перенесен в src/parsing.rs
 - **Integration в src/**: 1 тест требует переноса в tests/
 - **Монолиты**: 2 файла (1,339 строк) требуют разбиения:
   - `basestream_iter.rs` (700 строк)
@@ -392,13 +392,14 @@
 
 | Крейт | Файл | Строк | Целевой файл в src/ |
 |-------|------|-------|---------------------|
-| kithara-assets | asset_id.rs | 110 | src/key.rs |
-| kithara-assets | canonicalization.rs | 63 | src/key.rs |
-| kithara-hls | unit_tests.rs | 315 | src/abr/controller.rs, src/index.rs |
-| kithara-hls | driver_test.rs | 107 | src/lib.rs или src/adapter.rs |
-| kithara-net | types.rs | 371 | src/types.rs |
-| kithara-net | error.rs | 295 | src/error.rs |
-| **Итого** | **6 файлов** | **1,261** | |
+| Крейт | Файл | Строк | Целевой файл в src/ | Статус |
+|-------|------|-------|---------------------|--------|
+| kithara-assets | asset_id.rs | 110 | src/key.rs | ✓ Перенесено |
+| kithara-assets | canonicalization.rs | 63 | src/key.rs | ✓ Перенесено |
+| kithara-hls | unit_tests.rs | 315 | src/parsing.rs | ✓ Перенесено |
+| kithara-net | types.rs | 371 | src/types.rs | Осталось |
+| kithara-net | error.rs | 295 | src/error.rs | Осталось |
+| **Итого** | **5 файлов** | **1,154** | **3 ✓ / 2 осталось** |
 
 ### 2. Integration-тесты в src/ (требуют переноса в tests/)
 
