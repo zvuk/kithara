@@ -10,6 +10,7 @@ members = [
     "crates/kithara-assets",
     "crates/kithara-bufpool",
     "crates/kithara-worker",
+    "tests",
 ]
 
 [workspace.lints.rustdoc]

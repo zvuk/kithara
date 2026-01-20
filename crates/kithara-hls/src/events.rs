@@ -71,15 +71,4 @@ mod tests {
             _ => panic!("Unexpected event type"),
         }
     }
-
-    #[test]
-    fn test_broadcast_channel() {
-        use tokio::sync::broadcast;
-
-        let (tx, mut rx) = broadcast::channel::<HlsEvent>(32);
-        let _ = tx.send(HlsEvent::EndOfStream);
-
-        let event = rx.try_recv().ok();
-        assert!(matches!(event, Some(HlsEvent::EndOfStream)));
-    }
 }
