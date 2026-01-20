@@ -44,6 +44,7 @@ async-trait = { workspace = true }
 rstest = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
+mockall = { workspace = true }
 
 [[example]]
 name = "file_decode"

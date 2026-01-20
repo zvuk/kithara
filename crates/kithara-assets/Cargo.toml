@@ -28,3 +28,4 @@ kithara-assets = { path = ".", features = ["internal"] }
 tempfile = { workspace = true }
 rstest = { workspace = true }
 serial_test = { workspace = true }
+mockall = { workspace = true }

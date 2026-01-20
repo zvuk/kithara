@@ -21,3 +21,4 @@ tower = { workspace = true }
 futures = { workspace = true }
 rstest = { workspace = true }
 memory-stats = { workspace = true }
+mockall = { workspace = true }
