@@ -3,10 +3,9 @@ use std::{pin::Pin, time::Duration};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use url::Url;
-
 #[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
+use url::Url;
 
 use crate::{
     error::NetError,

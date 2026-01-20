@@ -3,13 +3,14 @@
 //! Provides `AbrTestServer` for testing throughput-based bitrate switching.
 
 use std::time::Duration;
+
 use axum::{Router, routing::get};
+use kithara_hls::HlsError;
 use rstest::fixture;
 use tokio::net::TcpListener;
 use url::Url;
 
 use super::{HlsResult, crypto::init_data};
-use kithara_hls::HlsError;
 
 /// ABR test server with configurable delays and bitrates
 pub struct AbrTestServer {
@@ -24,81 +25,82 @@ impl AbrTestServer {
 
         let master = master_playlist;
 
-        let app = Router::new()
-            .route(
-                "/master.m3u8",
-                get(move || {
-                    let master = master.clone();
-                    async move { master }
-                }),
-            )
-            .route(
-                "/v0.m3u8",
-                get(move || async move { media_playlist(0, init) }),
-            )
-            .route(
-                "/v1.m3u8",
-                get(move || async move { media_playlist(1, init) }),
-            )
-            .route(
-                "/v2.m3u8",
-                get(move || async move { media_playlist(2, init) }),
-            )
-            .route(
-                "/seg/v0_0.bin",
-                get(move || async move {
-                    segment_data(0, 0, Duration::from_millis(1), 200_000).await
-                }),
-            )
-            .route(
-                "/seg/v0_1.bin",
-                get(move || async move {
-                    segment_data(0, 1, Duration::from_millis(1), 200_000).await
-                }),
-            )
-            .route(
-                "/seg/v0_2.bin",
-                get(move || async move {
-                    segment_data(0, 2, Duration::from_millis(1), 200_000).await
-                }),
-            )
-            .route(
-                "/seg/v1_0.bin",
-                get(move || async move {
-                    segment_data(1, 0, Duration::from_millis(1), 200_000).await
-                }),
-            )
-            .route(
-                "/seg/v1_1.bin",
-                get(move || async move {
-                    segment_data(1, 1, Duration::from_millis(1), 200_000).await
-                }),
-            )
-            .route(
-                "/seg/v1_2.bin",
-                get(move || async move {
-                    segment_data(1, 2, Duration::from_millis(1), 200_000).await
-                }),
-            )
-            .route(
-                "/seg/v2_0.bin",
-                get(move || async move { segment_data(2, 0, segment0_delay, 50_000).await }),
-            )
-            .route(
-                "/seg/v2_1.bin",
-                get(move || async move {
-                    segment_data(2, 1, Duration::from_millis(1), 200_000).await
-                }),
-            )
-            .route(
-                "/seg/v2_2.bin",
-                get(move || async move {
-                    segment_data(2, 2, Duration::from_millis(1), 200_000).await
-                }),
-            )
-            .route("/init/v0.bin", get(|| async { init_data(0) }))
-            .route("/init/v1.bin", get(|| async { init_data(1) }))
-            .route("/init/v2.bin", get(|| async { init_data(2) }));
+        let app =
+            Router::new()
+                .route(
+                    "/master.m3u8",
+                    get(move || {
+                        let master = master.clone();
+                        async move { master }
+                    }),
+                )
+                .route(
+                    "/v0.m3u8",
+                    get(move || async move { media_playlist(0, init) }),
+                )
+                .route(
+                    "/v1.m3u8",
+                    get(move || async move { media_playlist(1, init) }),
+                )
+                .route(
+                    "/v2.m3u8",
+                    get(move || async move { media_playlist(2, init) }),
+                )
+                .route(
+                    "/seg/v0_0.bin",
+                    get(move || async move {
+                        segment_data(0, 0, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v0_1.bin",
+                    get(move || async move {
+                        segment_data(0, 1, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v0_2.bin",
+                    get(move || async move {
+                        segment_data(0, 2, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v1_0.bin",
+                    get(move || async move {
+                        segment_data(1, 0, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v1_1.bin",
+                    get(move || async move {
+                        segment_data(1, 1, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v1_2.bin",
+                    get(move || async move {
+                        segment_data(1, 2, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v2_0.bin",
+                    get(move || async move { segment_data(2, 0, segment0_delay, 50_000).await }),
+                )
+                .route(
+                    "/seg/v2_1.bin",
+                    get(move || async move {
+                        segment_data(2, 1, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route(
+                    "/seg/v2_2.bin",
+                    get(move || async move {
+                        segment_data(2, 2, Duration::from_millis(1), 200_000).await
+                    }),
+                )
+                .route("/init/v0.bin", get(|| async { init_data(0) }))
+                .route("/init/v1.bin", get(|| async { init_data(1) }))
+                .route("/init/v2.bin", get(|| async { init_data(2) }));
 
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();

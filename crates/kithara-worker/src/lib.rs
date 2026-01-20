@@ -38,7 +38,6 @@ mod async_worker;
 mod item;
 mod result;
 mod sync_worker;
-pub mod testing;
 mod traits;
 mod validator;
 
@@ -48,11 +47,9 @@ pub mod testing;
 
 // Public re-exports
 pub use async_worker::AsyncWorker;
-pub use item::{Fetch, WorkerItem};pub use result::WorkerResult;
+pub use item::{Fetch, WorkerItem};
+pub use result::{WorkerResult, WorkerResultExt};
 pub use sync_worker::SyncWorker;
-pub use traits::{AsyncWorkerSource, SyncWorkerSource, Worker};
-pub use validator::{AlwaysValid, EpochConsumer, EpochValidator, ItemValidator};
-
 // Export mock types when testing or test-utils feature is enabled
 // Note: Only Worker trait has auto-generated mock (MockWorker).
 // AsyncWorkerSource and SyncWorkerSource use manual mocking because
@@ -60,3 +57,5 @@ pub use validator::{AlwaysValid, EpochConsumer, EpochValidator, ItemValidator};
 // See testing.rs module documentation for details.
 #[cfg(any(test, feature = "test-utils"))]
 pub use traits::MockWorker;
+pub use traits::{AsyncWorkerSource, SyncWorkerSource, Worker};
+pub use validator::{AlwaysValid, EpochConsumer, EpochValidator, ItemValidator};

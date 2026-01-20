@@ -2,6 +2,7 @@
 
 use std::time::Duration;
 
+use fixture::TestServer;
 use kithara_assets::StoreOptions;
 use kithara_hls::{Hls, HlsParams};
 use kithara_stream::StreamSource;
@@ -13,7 +14,6 @@ use tracing_subscriber::EnvFilter;
 use url::Url;
 
 use super::fixture;
-use fixture::TestServer;
 
 // ==================== Fixtures ====================
 

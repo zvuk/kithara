@@ -5,14 +5,19 @@
 use std::{sync::Arc, time::Duration};
 
 use futures::StreamExt;
-use kithara_hls::{HlsEvent, stream::{SegmentStream, SegmentStreamParams}};
+use kithara_hls::{
+    HlsEvent,
+    stream::{SegmentStream, SegmentStreamParams},
+};
 use kithara_net::HttpClient;
 use rstest::rstest;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
-use super::basestream::{build_basestream, make_abr, make_fetch_and_playlist};
-use super::fixture::{TestAssets, TestServer, assets_fixture, net_fixture};
+use super::{
+    basestream::{build_basestream, make_abr, make_fetch_and_playlist},
+    fixture::{TestAssets, TestServer, assets_fixture, net_fixture},
+};
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]

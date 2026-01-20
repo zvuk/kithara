@@ -5,8 +5,9 @@
 
 use std::time::Duration;
 
-use super::fixture;
 use rstest::rstest;
+
+use super::fixture;
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]

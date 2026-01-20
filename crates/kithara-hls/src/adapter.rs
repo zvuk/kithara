@@ -67,8 +67,10 @@ impl HlsSource {
             while let Some(item) = stream.next().await {
                 match item {
                     Ok(meta) => {
-                        eprintln!("[HLS] Loaded: variant={}, segment={}, len={}",
-                            meta.variant, meta.segment_index, meta.len);
+                        eprintln!(
+                            "[HLS] Loaded: variant={}, segment={}, len={}",
+                            meta.variant, meta.segment_index, meta.len
+                        );
                         let encryption = extract_encryption_info(&meta);
                         let mut idx = index_clone.write().await;
                         idx.add(
@@ -182,7 +184,6 @@ impl Source for HlsSource {
                     break (entry.url, local_start..local_end, entry.encryption);
                 }
 
-
                 // Segment not found for current variant.
                 // Check if we should switch to next_variant (ABR switch pending).
                 if let Some(next_var) = self.handle.next_variant() {
@@ -202,8 +203,9 @@ impl Source for HlsSource {
                 let num_variants = self.variant_codecs.len();
 
                 // First, try lower or equal variants (respects ABR downswitch decision)
-                let found_variant = (0..num_variants)
-                    .find(|&v| v != current_var && v <= current_var && idx.find(range.start, v).is_some());
+                let found_variant = (0..num_variants).find(|&v| {
+                    v != current_var && v <= current_var && idx.find(range.start, v).is_some()
+                });
 
                 if let Some(target_variant) = found_variant {
                     // Found segment in lower/equal variant
@@ -287,145 +289,148 @@ impl Source for HlsSource {
         loop {
             let current_var = self.handle.current_variant();
 
-        let (segment_url, local_offset, segment_len, encryption, total_len) = {
-            let idx = self.index.read().await;
+            let (segment_url, local_offset, segment_len, encryption, total_len) = {
+                let idx = self.index.read().await;
 
-            if let Some(e) = idx.error() {
-                return Err(KitharaIoError::Source(HlsError::Driver(e.to_string())));
-            }
+                if let Some(e) = idx.error() {
+                    return Err(KitharaIoError::Source(HlsError::Driver(e.to_string())));
+                }
 
-            let total = idx.total_len(current_var);
-            if offset >= total && total > 0 {
-                return Ok(0);
-            }
+                let total = idx.total_len(current_var);
+                if offset >= total && total > 0 {
+                    return Ok(0);
+                }
 
-            // Find segment for current variant.
-            let entry = match idx.find(offset, current_var) {
-                Some(e) => e,
-                None => {
-                    // Segment not found for current variant.
-                    // Check if we should switch to next_variant.
-                    if let Some(_next_var) = self.handle.next_variant() {
-                        // Next variant requested - commit switch and retry.
-                        drop(idx);
-                        self.handle.commit_variant_switch();
-                        continue;
-                    }
-
-                    // Check if segment exists in OTHER variants (race condition with ABR switch)
-                    // CRITICAL: Don't switch to HIGHER variant (defeats ABR downswitch decision)
-                    // Only switch to lower/equal variants or when playlist finished
-                    let num_variants = self.variant_codecs.len();
-                    let found_variant = (0..num_variants)
-                        .find(|&v| v != current_var && v <= current_var && idx.find(offset, v).is_some());
-
-                    if let Some(target_variant) = found_variant {
-                        // Switch to variant with segment (only lower/equal bitrate)
-                        if idx.is_finished() {
+                // Find segment for current variant.
+                let entry = match idx.find(offset, current_var) {
+                    Some(e) => e,
+                    None => {
+                        // Segment not found for current variant.
+                        // Check if we should switch to next_variant.
+                        if let Some(_next_var) = self.handle.next_variant() {
+                            // Next variant requested - commit switch and retry.
                             drop(idx);
-                            self.handle.set_current_variant_direct(target_variant);
-                        } else {
-                            drop(idx);
-                            self.handle.force_variant(target_variant);
-                            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                            self.handle.commit_variant_switch();
+                            continue;
                         }
-                        continue;
-                    }
 
-                    // Don't switch to HIGHER variant even if playlist finished (respect ABR decision)
+                        // Check if segment exists in OTHER variants (race condition with ABR switch)
+                        // CRITICAL: Don't switch to HIGHER variant (defeats ABR downswitch decision)
+                        // Only switch to lower/equal variants or when playlist finished
+                        let num_variants = self.variant_codecs.len();
+                        let found_variant = (0..num_variants).find(|&v| {
+                            v != current_var && v <= current_var && idx.find(offset, v).is_some()
+                        });
 
-                    // Segment not in index for current variant.
-                    // Try to seek to load it from playlist (if it exists in playlist).
-                    if let Some(seg_idx) = idx.find_segment_index_for_offset(offset) {
+                        if let Some(target_variant) = found_variant {
+                            // Switch to variant with segment (only lower/equal bitrate)
+                            if idx.is_finished() {
+                                drop(idx);
+                                self.handle.set_current_variant_direct(target_variant);
+                            } else {
+                                drop(idx);
+                                self.handle.force_variant(target_variant);
+                                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                            }
+                            continue;
+                        }
+
+                        // Don't switch to HIGHER variant even if playlist finished (respect ABR decision)
+
+                        // Segment not in index for current variant.
+                        // Try to seek to load it from playlist (if it exists in playlist).
+                        if let Some(seg_idx) = idx.find_segment_index_for_offset(offset) {
+                            drop(idx);
+                            self.handle.seek(seg_idx);
+                            self.notify.notified().await;
+                            continue;
+                        }
+
+                        // Segment doesn't exist in playlist for current variant.
+                        if idx.is_finished() {
+                            // Stream finished and segment not in playlist → error
+                            return Err(KitharaIoError::Source(HlsError::SegmentNotFound(
+                                format!(
+                                    "No segment for offset {} in variant {}",
+                                    offset, current_var
+                                ),
+                            )));
+                        }
+
+                        // Stream not finished - wait for more segments to be loaded.
                         drop(idx);
-                        self.handle.seek(seg_idx);
                         self.notify.notified().await;
                         continue;
                     }
+                };
 
-                    // Segment doesn't exist in playlist for current variant.
-                    if idx.is_finished() {
-                        // Stream finished and segment not in playlist → error
-                        return Err(KitharaIoError::Source(HlsError::SegmentNotFound(format!(
-                            "No segment for offset {} in variant {}",
-                            offset, current_var
-                        ))));
-                    }
-
-                    // Stream not finished - wait for more segments to be loaded.
-                    drop(idx);
-                    self.notify.notified().await;
-                    continue;
-                }
+                let local_offset = offset - entry.global_start;
+                let segment_len = entry.global_end - entry.global_start;
+                (
+                    entry.url,
+                    local_offset,
+                    segment_len,
+                    entry.encryption,
+                    total,
+                )
             };
 
-            let local_offset = offset - entry.global_start;
-            let segment_len = entry.global_end - entry.global_start;
-            (
-                entry.url,
-                local_offset,
-                segment_len,
-                entry.encryption,
-                total,
-            )
-        };
+            let key = ResourceKey::from_url(&segment_url);
+            let available_in_segment = segment_len.saturating_sub(local_offset);
+            let read_len = (buf.len() as u64).min(available_in_segment) as usize;
 
-        let key = ResourceKey::from_url(&segment_url);
-        let available_in_segment = segment_len.saturating_sub(local_offset);
-        let read_len = (buf.len() as u64).min(available_in_segment) as usize;
+            let bytes_read = if let Some(enc) = encryption {
+                // Encrypted: use open_processed
+                let ctx = EncryptionInfo {
+                    key_url: enc.key_url.clone(),
+                    iv: enc.iv,
+                };
 
-        let bytes_read = if let Some(enc) = encryption {
-            // Encrypted: use open_processed
-            let ctx = EncryptionInfo {
-                key_url: enc.key_url.clone(),
-                iv: enc.iv,
+                // Emit KeyFetch event (we don't know if cached, so assume success after open).
+                let _ = self.events_tx.send(HlsEvent::KeyFetch {
+                    key_url: enc.key_url.to_string(),
+                    success: true,
+                    cached: false, // We don't track this currently
+                });
+
+                let res = self
+                    .assets
+                    .open_processed(&key, ctx)
+                    .await
+                    .map_err(|e| KitharaIoError::Source(HlsError::Assets(e)))?;
+
+                res.read_at(local_offset, &mut buf[..read_len])
+                    .await
+                    .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?
+            } else {
+                // Not encrypted: use regular streaming resource
+                let res = self
+                    .assets
+                    .open_streaming_resource(&key)
+                    .await
+                    .map_err(|e| KitharaIoError::Source(HlsError::Assets(e)))?;
+
+                res.read_at(local_offset, &mut buf[..read_len])
+                    .await
+                    .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?
             };
 
-            // Emit KeyFetch event (we don't know if cached, so assume success after open).
-            let _ = self.events_tx.send(HlsEvent::KeyFetch {
-                key_url: enc.key_url.to_string(),
-                success: true,
-                cached: false, // We don't track this currently
+            // Emit playback progress.
+            let new_pos = offset.saturating_add(bytes_read as u64);
+            let percent = if total_len > 0 {
+                Some(((new_pos as f64 / total_len as f64) * 100.0).min(100.0) as f32)
+            } else {
+                None
+            };
+            let _ = self.events_tx.send(HlsEvent::PlaybackProgress {
+                position: new_pos,
+                percent,
             });
 
-            let res = self
-                .assets
-                .open_processed(&key, ctx)
-                .await
-                .map_err(|e| KitharaIoError::Source(HlsError::Assets(e)))?;
+            // Update last read position for seek detection.
+            self.last_read_pos.store(new_pos, Ordering::Relaxed);
 
-            res.read_at(local_offset, &mut buf[..read_len])
-                .await
-                .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?
-        } else {
-            // Not encrypted: use regular streaming resource
-            let res = self
-                .assets
-                .open_streaming_resource(&key)
-                .await
-                .map_err(|e| KitharaIoError::Source(HlsError::Assets(e)))?;
-
-            res.read_at(local_offset, &mut buf[..read_len])
-                .await
-                .map_err(|e| KitharaIoError::Source(HlsError::Storage(e)))?
-        };
-
-        // Emit playback progress.
-        let new_pos = offset.saturating_add(bytes_read as u64);
-        let percent = if total_len > 0 {
-            Some(((new_pos as f64 / total_len as f64) * 100.0).min(100.0) as f32)
-        } else {
-            None
-        };
-        let _ = self.events_tx.send(HlsEvent::PlaybackProgress {
-            position: new_pos,
-            percent,
-        });
-
-        // Update last read position for seek detection.
-        self.last_read_pos.store(new_pos, Ordering::Relaxed);
-
-        return Ok(bytes_read);
+            return Ok(bytes_read);
         } // end loop
     }
 

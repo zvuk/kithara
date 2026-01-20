@@ -327,8 +327,9 @@ impl SegmentIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::rstest;
+
+    use super::*;
 
     fn make_url(variant: usize, segment: usize) -> Url {
         Url::parse(&format!(
@@ -437,9 +438,7 @@ mod tests {
             assert_eq!(
                 entry.global_start, offset,
                 "segment {} has wrong global_start (expected {}, got {})",
-                seg,
-                offset,
-                entry.global_start
+                seg, offset, entry.global_start
             );
             assert_eq!(
                 entry.global_end,
@@ -476,9 +475,9 @@ mod tests {
         for variant in 0..num_variants {
             for seg in 0..segments_per_variant {
                 let offset = seg as u64 * segment_size;
-                let entry = idx.find(offset, variant).unwrap_or_else(|| {
-                    panic!("variant {} segment {} not found", variant, seg)
-                });
+                let entry = idx
+                    .find(offset, variant)
+                    .unwrap_or_else(|| panic!("variant {} segment {} not found", variant, seg));
 
                 assert_eq!(entry.segment_index, seg);
                 assert_eq!(entry.global_start, offset);

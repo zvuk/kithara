@@ -18,16 +18,16 @@ use std::{
     time::Duration,
 };
 
+use fixture::{AbrTestServer, TestServer, master_playlist, test_segment_data};
 use kithara_assets::StoreOptions;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams, events::HlsEvent};
-use kithara_stream::{StreamSource, Source, SyncReader, SyncReaderParams, WaitOutcome};
+use kithara_stream::{Source, StreamSource, SyncReader, SyncReaderParams, WaitOutcome};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture;
-use fixture::{AbrTestServer, TestServer, master_playlist, test_segment_data};
 
 // ==================== Fixtures ====================
 

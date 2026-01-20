@@ -3,6 +3,7 @@
 //! Provides `TestAssets` and helper functions for creating test assets.
 
 use std::sync::Arc;
+
 use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig};
 use kithara_net::{HttpClient, NetOptions};
 use rstest::fixture;

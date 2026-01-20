@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use super::fixture;
-
 use std::time::{Duration, Instant};
 
 use kithara_hls::{
@@ -9,6 +7,8 @@ use kithara_hls::{
     playlist::parse_master_playlist,
 };
 use rstest::{fixture, rstest};
+
+use super::fixture;
 
 // ==================== Fixtures ====================
 

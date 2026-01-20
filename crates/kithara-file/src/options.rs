@@ -74,8 +74,9 @@ impl FileParams {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::*;
+
+    use super::*;
 
     #[test]
     fn test_file_params_new() {

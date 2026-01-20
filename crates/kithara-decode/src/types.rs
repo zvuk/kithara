@@ -101,8 +101,9 @@ pub struct DecoderSettings {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::*;
+
+    use super::*;
 
     // ============================================================================
     // PcmSpec Tests
@@ -113,8 +114,12 @@ mod tests {
     #[case(48000, 1, "48000 Hz, 1 channels")]
     #[case(96000, 6, "96000 Hz, 6 channels")]
     #[case(192000, 8, "192000 Hz, 8 channels")]
-    #[case(0, 0, "0 Hz, 0 channels")]  // Edge case
-    fn test_pcm_spec_display(#[case] sample_rate: u32, #[case] channels: u16, #[case] expected: &str) {
+    #[case(0, 0, "0 Hz, 0 channels")] // Edge case
+    fn test_pcm_spec_display(
+        #[case] sample_rate: u32,
+        #[case] channels: u16,
+        #[case] expected: &str,
+    ) {
         let spec = PcmSpec {
             sample_rate,
             channels,
@@ -176,7 +181,7 @@ mod tests {
             sample_rate,
             channels,
         };
-        let copied = spec;  // Copy, not move
+        let copied = spec; // Copy, not move
         assert_eq!(spec, copied);
     }
 
@@ -198,12 +203,16 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![0.0, 1.0, 2.0, 3.0], 2, 2)]  // 4 samples, 2 channels = 2 frames
-    #[case(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 2, 3)]  // 6 samples, 2 channels = 3 frames
-    #[case(vec![0.0], 1, 1)]  // 1 sample, 1 channel = 1 frame
-    #[case(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 6, 1)]  // 6 samples, 6 channels = 1 frame
-    #[case(vec![], 2, 0)]  // Empty PCM = 0 frames
-    fn test_frames_calculation(#[case] pcm: Vec<f32>, #[case] channels: u16, #[case] expected_frames: usize) {
+    #[case(vec![0.0, 1.0, 2.0, 3.0], 2, 2)] // 4 samples, 2 channels = 2 frames
+    #[case(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 2, 3)] // 6 samples, 2 channels = 3 frames
+    #[case(vec![0.0], 1, 1)] // 1 sample, 1 channel = 1 frame
+    #[case(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 6, 1)] // 6 samples, 6 channels = 1 frame
+    #[case(vec![], 2, 0)] // Empty PCM = 0 frames
+    fn test_frames_calculation(
+        #[case] pcm: Vec<f32>,
+        #[case] channels: u16,
+        #[case] expected_frames: usize,
+    ) {
         let spec = PcmSpec {
             sample_rate: 44100,
             channels,
@@ -223,11 +232,11 @@ mod tests {
     }
 
     #[rstest]
-    #[case(vec![0.0; 44100 * 2], 44100, 2, 1.0)]  // 1 second stereo
-    #[case(vec![0.0; 48000], 48000, 1, 1.0)]  // 1 second mono
-    #[case(vec![0.0; 88200], 44100, 2, 1.0)]  // 1 second stereo (88200 samples / 2 ch)
-    #[case(vec![0.0; 44100], 44100, 2, 0.5)]  // 0.5 seconds stereo
-    #[case(vec![], 44100, 2, 0.0)]  // Empty = 0 duration
+    #[case(vec![0.0; 44100 * 2], 44100, 2, 1.0)] // 1 second stereo
+    #[case(vec![0.0; 48000], 48000, 1, 1.0)] // 1 second mono
+    #[case(vec![0.0; 88200], 44100, 2, 1.0)] // 1 second stereo (88200 samples / 2 ch)
+    #[case(vec![0.0; 44100], 44100, 2, 0.5)] // 0.5 seconds stereo
+    #[case(vec![], 44100, 2, 0.0)] // Empty = 0 duration
     fn test_duration_secs(
         #[case] pcm: Vec<f32>,
         #[case] sample_rate: u32,
@@ -429,7 +438,11 @@ mod tests {
     #[case(false, false, true)]
     #[case(true, false, false)]
     #[case(false, true, false)]
-    fn test_decoder_settings_partial_eq(#[case] gapless1: bool, #[case] gapless2: bool, #[case] should_equal: bool) {
+    fn test_decoder_settings_partial_eq(
+        #[case] gapless1: bool,
+        #[case] gapless2: bool,
+        #[case] should_equal: bool,
+    ) {
         let settings1 = DecoderSettings {
             enable_gapless: gapless1,
         };

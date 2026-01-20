@@ -99,13 +99,14 @@ impl PinsIndex {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::{collections::HashSet, time::Duration};
+
     use kithara_storage::AtomicOptions;
     use rstest::*;
-    use std::collections::HashSet;
-    use std::time::Duration;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
+
+    use super::*;
 
     // Helper to create AtomicResource for tests
     fn create_test_resource(dir: &TempDir) -> AtomicResource {

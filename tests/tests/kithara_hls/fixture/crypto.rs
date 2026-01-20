@@ -3,7 +3,10 @@
 //! Provides AES-128 encryption helpers for testing encrypted HLS content.
 
 use aes::Aes128;
-use cbc::{Encryptor, cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7}};
+use cbc::{
+    Encryptor,
+    cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
+};
 
 /// Generate init segment data for variant
 pub fn init_data(variant: usize) -> Vec<u8> {

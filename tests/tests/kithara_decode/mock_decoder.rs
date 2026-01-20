@@ -78,10 +78,8 @@ impl<R: Read> MockDecoder<R> {
 
         // Parse header
         let variant = header[0] as usize;
-        let segment =
-            u32::from_be_bytes([header[1], header[2], header[3], header[4]]) as usize;
-        let data_len =
-            u32::from_be_bytes([header[5], header[6], header[7], header[8]]) as usize;
+        let segment = u32::from_be_bytes([header[1], header[2], header[3], header[4]]) as usize;
+        let data_len = u32::from_be_bytes([header[5], header[6], header[7], header[8]]) as usize;
 
         println!(
             "[MockDecoder] Read segment: variant={}, segment={}, data_len={}",
@@ -125,7 +123,9 @@ impl<R: Read> MockDecoder<R> {
                         // Timeout - assume EOF
                         self.eof = true;
                         println!("[MockDecoder] EOF (timeout after {} retries)", retries);
-                        println!("[MockDecoder] DEBUG: At EOF, reader position unknown (would need Seek trait)");
+                        println!(
+                            "[MockDecoder] DEBUG: At EOF, reader position unknown (would need Seek trait)"
+                        );
                         return Err(DecodeError::Io(std::io::Error::new(
                             std::io::ErrorKind::UnexpectedEof,
                             "EOF during read",
@@ -207,9 +207,11 @@ impl<R: Read + Send + 'static> Decoder for MockDecoder<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rstest::rstest;
     use std::io::Cursor;
+
+    use rstest::rstest;
+
+    use super::*;
 
     /// Helper: create binary segment data
     fn make_segment(variant: u8, segment: u32, data_len: usize) -> Vec<u8> {
@@ -263,8 +265,16 @@ mod tests {
 
             assert_eq!(chunk.spec, decoder.spec(), "{}: spec mismatch", desc);
             assert_eq!(chunk.pcm.len(), 102, "{}: pcm length mismatch", desc);
-            assert_eq!(chunk.pcm[0], *expected_variant, "{}: variant mismatch", desc);
-            assert_eq!(chunk.pcm[1], *expected_segment, "{}: segment mismatch", desc);
+            assert_eq!(
+                chunk.pcm[0], *expected_variant,
+                "{}: variant mismatch",
+                desc
+            );
+            assert_eq!(
+                chunk.pcm[1], *expected_segment,
+                "{}: segment mismatch",
+                desc
+            );
 
             // Verify data pattern (first few samples)
             assert_eq!(chunk.pcm[2], 0.0, "{}: data[0] should be 0.0", desc);
@@ -310,7 +320,17 @@ mod tests {
             None => MockDecoder::new(reader),
         };
 
-        assert_eq!(decoder.spec().sample_rate, expected_rate, "{}: sample rate", desc);
-        assert_eq!(decoder.spec().channels, expected_channels, "{}: channels", desc);
+        assert_eq!(
+            decoder.spec().sample_rate,
+            expected_rate,
+            "{}: sample rate",
+            desc
+        );
+        assert_eq!(
+            decoder.spec().channels,
+            expected_channels,
+            "{}: channels",
+            desc
+        );
     }
 }

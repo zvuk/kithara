@@ -1,12 +1,12 @@
 #![forbid(unsafe_code)]
 
-use super::fixture;
-
 use std::{sync::Arc, time::Duration};
 
 use fixture::*;
 use kithara_hls::{HlsResult, fetch::FetchManager, keys::KeyManager};
 use rstest::{fixture, rstest};
+
+use super::fixture;
 
 // ==================== Fixtures ====================
 

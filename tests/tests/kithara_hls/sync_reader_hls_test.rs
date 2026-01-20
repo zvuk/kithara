@@ -18,9 +18,7 @@
 //! → Problem is in MockDecoder or Pipeline integration
 //! → HLS itself works correctly
 
-use std::io::Read;
-use std::sync::Arc;
-use std::time::Duration;
+use std::{io::Read, sync::Arc, time::Duration};
 
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
 use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
@@ -83,7 +81,12 @@ async fn test_sync_reader_reads_all_bytes_from_hls() {
                 all_bytes.extend_from_slice(&read_buf[..n]);
                 total_reads += 1;
                 if total_reads <= 10 || total_reads % 10 == 0 {
-                    println!("Read {}: {} bytes, total: {}", total_reads, n, all_bytes.len());
+                    println!(
+                        "Read {}: {} bytes, total: {}",
+                        total_reads,
+                        n,
+                        all_bytes.len()
+                    );
                 }
             }
             Err(e) => {
@@ -157,7 +160,10 @@ async fn test_sync_reader_reads_all_bytes_from_hls() {
         segments_found
     );
 
-    println!("\n✅ PASS: SyncReader successfully read all {} bytes from all 3 HLS segments!", all_bytes.len());
+    println!(
+        "\n✅ PASS: SyncReader successfully read all {} bytes from all 3 HLS segments!",
+        all_bytes.len()
+    );
 
     cancel_token.cancel();
 }

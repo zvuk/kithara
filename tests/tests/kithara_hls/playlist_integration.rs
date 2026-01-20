@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use super::fixture;
-
 use std::{sync::Arc, time::Duration};
 
 use fixture::*;
@@ -11,6 +9,8 @@ use kithara_hls::{
     playlist::{PlaylistManager, VariantId},
 };
 use rstest::{fixture, rstest};
+
+use super::fixture;
 
 // ==================== Fixtures ====================
 

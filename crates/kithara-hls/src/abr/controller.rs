@@ -252,8 +252,7 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::*;
-    use super::super::estimator::MockEstimator;
+    use super::{super::estimator::MockEstimator, *};
 
     fn variants() -> Vec<Variant> {
         vec![
@@ -275,7 +274,15 @@ mod tests {
     #[rstest]
     #[case("downswitch_low_throughput", 2, 300_000 / 8, 10.0, 0, AbrReason::DownSwitch, true)]
     #[case("upswitch_high_throughput", 0, 2_000_000 / 8, 0.0, 2, AbrReason::UpSwitch, true)]
-    #[case("downswitch_buffer_too_low", 2, 30_000, 0.1, 0, AbrReason::DownSwitch, true)]
+    #[case(
+        "downswitch_buffer_too_low",
+        2,
+        30_000,
+        0.1,
+        0,
+        AbrReason::DownSwitch,
+        true
+    )]
     fn test_throughput_based_switching(
         #[case] _name: &str,
         #[case] initial_variant: usize,
@@ -367,7 +374,6 @@ mod tests {
         assert!(!d2.changed);
         assert_eq!(d2.reason, AbrReason::MinInterval);
     }
-
 
     #[test]
     fn no_change_without_estimate() {

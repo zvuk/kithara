@@ -10,8 +10,10 @@ use kithara_net::HttpClient;
 use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 
-use super::basestream::{build_basestream, collect_all, make_abr, make_fetch_and_playlist};
-use super::fixture::{TestAssets, TestServer, assets_fixture, net_fixture};
+use super::{
+    basestream::{build_basestream, collect_all, make_abr, make_fetch_and_playlist},
+    fixture::{TestAssets, TestServer, assets_fixture, net_fixture},
+};
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
@@ -75,8 +77,9 @@ async fn basestream_pause_and_resume_continues_streaming(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn basestream_stops_after_cancellation(assets_fixture: TestAssets, net_fixture: HttpClient) {
-    use kithara_hls::{HlsEvent, stream::{SegmentStreamParams}};
     use std::sync::Arc;
+
+    use kithara_hls::{HlsEvent, stream::SegmentStreamParams};
     use tokio::sync::broadcast;
 
     let server = TestServer::new().await;

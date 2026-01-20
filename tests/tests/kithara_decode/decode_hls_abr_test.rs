@@ -18,9 +18,9 @@
 
 use std::{error::Error, sync::Arc, time::Duration};
 
-use kithara_decode::{Pipeline, PcmSpec};
+use kithara_decode::{PcmSpec, Pipeline};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
-use kithara_stream::{SyncReader, SyncReaderParams, StreamSource};
+use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
 use tokio_util::sync::CancellationToken;
 
 use super::mock_decoder::MockDecoder;
@@ -145,10 +145,13 @@ async fn test_decode_hls_abr_variant_switch() -> Result<(), Box<dyn Error + Send
     let master = master_playlist_10_segments(256_000, 512_000, 1_024_000);
 
     let app = Router::new()
-        .route("/master.m3u8", get(move || {
-            let m = master.clone();
-            async move { m }
-        }))
+        .route(
+            "/master.m3u8",
+            get(move || {
+                let m = master.clone();
+                async move { m }
+            }),
+        )
         .route("/v0.m3u8", get(|| async { media_playlist_10_segments(0) }))
         .route("/v1.m3u8", get(|| async { media_playlist_10_segments(1) }))
         .route("/v2.m3u8", get(|| async { media_playlist_10_segments(2) }));
@@ -158,13 +161,16 @@ async fn test_decode_hls_abr_variant_switch() -> Result<(), Box<dyn Error + Send
     for variant in 0..3 {
         for segment in 0..10 {
             let route = format!("/seg/v{}_{}.bin", variant, segment);
-            app = app.route(&route, get(move || async move {
-                // Delay only on variant 0 to trigger ABR upswitch
-                if variant == 0 {
-                    tokio::time::sleep(Duration::from_secs(2)).await;
-                }
-                segment_data(variant, segment, Duration::ZERO, 200_000).await
-            }));
+            app = app.route(
+                &route,
+                get(move || async move {
+                    // Delay only on variant 0 to trigger ABR upswitch
+                    if variant == 0 {
+                        tokio::time::sleep(Duration::from_secs(2)).await;
+                    }
+                    segment_data(variant, segment, Duration::ZERO, 200_000).await
+                }),
+            );
         }
     }
 
@@ -195,8 +201,8 @@ async fn test_decode_hls_abr_variant_switch() -> Result<(), Box<dyn Error + Send
     // Create SyncReader for MockDecoder with increased prefetch buffer
     // Each segment is ~200KB, need larger buffer to avoid EOF during prefetch
     let sync_reader_params = SyncReaderParams {
-        chunk_size: 64 * 1024,  // 64KB (default)
-        prefetch_chunks: 16,     // 16 chunks = 1MB buffer (enough for ~5 segments)
+        chunk_size: 64 * 1024, // 64KB (default)
+        prefetch_chunks: 16,   // 16 chunks = 1MB buffer (enough for ~5 segments)
     };
     let sync_reader = SyncReader::new(source_arc.clone(), sync_reader_params);
 
@@ -226,17 +232,18 @@ async fn test_decode_hls_abr_variant_switch() -> Result<(), Box<dyn Error + Send
     let mut chunks_received = 0;
 
     loop {
-        let result = tokio::time::timeout(read_timeout, async {
-            async_rx.recv().await
-        })
-        .await;
+        let result = tokio::time::timeout(read_timeout, async { async_rx.recv().await }).await;
 
         match result {
             Ok(Ok(chunk)) => {
                 all_samples.extend_from_slice(&chunk);
                 chunks_received += 1;
                 if chunks_received <= 10 || chunks_received % 10 == 0 {
-                    println!("Received chunk {}: {} samples", chunks_received, chunk.len());
+                    println!(
+                        "Received chunk {}: {} samples",
+                        chunks_received,
+                        chunk.len()
+                    );
                 }
             }
             Ok(Err(_)) => {
@@ -295,7 +302,10 @@ async fn test_decode_hls_abr_variant_switch() -> Result<(), Box<dyn Error + Send
 
     // CRITICAL CHECK 5: Verify channel closed naturally (not timeout)
     // If we got here via timeout, it means decoder is stuck!
-    println!("✅ PASS: Read {} chunks from variants {:?}", total_chunks, variants_seen);
+    println!(
+        "✅ PASS: Read {} chunks from variants {:?}",
+        total_chunks, variants_seen
+    );
     println!("✅ All samples sequential - ABR variant switch works!");
 
     cancel_token.cancel();

@@ -59,7 +59,11 @@ pub trait Source: Send + Sync + 'static {
     ///
     /// - For byte sources: reads bytes
     /// - For PCM sources: reads samples
-    async fn read_at(&self, offset: u64, buf: &mut [Self::Item]) -> StreamResult<usize, Self::Error>
+    async fn read_at(
+        &self,
+        offset: u64,
+        buf: &mut [Self::Item],
+    ) -> StreamResult<usize, Self::Error>
     where
         Self: Send + Sync;
 

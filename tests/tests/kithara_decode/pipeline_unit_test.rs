@@ -82,10 +82,7 @@ async fn test_pipeline_with_simple_mock_decoder() {
     let read_timeout = tokio::time::Duration::from_millis(100);
 
     loop {
-        let result = tokio::time::timeout(read_timeout, async {
-            async_rx.recv().await
-        })
-        .await;
+        let result = tokio::time::timeout(read_timeout, async { async_rx.recv().await }).await;
 
         match result {
             Ok(Ok(chunk)) => {
@@ -217,22 +214,13 @@ async fn test_pipeline_speed_control() {
     assert_eq!(pipeline.speed(), 1.0);
 
     // Set speed
-    pipeline
-        .set_speed(1.5)
-        .await
-        .expect("Failed to set speed");
+    pipeline.set_speed(1.5).await.expect("Failed to set speed");
     assert_eq!(pipeline.speed(), 1.5);
 
     // Clamp to limits
-    pipeline
-        .set_speed(3.0)
-        .await
-        .expect("Failed to set speed");
+    pipeline.set_speed(3.0).await.expect("Failed to set speed");
     assert_eq!(pipeline.speed(), 2.0); // Clamped to max
 
-    pipeline
-        .set_speed(0.1)
-        .await
-        .expect("Failed to set speed");
+    pipeline.set_speed(0.1).await.expect("Failed to set speed");
     assert_eq!(pipeline.speed(), 0.5); // Clamped to min
 }

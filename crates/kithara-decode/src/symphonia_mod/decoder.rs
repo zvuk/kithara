@@ -535,9 +535,11 @@ impl crate::Decoder for SymphoniaDecoder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rstest::*;
     use std::io::Cursor;
+
+    use rstest::*;
+
+    use super::*;
 
     /// Create minimal valid WAV file (PCM 16-bit stereo, 44100Hz)
     fn create_test_wav(sample_count: usize, sample_rate: u32, channels: u16) -> Vec<u8> {
@@ -656,8 +658,7 @@ mod tests {
             .with_sample_rate(44100)
             .with_channels(2);
 
-        let decoder =
-            SymphoniaDecoder::new_from_media_info(cursor, &media_info, false).unwrap();
+        let decoder = SymphoniaDecoder::new_from_media_info(cursor, &media_info, false).unwrap();
 
         assert_eq!(decoder.spec().sample_rate, 44100);
         assert_eq!(decoder.spec().channels, 2);
@@ -1007,7 +1008,10 @@ mod tests {
         };
         let cloned = cached.clone();
 
-        assert_eq!(cached.codec_params.sample_rate, cloned.codec_params.sample_rate);
+        assert_eq!(
+            cached.codec_params.sample_rate,
+            cloned.codec_params.sample_rate
+        );
     }
 
     #[test]
@@ -1018,7 +1022,9 @@ mod tests {
         let decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
         let params = decoder.codec_params().unwrap();
 
-        let cached = CachedCodecInfo { codec_params: params };
+        let cached = CachedCodecInfo {
+            codec_params: params,
+        };
         let debug_str = format!("{:?}", cached);
 
         assert!(debug_str.contains("CachedCodecInfo"));

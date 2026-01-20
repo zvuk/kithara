@@ -3,12 +3,13 @@
 //! Provides `TestServer` with routes for master/media playlists and segments.
 
 use std::{collections::HashMap, sync::Arc};
+
 use axum::{Router, routing::get};
+use kithara_hls::HlsError;
 use tokio::net::TcpListener;
 use url::Url;
 
 use super::{HlsResult, crypto::*};
-use kithara_hls::HlsError;
 
 /// Test HTTP server for HLS content
 pub struct TestServer {

@@ -282,11 +282,13 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
     use kithara_storage::StreamingResource;
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
+
+    use super::*;
 
     /// Simple mock streaming resource for testing.
     async fn mock_resource(content: &[u8]) -> StreamingResource {
@@ -325,7 +327,11 @@ mod tests {
         // First read - should call process_fn
         let result1 = processed.read().await.unwrap();
         assert_eq!(result1.as_ref(), b"test content");
-        assert_eq!(call_count.load(Ordering::SeqCst), 1, "First read should call process_fn");
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "First read should call process_fn"
+        );
 
         // Second read - should NOT call process_fn (cached)
         let result2 = processed.read().await.unwrap();
@@ -358,7 +364,11 @@ mod tests {
         let n1 = processed.read_at(0, &mut buf1).await.unwrap();
         assert_eq!(n1, 4);
         assert_eq!(&buf1, b"test");
-        assert_eq!(call_count.load(Ordering::SeqCst), 1, "First read_at should call process_fn");
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "First read_at should call process_fn"
+        );
 
         // Second read_at - should NOT call process_fn (cached)
         let mut buf2 = vec![0u8; 7];

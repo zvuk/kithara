@@ -8,10 +8,11 @@
 //! - Epoch validation
 
 use kanal;
+use kithara_worker::{
+    testing::{MockAsyncSource, MockSyncSource, SeekCommand},
+    AsyncWorker, Fetch, SyncWorker, Worker,
+};
 use rstest::*;
-
-use kithara_worker::testing::{MockAsyncSource, MockSyncSource, SeekCommand};
-use kithara_worker::{AsyncWorker, Fetch, SyncWorker, Worker};
 
 /// Test basic AsyncWorker throughput with various buffer sizes.
 #[rstest]
@@ -973,4 +974,46 @@ async fn test_diamond_pattern_workers_no_deadlock() {
 
     drop(cmd_tx1);
     drop(cmd_tx2);
+}
+
+// Tests for WorkerResult bitflags combinations
+#[cfg(test)]
+mod result_combinations {
+    use kithara_worker::{WorkerResult, WorkerResultExt};
+    use rstest::rstest;
+
+    #[rstest]
+    #[case(WorkerResult::CONTINUE, "continue")]
+    #[case(WorkerResult::STOP, "stop")]
+    #[case(WorkerResult::EOF, "eof")]
+    #[case(WorkerResult::COMMAND_RECEIVED, "command")]
+    #[case(WorkerResult::EOF | WorkerResult::CONTINUE, "eof + continue")]
+    #[case(WorkerResult::EOF | WorkerResult::STOP, "eof + stop")]
+    #[case(WorkerResult::COMMAND_RECEIVED | WorkerResult::EOF, "command + eof")]
+    #[case(WorkerResult::COMMAND_RECEIVED | WorkerResult::CONTINUE, "command + continue")]
+    fn test_worker_result_flag_combinations(#[case] result: WorkerResult, #[case] _desc: &str) {
+        // Verify trait methods work
+        let _ = result.is_continue();
+        let _ = result.is_stop();
+        let _ = result.is_eof();
+        let _ = result.is_command_received();
+
+        // Verify no panic on any combination
+        let _ = result.validate();
+    }
+
+    #[test]
+    fn test_mutually_exclusive_validation() {
+        let invalid = WorkerResult::STOP | WorkerResult::CONTINUE;
+        assert!(invalid.validate().is_err());
+
+        let valid1 = WorkerResult::CONTINUE;
+        assert!(valid1.validate().is_ok());
+
+        let valid2 = WorkerResult::STOP;
+        assert!(valid2.validate().is_ok());
+
+        let valid3 = WorkerResult::EOF | WorkerResult::CONTINUE;
+        assert!(valid3.validate().is_ok());
+    }
 }

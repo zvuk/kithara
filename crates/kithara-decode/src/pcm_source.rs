@@ -8,7 +8,7 @@ use async_trait::async_trait;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{Source, StreamError, StreamResult};
 
-use crate::{traits::PcmBufferTrait, DecodeError, PcmSpec};
+use crate::{DecodeError, PcmSpec, traits::PcmBufferTrait};
 
 /// PCM audio source implementing `Source<Item=f32>`.
 ///
@@ -103,15 +103,17 @@ impl<B: PcmBufferTrait + 'static> Source for PcmSource<B> {
         }
 
         // Timeout
-        Err(StreamError::Source(DecodeError::Io(
-            std::io::Error::new(
-                std::io::ErrorKind::TimedOut,
-                "Timeout waiting for PCM data",
-            ),
-        )))
+        Err(StreamError::Source(DecodeError::Io(std::io::Error::new(
+            std::io::ErrorKind::TimedOut,
+            "Timeout waiting for PCM data",
+        ))))
     }
 
-    async fn read_at(&self, offset: u64, buf: &mut [Self::Item]) -> StreamResult<usize, Self::Error> {
+    async fn read_at(
+        &self,
+        offset: u64,
+        buf: &mut [Self::Item],
+    ) -> StreamResult<usize, Self::Error> {
         let channels = self.spec.channels as u64;
         let frame_offset = offset / channels;
 
@@ -132,10 +134,12 @@ impl<B: PcmBufferTrait + 'static> Source for PcmSource<B> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use rstest::*;
+
     use super::*;
     use crate::traits::MockPcmBufferTrait;
-    use rstest::*;
-    use std::time::Duration;
 
     // Helper to create PcmSpec for tests
     fn test_spec(channels: u16, sample_rate: u32) -> PcmSpec {
@@ -146,9 +150,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case(1, 44100)]  // Mono
-    #[case(2, 48000)]  // Stereo
-    #[case(6, 44100)]  // 5.1 surround
+    #[case(1, 44100)] // Mono
+    #[case(2, 48000)] // Stereo
+    #[case(6, 44100)] // 5.1 surround
     #[timeout(Duration::from_secs(1))]
     #[tokio::test]
     async fn test_pcm_source_spec(#[case] channels: u16, #[case] sample_rate: u32) {
@@ -163,9 +167,9 @@ mod tests {
     }
 
     #[rstest]
-    #[case(100, 2, 200)]  // 100 frames * 2 channels = 200 samples
-    #[case(1000, 1, 1000)]  // 1000 frames * 1 channel = 1000 samples
-    #[case(500, 6, 3000)]  // 500 frames * 6 channels = 3000 samples
+    #[case(100, 2, 200)] // 100 frames * 2 channels = 200 samples
+    #[case(1000, 1, 1000)] // 1000 frames * 1 channel = 1000 samples
+    #[case(500, 6, 3000)] // 500 frames * 6 channels = 3000 samples
     #[timeout(Duration::from_secs(1))]
     #[tokio::test]
     async fn test_samples_available(
@@ -200,8 +204,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case(0, 100, 2, 100)]  // Read 100 samples from offset 0, stereo
-    #[case(50, 50, 1, 50)]   // Read 50 samples from offset 50, mono
+    #[case(0, 100, 2, 100)] // Read 100 samples from offset 0, stereo
+    #[case(50, 50, 1, 50)] // Read 50 samples from offset 50, mono
     #[case(200, 200, 2, 200)] // Read 200 samples from offset 200, stereo
     #[timeout(Duration::from_secs(1))]
     #[tokio::test]
@@ -247,7 +251,7 @@ mod tests {
         mock_buffer
             .expect_read_samples()
             .times(1)
-            .returning(|_, _| 0);  // No data available
+            .returning(|_, _| 0); // No data available
 
         let source = PcmSource::new(mock_buffer, spec);
 
@@ -258,8 +262,8 @@ mod tests {
     }
 
     #[rstest]
-    #[case(Some(1000))]  // EOF reached, known length
-    #[case(None)]        // EOF not reached, unknown length
+    #[case(Some(1000))] // EOF reached, known length
+    #[case(None)] // EOF not reached, unknown length
     #[timeout(Duration::from_secs(1))]
     #[tokio::test]
     async fn test_len(#[case] expected_len: Option<u64>) {
@@ -270,7 +274,7 @@ mod tests {
         mock_buffer.expect_is_eof().return_const(is_eof);
 
         if is_eof {
-            let frames = expected_len.unwrap() / 2;  // samples / channels
+            let frames = expected_len.unwrap() / 2; // samples / channels
             mock_buffer.expect_frames_written().return_const(frames);
         }
 
@@ -280,7 +284,7 @@ mod tests {
     }
 
     #[rstest]
-    #[case(0, 100, 2, 50, true)]  // Range 0..100 samples, 50 frames available, stereo -> ready
+    #[case(0, 100, 2, 50, true)] // Range 0..100 samples, 50 frames available, stereo -> ready
     #[case(0, 200, 2, 50, false)] // Range 0..200 samples, only 50 frames, stereo -> wait
     #[case(0, 100, 1, 100, true)] // Range 0..100 samples, 100 frames, mono -> ready
     #[timeout(Duration::from_secs(2))]
@@ -307,10 +311,8 @@ mod tests {
 
         let source = PcmSource::new(mock_buffer, spec);
 
-        let result = tokio::time::timeout(
-            Duration::from_millis(100),
-            source.wait_range(start..end)
-        ).await;
+        let result =
+            tokio::time::timeout(Duration::from_millis(100), source.wait_range(start..end)).await;
 
         if should_be_ready {
             assert!(result.is_ok());

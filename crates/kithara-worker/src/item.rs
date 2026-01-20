@@ -48,7 +48,6 @@ impl<C> AsRef<C> for Fetch<C> {
     }
 }
 
-
 /// Generic trait for worker items.
 ///
 /// Allows different worker types to use different item metadata (e.g., with or without epochs).

@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 // Import AbrTestServer from kithara-hls fixture
-use crate::kithara_hls::fixture::abr::{master_playlist, AbrTestServer};
+use crate::kithara_hls::fixture::abr::{AbrTestServer, master_playlist};
 
 /// Test that ABR variant switch does not cause byte reading glitches.
 ///
@@ -71,7 +71,7 @@ async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error 
     let hls_params = HlsParams::default()
         .with_cancel(cancel_token.clone())
         .with_abr(AbrOptions {
-            mode: AbrMode::Auto(Some(0)), // Start with variant 0
+            mode: AbrMode::Auto(Some(0)),  // Start with variant 0
             min_buffer_for_up_switch: 1.0, // Low threshold for quick upswitch
             down_switch_buffer: 0.5,
             throughput_safety_factor: 1.2,
@@ -97,7 +97,10 @@ async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error 
                     to_variant,
                     ..
                 } => {
-                    info!("Variant switch detected: {} -> {}", from_variant, to_variant);
+                    info!(
+                        "Variant switch detected: {} -> {}",
+                        from_variant, to_variant
+                    );
                     variant_switches_clone
                         .lock()
                         .unwrap()
@@ -118,30 +121,40 @@ async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error 
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Read bytes in blocking thread
-    let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
-        let mut all_bytes = Vec::new();
-        let mut buffer = vec![0u8; 4096];
-        let mut total_reads = 0;
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+            let mut all_bytes = Vec::new();
+            let mut buffer = vec![0u8; 4096];
+            let mut total_reads = 0;
 
-        // Read all available bytes
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(n) if n > 0 => {
-                    total_reads += 1;
-                    tracing::debug!("Read {} bytes (read #{}, total so far: {})", n, total_reads, all_bytes.len() + n);
-                    all_bytes.extend_from_slice(&buffer[..n]);
+            // Read all available bytes
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(n) if n > 0 => {
+                        total_reads += 1;
+                        tracing::debug!(
+                            "Read {} bytes (read #{}, total so far: {})",
+                            n,
+                            total_reads,
+                            all_bytes.len() + n
+                        );
+                        all_bytes.extend_from_slice(&buffer[..n]);
+                    }
+                    Ok(_) => {
+                        tracing::debug!(
+                            "EOF reached after {} reads, total bytes: {}",
+                            total_reads,
+                            all_bytes.len()
+                        );
+                        break;
+                    }
+                    Err(e) => return Err(format!("Read error: {}", e).into()),
                 }
-                Ok(_) => {
-                    tracing::debug!("EOF reached after {} reads, total bytes: {}", total_reads, all_bytes.len());
-                    break;
-                }
-                Err(e) => return Err(format!("Read error: {}", e).into()),
             }
-        }
 
-        Ok(all_bytes)
-    })
-    .await??;
+            Ok(all_bytes)
+        })
+        .await??;
 
     info!("Read {} bytes total", result.len());
 
@@ -184,7 +197,7 @@ async fn test_basic_multi_segment_reading() -> Result<(), Box<dyn Error + Send +
 
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
-        false, // binary mode
+        false,                    // binary mode
         Duration::from_millis(1), // no delay
     )
     .await;
@@ -203,23 +216,24 @@ async fn test_basic_multi_segment_reading() -> Result<(), Box<dyn Error + Send +
     let source_arc = Arc::new(source);
     let mut reader = SourceReader::new(source_arc.clone());
 
-    let result = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
-        let mut all_bytes = Vec::new();
-        let mut buffer = vec![0u8; 4096];
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
+            let mut all_bytes = Vec::new();
+            let mut buffer = vec![0u8; 4096];
 
-        loop {
-            match reader.read(&mut buffer) {
-                Ok(n) if n > 0 => {
-                    all_bytes.extend_from_slice(&buffer[..n]);
+            loop {
+                match reader.read(&mut buffer) {
+                    Ok(n) if n > 0 => {
+                        all_bytes.extend_from_slice(&buffer[..n]);
+                    }
+                    Ok(_) => break,
+                    Err(e) => return Err(format!("Read error: {}", e).into()),
                 }
-                Ok(_) => break,
-                Err(e) => return Err(format!("Read error: {}", e).into()),
             }
-        }
 
-        Ok(all_bytes)
-    })
-    .await??;
+            Ok(all_bytes)
+        })
+        .await??;
 
     // Should have read all 3 segments from variant 0 (~600KB total)
     info!("Read {} bytes from variant 0", result.len());
@@ -256,7 +270,7 @@ async fn test_abr_variant_switch_with_seek_backward() -> Result<(), Box<dyn Erro
 
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
-        true, // text mode for parsing
+        true,                   // text mode for parsing
         Duration::from_secs(2), // slow variant 0 segment 0 to trigger ABR
     )
     .await;
@@ -305,40 +319,41 @@ async fn test_abr_variant_switch_with_seek_backward() -> Result<(), Box<dyn Erro
     // Give ABR time to trigger and load some segments
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let result = tokio::task::spawn_blocking(move || -> Result<(), Box<dyn Error + Send + Sync>> {
-        use std::io::SeekFrom;
+    let result =
+        tokio::task::spawn_blocking(move || -> Result<(), Box<dyn Error + Send + Sync>> {
+            use std::io::SeekFrom;
 
-        // Read some bytes to trigger ABR switch
-        let mut buffer = vec![0u8; 50000];
-        let n1 = reader.read(&mut buffer)?;
-        println!("Read {} bytes initially", n1);
+            // Read some bytes to trigger ABR switch
+            let mut buffer = vec![0u8; 50000];
+            let n1 = reader.read(&mut buffer)?;
+            println!("Read {} bytes initially", n1);
 
-        // Seek back to beginning - this should trigger loading earlier segments
-        // if ABR switched to a variant that only has later segments loaded
-        println!("Seeking back to offset 0");
-        reader.seek(SeekFrom::Start(0))?;
+            // Seek back to beginning - this should trigger loading earlier segments
+            // if ABR switched to a variant that only has later segments loaded
+            println!("Seeking back to offset 0");
+            reader.seek(SeekFrom::Start(0))?;
 
-        // Try to read from beginning again
-        let mut buffer2 = vec![0u8; 1000];
-        let n2 = reader.read(&mut buffer2)?;
-        println!("Read {} bytes after seek to 0", n2);
+            // Try to read from beginning again
+            let mut buffer2 = vec![0u8; 1000];
+            let n2 = reader.read(&mut buffer2)?;
+            println!("Read {} bytes after seek to 0", n2);
 
-        // Verify we read some data (not EOF)
-        assert!(n2 > 0, "Should be able to read after seeking to beginning");
+            // Verify we read some data (not EOF)
+            assert!(n2 > 0, "Should be able to read after seeking to beginning");
 
-        // Verify we're reading from segment 0 (should start with "V")
-        let data_str = String::from_utf8_lossy(&buffer2[..n2]);
-        assert!(
-            data_str.starts_with("V"),
-            "Should read segment data after seek, got: {}",
-            &data_str[..20.min(data_str.len())]
-        );
+            // Verify we're reading from segment 0 (should start with "V")
+            let data_str = String::from_utf8_lossy(&buffer2[..n2]);
+            assert!(
+                data_str.starts_with("V"),
+                "Should read segment data after seek, got: {}",
+                &data_str[..20.min(data_str.len())]
+            );
 
-        println!("Successfully read after seek backward");
+            println!("Successfully read after seek backward");
 
-        Ok(())
-    })
-    .await??;
+            Ok(())
+        })
+        .await??;
 
     // Check if ABR switch occurred
     let switches = variant_switches.lock().unwrap();

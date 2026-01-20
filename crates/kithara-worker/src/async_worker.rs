@@ -3,9 +3,11 @@
 use async_trait::async_trait;
 use tracing::trace;
 
-use crate::item::Fetch;
-use crate::result::WorkerResult;
-use crate::traits::{AsyncWorkerSource, Worker};
+use crate::{
+    item::Fetch,
+    result::{WorkerResult, WorkerResultExt},
+    traits::{AsyncWorkerSource, Worker},
+};
 
 /// Generic async worker that runs in a background task.
 ///
@@ -31,21 +33,20 @@ impl<S: AsyncWorkerSource> AsyncWorker<S> {
         }
     }
 
-    /// Drain all pending commands. Returns true if any command was processed.
-    fn drain_pending_commands(&mut self) -> bool {
-        let mut processed = false;
+    /// Drain all pending commands.
+    fn drain_pending_commands(&mut self) {
         while let Ok(Some(cmd)) = self.cmd_rx.try_recv() {
             let new_epoch = self.source.handle_command(cmd);
             trace!(epoch = new_epoch, "AsyncWorker: drained pending command");
-            processed = true;
         }
-        processed
     }
 
     /// Send an item through the channel, interruptible by commands.
-    /// Returns `(result, command_received)` where `command_received` indicates if a seek was processed.
-    async fn send_item(&mut self, fetch: Fetch<S::Chunk>) -> (WorkerResult, bool) {
+    /// Returns `WorkerResult::COMMAND_RECEIVED` if command was received and item was discarded.
+    /// Returns `WorkerResult::EOF` if the item was EOF.
+    async fn send_item(&mut self, fetch: Fetch<S::Chunk>) -> WorkerResult {
         let fetch_epoch = fetch.epoch();
+        let is_eof = fetch.is_eof();
 
         tokio::select! {
             biased;
@@ -56,16 +57,20 @@ impl<S: AsyncWorkerSource> AsyncWorker<S> {
                     Ok(cmd) => {
                         let new_epoch = self.source.handle_command(cmd);
                         trace!(old_epoch = fetch_epoch, new_epoch, "AsyncWorker: command during send, discarding chunk");
-                        (WorkerResult::Continue, true)
+                        WorkerResult::COMMAND_RECEIVED
                     }
-                    Err(_) => (WorkerResult::Stop, false), // Channel closed
+                    Err(_) => WorkerResult::STOP, // Channel closed
                 }
             }
             result = self.data_tx.send(fetch) => {
                 if result.is_ok() {
-                    (WorkerResult::Continue, false)
+                    if is_eof {
+                        WorkerResult::EOF
+                    } else {
+                        WorkerResult::CONTINUE
+                    }
                 } else {
-                    (WorkerResult::Stop, false)
+                    WorkerResult::STOP
                 }
             }
         }
@@ -75,13 +80,9 @@ impl<S: AsyncWorkerSource> AsyncWorker<S> {
     async fn run_worker(mut self) {
         trace!("AsyncWorker started");
 
-        let mut at_eof = false;
-
         loop {
-            // Drain any pending commands first (and reset EOF if command received)
-            if self.drain_pending_commands() {
-                at_eof = false;
-            }
+            // Drain any pending commands first
+            self.drain_pending_commands();
 
             tokio::select! {
                 biased;
@@ -92,14 +93,14 @@ impl<S: AsyncWorkerSource> AsyncWorker<S> {
                         Ok(cmd) => {
                             let new_epoch = self.source.handle_command(cmd);
                             trace!(epoch = new_epoch, "AsyncWorker: received command");
-                            at_eof = false; // Reset EOF state, will refetch
+                            // Continue loop to refetch with new position
                         }
                         Err(_) => break, // Channel closed
                     }
                 }
 
-                // Only fetch if not at EOF
-                fetch = self.source.fetch_next(), if !at_eof => {
+                // Fetch next chunk
+                fetch = self.source.fetch_next() => {
                     // Check if epoch changed while we were fetching
                     // This can happen if a command arrived between drain and fetch
                     if fetch.epoch() != self.source.epoch() {
@@ -111,24 +112,38 @@ impl<S: AsyncWorkerSource> AsyncWorker<S> {
                         continue; // Discard and refetch with new epoch
                     }
 
-                    let is_eof = fetch.is_eof();
-
-                    if is_eof {
+                    if fetch.is_eof() {
                         trace!(epoch = fetch.epoch(), "AsyncWorker: EOF reached");
                     }
 
-                    let (send_result, cmd_received) = self.send_item(fetch).await;
-                    if cmd_received {
-                        at_eof = false; // Reset EOF on command
-                    } else if is_eof {
-                        at_eof = true;
+                    let result = self.send_item(fetch).await;
+
+                    // Check priority: stop > eof > command_received > continue
+                    if result.is_stop() {
+                        break;
                     }
 
-                    match send_result {
-                        WorkerResult::Continue => {}
-                        WorkerResult::Stop => break,
-                        WorkerResult::Eof => unreachable!(),
+                    if result.is_eof() {
+                        // EOF reached, enter EOF-waiting mode
+                        trace!("AsyncWorker: entering EOF-waiting mode");
+                        #[allow(clippy::never_loop)]
+                        loop {
+                            match self.cmd_rx.recv().await {
+                                Ok(cmd) => {
+                                    let new_epoch = self.source.handle_command(cmd);
+                                    trace!(epoch = new_epoch, "AsyncWorker: command at EOF, resuming");
+                                    break; // Exit EOF loop, return to main loop
+                                }
+                                Err(_) => {
+                                    trace!("AsyncWorker: command channel closed at EOF");
+                                    return; // Exit worker
+                                }
+                            }
+                        }
                     }
+
+                    // is_command_received() and is_continue() are handled implicitly
+                    // (just continue the loop)
                 }
             }
         }

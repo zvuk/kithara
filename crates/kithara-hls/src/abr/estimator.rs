@@ -1,7 +1,7 @@
-use super::{AbrConfig, ThroughputSample, ThroughputSampleSource};
-
 #[cfg(test)]
 use mockall::automock;
+
+use super::{AbrConfig, ThroughputSample, ThroughputSampleSource};
 
 /// Trait for throughput estimation strategies.
 ///
@@ -160,7 +160,10 @@ mod tests {
         }
 
         let estimate = est.estimate_bps();
-        assert!(estimate.is_some(), "Should have estimate after network samples");
+        assert!(
+            estimate.is_some(),
+            "Should have estimate after network samples"
+        );
         assert!(
             estimate.unwrap() >= expected_min_bps,
             "Estimate should be at least {expected_min_bps}"
@@ -191,7 +194,10 @@ mod tests {
             source: ThroughputSampleSource::Network,
         });
 
-        assert!(est.estimate_bps().is_some(), "Large chunks should be counted");
+        assert!(
+            est.estimate_bps().is_some(),
+            "Large chunks should be counted"
+        );
     }
 
     #[test]
@@ -211,7 +217,10 @@ mod tests {
         let estimate = est.estimate_bps();
         assert!(estimate.is_some(), "Should still produce estimate");
         // With clamped duration, throughput should be very high
-        assert!(estimate.unwrap() > 1_000_000, "Clamped duration should yield high throughput");
+        assert!(
+            estimate.unwrap() > 1_000_000,
+            "Clamped duration should yield high throughput"
+        );
     }
 
     #[test]

@@ -3,8 +3,9 @@
 //! Tests that DecodeSource correctly reads all chunks from the inner decoder
 //! without resampling interference.
 
-use kithara_decode::{DecodeResult, Decoder, PcmChunk, PcmSpec, Pipeline};
 use std::time::Duration;
+
+use kithara_decode::{DecodeResult, Decoder, PcmChunk, PcmSpec, Pipeline};
 
 /// Simple mock decoder that generates N chunks with predictable data.
 ///
@@ -109,9 +110,7 @@ mod tests {
         let decoder = SimpleMockDecoder::new(spec, TOTAL_CHUNKS);
 
         // Create Pipeline with decoder (no resampling - source_rate == target_rate)
-        let pipeline = Pipeline::with_decoder(decoder, spec, 44100)
-            .await
-            .unwrap();
+        let pipeline = Pipeline::with_decoder(decoder, spec, 44100).await.unwrap();
 
         // Give pipeline time to process all chunks
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -126,10 +125,7 @@ mod tests {
             // Try to receive next chunk with timeout
             let async_rx = sample_rx.as_async();
 
-            let result = tokio::time::timeout(read_timeout, async {
-                async_rx.recv().await
-            })
-            .await;
+            let result = tokio::time::timeout(read_timeout, async { async_rx.recv().await }).await;
 
             match result {
                 Ok(Ok(chunk)) => {

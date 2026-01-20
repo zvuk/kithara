@@ -76,7 +76,11 @@ impl<S: SourceFactory> Source for StreamSource<S> {
         self.inner.wait_range(range).await
     }
 
-    async fn read_at(&self, offset: u64, buf: &mut [Self::Item]) -> StreamResult<usize, Self::Error> {
+    async fn read_at(
+        &self,
+        offset: u64,
+        buf: &mut [Self::Item],
+    ) -> StreamResult<usize, Self::Error> {
         self.inner.read_at(offset, buf).await
     }
 

@@ -17,7 +17,7 @@ use tokio::task::JoinHandle;
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    Decoder, DecodeError, DecodeResult, PcmChunk, PcmSpec, SymphoniaDecoder,
+    DecodeError, DecodeResult, Decoder, PcmChunk, PcmSpec, SymphoniaDecoder,
     resampler::ResamplerProcessor,
 };
 
@@ -192,10 +192,7 @@ impl Pipeline<SymphoniaDecoder> {
     /// The pipeline will decode and resample audio to the target sample rate.
     ///
     /// For custom decoders (e.g., MockDecoder in tests), use `Pipeline::with_decoder()`.
-    pub async fn open<S>(
-        source: Arc<S>,
-        target_sample_rate: u32,
-    ) -> DecodeResult<Self>
+    pub async fn open<S>(source: Arc<S>, target_sample_rate: u32) -> DecodeResult<Self>
     where
         S: Source<Item = u8>,
     {
@@ -264,10 +261,7 @@ impl Pipeline<SymphoniaDecoder> {
         let buffer_clone = buffer.clone();
         let task_handle = tokio::spawn(async move {
             debug!("SyncWorker starting");
-            let (_, _) = tokio::join!(
-                worker.run(),
-                run_consumer_async(data_rx, buffer_clone)
-            );
+            let (_, _) = tokio::join!(worker.run(), run_consumer_async(data_rx, buffer_clone));
             debug!("SyncWorker finished");
         });
 
@@ -334,10 +328,7 @@ impl<D: Decoder> Pipeline<D> {
         let buffer_clone = buffer.clone();
         let task_handle = tokio::spawn(async move {
             debug!("SyncWorker starting");
-            let (_, _) = tokio::join!(
-                worker.run(),
-                run_consumer_async(data_rx, buffer_clone)
-            );
+            let (_, _) = tokio::join!(worker.run(), run_consumer_async(data_rx, buffer_clone));
             debug!("SyncWorker finished");
         });
 
@@ -606,10 +597,12 @@ async fn run_consumer_async(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use rstest::*;
+
     use super::*;
     use crate::types::PcmChunk;
-    use rstest::*;
-    use std::time::Duration;
 
     /// Simple mock decoder for testing.
     struct MockDecoder {
@@ -1066,4 +1059,3 @@ mod tests {
         assert!((read_buf[0] - 0.8f32).abs() < 1e-6);
     }
 }
-

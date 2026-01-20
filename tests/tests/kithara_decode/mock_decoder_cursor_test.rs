@@ -4,9 +4,9 @@
 
 use std::io::Cursor;
 
-use super::mock_decoder::MockDecoder;
-
 use kithara_decode::{Decoder, PcmSpec};
+
+use super::mock_decoder::MockDecoder;
 
 /// Helper: create binary segment data
 fn make_segment(variant: u8, segment: u32, data_len: usize) -> Vec<u8> {
@@ -71,5 +71,8 @@ fn test_mock_decoder_reads_all_segments_from_cursor() {
         TOTAL_SEGMENTS, chunks_read
     );
 
-    println!("✅ MockDecoder correctly read all {} segments from Cursor!", TOTAL_SEGMENTS);
+    println!(
+        "✅ MockDecoder correctly read all {} segments from Cursor!",
+        TOTAL_SEGMENTS
+    );
 }

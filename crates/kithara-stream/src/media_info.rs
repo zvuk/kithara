@@ -234,10 +234,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case(1)]   // Mono
-    #[case(2)]   // Stereo
-    #[case(6)]   // 5.1 surround
-    #[case(8)]   // 7.1 surround
+    #[case(1)] // Mono
+    #[case(2)] // Stereo
+    #[case(6)] // 5.1 surround
+    #[case(8)] // 7.1 surround
     fn test_media_info_with_channels(#[case] channels: u16) {
         let info = MediaInfo::new().with_channels(channels);
         assert_eq!(info.container, None);

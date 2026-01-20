@@ -218,9 +218,14 @@ impl RetryPolicyTrait for DefaultRetryPolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    };
+
     use rstest::*;
-    use std::sync::{Arc, atomic::{AtomicU32, Ordering}};
+
+    use super::*;
 
     /// Mock Net implementation for testing
     struct MockNet {
@@ -254,7 +259,11 @@ mod tests {
             }
         }
 
-        async fn stream(&self, _url: Url, _headers: Option<Headers>) -> Result<ByteStream, NetError> {
+        async fn stream(
+            &self,
+            _url: Url,
+            _headers: Option<Headers>,
+        ) -> Result<ByteStream, NetError> {
             let call = self.call_count.fetch_add(1, Ordering::SeqCst);
             if call < self.fail_until {
                 Err(self.error.clone())
@@ -264,7 +273,12 @@ mod tests {
             }
         }
 
-        async fn get_range(&self, _url: Url, _range: RangeSpec, _headers: Option<Headers>) -> Result<ByteStream, NetError> {
+        async fn get_range(
+            &self,
+            _url: Url,
+            _range: RangeSpec,
+            _headers: Option<Headers>,
+        ) -> Result<ByteStream, NetError> {
             let call = self.call_count.fetch_add(1, Ordering::SeqCst);
             if call < self.fail_until {
                 Err(self.error.clone())

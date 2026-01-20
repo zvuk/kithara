@@ -268,7 +268,10 @@ mod tests {
         // If valid, check normalization worked
         if is_valid {
             let normalized = result.unwrap();
-            assert!(!normalized.contains('\\'), "Backslashes should be normalized");
+            assert!(
+                !normalized.contains('\\'),
+                "Backslashes should be normalized"
+            );
         }
     }
 }

@@ -3,11 +3,10 @@
 use async_trait::async_trait;
 use tracing::trace;
 
-use crate::item::Fetch;
-use crate::traits::{SyncWorkerSource, Worker};
-
-// Re-export for backwards compatibility
-use crate::item::SimpleItem;
+use crate::{
+    item::Fetch,
+    traits::{SyncWorkerSource, Worker},
+};
 
 /// Blocking worker for synchronous sources.
 ///

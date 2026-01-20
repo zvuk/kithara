@@ -19,8 +19,10 @@ use tokio::{net::TcpListener, sync::broadcast};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::basestream::build_basestream_with_events;
-use super::fixture::{TestAssets, assets_fixture, net_fixture, test_init_data};
+use super::{
+    basestream::build_basestream_with_events,
+    fixture::{TestAssets, assets_fixture, net_fixture, test_init_data},
+};
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]

@@ -1,9 +1,9 @@
 //! Traits for testability and abstraction.
 
-use crate::PcmSpec;
-
 #[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
+
+use crate::PcmSpec;
 
 /// Trait for PCM buffer abstraction.
 ///

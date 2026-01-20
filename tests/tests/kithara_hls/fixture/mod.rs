@@ -15,9 +15,8 @@ pub mod server;
 pub use abr::*;
 pub use assets::*;
 pub use crypto::*;
-pub use server::*;
-
 // Common types
 use kithara_hls::HlsError;
+pub use server::*;
 
 pub type HlsResult<T> = Result<T, HlsError>;

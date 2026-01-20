@@ -149,11 +149,7 @@ impl<N: Net> FetchManager<N> {
     }
 
     /// Download URL to streaming resource (no spawn, runs in current task).
-    async fn download_to_resource<TNet: Net>(
-        net: &TNet,
-        url: &Url,
-        res: &StreamingAssetResource,
-    ) {
+    async fn download_to_resource<TNet: Net>(net: &TNet, url: &Url, res: &StreamingAssetResource) {
         let start_time = Instant::now();
         trace!(url = %url, "kithara-hls segment download: START");
 
@@ -260,12 +256,13 @@ pub type DefaultFetchManager = FetchManager<HttpClient>;
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bytes::Bytes;
     use kithara_assets::AssetStoreBuilder;
     use kithara_net::MockNet;
     use tempfile::TempDir;
     use url::Url;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_fetch_playlist_with_mock_net() {
@@ -351,9 +348,7 @@ mod tests {
 
         let fetch_manager = FetchManager::with_net(assets, mock_net);
 
-        let result: HlsResult<Bytes> = fetch_manager
-            .fetch_key(&test_url, "key.bin", None)
-            .await;
+        let result: HlsResult<Bytes> = fetch_manager.fetch_key(&test_url, "key.bin", None).await;
 
         assert!(result.is_ok());
         let bytes = result.unwrap();
@@ -422,9 +417,7 @@ mod tests {
         assert!(master.is_ok());
 
         let media_url = Url::parse("http://example.com/v0.m3u8").unwrap();
-        let media: HlsResult<Bytes> = fetch_manager
-            .fetch_playlist(&media_url, "v0.m3u8")
-            .await;
+        let media: HlsResult<Bytes> = fetch_manager.fetch_playlist(&media_url, "v0.m3u8").await;
         assert!(media.is_ok());
     }
 
@@ -454,8 +447,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_matcher_headers_matching() {
-        use kithara_net::Headers;
         use std::collections::HashMap;
+
+        use kithara_net::Headers;
 
         let temp_dir = TempDir::new().unwrap();
         let assets = AssetStoreBuilder::new()

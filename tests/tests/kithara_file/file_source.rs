@@ -95,14 +95,18 @@ async fn stream_source_file_read_at_works(#[future] test_server: String, temp_di
 
     // Read from middle
     let mut buf = [0u8; 5];
-    let n = Source::read_at(source.as_ref(), 13, &mut buf).await.unwrap();
+    let n = Source::read_at(source.as_ref(), 13, &mut buf)
+        .await
+        .unwrap();
     assert_eq!(n, 5);
     assert_eq!(&buf, b"Audio");
 
     // Read at end
     let len = Source::len(source.as_ref()).unwrap();
     let mut buf = [0u8; 10];
-    let n = Source::read_at(source.as_ref(), len, &mut buf).await.unwrap();
+    let n = Source::read_at(source.as_ref(), len, &mut buf)
+        .await
+        .unwrap();
     assert_eq!(n, 0); // EOF
 }
 

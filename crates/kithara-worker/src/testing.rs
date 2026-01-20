@@ -29,8 +29,10 @@
 
 use async_trait::async_trait;
 
-use crate::item::Fetch;
-use crate::traits::{AsyncWorkerSource, SyncWorkerSource};
+use crate::{
+    item::Fetch,
+    traits::{AsyncWorkerSource, SyncWorkerSource},
+};
 
 /// Simple seek command with offset and epoch.
 #[derive(Debug, Clone, Copy)]
@@ -116,9 +118,7 @@ impl MockSyncSource {
 
     /// Create a mock source with N chunks of given size.
     pub fn with_count(chunk_size: usize, count: usize) -> Self {
-        let items = (0..count)
-            .map(|i| vec![i as u8; chunk_size])
-            .collect();
+        let items = (0..count).map(|i| vec![i as u8; chunk_size]).collect();
         Self::new(items)
     }
 }

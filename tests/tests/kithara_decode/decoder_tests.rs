@@ -4,12 +4,12 @@
 
 use std::io::Cursor;
 
+use fixture::EmbeddedAudio;
 use kithara_decode::SymphoniaDecoder;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use rstest::{fixture, rstest};
 
 use super::fixture;
-use fixture::EmbeddedAudio;
 
 // ==================== Fixtures ====================
 

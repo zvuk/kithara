@@ -121,8 +121,9 @@ impl Default for NetOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use rstest::*;
+
+    use super::*;
 
     // Headers tests
     #[rstest]

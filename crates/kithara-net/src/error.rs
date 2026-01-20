@@ -64,7 +64,7 @@ impl NetError {
                 http_err_str.contains("connection") ||
                 http_err_str.contains("network") ||
                 http_err_str.contains("decoding") ||  // Body decode errors
-                http_err_str.contains("body")         // Body read errors
+                http_err_str.contains("body") // Body read errors
             }
             NetError::Timeout => true,
             NetError::RetryExhausted { .. } => false,
@@ -98,9 +98,11 @@ impl From<ReqwestError> for NetError {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rstest::*;
     use std::time::Duration;
+
+    use rstest::*;
+
+    use super::*;
 
     // Test error creation methods
     #[rstest]
