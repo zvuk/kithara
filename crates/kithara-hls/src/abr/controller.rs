@@ -448,4 +448,90 @@ mod tests {
 
         // Mockall automatically verifies estimator was called exactly once
     }
+
+    #[test]
+    fn test_abr_sequence_estimate_then_push() {
+        use mockall::Sequence;
+
+        let cfg = AbrConfig {
+            mode: crate::options::AbrMode::Auto(Some(1)),
+            min_switch_interval: Duration::ZERO,
+            ..AbrConfig::default()
+        };
+
+        let mut seq = Sequence::new();
+        let mut mock_estimator = MockEstimator::new();
+
+        // Verify sequence: estimate → push_sample → estimate
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|| Some(1_000_000));
+
+        mock_estimator
+            .expect_push_sample()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_const(());
+
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|| Some(2_000_000));
+
+        let mut c = AbrController::with_estimator(cfg, mock_estimator, None);
+        let now = Instant::now();
+
+        c.decide(&variants(), 5.0, now);
+
+        c.push_throughput_sample(ThroughputSample {
+            bytes: 1_000_000 / 8,
+            duration: Duration::from_secs(1),
+            at: now,
+            source: super::super::ThroughputSampleSource::Network,
+        });
+
+        c.decide(&variants(), 5.0, now);
+    }
+
+    #[test]
+    fn test_abr_sequence_multiple_decisions() {
+        use mockall::Sequence;
+
+        let cfg = AbrConfig {
+            mode: crate::options::AbrMode::Auto(Some(0)),
+            min_switch_interval: Duration::ZERO,
+            ..AbrConfig::default()
+        };
+
+        let mut seq = Sequence::new();
+        let mut mock_estimator = MockEstimator::new();
+
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|| Some(500_000));
+
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|| Some(1_500_000));
+
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|| Some(3_000_000));
+
+        let c = AbrController::with_estimator(cfg, mock_estimator, None);
+        let now = Instant::now();
+
+        c.decide(&variants(), 10.0, now);
+        c.decide(&variants(), 10.0, now);
+        c.decide(&variants(), 10.0, now);
+    }
 }
