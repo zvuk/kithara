@@ -96,3 +96,265 @@ impl PinsIndex {
         Ok(pins.contains(asset_root))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashSet, time::Duration};
+
+    use kithara_storage::AtomicOptions;
+    use rstest::*;
+    use tempfile::TempDir;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+
+    // Helper to create AtomicResource for tests
+    fn create_test_resource(dir: &TempDir) -> AtomicResource {
+        let path = dir.path().join("pins.json");
+        AtomicResource::open(AtomicOptions {
+            path,
+            cancel: CancellationToken::new(),
+        })
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_pins_index_new() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+
+        let index = PinsIndex::new(res);
+
+        // Index created successfully, load should return empty set
+        let pins = index.load().await.unwrap();
+        assert!(pins.is_empty());
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_load_empty_resource() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+        let index = PinsIndex::new(res);
+
+        let pins = index.load().await.unwrap();
+
+        assert!(pins.is_empty());
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_load_invalid_json() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+
+        // Write invalid JSON
+        res.write(b"not valid json").await.unwrap();
+
+        let index = PinsIndex::new(res);
+        let pins = index.load().await.unwrap();
+
+        // Should return empty set on invalid JSON (best-effort)
+        assert!(pins.is_empty());
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_store_and_load() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+        let index = PinsIndex::new(res);
+
+        let mut pins = HashSet::new();
+        pins.insert("asset1".to_string());
+        pins.insert("asset2".to_string());
+
+        index.store(&pins).await.unwrap();
+
+        let loaded = index.load().await.unwrap();
+        assert_eq!(loaded.len(), 2);
+        assert!(loaded.contains("asset1"));
+        assert!(loaded.contains("asset2"));
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_insert_single_asset() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+        let index = PinsIndex::new(res);
+
+        index.insert("my-asset").await.unwrap();
+
+        let pins = index.load().await.unwrap();
+        assert_eq!(pins.len(), 1);
+        assert!(pins.contains("my-asset"));
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_insert_multiple_assets() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+        let index = PinsIndex::new(res);
+
+        index.insert("asset1").await.unwrap();
+        index.insert("asset2").await.unwrap();
+        index.insert("asset3").await.unwrap();
+
+        let pins = index.load().await.unwrap();
+        assert_eq!(pins.len(), 3);
+        assert!(pins.contains("asset1"));
+        assert!(pins.contains("asset2"));
+        assert!(pins.contains("asset3"));
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_insert_duplicate() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+        let index = PinsIndex::new(res);
+
+        index.insert("asset").await.unwrap();
+        index.insert("asset").await.unwrap(); // Duplicate
+
+        let pins = index.load().await.unwrap();
+        assert_eq!(pins.len(), 1); // HashSet deduplicates
+        assert!(pins.contains("asset"));
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_remove_existing_asset() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+        let index = PinsIndex::new(res);
+
+        index.insert("asset1").await.unwrap();
+        index.insert("asset2").await.unwrap();
+
+        index.remove("asset1").await.unwrap();
+
+        let pins = index.load().await.unwrap();
+        assert_eq!(pins.len(), 1);
+        assert!(!pins.contains("asset1"));
+        assert!(pins.contains("asset2"));
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_remove_nonexistent_asset() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+        let index = PinsIndex::new(res);
+
+        index.insert("asset1").await.unwrap();
+
+        // Remove non-existent asset (should not error)
+        index.remove("nonexistent").await.unwrap();
+
+        let pins = index.load().await.unwrap();
+        assert_eq!(pins.len(), 1);
+        assert!(pins.contains("asset1"));
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_contains_true() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+        let index = PinsIndex::new(res);
+
+        index.insert("my-asset").await.unwrap();
+
+        let contains = index.contains("my-asset").await.unwrap();
+        assert!(contains);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_contains_false() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+        let index = PinsIndex::new(res);
+
+        index.insert("asset1").await.unwrap();
+
+        let contains = index.contains("asset2").await.unwrap();
+        assert!(!contains);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_contains_empty_index() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+        let index = PinsIndex::new(res);
+
+        let contains = index.contains("anything").await.unwrap();
+        assert!(!contains);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_persistence_across_instances() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join("pins.json");
+
+        // First instance
+        {
+            let res = AtomicResource::open(AtomicOptions {
+                path: path.clone(),
+                cancel: CancellationToken::new(),
+            });
+            let index = PinsIndex::new(res);
+            index.insert("persisted-asset").await.unwrap();
+        }
+
+        // Second instance (new resource, same path)
+        {
+            let res = AtomicResource::open(AtomicOptions {
+                path,
+                cancel: CancellationToken::new(),
+            });
+            let index = PinsIndex::new(res);
+
+            let pins = index.load().await.unwrap();
+            assert_eq!(pins.len(), 1);
+            assert!(pins.contains("persisted-asset"));
+        }
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[tokio::test]
+    async fn test_pins_index_file_format() {
+        let temp_dir = TempDir::new().unwrap();
+        let res = create_test_resource(&temp_dir);
+        let index = PinsIndex::new(res.clone());
+
+        index.insert("asset").await.unwrap();
+
+        // Read raw bytes and parse
+        let bytes = res.read().await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+
+        assert_eq!(json["version"], 1);
+        assert!(json["pinned"].is_array());
+        assert_eq!(json["pinned"].as_array().unwrap().len(), 1);
+    }
+}

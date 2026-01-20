@@ -279,3 +279,129 @@ where
         self.cache.clear();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use kithara_storage::StreamingResource;
+    use tempfile::tempdir;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+
+    /// Simple mock streaming resource for testing.
+    async fn mock_resource(content: &[u8]) -> StreamingResource {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("test.bin");
+        let cancel = CancellationToken::new();
+
+        let res = StreamingResource::open_disk(kithara_storage::DiskOptions {
+            path,
+            cancel,
+            initial_len: None,
+        })
+        .await
+        .unwrap();
+        res.write(content).await.unwrap();
+        res.commit(Some(content.len() as u64)).await.unwrap();
+        res
+    }
+
+    #[tokio::test]
+    async fn test_process_fn_called_once() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = Arc::clone(&call_count);
+
+        let process_fn: ProcessFn<()> = Arc::new(move |data, _ctx| {
+            let count = Arc::clone(&count_clone);
+            Box::pin(async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(data)
+            })
+        });
+
+        let resource = mock_resource(b"test content").await;
+        let processed = ProcessedResource::new(resource, (), process_fn);
+
+        // First read - should call process_fn
+        let result1 = processed.read().await.unwrap();
+        assert_eq!(result1.as_ref(), b"test content");
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "First read should call process_fn"
+        );
+
+        // Second read - should NOT call process_fn (cached)
+        let result2 = processed.read().await.unwrap();
+        assert_eq!(result2.as_ref(), b"test content");
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "Second read should use cached result"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_fn_called_once_via_read_at() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = Arc::clone(&call_count);
+
+        let process_fn: ProcessFn<()> = Arc::new(move |data, _ctx| {
+            let count = Arc::clone(&count_clone);
+            Box::pin(async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                Ok(data)
+            })
+        });
+
+        let resource = mock_resource(b"test content").await;
+        let processed = ProcessedResource::new(resource, (), process_fn);
+
+        // First read_at - should call process_fn
+        let mut buf1 = vec![0u8; 4];
+        let n1 = processed.read_at(0, &mut buf1).await.unwrap();
+        assert_eq!(n1, 4);
+        assert_eq!(&buf1, b"test");
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "First read_at should call process_fn"
+        );
+
+        // Second read_at - should NOT call process_fn (cached)
+        let mut buf2 = vec![0u8; 7];
+        let n2 = processed.read_at(5, &mut buf2).await.unwrap();
+        assert_eq!(n2, 7);
+        assert_eq!(&buf2, b"content");
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "Second read_at should use cached result"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_process_fn_transformation() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let count_clone = Arc::clone(&call_count);
+
+        // Process function that uppercases the content
+        let process_fn: ProcessFn<()> = Arc::new(move |data, _ctx| {
+            let count = Arc::clone(&count_clone);
+            Box::pin(async move {
+                count.fetch_add(1, Ordering::SeqCst);
+                let upper: Vec<u8> = data.iter().map(|b| b.to_ascii_uppercase()).collect();
+                Ok(Bytes::from(upper))
+            })
+        });
+
+        let resource = mock_resource(b"hello").await;
+        let processed = ProcessedResource::new(resource, (), process_fn);
+
+        let result = processed.read().await.unwrap();
+        assert_eq!(result.as_ref(), b"HELLO");
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+    }
+}

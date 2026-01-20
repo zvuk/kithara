@@ -36,6 +36,8 @@ pub mod options;
 #[doc(hidden)]
 pub mod fetch;
 #[doc(hidden)]
+pub mod index;
+#[doc(hidden)]
 pub mod keys;
 #[doc(hidden)]
 pub mod playlist;
@@ -44,7 +46,6 @@ pub mod stream;
 
 // Private modules
 mod adapter;
-mod index;
 mod parsing;
 mod source;
 

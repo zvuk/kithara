@@ -27,6 +27,7 @@ rodio = ["dep:rodio"]
 
 [dev-dependencies]
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 axum = { workspace = true }
 bytes = { workspace = true }
 reqwest = { workspace = true }
@@ -35,10 +36,15 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
+kithara-assets = { workspace = true }
+kithara-net = { workspace = true }
 tempfile = { workspace = true }
 rodio = { workspace = true }
 async-trait = { workspace = true }
 rstest = { workspace = true }
+aes = { workspace = true }
+cbc = { workspace = true }
+mockall = { workspace = true }
 
 [[example]]
 name = "file_decode"

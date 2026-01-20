@@ -3,11 +3,20 @@ name = "kithara-worker"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+test-utils = ["mockall"]
+
 [dependencies]
+async-trait = { workspace = true }
+bitflags = { workspace = true }
 futures = { workspace = true }
 kanal = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
+kithara-worker = { path = ".", features = ["test-utils"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+mockall = { workspace = true }
+rstest = { workspace = true }

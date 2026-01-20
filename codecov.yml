@@ -1,0 +1,59 @@
+# Codecov configuration
+# https://docs.codecov.com/docs/codecov-yaml
+
+coverage:
+  status:
+    # Project-wide coverage
+    project:
+      default:
+        target: 80%           # Minimum target coverage
+        threshold: 2%         # Allowable drop before failure
+        base: auto            # Compare against base branch
+
+    # Coverage for new changes (patches/PRs)
+    patch:
+      default:
+        target: 70%           # Coverage for new code
+        threshold: 5%         # More lenient for patches
+
+  # Precision for coverage percentages
+  precision: 2
+  round: down
+
+# Ignore paths (don't count toward coverage)
+ignore:
+  - "tests/**/*"              # Integration tests
+  - "examples/**/*"           # Examples
+  - "benches/**/*"            # Benchmarks
+  - "**/tests.rs"             # Test modules
+  - "**/tests/**"             # Nested test directories
+
+# Comment behavior on PRs
+comment:
+  layout: "reach, diff, flags, files"
+  behavior: default
+  require_changes: false
+  after_n_builds: 1
+
+# Flags for different test types
+flags:
+  unit:
+    paths:
+      - src/
+    carryforward: true
+
+  integration:
+    paths:
+      - tests/
+    carryforward: true
+
+# GitHub Checks integration
+github_checks:
+  annotations: true
+
+# Codecov UI settings
+ui:
+  hide_density: false
+  hide_complexity: false
+  hide_branch_rate: false
+  hide_sunburst: false

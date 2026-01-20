@@ -521,3 +521,512 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for Streamin
         None
     }
 }
+
+// Implement generic Decoder trait for SymphoniaDecoder
+impl crate::Decoder for SymphoniaDecoder {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+        self.next_chunk()
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+
+    use rstest::*;
+
+    use super::*;
+
+    /// Create minimal valid WAV file (PCM 16-bit stereo, 44100Hz)
+    fn create_test_wav(sample_count: usize, sample_rate: u32, channels: u16) -> Vec<u8> {
+        let bytes_per_sample = 2; // 16-bit = 2 bytes
+        let data_size = (sample_count * channels as usize * bytes_per_sample) as u32;
+        let file_size = 36 + data_size;
+
+        let mut wav = Vec::new();
+
+        // RIFF header
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&file_size.to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+
+        // fmt chunk
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes()); // chunk size
+        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM format
+        wav.extend_from_slice(&channels.to_le_bytes());
+        wav.extend_from_slice(&sample_rate.to_le_bytes());
+        let byte_rate = sample_rate * channels as u32 * bytes_per_sample as u32;
+        wav.extend_from_slice(&byte_rate.to_le_bytes());
+        let block_align = channels * bytes_per_sample as u16;
+        wav.extend_from_slice(&block_align.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+
+        // data chunk
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&data_size.to_le_bytes());
+
+        // Generate simple sine wave samples
+        for i in 0..sample_count {
+            let sample = ((i as f32 * 0.1).sin() * 32767.0) as i16;
+            for _ in 0..channels {
+                wav.extend_from_slice(&sample.to_le_bytes());
+            }
+        }
+
+        wav
+    }
+
+    /// Create minimal corrupted WAV (invalid header)
+    fn create_corrupted_wav() -> Vec<u8> {
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&100u32.to_le_bytes());
+        wav.extend_from_slice(b"CORR"); // Invalid WAVE signature
+        wav
+    }
+
+    // ========================================================================
+    // Constructor Tests
+    // ========================================================================
+
+    #[rstest]
+    #[case(100, 44100, 2, "44100Hz stereo")]
+    #[case(100, 48000, 2, "48000Hz stereo")]
+    #[case(100, 44100, 1, "44100Hz mono")]
+    fn test_new_with_probe_wav(
+        #[case] sample_count: usize,
+        #[case] sample_rate: u32,
+        #[case] channels: u16,
+        #[case] _desc: &str,
+    ) {
+        let wav_data = create_test_wav(sample_count, sample_rate, channels);
+        let cursor = Cursor::new(wav_data);
+
+        let decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        assert_eq!(decoder.spec().sample_rate, sample_rate);
+        assert_eq!(decoder.spec().channels, channels);
+    }
+
+    #[test]
+    fn test_new_with_probe_no_hint() {
+        let wav_data = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        let decoder = SymphoniaDecoder::new_with_probe(cursor, None).unwrap();
+
+        assert_eq!(decoder.spec().sample_rate, 44100);
+        assert_eq!(decoder.spec().channels, 2);
+    }
+
+    #[test]
+    fn test_new_with_probe_corrupted() {
+        let corrupted = create_corrupted_wav();
+        let cursor = Cursor::new(corrupted);
+
+        let result = SymphoniaDecoder::new_with_probe(cursor, Some("wav"));
+
+        assert!(result.is_err());
+        match result {
+            Err(DecodeError::Symphonia(_)) => {}
+            _ => panic!("Expected Symphonia error"),
+        }
+    }
+
+    #[test]
+    fn test_new_with_probe_empty() {
+        let empty = Vec::new();
+        let cursor = Cursor::new(empty);
+
+        let result = SymphoniaDecoder::new_with_probe(cursor, Some("wav"));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_new_from_media_info_wav() {
+        let wav_data = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        let media_info = MediaInfo::new()
+            .with_container(ContainerFormat::Wav)
+            .with_sample_rate(44100)
+            .with_channels(2);
+
+        let decoder = SymphoniaDecoder::new_from_media_info(cursor, &media_info, false).unwrap();
+
+        assert_eq!(decoder.spec().sample_rate, 44100);
+        assert_eq!(decoder.spec().channels, 2);
+    }
+
+    // ========================================================================
+    // Decode Tests
+    // ========================================================================
+
+    #[rstest]
+    #[case(100, 44100, 2)]
+    #[case(200, 48000, 1)]
+    #[case(50, 96000, 2)]
+    fn test_next_chunk_basic(
+        #[case] sample_count: usize,
+        #[case] sample_rate: u32,
+        #[case] channels: u16,
+    ) {
+        let wav_data = create_test_wav(sample_count, sample_rate, channels);
+        let cursor = Cursor::new(wav_data);
+
+        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        let chunk = decoder.next_chunk().unwrap();
+        assert!(chunk.is_some());
+
+        let chunk = chunk.unwrap();
+        assert_eq!(chunk.spec.sample_rate, sample_rate);
+        assert_eq!(chunk.spec.channels, channels);
+        assert!(!chunk.pcm.is_empty());
+    }
+
+    #[test]
+    fn test_next_chunk_eof() {
+        let wav_data = create_test_wav(10, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        // Read all chunks
+        while let Some(_) = decoder.next_chunk().unwrap() {}
+
+        // Next call should return None (EOF)
+        let result = decoder.next_chunk().unwrap();
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_next_chunk_multiple() {
+        let wav_data = create_test_wav(1000, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        let mut chunk_count = 0;
+        let mut total_samples = 0;
+
+        while let Some(chunk) = decoder.next_chunk().unwrap() {
+            chunk_count += 1;
+            total_samples += chunk.pcm.len();
+        }
+
+        assert!(chunk_count > 0);
+        assert!(total_samples > 0);
+    }
+
+    // ========================================================================
+    // Spec Tests
+    // ========================================================================
+
+    #[rstest]
+    #[case(44100, 2)]
+    #[case(48000, 1)]
+    #[case(96000, 6)]
+    fn test_spec(#[case] sample_rate: u32, #[case] channels: u16) {
+        let wav_data = create_test_wav(100, sample_rate, channels);
+        let cursor = Cursor::new(wav_data);
+
+        let decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        let spec = decoder.spec();
+        assert_eq!(spec.sample_rate, sample_rate);
+        assert_eq!(spec.channels, channels);
+    }
+
+    // ========================================================================
+    // Codec Params Tests
+    // ========================================================================
+
+    #[test]
+    fn test_codec_params() {
+        let wav_data = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        let decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        let params = decoder.codec_params();
+        assert!(params.is_some());
+
+        let params = params.unwrap();
+        assert_eq!(params.sample_rate, Some(44100));
+    }
+
+    // ========================================================================
+    // Reset Tests
+    // ========================================================================
+
+    #[test]
+    fn test_reset() {
+        let wav_data = create_test_wav(1000, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        // Read one chunk
+        let _ = decoder.next_chunk().unwrap();
+
+        // Reset should not fail (clears decoder state, but doesn't seek)
+        decoder.reset();
+
+        // After reset without seek, can still decode remaining data
+        // (reset is typically used after seek, not standalone)
+    }
+
+    #[test]
+    fn test_seek_and_reset() {
+        let wav_data = create_test_wav(10000, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        // Read some chunks
+        let _ = decoder.next_chunk().unwrap();
+        let _ = decoder.next_chunk().unwrap();
+
+        // Seek to beginning
+        decoder.seek(Duration::from_secs(0)).unwrap();
+
+        // After seek, should be able to read from start again
+        let chunk = decoder.next_chunk().unwrap();
+        assert!(chunk.is_some());
+    }
+
+    // ========================================================================
+    // Seek Tests
+    // ========================================================================
+
+    #[rstest]
+    #[case(Duration::from_secs(0))]
+    #[case(Duration::from_millis(100))]
+    #[case(Duration::from_millis(500))]
+    fn test_seek_positions(#[case] pos: Duration) {
+        let wav_data = create_test_wav(44100, 44100, 2); // 1 second of audio
+        let cursor = Cursor::new(wav_data);
+
+        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        let result = decoder.seek(pos);
+        assert!(result.is_ok());
+
+        // Should be able to decode after seek
+        let chunk = decoder.next_chunk().unwrap();
+        assert!(chunk.is_some());
+    }
+
+    #[test]
+    fn test_seek_to_zero() {
+        let wav_data = create_test_wav(10000, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        // Read chunks
+        let _ = decoder.next_chunk().unwrap();
+        let _ = decoder.next_chunk().unwrap();
+
+        // Seek back to start
+        decoder.seek(Duration::from_secs(0)).unwrap();
+
+        // Should read from beginning again
+        let chunk = decoder.next_chunk().unwrap();
+        assert!(chunk.is_some());
+    }
+
+    #[test]
+    fn test_seek_beyond_duration() {
+        let wav_data = create_test_wav(1000, 44100, 2); // Short file
+        let cursor = Cursor::new(wav_data);
+
+        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        // Try to seek beyond file duration
+        let result = decoder.seek(Duration::from_secs(100));
+
+        // Seek might succeed but next_chunk will return None (EOF)
+        if result.is_ok() {
+            let chunk = decoder.next_chunk().unwrap();
+            assert!(chunk.is_none());
+        }
+    }
+
+    // ========================================================================
+    // new_direct() Tests
+    // ========================================================================
+
+    #[test]
+    fn test_new_direct_with_cached_params() {
+        let wav_data = create_test_wav(100, 44100, 2);
+        let cursor1 = Cursor::new(wav_data.clone());
+
+        // First create decoder to get codec params
+        let decoder1 = SymphoniaDecoder::new_with_probe(cursor1, Some("wav")).unwrap();
+        let codec_params = decoder1.codec_params().unwrap();
+
+        // Create cached info
+        let cached = CachedCodecInfo { codec_params };
+
+        // Now create new decoder with cached params
+        let cursor2 = Cursor::new(wav_data);
+        let decoder2 = SymphoniaDecoder::new_direct(cursor2, &cached).unwrap();
+
+        assert_eq!(decoder2.spec().sample_rate, 44100);
+        assert_eq!(decoder2.spec().channels, 2);
+    }
+
+    #[test]
+    fn test_new_direct_decode() {
+        let wav_data = create_test_wav(100, 44100, 2);
+        let cursor1 = Cursor::new(wav_data.clone());
+
+        let decoder1 = SymphoniaDecoder::new_with_probe(cursor1, Some("wav")).unwrap();
+        let codec_params = decoder1.codec_params().unwrap();
+        let cached = CachedCodecInfo { codec_params };
+
+        let cursor2 = Cursor::new(wav_data);
+        let mut decoder2 = SymphoniaDecoder::new_direct(cursor2, &cached).unwrap();
+
+        // Should be able to decode
+        let chunk = decoder2.next_chunk().unwrap();
+        assert!(chunk.is_some());
+    }
+
+    // ========================================================================
+    // Error Path Tests
+    // ========================================================================
+
+    #[test]
+    fn test_no_audio_track() {
+        // Create WAV with minimal header but no actual audio data
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&36u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVE");
+        wav.extend_from_slice(b"fmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+
+        let cursor = Cursor::new(wav);
+        let result = SymphoniaDecoder::new_with_probe(cursor, Some("wav"));
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_format() {
+        let random_data = [0xDE, 0xAD, 0xBE, 0xEF].repeat(250);
+        let cursor = Cursor::new(random_data);
+
+        let result = SymphoniaDecoder::new_with_probe(cursor, None);
+
+        assert!(result.is_err());
+        match result {
+            Err(DecodeError::Symphonia(_)) => {}
+            _ => panic!("Expected Symphonia error"),
+        }
+    }
+
+    #[test]
+    fn test_truncated_file() {
+        let mut wav_data = create_test_wav(100, 44100, 2);
+        // Truncate the data
+        wav_data.truncate(wav_data.len() / 2);
+
+        let cursor = Cursor::new(wav_data);
+
+        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+
+        // Try to read - should eventually fail or return None
+        let mut chunk_count = 0;
+        while let Ok(Some(_)) = decoder.next_chunk() {
+            chunk_count += 1;
+            if chunk_count > 100 {
+                break; // Prevent infinite loop
+            }
+        }
+        // Test passes if we don't panic
+    }
+
+    #[test]
+    fn test_new_from_media_info_unsupported_container() {
+        let wav_data = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        // Try to create with MpegTs container (likely not in default features)
+        let media_info = MediaInfo::new()
+            .with_container(ContainerFormat::MpegTs)
+            .with_sample_rate(44100)
+            .with_channels(2);
+
+        let result = SymphoniaDecoder::new_from_media_info(cursor, &media_info, false);
+
+        // Should either succeed with probe fallback or fail
+        // Test just verifies it doesn't panic
+        let _ = result;
+    }
+
+    #[test]
+    fn test_new_from_media_info_mismatch() {
+        let wav_data = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        // Provide wrong container type (Ogg instead of WAV)
+        let media_info = MediaInfo::new()
+            .with_container(ContainerFormat::Ogg)
+            .with_sample_rate(44100)
+            .with_channels(2);
+
+        let result = SymphoniaDecoder::new_from_media_info(cursor, &media_info, false);
+
+        // Should fail because WAV data can't be read as Ogg
+        assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // CachedCodecInfo Tests
+    // ========================================================================
+
+    #[test]
+    fn test_cached_codec_info_clone() {
+        let wav_data = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        let decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let params = decoder.codec_params().unwrap();
+
+        let cached = CachedCodecInfo {
+            codec_params: params.clone(),
+        };
+        let cloned = cached.clone();
+
+        assert_eq!(
+            cached.codec_params.sample_rate,
+            cloned.codec_params.sample_rate
+        );
+    }
+
+    #[test]
+    fn test_cached_codec_info_debug() {
+        let wav_data = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        let decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let params = decoder.codec_params().unwrap();
+
+        let cached = CachedCodecInfo {
+            codec_params: params,
+        };
+        let debug_str = format!("{:?}", cached);
+
+        assert!(debug_str.contains("CachedCodecInfo"));
+    }
+}

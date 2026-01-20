@@ -71,3 +71,126 @@ impl FileParams {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::*;
+
+    use super::*;
+
+    #[test]
+    fn test_file_params_new() {
+        let store = StoreOptions::default();
+        let params = FileParams::new(store.clone());
+
+        assert_eq!(params.event_capacity, 32);
+        assert_eq!(params.command_capacity, 8);
+        assert_eq!(params.max_buffer_size, None);
+        assert!(params.cancel.is_none());
+    }
+
+    #[test]
+    fn test_file_params_default() {
+        let params = FileParams::default();
+
+        assert_eq!(params.event_capacity, 32);
+        assert_eq!(params.command_capacity, 8);
+        assert_eq!(params.max_buffer_size, None);
+        assert!(params.cancel.is_none());
+    }
+
+    #[test]
+    fn test_with_net() {
+        let store = StoreOptions::default();
+        let net = NetOptions::default();
+        let params = FileParams::new(store).with_net(net);
+
+        // NetOptions doesn't impl PartialEq, just verify it compiles
+        assert_eq!(params.event_capacity, 32);
+    }
+
+    #[rstest]
+    #[case(1024)]
+    #[case(4096)]
+    #[case(8192)]
+    #[case(1024 * 1024)]
+    fn test_with_max_buffer_size(#[case] size: usize) {
+        let store = StoreOptions::default();
+        let params = FileParams::new(store).with_max_buffer_size(size);
+
+        assert_eq!(params.max_buffer_size, Some(size));
+    }
+
+    #[test]
+    fn test_with_cancel() {
+        let store = StoreOptions::default();
+        let cancel = CancellationToken::new();
+        let params = FileParams::new(store).with_cancel(cancel.clone());
+
+        assert!(params.cancel.is_some());
+    }
+
+    #[rstest]
+    #[case(1)]
+    #[case(16)]
+    #[case(64)]
+    #[case(128)]
+    fn test_with_event_capacity(#[case] capacity: usize) {
+        let store = StoreOptions::default();
+        let params = FileParams::new(store).with_event_capacity(capacity);
+
+        assert_eq!(params.event_capacity, capacity);
+    }
+
+    #[rstest]
+    #[case(1)]
+    #[case(4)]
+    #[case(16)]
+    #[case(32)]
+    fn test_with_command_capacity(#[case] capacity: usize) {
+        let store = StoreOptions::default();
+        let params = FileParams::new(store).with_command_capacity(capacity);
+
+        assert_eq!(params.command_capacity, capacity);
+    }
+
+    #[test]
+    fn test_builder_chain() {
+        let store = StoreOptions::default();
+        let net = NetOptions::default();
+        let cancel = CancellationToken::new();
+
+        let params = FileParams::new(store)
+            .with_net(net)
+            .with_max_buffer_size(8192)
+            .with_cancel(cancel.clone())
+            .with_event_capacity(64)
+            .with_command_capacity(16);
+
+        assert_eq!(params.max_buffer_size, Some(8192));
+        assert!(params.cancel.is_some());
+        assert_eq!(params.event_capacity, 64);
+        assert_eq!(params.command_capacity, 16);
+    }
+
+    #[test]
+    fn test_debug_impl() {
+        let params = FileParams::default();
+        let debug_str = format!("{:?}", params);
+
+        assert!(debug_str.contains("FileParams"));
+    }
+
+    #[test]
+    fn test_clone() {
+        let params = FileParams::default()
+            .with_max_buffer_size(4096)
+            .with_event_capacity(64);
+
+        let cloned = params.clone();
+
+        assert_eq!(cloned.max_buffer_size, params.max_buffer_size);
+        assert_eq!(cloned.event_capacity, params.event_capacity);
+        assert_eq!(cloned.command_capacity, params.command_capacity);
+    }
+}

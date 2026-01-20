@@ -19,9 +19,9 @@ use url::Url;
 use super::types::{PipelineError, PipelineResult, SegmentMeta, StreamCommand, VariantSwitch};
 use crate::{
     HlsError, HlsResult,
-    abr::{AbrController, ThroughputSample, ThroughputSampleSource},
+    abr::{DefaultAbrController, ThroughputSample, ThroughputSampleSource},
     events::HlsEvent,
-    fetch::{ActiveFetchResult, FetchManager},
+    fetch::{ActiveFetchResult, DefaultFetchManager},
     keys::KeyManager,
     playlist::{MediaPlaylist, MediaSegment, PlaylistManager, VariantId},
 };
@@ -29,10 +29,10 @@ use crate::{
 /// Parameters for creating a [`SegmentStream`].
 pub struct SegmentStreamParams {
     pub master_url: Url,
-    pub fetch: Arc<FetchManager>,
+    pub fetch: Arc<DefaultFetchManager>,
     pub playlist_manager: Arc<PlaylistManager>,
     pub key_manager: Option<Arc<KeyManager>>,
-    pub abr_controller: AbrController,
+    pub abr_controller: DefaultAbrController,
     pub events_tx: broadcast::Sender<HlsEvent>,
     pub cancel: CancellationToken,
     pub command_capacity: usize,
@@ -75,6 +75,12 @@ impl PipelineHandle {
     /// Get current variant index (variant being read).
     pub fn current_variant(&self) -> usize {
         self.current_variant.load(Ordering::SeqCst)
+    }
+
+    /// Directly set current_variant (for finished playlists where pipeline is stopped).
+    /// WARNING: Only use when playlist is finished and pipeline won't process commands!
+    pub(crate) fn set_current_variant_direct(&self, variant: usize) {
+        self.current_variant.store(variant, Ordering::SeqCst);
     }
 
     /// Get next variant if ABR requested a switch, or None.
@@ -216,7 +222,7 @@ fn build_segment_meta(
 
 /// Fetch init segment for variant.
 async fn fetch_init_segment(
-    fetch: &FetchManager,
+    fetch: &DefaultFetchManager,
     ctx: &VariantContext,
     variant: usize,
 ) -> HlsResult<SegmentMeta> {
@@ -253,7 +259,7 @@ async fn fetch_init_segment(
 fn process_commands(
     cmd_rx: &mut mpsc::Receiver<StreamCommand>,
     state: &mut VariantSwitch,
-    abr: &mut AbrController,
+    abr: &mut DefaultAbrController,
     process_all: bool,
 ) -> Option<VariantSwitch> {
     let mut result = None;
@@ -307,10 +313,10 @@ fn process_commands(
 #[allow(clippy::too_many_arguments)]
 fn create_stream(
     master_url: Url,
-    fetch: Arc<FetchManager>,
+    fetch: Arc<DefaultFetchManager>,
     playlist_manager: Arc<PlaylistManager>,
     _key_manager: Option<Arc<KeyManager>>,
-    mut abr: AbrController,
+    mut abr: DefaultAbrController,
     cancel: CancellationToken,
     events: broadcast::Sender<HlsEvent>,
     mut cmd_rx: mpsc::Receiver<StreamCommand>,

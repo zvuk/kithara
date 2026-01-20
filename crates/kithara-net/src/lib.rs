@@ -7,6 +7,8 @@ mod timeout;
 mod traits;
 mod types;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub use crate::traits::MockNet;
 pub use crate::{
     client::HttpClient,
     error::{NetError, NetResult},

@@ -230,7 +230,8 @@ impl ResamplerProcessor {
                 self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
             }
 
-            let input_refs: Vec<&[f32]> = self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
+            let input_refs: Vec<&[f32]> =
+                self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
             let output_frames = resampler.output_frames_next();
 
             // Reuse temp_output_bufs - resize instead of creating new Vec
@@ -240,8 +241,11 @@ impl ResamplerProcessor {
             for ch in 0..channels {
                 self.temp_output_bufs[ch].resize(output_frames, 0.0);
             }
-            let mut output_refs: Vec<&mut [f32]> =
-                self.temp_output_bufs.iter_mut().map(|v| v.as_mut_slice()).collect();
+            let mut output_refs: Vec<&mut [f32]> = self
+                .temp_output_bufs
+                .iter_mut()
+                .map(|v| v.as_mut_slice())
+                .collect();
 
             match resampler.process_into_buffer(&input_refs, &mut output_refs, None) {
                 Ok((_, out_len)) => {
@@ -342,8 +346,11 @@ impl ResamplerProcessor {
         for ch in 0..channels {
             self.temp_output_bufs[ch].resize(output_frames, 0.0);
         }
-        let mut output_refs: Vec<&mut [f32]> =
-            self.temp_output_bufs.iter_mut().map(|v| v.as_mut_slice()).collect();
+        let mut output_refs: Vec<&mut [f32]> = self
+            .temp_output_bufs
+            .iter_mut()
+            .map(|v| v.as_mut_slice())
+            .collect();
 
         match resampler.process_into_buffer(&input_refs, &mut output_refs, None) {
             Ok((_, out_len)) => {
@@ -445,7 +452,8 @@ mod tests {
     #[test]
     fn test_dynamic_speed_change() {
         let speed = make_speed_atomic(1.0);
-        let mut processor = ResamplerProcessor::new(44100, 44100, 2, speed.clone(), make_test_pool());
+        let mut processor =
+            ResamplerProcessor::new(44100, 44100, 2, speed.clone(), make_test_pool());
         assert!(processor.is_passthrough());
 
         speed.store(1.5_f32.to_bits(), Ordering::Relaxed);
@@ -673,5 +681,156 @@ mod tests {
             expected_output,
             tolerance
         );
+    }
+
+    #[test]
+    fn test_passthrough_call_count() {
+        // In passthrough mode, each process() call should produce exactly one output chunk
+        let speed = make_speed_atomic(1.0);
+        let mut processor = ResamplerProcessor::new(44100, 44100, 2, speed, make_test_pool());
+        assert!(processor.is_passthrough());
+
+        let mut output_count = 0;
+        let process_calls = 5;
+
+        for _ in 0..process_calls {
+            let chunk = PcmChunk::new(
+                PcmSpec {
+                    sample_rate: 44100,
+                    channels: 2,
+                },
+                vec![0.1; 100], // Small chunk
+            );
+
+            if processor.process(&chunk).is_some() {
+                output_count += 1;
+            }
+        }
+
+        assert_eq!(
+            output_count, process_calls,
+            "Passthrough mode: {} process() calls should produce {} output chunks",
+            process_calls, process_calls
+        );
+    }
+
+    #[test]
+    fn test_resampling_accumulation_call_count() {
+        // In resampling mode with small chunks, first calls accumulate, later calls produce output
+        let speed = make_speed_atomic(1.0);
+        let mut processor = ResamplerProcessor::new(48000, 44100, 2, speed, make_test_pool());
+        assert!(!processor.is_passthrough());
+
+        let mut output_count = 0;
+        let mut none_count = 0;
+        let process_calls = 10;
+
+        for _ in 0..process_calls {
+            let chunk = PcmChunk::new(
+                PcmSpec {
+                    sample_rate: 48000,
+                    channels: 2,
+                },
+                vec![0.1; 512], // Small chunk (256 frames) - should accumulate initially
+            );
+
+            match processor.process(&chunk) {
+                Some(_) => output_count += 1,
+                None => none_count += 1,
+            }
+        }
+
+        assert!(
+            none_count > 0,
+            "Resampling mode with small chunks: some process() calls should return None (accumulation)"
+        );
+        assert!(
+            output_count > 0,
+            "Resampling mode: after accumulation, some process() calls should produce output"
+        );
+        assert_eq!(
+            output_count + none_count,
+            process_calls,
+            "Total outcomes should equal process calls"
+        );
+    }
+
+    #[test]
+    fn test_resampling_no_accumulation_with_large_chunks() {
+        // With large enough chunks, every process() call should produce output
+        let speed = make_speed_atomic(1.0);
+        let mut processor = ResamplerProcessor::new(48000, 44100, 2, speed, make_test_pool());
+        assert!(!processor.is_passthrough());
+
+        let mut output_count = 0;
+        let process_calls = 5;
+
+        for _ in 0..process_calls {
+            let chunk = PcmChunk::new(
+                PcmSpec {
+                    sample_rate: 48000,
+                    channels: 2,
+                },
+                vec![0.1; 4096], // Large chunk - should not need accumulation
+            );
+
+            if processor.process(&chunk).is_some() {
+                output_count += 1;
+            }
+        }
+
+        assert_eq!(
+            output_count, process_calls,
+            "Resampling mode with large chunks: {} process() calls should produce {} output chunks",
+            process_calls, process_calls
+        );
+    }
+
+    #[test]
+    fn test_mode_switch_resets_call_behavior() {
+        // Switching between passthrough and resampling modes should reset behavior
+        let speed = make_speed_atomic(1.0);
+        let mut processor =
+            ResamplerProcessor::new(44100, 44100, 2, speed.clone(), make_test_pool());
+        assert!(processor.is_passthrough());
+
+        // Passthrough: 3 calls → 3 outputs
+        let mut output_count = 0;
+        for _ in 0..3 {
+            let chunk = PcmChunk::new(
+                PcmSpec {
+                    sample_rate: 44100,
+                    channels: 2,
+                },
+                vec![0.1; 100],
+            );
+            if processor.process(&chunk).is_some() {
+                output_count += 1;
+            }
+        }
+        assert_eq!(
+            output_count, 3,
+            "Passthrough: 3 calls should produce 3 outputs"
+        );
+
+        // Switch to resampling mode by changing speed
+        speed.store(1.5_f32.to_bits(), Ordering::Relaxed);
+
+        // After switch: first small chunk may return None (accumulation)
+        let chunk = PcmChunk::new(
+            PcmSpec {
+                sample_rate: 44100,
+                channels: 2,
+            },
+            vec![0.1; 100],
+        );
+        let _result = processor.process(&chunk);
+        assert!(
+            !processor.is_passthrough(),
+            "Should have switched to resampling mode"
+        );
+
+        // Behavior changed: now small chunks need accumulation
+        // (exact behavior depends on rubato internals, but mode definitely changed)
     }
 }

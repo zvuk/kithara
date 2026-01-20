@@ -31,3 +31,4 @@ tokio = { workspace = true }
 rstest = { workspace = true }
 memory-stats = { workspace = true }
 axum = { workspace = true }
+mockall = { workspace = true }

@@ -14,7 +14,6 @@ use url::Url;
 
 use crate::{StreamError, StreamMsg};
 
-
 /// Error type for the generic writer (fetch loop).
 #[derive(Debug, Error)]
 pub enum WriterError {

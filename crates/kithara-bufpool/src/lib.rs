@@ -356,7 +356,9 @@ where
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
-        self.value.as_ref().expect("PooledOwned value already taken")
+        self.value
+            .as_ref()
+            .expect("PooledOwned value already taken")
     }
 }
 
@@ -365,7 +367,9 @@ where
     T: Reuse,
 {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        self.value.as_mut().expect("PooledOwned value already taken")
+        self.value
+            .as_mut()
+            .expect("PooledOwned value already taken")
     }
 }
 

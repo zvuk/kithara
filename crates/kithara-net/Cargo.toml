@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[features]
+test-utils = ["mockall"]
+
 [dependencies]
 kithara-assets = { workspace = true }
 bytes = { workspace = true }
@@ -13,6 +16,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 async-trait = { workspace = true }
+mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
@@ -21,3 +25,4 @@ tower = { workspace = true }
 futures = { workspace = true }
 rstest = { workspace = true }
 memory-stats = { workspace = true }
+mockall = { workspace = true }

@@ -1,4 +1,19 @@
+#[cfg(test)]
+use mockall::automock;
+
 use super::{AbrConfig, ThroughputSample, ThroughputSampleSource};
+
+/// Trait for throughput estimation strategies.
+///
+/// Allows testing `AbrController` with mock estimators.
+#[cfg_attr(test, automock)]
+pub trait Estimator {
+    /// Get estimated throughput in bits per second.
+    fn estimate_bps(&self) -> Option<u64>;
+
+    /// Push a new throughput sample for estimation.
+    fn push_sample(&mut self, sample: ThroughputSample);
+}
 
 #[derive(Clone, Debug)]
 pub struct ThroughputEstimator {
@@ -56,6 +71,16 @@ impl ThroughputEstimator {
     }
 }
 
+impl Estimator for ThroughputEstimator {
+    fn estimate_bps(&self) -> Option<u64> {
+        self.estimate_bps()
+    }
+
+    fn push_sample(&mut self, sample: ThroughputSample) {
+        self.push_sample(sample)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Ewma {
     alpha: f64,
@@ -93,6 +118,8 @@ impl Ewma {
 mod tests {
     use std::time::{Duration, Instant};
 
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -108,5 +135,99 @@ mod tests {
         });
 
         assert_eq!(est.estimate_bps(), None);
+    }
+
+    #[rstest]
+    #[case(vec![(500_000, 1000)], 3_500_000, "Single sample")]
+    #[case(vec![(500_000, 1000), (500_000, 1000)], 3_800_000, "Stable throughput")]
+    #[case(vec![(1_000_000, 1000), (1_000_000, 1000), (1_000_000, 1000)], 7_500_000, "Multiple stable samples")]
+    fn test_ewma_estimation(
+        #[case] samples: Vec<(u64, u64)>,
+        #[case] expected_min_bps: u64,
+        #[case] _description: &str,
+    ) {
+        let cfg = AbrConfig::default();
+        let mut est = ThroughputEstimator::new(&cfg);
+        let now = Instant::now();
+
+        for (bytes, duration_ms) in samples {
+            est.push_sample(ThroughputSample {
+                bytes,
+                duration: Duration::from_millis(duration_ms),
+                at: now,
+                source: ThroughputSampleSource::Network,
+            });
+        }
+
+        let estimate = est.estimate_bps();
+        assert!(
+            estimate.is_some(),
+            "Should have estimate after network samples"
+        );
+        assert!(
+            estimate.unwrap() >= expected_min_bps,
+            "Estimate should be at least {expected_min_bps}"
+        );
+    }
+
+    #[test]
+    fn test_min_chunk_size_filtering() {
+        let cfg = AbrConfig::default();
+        let mut est = ThroughputEstimator::new(&cfg);
+        let now = Instant::now();
+
+        // Too small (< 16_000 bytes)
+        est.push_sample(ThroughputSample {
+            bytes: 10_000,
+            duration: Duration::from_millis(100),
+            at: now,
+            source: ThroughputSampleSource::Network,
+        });
+
+        assert_eq!(est.estimate_bps(), None, "Small chunks should be ignored");
+
+        // Large enough
+        est.push_sample(ThroughputSample {
+            bytes: 100_000,
+            duration: Duration::from_secs(1),
+            at: now,
+            source: ThroughputSampleSource::Network,
+        });
+
+        assert!(
+            est.estimate_bps().is_some(),
+            "Large chunks should be counted"
+        );
+    }
+
+    #[test]
+    fn test_min_duration_clamping() {
+        let cfg = AbrConfig::default();
+        let mut est = ThroughputEstimator::new(&cfg);
+        let now = Instant::now();
+
+        // Very short duration (gets clamped to MIN_DURATION_MS)
+        est.push_sample(ThroughputSample {
+            bytes: 100_000,
+            duration: Duration::from_nanos(1),
+            at: now,
+            source: ThroughputSampleSource::Network,
+        });
+
+        let estimate = est.estimate_bps();
+        assert!(estimate.is_some(), "Should still produce estimate");
+        // With clamped duration, throughput should be very high
+        assert!(
+            estimate.unwrap() > 1_000_000,
+            "Clamped duration should yield high throughput"
+        );
+    }
+
+    #[test]
+    fn test_no_estimate_without_samples() {
+        let cfg = AbrConfig::default();
+        let est = ThroughputEstimator::new(&cfg);
+
+        assert_eq!(est.estimate_bps(), None, "No estimate without samples");
     }
 }

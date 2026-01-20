@@ -1,0 +1,73 @@
+[package]
+name = "kithara-integration-tests"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+# All kithara crates
+kithara-assets = { workspace = true, features = ["internal"] }
+kithara-bufpool = { workspace = true }
+kithara-decode = { workspace = true }
+kithara-file = { workspace = true }
+kithara-hls = { workspace = true }
+kithara-net = { workspace = true }
+kithara-storage = { workspace = true }
+kithara-stream = { workspace = true }
+kithara-worker = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+tokio-stream = { workspace = true }
+futures = { workspace = true }
+
+# Channels/buffers
+kanal = { workspace = true }
+bytes = { workspace = true }
+
+# HTTP/URL
+reqwest = { workspace = true }
+url = { workspace = true }
+axum = { workspace = true }
+tower = { workspace = true }
+
+# HLS parsing
+hls_m3u8 = { workspace = true }
+
+# Decoding
+symphonia = { workspace = true }
+rodio = { workspace = true }
+
+# Testing framework
+rstest = { workspace = true }
+serial_test = { workspace = true }
+tempfile = { workspace = true }
+
+# Errors/logging
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Crypto (for HLS encryption tests)
+hex = { workspace = true }
+aes = { workspace = true }
+cbc = { workspace = true }
+
+# Misc
+uuid = { workspace = true }
+sha2 = { workspace = true }
+
+# Async traits
+async-trait = { workspace = true }
+
+# Storage
+random-access-disk = { workspace = true }
+random-access-storage = { workspace = true }
+dashmap = { workspace = true }

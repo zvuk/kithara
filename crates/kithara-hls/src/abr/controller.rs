@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{AbrConfig, ThroughputEstimator, ThroughputSample, Variant};
+use super::{AbrConfig, Estimator, ThroughputEstimator, ThroughputSample, Variant};
 use crate::{options::VariantSelector, playlist::MasterPlaylist};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,10 +31,10 @@ pub struct AbrDecision {
 /// Value indicating no switch has occurred yet.
 const NO_SWITCH: u64 = 0;
 
-pub struct AbrController {
+pub struct AbrController<E: Estimator> {
     cfg: AbrConfig,
     variant_selector: Option<VariantSelector>,
-    estimator: ThroughputEstimator,
+    estimator: E,
     current_variant: Arc<AtomicUsize>,
     /// Reference instant for computing elapsed time (created at controller init).
     reference_instant: Instant,
@@ -42,9 +42,12 @@ pub struct AbrController {
     last_switch_at_nanos: AtomicU64,
 }
 
-impl AbrController {
-    pub fn new(cfg: AbrConfig, variant_selector: Option<VariantSelector>) -> Self {
-        let estimator = ThroughputEstimator::new(&cfg);
+impl<E: Estimator> AbrController<E> {
+    pub fn with_estimator(
+        cfg: AbrConfig,
+        estimator: E,
+        variant_selector: Option<VariantSelector>,
+    ) -> Self {
         let initial_variant = cfg.initial_variant();
         Self {
             cfg,
@@ -105,14 +108,6 @@ impl AbrController {
     ) -> AbrDecision {
         let current = self.current_variant.load(Ordering::Acquire);
 
-        let Some(estimate_bps) = self.estimator.estimate_bps() else {
-            return AbrDecision {
-                target_variant_index: current,
-                reason: AbrReason::NoEstimate,
-                changed: false,
-            };
-        };
-
         if !self.can_switch_now(now) {
             return AbrDecision {
                 target_variant_index: current,
@@ -120,6 +115,14 @@ impl AbrController {
                 changed: false,
             };
         }
+
+        let Some(estimate_bps) = self.estimator.estimate_bps() else {
+            return AbrDecision {
+                target_variant_index: current,
+                reason: AbrReason::NoEstimate,
+                changed: false,
+            };
+        };
 
         let current_bw = variants
             .iter()
@@ -230,11 +233,26 @@ impl AbrController {
     }
 }
 
+// Backward compatibility: Default AbrController with ThroughputEstimator
+impl AbrController<ThroughputEstimator> {
+    pub fn new(cfg: AbrConfig, variant_selector: Option<VariantSelector>) -> Self {
+        let estimator = ThroughputEstimator::new(&cfg);
+        Self::with_estimator(cfg, estimator, variant_selector)
+    }
+}
+
+/// Type alias for backward compatibility.
+/// Use `AbrController<ThroughputEstimator>` or this alias for production code.
+/// Use `AbrController<MockEstimator>` in tests for isolated testing.
+pub type DefaultAbrController = AbrController<ThroughputEstimator>;
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
-    use super::*;
+    use rstest::rstest;
+
+    use super::{super::estimator::MockEstimator, *};
 
     fn variants() -> Vec<Variant> {
         vec![
@@ -253,30 +271,49 @@ mod tests {
         ]
     }
 
-    #[test]
-    fn downswitch_on_low_throughput() {
+    #[rstest]
+    #[case("downswitch_low_throughput", 2, 300_000 / 8, 10.0, 0, AbrReason::DownSwitch, true)]
+    #[case("upswitch_high_throughput", 0, 2_000_000 / 8, 0.0, 2, AbrReason::UpSwitch, true)]
+    #[case(
+        "downswitch_buffer_too_low",
+        2,
+        30_000,
+        0.1,
+        0,
+        AbrReason::DownSwitch,
+        true
+    )]
+    fn test_throughput_based_switching(
+        #[case] _name: &str,
+        #[case] initial_variant: usize,
+        #[case] throughput_bytes: u64,
+        #[case] buffer_level: f64,
+        #[case] expected_variant: usize,
+        #[case] expected_reason: AbrReason,
+        #[case] expected_changed: bool,
+    ) {
         let cfg = AbrConfig {
             throughput_safety_factor: 1.5,
             min_buffer_for_up_switch_secs: 0.0,
             down_switch_buffer_secs: 0.0,
             min_switch_interval: Duration::ZERO,
-            mode: crate::options::AbrMode::Auto(Some(2)),
+            mode: crate::options::AbrMode::Auto(Some(initial_variant)),
             ..AbrConfig::default()
         };
 
         let mut c = AbrController::new(cfg, None);
         let now = Instant::now();
         c.push_throughput_sample(ThroughputSample {
-            bytes: 300_000 / 8,
+            bytes: throughput_bytes,
             duration: Duration::from_secs(1),
             at: now,
             source: super::super::ThroughputSampleSource::Network,
         });
 
-        let d = c.decide(&variants(), 10.0, now);
-        assert_eq!(d.target_variant_index, 0);
-        assert_eq!(d.reason, AbrReason::DownSwitch);
-        assert!(d.changed);
+        let d = c.decide(&variants(), buffer_level, now);
+        assert_eq!(d.target_variant_index, expected_variant);
+        assert_eq!(d.reason, expected_reason);
+        assert_eq!(d.changed, expected_changed);
     }
 
     #[test]
@@ -339,54 +376,6 @@ mod tests {
     }
 
     #[test]
-    fn aggressive_up_switch_without_interval() {
-        let cfg = AbrConfig {
-            min_switch_interval: Duration::ZERO,
-            min_buffer_for_up_switch_secs: 0.0,
-            down_switch_buffer_secs: 0.0,
-            mode: crate::options::AbrMode::Auto(Some(0)),
-            ..AbrConfig::default()
-        };
-
-        let mut c = AbrController::new(cfg, None);
-        let now = Instant::now();
-        c.push_throughput_sample(ThroughputSample {
-            bytes: 2_000_000 / 8,
-            duration: Duration::from_secs(1),
-            at: now,
-            source: super::super::ThroughputSampleSource::Network,
-        });
-
-        let d = c.decide(&variants(), 0.0, now);
-        assert_eq!(d.target_variant_index, 2);
-        assert!(d.changed);
-        assert_eq!(d.reason, AbrReason::UpSwitch);
-    }
-
-    #[test]
-    fn down_switch_when_buffer_low() {
-        let cfg = AbrConfig {
-            min_switch_interval: Duration::ZERO,
-            mode: crate::options::AbrMode::Auto(Some(2)),
-            ..AbrConfig::default()
-        };
-
-        let mut c = AbrController::new(cfg, None);
-        let now = Instant::now();
-        c.push_throughput_sample(ThroughputSample {
-            bytes: 30_000,
-            duration: Duration::from_secs(1),
-            at: now,
-            source: super::super::ThroughputSampleSource::Network,
-        });
-
-        let d = c.decide(&variants(), 0.1, now);
-        assert_eq!(d.target_variant_index, 0);
-        assert!(d.changed);
-        assert_eq!(d.reason, AbrReason::DownSwitch);
-    }
-
-    #[test]
     fn no_change_without_estimate() {
         let cfg = AbrConfig {
             mode: crate::options::AbrMode::Auto(Some(1)),
@@ -399,5 +388,156 @@ mod tests {
         assert_eq!(d.target_variant_index, 1);
         assert!(!d.changed);
         assert_eq!(d.reason, AbrReason::NoEstimate);
+    }
+
+    #[test]
+    fn test_estimator_called_once_per_decide() {
+        let cfg = AbrConfig {
+            mode: crate::options::AbrMode::Auto(Some(1)),
+            min_switch_interval: Duration::ZERO,
+            ..AbrConfig::default()
+        };
+
+        let mut mock_estimator = MockEstimator::new();
+
+        // Setup expectations: estimate_bps() will be called exactly 2 times
+        mock_estimator
+            .expect_estimate_bps()
+            .times(2) // Built-in call count verification!
+            .returning(|| Some(1_000_000));
+
+        // push_sample() won't be called in this test
+        mock_estimator.expect_push_sample().times(0);
+
+        let c = AbrController::with_estimator(cfg, mock_estimator, None);
+        let now = Instant::now();
+
+        // First decide - calls estimator once
+        c.decide(&variants(), 5.0, now);
+
+        // Second decide - calls estimator again
+        c.decide(&variants(), 5.0, now);
+
+        // Mockall automatically verifies call counts on drop - no manual assert needed!
+    }
+
+    #[test]
+    fn test_min_interval_skips_estimator_call() {
+        let cfg = AbrConfig {
+            mode: crate::options::AbrMode::Auto(Some(1)),
+            min_switch_interval: Duration::from_secs(30),
+            ..AbrConfig::default()
+        };
+
+        let mut mock_estimator = MockEstimator::new();
+
+        // Setup expectations: estimate_bps() will be called exactly ONCE
+        // (second decide() should early-return due to min_interval)
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1) // Only first call triggers estimator
+            .returning(|| Some(5_000_000));
+
+        mock_estimator.expect_push_sample().times(0);
+
+        let c = AbrController::with_estimator(cfg, mock_estimator, None);
+        let now = Instant::now();
+
+        // First call - should call estimator and cause switch
+        let d1 = c.decide(&variants(), 10.0, now);
+        assert!(d1.changed, "First call should switch");
+
+        // Second call immediately - should NOT call estimator (min_interval not elapsed)
+        let d2 = c.decide(&variants(), 10.0, now);
+        assert!(!d2.changed, "Second call should not switch");
+        assert_eq!(d2.reason, AbrReason::MinInterval);
+
+        // Mockall automatically verifies estimator was called exactly once
+    }
+
+    #[test]
+    fn test_abr_sequence_estimate_then_push() {
+        use mockall::Sequence;
+
+        let cfg = AbrConfig {
+            mode: crate::options::AbrMode::Auto(Some(1)),
+            min_switch_interval: Duration::ZERO,
+            ..AbrConfig::default()
+        };
+
+        let mut seq = Sequence::new();
+        let mut mock_estimator = MockEstimator::new();
+
+        // Verify sequence: estimate → push_sample → estimate
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|| Some(1_000_000));
+
+        mock_estimator
+            .expect_push_sample()
+            .times(1)
+            .in_sequence(&mut seq)
+            .return_const(());
+
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|| Some(2_000_000));
+
+        let mut c = AbrController::with_estimator(cfg, mock_estimator, None);
+        let now = Instant::now();
+
+        c.decide(&variants(), 5.0, now);
+
+        c.push_throughput_sample(ThroughputSample {
+            bytes: 1_000_000 / 8,
+            duration: Duration::from_secs(1),
+            at: now,
+            source: super::super::ThroughputSampleSource::Network,
+        });
+
+        c.decide(&variants(), 5.0, now);
+    }
+
+    #[test]
+    fn test_abr_sequence_multiple_decisions() {
+        use mockall::Sequence;
+
+        let cfg = AbrConfig {
+            mode: crate::options::AbrMode::Auto(Some(0)),
+            min_switch_interval: Duration::ZERO,
+            ..AbrConfig::default()
+        };
+
+        let mut seq = Sequence::new();
+        let mut mock_estimator = MockEstimator::new();
+
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|| Some(500_000));
+
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|| Some(1_500_000));
+
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1)
+            .in_sequence(&mut seq)
+            .returning(|| Some(3_000_000));
+
+        let c = AbrController::with_estimator(cfg, mock_estimator, None);
+        let now = Instant::now();
+
+        c.decide(&variants(), 10.0, now);
+        c.decide(&variants(), 10.0, now);
+        c.decide(&variants(), 10.0, now);
     }
 }

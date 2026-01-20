@@ -233,3 +233,45 @@ pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
     }
     Ok(s)
 }
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+
+    #[rstest]
+    #[case("valid.txt", true, "Simple filename")]
+    #[case("dir/valid.txt", true, "Nested path")]
+    #[case("a/b/c/file.mp3", true, "Multiple levels")]
+    #[case("audio-file_123.m4a", true, "Filename with special chars")]
+    #[case("/absolute", false, "Absolute path (leading slash)")]
+    #[case("../traversal", false, "Dotdot traversal at start")]
+    #[case("dir/../file", false, "Dotdot traversal in middle")]
+    #[case("a/b/../c", false, "Dotdot traversal")]
+    #[case("", false, "Empty string")]
+    #[case("dir//file", false, "Double slash (empty component)")]
+    #[case("dir/", false, "Trailing slash (empty component)")]
+    #[case("/", false, "Single slash")]
+    #[case(".", true, "Current directory reference")]
+    #[case("dir/./file.txt", true, "Dot component (allowed)")]
+    #[case("windows\\path", true, "Windows backslash (gets normalized)")]
+    #[case("dir\\file.txt", true, "Mixed slashes")]
+    fn test_path_validation(
+        #[case] path: &str,
+        #[case] is_valid: bool,
+        #[case] _description: &str,
+    ) {
+        let result = sanitize_rel(path);
+        assert_eq!(result.is_ok(), is_valid, "Path: {:?}", path);
+
+        // If valid, check normalization worked
+        if is_valid {
+            let normalized = result.unwrap();
+            assert!(
+                !normalized.contains('\\'),
+                "Backslashes should be normalized"
+            );
+        }
+    }
+}
