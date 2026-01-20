@@ -4,8 +4,11 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tracing::trace;
 
-use crate::item::SimpleItem;
+use crate::item::Fetch;
 use crate::traits::{SyncWorkerSource, Worker};
+
+// Re-export for backwards compatibility
+use crate::item::SimpleItem;
 
 /// Blocking worker for synchronous sources.
 ///
@@ -72,10 +75,8 @@ impl<S: SyncWorkerSource> SyncWorker<S> {
                     trace!("SyncWorker: EOF reached");
                 }
 
-                let mut item_opt = Some(SimpleItem {
-                    data: fetch.data,
-                    is_eof,
-                });
+                // For sync sources, epoch is always 0
+                let mut item_opt = Some(Fetch::new(fetch.data, is_eof, 0));
 
                 // Non-blocking send with retry
                 loop {

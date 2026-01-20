@@ -32,10 +32,14 @@ impl<C> Fetch<C> {
     pub fn epoch(&self) -> u64 {
         self.epoch
     }
+}
 
-    /// Consume and return the data.
-    pub fn into_data(self) -> C {
-        self.data
+/// Convert `Fetch<C>` into its data `C`.
+///
+/// This allows idiomatic Rust usage like `let bytes: Vec<u8> = fetch.into();`
+impl<C> From<Fetch<C>> for C {
+    fn from(fetch: Fetch<C>) -> C {
+        fetch.data
     }
 }
 
@@ -56,20 +60,8 @@ pub trait WorkerItem: Send + 'static {
     fn is_eof(&self) -> bool;
 }
 
-/// Item with epoch tracking for invalidation on seek.
-///
-/// Used by `AsyncWorker` for async sources that support seeking.
-#[derive(Debug, Clone)]
-pub struct EpochItem<C> {
-    /// The data chunk.
-    pub data: C,
-    /// Epoch at which this item was fetched.
-    pub epoch: u64,
-    /// Whether this is the final item (EOF).
-    pub is_eof: bool,
-}
-
-impl<C: Send + 'static> WorkerItem for EpochItem<C> {
+/// Implement WorkerItem for Fetch.
+impl<C: Send + 'static> WorkerItem for Fetch<C> {
     type Data = C;
 
     fn data(&self) -> &C {
@@ -77,40 +69,26 @@ impl<C: Send + 'static> WorkerItem for EpochItem<C> {
     }
 
     fn into_data(self) -> C {
-        self.data
+        self.into()
     }
 
     fn is_eof(&self) -> bool {
         self.is_eof
     }
 }
+
+/// Item with epoch tracking for invalidation on seek.
+///
+/// Used by `AsyncWorker` for async sources that support seeking.
+/// This is now a type alias to `Fetch<C>` for backwards compatibility.
+pub type EpochItem<C> = Fetch<C>;
 
 /// Simple item without epoch tracking.
 ///
 /// Used by `SyncWorker` for synchronous sources that don't support seeking.
-#[derive(Debug, Clone)]
-pub struct SimpleItem<C> {
-    /// The data chunk.
-    pub data: C,
-    /// Whether this is the final item (EOF).
-    pub is_eof: bool,
-}
-
-impl<C: Send + 'static> WorkerItem for SimpleItem<C> {
-    type Data = C;
-
-    fn data(&self) -> &C {
-        &self.data
-    }
-
-    fn into_data(self) -> C {
-        self.data
-    }
-
-    fn is_eof(&self) -> bool {
-        self.is_eof
-    }
-}
+/// This is now a type alias to `Fetch<C>` for backwards compatibility.
+/// For sync sources, epoch is always set to 0.
+pub type SimpleItem<C> = Fetch<C>;
 
 #[cfg(test)]
 mod tests {
@@ -118,22 +96,35 @@ mod tests {
 
     #[test]
     fn test_worker_item_trait() {
-        let epoch_item = EpochItem {
-            data: 42,
-            epoch: 5,
-            is_eof: false,
-        };
+        let epoch_item = Fetch::new(42, false, 5);
         assert_eq!(*epoch_item.data(), 42);
         assert!(!epoch_item.is_eof());
+        assert_eq!(epoch_item.epoch(), 5);
 
-        let simple_item = SimpleItem {
-            data: 100,
-            is_eof: true,
-        };
+        let simple_item = Fetch::new(100, true, 0);
         assert_eq!(*simple_item.data(), 100);
         assert!(simple_item.is_eof());
 
         let data = simple_item.into_data();
         assert_eq!(data, 100);
+    }
+
+    #[test]
+    fn test_fetch_into_conversion() {
+        let fetch = Fetch::new(vec![1u8, 2, 3], false, 0);
+        let bytes: Vec<u8> = fetch.into();
+        assert_eq!(bytes, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_type_aliases() {
+        // Verify that EpochItem and SimpleItem work as expected
+        let epoch_item: EpochItem<i32> = Fetch::new(42, false, 5);
+        assert_eq!(epoch_item.data, 42);
+        assert_eq!(epoch_item.epoch, 5);
+
+        let simple_item: SimpleItem<i32> = Fetch::new(100, true, 0);
+        assert_eq!(simple_item.data, 100);
+        assert_eq!(simple_item.epoch, 0);
     }
 }

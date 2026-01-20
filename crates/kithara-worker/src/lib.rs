@@ -41,6 +41,10 @@ mod sync_worker;
 mod traits;
 mod validator;
 
+// Test utilities
+#[cfg(any(test, feature = "test-utils"))]
+pub mod testing;
+
 // Public re-exports
 pub use async_worker::AsyncWorker;
 pub use item::{EpochItem, Fetch, SimpleItem, WorkerItem};

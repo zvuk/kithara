@@ -4,9 +4,12 @@ use async_trait::async_trait;
 use tokio::sync::mpsc;
 use tracing::trace;
 
-use crate::item::EpochItem;
+use crate::item::Fetch;
 use crate::result::WorkerResult;
 use crate::traits::{AsyncWorkerSource, Worker};
+
+// Re-export for backwards compatibility
+use crate::item::EpochItem;
 
 /// Generic async worker that runs in a background task.
 ///
@@ -46,11 +49,7 @@ impl<S: AsyncWorkerSource> AsyncWorker<S> {
     /// Send an item through the channel, interruptible by commands.
     /// Returns `(result, command_received)` where `command_received` indicates if a seek was processed.
     async fn send_item(&mut self, chunk: S::Chunk, is_eof: bool) -> (WorkerResult, bool) {
-        let item = EpochItem {
-            data: chunk,
-            epoch: self.source.epoch(),
-            is_eof,
-        };
+        let item = Fetch::new(chunk, is_eof, self.source.epoch());
 
         tokio::select! {
             biased;
