@@ -7,8 +7,8 @@ use futures::StreamExt;
 use kithara_assets::AssetStore;
 use kithara_hls::{
     AbrMode, HlsEvent,
-    abr::{AbrConfig, AbrController, AbrReason},
-    fetch::FetchManager,
+    abr::{AbrConfig, AbrReason, DefaultAbrController},
+    fetch::DefaultFetchManager,
     playlist::PlaylistManager,
     stream::{PipelineHandle, SegmentMeta, SegmentStream, SegmentStreamParams},
 };
@@ -24,16 +24,16 @@ use fixture::{TestAssets, TestServer, assets_fixture, net_fixture, test_init_dat
 fn make_fetch_and_playlist(
     assets: AssetStore,
     net: HttpClient,
-) -> (Arc<FetchManager>, Arc<PlaylistManager>) {
-    let fetch = Arc::new(FetchManager::new(assets, net));
+) -> (Arc<DefaultFetchManager>, Arc<PlaylistManager>) {
+    let fetch = Arc::new(DefaultFetchManager::new(assets, net));
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
     (fetch, playlist)
 }
 
-fn make_abr(initial_variant: usize) -> AbrController {
+fn make_abr(initial_variant: usize) -> DefaultAbrController {
     let mut cfg = AbrConfig::default();
     cfg.mode = AbrMode::Auto(Some(initial_variant));
-    AbrController::new(cfg, None)
+    DefaultAbrController::new(cfg, None)
 }
 
 async fn build_basestream(
@@ -487,7 +487,7 @@ seg/v{}_2.bin
         .parse()
         .expect("valid master url");
 
-    let fetch = Arc::new(FetchManager::new(
+    let fetch = Arc::new(DefaultFetchManager::new(
         assets_fixture.assets().clone(),
         net_fixture,
     ));
@@ -500,7 +500,7 @@ seg/v{}_2.bin
     cfg.throughput_safety_factor = 1.0;
     cfg.min_switch_interval = Duration::ZERO;
 
-    let abr = AbrController::new(cfg, None);
+    let abr = DefaultAbrController::new(cfg, None);
     let cancel = CancellationToken::new();
     let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 
@@ -652,7 +652,7 @@ seg/v{}_2.bin
         .parse()
         .expect("valid master url");
 
-    let fetch = Arc::new(FetchManager::new(
+    let fetch = Arc::new(DefaultFetchManager::new(
         assets_fixture.assets().clone(),
         net_fixture,
     ));
@@ -665,7 +665,7 @@ seg/v{}_2.bin
     cfg.throughput_safety_factor = 1.0;
     cfg.min_switch_interval = Duration::ZERO;
 
-    let abr = AbrController::new(cfg, None);
+    let abr = DefaultAbrController::new(cfg, None);
     let cancel = CancellationToken::new();
     let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 

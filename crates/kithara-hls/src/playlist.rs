@@ -17,7 +17,7 @@ pub use crate::parsing::{
 use crate::{
     HlsError, HlsResult,
     abr::{Variant, variants_from_master},
-    fetch::FetchManager,
+    fetch::DefaultFetchManager,
 };
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {
@@ -29,7 +29,7 @@ fn uri_basename_no_query(uri: &str) -> Option<&str> {
 /// Thin wrapper: fetches + parses playlists with caching via `kithara-assets`.
 #[derive(Clone)]
 pub struct PlaylistManager {
-    fetch: Arc<FetchManager>,
+    fetch: Arc<DefaultFetchManager>,
     base_url: Option<Url>,
     master: Arc<OnceCell<MasterPlaylist>>,
     variants: Arc<OnceCell<Vec<Variant>>>,
@@ -37,7 +37,7 @@ pub struct PlaylistManager {
 }
 
 impl PlaylistManager {
-    pub fn new(fetch: Arc<FetchManager>, base_url: Option<Url>) -> Self {
+    pub fn new(fetch: Arc<DefaultFetchManager>, base_url: Option<Url>) -> Self {
         Self {
             fetch,
             base_url,

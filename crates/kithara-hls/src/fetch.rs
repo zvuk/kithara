@@ -8,7 +8,7 @@ use kithara_assets::{
     AssetResource, AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard,
     ResourceKey,
 };
-use kithara_net::{ByteStream, Headers, HttpClient};
+use kithara_net::{ByteStream, Headers, HttpClient, Net};
 use kithara_storage::{Resource as _, ResourceStatus, StreamingResource, StreamingResourceExt};
 use tracing::{debug, trace, warn};
 use url::Url;
@@ -19,13 +19,13 @@ pub type StreamingAssetResource =
     AssetResource<StreamingResource, LeaseGuard<CachedAssets<EvictAssets<DiskAssetStore>>>>;
 
 #[derive(Clone)]
-pub struct FetchManager {
+pub struct FetchManager<N> {
     assets: AssetStore,
-    net: HttpClient,
+    net: N,
 }
 
-impl FetchManager {
-    pub fn new(assets: AssetStore, net: HttpClient) -> Self {
+impl<N: Net> FetchManager<N> {
+    pub fn with_net(assets: AssetStore, net: N) -> Self {
         Self { assets, net }
     }
 
@@ -149,7 +149,11 @@ impl FetchManager {
     }
 
     /// Download URL to streaming resource (no spawn, runs in current task).
-    async fn download_to_resource(net: &HttpClient, url: &Url, res: &StreamingAssetResource) {
+    async fn download_to_resource<TNet: Net>(
+        net: &TNet,
+        url: &Url,
+        res: &StreamingAssetResource,
+    ) {
         let start_time = Instant::now();
         trace!(url = %url, "kithara-hls segment download: START");
 
@@ -241,3 +245,15 @@ impl ActiveFetch {
         self.offset
     }
 }
+
+// Backward compatibility: Specialized impl for concrete types
+impl FetchManager<HttpClient> {
+    pub fn new(assets: AssetStore, net: HttpClient) -> Self {
+        Self::with_net(assets, net)
+    }
+}
+
+/// Type alias for backward compatibility.
+/// Use `FetchManager<N>` with custom Net implementation for testing with mocks.
+/// Use this alias for production code with HttpClient.
+pub type DefaultFetchManager = FetchManager<HttpClient>;

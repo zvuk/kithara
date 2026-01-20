@@ -21,7 +21,7 @@ use crate::{
     HlsError, HlsResult,
     abr::{DefaultAbrController, ThroughputSample, ThroughputSampleSource},
     events::HlsEvent,
-    fetch::{ActiveFetchResult, FetchManager},
+    fetch::{ActiveFetchResult, DefaultFetchManager},
     keys::KeyManager,
     playlist::{MediaPlaylist, MediaSegment, PlaylistManager, VariantId},
 };
@@ -29,7 +29,7 @@ use crate::{
 /// Parameters for creating a [`SegmentStream`].
 pub struct SegmentStreamParams {
     pub master_url: Url,
-    pub fetch: Arc<FetchManager>,
+    pub fetch: Arc<DefaultFetchManager>,
     pub playlist_manager: Arc<PlaylistManager>,
     pub key_manager: Option<Arc<KeyManager>>,
     pub abr_controller: DefaultAbrController,
@@ -222,7 +222,7 @@ fn build_segment_meta(
 
 /// Fetch init segment for variant.
 async fn fetch_init_segment(
-    fetch: &FetchManager,
+    fetch: &DefaultFetchManager,
     ctx: &VariantContext,
     variant: usize,
 ) -> HlsResult<SegmentMeta> {
@@ -313,7 +313,7 @@ fn process_commands(
 #[allow(clippy::too_many_arguments)]
 fn create_stream(
     master_url: Url,
-    fetch: Arc<FetchManager>,
+    fetch: Arc<DefaultFetchManager>,
     playlist_manager: Arc<PlaylistManager>,
     _key_manager: Option<Arc<KeyManager>>,
     mut abr: DefaultAbrController,
