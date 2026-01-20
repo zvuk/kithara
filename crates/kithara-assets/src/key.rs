@@ -153,8 +153,6 @@ mod tests {
     use super::*;
     use crate::{AssetsError, canonicalize_for_asset};
 
-    // === Tests from tests/asset_id.rs ===
-
     #[rstest]
     #[case(
         "https://example.com/audio.mp3?token=123&quality=high#section",
