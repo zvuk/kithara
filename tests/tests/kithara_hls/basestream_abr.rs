@@ -1,16 +1,17 @@
+//! Basestream ABR switching tests
+
 #![forbid(unsafe_code)]
 
 use std::{sync::Arc, time::Duration};
 
 use axum::{Router, routing::get};
 use futures::StreamExt;
-use kithara_assets::AssetStore;
 use kithara_hls::{
     AbrMode, HlsEvent,
     abr::{AbrConfig, AbrReason, DefaultAbrController},
     fetch::DefaultFetchManager,
     playlist::PlaylistManager,
-    stream::{PipelineHandle, SegmentMeta, SegmentStream, SegmentStreamParams},
+    stream::{SegmentMeta, SegmentStream, SegmentStreamParams},
 };
 use kithara_net::HttpClient;
 use rstest::rstest;
@@ -18,140 +19,8 @@ use tokio::{net::TcpListener, sync::broadcast};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use super::fixture;
-use fixture::{TestAssets, TestServer, assets_fixture, net_fixture, test_init_data};
-
-fn make_fetch_and_playlist(
-    assets: AssetStore,
-    net: HttpClient,
-) -> (Arc<DefaultFetchManager>, Arc<PlaylistManager>) {
-    let fetch = Arc::new(DefaultFetchManager::new(assets, net));
-    let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
-    (fetch, playlist)
-}
-
-fn make_abr(initial_variant: usize) -> DefaultAbrController {
-    let mut cfg = AbrConfig::default();
-    cfg.mode = AbrMode::Auto(Some(initial_variant));
-    DefaultAbrController::new(cfg, None)
-}
-
-async fn build_basestream(
-    master_url: Url,
-    initial_variant: usize,
-    assets: AssetStore,
-    net: HttpClient,
-) -> (PipelineHandle, SegmentStream) {
-    let (fetch, playlist) = make_fetch_and_playlist(assets, net);
-    let abr = make_abr(initial_variant);
-    let cancel = CancellationToken::new();
-    let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
-
-    SegmentStream::new(SegmentStreamParams {
-        master_url,
-        fetch: Arc::clone(&fetch),
-        playlist_manager: Arc::clone(&playlist),
-        key_manager: None,
-        abr_controller: abr,
-        events_tx,
-        cancel,
-        command_capacity: 8,
-        min_sample_bytes: 32_000,
-    })
-}
-
-async fn build_basestream_with_events(
-    master_url: Url,
-    initial_variant: usize,
-    assets: AssetStore,
-    net: HttpClient,
-) -> (PipelineHandle, SegmentStream, broadcast::Receiver<HlsEvent>) {
-    let (fetch, playlist) = make_fetch_and_playlist(assets, net);
-    let abr = make_abr(initial_variant);
-    let cancel = CancellationToken::new();
-    let (events_tx, events_rx) = broadcast::channel::<HlsEvent>(32);
-
-    let (handle, stream) = SegmentStream::new(SegmentStreamParams {
-        master_url,
-        fetch: Arc::clone(&fetch),
-        playlist_manager: Arc::clone(&playlist),
-        key_manager: None,
-        abr_controller: abr,
-        events_tx,
-        cancel,
-        command_capacity: 8,
-        min_sample_bytes: 32_000,
-    });
-    (handle, stream, events_rx)
-}
-
-async fn collect_all(mut stream: SegmentStream) -> Vec<SegmentMeta> {
-    let mut out = Vec::new();
-    while let Some(item) = stream.next().await {
-        let payload = item.expect("pipeline should yield Ok payloads");
-        out.push(payload);
-    }
-    out
-}
-
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn basestream_iterates_with_init_and_segments(
-    assets_fixture: TestAssets,
-    net_fixture: HttpClient,
-) {
-    let server = TestServer::new().await;
-    let master_url = server.url("/master-init.m3u8").expect("url");
-
-    let (_handle, stream) =
-        build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
-    let items = collect_all(stream).await;
-
-    assert_eq!(items.len(), 4, "init + 3 segments expected");
-    assert_eq!(items[0].segment_index, usize::MAX, "init first");
-    assert_eq!(items[0].variant, 0);
-    assert!(items[0].len > 0, "init segment should have non-zero length");
-
-    for (idx, meta) in items.iter().enumerate().skip(1) {
-        assert_eq!(meta.variant, 0);
-        assert_eq!(meta.segment_index, idx - 1);
-        assert!(
-            meta.len > 0,
-            "segment {} should have non-zero length",
-            idx - 1
-        );
-    }
-}
-
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn basestream_seek_restarts_from_index(assets_fixture: TestAssets, net_fixture: HttpClient) {
-    let server = TestServer::new().await;
-    let master_url = server.url("/master.m3u8").expect("url");
-
-    let (handle, mut stream) =
-        build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
-    let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.segment_index, 0);
-
-    handle.seek(2);
-    let after_seek = stream.next().await.expect("item").expect("ok");
-    assert_eq!(after_seek.segment_index, 2);
-    assert_eq!(after_seek.variant, 0);
-
-    let rest: Vec<_> = stream
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .map(|res| res.expect("ok"))
-        .collect();
-    assert!(
-        rest.is_empty(),
-        "after reading segment 2 there should be no more segments"
-    );
-}
+use super::basestream::build_basestream_with_events;
+use super::fixture::{TestAssets, assets_fixture, net_fixture, test_init_data};
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
@@ -160,6 +29,8 @@ async fn basestream_force_variant_switches_output_and_emits_events(
     assets_fixture: TestAssets,
     net_fixture: HttpClient,
 ) {
+    use super::fixture::TestServer;
+
     let server = TestServer::new().await;
     let master_url = server.url("/master.m3u8").expect("url");
 
@@ -202,6 +73,8 @@ async fn basestream_emits_abr_events_on_manual_switch(
     assets_fixture: TestAssets,
     net_fixture: HttpClient,
 ) {
+    use super::fixture::TestServer;
+
     let server = TestServer::new().await;
     let master_url = server.url("/master.m3u8").expect("url");
 
@@ -235,137 +108,6 @@ async fn basestream_emits_abr_events_on_manual_switch(
         }
     }
     assert!(saw_applied, "expected VariantApplied event");
-}
-
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn basestream_stops_after_cancellation(assets_fixture: TestAssets, net_fixture: HttpClient) {
-    let server = TestServer::new().await;
-    let master_url = server.url("/master.m3u8").expect("url");
-
-    let (fetch, playlist) = make_fetch_and_playlist(assets_fixture.assets().clone(), net_fixture);
-    let abr = make_abr(0);
-    let cancel = CancellationToken::new();
-    let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
-
-    let (_handle, mut stream) = SegmentStream::new(SegmentStreamParams {
-        master_url,
-        fetch: Arc::clone(&fetch),
-        playlist_manager: Arc::clone(&playlist),
-        key_manager: None,
-        abr_controller: abr,
-        events_tx,
-        cancel: cancel.clone(),
-        command_capacity: 8,
-        min_sample_bytes: 32_000,
-    });
-
-    let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.segment_index, 0);
-    cancel.cancel();
-
-    let next = stream.next().await;
-    assert!(next.is_none(), "stream should stop after cancellation");
-}
-
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn basestream_pause_and_resume_continues_streaming(
-    assets_fixture: TestAssets,
-    net_fixture: HttpClient,
-) {
-    let server = TestServer::new().await;
-    let master_url = server.url("/master.m3u8").expect("url");
-
-    let (_handle, mut stream) =
-        build_basestream(master_url, 0, assets_fixture.assets().clone(), net_fixture).await;
-
-    let first = stream.next().await.expect("item").expect("ok");
-    assert_eq!(first.segment_index, 0);
-
-    tokio::time::sleep(Duration::from_millis(50)).await;
-
-    let mut remaining = Vec::new();
-    while let Some(item) = stream.next().await {
-        remaining.push(item.expect("ok"));
-    }
-
-    assert_eq!(remaining.len(), 2, "should receive remaining segments");
-    assert_eq!(remaining[0].segment_index, 1);
-    assert_eq!(remaining[1].segment_index, 2);
-}
-
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn basestream_reconnects_and_resumes_same_segment(
-    assets_fixture: TestAssets,
-    net_fixture: HttpClient,
-) {
-    let server = TestServer::new().await;
-    let master_url = server.url("/master.m3u8").expect("url");
-
-    let (fetch, playlist) = make_fetch_and_playlist(assets_fixture.assets().clone(), net_fixture);
-    let abr1 = make_abr(0);
-
-    let cancel1 = CancellationToken::new();
-    let (events_tx1, _) = broadcast::channel::<HlsEvent>(32);
-    let (_handle1, mut stream1) = SegmentStream::new(SegmentStreamParams {
-        master_url: master_url.clone(),
-        fetch: fetch.clone(),
-        playlist_manager: playlist.clone(),
-        key_manager: None,
-        abr_controller: abr1,
-        events_tx: events_tx1,
-        cancel: cancel1.clone(),
-        command_capacity: 8,
-        min_sample_bytes: 32_000,
-    });
-
-    let first = stream1.next().await.expect("item").expect("ok");
-    assert_eq!(first.segment_index, 0);
-
-    cancel1.cancel();
-    let ended = stream1.next().await;
-    assert!(ended.is_none(), "stream should end after cancellation");
-
-    let abr2 = make_abr(0);
-    let cancel2 = CancellationToken::new();
-    let (events_tx2, _) = broadcast::channel::<HlsEvent>(32);
-    let (handle2, stream2) = SegmentStream::new(SegmentStreamParams {
-        master_url,
-        fetch,
-        playlist_manager: playlist,
-        key_manager: None,
-        abr_controller: abr2,
-        events_tx: events_tx2,
-        cancel: cancel2,
-        command_capacity: 8,
-        min_sample_bytes: 32_000,
-    });
-
-    handle2.seek(1);
-
-    let remaining: Vec<_> = stream2
-        .collect::<Vec<_>>()
-        .await
-        .into_iter()
-        .map(|res| res.expect("ok"))
-        .collect();
-
-    assert_eq!(
-        remaining.len(),
-        2,
-        "should continue from next segment after reconnect"
-    );
-    assert_eq!(remaining[0].segment_index, 1);
-    assert!(
-        remaining[0].len > 0,
-        "resume should yield segment data after reconnect"
-    );
-    assert_eq!(remaining[1].segment_index, 2);
 }
 
 #[rstest]

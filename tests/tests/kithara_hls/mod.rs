@@ -1,9 +1,12 @@
 //! Integration tests for kithara-hls
 
 pub mod fixture;
+pub mod basestream;
 
 mod abr_integration;
-mod basestream_iter;
+mod basestream_basic;
+mod basestream_seek;
+mod basestream_abr;
 mod basic_playback;
 mod deferred_abr;
 mod driver_test;
