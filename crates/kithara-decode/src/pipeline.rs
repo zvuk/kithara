@@ -805,7 +805,7 @@ mod tests {
             .await
             .unwrap();
 
-        pipeline.set_speed(speed);
+        pipeline.set_speed(speed).await.unwrap();
 
         pipeline.stop().await;
     }
