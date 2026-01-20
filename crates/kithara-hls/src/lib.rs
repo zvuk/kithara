@@ -41,10 +41,11 @@ pub mod keys;
 pub mod playlist;
 #[doc(hidden)]
 pub mod stream;
+#[doc(hidden)]
+pub mod index;
 
 // Private modules
 mod adapter;
-mod index;
 mod parsing;
 mod source;
 

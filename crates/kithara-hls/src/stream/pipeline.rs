@@ -77,6 +77,12 @@ impl PipelineHandle {
         self.current_variant.load(Ordering::SeqCst)
     }
 
+    /// Directly set current_variant (for finished playlists where pipeline is stopped).
+    /// WARNING: Only use when playlist is finished and pipeline won't process commands!
+    pub(crate) fn set_current_variant_direct(&self, variant: usize) {
+        self.current_variant.store(variant, Ordering::SeqCst);
+    }
+
     /// Get next variant if ABR requested a switch, or None.
     pub fn next_variant(&self) -> Option<usize> {
         let v = self.next_variant.load(Ordering::SeqCst);

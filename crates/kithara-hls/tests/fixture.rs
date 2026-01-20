@@ -295,11 +295,30 @@ pub async fn segment_data(
     if delay != Duration::ZERO {
         tokio::time::sleep(delay).await;
     }
-    let prefix = format!("V{}-SEG-{}:", variant, segment);
-    let mut data = prefix.into_bytes();
-    if data.len() < total_len {
-        data.extend(std::iter::repeat(b'A').take(total_len - data.len()));
-    }
+
+    // Binary format: [VARIANT:1byte][SEGMENT:4bytes][DATA_LEN:4bytes][DATA:DATA_LEN bytes]
+    let mut data = Vec::new();
+
+    // VARIANT (1 byte)
+    data.push(variant as u8);
+
+    // SEGMENT (4 bytes, big-endian)
+    data.extend(&(segment as u32).to_be_bytes());
+
+    // Calculate DATA_LEN (total_len - header size)
+    let header_size = 1 + 4 + 4; // variant + segment + data_len
+    let data_len = if total_len > header_size {
+        total_len - header_size
+    } else {
+        0
+    };
+
+    // DATA_LEN (4 bytes, big-endian)
+    data.extend(&(data_len as u32).to_be_bytes());
+
+    // DATA (padding with 'A')
+    data.extend(std::iter::repeat(b'A').take(data_len));
+
     data
 }
 

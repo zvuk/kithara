@@ -67,6 +67,8 @@ impl HlsSource {
             while let Some(item) = stream.next().await {
                 match item {
                     Ok(meta) => {
+                        eprintln!("[HLS] Loaded: variant={}, segment={}, len={}",
+                            meta.variant, meta.segment_index, meta.len);
                         let encryption = extract_encryption_info(&meta);
                         let mut idx = index_clone.write().await;
                         idx.add(
@@ -180,29 +182,50 @@ impl Source for HlsSource {
                     break (entry.url, local_start..local_end, entry.encryption);
                 }
 
+
                 // Segment not found for current variant.
                 // Check if we should switch to next_variant (ABR switch pending).
-                if let Some(next_var) = self.handle.next_variant()
-                    && idx.find(range.start, next_var).is_some()
-                {
-                    // Next variant has data at this offset - commit switch.
-                    self.handle.commit_variant_switch();
-                    continue;
+                if let Some(next_var) = self.handle.next_variant() {
+                    // Check if requested offset is already available in next_var
+                    if idx.find(range.start, next_var).is_some() {
+                        // Segment exists in new variant - this is ABR boundary.
+                        // Safe to commit switch (decoder reached switch point).
+                        self.handle.commit_variant_switch();
+                        continue;
+                    }
                 }
 
-                // Check if stream is finished before sending seek.
-                if idx.is_finished() {
-                    // Try to find segment_index hint from any loaded variant.
-                    let seg_idx_hint = idx.find_segment_index_for_offset(range.start);
-                    if seg_idx_hint.is_none() {
-                        return Ok(WaitOutcome::Eof);
-                    }
-                    // If we have a hint, send seek command to pipeline.
-                    if let Some(seg_idx) = seg_idx_hint {
-                        self.handle.seek(seg_idx);
+                // CRITICAL: Segment not in current_variant and not in next_variant.
+                // Check if it exists in other variants, but respect ABR decisions:
+                // - Don't switch to HIGHER variant (defeats ABR downswitch)
+                // - Only switch to lower/equal variants, or any variant if playlist finished
+                let num_variants = self.variant_codecs.len();
+
+                // First, try lower or equal variants (respects ABR downswitch decision)
+                let found_variant = (0..num_variants)
+                    .find(|&v| v != current_var && v <= current_var && idx.find(range.start, v).is_some());
+
+                if let Some(target_variant) = found_variant {
+                    // Found segment in lower/equal variant
+                    if idx.is_finished() {
+                        drop(idx);
+                        self.handle.set_current_variant_direct(target_variant);
+                        continue;
+                    } else {
+                        drop(idx);
+                        self.handle.force_variant(target_variant);
+                        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                        continue;
                     }
                 }
-                // If not finished, just wait for the segment to be loaded.
+
+                // Segment not found in any suitable variant.
+                // If playlist finished, return EOF (don't switch to higher variant).
+                if idx.is_finished() {
+                    return Ok(WaitOutcome::Eof);
+                }
+
+                // If not finished, wait for segment to be loaded.
             }
 
             self.notify.notified().await;
@@ -260,7 +283,9 @@ impl Source for HlsSource {
             self.handle.commit_variant_switch();
         }
 
-        let current_var = self.handle.current_variant();
+        // Use loop instead of recursion to avoid stack overflow
+        loop {
+            let current_var = self.handle.current_variant();
 
         let (segment_url, local_offset, segment_len, encryption, total_len) = {
             let idx = self.index.read().await;
@@ -271,15 +296,6 @@ impl Source for HlsSource {
 
             let total = idx.total_len(current_var);
             if offset >= total && total > 0 {
-                // Before returning EOF, check if we should switch to next variant.
-                if let Some(next_var) = self.handle.next_variant()
-                    && idx.find(offset, next_var).is_some()
-                {
-                    // Next variant has data - commit switch and retry.
-                    drop(idx);
-                    self.handle.commit_variant_switch();
-                    return self.read_at(offset, buf).await;
-                }
                 return Ok(0);
             }
 
@@ -289,32 +305,57 @@ impl Source for HlsSource {
                 None => {
                     // Segment not found for current variant.
                     // Check if we should switch to next_variant.
-                    if let Some(next_var) = self.handle.next_variant()
-                        && idx.find(offset, next_var).is_some()
-                    {
-                        // Next variant has data - commit switch and retry.
+                    if let Some(_next_var) = self.handle.next_variant() {
+                        // Next variant requested - commit switch and retry.
                         drop(idx);
                         self.handle.commit_variant_switch();
-                        return self.read_at(offset, buf).await;
+                        continue;
                     }
 
-                    // Only seek if stream is finished (segment won't appear by waiting).
-                    if idx.is_finished() {
-                        if let Some(seg_idx) = idx.find_segment_index_for_offset(offset) {
+                    // Check if segment exists in OTHER variants (race condition with ABR switch)
+                    // CRITICAL: Don't switch to HIGHER variant (defeats ABR downswitch decision)
+                    // Only switch to lower/equal variants or when playlist finished
+                    let num_variants = self.variant_codecs.len();
+                    let found_variant = (0..num_variants)
+                        .find(|&v| v != current_var && v <= current_var && idx.find(offset, v).is_some());
+
+                    if let Some(target_variant) = found_variant {
+                        // Switch to variant with segment (only lower/equal bitrate)
+                        if idx.is_finished() {
                             drop(idx);
-                            self.handle.seek(seg_idx);
-                            self.notify.notified().await;
-                            return self.read_at(offset, buf).await;
+                            self.handle.set_current_variant_direct(target_variant);
+                        } else {
+                            drop(idx);
+                            self.handle.force_variant(target_variant);
+                            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
                         }
+                        continue;
+                    }
+
+                    // Don't switch to HIGHER variant even if playlist finished (respect ABR decision)
+
+                    // Segment not in index for current variant.
+                    // Try to seek to load it from playlist (if it exists in playlist).
+                    if let Some(seg_idx) = idx.find_segment_index_for_offset(offset) {
+                        drop(idx);
+                        self.handle.seek(seg_idx);
+                        self.notify.notified().await;
+                        continue;
+                    }
+
+                    // Segment doesn't exist in playlist for current variant.
+                    if idx.is_finished() {
+                        // Stream finished and segment not in playlist → error
                         return Err(KitharaIoError::Source(HlsError::SegmentNotFound(format!(
                             "No segment for offset {} in variant {}",
                             offset, current_var
                         ))));
                     }
-                    // Stream not finished - wait for segment to be loaded.
+
+                    // Stream not finished - wait for more segments to be loaded.
                     drop(idx);
                     self.notify.notified().await;
-                    return self.read_at(offset, buf).await;
+                    continue;
                 }
             };
 
@@ -384,7 +425,8 @@ impl Source for HlsSource {
         // Update last read position for seek detection.
         self.last_read_pos.store(new_pos, Ordering::Relaxed);
 
-        Ok(bytes_read)
+        return Ok(bytes_read);
+        } // end loop
     }
 
     fn len(&self) -> Option<u64> {

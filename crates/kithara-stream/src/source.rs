@@ -494,16 +494,9 @@ where
         let old_pos = self.pos;
         self.pos = new_pos_u64;
 
-        // If position changed, notify worker with new epoch for backward seeks only
+        // If position changed, notify worker with new epoch
         if new_pos_u64 != old_pos {
-            let is_backward = new_pos_u64 < old_pos;
-
-            // Only increment epoch for backward seeks (user-initiated)
-            // Forward seeks (variant switch, buffering) preserve epoch
-            if is_backward {
-                self.epoch = self.epoch.wrapping_add(1);
-            }
-
+            self.epoch = self.epoch.wrapping_add(1);
             self.current_chunk = None;
             self.eof_reached = false;
 
@@ -517,7 +510,6 @@ where
                 from = old_pos,
                 to = new_pos_u64,
                 epoch = self.epoch,
-                backward = is_backward,
                 "SyncReader::seek sent to worker"
             );
         }

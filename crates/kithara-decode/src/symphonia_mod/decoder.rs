@@ -521,3 +521,14 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for Streamin
         None
     }
 }
+
+// Implement generic Decoder trait for SymphoniaDecoder
+impl crate::Decoder for SymphoniaDecoder {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+        self.next_chunk()
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec()
+    }
+}

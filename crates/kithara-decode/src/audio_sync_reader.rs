@@ -6,8 +6,6 @@
 
 use std::{sync::Arc, time::Duration};
 
-use parking_lot::Mutex;
-use ringbuf::traits::Consumer;
 use tracing::{debug, trace};
 
 use crate::{PcmBuffer, PcmSpec};
@@ -16,43 +14,39 @@ use crate::{PcmBuffer, PcmSpec};
 ///
 /// Implements `Iterator<Item=f32>` and `rodio::Source` traits.
 pub struct AudioSyncReader {
-    /// Ring buffer consumer for reading samples.
-    consumer: Arc<Mutex<ringbuf::HeapCons<f32>>>,
+    /// Channel receiver for reading sample chunks (with backpressure).
+    sample_rx: kanal::Receiver<Vec<f32>>,
     /// Shared PCM buffer for metadata.
     buffer: Arc<PcmBuffer>,
     /// Audio specification.
     spec: PcmSpec,
     /// End of stream reached.
     eof: bool,
-    /// Internal read buffer.
-    read_buffer: Vec<f32>,
-    /// Current position in read buffer.
-    buffer_offset: usize,
-    /// Samples available in read buffer.
-    buffer_samples: usize,
+    /// Current chunk being read.
+    current_chunk: Option<Vec<f32>>,
+    /// Current position in chunk.
+    chunk_offset: usize,
 }
 
 impl AudioSyncReader {
-    /// Create a new AudioSyncReader from a pipeline consumer.
+    /// Create a new AudioSyncReader from a pipeline sample receiver.
     ///
     /// # Arguments
-    /// - `consumer`: Ring buffer consumer from Pipeline
+    /// - `sample_rx`: Channel receiver from Pipeline (get via pipeline.consumer())
     /// - `buffer`: Shared PCM buffer for metadata
     /// - `spec`: Audio specification (should match buffer spec)
     pub fn new(
-        consumer: Arc<Mutex<ringbuf::HeapCons<f32>>>,
+        sample_rx: kanal::Receiver<Vec<f32>>,
         buffer: Arc<PcmBuffer>,
         spec: PcmSpec,
     ) -> Self {
-        const BUFFER_SIZE: usize = 8192; // Samples, not frames
         Self {
-            consumer,
+            sample_rx,
             buffer,
             spec,
             eof: false,
-            read_buffer: vec![0.0; BUFFER_SIZE],
-            buffer_offset: 0,
-            buffer_samples: 0,
+            current_chunk: None,
+            chunk_offset: 0,
         }
     }
 
@@ -61,43 +55,29 @@ impl AudioSyncReader {
         self.spec
     }
 
-    /// Read more samples from ring buffer into internal buffer.
+    /// Receive next chunk from channel.
+    ///
+    /// Blocks until data is available or channel is closed.
+    /// No polling/sleep needed - kanal handles blocking efficiently.
     fn fill_buffer(&mut self) -> bool {
         if self.eof {
             return false;
         }
 
-        // Wait for data with polling
-        let mut attempts = 0;
-        const MAX_ATTEMPTS: u32 = 1000;
-        loop {
-            let mut consumer = self.consumer.lock();
-            let n = consumer.pop_slice(&mut self.read_buffer);
-            drop(consumer);
-
-            if n > 0 {
-                debug!(samples = n, "AudioSyncReader: read from ring buffer");
-                self.buffer_samples = n;
-                self.buffer_offset = 0;
-                return true;
+        // Blocking receive from channel (automatic backpressure)
+        match self.sample_rx.recv() {
+            Ok(chunk) => {
+                debug!(samples = chunk.len(), "AudioSyncReader: received chunk");
+                self.current_chunk = Some(chunk);
+                self.chunk_offset = 0;
+                true
             }
-
-            // Check if EOF
-            if self.buffer.is_eof() {
-                debug!("AudioSyncReader: EOF detected");
+            Err(_) => {
+                // Channel closed (EOF)
+                debug!("AudioSyncReader: channel closed (EOF)");
                 self.eof = true;
-                return false;
+                false
             }
-
-            // Wait a bit for more data
-            attempts += 1;
-            if attempts > MAX_ATTEMPTS {
-                // Timeout
-                debug!("AudioSyncReader: timeout waiting for data");
-                self.eof = true;
-                return false;
-            }
-            std::thread::sleep(std::time::Duration::from_micros(100));
         }
     }
 }
@@ -110,24 +90,28 @@ impl Iterator for AudioSyncReader {
             return None;
         }
 
-        // Try to get sample from current buffer
-        if self.buffer_offset < self.buffer_samples {
-            let sample = self.read_buffer[self.buffer_offset];
-            self.buffer_offset += 1;
-            return Some(sample);
-        }
-
-        // Buffer exhausted, need more data
-        if self.fill_buffer() {
-            // Successfully filled buffer
-            if self.buffer_offset < self.buffer_samples {
-                let sample = self.read_buffer[self.buffer_offset];
-                self.buffer_offset += 1;
+        // Try to get sample from current chunk
+        if let Some(ref chunk) = self.current_chunk {
+            if self.chunk_offset < chunk.len() {
+                let sample = chunk[self.chunk_offset];
+                self.chunk_offset += 1;
                 return Some(sample);
             }
         }
 
-        // EOF or timeout
+        // Chunk exhausted or no chunk - need more data
+        if self.fill_buffer() {
+            // Successfully received new chunk
+            if let Some(ref chunk) = self.current_chunk {
+                if self.chunk_offset < chunk.len() {
+                    let sample = chunk[self.chunk_offset];
+                    self.chunk_offset += 1;
+                    return Some(sample);
+                }
+            }
+        }
+
+        // EOF
         trace!("AudioSyncReader: EOF");
         None
     }
@@ -135,12 +119,13 @@ impl Iterator for AudioSyncReader {
 
 impl rodio::Source for AudioSyncReader {
     fn current_span_len(&self) -> Option<usize> {
-        // Return remaining samples in internal buffer
-        if self.buffer_samples > self.buffer_offset {
-            Some(self.buffer_samples - self.buffer_offset)
-        } else {
-            None
+        // Return remaining samples in current chunk
+        if let Some(ref chunk) = self.current_chunk {
+            if self.chunk_offset < chunk.len() {
+                return Some(chunk.len() - self.chunk_offset);
+            }
         }
+        None
     }
 
     fn channels(&self) -> u16 {
