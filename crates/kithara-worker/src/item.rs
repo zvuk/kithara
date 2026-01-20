@@ -23,6 +23,14 @@ impl<C> Fetch<C> {
         }
     }
 
+    /// Consume the fetch and return the inner data.
+    ///
+    /// This is the idiomatic way to extract owned data from the wrapper,
+    /// following the Rust stdlib pattern (e.g., `Arc::into_inner()`, `Box::into_inner()`).
+    pub fn into_inner(self) -> C {
+        self.data
+    }
+
     /// Check if this is an EOF marker.
     pub fn is_eof(&self) -> bool {
         self.is_eof
@@ -34,14 +42,12 @@ impl<C> Fetch<C> {
     }
 }
 
-/// Convert `Fetch<C>` into its data `C`.
-///
-/// This allows idiomatic Rust usage like `let bytes: Vec<u8> = fetch.into();`
-impl<C> From<Fetch<C>> for C {
-    fn from(fetch: Fetch<C>) -> C {
-        fetch.data
+impl<C> AsRef<C> for Fetch<C> {
+    fn as_ref(&self) -> &C {
+        &self.data
     }
 }
+
 
 /// Generic trait for worker items.
 ///
@@ -69,26 +75,13 @@ impl<C: Send + 'static> WorkerItem for Fetch<C> {
     }
 
     fn into_data(self) -> C {
-        self.into()
+        self.into_inner()
     }
 
     fn is_eof(&self) -> bool {
         self.is_eof
     }
 }
-
-/// Item with epoch tracking for invalidation on seek.
-///
-/// Used by `AsyncWorker` for async sources that support seeking.
-/// This is now a type alias to `Fetch<C>` for backwards compatibility.
-pub type EpochItem<C> = Fetch<C>;
-
-/// Simple item without epoch tracking.
-///
-/// Used by `SyncWorker` for synchronous sources that don't support seeking.
-/// This is now a type alias to `Fetch<C>` for backwards compatibility.
-/// For sync sources, epoch is always set to 0.
-pub type SimpleItem<C> = Fetch<C>;
 
 #[cfg(test)]
 mod tests {
@@ -110,21 +103,29 @@ mod tests {
     }
 
     #[test]
-    fn test_fetch_into_conversion() {
+    fn test_fetch_with_epoch() {
+        // Verify Fetch works with epochs (for AsyncWorker)
+        let epoch_item: Fetch<i32> = Fetch::new(42, false, 5);
+        assert_eq!(epoch_item.data, 42);
+        assert_eq!(epoch_item.epoch, 5);
+
+        // Verify Fetch works with epoch=0 (for SyncWorker)
+        let simple_item: Fetch<i32> = Fetch::new(100, true, 0);
+        assert_eq!(simple_item.data, 100);
+        assert_eq!(simple_item.epoch, 0);
+    }
+
+    #[test]
+    fn test_into_inner_api() {
         let fetch = Fetch::new(vec![1u8, 2, 3], false, 0);
-        let bytes: Vec<u8> = fetch.into();
+        let bytes = fetch.into_inner();
         assert_eq!(bytes, vec![1, 2, 3]);
     }
 
     #[test]
-    fn test_type_aliases() {
-        // Verify that EpochItem and SimpleItem work as expected
-        let epoch_item: EpochItem<i32> = Fetch::new(42, false, 5);
-        assert_eq!(epoch_item.data, 42);
-        assert_eq!(epoch_item.epoch, 5);
-
-        let simple_item: SimpleItem<i32> = Fetch::new(100, true, 0);
-        assert_eq!(simple_item.data, 100);
-        assert_eq!(simple_item.epoch, 0);
+    fn test_as_ref_api() {
+        let fetch = Fetch::new(vec![1u8, 2, 3], false, 0);
+        let bytes_ref: &Vec<u8> = fetch.as_ref();
+        assert_eq!(bytes_ref, &vec![1, 2, 3]);
     }
 }

@@ -1,15 +1,11 @@
 //! Async worker implementation for non-blocking sources.
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 use tracing::trace;
 
 use crate::item::Fetch;
 use crate::result::WorkerResult;
 use crate::traits::{AsyncWorkerSource, Worker};
-
-// Re-export for backwards compatibility
-use crate::item::EpochItem;
 
 /// Generic async worker that runs in a background task.
 ///
@@ -17,16 +13,16 @@ use crate::item::EpochItem;
 /// a channel. It handles commands (like seek) and tracks epochs for invalidation.
 pub struct AsyncWorker<S: AsyncWorkerSource> {
     source: S,
-    cmd_rx: mpsc::Receiver<S::Command>,
-    data_tx: kanal::AsyncSender<EpochItem<S::Chunk>>,
+    cmd_rx: kanal::AsyncReceiver<S::Command>,
+    data_tx: kanal::AsyncSender<Fetch<S::Chunk>>,
 }
 
 impl<S: AsyncWorkerSource> AsyncWorker<S> {
     /// Create a new async worker.
     pub fn new(
         source: S,
-        cmd_rx: mpsc::Receiver<S::Command>,
-        data_tx: kanal::AsyncSender<EpochItem<S::Chunk>>,
+        cmd_rx: kanal::AsyncReceiver<S::Command>,
+        data_tx: kanal::AsyncSender<Fetch<S::Chunk>>,
     ) -> Self {
         Self {
             source,
@@ -38,7 +34,7 @@ impl<S: AsyncWorkerSource> AsyncWorker<S> {
     /// Drain all pending commands. Returns true if any command was processed.
     fn drain_pending_commands(&mut self) -> bool {
         let mut processed = false;
-        while let Ok(cmd) = self.cmd_rx.try_recv() {
+        while let Ok(Some(cmd)) = self.cmd_rx.try_recv() {
             let new_epoch = self.source.handle_command(cmd);
             trace!(epoch = new_epoch, "AsyncWorker: drained pending command");
             processed = true;
@@ -48,24 +44,24 @@ impl<S: AsyncWorkerSource> AsyncWorker<S> {
 
     /// Send an item through the channel, interruptible by commands.
     /// Returns `(result, command_received)` where `command_received` indicates if a seek was processed.
-    async fn send_item(&mut self, chunk: S::Chunk, is_eof: bool) -> (WorkerResult, bool) {
-        let item = Fetch::new(chunk, is_eof, self.source.epoch());
+    async fn send_item(&mut self, fetch: Fetch<S::Chunk>) -> (WorkerResult, bool) {
+        let fetch_epoch = fetch.epoch();
 
         tokio::select! {
             biased;
-            cmd_opt = self.cmd_rx.recv() => {
+            cmd_result = self.cmd_rx.recv() => {
                 // Command received while waiting to send - handle it
                 // The current item is discarded (will be re-fetched with new position)
-                match cmd_opt {
-                    Some(cmd) => {
+                match cmd_result {
+                    Ok(cmd) => {
                         let new_epoch = self.source.handle_command(cmd);
-                        trace!(epoch = new_epoch, "AsyncWorker: command during send");
+                        trace!(old_epoch = fetch_epoch, new_epoch, "AsyncWorker: command during send, discarding chunk");
                         (WorkerResult::Continue, true)
                     }
-                    None => (WorkerResult::Stop, false), // Channel closed
+                    Err(_) => (WorkerResult::Stop, false), // Channel closed
                 }
             }
-            result = self.data_tx.send(item) => {
+            result = self.data_tx.send(fetch) => {
                 if result.is_ok() {
                     (WorkerResult::Continue, false)
                 } else {
@@ -91,27 +87,37 @@ impl<S: AsyncWorkerSource> AsyncWorker<S> {
                 biased;
 
                 // Always prioritize commands
-                cmd_opt = self.cmd_rx.recv() => {
-                    match cmd_opt {
-                        Some(cmd) => {
+                cmd_result = self.cmd_rx.recv() => {
+                    match cmd_result {
+                        Ok(cmd) => {
                             let new_epoch = self.source.handle_command(cmd);
                             trace!(epoch = new_epoch, "AsyncWorker: received command");
                             at_eof = false; // Reset EOF state, will refetch
                         }
-                        None => break, // Channel closed
+                        Err(_) => break, // Channel closed
                     }
                 }
 
                 // Only fetch if not at EOF
                 fetch = self.source.fetch_next(), if !at_eof => {
-                    let is_eof = fetch.is_eof();
-                    let epoch = fetch.epoch();
-
-                    if is_eof {
-                        trace!(epoch, "AsyncWorker: EOF reached");
+                    // Check if epoch changed while we were fetching
+                    // This can happen if a command arrived between drain and fetch
+                    if fetch.epoch() != self.source.epoch() {
+                        trace!(
+                            fetch_epoch = fetch.epoch(),
+                            current_epoch = self.source.epoch(),
+                            "AsyncWorker: epoch mismatch, discarding stale fetch"
+                        );
+                        continue; // Discard and refetch with new epoch
                     }
 
-                    let (send_result, cmd_received) = self.send_item(fetch.data, is_eof).await;
+                    let is_eof = fetch.is_eof();
+
+                    if is_eof {
+                        trace!(epoch = fetch.epoch(), "AsyncWorker: EOF reached");
+                    }
+
+                    let (send_result, cmd_received) = self.send_item(fetch).await;
                     if cmd_received {
                         at_eof = false; // Reset EOF on command
                     } else if is_eof {

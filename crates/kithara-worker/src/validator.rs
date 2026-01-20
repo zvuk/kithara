@@ -1,6 +1,6 @@
 //! Item validation for epoch-based invalidation.
 
-use crate::item::{EpochItem, SimpleItem, WorkerItem};
+use crate::item::{Fetch, WorkerItem};
 
 /// Trait for validating worker items.
 ///
@@ -32,8 +32,8 @@ impl EpochValidator {
     }
 }
 
-impl<C: Send + 'static> ItemValidator<EpochItem<C>> for EpochValidator {
-    fn is_valid(&self, item: &EpochItem<C>) -> bool {
+impl<C: Send + 'static> ItemValidator<Fetch<C>> for EpochValidator {
+    fn is_valid(&self, item: &Fetch<C>) -> bool {
         item.epoch == self.epoch
     }
 }
@@ -50,8 +50,8 @@ impl Default for EpochValidator {
 #[derive(Debug, Clone, Copy)]
 pub struct AlwaysValid;
 
-impl<C: Send + 'static> ItemValidator<SimpleItem<C>> for AlwaysValid {
-    fn is_valid(&self, _item: &SimpleItem<C>) -> bool {
+impl<C: Send + 'static> ItemValidator<Fetch<C>> for AlwaysValid {
+    fn is_valid(&self, _item: &Fetch<C>) -> bool {
         true
     }
 }
@@ -70,37 +70,23 @@ mod tests {
         let mut validator = EpochValidator::new();
         assert_eq!(validator.epoch, 0);
 
-        let item0 = EpochItem {
-            data: 42,
-            epoch: 0,
-            is_eof: false,
-        };
+        let item0 = Fetch::new(42, false, 0);
         assert!(validator.is_valid(&item0));
 
         validator.next_epoch();
         assert!(!validator.is_valid(&item0));
 
-        let item1 = EpochItem {
-            data: 43,
-            epoch: 1,
-            is_eof: false,
-        };
+        let item1 = Fetch::new(43, false, 1);
         assert!(validator.is_valid(&item1));
     }
 
     #[test]
     fn test_always_valid_validator() {
         let validator = AlwaysValid;
-        let item = SimpleItem {
-            data: 42,
-            is_eof: false,
-        };
+        let item = Fetch::new(42, false, 0);
         assert!(validator.is_valid(&item));
 
-        let eof_item = SimpleItem {
-            data: 0,
-            is_eof: true,
-        };
+        let eof_item = Fetch::new(0, true, 0);
         assert!(validator.is_valid(&eof_item));
     }
 }

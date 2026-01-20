@@ -1,7 +1,6 @@
 //! Sync worker implementation for blocking sources.
 
 use async_trait::async_trait;
-use tokio::sync::mpsc;
 use tracing::trace;
 
 use crate::item::Fetch;
@@ -13,13 +12,13 @@ use crate::item::SimpleItem;
 /// Blocking worker for synchronous sources.
 ///
 /// This is the blocking counterpart to `AsyncWorker`. It runs in a
-/// `spawn_blocking` task and uses `SimpleItem` (no epoch tracking).
+/// `spawn_blocking` task and uses `Fetch` with epoch always set to 0.
 ///
 /// ## Usage
 ///
 /// ```ignore
 /// let source = MySyncSource::new();
-/// let (cmd_tx, cmd_rx) = mpsc::channel(4);
+/// let (cmd_tx, cmd_rx) = kanal::bounded(4);
 /// let (data_tx, data_rx) = kanal::bounded(4);
 ///
 /// let worker = SyncWorker::new(source, cmd_rx, data_tx);
@@ -27,16 +26,16 @@ use crate::item::SimpleItem;
 /// ```
 pub struct SyncWorker<S: SyncWorkerSource> {
     source: S,
-    cmd_rx: mpsc::Receiver<S::Command>,
-    data_tx: kanal::Sender<SimpleItem<S::Chunk>>,
+    cmd_rx: kanal::Receiver<S::Command>,
+    data_tx: kanal::Sender<Fetch<S::Chunk>>,
 }
 
 impl<S: SyncWorkerSource> SyncWorker<S> {
     /// Create a new sync worker.
     pub fn new(
         source: S,
-        cmd_rx: mpsc::Receiver<S::Command>,
-        data_tx: kanal::Sender<SimpleItem<S::Chunk>>,
+        cmd_rx: kanal::Receiver<S::Command>,
+        data_tx: kanal::Sender<Fetch<S::Chunk>>,
     ) -> Self {
         Self {
             source,
@@ -56,7 +55,7 @@ impl<S: SyncWorkerSource> SyncWorker<S> {
         loop {
             // Drain all pending commands
             let mut cmd_received = false;
-            while let Ok(cmd) = self.cmd_rx.try_recv() {
+            while let Ok(Some(cmd)) = self.cmd_rx.try_recv() {
                 self.source.handle_command(cmd);
                 cmd_received = true;
                 trace!("SyncWorker: drained pending command");
@@ -83,11 +82,27 @@ impl<S: SyncWorkerSource> SyncWorker<S> {
                     match self.data_tx.try_send_option(&mut item_opt) {
                         Ok(true) => break, // Successfully sent
                         Ok(false) => {
-                            // Channel full, wait and retry
-                            std::thread::sleep(std::time::Duration::from_micros(100));
+                            // Channel full, check if command channel is closed
+                            match self.cmd_rx.try_recv() {
+                                Ok(Some(cmd)) => {
+                                    // Command received, handle it and discard current item
+                                    self.source.handle_command(cmd);
+                                    trace!("SyncWorker: command during send, discarding chunk");
+                                    return; // Exit to refetch with new position
+                                }
+                                Ok(None) => {
+                                    // No command available, wait and retry send
+                                    std::thread::sleep(std::time::Duration::from_micros(100));
+                                }
+                                Err(_) => {
+                                    // Command channel closed, exit gracefully
+                                    trace!("SyncWorker: command channel closed during send, shutting down");
+                                    return;
+                                }
+                            }
                         }
                         Err(_) => {
-                            return; // Channel closed
+                            return; // Data channel closed
                         }
                     }
                 }
@@ -96,14 +111,24 @@ impl<S: SyncWorkerSource> SyncWorker<S> {
                     at_eof = true;
                 }
             } else {
-                // At EOF, block on commands
-                match self.cmd_rx.blocking_recv() {
-                    Some(cmd) => {
+                // At EOF, periodically check for commands with timeout
+                // This prevents deadlock in spawn_blocking thread
+                match self.cmd_rx.try_recv() {
+                    Ok(Some(cmd)) => {
                         self.source.handle_command(cmd);
                         at_eof = false;
                         trace!("SyncWorker: received command at EOF, resuming");
                     }
-                    None => break, // Channel closed
+                    Ok(None) => {
+                        // No command within check, loop again
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        continue;
+                    }
+                    Err(_) => {
+                        // Channel closed, exit gracefully
+                        trace!("SyncWorker: command channel closed at EOF, shutting down");
+                        break;
+                    }
                 }
             }
         }

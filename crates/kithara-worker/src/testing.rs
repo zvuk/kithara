@@ -1,7 +1,31 @@
-//! Test utilities and mock implementations for kithara-worker.
+//! Mock implementations for testing workers.
 //!
-//! This module provides mock implementations of `AsyncWorkerSource` and `SyncWorkerSource`
-//! for use in tests. Enable with `test-utils` feature or in tests.
+//! ## Why manual mocks instead of mockall?
+//!
+//! We cannot use `#[automock]` for `AsyncWorkerSource` and `SyncWorkerSource`
+//! because **mockall does not support traits with associated types**.
+//!
+//! Both traits have:
+//! - `type Chunk: Send + 'static`
+//! - `type Command: Send + 'static`
+//!
+//! Mockall requires knowing concrete types at compile time to generate mocks,
+//! but generic associated types cannot be resolved until trait implementation.
+//!
+//! This is a fundamental limitation documented in:
+//! <https://docs.rs/mockall/latest/mockall/#associated-types>
+//!
+//! ## Our approach
+//!
+//! Manual mocks with concrete types:
+//! - `MockAsyncSource`: `Chunk = Vec<u8>`, `Command = SeekCommand`
+//! - `MockSyncSource`: `Chunk = Vec<u8>`, `Command = ()`
+//!
+//! This gives us:
+//! - Full control over behavior
+//! - Simple, readable implementation
+//! - No macro complexity
+//! - Easy to extend for new test scenarios
 
 use async_trait::async_trait;
 

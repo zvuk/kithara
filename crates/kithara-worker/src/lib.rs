@@ -12,7 +12,7 @@
 //!   - Produces `SimpleItem<C>` without epoch overhead
 //!   - Validated by `AlwaysValid` (no invalidation)
 //!
-//! Both workers follow the same protocol: commands via mpsc, data via kanal channels,
+//! Both workers follow the same protocol: commands via kanal, data via kanal channels,
 //! with backpressure and EOF signaling.
 //!
 //! ## Architecture
@@ -38,6 +38,7 @@ mod async_worker;
 mod item;
 mod result;
 mod sync_worker;
+pub mod testing;
 mod traits;
 mod validator;
 
@@ -47,14 +48,15 @@ pub mod testing;
 
 // Public re-exports
 pub use async_worker::AsyncWorker;
-pub use item::{EpochItem, Fetch, SimpleItem, WorkerItem};
-pub use result::WorkerResult;
+pub use item::{Fetch, WorkerItem};pub use result::WorkerResult;
 pub use sync_worker::SyncWorker;
 pub use traits::{AsyncWorkerSource, SyncWorkerSource, Worker};
 pub use validator::{AlwaysValid, EpochConsumer, EpochValidator, ItemValidator};
 
 // Export mock types when testing or test-utils feature is enabled
-// Note: Only Worker trait has auto-generated mock (MockWorker)
-// AsyncWorkerSource and SyncWorkerSource require manual mocking due to associated types
+// Note: Only Worker trait has auto-generated mock (MockWorker).
+// AsyncWorkerSource and SyncWorkerSource use manual mocking because
+// mockall does not support traits with associated types.
+// See testing.rs module documentation for details.
 #[cfg(any(test, feature = "test-utils"))]
 pub use traits::MockWorker;
