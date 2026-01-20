@@ -108,14 +108,6 @@ impl<E: Estimator> AbrController<E> {
     ) -> AbrDecision {
         let current = self.current_variant.load(Ordering::Acquire);
 
-        let Some(estimate_bps) = self.estimator.estimate_bps() else {
-            return AbrDecision {
-                target_variant_index: current,
-                reason: AbrReason::NoEstimate,
-                changed: false,
-            };
-        };
-
         if !self.can_switch_now(now) {
             return AbrDecision {
                 target_variant_index: current,
@@ -123,6 +115,14 @@ impl<E: Estimator> AbrController<E> {
                 changed: false,
             };
         }
+
+        let Some(estimate_bps) = self.estimator.estimate_bps() else {
+            return AbrDecision {
+                target_variant_index: current,
+                reason: AbrReason::NoEstimate,
+                changed: false,
+            };
+        };
 
         let current_bw = variants
             .iter()
@@ -248,11 +248,46 @@ pub type DefaultAbrController = AbrController<ThroughputEstimator>;
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     use rstest::rstest;
 
     use super::*;
+
+    // Mock estimator for testing call counts
+    #[derive(Clone)]
+    struct MockEstimator {
+        estimate: Option<u64>,
+        call_count: Arc<AtomicUsize>,
+    }
+
+    impl MockEstimator {
+        fn new(estimate: Option<u64>) -> Self {
+            Self {
+                estimate,
+                call_count: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn calls(&self) -> usize {
+            self.call_count.load(Ordering::SeqCst)
+        }
+    }
+
+    impl Estimator for MockEstimator {
+        fn estimate_bps(&self) -> Option<u64> {
+            self.call_count.fetch_add(1, Ordering::SeqCst);
+            self.estimate
+        }
+
+        fn push_sample(&mut self, _sample: ThroughputSample) {}
+    }
 
     fn variants() -> Vec<Variant> {
         vec![
@@ -381,5 +416,54 @@ mod tests {
         assert_eq!(d.target_variant_index, 1);
         assert!(!d.changed);
         assert_eq!(d.reason, AbrReason::NoEstimate);
+    }
+
+    #[test]
+    fn test_estimator_called_once_per_decide() {
+        let cfg = AbrConfig {
+            mode: crate::options::AbrMode::Auto(Some(1)),
+            min_switch_interval: Duration::ZERO,
+            ..AbrConfig::default()
+        };
+        let mock_estimator = MockEstimator::new(Some(1_000_000));
+        let c = AbrController::with_estimator(cfg, mock_estimator.clone(), None);
+        let now = Instant::now();
+
+        c.decide(&variants(), 5.0, now);
+        assert_eq!(mock_estimator.calls(), 1, "Should call estimator exactly once");
+
+        c.decide(&variants(), 5.0, now);
+        assert_eq!(
+            mock_estimator.calls(),
+            2,
+            "Second decide should call estimator again"
+        );
+    }
+
+    #[test]
+    fn test_min_interval_skips_estimator_call() {
+        let cfg = AbrConfig {
+            mode: crate::options::AbrMode::Auto(Some(1)),
+            min_switch_interval: Duration::from_secs(30),
+            ..AbrConfig::default()
+        };
+        let mock_estimator = MockEstimator::new(Some(5_000_000));
+        let c = AbrController::with_estimator(cfg, mock_estimator.clone(), None);
+        let now = Instant::now();
+
+        // First call - should call estimator and cause switch
+        let d1 = c.decide(&variants(), 10.0, now);
+        assert!(d1.changed, "First call should switch");
+        assert_eq!(mock_estimator.calls(), 1);
+
+        // Second call immediately - should NOT call estimator (min_interval not elapsed)
+        let d2 = c.decide(&variants(), 10.0, now);
+        assert!(!d2.changed, "Second call should not switch");
+        assert_eq!(d2.reason, AbrReason::MinInterval);
+        assert_eq!(
+            mock_estimator.calls(),
+            1,
+            "Should not call estimator when min_interval prevents switch"
+        );
     }
 }
