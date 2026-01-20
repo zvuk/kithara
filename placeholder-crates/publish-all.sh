@@ -4,7 +4,6 @@ set -e
 cd "$(dirname "$0")"
 
 crates=(
-    "kithara-storage"
     "kithara-assets"
     "kithara-bufpool"
     "kithara-worker"
@@ -12,13 +11,14 @@ crates=(
 )
 
 for crate in "${crates[@]}"; do
+    sleep 600
     echo "Publishing $crate..."
     cd "$crate"
     cargo publish --allow-dirty
     cd ..
     echo "✓ Published $crate"
     echo ""
-    sleep 15  # longer pause to avoid rate limits
+    sleep 600  # longer pause to avoid rate limits
 done
 
 echo "All crates published!"

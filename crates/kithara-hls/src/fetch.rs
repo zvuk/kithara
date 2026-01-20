@@ -329,4 +329,63 @@ mod tests {
         assert!(result2.is_ok());
         assert_eq!(result1.unwrap(), result2.unwrap());
     }
+
+    #[tokio::test]
+    async fn test_fetch_key_with_mock_net() {
+        let temp_dir = TempDir::new().unwrap();
+        let assets = AssetStoreBuilder::new()
+            .asset_root("test")
+            .root_dir(temp_dir.path())
+            .build();
+
+        let mut mock_net = MockNet::new();
+        let test_url = Url::parse("http://example.com/key.bin").unwrap();
+        let test_url_clone = test_url.clone();
+        let key_content = vec![0u8; 16];
+
+        mock_net
+            .expect_get_bytes()
+            .times(1)
+            .withf(move |url, _| url == &test_url_clone)
+            .returning(move |_, _| Ok(Bytes::from(key_content.clone())));
+
+        let fetch_manager = FetchManager::with_net(assets, mock_net);
+
+        let result: HlsResult<Bytes> = fetch_manager
+            .fetch_key(&test_url, "key.bin", None)
+            .await;
+
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert_eq!(bytes.len(), 16);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_with_network_error() {
+        use kithara_net::NetError;
+
+        let temp_dir = TempDir::new().unwrap();
+        let assets = AssetStoreBuilder::new()
+            .asset_root("test")
+            .root_dir(temp_dir.path())
+            .build();
+
+        let mut mock_net = MockNet::new();
+        let test_url = Url::parse("http://example.com/playlist.m3u8").unwrap();
+        let test_url_clone = test_url.clone();
+
+        mock_net
+            .expect_get_bytes()
+            .times(1)
+            .withf(move |url, _| url == &test_url_clone)
+            .returning(|_, _| Err(NetError::Timeout));
+
+        let fetch_manager = FetchManager::with_net(assets, mock_net);
+
+        let result: HlsResult<Bytes> = fetch_manager
+            .fetch_playlist(&test_url, "playlist.m3u8")
+            .await;
+
+        assert!(result.is_err());
+    }
 }
