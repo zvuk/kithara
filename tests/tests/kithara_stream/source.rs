@@ -4,6 +4,7 @@ use std::{
     io::{Read, Seek, SeekFrom},
     ops::Range,
     sync::Arc,
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -120,6 +121,7 @@ fn small_data() -> Vec<u8> {
 #[case(10, b"KLMNO")]
 #[case(20, b"UVWXY")]
 #[case(25, b"Z")]
+#[timeout(Duration::from_secs(10))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_start_reads_correct_bytes(
     test_data: Vec<u8>,
@@ -176,6 +178,7 @@ async fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
 // ==================== SeekFrom::Current tests ====================
 
 #[rstest]
+#[timeout(Duration::from_secs(10))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_current_forward(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
@@ -373,6 +376,7 @@ async fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
 // ==================== Multiple seeks ====================
 
 #[rstest]
+#[timeout(Duration::from_secs(10))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
     let data = test_data.clone();
@@ -500,6 +504,7 @@ async fn seek_exact_to_last_byte(small_data: Vec<u8>) {
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(10))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_to_exact_eof_returns_zero_on_read(small_data: Vec<u8>) {
     let len = small_data.len() as u64;

@@ -153,8 +153,8 @@ async fn stream_file_seek_start_reads_correct_bytes(
 }
 
 #[rstest]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[timeout(Duration::from_secs(10))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stream_file_seek_current_works(#[future] test_server: String, temp_dir: TempDir) {
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
@@ -238,8 +238,8 @@ async fn stream_file_seek_past_eof_fails(#[future] test_server: String, temp_dir
 }
 
 #[rstest]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[timeout(Duration::from_secs(10))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stream_file_multiple_seeks_work(#[future] test_server: String, temp_dir: TempDir) {
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
