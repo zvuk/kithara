@@ -3,9 +3,13 @@
 //! Tests that verify the audio fixtures work correctly and can be used
 //! by decode tests without external network access.
 
+use std::time::Duration;
+
 use super::fixture;
 use rstest::rstest;
 
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_audio_test_server_starts() {
     // Test that the server can start and serve requests
@@ -24,6 +28,7 @@ async fn test_audio_test_server_starts() {
 #[rstest]
 #[case("wav", "/silence.wav", "audio/wav", "WAV file")]
 #[case("mp3", "/test.mp3", "audio/mpeg", "MP3 file")]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_audio_test_server_serves_format(
     #[case] format: &str,

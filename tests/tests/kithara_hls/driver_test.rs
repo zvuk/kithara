@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
 use kithara_stream::{Source, SourceFactory};
+use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 
 use super::fixture::abr::{AbrTestServer, master_playlist};
@@ -23,6 +24,8 @@ use super::fixture::abr::{AbrTestServer, master_playlist};
 ///
 /// ОЖИДАНИЕ: seek обработан, сегмент загружен
 /// БЕЗ ФИКСА: seek игнорируется, pipeline остановлен
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 #[tokio::test]
 async fn test_driver_seek_after_playlist_finished() {
     use kithara_stream::Source;
@@ -98,6 +101,8 @@ async fn test_driver_seek_after_playlist_finished() {
 ///
 /// Это уже протестировано в Тесте 9, но там полная цепочка с decoder.
 /// Здесь нужно изолировать только HLS driver.
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 #[tokio::test]
 #[ignore] // TODO: Implement after fixing Driver-1
 async fn test_driver_abr_seek_backward() {

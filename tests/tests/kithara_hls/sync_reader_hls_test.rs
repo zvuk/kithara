@@ -24,10 +24,13 @@ use std::time::Duration;
 
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
 use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
+use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 
 use super::fixture::abr::{AbrTestServer, master_playlist};
 
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 #[tokio::test]
 async fn test_sync_reader_reads_all_bytes_from_hls() {
     // Create HLS server with 3 segments per variant

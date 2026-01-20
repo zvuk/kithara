@@ -2,7 +2,10 @@
 //!
 //! Tests Pipeline independently from HLS to verify core decode pipeline logic.
 
+use std::time::Duration;
+
 use kithara_decode::{DecodeResult, Decoder, PcmChunk, PcmSpec, Pipeline};
+use rstest::rstest;
 
 /// Simple mock decoder that generates predictable PCM chunks.
 ///
@@ -54,6 +57,8 @@ impl Decoder for SimpleMockDecoder {
 }
 
 /// Test that Pipeline can process chunks from SimpleMockDecoder.
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 #[tokio::test]
 async fn test_pipeline_with_simple_mock_decoder() {
     let decoder = SimpleMockDecoder::new(5); // Generate 5 chunks
@@ -145,6 +150,8 @@ async fn test_pipeline_with_simple_mock_decoder() {
 }
 
 /// Test Pipeline EOF handling.
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_pipeline_eof() {
     let decoder = SimpleMockDecoder::new(2); // Only 2 chunks
@@ -173,6 +180,8 @@ async fn test_pipeline_eof() {
 }
 
 /// Test Pipeline output spec.
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_pipeline_output_spec() {
     let decoder = SimpleMockDecoder::new(1);
@@ -193,6 +202,8 @@ async fn test_pipeline_output_spec() {
 }
 
 /// Test speed control.
+#[rstest]
+#[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_pipeline_speed_control() {
     let decoder = SimpleMockDecoder::new(5);
