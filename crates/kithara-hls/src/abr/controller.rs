@@ -248,46 +248,12 @@ pub type DefaultAbrController = AbrController<ThroughputEstimator>;
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{
-            Arc,
-            atomic::{AtomicUsize, Ordering},
-        },
-        time::Duration,
-    };
+    use std::time::Duration;
 
     use rstest::rstest;
 
     use super::*;
-
-    // Mock estimator for testing call counts
-    #[derive(Clone)]
-    struct MockEstimator {
-        estimate: Option<u64>,
-        call_count: Arc<AtomicUsize>,
-    }
-
-    impl MockEstimator {
-        fn new(estimate: Option<u64>) -> Self {
-            Self {
-                estimate,
-                call_count: Arc::new(AtomicUsize::new(0)),
-            }
-        }
-
-        fn calls(&self) -> usize {
-            self.call_count.load(Ordering::SeqCst)
-        }
-    }
-
-    impl Estimator for MockEstimator {
-        fn estimate_bps(&self) -> Option<u64> {
-            self.call_count.fetch_add(1, Ordering::SeqCst);
-            self.estimate
-        }
-
-        fn push_sample(&mut self, _sample: ThroughputSample) {}
-    }
+    use super::super::estimator::MockEstimator;
 
     fn variants() -> Vec<Variant> {
         vec![
@@ -425,19 +391,28 @@ mod tests {
             min_switch_interval: Duration::ZERO,
             ..AbrConfig::default()
         };
-        let mock_estimator = MockEstimator::new(Some(1_000_000));
-        let c = AbrController::with_estimator(cfg, mock_estimator.clone(), None);
+
+        let mut mock_estimator = MockEstimator::new();
+
+        // Setup expectations: estimate_bps() will be called exactly 2 times
+        mock_estimator
+            .expect_estimate_bps()
+            .times(2) // Built-in call count verification!
+            .returning(|| Some(1_000_000));
+
+        // push_sample() won't be called in this test
+        mock_estimator.expect_push_sample().times(0);
+
+        let c = AbrController::with_estimator(cfg, mock_estimator, None);
         let now = Instant::now();
 
+        // First decide - calls estimator once
         c.decide(&variants(), 5.0, now);
-        assert_eq!(mock_estimator.calls(), 1, "Should call estimator exactly once");
 
+        // Second decide - calls estimator again
         c.decide(&variants(), 5.0, now);
-        assert_eq!(
-            mock_estimator.calls(),
-            2,
-            "Second decide should call estimator again"
-        );
+
+        // Mockall automatically verifies call counts on drop - no manual assert needed!
     }
 
     #[test]
@@ -447,23 +422,30 @@ mod tests {
             min_switch_interval: Duration::from_secs(30),
             ..AbrConfig::default()
         };
-        let mock_estimator = MockEstimator::new(Some(5_000_000));
-        let c = AbrController::with_estimator(cfg, mock_estimator.clone(), None);
+
+        let mut mock_estimator = MockEstimator::new();
+
+        // Setup expectations: estimate_bps() will be called exactly ONCE
+        // (second decide() should early-return due to min_interval)
+        mock_estimator
+            .expect_estimate_bps()
+            .times(1) // Only first call triggers estimator
+            .returning(|| Some(5_000_000));
+
+        mock_estimator.expect_push_sample().times(0);
+
+        let c = AbrController::with_estimator(cfg, mock_estimator, None);
         let now = Instant::now();
 
         // First call - should call estimator and cause switch
         let d1 = c.decide(&variants(), 10.0, now);
         assert!(d1.changed, "First call should switch");
-        assert_eq!(mock_estimator.calls(), 1);
 
         // Second call immediately - should NOT call estimator (min_interval not elapsed)
         let d2 = c.decide(&variants(), 10.0, now);
         assert!(!d2.changed, "Second call should not switch");
         assert_eq!(d2.reason, AbrReason::MinInterval);
-        assert_eq!(
-            mock_estimator.calls(),
-            1,
-            "Should not call estimator when min_interval prevents switch"
-        );
+
+        // Mockall automatically verifies estimator was called exactly once
     }
 }
