@@ -1,0 +1,11 @@
+[package]
+name = "kithara-assets"
+version = "0.0.0"
+edition = "2021"
+authors = ["kithara contributors"]
+license = "MIT OR Apache-2.0"
+description = "Placeholder for kithara-assets: asset management component"
+keywords = ["audio", "assets"]
+categories = ["multimedia::audio"]
+
+[workspace]

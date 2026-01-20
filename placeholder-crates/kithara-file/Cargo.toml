@@ -1,0 +1,11 @@
+[package]
+name = "kithara-file"
+version = "0.0.0"
+edition = "2021"
+authors = ["kithara contributors"]
+license = "MIT OR Apache-2.0"
+description = "Placeholder for kithara-file: local file access component"
+keywords = ["audio", "file"]
+categories = ["multimedia::audio", "filesystem"]
+
+[workspace]

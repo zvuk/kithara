@@ -27,6 +27,7 @@ cbc = { workspace = true }
 default = []
 
 [dev-dependencies]
+kithara-net = { workspace = true, features = ["test-utils"] }
 axum = { workspace = true }
 tempfile = { workspace = true }
 rodio = { workspace = true }

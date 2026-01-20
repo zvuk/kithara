@@ -257,3 +257,76 @@ impl FetchManager<HttpClient> {
 /// Use `FetchManager<N>` with custom Net implementation for testing with mocks.
 /// Use this alias for production code with HttpClient.
 pub type DefaultFetchManager = FetchManager<HttpClient>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use kithara_assets::AssetStoreBuilder;
+    use kithara_net::MockNet;
+    use tempfile::TempDir;
+    use url::Url;
+
+    #[tokio::test]
+    async fn test_fetch_playlist_with_mock_net() {
+        let temp_dir = TempDir::new().unwrap();
+        let assets = AssetStoreBuilder::new()
+            .asset_root("test")
+            .root_dir(temp_dir.path())
+            .build();
+
+        let mut mock_net = MockNet::new();
+        let test_url = Url::parse("http://example.com/playlist.m3u8").unwrap();
+        let test_url_clone = test_url.clone();
+        let playlist_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
+
+        mock_net
+            .expect_get_bytes()
+            .times(1)
+            .withf(move |url, _| url == &test_url_clone)
+            .returning(move |_, _| Ok(Bytes::from_static(playlist_content)));
+
+        let fetch_manager = FetchManager::with_net(assets, mock_net);
+
+        let result: HlsResult<Bytes> = fetch_manager
+            .fetch_playlist(&test_url, "playlist.m3u8")
+            .await;
+
+        assert!(result.is_ok());
+        let bytes = result.unwrap();
+        assert_eq!(bytes, Bytes::from_static(playlist_content));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_playlist_uses_cache() {
+        let temp_dir = TempDir::new().unwrap();
+        let assets = AssetStoreBuilder::new()
+            .asset_root("test")
+            .root_dir(temp_dir.path())
+            .build();
+
+        let mut mock_net = MockNet::new();
+        let test_url = Url::parse("http://example.com/playlist.m3u8").unwrap();
+        let test_url_clone = test_url.clone();
+        let playlist_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
+
+        mock_net
+            .expect_get_bytes()
+            .times(1)
+            .withf(move |url, _| url == &test_url_clone)
+            .returning(move |_, _| Ok(Bytes::from_static(playlist_content)));
+
+        let fetch_manager = FetchManager::with_net(assets, mock_net);
+
+        let result1: HlsResult<Bytes> = fetch_manager
+            .fetch_playlist(&test_url, "playlist.m3u8")
+            .await;
+        assert!(result1.is_ok());
+
+        let result2: HlsResult<Bytes> = fetch_manager
+            .fetch_playlist(&test_url, "playlist.m3u8")
+            .await;
+        assert!(result2.is_ok());
+        assert_eq!(result1.unwrap(), result2.unwrap());
+    }
+}

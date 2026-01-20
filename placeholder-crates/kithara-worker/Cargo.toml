@@ -1,0 +1,11 @@
+[package]
+name = "kithara-worker"
+version = "0.0.0"
+edition = "2021"
+authors = ["kithara contributors"]
+license = "MIT OR Apache-2.0"
+description = "Placeholder for kithara-worker: worker pool component"
+keywords = ["audio", "worker", "async"]
+categories = ["multimedia::audio", "asynchronous"]
+
+[workspace]

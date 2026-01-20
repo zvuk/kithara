@@ -1,0 +1,11 @@
+[package]
+name = "kithara-net"
+version = "0.0.0"
+edition = "2021"
+authors = ["kithara contributors"]
+license = "MIT OR Apache-2.0"
+description = "Placeholder for kithara-net: HTTP networking component"
+keywords = ["audio", "http", "networking"]
+categories = ["multimedia::audio", "network-programming"]
+
+[workspace]

@@ -5,7 +5,7 @@ use bytes::Bytes;
 use futures::Stream;
 use url::Url;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use mockall::automock;
 
 use crate::{
@@ -17,7 +17,7 @@ use crate::{
 
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>;
 
-#[cfg_attr(test, automock)]
+#[cfg_attr(any(test, feature = "test-utils"), automock)]
 #[async_trait]
 pub trait Net: Send + Sync {
     /// Get all bytes from a URL
