@@ -19,12 +19,8 @@ use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-// Import AbrTestServer from kithara-hls fixture by including the module
-// This is a common pattern for sharing test infrastructure
-#[path = "../kithara_hls/fixture.rs"]
-mod hls_fixture;
-
-use hls_fixture::{master_playlist, AbrTestServer};
+// Import AbrTestServer from kithara-hls fixture
+use crate::kithara_hls::fixture::abr::{master_playlist, AbrTestServer};
 
 /// Test that ABR variant switch does not cause byte reading glitches.
 ///

@@ -11,9 +11,7 @@ use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
 use kithara_stream::{Source, SourceFactory};
 use tokio_util::sync::CancellationToken;
 
-#[path = "fixture.rs"]
-use super::fixture;
-use fixture::AbrTestServer;
+use super::fixture::abr::{AbrTestServer, master_playlist};
 
 /// Driver-1: Проверка что pipeline обрабатывает seek ПОСЛЕ завершения playlist.
 ///
@@ -31,7 +29,7 @@ async fn test_driver_seek_after_playlist_finished() {
 
     // Create HLS server with 3 segments
     let server = AbrTestServer::new(
-        fixture::master_playlist(256_000, 512_000, 1_024_000),
+        master_playlist(256_000, 512_000, 1_024_000),
         false,
         Duration::from_millis(10),
     )

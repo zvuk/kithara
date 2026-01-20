@@ -24,9 +24,7 @@ use kithara_stream::{SyncReader, SyncReaderParams, StreamSource};
 use tokio_util::sync::CancellationToken;
 
 use super::mock_decoder::MockDecoder;
-
-#[path = "../kithara_hls/fixture.rs"]
-mod hls_fixture;
+use crate::kithara_hls::fixture::abr::segment_data;
 
 /// Verify PCM samples are sequential (no gaps in segment indices).
 ///
@@ -165,7 +163,7 @@ async fn test_decode_hls_abr_variant_switch() -> Result<(), Box<dyn Error + Send
                 if variant == 0 {
                     tokio::time::sleep(Duration::from_secs(2)).await;
                 }
-                hls_fixture::segment_data(variant, segment, Duration::ZERO, 200_000).await
+                segment_data(variant, segment, Duration::ZERO, 200_000).await
             }));
         }
     }

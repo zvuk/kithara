@@ -26,15 +26,13 @@ use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
 use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
 use tokio_util::sync::CancellationToken;
 
-#[path = "fixture.rs"]
-use super::fixture;
-use fixture::AbrTestServer;
+use super::fixture::abr::{AbrTestServer, master_playlist};
 
 #[tokio::test]
 async fn test_sync_reader_reads_all_bytes_from_hls() {
     // Create HLS server with 3 segments per variant
     let server = AbrTestServer::new(
-        fixture::master_playlist(256_000, 512_000, 1_024_000),
+        master_playlist(256_000, 512_000, 1_024_000),
         false,
         Duration::from_millis(10), // minimal delay
     )
