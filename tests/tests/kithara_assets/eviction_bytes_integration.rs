@@ -221,8 +221,6 @@ async fn eviction_corner_cases_different_byte_limits(
             .unwrap();
     }
 
-    assert!(exists_asset_dir(&dir, "asset-trigger"));
-
     // Trigger eviction by creating another asset_root.
     {
         let store = asset_store_with_root_and_limit(
@@ -237,22 +235,36 @@ async fn eviction_corner_cases_different_byte_limits(
         probe.commit(None).await.unwrap();
     }
 
-    assert!(exists_asset_dir(&dir, "asset-probe"));
+    assert!(
+        exists_asset_dir(&dir, "asset-probe"),
+        "asset-probe (newly created) must exist"
+    );
 
-    // At least one old asset should be evicted if we're over the limit; otherwise they remain.
+    // Eviction behavior: when over limit, oldest assets are evicted until the limit is satisfied.
+    // NOTE: asset-trigger is NOT protected - only asset-probe (the newly created asset) is protected.
     let total_old_size: usize = asset_sizes.iter().sum();
     if total_old_size + new_asset_size > max_bytes {
+        // When over limit, eviction should free enough space by removing oldest assets.
         let mut evicted_count = 0;
         for name in &asset_names {
             if !exists_asset_dir(&dir, name) {
                 evicted_count += 1;
             }
         }
+        // Also check if trigger was evicted (it may be needed to satisfy the limit).
+        if !exists_asset_dir(&dir, "asset-trigger") {
+            evicted_count += 1;
+        }
+
         assert!(
             evicted_count > 0,
-            "Should evict at least one older asset when over byte limit"
+            "Should evict at least one asset when over byte limit (total_old={}, new={}, limit={})",
+            total_old_size,
+            new_asset_size,
+            max_bytes
         );
     } else {
+        // Under limit - all assets should remain.
         for name in &asset_names {
             assert!(
                 exists_asset_dir(&dir, name),
@@ -260,5 +272,9 @@ async fn eviction_corner_cases_different_byte_limits(
                 name
             );
         }
+        assert!(
+            exists_asset_dir(&dir, "asset-trigger"),
+            "asset-trigger should remain when under byte limit"
+        );
     }
 }
