@@ -208,6 +208,7 @@ impl<R: Read + Send + 'static> Decoder for MockDecoder<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
     use std::io::Cursor;
 
     /// Helper: create binary segment data
@@ -220,53 +221,63 @@ mod tests {
         data
     }
 
-    #[test]
-    fn test_decode_single_segment() {
-        let data = make_segment(0, 5, 100);
-        let reader = Cursor::new(data);
-        let mut decoder = MockDecoder::new(reader);
-
-        let chunk = decoder.next_chunk().unwrap().unwrap();
-        assert_eq!(chunk.spec, decoder.spec());
-        assert_eq!(chunk.pcm.len(), 102); // 2 metadata + 100 data
-
-        // Check metadata
-        assert_eq!(chunk.pcm[0], 0.0); // variant 0
-        assert_eq!(chunk.pcm[1], 5.0); // segment 5
-
-        // Check data pattern
-        assert_eq!(chunk.pcm[2], 0.0);
-        assert_eq!(chunk.pcm[3], 1.0);
-        assert_eq!(chunk.pcm[101], 99.0);
-    }
-
-    #[test]
-    fn test_decode_multiple_segments() {
+    /// Parametrized test for decoding segments.
+    ///
+    /// Each case defines: (segments to create, expected metadata per chunk)
+    #[rstest]
+    #[case(
+        vec![(0, 5, 100)],
+        vec![(0.0, 5.0)],
+        "single segment"
+    )]
+    #[case(
+        vec![(0, 0, 1000), (0, 1, 1000)],
+        vec![(0.0, 0.0), (0.0, 1.0)],
+        "two segments same variant"
+    )]
+    #[case(
+        vec![(0, 0, 1000), (0, 1, 1000), (2, 2, 1000)],
+        vec![(0.0, 0.0), (0.0, 1.0), (2.0, 2.0)],
+        "three segments with variant switch"
+    )]
+    fn test_decode_segments(
+        #[case] segments: Vec<(u8, u32, usize)>,
+        #[case] expected: Vec<(f32, f32)>,
+        #[case] desc: &str,
+    ) {
+        // Create binary data
         let mut data = Vec::new();
-        data.extend(make_segment(0, 0, 1000));
-        data.extend(make_segment(0, 1, 1000));
-        data.extend(make_segment(2, 2, 1000));
+        for (variant, segment, data_len) in segments {
+            data.extend(make_segment(variant, segment, data_len));
+        }
 
         let reader = Cursor::new(data);
         let mut decoder = MockDecoder::new(reader);
 
-        // Segment 0
-        let chunk = decoder.next_chunk().unwrap().unwrap();
-        assert_eq!(chunk.pcm[0], 0.0); // variant 0
-        assert_eq!(chunk.pcm[1], 0.0); // segment 0
+        // Verify each chunk
+        for (idx, (expected_variant, expected_segment)) in expected.iter().enumerate() {
+            let chunk = decoder
+                .next_chunk()
+                .unwrap()
+                .unwrap_or_else(|| panic!("{}: chunk {} missing", desc, idx));
 
-        // Segment 1
-        let chunk = decoder.next_chunk().unwrap().unwrap();
-        assert_eq!(chunk.pcm[0], 0.0); // variant 0
-        assert_eq!(chunk.pcm[1], 1.0); // segment 1
+            assert_eq!(chunk.spec, decoder.spec(), "{}: spec mismatch", desc);
+            assert_eq!(chunk.pcm.len(), 102, "{}: pcm length mismatch", desc);
+            assert_eq!(chunk.pcm[0], *expected_variant, "{}: variant mismatch", desc);
+            assert_eq!(chunk.pcm[1], *expected_segment, "{}: segment mismatch", desc);
 
-        // Segment 2 (variant switch to 2)
-        let chunk = decoder.next_chunk().unwrap().unwrap();
-        assert_eq!(chunk.pcm[0], 2.0); // variant 2
-        assert_eq!(chunk.pcm[1], 2.0); // segment 2
+            // Verify data pattern (first few samples)
+            assert_eq!(chunk.pcm[2], 0.0, "{}: data[0] should be 0.0", desc);
+            assert_eq!(chunk.pcm[3], 1.0, "{}: data[1] should be 1.0", desc);
+            assert_eq!(chunk.pcm[101], 99.0, "{}: data[99] should be 99.0", desc);
+        }
 
-        // EOF
-        assert!(decoder.next_chunk().unwrap().is_none());
+        // Verify EOF
+        assert!(
+            decoder.next_chunk().unwrap().is_none(),
+            "{}: expected EOF after all segments",
+            desc
+        );
     }
 
     #[test]
@@ -283,23 +294,23 @@ mod tests {
         assert!(decoder.next_chunk().unwrap().is_none()); // Repeated calls return None
     }
 
-    #[test]
-    fn test_spec() {
+    #[rstest]
+    #[case(None, 44100, 2, "default spec")]
+    #[case(Some(PcmSpec { sample_rate: 48000, channels: 1 }), 48000, 1, "mono 48kHz")]
+    #[case(Some(PcmSpec { sample_rate: 96000, channels: 6 }), 96000, 6, "5.1 surround 96kHz")]
+    fn test_decoder_spec(
+        #[case] custom_spec: Option<PcmSpec>,
+        #[case] expected_rate: u32,
+        #[case] expected_channels: u16,
+        #[case] desc: &str,
+    ) {
         let reader = Cursor::new(Vec::new());
-        let decoder = MockDecoder::new(reader);
-        assert_eq!(decoder.spec().sample_rate, 44100);
-        assert_eq!(decoder.spec().channels, 2);
-    }
-
-    #[test]
-    fn test_custom_spec() {
-        let reader = Cursor::new(Vec::new());
-        let spec = PcmSpec {
-            sample_rate: 48000,
-            channels: 1,
+        let decoder = match custom_spec {
+            Some(spec) => MockDecoder::with_spec(reader, spec),
+            None => MockDecoder::new(reader),
         };
-        let decoder = MockDecoder::with_spec(reader, spec);
-        assert_eq!(decoder.spec().sample_rate, 48000);
-        assert_eq!(decoder.spec().channels, 1);
+
+        assert_eq!(decoder.spec().sample_rate, expected_rate, "{}: sample rate", desc);
+        assert_eq!(decoder.spec().channels, expected_channels, "{}: channels", desc);
     }
 }

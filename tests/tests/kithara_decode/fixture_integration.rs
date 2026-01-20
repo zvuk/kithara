@@ -4,6 +4,7 @@
 //! by decode tests without external network access.
 
 use super::fixture;
+use rstest::rstest;
 
 #[tokio::test]
 async fn test_audio_test_server_starts() {
@@ -20,48 +21,37 @@ async fn test_audio_test_server_starts() {
     assert!(mp3_url.as_str().ends_with("/test.mp3"));
 }
 
+#[rstest]
+#[case("wav", "/silence.wav", "audio/wav", "WAV file")]
+#[case("mp3", "/test.mp3", "audio/mpeg", "MP3 file")]
 #[tokio::test]
-async fn test_audio_test_server_serves_wav() {
+async fn test_audio_test_server_serves_format(
+    #[case] format: &str,
+    #[case] path: &str,
+    #[case] content_type: &str,
+    #[case] desc: &str,
+) {
     let server = fixture::AudioTestServer::new().await;
     let client = reqwest::Client::new();
 
-    let response = client
-        .get(server.wav_url())
-        .send()
-        .await
-        .expect("Failed to fetch WAV");
-
-    assert_eq!(response.status(), 200);
-    assert_eq!(response.headers().get("content-type").unwrap(), "audio/wav");
-
-    let content_length: usize = response
-        .headers()
-        .get("content-length")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .parse()
-        .unwrap();
-
-    assert!(content_length > 0);
-    assert_eq!(server.request_count("/silence.wav"), 1);
-}
-
-#[tokio::test]
-async fn test_audio_test_server_serves_mp3() {
-    let server = fixture::AudioTestServer::new().await;
-    let client = reqwest::Client::new();
+    let url = match format {
+        "wav" => server.wav_url(),
+        "mp3" => server.mp3_url(),
+        _ => panic!("Unknown format: {}", format),
+    };
 
     let response = client
-        .get(server.mp3_url())
+        .get(url)
         .send()
         .await
-        .expect("Failed to fetch MP3");
+        .unwrap_or_else(|e| panic!("Failed to fetch {}: {}", desc, e));
 
-    assert_eq!(response.status(), 200);
+    assert_eq!(response.status(), 200, "{}: status", desc);
     assert_eq!(
         response.headers().get("content-type").unwrap(),
-        "audio/mpeg"
+        content_type,
+        "{}: content-type",
+        desc
     );
 
     let content_length: usize = response
@@ -73,8 +63,8 @@ async fn test_audio_test_server_serves_mp3() {
         .parse()
         .unwrap();
 
-    assert!(content_length > 0);
-    assert_eq!(server.request_count("/test.mp3"), 1);
+    assert!(content_length > 0, "{}: content length should be > 0", desc);
+    assert_eq!(server.request_count(path), 1, "{}: request count", desc);
 }
 
 #[test]
