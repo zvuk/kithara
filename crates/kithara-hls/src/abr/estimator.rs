@@ -1,5 +1,16 @@
 use super::{AbrConfig, ThroughputSample, ThroughputSampleSource};
 
+/// Trait for throughput estimation strategies.
+///
+/// Allows testing `AbrController` with mock estimators.
+pub trait Estimator {
+    /// Get estimated throughput in bits per second.
+    fn estimate_bps(&self) -> Option<u64>;
+
+    /// Push a new throughput sample for estimation.
+    fn push_sample(&mut self, sample: ThroughputSample);
+}
+
 #[derive(Clone, Debug)]
 pub struct ThroughputEstimator {
     fast_ewma: Ewma,
@@ -53,6 +64,16 @@ impl ThroughputEstimator {
         self.fast_ewma.add_sample(weight_secs, bps);
         self.slow_ewma.add_sample(weight_secs, bps);
         self.bytes_sampled = self.bytes_sampled.saturating_add(sample.bytes);
+    }
+}
+
+impl Estimator for ThroughputEstimator {
+    fn estimate_bps(&self) -> Option<u64> {
+        self.estimate_bps()
+    }
+
+    fn push_sample(&mut self, sample: ThroughputSample) {
+        self.push_sample(sample)
     }
 }
 

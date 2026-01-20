@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{AbrConfig, ThroughputEstimator, ThroughputSample, Variant};
+use super::{AbrConfig, Estimator, ThroughputEstimator, ThroughputSample, Variant};
 use crate::{options::VariantSelector, playlist::MasterPlaylist};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -31,10 +31,10 @@ pub struct AbrDecision {
 /// Value indicating no switch has occurred yet.
 const NO_SWITCH: u64 = 0;
 
-pub struct AbrController {
+pub struct AbrController<E: Estimator> {
     cfg: AbrConfig,
     variant_selector: Option<VariantSelector>,
-    estimator: ThroughputEstimator,
+    estimator: E,
     current_variant: Arc<AtomicUsize>,
     /// Reference instant for computing elapsed time (created at controller init).
     reference_instant: Instant,
@@ -42,9 +42,12 @@ pub struct AbrController {
     last_switch_at_nanos: AtomicU64,
 }
 
-impl AbrController {
-    pub fn new(cfg: AbrConfig, variant_selector: Option<VariantSelector>) -> Self {
-        let estimator = ThroughputEstimator::new(&cfg);
+impl<E: Estimator> AbrController<E> {
+    pub fn with_estimator(
+        cfg: AbrConfig,
+        estimator: E,
+        variant_selector: Option<VariantSelector>,
+    ) -> Self {
         let initial_variant = cfg.initial_variant();
         Self {
             cfg,
@@ -229,6 +232,19 @@ impl AbrController {
             .unwrap_or(true)
     }
 }
+
+// Backward compatibility: Default AbrController with ThroughputEstimator
+impl AbrController<ThroughputEstimator> {
+    pub fn new(cfg: AbrConfig, variant_selector: Option<VariantSelector>) -> Self {
+        let estimator = ThroughputEstimator::new(&cfg);
+        Self::with_estimator(cfg, estimator, variant_selector)
+    }
+}
+
+/// Type alias for backward compatibility.
+/// Use `AbrController<ThroughputEstimator>` or this alias for production code.
+/// Use `AbrController<MockEstimator>` in tests for isolated testing.
+pub type DefaultAbrController = AbrController<ThroughputEstimator>;
 
 #[cfg(test)]
 mod tests {

@@ -19,7 +19,7 @@ use url::Url;
 use super::types::{PipelineError, PipelineResult, SegmentMeta, StreamCommand, VariantSwitch};
 use crate::{
     HlsError, HlsResult,
-    abr::{AbrController, ThroughputSample, ThroughputSampleSource},
+    abr::{DefaultAbrController, ThroughputSample, ThroughputSampleSource},
     events::HlsEvent,
     fetch::{ActiveFetchResult, FetchManager},
     keys::KeyManager,
@@ -32,7 +32,7 @@ pub struct SegmentStreamParams {
     pub fetch: Arc<FetchManager>,
     pub playlist_manager: Arc<PlaylistManager>,
     pub key_manager: Option<Arc<KeyManager>>,
-    pub abr_controller: AbrController,
+    pub abr_controller: DefaultAbrController,
     pub events_tx: broadcast::Sender<HlsEvent>,
     pub cancel: CancellationToken,
     pub command_capacity: usize,
@@ -259,7 +259,7 @@ async fn fetch_init_segment(
 fn process_commands(
     cmd_rx: &mut mpsc::Receiver<StreamCommand>,
     state: &mut VariantSwitch,
-    abr: &mut AbrController,
+    abr: &mut DefaultAbrController,
     process_all: bool,
 ) -> Option<VariantSwitch> {
     let mut result = None;
@@ -316,7 +316,7 @@ fn create_stream(
     fetch: Arc<FetchManager>,
     playlist_manager: Arc<PlaylistManager>,
     _key_manager: Option<Arc<KeyManager>>,
-    mut abr: AbrController,
+    mut abr: DefaultAbrController,
     cancel: CancellationToken,
     events: broadcast::Sender<HlsEvent>,
     mut cmd_rx: mpsc::Receiver<StreamCommand>,
