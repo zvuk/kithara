@@ -16,6 +16,7 @@ tracing = { workspace = true }
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
+kithara-worker = { path = ".", features = ["test-utils"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 mockall = { workspace = true }
 rstest = { workspace = true }

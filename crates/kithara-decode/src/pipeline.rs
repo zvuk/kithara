@@ -12,7 +12,7 @@ use std::{
 };
 
 use kithara_stream::{MediaInfo, Source, SyncReader, SyncReaderParams};
-use kithara_worker::{Fetch, SimpleItem, SyncWorker, SyncWorkerSource, Worker};
+use kithara_worker::{Fetch, SyncWorker, SyncWorkerSource, Worker};
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, trace};
 
@@ -169,7 +169,7 @@ pub struct Pipeline<D: Decoder = SymphoniaDecoder> {
     /// Handle to the blocking processing task.
     task_handle: Option<JoinHandle<()>>,
     /// Command sender.
-    cmd_tx: tokio::sync::mpsc::Sender<PipelineCommand>,
+    cmd_tx: kanal::Sender<PipelineCommand>,
     /// Shared PCM buffer for decoded audio.
     buffer: Arc<PcmBuffer>,
     /// Channel receiver for reading decoded samples (with backpressure).
@@ -232,8 +232,8 @@ impl Pipeline<SymphoniaDecoder> {
         };
 
         // Channels for communication
-        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<PipelineCommand>(4);
-        let (data_tx, data_rx) = kanal::bounded::<SimpleItem<PcmChunk<f32>>>(8);
+        let (cmd_tx, cmd_rx) = kanal::bounded::<PipelineCommand>(4);
+        let (data_tx, data_rx) = kanal::bounded::<Fetch<PcmChunk<f32>>>(8);
 
         // Shared buffer for decoded PCM with sample channel
         let (buffer, sample_rx) = PcmBuffer::new(output_spec);
@@ -299,8 +299,8 @@ impl<D: Decoder> Pipeline<D> {
         };
 
         // Channels for communication
-        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::channel::<PipelineCommand>(4);
-        let (data_tx, data_rx) = kanal::bounded::<SimpleItem<PcmChunk<f32>>>(8);
+        let (cmd_tx, cmd_rx) = kanal::bounded::<PipelineCommand>(4);
+        let (data_tx, data_rx) = kanal::bounded::<Fetch<PcmChunk<f32>>>(8);
 
         // Shared buffer for decoded PCM with sample channel
         let (buffer, sample_rx) = PcmBuffer::new(output_spec);
@@ -358,6 +358,7 @@ impl<D: Decoder> Pipeline<D> {
         let clamped = speed.clamp(0.5, 2.0);
         self.speed.store(clamped.to_bits(), Ordering::Relaxed);
         self.cmd_tx
+            .as_async()
             .send(PipelineCommand::SetSpeed(clamped))
             .await
             .map_err(|_| DecodeError::Io(std::io::Error::other("Pipeline stopped")))?;
@@ -379,7 +380,7 @@ impl<D: Decoder> Pipeline<D> {
 
     /// Stop the pipeline.
     pub async fn stop(&self) {
-        let _ = self.cmd_tx.send(PipelineCommand::Stop).await;
+        let _ = self.cmd_tx.as_async().send(PipelineCommand::Stop).await;
     }
 
     /// Wait for pipeline to finish.
@@ -395,7 +396,7 @@ impl<D: Decoder> Pipeline<D> {
 
 impl<D: Decoder> Drop for Pipeline<D> {
     fn drop(&mut self) {
-        let _ = self.cmd_tx.try_send(PipelineCommand::Stop);
+        let _ = self.cmd_tx.send(PipelineCommand::Stop);
     }
 }
 
@@ -559,7 +560,7 @@ where
 
 /// Consumer that receives PCM chunks from worker and writes to buffer.
 async fn run_consumer_async(
-    data_rx: kanal::Receiver<SimpleItem<PcmChunk<f32>>>,
+    data_rx: kanal::Receiver<Fetch<PcmChunk<f32>>>,
     buffer: Arc<PcmBuffer>,
 ) {
     debug!("Consumer started");

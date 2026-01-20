@@ -3,11 +3,7 @@
 //! Tests the full worker implementation with async and sync workers.
 
 use async_trait::async_trait;
-use kithara_worker::{
-    AsyncWorker, AsyncWorkerSource, EpochItem, Fetch, SimpleItem, SyncWorker, SyncWorkerSource,
-    Worker,
-};
-use tokio::sync::mpsc;
+use kithara_worker::{AsyncWorker, AsyncWorkerSource, Fetch, SyncWorker, SyncWorkerSource, Worker};
 
 // ==== Async worker tests ====
 
@@ -55,8 +51,8 @@ impl AsyncWorkerSource for TestAsyncSource {
 #[tokio::test]
 async fn test_async_worker_basic() {
     let source = TestAsyncSource::new(vec![1, 2, 3]);
-    let (cmd_tx, cmd_rx) = mpsc::channel::<usize>(4);
-    let (data_tx, data_rx) = kanal::bounded_async::<EpochItem<i32>>(4);
+    let (cmd_tx, cmd_rx) = kanal::bounded_async::<usize>(4);
+    let (data_tx, data_rx) = kanal::bounded_async::<Fetch<i32>>(4);
 
     let worker = AsyncWorker::new(source, cmd_rx, data_tx);
     tokio::spawn(worker.run());
@@ -125,8 +121,8 @@ impl SyncWorkerSource for TestSyncSource {
 #[tokio::test]
 async fn test_sync_worker_basic() {
     let source = TestSyncSource::new(vec![1, 2, 3]);
-    let (cmd_tx, cmd_rx) = mpsc::channel::<usize>(4);
-    let (data_tx, data_rx) = kanal::bounded::<SimpleItem<i32>>(4);
+    let (cmd_tx, cmd_rx) = kanal::bounded::<usize>(4);
+    let (data_tx, data_rx) = kanal::bounded::<Fetch<i32>>(4);
 
     let worker = SyncWorker::new(source, cmd_rx, data_tx);
     tokio::spawn(async move { worker.run().await });
@@ -151,7 +147,7 @@ async fn test_sync_worker_basic() {
     assert!(eof.is_eof);
 
     // Send command to restart from position 1
-    cmd_tx.send(1).await.unwrap();
+    cmd_tx.as_async().send(1).await.unwrap();
 
     // After command, worker restarts from position 1
     let item4 = async_rx.recv().await.unwrap();

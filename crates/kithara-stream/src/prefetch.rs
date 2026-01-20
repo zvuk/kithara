@@ -19,9 +19,12 @@
 
 // Re-export everything from kithara-worker
 pub use kithara_worker::{
-    AlwaysValid, AsyncWorker, AsyncWorkerSource, EpochConsumer, EpochItem, EpochValidator,
-    ItemValidator, SimpleItem, SyncWorker, SyncWorkerSource, WorkerItem, WorkerResult,
+    AlwaysValid, AsyncWorker, AsyncWorkerSource, EpochConsumer, EpochValidator, Fetch,
+    ItemValidator, SyncWorker, SyncWorkerSource, WorkerItem, WorkerResult,
 };
+
+// Backward compatibility type aliases
+pub type PrefetchedItem<C> = Fetch<C>;
 
 // Backward compatibility trait aliases via blanket impls
 pub trait PrefetchSource: AsyncWorkerSource {}
@@ -32,7 +35,6 @@ impl<T: SyncWorkerSource> BlockingSource for T {}
 
 // Backward compatibility type aliases
 pub type PrefetchWorker<S> = AsyncWorker<S>;
-pub type PrefetchedItem<C> = EpochItem<C>;
 pub type PrefetchConsumer = EpochConsumer;
 pub type PrefetchResult = WorkerResult;
 pub type BlockingWorker<S> = SyncWorker<S>;

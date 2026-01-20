@@ -9,7 +9,6 @@ use std::{
 use async_trait::async_trait;
 use kithara_storage::WaitOutcome;
 use kithara_worker::{Fetch, Worker};
-use tokio::sync::mpsc;
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -287,7 +286,7 @@ where
     S: Source<Item = u8>,
 {
     source: Arc<S>,
-    cmd_tx: mpsc::Sender<ByteSeekCmd>,
+    cmd_tx: kanal::Sender<ByteSeekCmd>,
     data_rx: kanal::Receiver<PrefetchedItem<ByteChunk>>,
     current_chunk: Option<CurrentChunk>,
     pos: u64,
@@ -322,11 +321,11 @@ where
             chunk_size, "SyncReader::new (spawning prefetch worker)"
         );
 
-        let (cmd_tx, cmd_rx) = mpsc::channel::<ByteSeekCmd>(4);
+        let (cmd_tx, cmd_rx) = kanal::bounded::<ByteSeekCmd>(4);
         let (data_tx, data_rx) = kanal::bounded::<PrefetchedItem<ByteChunk>>(prefetch_chunks);
 
         let prefetch_source = BytePrefetchSource::new(source.clone(), chunk_size);
-        let worker = PrefetchWorker::new(prefetch_source, cmd_rx, data_tx.to_async());
+        let worker = PrefetchWorker::new(prefetch_source, cmd_rx.to_async(), data_tx.to_async());
         tokio::spawn(async move { worker.run().await });
 
         Self {
@@ -529,7 +528,7 @@ where
 
             // Send seek command to worker (blocking to ensure delivery)
             // Epoch is passed in command to ensure synchronization even if commands are lost
-            let _ = self.cmd_tx.blocking_send(ByteSeekCmd {
+            let _ = self.cmd_tx.send(ByteSeekCmd {
                 pos: new_pos_u64,
                 epoch: self.epoch,
             });
