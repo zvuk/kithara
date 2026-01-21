@@ -1,6 +1,6 @@
 //! CachedLoader: Full Source implementation with caching.
 
-use std::{ops::Range, sync::{Arc, atomic::{AtomicU64, AtomicUsize, Ordering}}};
+use std::{ops::Range, sync::{Arc, atomic::{AtomicU64, AtomicUsize}}};
 use async_trait::async_trait;
 use dashmap::DashMap;
 use kithara_assets::AssetStore;
@@ -18,23 +18,17 @@ use crate::{HlsError, index::EncryptionInfo};
 /// - Offset mapping via OffsetMap per variant
 /// - ABR support via current_variant tracking
 /// - Seek detection via last_read_pos
-pub struct CachedLoader<L: Loader, Ctx = EncryptionInfo>
-where
-    Ctx: Clone + std::hash::Hash + Eq + Send + Sync + 'static,
-{
+pub struct CachedLoader<L: Loader> {
     loader: Arc<L>,
     offset_maps: DashMap<usize, OffsetMap>,
     current_variant: AtomicUsize,
     last_read_pos: AtomicU64,
-    assets: AssetStore<Ctx>,
+    assets: AssetStore<EncryptionInfo>,
     notify: Arc<Notify>,
 }
 
-impl<L: Loader, Ctx> CachedLoader<L, Ctx>
-where
-    Ctx: Clone + std::hash::Hash + Eq + Send + Sync + 'static,
-{
-    pub fn new(loader: Arc<L>, assets: AssetStore<Ctx>) -> Self {
+impl<L: Loader> CachedLoader<L> {
+    pub fn new(loader: Arc<L>, assets: AssetStore<EncryptionInfo>) -> Self {
         Self {
             loader,
             offset_maps: DashMap::new(),
@@ -92,10 +86,7 @@ where
 }
 
 #[async_trait]
-impl<L: Loader + 'static, Ctx> Source for CachedLoader<L, Ctx>
-where
-    Ctx: Clone + std::hash::Hash + Eq + Send + Sync + 'static,
-{
+impl<L: Loader + 'static> Source for CachedLoader<L> {
     type Item = u8;
     type Error = HlsError;
 
@@ -117,7 +108,7 @@ where
             }
 
             // Check if segment covering range.start exists
-            if let Some((segment_index, _local_offset)) = self.find_cached_segment(range.start, current_var) {
+            if let Some((_segment_index, _local_offset)) = self.find_cached_segment(range.start, current_var) {
                 // Segment found in cache
                 return Ok(WaitOutcome::Ready);
             }
@@ -149,18 +140,16 @@ where
     }
 
     async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
-        use std::sync::atomic::Ordering;
-
         if buf.is_empty() {
             return Ok(0);
         }
 
         // Detect seek
-        let last_pos = self.last_read_pos.load(Ordering::Relaxed);
-        let is_seek = offset < last_pos || offset > last_pos.saturating_add(1024 * 1024);
+        let last_pos = self.last_read_pos.load(std::sync::atomic::Ordering::Relaxed);
+        let _is_seek = offset < last_pos || offset > last_pos.saturating_add(1024 * 1024);
 
         // Update last_read_pos
-        self.last_read_pos.store(offset, Ordering::Relaxed);
+        self.last_read_pos.store(offset, std::sync::atomic::Ordering::Relaxed);
 
         let current_var = self.current_variant();
 
@@ -186,29 +175,41 @@ where
             }
         };
 
-        // Get segment metadata from OffsetMap
-        let segment_url = {
+        // Get segment URL and encryption from OffsetMap
+        let (segment_url, encryption) = {
             let map_ref = self.offset_maps.get(&current_var)
                 .ok_or_else(|| StreamError::Source(HlsError::SegmentNotFound("variant not found".into())))?;
             let cached_seg = map_ref.get(segment_index)
                 .ok_or_else(|| StreamError::Source(HlsError::SegmentNotFound(format!("segment {} not found", segment_index))))?;
-            cached_seg.url.clone()
+            (cached_seg.url.clone(), cached_seg.encryption.clone())
         };
 
-        // Read from AssetStore
-        // For now, use plain streaming resource (no decryption)
-        // TODO: Add encryption support via open_processed when segment has encryption
         use kithara_assets::{Assets, ResourceKey};
         use kithara_storage::StreamingResourceExt;
 
         let key = ResourceKey::from_url(&segment_url);
-        let resource = Assets::open_streaming_resource(&*self.assets, &key)
-            .await
-            .map_err(|e| StreamError::Source(HlsError::Assets(e)))?;
 
-        let bytes_read = resource.inner().read_at(local_offset, buf)
-            .await
-            .map_err(|e| StreamError::Source(HlsError::Storage(e)))?;
+        // Choose between encrypted and plain resource
+        let bytes_read = if self.assets.has_processing() && encryption.is_some() {
+            // Encrypted segment - use processed resource with decryption callback
+            let enc_info = encryption.unwrap();
+            let resource = self.assets.open_processed(&key, enc_info)
+                .await
+                .map_err(|e| StreamError::Source(HlsError::Assets(e)))?;
+
+            resource.read_at(local_offset, buf)
+                .await
+                .map_err(|e| StreamError::Source(HlsError::Storage(e)))?
+        } else {
+            // Plain segment - use streaming resource directly
+            let resource = Assets::open_streaming_resource(&*self.assets, &key)
+                .await
+                .map_err(|e| StreamError::Source(HlsError::Assets(e)))?;
+
+            resource.inner().read_at(local_offset, buf)
+                .await
+                .map_err(|e| StreamError::Source(HlsError::Storage(e)))?
+        };
 
         Ok(bytes_read)
     }
@@ -247,11 +248,17 @@ mod tests {
         }
     }
 
-    async fn create_test_loader() -> (Arc<MockLoader>, AssetStore<()>, TempDir) {
+    async fn create_test_loader() -> (Arc<MockLoader>, AssetStore<EncryptionInfo>, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
+
+        // Dummy process_fn for tests - doesn't actually decrypt, just passes through
+        let dummy_fn: kithara_assets::ProcessFn<EncryptionInfo> =
+            Arc::new(|bytes, _ctx| Box::pin(async move { Ok(bytes) }));
+
         let assets = AssetStoreBuilder::new()
             .root_dir(temp_dir.path())
             .asset_root("test")
+            .process_fn(dummy_fn)
             .build();
 
         let mut loader = MockLoader::new();

@@ -31,13 +31,20 @@ fn create_test_meta(variant: usize, segment_index: usize, len: u64) -> SegmentMe
     }
 }
 
-async fn create_test_assets() -> (AssetStoreBuilder<()>, TempDir) {
+async fn create_test_assets() -> (kithara_assets::AssetStore<kithara_hls::index::EncryptionInfo>, TempDir) {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
-    let builder = AssetStoreBuilder::new()
-        .root_dir(temp_dir.path())
-        .asset_root("test");
 
-    (builder, temp_dir)
+    // Dummy process_fn for tests - doesn't actually decrypt, just passes through
+    let dummy_fn: kithara_assets::ProcessFn<kithara_hls::index::EncryptionInfo> =
+        Arc::new(|bytes, _ctx| Box::pin(async move { Ok(bytes) }));
+
+    let assets = AssetStoreBuilder::new()
+        .root_dir(temp_dir.path())
+        .asset_root("test")
+        .process_fn(dummy_fn)
+        .build();
+
+    (assets, temp_dir)
 }
 
 // ==================== EC-2: ABR Mid-Stream + Seek Backward (CRITICAL) ====================
@@ -62,8 +69,7 @@ async fn create_test_assets() -> (AssetStoreBuilder<()>, TempDir) {
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_ec2_abr_midstream_then_backward_seek() -> Result<(), Box<dyn std::error::Error>> {
-    let (builder, _temp) = create_test_assets().await;
-    let assets = builder.build();
+    let (assets, _temp) = create_test_assets().await;
 
     let mut loader = MockLoader::new();
     loader.expect_num_variants().returning(|| 1);
@@ -137,8 +143,7 @@ async fn test_ec2_abr_midstream_then_backward_seek() -> Result<(), Box<dyn std::
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_ec2b_extreme_out_of_order() -> Result<(), Box<dyn std::error::Error>> {
-    let (builder, _temp) = create_test_assets().await;
-    let assets = builder.build();
+    let (assets, _temp) = create_test_assets().await;
 
     let mut loader = MockLoader::new();
     loader.expect_num_variants().returning(|| 1);
@@ -226,8 +231,7 @@ fn test_offset_map_out_of_order_insert() {
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_ec1_empty_playlist() -> Result<(), Box<dyn std::error::Error>> {
-    let (builder, _temp) = create_test_assets().await;
-    let assets = builder.build();
+    let (assets, _temp) = create_test_assets().await;
 
     let mut loader = MockLoader::new();
     loader.expect_num_variants().returning(|| 1);
@@ -259,8 +263,7 @@ async fn test_ec1_empty_playlist() -> Result<(), Box<dyn std::error::Error>> {
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_ec3_single_variant() -> Result<(), Box<dyn std::error::Error>> {
-    let (builder, _temp) = create_test_assets().await;
-    let assets = builder.build();
+    let (assets, _temp) = create_test_assets().await;
 
     let mut loader = MockLoader::new();
     loader.expect_num_variants().returning(|| 1); // Only 1 variant
@@ -294,8 +297,7 @@ async fn test_ec3_single_variant() -> Result<(), Box<dyn std::error::Error>> {
 #[timeout(Duration::from_secs(10))]
 #[tokio::test]
 async fn test_ec4_rapid_variant_switches() -> Result<(), Box<dyn std::error::Error>> {
-    let (builder, _temp) = create_test_assets().await;
-    let assets = builder.build();
+    let (assets, _temp) = create_test_assets().await;
 
     let mut loader = MockLoader::new();
     loader.expect_num_variants().returning(|| 3);

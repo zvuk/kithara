@@ -53,7 +53,7 @@ impl Hls {
     pub async fn open_v2(
         url: Url,
         params: HlsParams,
-    ) -> HlsResult<CachedLoader<FetchLoader, EncryptionInfo>> {
+    ) -> HlsResult<CachedLoader<FetchLoader>> {
         let asset_root = asset_root_for_url(&url);
         let cancel = params.cancel.clone().unwrap_or_default();
         let net = HttpClient::new(params.net.clone());
