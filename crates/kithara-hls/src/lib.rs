@@ -34,6 +34,8 @@ pub mod options;
 
 // Internal modules (exposed for testing, use with caution)
 #[doc(hidden)]
+pub mod cache;
+#[doc(hidden)]
 pub mod fetch;
 #[doc(hidden)]
 pub mod index;

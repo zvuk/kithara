@@ -174,6 +174,14 @@ pub fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
     let prefix = format!("V{}-SEG-{}:", variant, segment);
     let mut data = prefix.into_bytes();
     data.extend(b"TEST_SEGMENT_DATA");
+
+    // Pad to make realistic segment size (~200KB per segment)
+    // This matches the test assumptions and typical HLS segment sizes
+    let target_size = 200_000;
+    if data.len() < target_size {
+        data.resize(target_size, 0xFF);
+    }
+
     data
 }
 

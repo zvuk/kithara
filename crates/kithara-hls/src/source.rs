@@ -11,6 +11,7 @@ use url::Url;
 use crate::{
     abr::{AbrConfig, AbrController},
     adapter::HlsSource,
+    cache::{CachedLoader, FetchLoader},
     error::{HlsError, HlsResult},
     events::HlsEvent,
     fetch::FetchManager,
@@ -45,6 +46,77 @@ use crate::{
 pub struct Hls;
 
 impl Hls {
+    /// Open HLS stream using NEW cache-based architecture (experimental).
+    ///
+    /// Returns `CachedLoader<FetchLoader>` implementing Source trait.
+    /// This bypasses SegmentStream pipeline completely.
+    pub async fn open_v2(
+        url: Url,
+        params: HlsParams,
+    ) -> HlsResult<CachedLoader<FetchLoader, EncryptionInfo>> {
+        let asset_root = asset_root_for_url(&url);
+        let cancel = params.cancel.clone().unwrap_or_default();
+        let net = HttpClient::new(params.net.clone());
+
+        // Build base asset store (for FetchManager to use)
+        let base_assets = AssetStoreBuilder::new()
+            .asset_root(&asset_root)
+            .cancel(cancel.clone())
+            .root_dir(&params.store.cache_dir)
+            .evict_config(params.store.to_evict_config())
+            .build();
+
+        // Build FetchManager
+        let fetch_manager = Arc::new(FetchManager::new(base_assets, net));
+
+        // Build KeyManager for decryption
+        let key_manager = Arc::new(KeyManager::new(
+            Arc::clone(&fetch_manager),
+            params.keys.processor.clone(),
+            params.keys.query_params.clone(),
+            params.keys.request_headers.clone(),
+        ));
+
+        // Build PlaylistManager
+        let playlist_manager = Arc::new(PlaylistManager::new(
+            Arc::clone(&fetch_manager),
+            params.base_url.clone(),
+        ));
+
+        // Build asset store WITH decryption callback (for CachedLoader)
+        let decrypt_fn: ProcessFn<EncryptionInfo> = {
+            let km = Arc::clone(&key_manager);
+            Arc::new(move |bytes, ctx: EncryptionInfo| {
+                let km = Arc::clone(&km);
+                Box::pin(async move {
+                    km.decrypt(&ctx.key_url, Some(ctx.iv), bytes)
+                        .await
+                        .map_err(|e| e.to_string())
+                })
+            })
+        };
+
+        let assets = AssetStoreBuilder::new()
+            .asset_root(&asset_root)
+            .cancel(cancel)
+            .root_dir(&params.store.cache_dir)
+            .evict_config(params.store.to_evict_config())
+            .process_fn(decrypt_fn)
+            .build();
+
+        // Create FetchLoader
+        let fetch_loader = Arc::new(FetchLoader::new(
+            url.clone(),
+            fetch_manager,
+            playlist_manager,
+        ));
+
+        // Create CachedLoader (NEW architecture!)
+        let cached_loader = CachedLoader::new(fetch_loader, assets);
+
+        Ok(cached_loader)
+    }
+
     /// Open an HLS stream from a master playlist URL.
     ///
     /// Returns `HlsSource` which implements `Source` trait for random-access reading
