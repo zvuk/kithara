@@ -8,6 +8,8 @@ mod basestream_abr;
 mod basestream_basic;
 mod basestream_seek;
 mod basic_playback;
+mod cached_loader_edge_cases;
+mod cached_loader_integration;
 mod deferred_abr;
 mod driver_test;
 mod keys_integration;

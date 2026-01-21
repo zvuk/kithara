@@ -29,6 +29,7 @@ impl TestServer {
         let app = Router::new()
             .route("/master.m3u8", get(master_endpoint))
             .route("/master-init.m3u8", get(master_with_init_endpoint))
+            .route("/master-encrypted.m3u8", get(master_encrypted_endpoint))
             .route("/v0.m3u8", get(|| async { test_media_playlist(0) }))
             .route("/v1.m3u8", get(|| async { test_media_playlist(1) }))
             .route("/v2.m3u8", get(|| async { test_media_playlist(2) }))
@@ -43,6 +44,10 @@ impl TestServer {
             .route(
                 "/v2-init.m3u8",
                 get(|| async { test_media_playlist_with_init(2) }),
+            )
+            .route(
+                "/v0-encrypted.m3u8",
+                get(|| async { test_media_playlist_encrypted(0) }),
             )
             .route(
                 "/video/480p/playlist.m3u8",
@@ -174,6 +179,14 @@ pub fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
     let prefix = format!("V{}-SEG-{}:", variant, segment);
     let mut data = prefix.into_bytes();
     data.extend(b"TEST_SEGMENT_DATA");
+
+    // Pad to make realistic segment size (~200KB per segment)
+    // This matches the test assumptions and typical HLS segment sizes
+    let target_size = 200_000;
+    if data.len() < target_size {
+        data.resize(target_size, 0xFF);
+    }
+
     data
 }
 
@@ -186,6 +199,35 @@ async fn master_with_init_endpoint() -> &'static str {
     test_master_playlist_with_init()
 }
 
+async fn master_encrypted_endpoint() -> &'static str {
+    test_master_playlist_encrypted()
+}
+
 async fn key_endpoint() -> Vec<u8> {
     test_key_data()
+}
+
+/// Master playlist with encrypted variant
+pub fn test_master_playlist_encrypted() -> &'static str {
+    r#"#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
+v0-encrypted.m3u8
+"#
+}
+
+/// Media playlist with AES-128 encryption for testing
+pub fn test_media_playlist_encrypted(variant: usize) -> String {
+    format!(
+        r#"#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-KEY:METHOD=AES-128,URI="../aes/key.bin",IV=0x00000000000000000000000000000000
+#EXTINF:4.0,
+../aes/seg0.bin
+#EXT-X-ENDLIST
+"#
+    )
 }
