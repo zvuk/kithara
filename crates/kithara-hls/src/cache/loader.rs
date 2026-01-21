@@ -1,7 +1,8 @@
 //! Generic segment loader trait.
 
 use async_trait::async_trait;
-use crate::{HlsResult, stream::types::SegmentMeta};
+use crate::HlsResult;
+use super::types::SegmentMeta;
 
 /// Generic segment loader.
 ///

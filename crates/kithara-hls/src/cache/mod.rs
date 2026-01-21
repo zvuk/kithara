@@ -10,8 +10,10 @@ mod loader;
 mod offset_map;
 mod cached_loader;
 mod fetch_loader;
+mod types;
 
 pub use loader::{Loader, MockLoader};
 pub use offset_map::{OffsetMap, CachedSegment};
 pub use cached_loader::CachedLoader;
 pub use fetch_loader::FetchLoader;
+pub use types::{SegmentMeta, EncryptionInfo};

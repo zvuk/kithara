@@ -9,7 +9,12 @@ use kithara_stream::{MediaInfo, Source, StreamError, StreamResult};
 use tokio::sync::Notify;
 
 use super::{Loader, OffsetMap};
-use crate::{HlsError, index::EncryptionInfo};
+use crate::HlsError;
+use super::types::EncryptionInfo;
+
+/// Callback invoked when segment is loaded.
+/// Args: (variant, segment_index, bytes_loaded, duration_secs, throughput_bps)
+pub type SegmentLoadedCallback = Arc<dyn Fn(usize, usize, u64, f64, f64) + Send + Sync>;
 
 /// Generic cached loader implementing Source trait.
 ///
@@ -18,6 +23,7 @@ use crate::{HlsError, index::EncryptionInfo};
 /// - Offset mapping via OffsetMap per variant
 /// - ABR support via current_variant tracking
 /// - Seek detection via last_read_pos
+/// - Segment load callback for throughput measurement
 pub struct CachedLoader<L: Loader> {
     loader: Arc<L>,
     offset_maps: DashMap<usize, OffsetMap>,
@@ -25,6 +31,8 @@ pub struct CachedLoader<L: Loader> {
     last_read_pos: AtomicU64,
     assets: AssetStore<EncryptionInfo>,
     notify: Arc<Notify>,
+    /// Optional callback invoked when segment is loaded (for ABR integration)
+    on_segment_loaded: Option<SegmentLoadedCallback>,
 }
 
 impl<L: Loader> CachedLoader<L> {
@@ -36,7 +44,13 @@ impl<L: Loader> CachedLoader<L> {
             last_read_pos: AtomicU64::new(0),
             assets,
             notify: Arc::new(Notify::new()),
+            on_segment_loaded: None,
         }
+    }
+
+    /// Set callback for segment load events (for ABR integration).
+    pub fn set_segment_loaded_callback(&mut self, callback: SegmentLoadedCallback) {
+        self.on_segment_loaded = Some(callback);
     }
 
     pub fn current_variant(&self) -> usize {
@@ -82,6 +96,30 @@ impl<L: Loader> CachedLoader<L> {
     fn estimate_len(&self, variant: usize) -> Option<u64> {
         let map = self.offset_maps.get(&variant)?;
         Some(map.total_size())
+    }
+
+    /// Get number of loaded segments for variant.
+    pub fn loaded_segment_count(&self, variant: usize) -> usize {
+        self.offset_maps
+            .get(&variant)
+            .map(|map| map.segment_count())
+            .unwrap_or(0)
+    }
+
+    /// Get all loaded segment indices for variant in sorted order.
+    pub fn loaded_segment_indices(&self, variant: usize) -> Vec<usize> {
+        self.offset_maps
+            .get(&variant)
+            .map(|map| map.segment_indices())
+            .unwrap_or_default()
+    }
+
+    /// Check if specific segment is loaded for variant.
+    pub fn has_segment(&self, variant: usize, segment_index: usize) -> bool {
+        self.offset_maps
+            .get(&variant)
+            .map(|map| map.has_segment(segment_index))
+            .unwrap_or(false)
     }
 }
 
@@ -229,7 +267,7 @@ impl<L: Loader + 'static> Source for CachedLoader<L> {
 mod tests {
     use super::*;
     use crate::cache::loader::MockLoader;
-    use crate::stream::types::SegmentMeta;
+    use crate::cache::types::SegmentMeta;
     use std::time::Duration;
     use url::Url;
     use kithara_assets::AssetStoreBuilder;

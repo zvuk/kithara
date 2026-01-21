@@ -11,15 +11,13 @@ use url::Url;
 use crate::{
     abr::{AbrConfig, AbrController},
     adapter::HlsSource,
-    cache::{CachedLoader, FetchLoader},
+    cache::{CachedLoader, FetchLoader, EncryptionInfo},
     error::{HlsError, HlsResult},
     events::HlsEvent,
     fetch::FetchManager,
-    index::EncryptionInfo,
     keys::KeyManager,
     options::HlsParams,
     playlist::PlaylistManager,
-    stream::{SegmentStream, SegmentStreamParams},
 };
 
 /// Marker type for HLS streaming with the unified `StreamSource<S>` API.
@@ -46,14 +44,17 @@ use crate::{
 pub struct Hls;
 
 impl Hls {
-    /// Open HLS stream using NEW cache-based architecture (experimental).
+
+    /// Open an HLS stream from a master playlist URL.
     ///
-    /// Returns `CachedLoader<FetchLoader>` implementing Source trait.
-    /// This bypasses SegmentStream pipeline completely.
-    pub async fn open_v2(
-        url: Url,
-        params: HlsParams,
-    ) -> HlsResult<CachedLoader<FetchLoader>> {
+    /// Returns `HlsSource` which implements `Source` trait for random-access reading
+    /// and provides event subscription via `events()`.
+    ///
+    /// # Note
+    /// This method is internal. Use `StreamSource::<Hls>::open(url, params)` instead.
+    ///
+    /// NEW ARCHITECTURE: Uses CachedLoader instead of SegmentStream.
+    pub(crate) async fn open(url: Url, params: HlsParams) -> HlsResult<HlsSource> {
         let asset_root = asset_root_for_url(&url);
         let cancel = params.cancel.clone().unwrap_or_default();
         let net = HttpClient::new(params.net.clone());
@@ -104,77 +105,15 @@ impl Hls {
             .process_fn(decrypt_fn)
             .build();
 
-        // Create FetchLoader
-        let fetch_loader = Arc::new(FetchLoader::new(
-            url.clone(),
-            fetch_manager,
-            playlist_manager,
-        ));
+        // Create events channel
+        let (events_tx, _) = broadcast::channel::<HlsEvent>(params.event_capacity);
 
-        // Create CachedLoader (NEW architecture!)
-        let cached_loader = CachedLoader::new(fetch_loader, assets);
+        // Load master playlist to extract variant codec info
+        let master = playlist_manager.master_playlist(&url).await?;
+        let variant_codecs: Vec<Option<_>> =
+            master.variants.iter().map(|v| v.codec.clone()).collect();
 
-        Ok(cached_loader)
-    }
-
-    /// Open an HLS stream from a master playlist URL.
-    ///
-    /// Returns `HlsSource` which implements `Source` trait for random-access reading
-    /// and provides event subscription via `events()`.
-    ///
-    /// # Note
-    /// This method is internal. Use `StreamSource::<Hls>::open(url, params)` instead.
-    pub(crate) async fn open(url: Url, params: HlsParams) -> HlsResult<HlsSource> {
-        let asset_root = asset_root_for_url(&url);
-        let cancel = params.cancel.clone().unwrap_or_default();
-
-        let net = HttpClient::new(params.net.clone());
-
-        // Build base asset store without processing (needed for FetchManager/KeyManager).
-        let base_assets = AssetStoreBuilder::new()
-            .asset_root(&asset_root)
-            .cancel(cancel.clone())
-            .root_dir(&params.store.cache_dir)
-            .evict_config(params.store.to_evict_config())
-            .build();
-
-        // Build FetchManager and KeyManager with base assets.
-        let fetch_manager = Arc::new(FetchManager::new(base_assets, net));
-
-        let key_manager = Arc::new(KeyManager::new(
-            Arc::clone(&fetch_manager),
-            params.keys.processor.clone(),
-            params.keys.query_params.clone(),
-            params.keys.request_headers.clone(),
-        ));
-
-        let playlist_manager = Arc::new(PlaylistManager::new(
-            Arc::clone(&fetch_manager),
-            params.base_url.clone(),
-        ));
-
-        // Build asset store with decryption callback.
-        let decrypt_fn: ProcessFn<EncryptionInfo> = {
-            let km = Arc::clone(&key_manager);
-            Arc::new(move |bytes, ctx: EncryptionInfo| {
-                let km = Arc::clone(&km);
-                Box::pin(async move {
-                    km.decrypt(&ctx.key_url, Some(ctx.iv), bytes)
-                        .await
-                        .map_err(|e| e.to_string())
-                })
-            })
-        };
-
-        let assets = AssetStoreBuilder::new()
-            .asset_root(&asset_root)
-            .cancel(cancel.clone())
-            .root_dir(&params.store.cache_dir)
-            .evict_config(params.store.to_evict_config())
-            .process_fn(decrypt_fn)
-            .build();
-
-        // Build ABR controller.
+        // Build ABR controller
         let abr_config = AbrConfig {
             mode: params.abr.mode,
             min_buffer_for_up_switch_secs: params.abr.min_buffer_for_up_switch as f64,
@@ -185,34 +124,22 @@ impl Hls {
             min_switch_interval: params.abr.min_switch_interval,
             ..AbrConfig::default()
         };
-
         let abr_controller = AbrController::new(abr_config, params.abr.variant_selector.clone());
 
-        // Create events channel.
-        let (events_tx, _) = broadcast::channel::<HlsEvent>(params.event_capacity);
-
-        // Load master playlist to extract variant codec info.
-        let master = playlist_manager.master_playlist(&url).await?;
-        let variant_codecs: Vec<Option<_>> =
-            master.variants.iter().map(|v| v.codec.clone()).collect();
-
-        // Build SegmentStream.
-        let (handle, base_stream) = SegmentStream::new(SegmentStreamParams {
-            master_url: url,
-            fetch: Arc::clone(&fetch_manager),
+        // Create FetchLoader
+        let fetch_loader = Arc::new(FetchLoader::new(
+            url.clone(),
+            fetch_manager,
             playlist_manager,
-            key_manager: Some(key_manager),
-            abr_controller,
-            events_tx: events_tx.clone(),
-            cancel,
-            command_capacity: params.command_capacity,
-            min_sample_bytes: params.abr.min_sample_bytes,
-        });
+        ));
 
+        // Create CachedLoader (NEW architecture!)
+        let cached_loader = CachedLoader::new(fetch_loader, assets);
+
+        // Create HlsSource wrapper
         Ok(HlsSource::new(
-            handle,
-            base_stream,
-            assets,
+            cached_loader,
+            abr_controller,
             events_tx,
             variant_codecs,
         ))

@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 use url::Url;
-use crate::{stream::types::SegmentMeta, index::EncryptionInfo, playlist::EncryptionMethod};
+use super::types::{SegmentMeta, EncryptionInfo};
+use crate::playlist::EncryptionMethod;
 
 /// Cached segment with computed global_offset.
 #[derive(Debug, Clone)]
@@ -112,6 +113,26 @@ impl OffsetMap {
         }
         let total: u64 = self.segments.values().map(|s| s.len).sum();
         Some(total / self.segments.len() as u64)
+    }
+
+    /// Get number of loaded segments.
+    pub fn segment_count(&self) -> usize {
+        self.segments.len()
+    }
+
+    /// Get all loaded segment indices in sorted order.
+    pub fn segment_indices(&self) -> Vec<usize> {
+        self.segments.keys().copied().collect()
+    }
+
+    /// Check if segment is loaded.
+    pub fn has_segment(&self, segment_index: usize) -> bool {
+        self.segments.contains_key(&segment_index)
+    }
+
+    /// Get all cached segments in sorted order by segment_index.
+    pub fn all_segments(&self) -> Vec<&CachedSegment> {
+        self.segments.values().collect()
     }
 }
 

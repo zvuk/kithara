@@ -5,12 +5,11 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use url::Url;
 
-use super::Loader;
+use super::{Loader, types::SegmentMeta};
 use crate::{
     HlsResult, HlsError,
     fetch::{ActiveFetchResult, DefaultFetchManager},
     playlist::{MediaPlaylist, PlaylistManager, VariantId},
-    stream::types::SegmentMeta,
 };
 
 /// Adapter: FetchManager + PlaylistManager → Loader trait.
