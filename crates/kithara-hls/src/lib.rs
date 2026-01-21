@@ -31,6 +31,7 @@ pub mod abr;
 pub mod error;
 pub mod events;
 pub mod options;
+pub mod worker;
 
 // Internal modules (exposed for testing, use with caution)
 #[doc(hidden)]
