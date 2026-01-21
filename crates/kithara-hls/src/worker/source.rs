@@ -2,7 +2,8 @@ use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_assets::ResourceKey;
+use kithara_assets::{Assets, ResourceKey};
+use kithara_storage::Resource;
 use kithara_worker::{AsyncWorkerSource, Fetch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
@@ -10,6 +11,7 @@ use tracing::{debug, trace};
 use crate::{
     cache::Loader,
     events::HlsEvent,
+    fetch::DefaultFetchManager,
     parsing::MasterPlaylist,
     HlsResult,
 };
@@ -24,6 +26,9 @@ use super::{
 pub struct HlsWorkerSource {
     /// Generic loader (FetchLoader or test mock).
     loader: Arc<dyn Loader>,
+
+    /// Fetch manager for reading segment data.
+    fetch_manager: Arc<DefaultFetchManager>,
 
     /// Master playlist.
     master: MasterPlaylist,
@@ -67,6 +72,7 @@ impl HlsWorkerSource {
     ///
     /// # Arguments
     /// - `loader`: Segment loader (FetchLoader or mock)
+    /// - `fetch_manager`: Fetch manager for reading segment data
     /// - `master`: Parsed master playlist
     /// - `variant_metadata`: Metadata for each variant
     /// - `initial_variant`: Starting variant index
@@ -74,6 +80,7 @@ impl HlsWorkerSource {
     /// - `cancel`: Cancellation token
     pub fn new(
         loader: Arc<dyn Loader>,
+        fetch_manager: Arc<DefaultFetchManager>,
         master: MasterPlaylist,
         variant_metadata: Vec<VariantMetadata>,
         initial_variant: usize,
@@ -82,6 +89,7 @@ impl HlsWorkerSource {
     ) -> Self {
         Self {
             loader,
+            fetch_manager,
             master,
             variant_metadata,
             current_variant: initial_variant,
@@ -97,51 +105,49 @@ impl HlsWorkerSource {
         }
     }
 
-    /// Load segment bytes from loader.
+    /// Load segment bytes from SegmentMeta.
     async fn load_segment_bytes(
         &self,
-        variant: usize,
-        segment_index: usize,
-    ) -> HlsResult<(Bytes, u64)> {
-        let meta = self.loader.load_segment(variant, segment_index).await?;
-
+        meta: &crate::cache::SegmentMeta,
+    ) -> HlsResult<Bytes> {
         trace!(
-            variant,
-            segment_index,
             url = %meta.url,
             size = meta.len,
-            "loaded segment metadata"
+            "reading segment bytes from storage"
         );
 
-        let _key = ResourceKey::from_url(&meta.url);
+        let key = ResourceKey::from_url(&meta.url);
 
         let bytes = if let Some(ref _enc) = meta.key {
             return Err(crate::HlsError::Unimplemented);
         } else {
-            Bytes::new()
+            let resource = self.fetch_manager.assets().open_streaming_resource(&key).await?;
+            resource.inner().read().await?
         };
 
-        Ok((bytes, meta.len))
+        Ok(bytes)
     }
 
     /// Fetch init segment for a variant.
     async fn fetch_init_segment(&mut self, variant: usize) -> HlsResult<HlsChunk> {
         debug!(variant, "fetching init segment");
 
-        let (bytes, _len) = self.load_segment_bytes(variant, usize::MAX).await?;
+        debug!(variant, "loading init segment metadata");
+        let meta = self.loader.load_segment(variant, usize::MAX).await?;
+        debug!(variant, url = %meta.url, size = meta.len, "init segment metadata loaded");
+
+        debug!(variant, "reading init segment bytes");
+        let bytes = self.load_segment_bytes(&meta).await?;
+        debug!(variant, bytes_len = bytes.len(), "init segment bytes loaded");
 
         let variant_meta = &self.variant_metadata[variant];
-        let url = self.master.variants[variant]
-            .uri
-            .parse()
-            .map_err(|e| crate::HlsError::InvalidUrl(format!("{}", e)))?;
 
-        Ok(HlsChunk {
-            bytes,
-            byte_offset: 0,
+        let chunk = HlsChunk {
+            bytes: bytes.clone(),
+            byte_offset: self.byte_offset,
             variant,
             segment_index: usize::MAX,
-            segment_url: url,
+            segment_url: meta.url,
             segment_duration: None,
             codec: variant_meta.codec,
             container: variant_meta.container,
@@ -151,7 +157,11 @@ impl HlsWorkerSource {
             is_segment_start: true,
             is_segment_end: true,
             is_variant_switch: true,
-        })
+        };
+
+        self.byte_offset += bytes.len() as u64;
+
+        Ok(chunk)
     }
 
     /// Emit an event (if channel exists).
@@ -207,38 +217,41 @@ impl AsyncWorkerSource for HlsWorkerSource {
             return Fetch::new(HlsChunk::empty(), true, self.epoch);
         }
 
-        let (bytes, len) = match self
-            .load_segment_bytes(current_variant, self.current_segment_index)
-            .await
-        {
+        let meta = match self.loader.load_segment(current_variant, self.current_segment_index).await {
+            Ok(m) => m,
+            Err(e) => {
+                debug!(
+                    variant = current_variant,
+                    segment_index = self.current_segment_index,
+                    error = ?e,
+                    "segment metadata load failed"
+                );
+                return Fetch::new(HlsChunk::empty(), true, self.epoch);
+            }
+        };
+
+        let bytes = match self.load_segment_bytes(&meta).await {
             Ok(data) => data,
             Err(e) => {
                 debug!(
                     variant = current_variant,
                     segment_index = self.current_segment_index,
                     error = ?e,
-                    "segment load failed"
+                    "segment bytes load failed"
                 );
                 return Fetch::new(HlsChunk::empty(), true, self.epoch);
             }
         };
 
         let variant_meta = &self.variant_metadata[current_variant];
-        let url_str = format!(
-            "{}/segment{}.ts",
-            self.master.variants[current_variant].uri, self.current_segment_index
-        );
-        let url = url_str
-            .parse()
-            .unwrap_or_else(|_| "http://localhost".parse().expect("valid url"));
 
         let chunk = HlsChunk {
             bytes,
             byte_offset: self.byte_offset,
             variant: current_variant,
             segment_index: self.current_segment_index,
-            segment_url: url,
-            segment_duration: Some(std::time::Duration::from_secs(4)),
+            segment_url: meta.url,
+            segment_duration: meta.duration,
             codec: variant_meta.codec,
             container: variant_meta.container,
             bitrate: variant_meta.bitrate,
@@ -249,13 +262,13 @@ impl AsyncWorkerSource for HlsWorkerSource {
             is_variant_switch: false,
         };
 
-        self.byte_offset += len;
+        self.byte_offset += meta.len;
         self.current_segment_index += 1;
 
         trace!(
             variant = current_variant,
             segment = self.current_segment_index - 1,
-            bytes = len,
+            bytes = meta.len,
             "emitting chunk"
         );
 
@@ -313,8 +326,11 @@ mod tests {
     use super::*;
     use crate::{
         cache::{MockLoader, SegmentMeta},
+        fetch::DefaultFetchManager,
         parsing::{MasterPlaylist, VariantStream, VariantId},
     };
+    use kithara_assets::AssetStore;
+    use kithara_net::HttpClient;
     use std::time::Duration;
     use url::Url;
 
@@ -359,6 +375,20 @@ mod tests {
         }
     }
 
+    fn create_test_fetch_manager() -> Arc<DefaultFetchManager> {
+        use tempfile::TempDir;
+        let temp_dir = TempDir::new().expect("temp dir");
+        let cache_dir = temp_dir.path().to_path_buf();
+
+        let assets = kithara_assets::AssetStoreBuilder::new()
+            .asset_root("test_root")
+            .root_dir(&cache_dir)
+            .build();
+
+        let net = HttpClient::new(Default::default());
+        Arc::new(DefaultFetchManager::new(assets, net))
+    }
+
     #[tokio::test]
     async fn test_worker_source_basic() {
         let mut loader = MockLoader::new();
@@ -386,9 +416,11 @@ mod tests {
         let master = create_test_master();
         let metadata = create_test_metadata();
         let cancel = CancellationToken::new();
+        let fetch_manager = create_test_fetch_manager();
 
         let mut source = HlsWorkerSource::new(
             Arc::new(loader),
+            fetch_manager,
             master,
             metadata,
             0,
@@ -434,9 +466,11 @@ mod tests {
         let master = create_test_master();
         let metadata = create_test_metadata();
         let cancel = CancellationToken::new();
+        let fetch_manager = create_test_fetch_manager();
 
         let mut source = HlsWorkerSource::new(
             Arc::new(loader),
+            fetch_manager,
             master,
             metadata,
             0,
@@ -464,9 +498,11 @@ mod tests {
         let master = create_test_master();
         let metadata = create_test_metadata();
         let cancel = CancellationToken::new();
+        let fetch_manager = create_test_fetch_manager();
 
         let mut source = HlsWorkerSource::new(
             Arc::new(loader),
+            fetch_manager,
             master,
             metadata,
             0,

@@ -10,6 +10,7 @@
 //! - `HlsWorkerSource`: Implementation of AsyncWorkerSource trait
 //! - Helper types: VariantMetadata, ThroughputAccumulator, BufferTracker
 
+mod adapter;
 mod buffer;
 mod chunk;
 mod command;
@@ -17,6 +18,7 @@ mod metadata;
 mod source;
 mod throughput;
 
+pub use adapter::HlsSourceAdapter;
 pub use buffer::BufferTracker;
 pub use chunk::HlsChunk;
 pub use command::HlsCommand;

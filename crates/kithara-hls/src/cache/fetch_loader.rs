@@ -69,7 +69,55 @@ impl Loader for FetchLoader {
         // Load media playlist for variant
         let (media_url, playlist) = self.load_media_playlist(variant).await?;
 
-        // Get segment from playlist
+        // Handle init segment (segment_index == usize::MAX)
+        if segment_index == usize::MAX {
+            use tracing::debug;
+            debug!(variant, "looking for init segment in playlist");
+            let init_segment = playlist.init_segment.as_ref().ok_or_else(|| {
+                HlsError::SegmentNotFound(format!(
+                    "init segment not found in variant {} playlist",
+                    variant
+                ))
+            })?;
+
+            // Resolve init segment URL
+            let init_url = media_url
+                .join(&init_segment.uri)
+                .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {}", e)))?;
+
+            debug!(variant, url = %init_url, "starting init segment fetch");
+            // Fetch init segment
+            let fetch_result = self.fetch.start_fetch(&init_url).await?;
+            debug!(variant, "init segment fetch started");
+
+            // Determine init segment length
+            let init_len = match fetch_result {
+                ActiveFetchResult::Cached { bytes } => {
+                    debug!(variant, bytes, "init segment already cached");
+                    bytes
+                }
+                ActiveFetchResult::Active(mut active_fetch) => {
+                    debug!(variant, "downloading init segment chunks");
+                    while let Some(_chunk_bytes) = active_fetch.next_chunk().await? {
+                        // Download all chunks
+                    }
+                    debug!(variant, "committing init segment");
+                    active_fetch.commit().await
+                }
+            };
+
+            return Ok(SegmentMeta {
+                variant,
+                segment_index: usize::MAX,
+                sequence: 0,
+                url: init_url,
+                duration: None,
+                key: None,
+                len: init_len,
+            });
+        }
+
+        // Get regular segment from playlist
         let segment = playlist
             .segments
             .get(segment_index)
@@ -92,14 +140,12 @@ impl Loader for FetchLoader {
         let segment_len = match fetch_result {
             ActiveFetchResult::Cached { bytes } => bytes,
             ActiveFetchResult::Active(mut active_fetch) => {
-                let mut total_bytes = 0u64;
-
                 // Consume all chunks to complete the download
-                while let Some(chunk_bytes) = active_fetch.next_chunk().await? {
-                    total_bytes += chunk_bytes;
+                while let Some(_chunk_bytes) = active_fetch.next_chunk().await? {
+                    // Download all chunks
                 }
 
-                total_bytes
+                active_fetch.commit().await
             }
         };
 
