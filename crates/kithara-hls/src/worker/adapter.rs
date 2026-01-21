@@ -341,6 +341,7 @@ impl Source for HlsSourceAdapter {
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
+        use tracing::debug;
         let chunks = self.buffered_chunks.lock();
         let last_chunk = chunks.last()?;
 
@@ -349,6 +350,8 @@ impl Source for HlsSourceAdapter {
             Some(ContainerFormat::Ts) => Some(StreamContainerFormat::MpegTs),
             Some(ContainerFormat::Other) | None => None,
         };
+
+        debug!(?container, codec = ?last_chunk.codec, "media_info called");
 
         Some(MediaInfo {
             container,

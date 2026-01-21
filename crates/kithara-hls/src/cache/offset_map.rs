@@ -184,6 +184,7 @@ mod tests {
             duration: Some(Duration::from_secs(4)),
             key: None,
             len,
+            container: Some(crate::parsing::ContainerFormat::Ts),
         }
     }
 

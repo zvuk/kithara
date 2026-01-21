@@ -9,6 +9,7 @@ use super::{Loader, types::SegmentMeta};
 use crate::{
     HlsResult, HlsError,
     fetch::{ActiveFetchResult, DefaultFetchManager},
+    parsing::ContainerFormat,
     playlist::{MediaPlaylist, PlaylistManager, VariantId},
 };
 
@@ -69,6 +70,14 @@ impl Loader for FetchLoader {
         // Load media playlist for variant
         let (media_url, playlist) = self.load_media_playlist(variant).await?;
 
+        // Determine container format from playlist structure
+        // Presence of init segment (#EXT-X-MAP) indicates fMP4
+        let container = if playlist.init_segment.is_some() {
+            Some(ContainerFormat::Fmp4)
+        } else {
+            Some(ContainerFormat::Ts)
+        };
+
         // Handle init segment (segment_index == usize::MAX)
         if segment_index == usize::MAX {
             use tracing::debug;
@@ -114,6 +123,7 @@ impl Loader for FetchLoader {
                 duration: None,
                 key: None,
                 len: init_len,
+                container,
             });
         }
 
@@ -158,6 +168,7 @@ impl Loader for FetchLoader {
             duration: Some(segment.duration),
             key: segment.key.clone(),
             len: segment_len,
+            container,
         })
     }
 

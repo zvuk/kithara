@@ -202,6 +202,11 @@ impl Pipeline<SymphoniaDecoder> {
         let initial_media_info = if is_streaming {
             let mut attempts = 0;
             loop {
+                // Kick-start the source by requesting a small range on first attempt
+                if attempts == 0 {
+                    let _ = source.wait_range(0..1024).await;
+                }
+
                 let info = source.media_info();
                 if info.as_ref().is_some_and(|i| i.container.is_some()) {
                     break info;
