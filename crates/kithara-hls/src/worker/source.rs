@@ -9,9 +9,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
 use crate::{
+    abr::{AbrController, AbrDecision, AbrReason, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant},
     cache::Loader,
     events::HlsEvent,
     fetch::DefaultFetchManager,
+    options::AbrOptions,
     parsing::MasterPlaylist,
     HlsResult,
 };
@@ -51,11 +53,17 @@ pub struct HlsWorkerSource {
     /// Paused state.
     paused: bool,
 
-    /// Throughput tracking (for future ABR).
+    /// Throughput tracking.
     throughput_accumulator: ThroughputAccumulator,
 
-    /// Buffer tracking (for future ABR).
+    /// Buffer tracking.
     buffer_tracker: BufferTracker,
+
+    /// ABR controller.
+    abr_controller: Option<AbrController<ThroughputEstimator>>,
+
+    /// ABR variants list (for decision making).
+    abr_variants: Vec<Variant>,
 
     /// Global byte offset.
     byte_offset: u64,
@@ -76,6 +84,7 @@ impl HlsWorkerSource {
     /// - `master`: Parsed master playlist
     /// - `variant_metadata`: Metadata for each variant
     /// - `initial_variant`: Starting variant index
+    /// - `abr_options`: ABR configuration (None for no ABR)
     /// - `events_tx`: Optional event broadcast channel
     /// - `cancel`: Cancellation token
     pub fn new(
@@ -84,9 +93,39 @@ impl HlsWorkerSource {
         master: MasterPlaylist,
         variant_metadata: Vec<VariantMetadata>,
         initial_variant: usize,
+        abr_options: Option<AbrOptions>,
         events_tx: Option<tokio::sync::broadcast::Sender<HlsEvent>>,
         cancel: CancellationToken,
     ) -> Self {
+        // Build ABR variants list from variant_metadata
+        let abr_variants: Vec<Variant> = variant_metadata
+            .iter()
+            .map(|v| Variant {
+                variant_index: v.index,
+                bandwidth_bps: v.bitrate.unwrap_or(0),
+            })
+            .collect();
+
+        // Create ABR controller if enabled
+        let abr_controller = abr_options.as_ref().and_then(|opts| {
+            if matches!(opts.mode, crate::options::AbrMode::Auto(_)) {
+                use std::time::Duration;
+                let config = crate::abr::AbrConfig {
+                    mode: opts.mode.clone(),
+                    min_buffer_for_up_switch_secs: opts.min_buffer_for_up_switch as f64,
+                    down_switch_buffer_secs: opts.down_switch_buffer as f64,
+                    throughput_safety_factor: opts.throughput_safety_factor as f64,
+                    up_hysteresis_ratio: opts.up_hysteresis_ratio as f64,
+                    down_hysteresis_ratio: opts.down_hysteresis_ratio as f64,
+                    min_switch_interval: opts.min_switch_interval,
+                    sample_window: Duration::from_secs(30),
+                };
+                Some(AbrController::new(config, None))
+            } else {
+                None
+            }
+        });
+
         Self {
             loader,
             fetch_manager,
@@ -99,6 +138,8 @@ impl HlsWorkerSource {
             paused: false,
             throughput_accumulator: ThroughputAccumulator::new(),
             buffer_tracker: BufferTracker::new(),
+            abr_controller,
+            abr_variants,
             byte_offset: 0,
             events_tx,
             cancel,
@@ -230,6 +271,8 @@ impl AsyncWorkerSource for HlsWorkerSource {
             }
         };
 
+        // Measure download time for ABR
+        let download_start = std::time::Instant::now();
         let bytes = match self.load_segment_bytes(&meta).await {
             Ok(data) => data,
             Err(e) => {
@@ -242,6 +285,7 @@ impl AsyncWorkerSource for HlsWorkerSource {
                 return Fetch::new(HlsChunk::empty(), true, self.epoch);
             }
         };
+        let download_duration = download_start.elapsed();
 
         let variant_meta = &self.variant_metadata[current_variant];
 
@@ -264,6 +308,61 @@ impl AsyncWorkerSource for HlsWorkerSource {
 
         self.byte_offset += meta.len;
         self.current_segment_index += 1;
+
+        // ABR: Update buffer level
+        if let Some(duration) = meta.duration {
+            self.buffer_tracker.add_segment(duration);
+        }
+
+        // ABR: Calculate throughput
+        let throughput_bps = if download_duration.as_secs_f64() > 0.0 {
+            (meta.len as f64 * 8.0) / download_duration.as_secs_f64()
+        } else {
+            0.0
+        };
+        let buffer_level = self.buffer_tracker.buffer_level_secs();
+
+        // ABR: Record throughput sample and make decision
+        let abr_decision = if let Some(ref mut controller) = self.abr_controller {
+            let sample = ThroughputSample {
+                bytes: meta.len,
+                duration: download_duration,
+                at: download_start,
+                source: ThroughputSampleSource::Network,
+            };
+            controller.push_throughput_sample(sample);
+            Some(controller.decide(&self.abr_variants, buffer_level, std::time::Instant::now()))
+        } else {
+            None
+        };
+
+        // Emit events (after releasing mutable borrow)
+        self.emit_event(HlsEvent::ThroughputSample {
+            bytes_per_second: throughput_bps,
+        });
+        self.emit_event(HlsEvent::BufferLevel {
+            level_seconds: buffer_level as f32,
+        });
+
+        // Apply ABR decision
+        if let Some(decision) = abr_decision {
+            if decision.changed {
+                let new_variant = decision.target_variant_index;
+                debug!(
+                    from = current_variant,
+                    to = new_variant,
+                    reason = ?decision.reason,
+                    "ABR switching variant"
+                );
+                self.current_variant = new_variant;
+                self.sent_init_for_variant.remove(&new_variant);
+                self.emit_event(HlsEvent::VariantApplied {
+                    from_variant: current_variant,
+                    to_variant: new_variant,
+                    reason: decision.reason,
+                });
+            }
+        }
 
         trace!(
             variant = current_variant,
@@ -462,7 +561,8 @@ mod tests {
             master,
             metadata,
             0,
-            None,
+            None, // no ABR
+            None, // no events
             cancel,
         );
 
@@ -517,7 +617,8 @@ mod tests {
             master,
             metadata,
             0,
-            None,
+            None, // no ABR
+            None, // no events
             cancel,
         );
 
@@ -551,7 +652,8 @@ mod tests {
             master,
             metadata,
             0,
-            None,
+            None, // no ABR
+            None, // no events
             cancel,
         );
 

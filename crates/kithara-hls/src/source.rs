@@ -118,6 +118,7 @@ impl Hls {
             master,
             variant_metadata,
             initial_variant,
+            Some(params.abr.clone()),
             Some(events_tx.clone()),
             cancel,
         );
