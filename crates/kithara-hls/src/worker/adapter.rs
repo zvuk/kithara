@@ -11,20 +11,20 @@ use tracing::{debug, trace};
 
 use crate::{events::HlsEvent, parsing::ContainerFormat, HlsError};
 
-use super::{HlsChunk, HlsCommand};
+use super::{HlsMessage, HlsCommand};
 
 /// Adapter from HLS worker chunks to Source trait.
 ///
 /// Buffers chunks in memory and provides random-access read interface.
 pub struct HlsSourceAdapter {
     /// Receiver for chunks from worker.
-    chunk_rx: AsyncReceiver<Fetch<HlsChunk>>,
+    chunk_rx: AsyncReceiver<Fetch<HlsMessage>>,
 
     /// Sender for commands to worker.
     cmd_tx: AsyncSender<HlsCommand>,
 
     /// Buffered chunks (in order).
-    buffered_chunks: Arc<Mutex<Vec<HlsChunk>>>,
+    buffered_chunks: Arc<Mutex<Vec<HlsMessage>>>,
 
     /// Current epoch (for validation).
     current_epoch: Arc<Mutex<u64>>,
@@ -39,7 +39,7 @@ pub struct HlsSourceAdapter {
 impl HlsSourceAdapter {
     /// Create a new adapter.
     pub fn new(
-        chunk_rx: AsyncReceiver<Fetch<HlsChunk>>,
+        chunk_rx: AsyncReceiver<Fetch<HlsMessage>>,
         cmd_tx: AsyncSender<HlsCommand>,
         events_tx: broadcast::Sender<HlsEvent>,
     ) -> Self {
@@ -129,7 +129,7 @@ impl HlsSourceAdapter {
     }
 
     /// Check if buffered chunks cover the given range.
-    fn range_covered_by_chunks(&self, chunks: &[HlsChunk], range: Range<u64>) -> bool {
+    fn range_covered_by_chunks(&self, chunks: &[HlsMessage], range: Range<u64>) -> bool {
         if range.is_empty() {
             return true;
         }
@@ -171,7 +171,7 @@ impl HlsSourceAdapter {
     /// Find chunk containing the given offset and return (chunk_index, offset_in_chunk).
     fn find_chunk_at_offset(
         &self,
-        chunks: &[HlsChunk],
+        chunks: &[HlsMessage],
         offset: u64,
     ) -> Option<(usize, usize)> {
         for (idx, chunk) in chunks.iter().enumerate() {
@@ -368,8 +368,8 @@ mod tests {
     use bytes::Bytes;
     use url::Url;
 
-    fn create_test_chunk(offset: u64, len: usize) -> HlsChunk {
-        HlsChunk {
+    fn create_test_chunk(offset: u64, len: usize) -> HlsMessage {
+        HlsMessage {
             bytes: Bytes::from(vec![0u8; len]),
             byte_offset: offset,
             variant: 0,

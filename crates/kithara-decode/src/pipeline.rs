@@ -428,7 +428,7 @@ impl PcmBuffer {
     ///
     /// Returns (PcmBuffer, receiver for streaming).
     /// Channel capacity: enough for ~10 seconds of audio chunks.
-    fn new(spec: PcmSpec) -> (Self, kanal::Receiver<Vec<f32>>) {
+    pub fn new(spec: PcmSpec) -> (Self, kanal::Receiver<Vec<f32>>) {
         // Channel capacity: ~100 chunks (assuming ~100ms per chunk = 10 seconds total)
         // This provides backpressure when consumer is slow
         let channel_capacity = 100;
@@ -486,7 +486,7 @@ impl PcmBuffer {
     ///
     /// IMPORTANT: Uses blocking_send() which blocks if channel is full.
     /// This provides automatic backpressure to the decoder/HLS pipeline.
-    fn append(&self, chunk: &PcmChunk<f32>) {
+    pub fn append(&self, chunk: &PcmChunk<f32>) {
         // Append to Vec for random access
         let mut samples = self.samples.write();
         samples.extend_from_slice(&chunk.pcm);

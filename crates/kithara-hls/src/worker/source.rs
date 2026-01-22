@@ -19,7 +19,7 @@ use crate::{
 };
 
 use super::{
-    BufferTracker, HlsChunk, HlsCommand, ThroughputAccumulator, VariantMetadata,
+    BufferTracker, HlsMessage, HlsCommand, ThroughputAccumulator, VariantMetadata,
 };
 
 /// HLS worker source implementing AsyncWorkerSource.
@@ -170,7 +170,7 @@ impl HlsWorkerSource {
     }
 
     /// Fetch init segment for a variant.
-    async fn fetch_init_segment(&mut self, variant: usize) -> HlsResult<HlsChunk> {
+    async fn fetch_init_segment(&mut self, variant: usize) -> HlsResult<HlsMessage> {
         debug!(variant, "fetching init segment");
 
         debug!(variant, "loading init segment metadata");
@@ -183,7 +183,7 @@ impl HlsWorkerSource {
 
         let variant_meta = &self.variant_metadata[variant];
 
-        let chunk = HlsChunk {
+        let chunk = HlsMessage {
             bytes: bytes.clone(),
             byte_offset: self.byte_offset,
             variant,
@@ -215,18 +215,18 @@ impl HlsWorkerSource {
 
 #[async_trait]
 impl AsyncWorkerSource for HlsWorkerSource {
-    type Chunk = HlsChunk;
+    type Chunk = HlsMessage;
     type Command = HlsCommand;
 
-    async fn fetch_next(&mut self) -> Fetch<HlsChunk> {
+    async fn fetch_next(&mut self) -> Fetch<HlsMessage> {
         if self.cancel.is_cancelled() {
             debug!("worker cancelled, returning EOF");
-            return Fetch::new(HlsChunk::empty(), true, self.epoch);
+            return Fetch::new(HlsMessage::empty(), true, self.epoch);
         }
 
         if self.paused {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            return Fetch::new(HlsChunk::empty(), false, self.epoch);
+            return Fetch::new(HlsMessage::empty(), false, self.epoch);
         }
 
         let current_variant = self.current_variant;
@@ -239,7 +239,7 @@ impl AsyncWorkerSource for HlsWorkerSource {
                 }
                 Err(e) => {
                     debug!(variant = current_variant, error = ?e, "init segment fetch failed");
-                    return Fetch::new(HlsChunk::empty(), true, self.epoch);
+                    return Fetch::new(HlsMessage::empty(), true, self.epoch);
                 }
             }
         }
@@ -248,14 +248,14 @@ impl AsyncWorkerSource for HlsWorkerSource {
             Ok(n) => n,
             Err(e) => {
                 debug!(error = ?e, "failed to get segment count");
-                return Fetch::new(HlsChunk::empty(), true, self.epoch);
+                return Fetch::new(HlsMessage::empty(), true, self.epoch);
             }
         };
 
         if self.current_segment_index >= num_segments {
             debug!("reached end of playlist");
             self.emit_event(HlsEvent::EndOfStream);
-            return Fetch::new(HlsChunk::empty(), true, self.epoch);
+            return Fetch::new(HlsMessage::empty(), true, self.epoch);
         }
 
         let meta = match self.loader.load_segment(current_variant, self.current_segment_index).await {
@@ -267,7 +267,7 @@ impl AsyncWorkerSource for HlsWorkerSource {
                     error = ?e,
                     "segment metadata load failed"
                 );
-                return Fetch::new(HlsChunk::empty(), true, self.epoch);
+                return Fetch::new(HlsMessage::empty(), true, self.epoch);
             }
         };
 
@@ -282,14 +282,14 @@ impl AsyncWorkerSource for HlsWorkerSource {
                     error = ?e,
                     "segment bytes load failed"
                 );
-                return Fetch::new(HlsChunk::empty(), true, self.epoch);
+                return Fetch::new(HlsMessage::empty(), true, self.epoch);
             }
         };
         let download_duration = download_start.elapsed();
 
         let variant_meta = &self.variant_metadata[current_variant];
 
-        let chunk = HlsChunk {
+        let chunk = HlsMessage {
             bytes,
             byte_offset: self.byte_offset,
             variant: current_variant,
