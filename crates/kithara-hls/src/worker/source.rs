@@ -254,7 +254,7 @@ impl AsyncWorkerSource for HlsWorkerSource {
 
         // Measure download time for ABR
         let download_start = std::time::Instant::now();
-        let mut media_bytes = match self.load_segment_bytes(&meta).await {
+        let media_bytes = match self.load_segment_bytes(&meta).await {
             Ok(data) => data,
             Err(e) => {
                 debug!(
@@ -268,33 +268,31 @@ impl AsyncWorkerSource for HlsWorkerSource {
         };
         let download_duration = download_start.elapsed();
 
-        // Combine init + media if this is a boundary (variant switch)
-        let combined_bytes = if is_variant_switch {
-            match self.load_init_segment(current_variant).await {
-                Ok(init_bytes) => {
+        // Combine init + media for EVERY segment (fMP4 requires init for each fragment)
+        let combined_bytes = match self.load_init_segment(current_variant).await {
+            Ok(init_bytes) => {
+                if is_variant_switch {
                     debug!(
                         variant = current_variant,
                         init_size = init_bytes.len(),
                         media_size = media_bytes.len(),
                         "combining init + media for variant switch"
                     );
-                    let mut combined = Vec::with_capacity(init_bytes.len() + media_bytes.len());
-                    combined.extend_from_slice(&init_bytes);
-                    combined.extend_from_slice(&media_bytes);
                     self.sent_init_for_variant.insert(current_variant);
-                    Bytes::from(combined)
                 }
-                Err(e) => {
-                    debug!(
-                        variant = current_variant,
-                        error = ?e,
-                        "init segment load failed, using media only"
-                    );
-                    media_bytes
-                }
+                let mut combined = Vec::with_capacity(init_bytes.len() + media_bytes.len());
+                combined.extend_from_slice(&init_bytes);
+                combined.extend_from_slice(&media_bytes);
+                Bytes::from(combined)
             }
-        } else {
-            media_bytes
+            Err(e) => {
+                debug!(
+                    variant = current_variant,
+                    error = ?e,
+                    "init segment load failed, using media only"
+                );
+                media_bytes
+            }
         };
 
         let variant_meta = &self.variant_metadata[current_variant];
@@ -354,23 +352,33 @@ impl AsyncWorkerSource for HlsWorkerSource {
             level_seconds: buffer_level as f32,
         });
 
-        // Apply ABR decision
+        // Apply ABR decision (only if variant actually changes)
         if let Some(decision) = abr_decision {
             if decision.changed {
                 let new_variant = decision.target_variant_index;
-                debug!(
-                    from = current_variant,
-                    to = new_variant,
-                    reason = ?decision.reason,
-                    "ABR switching variant"
-                );
-                self.current_variant = new_variant;
-                self.sent_init_for_variant.remove(&new_variant);
-                self.emit_event(HlsEvent::VariantApplied {
-                    from_variant: current_variant,
-                    to_variant: new_variant,
-                    reason: decision.reason,
-                });
+
+                // Only apply switch if variant actually changed
+                if new_variant != current_variant {
+                    debug!(
+                        from = current_variant,
+                        to = new_variant,
+                        reason = ?decision.reason,
+                        "ABR switching variant"
+                    );
+                    self.current_variant = new_variant;
+                    self.sent_init_for_variant.remove(&new_variant);
+                    self.emit_event(HlsEvent::VariantApplied {
+                        from_variant: current_variant,
+                        to_variant: new_variant,
+                        reason: decision.reason,
+                    });
+                } else {
+                    debug!(
+                        variant = current_variant,
+                        reason = ?decision.reason,
+                        "ABR decided to stay on current variant"
+                    );
+                }
             }
         }
 

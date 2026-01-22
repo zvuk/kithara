@@ -46,6 +46,7 @@ pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};
 // Internal modules
 #[cfg(feature = "rodio")]
 mod audio_sync_reader;
+mod chunked_reader;
 mod decoder;
 mod decoder_stream;
 mod pcm_source;

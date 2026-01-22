@@ -78,8 +78,10 @@ impl StreamMetadata for HlsSegmentMetadata {
 
     fn is_boundary(&self) -> bool {
         // Boundaries require decoder reinitialization:
-        // - Init segments contain codec/format info
+        // - Init segments contain codec/format info (standalone init without media)
         // - Variant switches may change codec/bitrate
+        // NOTE: We send init+media for EVERY segment, but decoder doesn't need
+        // reinitialization unless codec/format changes (variant switch)
         self.is_init_segment || self.is_variant_switch
     }
 
@@ -209,7 +211,7 @@ mod tests {
             is_variant_switch: false,
         };
 
-        // Regular segment is NOT a boundary
+        // Regular segment is NOT a boundary (decoder can continue)
         assert!(!regular_meta.is_boundary());
     }
 }

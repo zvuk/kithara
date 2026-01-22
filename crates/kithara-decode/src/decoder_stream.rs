@@ -6,13 +6,12 @@
 //! - Handles boundaries by recreating decoder from media_info()
 //! - No knowledge of HLS, init segments, or transport specifics
 
-use std::io::Cursor;
-
 use async_trait::async_trait;
 use kithara_stream::{MediaInfo, StreamData, StreamMessage, StreamMetadata};
 use tracing::debug;
 
 use crate::{
+    chunked_reader::SharedChunkedReader,
     decoder::Decoder,
     stream_decoder::StreamDecoder,
     symphonia_mod::SymphoniaDecoder,
@@ -46,7 +45,10 @@ where
     M: StreamMetadata,
     D: StreamData<Item = u8>,
 {
-    /// Current decoder instance (recreated on boundaries)
+    /// Shared chunked reader for continuous data stream
+    chunked_reader: SharedChunkedReader,
+
+    /// Current decoder instance (recreated only on codec change)
     decoder: Option<Box<dyn Decoder + Send + Sync>>,
 
     /// Current PCM spec (sample rate, channels)
@@ -70,6 +72,7 @@ where
     /// Create a new generic stream decoder.
     pub fn new() -> Self {
         Self {
+            chunked_reader: SharedChunkedReader::new(),
             decoder: None,
             current_spec: None,
             messages_processed: 0,
@@ -78,17 +81,17 @@ where
         }
     }
 
-    /// Create decoder from bytes and media info.
-    fn create_decoder(&mut self, data: &[u8], media_info: &MediaInfo) -> DecodeResult<()> {
-        let cursor = Cursor::new(data.to_vec());
-
+    /// Create decoder from chunked reader and media info.
+    fn create_decoder(&mut self, media_info: &MediaInfo) -> DecodeResult<()> {
         debug!(
             ?media_info,
-            data_len = data.len(),
-            "creating decoder from media info"
+            "creating decoder from shared chunked reader"
         );
 
-        let decoder = SymphoniaDecoder::new_from_media_info(cursor, media_info, true)?;
+        // Clone the reader (Arc clone, cheap) and pass to decoder
+        // Decoder owns the clone, we keep our reference for appending data
+        let reader_clone = self.chunked_reader.clone();
+        let decoder = SymphoniaDecoder::new_from_media_info(reader_clone, media_info, true)?;
         self.current_spec = Some(decoder.spec());
         self.decoder = Some(Box::new(decoder));
 
@@ -160,29 +163,12 @@ where
 
         self.messages_processed += 1;
 
-        // Check if reinitialization needed
-        if meta.is_boundary() {
-            self.boundaries_encountered += 1;
-
-            debug!(
-                sequence_id = meta.sequence_id(),
-                boundaries_total = self.boundaries_encountered,
-                "boundary detected - reinitializing decoder"
-            );
-
-            // Get media info for decoder creation
-            if let Some(media_info) = meta.media_info() {
-                debug!(?media_info, "creating decoder from boundary metadata");
-
-                // Create new decoder with message data
-                self.create_decoder(&data, &media_info)?;
-            } else {
-                debug!("boundary without media_info - keeping current decoder");
-            }
-        }
-
-        // Skip empty messages
+        // Skip empty messages early
         if data.is_empty() {
+            // Still track boundaries even for empty messages
+            if meta.is_boundary() {
+                self.boundaries_encountered += 1;
+            }
             return Ok(PcmChunk::new(
                 self.current_spec.unwrap_or(PcmSpec {
                     sample_rate: 44100,
@@ -192,23 +178,51 @@ where
             ));
         }
 
-        // If no decoder yet and not a boundary, try to create from data
-        if self.decoder.is_none() {
-            if let Some(media_info) = meta.media_info() {
-                debug!("creating initial decoder from media_info");
-                self.create_decoder(&data, &media_info)?;
-            } else {
-                debug!("no decoder and no media_info - cannot decode");
-                return Err(DecodeError::DecodeError(
-                    "Cannot create decoder: no media info available".to_string(),
-                ));
+        // Handle boundary (codec/format change - decoder must be recreated)
+        if meta.is_boundary() {
+            self.boundaries_encountered += 1;
+
+            debug!(
+                sequence_id = meta.sequence_id(),
+                boundaries_total = self.boundaries_encountered,
+                "boundary detected - recreating decoder"
+            );
+
+            // Clear old data and add new
+            self.chunked_reader.clear();
+            self.chunked_reader.append(data);
+
+            // Get media info and create new decoder
+            let media_info = meta.media_info().ok_or_else(|| {
+                DecodeError::DecodeError("No media info on boundary".to_string())
+            })?;
+
+            self.create_decoder(&media_info)?;
+        } else {
+            // No boundary - just append data to reader, decoder continues
+            debug!(
+                sequence_id = meta.sequence_id(),
+                data_len = data.len(),
+                "appending data to existing decoder"
+            );
+
+            self.chunked_reader.append(data);
+
+            // If no decoder yet, create one (first message)
+            if self.decoder.is_none() {
+                let media_info = meta.media_info().ok_or_else(|| {
+                    DecodeError::DecodeError("No media info for initial decoder".to_string())
+                })?;
+
+                self.create_decoder(&media_info)?;
             }
         }
 
-        // If this is a boundary with new data, we already created decoder above
-        // If this is NOT a boundary, decoder is already available
-        // In both cases, just decode
+        // Decode from decoder (same or newly created)
         let pcm = self.decode_all_chunks()?;
+
+        // Periodically release consumed memory
+        self.chunked_reader.release_consumed();
 
         Ok(pcm)
     }
