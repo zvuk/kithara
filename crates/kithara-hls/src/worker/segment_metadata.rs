@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use kithara_stream::{AudioCodec, StreamMetadata};
+use kithara_stream::{AudioCodec, MediaInfo, StreamMetadata};
 use url::Url;
 
 use crate::{cache::EncryptionInfo, parsing::ContainerFormat};
@@ -59,6 +59,15 @@ pub struct HlsSegmentMetadata {
     pub is_variant_switch: bool,
 }
 
+/// Convert HLS ContainerFormat to stream ContainerFormat.
+fn convert_container(container: ContainerFormat) -> kithara_stream::ContainerFormat {
+    match container {
+        ContainerFormat::Fmp4 => kithara_stream::ContainerFormat::Fmp4,
+        ContainerFormat::Ts => kithara_stream::ContainerFormat::MpegTs,
+        ContainerFormat::Other => kithara_stream::ContainerFormat::Fmp4,
+    }
+}
+
 impl StreamMetadata for HlsSegmentMetadata {
     fn sequence_id(&self) -> u64 {
         // Combine variant + segment for unique ID
@@ -72,6 +81,21 @@ impl StreamMetadata for HlsSegmentMetadata {
         // - Init segments contain codec/format info
         // - Variant switches may change codec/bitrate
         self.is_init_segment || self.is_variant_switch
+    }
+
+    fn media_info(&self) -> Option<MediaInfo> {
+        // Return media info if codec is available
+        // Decoders need this to reinitialize on boundaries
+        if self.codec.is_some() || self.container.is_some() {
+            Some(MediaInfo {
+                container: self.container.map(convert_container),
+                codec: self.codec,
+                sample_rate: None,
+                channels: None,
+            })
+        } else {
+            None
+        }
     }
 }
 

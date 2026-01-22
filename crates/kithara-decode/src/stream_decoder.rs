@@ -34,7 +34,7 @@
 use async_trait::async_trait;
 use kithara_stream::{StreamData, StreamMessage, StreamMetadata};
 
-use crate::types::DecodeResult;
+use crate::types::{DecodeError, DecodeResult};
 
 /// Generic stream decoder that processes messages with metadata.
 ///

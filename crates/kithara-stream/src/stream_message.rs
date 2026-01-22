@@ -92,6 +92,8 @@ where
     }
 }
 
+use crate::MediaInfo;
+
 /// Metadata trait for stream messages.
 ///
 /// Implementations provide information about message ordering and boundaries
@@ -100,6 +102,7 @@ where
 /// # Required Methods
 /// - [`sequence_id`](StreamMetadata::sequence_id): Unique identifier for ordering
 /// - [`is_boundary`](StreamMetadata::is_boundary): Whether this message marks a processing boundary
+/// - [`media_info`](StreamMetadata::media_info): Codec and container information for decoders
 ///
 /// # Boundary Semantics
 ///
@@ -127,6 +130,27 @@ pub trait StreamMetadata: Send + Sync + Clone + 'static {
     /// - HLS variant switch: `true`
     /// - Regular media segment: `false`
     fn is_boundary(&self) -> bool;
+
+    /// Media information for decoders (codec, container, format).
+    ///
+    /// Provides codec and container information needed by decoders to:
+    /// - Create appropriate decoder (AAC, MP3, FLAC, etc.)
+    /// - Configure container demuxer (fMP4, MPEG-TS, etc.)
+    /// - Initialize with correct parameters
+    ///
+    /// Returns `None` if media info is not available or not applicable.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// if message.meta.is_boundary() {
+    ///     if let Some(info) = message.meta.media_info() {
+    ///         decoder.reinit(info);
+    ///     }
+    /// }
+    /// ```
+    fn media_info(&self) -> Option<MediaInfo> {
+        None
+    }
 }
 
 /// Data trait for stream messages.

@@ -34,8 +34,7 @@
 #[cfg(feature = "rodio")]
 pub use audio_sync_reader::AudioSyncReader;
 pub use decoder::Decoder;
-#[cfg(feature = "hls")]
-pub use hls_stream_decoder::HlsStreamDecoder;
+pub use decoder_stream::GenericStreamDecoder;
 pub use pcm_source::PcmSource;
 pub use pipeline::{PcmBuffer, Pipeline, PipelineCommand};
 pub use source_reader::SourceReader;
@@ -48,8 +47,7 @@ pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};
 #[cfg(feature = "rodio")]
 mod audio_sync_reader;
 mod decoder;
-#[cfg(feature = "hls")]
-mod hls_stream_decoder;
+mod decoder_stream;
 mod pcm_source;
 mod pipeline;
 pub mod resampler;

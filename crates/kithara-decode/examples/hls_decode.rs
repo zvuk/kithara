@@ -1,19 +1,20 @@
 //! Example: Play audio from an HLS stream using stream-based architecture.
 //!
 //! This demonstrates the new StreamPipeline architecture:
-//! - HlsWorkerSource → HlsStreamDecoder → PCM output (3-loop design)
+//! - HlsWorkerSource → GenericStreamDecoder → PCM output (3-loop design)
 //! - Stream messages with full metadata (variant, codec, boundaries)
-//! - Explicit variant switch handling with decoder reinitialization
+//! - Generic decoder that works with any StreamMetadata implementation
 //!
 //! Run with:
 //! ```
-//! cargo run -p kithara-decode --example hls_decode --features hls,rodio [URL]
+//! cargo run -p kithara-decode --example hls_decode --features rodio [URL]
 //! ```
 
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_decode::{HlsStreamDecoder, PcmBuffer, StreamPipeline};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
+use bytes::Bytes;
+use kithara_decode::{GenericStreamDecoder, PcmBuffer, StreamPipeline};
+use kithara_hls::{worker::HlsSegmentMetadata, AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -85,8 +86,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Creating stream decoder and pipeline...");
 
-    // Create HLS stream decoder
-    let decoder = HlsStreamDecoder::new();
+    // Create generic stream decoder for HLS
+    let decoder = GenericStreamDecoder::<HlsSegmentMetadata, Bytes>::new();
 
     // Create StreamPipeline (connects worker → decoder → PCM output)
     let pipeline = StreamPipeline::new(worker_source, decoder).await?;

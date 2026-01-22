@@ -47,6 +47,9 @@ pub struct HlsWorkerSource {
     /// Init segments already sent for each variant.
     sent_init_for_variant: HashSet<usize>,
 
+    /// Cached init segments per variant (for combining with media).
+    init_segments_cache: std::collections::HashMap<usize, Bytes>,
+
     /// Current epoch (incremented on seek/switch).
     epoch: u64,
 
@@ -134,6 +137,7 @@ impl HlsWorkerSource {
             current_variant: initial_variant,
             current_segment_index: 0,
             sent_init_for_variant: HashSet::new(),
+            init_segments_cache: std::collections::HashMap::new(),
             epoch: 0,
             paused: false,
             throughput_accumulator: ThroughputAccumulator::new(),
@@ -169,40 +173,27 @@ impl HlsWorkerSource {
         Ok(bytes)
     }
 
-    /// Fetch init segment for a variant.
-    async fn fetch_init_segment(&mut self, variant: usize) -> HlsResult<HlsMessage> {
-        debug!(variant, "fetching init segment");
+    /// Load init segment for a variant and cache it.
+    ///
+    /// Returns cached init segment if already loaded.
+    async fn load_init_segment(&mut self, variant: usize) -> HlsResult<Bytes> {
+        // Check cache first
+        if let Some(cached) = self.init_segments_cache.get(&variant) {
+            debug!(variant, cached_size = cached.len(), "using cached init segment");
+            return Ok(cached.clone());
+        }
 
-        debug!(variant, "loading init segment metadata");
+        debug!(variant, "loading init segment");
         let meta = self.loader.load_segment(variant, usize::MAX).await?;
         debug!(variant, url = %meta.url, size = meta.len, "init segment metadata loaded");
 
-        debug!(variant, "reading init segment bytes");
         let bytes = self.load_segment_bytes(&meta).await?;
         debug!(variant, bytes_len = bytes.len(), "init segment bytes loaded");
 
-        let variant_meta = &self.variant_metadata[variant];
+        // Cache for future use
+        self.init_segments_cache.insert(variant, bytes.clone());
 
-        let chunk = HlsMessage {
-            bytes: bytes.clone(),
-            byte_offset: self.byte_offset,
-            variant,
-            segment_index: usize::MAX,
-            segment_url: meta.url.clone(),
-            segment_duration: None,
-            codec: variant_meta.codec,
-            container: meta.container,
-            bitrate: variant_meta.bitrate,
-            encryption: None,
-            is_init_segment: true,
-            is_segment_start: true,
-            is_segment_end: true,
-            is_variant_switch: true,
-        };
-
-        self.byte_offset += bytes.len() as u64;
-
-        Ok(chunk)
+        Ok(bytes)
     }
 
     /// Emit an event (if channel exists).
@@ -231,18 +222,8 @@ impl AsyncWorkerSource for HlsWorkerSource {
 
         let current_variant = self.current_variant;
 
-        if !self.sent_init_for_variant.contains(&current_variant) {
-            match self.fetch_init_segment(current_variant).await {
-                Ok(init_chunk) => {
-                    self.sent_init_for_variant.insert(current_variant);
-                    return Fetch::new(init_chunk, false, self.epoch);
-                }
-                Err(e) => {
-                    debug!(variant = current_variant, error = ?e, "init segment fetch failed");
-                    return Fetch::new(HlsMessage::empty(), true, self.epoch);
-                }
-            }
-        }
+        // Check if this is a variant switch (first segment after switch)
+        let is_variant_switch = !self.sent_init_for_variant.contains(&current_variant);
 
         let num_segments = match self.loader.num_segments(current_variant).await {
             Ok(n) => n,
@@ -273,7 +254,7 @@ impl AsyncWorkerSource for HlsWorkerSource {
 
         // Measure download time for ABR
         let download_start = std::time::Instant::now();
-        let bytes = match self.load_segment_bytes(&meta).await {
+        let mut media_bytes = match self.load_segment_bytes(&meta).await {
             Ok(data) => data,
             Err(e) => {
                 debug!(
@@ -287,10 +268,39 @@ impl AsyncWorkerSource for HlsWorkerSource {
         };
         let download_duration = download_start.elapsed();
 
+        // Combine init + media if this is a boundary (variant switch)
+        let combined_bytes = if is_variant_switch {
+            match self.load_init_segment(current_variant).await {
+                Ok(init_bytes) => {
+                    debug!(
+                        variant = current_variant,
+                        init_size = init_bytes.len(),
+                        media_size = media_bytes.len(),
+                        "combining init + media for variant switch"
+                    );
+                    let mut combined = Vec::with_capacity(init_bytes.len() + media_bytes.len());
+                    combined.extend_from_slice(&init_bytes);
+                    combined.extend_from_slice(&media_bytes);
+                    self.sent_init_for_variant.insert(current_variant);
+                    Bytes::from(combined)
+                }
+                Err(e) => {
+                    debug!(
+                        variant = current_variant,
+                        error = ?e,
+                        "init segment load failed, using media only"
+                    );
+                    media_bytes
+                }
+            }
+        } else {
+            media_bytes
+        };
+
         let variant_meta = &self.variant_metadata[current_variant];
 
         let chunk = HlsMessage {
-            bytes,
+            bytes: combined_bytes.clone(),
             byte_offset: self.byte_offset,
             variant: current_variant,
             segment_index: self.current_segment_index,
@@ -303,10 +313,10 @@ impl AsyncWorkerSource for HlsWorkerSource {
             is_init_segment: false,
             is_segment_start: true,
             is_segment_end: true,
-            is_variant_switch: false,
+            is_variant_switch,
         };
 
-        self.byte_offset += meta.len;
+        self.byte_offset += combined_bytes.len() as u64;
         self.current_segment_index += 1;
 
         // ABR: Update buffer level
