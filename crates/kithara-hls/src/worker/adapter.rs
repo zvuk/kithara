@@ -11,20 +11,20 @@ use tracing::{debug, trace};
 
 use crate::{events::HlsEvent, parsing::ContainerFormat, HlsError};
 
-use super::{HlsChunk, HlsCommand};
+use super::{HlsMessage, HlsCommand};
 
 /// Adapter from HLS worker chunks to Source trait.
 ///
 /// Buffers chunks in memory and provides random-access read interface.
 pub struct HlsSourceAdapter {
     /// Receiver for chunks from worker.
-    chunk_rx: AsyncReceiver<Fetch<HlsChunk>>,
+    chunk_rx: AsyncReceiver<Fetch<HlsMessage>>,
 
     /// Sender for commands to worker.
     cmd_tx: AsyncSender<HlsCommand>,
 
     /// Buffered chunks (in order).
-    buffered_chunks: Arc<Mutex<Vec<HlsChunk>>>,
+    buffered_chunks: Arc<Mutex<Vec<HlsMessage>>>,
 
     /// Current epoch (for validation).
     current_epoch: Arc<Mutex<u64>>,
@@ -39,7 +39,7 @@ pub struct HlsSourceAdapter {
 impl HlsSourceAdapter {
     /// Create a new adapter.
     pub fn new(
-        chunk_rx: AsyncReceiver<Fetch<HlsChunk>>,
+        chunk_rx: AsyncReceiver<Fetch<HlsMessage>>,
         cmd_tx: AsyncSender<HlsCommand>,
         events_tx: broadcast::Sender<HlsEvent>,
     ) -> Self {
@@ -61,6 +61,44 @@ impl HlsSourceAdapter {
     /// Get events sender.
     pub(crate) fn events_tx(&self) -> &broadcast::Sender<HlsEvent> {
         &self.events_tx
+    }
+
+    /// Release chunks that are fully consumed (before given offset).
+    /// Keeps at least one chunk for media_info().
+    fn release_consumed_chunks(&self, read_offset: u64) {
+        let mut chunks = self.buffered_chunks.lock();
+
+        // Keep at least 1 chunk for media_info and avoiding edge cases
+        if chunks.len() <= 1 {
+            return;
+        }
+
+        // Find how many chunks we can safely remove
+        let mut remove_count = 0;
+        for chunk in chunks.iter() {
+            let chunk_end = chunk.byte_offset + chunk.len() as u64;
+
+            // Only remove if chunk is fully behind read position
+            if chunk_end <= read_offset {
+                remove_count += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Always keep at least 1 chunk
+        if remove_count >= chunks.len() {
+            remove_count = chunks.len() - 1;
+        }
+
+        if remove_count > 0 {
+            chunks.drain(0..remove_count);
+            tracing::debug!(
+                removed = remove_count,
+                remaining = chunks.len(),
+                "released consumed chunks"
+            );
+        }
     }
 
     /// Ensure we have chunks covering the given range.
@@ -129,7 +167,7 @@ impl HlsSourceAdapter {
     }
 
     /// Check if buffered chunks cover the given range.
-    fn range_covered_by_chunks(&self, chunks: &[HlsChunk], range: Range<u64>) -> bool {
+    fn range_covered_by_chunks(&self, chunks: &[HlsMessage], range: Range<u64>) -> bool {
         if range.is_empty() {
             return true;
         }
@@ -171,7 +209,7 @@ impl HlsSourceAdapter {
     /// Find chunk containing the given offset and return (chunk_index, offset_in_chunk).
     fn find_chunk_at_offset(
         &self,
-        chunks: &[HlsChunk],
+        chunks: &[HlsMessage],
         offset: u64,
     ) -> Option<(usize, usize)> {
         for (idx, chunk) in chunks.iter().enumerate() {
@@ -327,6 +365,12 @@ impl Source for HlsSourceAdapter {
 
         buf[..to_copy].copy_from_slice(&chunk.bytes[offset_in_chunk..offset_in_chunk + to_copy]);
 
+        // Release lock before cleanup
+        drop(chunks);
+
+        // Release consumed chunks to free memory (sequential reads)
+        self.release_consumed_chunks(offset);
+
         Ok(to_copy)
     }
 
@@ -341,6 +385,7 @@ impl Source for HlsSourceAdapter {
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
+        use tracing::debug;
         let chunks = self.buffered_chunks.lock();
         let last_chunk = chunks.last()?;
 
@@ -349,6 +394,8 @@ impl Source for HlsSourceAdapter {
             Some(ContainerFormat::Ts) => Some(StreamContainerFormat::MpegTs),
             Some(ContainerFormat::Other) | None => None,
         };
+
+        debug!(?container, codec = ?last_chunk.codec, "media_info called");
 
         Some(MediaInfo {
             container,
@@ -365,8 +412,8 @@ mod tests {
     use bytes::Bytes;
     use url::Url;
 
-    fn create_test_chunk(offset: u64, len: usize) -> HlsChunk {
-        HlsChunk {
+    fn create_test_chunk(offset: u64, len: usize) -> HlsMessage {
+        HlsMessage {
             bytes: Bytes::from(vec![0u8; len]),
             byte_offset: offset,
             variant: 0,

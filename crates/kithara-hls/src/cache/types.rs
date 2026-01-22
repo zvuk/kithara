@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use url::Url;
 
-use crate::playlist::SegmentKey;
+use crate::{parsing::ContainerFormat, playlist::SegmentKey};
 
 /// Encryption info for a segment (resolved key URL and IV).
 /// Also used as context for decryption callback in `AssetStore`.
@@ -25,4 +25,6 @@ pub struct SegmentMeta {
     pub key: Option<SegmentKey>,
     /// Segment size in bytes.
     pub len: u64,
+    /// Container format (fMP4, MPEG-TS, etc).
+    pub container: Option<ContainerFormat>,
 }

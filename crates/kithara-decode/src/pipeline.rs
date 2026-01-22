@@ -202,6 +202,11 @@ impl Pipeline<SymphoniaDecoder> {
         let initial_media_info = if is_streaming {
             let mut attempts = 0;
             loop {
+                // Kick-start the source by requesting a small range on first attempt
+                if attempts == 0 {
+                    let _ = source.wait_range(0..1024).await;
+                }
+
                 let info = source.media_info();
                 if info.as_ref().is_some_and(|i| i.container.is_some()) {
                     break info;
@@ -423,10 +428,11 @@ impl PcmBuffer {
     ///
     /// Returns (PcmBuffer, receiver for streaming).
     /// Channel capacity: enough for ~10 seconds of audio chunks.
-    fn new(spec: PcmSpec) -> (Self, kanal::Receiver<Vec<f32>>) {
-        // Channel capacity: ~100 chunks (assuming ~100ms per chunk = 10 seconds total)
-        // This provides backpressure when consumer is slow
-        let channel_capacity = 100;
+    pub fn new(spec: PcmSpec) -> (Self, kanal::Receiver<Vec<f32>>) {
+        // Channel capacity: Balance between memory and smooth playback
+        // ~50 chunks (assuming ~100ms per chunk = 5 seconds buffered)
+        // Too small = blocking and stuttering, too large = high memory
+        let channel_capacity = 50;
 
         let (sample_tx, sample_rx) = kanal::bounded(channel_capacity);
 
@@ -474,21 +480,34 @@ impl PcmBuffer {
         to_read
     }
 
-    /// Append a PCM chunk to both Vec and channel.
+    /// Append a PCM chunk - streaming mode (no Vec accumulation).
     ///
-    /// Vec: for random access (grows unbounded - backwards compatible).
-    /// Channel: for streaming (bounded - provides backpressure).
+    /// For streaming playback, this sends data to channel only.
+    /// Vec is NOT used to avoid unbounded memory growth.
     ///
     /// IMPORTANT: Uses blocking_send() which blocks if channel is full.
     /// This provides automatic backpressure to the decoder/HLS pipeline.
-    fn append(&self, chunk: &PcmChunk<f32>) {
-        // Append to Vec for random access
-        let mut samples = self.samples.write();
-        samples.extend_from_slice(&chunk.pcm);
-        drop(samples);
+    pub fn append(&self, chunk: &PcmChunk<f32>) {
+        // STREAMING MODE: Send to channel only, skip Vec accumulation
+        // This avoids unbounded memory growth for long streams
+        let chunk_data = chunk.pcm.clone();
 
+        // blocking_send() will block if channel is full -> backpressure!
+        if let Err(e) = self.sample_tx.send(chunk_data) {
+            trace!(err = %e, "Channel closed, cannot send chunk (receiver dropped)");
+        }
+
+        let frames = chunk.frames() as u64;
+        self.frames_written.fetch_add(frames, Ordering::Relaxed);
+    }
+
+    /// Send PCM chunk to channel only (streaming mode - no Vec accumulation).
+    ///
+    /// Use this for streaming playback where random access is not needed.
+    /// Avoids unbounded memory growth from Vec accumulation.
+    pub fn send_to_channel(&self, chunk: &PcmChunk<f32>) {
         // Send chunk to channel for streaming (with backpressure)
-        // Clone PCM data for channel (Vec is already storing it)
+        // Clone is necessary since rodio consumes the data
         let chunk_data = chunk.pcm.clone();
 
         // blocking_send() will block if channel is full -> backpressure!

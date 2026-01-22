@@ -34,20 +34,27 @@
 #[cfg(feature = "rodio")]
 pub use audio_sync_reader::AudioSyncReader;
 pub use decoder::Decoder;
+pub use decoder_stream::GenericStreamDecoder;
 pub use pcm_source::PcmSource;
 pub use pipeline::{PcmBuffer, Pipeline, PipelineCommand};
 pub use source_reader::SourceReader;
+pub use stream_decoder::StreamDecoder;
+pub use stream_pipeline::StreamPipeline;
 pub use symphonia_mod::{CachedCodecInfo, SymphoniaDecoder};
 pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};
 
 // Internal modules
 #[cfg(feature = "rodio")]
 mod audio_sync_reader;
+mod chunked_reader;
 mod decoder;
+mod decoder_stream;
 mod pcm_source;
 mod pipeline;
 pub mod resampler;
 mod source_reader;
+mod stream_decoder;
+mod stream_pipeline;
 mod symphonia_mod;
 mod traits;
 mod types;

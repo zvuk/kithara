@@ -1,28 +1,23 @@
-//! Example: Play audio from an HLS stream using kithara-decode.
+//! Example: Play audio from an HLS stream using stream-based architecture.
 //!
-//! This demonstrates the integration between kithara-hls and kithara-decode,
-//! including resampling and speed control (plays at 0.5x speed by default).
+//! This demonstrates the new StreamPipeline architecture:
+//! - HlsWorkerSource → GenericStreamDecoder → PCM output (3-loop design)
+//! - Stream messages with full metadata (variant, codec, boundaries)
+//! - Generic decoder that works with any StreamMetadata implementation
 //!
 //! Run with:
 //! ```
-//! cargo run -p kithara-decode --example hls_decode --features rodio [URL] [SPEED]
+//! cargo run -p kithara-decode --example hls_decode --features rodio [URL]
 //! ```
-//!
-//! Speed is optional (default 0.5 = 2x slower). Examples:
-//! - 0.5 for half speed (2x slower)
-//! - 1.0 for normal speed
-//! - 2.0 for double speed
 
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_decode::{AudioSyncReader, Pipeline};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
-use kithara_stream::StreamSource;
+use bytes::Bytes;
+use kithara_decode::{GenericStreamDecoder, PcmBuffer, StreamPipeline};
+use kithara_hls::{worker::HlsSegmentMetadata, AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
-
-const TARGET_SAMPLE_RATE: u32 = 44100;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -45,23 +40,17 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .unwrap_or_else(|| "https://stream.silvercomet.top/hls/master.m3u8".to_string());
     let url: Url = url.parse()?;
 
-    // Default speed 0.5 = 2x slower
-    let speed: f32 = args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(1.0);
-
     info!("Opening HLS stream: {}", url);
-    info!("Playback speed: {}x ({}x slower)", speed, 1.0 / speed);
 
     let hls_params = HlsParams::default().with_abr(AbrOptions {
         mode: AbrMode::Auto(Some(0)),
         ..Default::default()
     });
 
-    // Open HLS source
-    let source = StreamSource::<Hls>::open(url, hls_params).await?;
-    let source_arc = Arc::new(source);
+    // Open HLS stream and get worker source
+    let (worker_source, mut events_rx) = Hls::open_stream(url, hls_params).await?;
 
-    // Subscribe to events
-    let mut events_rx = source_arc.events();
+    // Subscribe to HLS events
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             match ev {
@@ -95,50 +84,88 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     });
 
-    info!("Creating audio pipeline...");
+    info!("Creating stream decoder and pipeline...");
 
-    // Create unified pipeline (decoder + resampler in one)
-    let pipeline = Pipeline::open(source_arc, TARGET_SAMPLE_RATE).await?;
+    // Create generic stream decoder for HLS
+    let decoder = GenericStreamDecoder::<HlsSegmentMetadata, Bytes>::new();
 
-    let output_spec = pipeline.output_spec();
-    info!(
-        sample_rate = output_spec.sample_rate,
-        channels = output_spec.channels,
-        "Pipeline created"
-    );
+    // Create StreamPipeline (connects worker → decoder → PCM output)
+    let pipeline = StreamPipeline::new(worker_source, decoder).await?;
 
-    // Set playback speed
-    pipeline.set_speed(speed).await?;
+    info!("Pipeline created, consuming PCM chunks...");
 
-    info!(
-        target_rate = TARGET_SAMPLE_RATE,
-        speed,
-        "Speed configured ({}x slower playback)",
-        1.0 / speed
-    );
+    // Create simple PCM buffer for accumulating audio
+    let spec = kithara_decode::PcmSpec {
+        sample_rate: 44100,
+        channels: 2,
+    };
+    let (buffer, sample_rx) = PcmBuffer::new(spec);
+    let buffer = Arc::new(buffer);
 
-    // Create rodio adapter from buffer
-    let audio_source = AudioSyncReader::new(
-        pipeline.consumer().clone(),
-        pipeline.buffer().clone(),
-        output_spec,
-    );
+    // Spawn consumer task for PCM chunks
+    let pcm_rx = pipeline.pcm_rx().clone();
+    let buffer_clone = buffer.clone();
+    let _consumer_handle = tokio::spawn(async move {
+        let mut chunks_received = 0;
+        loop {
+            match pcm_rx.recv() {
+                Ok(chunk) => {
+                    chunks_received += 1;
+                    if !chunk.pcm.is_empty() {
+                        info!(
+                            chunk = chunks_received,
+                            frames = chunk.frames(),
+                            sample_rate = chunk.spec.sample_rate,
+                            channels = chunk.spec.channels,
+                            "Received PCM chunk"
+                        );
 
-    // Play via rodio in blocking thread
-    let handle = tokio::task::spawn_blocking(move || {
-        let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
-        let sink = rodio::Sink::connect_new(stream_handle.mixer());
-        sink.set_volume(0.3);
-        sink.append(audio_source);
-
-        info!("Playing at {}x speed ({}x slower)...", speed, 1.0 / speed);
-        sink.sleep_until_end();
-
-        info!("Playback complete");
-        Ok::<_, Box<dyn Error + Send + Sync>>(())
+                        // STREAMING MODE: Send to rodio via channel (no Vec accumulation)
+                        buffer_clone.append(&chunk);
+                    }
+                }
+                Err(_) => {
+                    info!("PCM channel closed");
+                    break;
+                }
+            }
+        }
+        info!(total_chunks = chunks_received, "Consumer finished");
     });
 
-    handle.await??;
+    // Create rodio adapter from sample channel
+    #[cfg(feature = "rodio")]
+    {
+        let audio_source = kithara_decode::AudioSyncReader::new(sample_rx, buffer.clone(), spec);
+
+        // Play via rodio in blocking thread
+        let play_handle = tokio::task::spawn_blocking(move || {
+            let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
+            let sink = rodio::Sink::connect_new(stream_handle.mixer());
+            sink.set_volume(0.3);
+            sink.append(audio_source);
+
+            info!("Playing HLS stream via rodio...");
+            sink.sleep_until_end();
+
+            info!("Playback complete");
+            Ok::<_, Box<dyn Error + Send + Sync>>(())
+        });
+
+        play_handle.await??;
+    }
+
+    #[cfg(not(feature = "rodio"))]
+    {
+        info!("Rodio feature not enabled, just consuming PCM chunks without playback");
+        // Wait for consumer to finish
+        _consumer_handle.await?;
+    }
+
+    // Wait for pipeline to complete
+    pipeline.wait().await?;
+
+    info!("HLS decode example finished");
 
     Ok(())
 }

@@ -60,4 +60,5 @@ pub use events::HlsEvent;
 pub use options::{
     AbrMode, AbrOptions, HlsParams, KeyContext, KeyOptions, KeyProcessor, VariantSelector,
 };
+pub use parsing::ContainerFormat;
 pub use source::Hls;
