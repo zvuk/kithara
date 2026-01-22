@@ -100,8 +100,12 @@ where
     {
         // 1. Create channels
         let (cmd_tx, cmd_rx) = kanal::bounded_async(16);
-        let (msg_tx, msg_rx) = kanal::bounded_async(32);
-        let (pcm_tx, pcm_rx) = kanal::bounded(100); // ~10s of audio at 100ms/chunk
+        // Keep msg buffer small to limit memory usage (backpressure)
+        // 2 segments = ~2-4 MB in flight
+        let (msg_tx, msg_rx) = kanal::bounded_async(2);
+        // PCM buffer: ~1-2s of audio (10-20 chunks at ~100ms/chunk)
+        // Smaller buffer = less memory, but requires faster consumer
+        let (pcm_tx, pcm_rx) = kanal::bounded(20);
 
         // 2. Create and spawn worker (HLS fetcher)
         let worker = AsyncWorker::new(source, cmd_rx, msg_tx);

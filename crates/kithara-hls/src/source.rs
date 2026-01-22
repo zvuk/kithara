@@ -219,8 +219,9 @@ impl Hls {
         );
 
         // Create channels for worker
+        // Keep small for low memory usage (backpressure)
         let (cmd_tx, cmd_rx) = kanal::bounded_async(16);
-        let (chunk_tx, chunk_rx) = kanal::bounded_async(32);
+        let (chunk_tx, chunk_rx) = kanal::bounded_async(2);
 
         // Create AsyncWorker and spawn it
         let worker = kithara_worker::AsyncWorker::new(worker_source, cmd_rx, chunk_tx);

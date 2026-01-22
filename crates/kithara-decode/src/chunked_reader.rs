@@ -65,8 +65,18 @@ impl ChunkedReader {
         if data.is_empty() {
             return;
         }
-        self.total_len += data.len();
+        let data_len = data.len();
+        self.total_len += data_len;
         self.chunks.push_back(data);
+
+        // Debug memory usage (only when accumulating)
+        if self.chunks.len() > 2 {
+            tracing::warn!(
+                chunks_count = self.chunks.len(),
+                total_bytes = self.total_len,
+                "ChunkedReader accumulating chunks (backpressure issue?)"
+            );
+        }
     }
 
     /// Clear all data and reset position.
@@ -82,16 +92,11 @@ impl ChunkedReader {
 
     /// Release fully read chunks to free memory.
     ///
-    /// Called periodically to prevent memory accumulation.
+    /// Note: Chunks are automatically released in read() when exhausted.
+    /// This method is kept for explicit memory management if needed.
     pub fn release_consumed(&mut self) {
-        while let Some(chunk) = self.chunks.front() {
-            if self.consumed_bytes >= chunk.len() {
-                self.consumed_bytes -= chunk.len();
-                self.chunks.pop_front();
-            } else {
-                break;
-            }
-        }
+        // No-op: chunks are already released in read() loop
+        // consumed_bytes is just for tracking/stats
     }
 
     /// Get total available bytes.
@@ -123,15 +128,17 @@ impl Read for ChunkedReader {
             let chunk = &self.chunks[0];
 
             if self.chunk_offset >= chunk.len() {
-                // Current chunk exhausted, move to next
-                self.consumed_bytes += chunk.len();
+                // Current chunk exhausted, remove it immediately to free memory
+                let chunk_len = chunk.len();
                 self.chunks.pop_front();
                 self.chunk_offset = 0;
+                self.consumed_bytes += chunk_len;
 
-                // Release memory periodically
-                if self.consumed_bytes > 1024 * 1024 {
-                    self.release_consumed();
-                }
+                tracing::trace!(
+                    removed_chunk_bytes = chunk_len,
+                    chunks_remaining = self.chunks.len(),
+                    "ChunkedReader removed exhausted chunk"
+                );
 
                 continue;
             }

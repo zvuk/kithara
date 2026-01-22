@@ -63,6 +63,44 @@ impl HlsSourceAdapter {
         &self.events_tx
     }
 
+    /// Release chunks that are fully consumed (before given offset).
+    /// Keeps at least one chunk for media_info().
+    fn release_consumed_chunks(&self, read_offset: u64) {
+        let mut chunks = self.buffered_chunks.lock();
+
+        // Keep at least 1 chunk for media_info and avoiding edge cases
+        if chunks.len() <= 1 {
+            return;
+        }
+
+        // Find how many chunks we can safely remove
+        let mut remove_count = 0;
+        for chunk in chunks.iter() {
+            let chunk_end = chunk.byte_offset + chunk.len() as u64;
+
+            // Only remove if chunk is fully behind read position
+            if chunk_end <= read_offset {
+                remove_count += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Always keep at least 1 chunk
+        if remove_count >= chunks.len() {
+            remove_count = chunks.len() - 1;
+        }
+
+        if remove_count > 0 {
+            chunks.drain(0..remove_count);
+            tracing::debug!(
+                removed = remove_count,
+                remaining = chunks.len(),
+                "released consumed chunks"
+            );
+        }
+    }
+
     /// Ensure we have chunks covering the given range.
     async fn ensure_chunks_for_range(&self, range: Range<u64>) -> Result<(), HlsError> {
         use tracing::debug;
@@ -326,6 +364,12 @@ impl Source for HlsSourceAdapter {
         let to_copy = available.min(buf.len());
 
         buf[..to_copy].copy_from_slice(&chunk.bytes[offset_in_chunk..offset_in_chunk + to_copy]);
+
+        // Release lock before cleanup
+        drop(chunks);
+
+        // Release consumed chunks to free memory (sequential reads)
+        self.release_consumed_chunks(offset);
 
         Ok(to_copy)
     }

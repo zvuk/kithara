@@ -163,6 +163,16 @@ where
 
         self.messages_processed += 1;
 
+        // Log memory usage periodically
+        if self.messages_processed % 10 == 0 {
+            debug!(
+                messages_processed = self.messages_processed,
+                boundaries = self.boundaries_encountered,
+                data_size = data.len(),
+                "GenericStreamDecoder stats"
+            );
+        }
+
         // Skip empty messages early
         if data.is_empty() {
             // Still track boundaries even for empty messages

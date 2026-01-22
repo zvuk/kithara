@@ -120,7 +120,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                             "Received PCM chunk"
                         );
 
-                        // Append to buffer
+                        // STREAMING MODE: Send to rodio via channel (no Vec accumulation)
                         buffer_clone.append(&chunk);
                     }
                 }
