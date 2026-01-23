@@ -8,18 +8,15 @@ use kithara_worker::{AsyncWorkerSource, Fetch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
+use super::{BufferTracker, HlsCommand, HlsMessage, ThroughputAccumulator, VariantMetadata};
 use crate::{
-    abr::{AbrController, AbrDecision, AbrReason, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant},
+    HlsResult,
+    abr::{AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant},
     cache::Loader,
     events::HlsEvent,
     fetch::DefaultFetchManager,
     options::AbrOptions,
     parsing::MasterPlaylist,
-    HlsResult,
-};
-
-use super::{
-    BufferTracker, HlsMessage, HlsCommand, ThroughputAccumulator, VariantMetadata,
 };
 
 /// HLS worker source implementing AsyncWorkerSource.
@@ -151,10 +148,7 @@ impl HlsWorkerSource {
     }
 
     /// Load segment bytes from SegmentMeta.
-    async fn load_segment_bytes(
-        &self,
-        meta: &crate::cache::SegmentMeta,
-    ) -> HlsResult<Bytes> {
+    async fn load_segment_bytes(&self, meta: &crate::cache::SegmentMeta) -> HlsResult<Bytes> {
         trace!(
             url = %meta.url,
             size = meta.len,
@@ -166,7 +160,11 @@ impl HlsWorkerSource {
         let bytes = if let Some(ref _enc) = meta.key {
             return Err(crate::HlsError::Unimplemented);
         } else {
-            let resource = self.fetch_manager.assets().open_streaming_resource(&key).await?;
+            let resource = self
+                .fetch_manager
+                .assets()
+                .open_streaming_resource(&key)
+                .await?;
             resource.inner().read().await?
         };
 
@@ -179,7 +177,11 @@ impl HlsWorkerSource {
     async fn load_init_segment(&mut self, variant: usize) -> HlsResult<Bytes> {
         // Check cache first
         if let Some(cached) = self.init_segments_cache.get(&variant) {
-            debug!(variant, cached_size = cached.len(), "using cached init segment");
+            debug!(
+                variant,
+                cached_size = cached.len(),
+                "using cached init segment"
+            );
             return Ok(cached.clone());
         }
 
@@ -188,7 +190,11 @@ impl HlsWorkerSource {
         debug!(variant, url = %meta.url, size = meta.len, "init segment metadata loaded");
 
         let bytes = self.load_segment_bytes(&meta).await?;
-        debug!(variant, bytes_len = bytes.len(), "init segment bytes loaded");
+        debug!(
+            variant,
+            bytes_len = bytes.len(),
+            "init segment bytes loaded"
+        );
 
         // Cache for future use
         self.init_segments_cache.insert(variant, bytes.clone());
@@ -239,7 +245,11 @@ impl AsyncWorkerSource for HlsWorkerSource {
             return Fetch::new(HlsMessage::empty(), true, self.epoch);
         }
 
-        let meta = match self.loader.load_segment(current_variant, self.current_segment_index).await {
+        let meta = match self
+            .loader
+            .load_segment(current_variant, self.current_segment_index)
+            .await
+        {
             Ok(m) => m,
             Err(e) => {
                 debug!(
@@ -440,16 +450,18 @@ impl AsyncWorkerSource for HlsWorkerSource {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
+    use kithara_assets::AssetStore;
+    use kithara_net::HttpClient;
+    use url::Url;
+
     use super::*;
     use crate::{
         cache::{MockLoader, SegmentMeta},
         fetch::DefaultFetchManager,
-        parsing::{MasterPlaylist, VariantStream, VariantId},
+        parsing::{MasterPlaylist, VariantId, VariantStream},
     };
-    use kithara_assets::AssetStore;
-    use kithara_net::HttpClient;
-    use std::time::Duration;
-    use url::Url;
 
     fn create_test_master() -> MasterPlaylist {
         MasterPlaylist {
@@ -472,11 +484,7 @@ mod tests {
         }]
     }
 
-    fn create_test_segment_meta(
-        variant: usize,
-        segment_index: usize,
-        len: u64,
-    ) -> SegmentMeta {
+    fn create_test_segment_meta(variant: usize, segment_index: usize, len: u64) -> SegmentMeta {
         let url_str = if segment_index == usize::MAX {
             format!("http://test.com/v{}/init.mp4", variant)
         } else {
@@ -486,7 +494,11 @@ mod tests {
         SegmentMeta {
             variant,
             segment_index,
-            sequence: if segment_index == usize::MAX { 0 } else { segment_index as u64 },
+            sequence: if segment_index == usize::MAX {
+                0
+            } else {
+                segment_index as u64
+            },
             url: Url::parse(&url_str).expect("valid url"),
             duration: Some(Duration::from_secs(4)),
             key: None,
@@ -524,7 +536,9 @@ mod tests {
             use tokio::fs;
 
             let key = ResourceKey::from_url(url);
-            let file_path = self._temp_dir.path()
+            let file_path = self
+                ._temp_dir
+                .path()
                 .join("test_root")
                 .join(&key.rel_path());
 
@@ -543,9 +557,12 @@ mod tests {
         let ctx = TestContext::new();
 
         // Populate test data
-        ctx.populate_data(&Url::parse("http://test.com/v0/init.mp4").unwrap(), 1000).await;
-        ctx.populate_data(&Url::parse("http://test.com/v0/seg0.ts").unwrap(), 10000).await;
-        ctx.populate_data(&Url::parse("http://test.com/v0/seg1.ts").unwrap(), 10000).await;
+        ctx.populate_data(&Url::parse("http://test.com/v0/init.mp4").unwrap(), 1000)
+            .await;
+        ctx.populate_data(&Url::parse("http://test.com/v0/seg0.ts").unwrap(), 10000)
+            .await;
+        ctx.populate_data(&Url::parse("http://test.com/v0/seg1.ts").unwrap(), 10000)
+            .await;
 
         let mut loader = MockLoader::new();
 
@@ -606,7 +623,8 @@ mod tests {
         let ctx = TestContext::new();
 
         // Populate test data
-        ctx.populate_data(&Url::parse("http://test.com/v0/init.mp4").unwrap(), 1000).await;
+        ctx.populate_data(&Url::parse("http://test.com/v0/init.mp4").unwrap(), 1000)
+            .await;
 
         let mut loader = MockLoader::new();
 
@@ -656,9 +674,7 @@ mod tests {
 
         loader.expect_num_variants().returning(|| 1);
 
-        loader
-            .expect_num_segments()
-            .returning(|_| Ok(10));
+        loader.expect_num_segments().returning(|_| Ok(10));
 
         let master = create_test_master();
         let metadata = create_test_metadata();

@@ -14,7 +14,7 @@ use std::{env::args, error::Error, sync::Arc};
 
 use bytes::Bytes;
 use kithara_decode::{GenericStreamDecoder, PcmBuffer, StreamPipeline};
-use kithara_hls::{worker::HlsSegmentMetadata, AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams, worker::HlsSegmentMetadata};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -42,13 +42,18 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Opening HLS stream: {}", url);
 
-    let hls_params = HlsParams::default().with_abr(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        ..Default::default()
-    });
+    // Create events channel
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+
+    let hls_params = HlsParams::default()
+        .with_abr(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..Default::default()
+        })
+        .with_events(events_tx);
 
     // Open HLS stream and get worker source
-    let (worker_source, mut events_rx) = Hls::open_stream(url, hls_params).await?;
+    let worker_source = Hls::open(url, hls_params).await?;
 
     // Subscribe to HLS events
     tokio::spawn(async move {
@@ -94,12 +99,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Pipeline created, consuming PCM chunks...");
 
-    // Create simple PCM buffer for accumulating audio
+    // Create simple PCM buffer for streaming (no random access)
     let spec = kithara_decode::PcmSpec {
         sample_rate: 44100,
         channels: 2,
     };
-    let (buffer, sample_rx) = PcmBuffer::new(spec);
+    let (buffer, sample_rx) = PcmBuffer::new_streaming(spec);
     let buffer = Arc::new(buffer);
 
     // Spawn consumer task for PCM chunks

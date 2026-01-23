@@ -26,7 +26,10 @@ use kithara_worker::{AsyncWorker, AsyncWorkerSource, Fetch, Worker};
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
-use crate::{stream_decoder::StreamDecoder, types::{DecodeResult, PcmChunk}};
+use crate::{
+    stream_decoder::StreamDecoder,
+    types::{DecodeResult, PcmChunk},
+};
 
 /// Stream-based decoding pipeline.
 ///
@@ -101,11 +104,11 @@ where
         // 1. Create channels
         let (cmd_tx, cmd_rx) = kanal::bounded_async(16);
         // Keep msg buffer small to limit memory usage (backpressure)
-        // 2 segments = ~2-4 MB in flight
-        let (msg_tx, msg_rx) = kanal::bounded_async(2);
-        // PCM buffer: ~1-2s of audio (10-20 chunks at ~100ms/chunk)
-        // Smaller buffer = less memory, but requires faster consumer
-        let (pcm_tx, pcm_rx) = kanal::bounded(20);
+        // 1 segment = ~1-2 MB in flight (reduced from 2 for memory optimization)
+        let (msg_tx, msg_rx) = kanal::bounded_async(1);
+        // PCM buffer: ~1s of audio (10 chunks at ~100ms/chunk)
+        // Reduced from 20 to 10 for lower memory consumption
+        let (pcm_tx, pcm_rx) = kanal::bounded(10);
 
         // 2. Create and spawn worker (HLS fetcher)
         let worker = AsyncWorker::new(source, cmd_rx, msg_tx);
@@ -229,11 +232,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use async_trait::async_trait;
     use bytes::Bytes;
     use kithara_stream::{StreamMessage, StreamMetadata};
     use kithara_worker::Fetch;
+
+    use super::*;
 
     // Test metadata
     #[derive(Clone, Debug)]

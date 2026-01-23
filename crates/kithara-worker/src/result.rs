@@ -57,26 +57,6 @@ impl WorkerResultExt for WorkerResult {
 }
 
 impl WorkerResult {
-    /// Create a simple "continue" result.
-    pub fn continue_processing() -> Self {
-        WorkerResult::CONTINUE
-    }
-
-    /// Create a "command received" result.
-    pub fn command_received() -> Self {
-        WorkerResult::COMMAND_RECEIVED
-    }
-
-    /// Create an "EOF" result.
-    pub fn eof() -> Self {
-        WorkerResult::EOF
-    }
-
-    /// Create a "stop" result.
-    pub fn stop() -> Self {
-        WorkerResult::STOP
-    }
-
     /// Validate that mutually exclusive flags are not set together.
     ///
     /// Returns `Err` if both STOP and CONTINUE are set.
@@ -85,11 +65,6 @@ impl WorkerResult {
             return Err("STOP and CONTINUE are mutually exclusive");
         }
         Ok(())
-    }
-
-    /// Check if the result indicates the worker should terminate.
-    pub fn should_terminate(&self) -> bool {
-        self.contains(WorkerResult::STOP)
     }
 }
 

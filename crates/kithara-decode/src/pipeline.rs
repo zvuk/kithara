@@ -240,8 +240,8 @@ impl Pipeline<SymphoniaDecoder> {
         let (cmd_tx, cmd_rx) = kanal::bounded::<PipelineCommand>(4);
         let (data_tx, data_rx) = kanal::bounded::<Fetch<PcmChunk<f32>>>(8);
 
-        // Shared buffer for decoded PCM with sample channel
-        let (buffer, sample_rx) = PcmBuffer::new(output_spec);
+        // Shared buffer for decoded PCM with sample channel (streaming mode)
+        let (buffer, sample_rx) = PcmBuffer::new_streaming(output_spec);
         let buffer = Arc::new(buffer);
 
         // Speed control (lock-free)
@@ -307,8 +307,8 @@ impl<D: Decoder> Pipeline<D> {
         let (cmd_tx, cmd_rx) = kanal::bounded::<PipelineCommand>(4);
         let (data_tx, data_rx) = kanal::bounded::<Fetch<PcmChunk<f32>>>(8);
 
-        // Shared buffer for decoded PCM with sample channel
-        let (buffer, sample_rx) = PcmBuffer::new(output_spec);
+        // Shared buffer for decoded PCM with sample channel (streaming mode)
+        let (buffer, sample_rx) = PcmBuffer::new_streaming(output_spec);
         let buffer = Arc::new(buffer);
 
         // Speed control (lock-free)
@@ -413,8 +413,10 @@ impl<D: Decoder> Drop for Pipeline<D> {
 pub struct PcmBuffer {
     /// Output specification.
     spec: PcmSpec,
-    /// All decoded samples for random access (backwards compatible).
-    samples: parking_lot::RwLock<Vec<f32>>,
+    /// All decoded samples for random access (optional, None for streaming).
+    /// Only enabled when random access is needed (e.g., PcmSource).
+    /// Disabled in streaming mode to save ~5MB memory.
+    samples: Option<parking_lot::RwLock<Vec<f32>>>,
     /// Channel sender for streaming chunks (with backpressure).
     sample_tx: kanal::Sender<Vec<f32>>,
     /// Total frames written.
@@ -424,27 +426,53 @@ pub struct PcmBuffer {
 }
 
 impl PcmBuffer {
-    /// Create new PCM buffer with hybrid storage.
+    /// Create new PCM buffer with optional random access.
     ///
     /// Returns (PcmBuffer, receiver for streaming).
-    /// Channel capacity: enough for ~10 seconds of audio chunks.
-    pub fn new(spec: PcmSpec) -> (Self, kanal::Receiver<Vec<f32>>) {
+    ///
+    /// Set `enable_random_access = false` for streaming-only use cases
+    /// (hls_decode, StreamPipeline) to save memory.
+    ///
+    /// Set `enable_random_access = true` when using PcmSource for random access.
+    pub fn new(spec: PcmSpec, enable_random_access: bool) -> (Self, kanal::Receiver<Vec<f32>>) {
         // Channel capacity: Balance between memory and smooth playback
-        // ~50 chunks (assuming ~100ms per chunk = 5 seconds buffered)
-        // Too small = blocking and stuttering, too large = high memory
-        let channel_capacity = 50;
+        // ~20 chunks (assuming ~100ms per chunk = 2 seconds buffered)
+        // Reduced from 50 to 20 for lower memory consumption
+        let channel_capacity = 20;
 
         let (sample_tx, sample_rx) = kanal::bounded(channel_capacity);
 
+        let samples = if enable_random_access {
+            Some(parking_lot::RwLock::new(Vec::new()))
+        } else {
+            None
+        };
+
         let buffer = Self {
             spec,
-            samples: parking_lot::RwLock::new(Vec::new()),
+            samples,
             sample_tx,
             frames_written: AtomicU64::new(0),
             eof: AtomicBool::new(false),
         };
 
         (buffer, sample_rx)
+    }
+
+    /// Create new PCM buffer for streaming only (no random access).
+    ///
+    /// This is a convenience method equivalent to `new(spec, false)`.
+    /// Use for hls_decode, StreamPipeline, and other streaming scenarios.
+    pub fn new_streaming(spec: PcmSpec) -> (Self, kanal::Receiver<Vec<f32>>) {
+        Self::new(spec, false)
+    }
+
+    /// Create new PCM buffer with random access enabled.
+    ///
+    /// This is a convenience method equivalent to `new(spec, true)`.
+    /// Use when creating PcmSource for random-access PCM reads.
+    pub fn new_with_random_access(spec: PcmSpec) -> (Self, kanal::Receiver<Vec<f32>>) {
+        Self::new(spec, true)
     }
 
     /// Get PCM specification.
@@ -465,8 +493,14 @@ impl PcmBuffer {
     /// Read samples at given frame offset (for random access).
     ///
     /// Returns number of samples read (not frames).
+    /// Returns 0 if random access is disabled (streaming mode).
     pub fn read_samples(&self, frame_offset: u64, buf: &mut [f32]) -> usize {
-        let samples = self.samples.read();
+        let Some(ref samples_lock) = self.samples else {
+            // Random access disabled (streaming mode)
+            return 0;
+        };
+
+        let samples = samples_lock.read();
         let channels = self.spec.channels as usize;
 
         let sample_offset = (frame_offset * channels as u64) as usize;
@@ -480,18 +514,23 @@ impl PcmBuffer {
         to_read
     }
 
-    /// Append a PCM chunk - streaming mode (no Vec accumulation).
+    /// Append a PCM chunk - hybrid mode.
     ///
-    /// For streaming playback, this sends data to channel only.
-    /// Vec is NOT used to avoid unbounded memory growth.
+    /// If random access is enabled (PcmSource use case), accumulates data in Vec.
+    /// Always sends data to channel for streaming consumers.
     ///
     /// IMPORTANT: Uses blocking_send() which blocks if channel is full.
     /// This provides automatic backpressure to the decoder/HLS pipeline.
     pub fn append(&self, chunk: &PcmChunk<f32>) {
-        // STREAMING MODE: Send to channel only, skip Vec accumulation
-        // This avoids unbounded memory growth for long streams
         let chunk_data = chunk.pcm.clone();
 
+        // If random access enabled, accumulate in Vec
+        if let Some(ref samples_lock) = self.samples {
+            let mut samples = samples_lock.write();
+            samples.extend_from_slice(&chunk_data);
+        }
+
+        // Always send to channel for streaming consumers
         // blocking_send() will block if channel is full -> backpressure!
         if let Err(e) = self.sample_tx.send(chunk_data) {
             trace!(err = %e, "Channel closed, cannot send chunk (receiver dropped)");
@@ -883,7 +922,7 @@ mod tests {
             channels,
         };
 
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, false);
 
         assert_eq!(buffer.spec(), spec);
         assert_eq!(buffer.frames_written(), 0);
@@ -896,7 +935,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, false);
 
         let samples = vec![0.5f32; 200];
         let chunk = PcmChunk::new(spec, samples);
@@ -912,7 +951,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, true);
 
         let samples = vec![0.7f32; 200];
         let chunk = PcmChunk::new(spec, samples);
@@ -931,7 +970,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, true);
 
         let samples = vec![0.5f32; 200];
         let chunk = PcmChunk::new(spec, samples);
@@ -949,7 +988,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, true);
 
         let samples = vec![0.5f32; 200];
         let chunk = PcmChunk::new(spec, samples);
@@ -967,7 +1006,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, false);
 
         assert!(!buffer.is_eof());
 
@@ -982,7 +1021,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, false);
 
         for i in 0..5 {
             let samples = vec![(i as f32) * 0.1; 200];
@@ -999,7 +1038,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, true);
 
         let samples1 = vec![0.3f32; 200];
         let chunk1 = PcmChunk::new(spec, samples1);
@@ -1023,7 +1062,7 @@ mod tests {
             sample_rate: 48000,
             channels: 2,
         };
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, false);
 
         let trait_spec = crate::traits::PcmBufferTrait::spec(&buffer);
         assert_eq!(trait_spec, spec);
@@ -1035,7 +1074,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, false);
 
         let samples = vec![0.5f32; 200];
         let chunk = PcmChunk::new(spec, samples);
@@ -1051,7 +1090,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, false);
 
         assert!(!crate::traits::PcmBufferTrait::is_eof(&buffer));
 
@@ -1066,7 +1105,7 @@ mod tests {
             sample_rate: 44100,
             channels: 2,
         };
-        let (buffer, _rx) = PcmBuffer::new(spec);
+        let (buffer, _rx) = PcmBuffer::new(spec, true);
 
         let samples = vec![0.8f32; 200];
         let chunk = PcmChunk::new(spec, samples);

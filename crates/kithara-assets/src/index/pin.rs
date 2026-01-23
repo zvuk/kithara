@@ -72,29 +72,6 @@ impl PinsIndex {
         self.res.write(&bytes).await?;
         Ok(())
     }
-
-    /// Add `asset_root` to the set and persist immediately.
-    #[allow(dead_code)]
-    pub async fn insert(&self, asset_root: &str) -> AssetsResult<()> {
-        let mut pins = self.load().await?;
-        pins.insert(asset_root.to_string());
-        self.store(&pins).await
-    }
-
-    /// Remove `asset_root` from the set and persist immediately.
-    #[allow(dead_code)]
-    pub async fn remove(&self, asset_root: &str) -> AssetsResult<()> {
-        let mut pins = self.load().await?;
-        pins.remove(asset_root);
-        self.store(&pins).await
-    }
-
-    /// Check whether `asset_root` is pinned (loads from storage).
-    #[allow(dead_code)]
-    pub async fn contains(&self, asset_root: &str) -> AssetsResult<bool> {
-        let pins = self.load().await?;
-        Ok(pins.contains(asset_root))
-    }
 }
 
 #[cfg(test)]
@@ -184,133 +161,6 @@ mod tests {
     #[rstest]
     #[timeout(Duration::from_secs(1))]
     #[tokio::test]
-    async fn test_insert_single_asset() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res);
-
-        index.insert("my-asset").await.unwrap();
-
-        let pins = index.load().await.unwrap();
-        assert_eq!(pins.len(), 1);
-        assert!(pins.contains("my-asset"));
-    }
-
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[tokio::test]
-    async fn test_insert_multiple_assets() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res);
-
-        index.insert("asset1").await.unwrap();
-        index.insert("asset2").await.unwrap();
-        index.insert("asset3").await.unwrap();
-
-        let pins = index.load().await.unwrap();
-        assert_eq!(pins.len(), 3);
-        assert!(pins.contains("asset1"));
-        assert!(pins.contains("asset2"));
-        assert!(pins.contains("asset3"));
-    }
-
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[tokio::test]
-    async fn test_insert_duplicate() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res);
-
-        index.insert("asset").await.unwrap();
-        index.insert("asset").await.unwrap(); // Duplicate
-
-        let pins = index.load().await.unwrap();
-        assert_eq!(pins.len(), 1); // HashSet deduplicates
-        assert!(pins.contains("asset"));
-    }
-
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[tokio::test]
-    async fn test_remove_existing_asset() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res);
-
-        index.insert("asset1").await.unwrap();
-        index.insert("asset2").await.unwrap();
-
-        index.remove("asset1").await.unwrap();
-
-        let pins = index.load().await.unwrap();
-        assert_eq!(pins.len(), 1);
-        assert!(!pins.contains("asset1"));
-        assert!(pins.contains("asset2"));
-    }
-
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[tokio::test]
-    async fn test_remove_nonexistent_asset() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res);
-
-        index.insert("asset1").await.unwrap();
-
-        // Remove non-existent asset (should not error)
-        index.remove("nonexistent").await.unwrap();
-
-        let pins = index.load().await.unwrap();
-        assert_eq!(pins.len(), 1);
-        assert!(pins.contains("asset1"));
-    }
-
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[tokio::test]
-    async fn test_contains_true() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res);
-
-        index.insert("my-asset").await.unwrap();
-
-        let contains = index.contains("my-asset").await.unwrap();
-        assert!(contains);
-    }
-
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[tokio::test]
-    async fn test_contains_false() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res);
-
-        index.insert("asset1").await.unwrap();
-
-        let contains = index.contains("asset2").await.unwrap();
-        assert!(!contains);
-    }
-
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[tokio::test]
-    async fn test_contains_empty_index() {
-        let temp_dir = TempDir::new().unwrap();
-        let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res);
-
-        let contains = index.contains("anything").await.unwrap();
-        assert!(!contains);
-    }
-
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[tokio::test]
     async fn test_persistence_across_instances() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("pins.json");
@@ -322,7 +172,10 @@ mod tests {
                 cancel: CancellationToken::new(),
             });
             let index = PinsIndex::new(res);
-            index.insert("persisted-asset").await.unwrap();
+
+            let mut pins = HashSet::new();
+            pins.insert("persisted-asset".to_string());
+            index.store(&pins).await.unwrap();
         }
 
         // Second instance (new resource, same path)
@@ -347,7 +200,9 @@ mod tests {
         let res = create_test_resource(&temp_dir);
         let index = PinsIndex::new(res.clone());
 
-        index.insert("asset").await.unwrap();
+        let mut pins = HashSet::new();
+        pins.insert("asset".to_string());
+        index.store(&pins).await.unwrap();
 
         // Read raw bytes and parse
         let bytes = res.read().await.unwrap();

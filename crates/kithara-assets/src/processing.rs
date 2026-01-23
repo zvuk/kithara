@@ -112,12 +112,6 @@ where
 
         Ok(processed)
     }
-
-    /// Get processed length (requires processing if not cached).
-    pub async fn processed_len(&self) -> StorageResult<u64> {
-        let processed = self.ensure_processed().await?;
-        Ok(processed.len() as u64)
-    }
 }
 
 #[async_trait]
@@ -264,14 +258,6 @@ where
         // Cache and return
         self.cache.insert(cache_key, Arc::clone(&processed));
         Ok(processed)
-    }
-
-    /// Open a regular (non-processed) streaming resource.
-    pub async fn open_streaming_resource(
-        &self,
-        key: &ResourceKey,
-    ) -> AssetsResult<A::StreamingRes> {
-        self.inner.open_streaming_resource(key).await
     }
 
     /// Clear all cached processed resources.

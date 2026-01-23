@@ -1,13 +1,14 @@
 //! FetchLoader: Adapter from FetchManager to Loader trait.
 
 use std::sync::Arc;
+
 use async_trait::async_trait;
 use parking_lot::RwLock;
 use url::Url;
 
 use super::{Loader, types::SegmentMeta};
 use crate::{
-    HlsResult, HlsError,
+    HlsError, HlsResult,
     fetch::{ActiveFetchResult, DefaultFetchManager},
     parsing::ContainerFormat,
     playlist::{MediaPlaylist, PlaylistManager, VariantId},
@@ -50,7 +51,9 @@ impl FetchLoader {
             .get(variant)
             .ok_or_else(|| HlsError::VariantNotFound(format!("variant {}", variant)))?;
 
-        let media_url = self.playlists.resolve_url(&self.master_url, &variant_stream.uri)?;
+        let media_url = self
+            .playlists
+            .resolve_url(&self.master_url, &variant_stream.uri)?;
         let playlist = self
             .playlists
             .media_playlist(&media_url, VariantId(variant))
@@ -62,11 +65,7 @@ impl FetchLoader {
 
 #[async_trait]
 impl Loader for FetchLoader {
-    async fn load_segment(
-        &self,
-        variant: usize,
-        segment_index: usize,
-    ) -> HlsResult<SegmentMeta> {
+    async fn load_segment(&self, variant: usize, segment_index: usize) -> HlsResult<SegmentMeta> {
         // Load media playlist for variant
         let (media_url, playlist) = self.load_media_playlist(variant).await?;
 
@@ -90,9 +89,9 @@ impl Loader for FetchLoader {
             })?;
 
             // Resolve init segment URL
-            let init_url = media_url
-                .join(&init_segment.uri)
-                .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {}", e)))?;
+            let init_url = media_url.join(&init_segment.uri).map_err(|e| {
+                HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {}", e))
+            })?;
 
             debug!(variant, url = %init_url, "starting init segment fetch");
             // Fetch init segment
@@ -128,15 +127,12 @@ impl Loader for FetchLoader {
         }
 
         // Get regular segment from playlist
-        let segment = playlist
-            .segments
-            .get(segment_index)
-            .ok_or_else(|| {
-                HlsError::SegmentNotFound(format!(
-                    "segment {} not found in variant {} playlist",
-                    segment_index, variant
-                ))
-            })?;
+        let segment = playlist.segments.get(segment_index).ok_or_else(|| {
+            HlsError::SegmentNotFound(format!(
+                "segment {} not found in variant {} playlist",
+                segment_index, variant
+            ))
+        })?;
 
         // Resolve segment URL
         let segment_url = media_url

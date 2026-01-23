@@ -159,13 +159,6 @@ impl From<StreamMessage<HlsSegmentMetadata, Bytes>> for HlsMessage {
     }
 }
 
-/// Backward compatibility alias for HlsMessage.
-///
-/// # Deprecated
-/// Use [`HlsMessage`] instead. This alias will be removed in a future version.
-#[deprecated(since = "0.1.0", note = "use HlsMessage instead")]
-pub type HlsChunk = HlsMessage;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,13 +198,5 @@ mod tests {
         assert!(init_msg.is_init_segment);
         assert!(init_msg.is_segment_start);
         assert!(init_msg.is_segment_end);
-    }
-
-    #[test]
-    #[allow(deprecated)]
-    fn test_backward_compat_alias() {
-        // Verify HlsChunk alias still works
-        let chunk: HlsChunk = HlsMessage::empty();
-        assert!(chunk.is_empty());
     }
 }

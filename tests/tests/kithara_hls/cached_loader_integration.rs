@@ -6,6 +6,7 @@
 //! with real HLS playlists and network fetching.
 
 use std::time::Duration;
+
 use kithara_assets::StoreOptions;
 use kithara_hls::{Hls, HlsParams};
 use kithara_stream::Source;
@@ -49,7 +50,10 @@ async fn test_cached_loader_basic_creation(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
-    info!("Testing CachedLoader creation with URL: {}", test_stream_url);
+    info!(
+        "Testing CachedLoader creation with URL: {}",
+        test_stream_url
+    );
 
     // Open using new architecture
     let source = Hls::open_v2(test_stream_url.clone(), hls_params).await?;
@@ -110,7 +114,10 @@ async fn test_cached_loader_sequential_reads(
         let offset = i * 1000;
         source.wait_range(offset..offset + 1000).await?;
         let bytes_read = source.read_at(offset, &mut buf).await?;
-        info!("Read iteration {}: {} bytes at offset {}", i, bytes_read, offset);
+        info!(
+            "Read iteration {}: {} bytes at offset {}",
+            i, bytes_read, offset
+        );
     }
 
     Ok(())
@@ -188,7 +195,10 @@ async fn test_cached_loader_aes128_decryption(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master-encrypted.m3u8")?;
-    info!("Testing CachedLoader with AES-128 encrypted content: {}", test_stream_url);
+    info!(
+        "Testing CachedLoader with AES-128 encrypted content: {}",
+        test_stream_url
+    );
 
     // Open encrypted stream using new architecture
     let source = Hls::open_v2(test_stream_url.clone(), hls_params).await?;
@@ -201,10 +211,16 @@ async fn test_cached_loader_aes128_decryption(
     // Read from encrypted segment - should be automatically decrypted
     let mut buf = vec![0u8; 1000];
     let bytes_read = source.read_at(0, &mut buf).await?;
-    info!("Read {} bytes from encrypted segment (decrypted)", bytes_read);
+    info!(
+        "Read {} bytes from encrypted segment (decrypted)",
+        bytes_read
+    );
 
     // Verify decrypted data contains expected plaintext prefix
-    assert!(bytes_read > 0, "Should read some bytes from encrypted segment");
+    assert!(
+        bytes_read > 0,
+        "Should read some bytes from encrypted segment"
+    );
 
     // The plaintext segment should start with "V0-SEG-0:DRM-PLAINTEXT"
     let decrypted_prefix = &buf[..bytes_read.min(22)];

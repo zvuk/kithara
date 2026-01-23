@@ -29,8 +29,7 @@ pub use msg::StreamMsg;
 pub use pipe::{Reader, ReaderError, Writer, WriterError};
 pub use prefetch::{
     AlwaysValid, BlockingSource, BlockingWorker, EpochValidator, Fetch, ItemValidator,
-    PrefetchConsumer, PrefetchResult, PrefetchSource, PrefetchWorker, PrefetchedItem,
-    WorkerItem,
+    PrefetchConsumer, PrefetchResult, PrefetchSource, PrefetchWorker, PrefetchedItem, WorkerItem,
 };
 pub use source::{Source, SyncReader, SyncReaderParams};
 pub use stream_message::{StreamData, StreamMessage, StreamMetadata};

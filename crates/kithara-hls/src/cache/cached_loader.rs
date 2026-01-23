@@ -1,6 +1,13 @@
 //! CachedLoader: Full Source implementation with caching.
 
-use std::{ops::Range, sync::{Arc, atomic::{AtomicU64, AtomicUsize}}};
+use std::{
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, AtomicUsize},
+    },
+};
+
 use async_trait::async_trait;
 use dashmap::DashMap;
 use kithara_assets::AssetStore;
@@ -8,9 +15,8 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{MediaInfo, Source, StreamError, StreamResult};
 use tokio::sync::Notify;
 
-use super::{Loader, OffsetMap};
+use super::{Loader, OffsetMap, types::EncryptionInfo};
 use crate::HlsError;
-use super::types::EncryptionInfo;
 
 /// Callback invoked when segment is loaded.
 /// Args: (variant, segment_index, bytes_loaded, duration_secs, throughput_bps)
@@ -54,15 +60,21 @@ impl<L: Loader> CachedLoader<L> {
     }
 
     pub fn current_variant(&self) -> usize {
-        self.current_variant.load(std::sync::atomic::Ordering::Relaxed)
+        self.current_variant
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub fn set_current_variant(&self, variant: usize) {
-        self.current_variant.store(variant, std::sync::atomic::Ordering::Relaxed);
+        self.current_variant
+            .store(variant, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Load segment if not in cache and insert into OffsetMap.
-    async fn load_segment_if_needed(&self, variant: usize, segment_index: usize) -> Result<(), HlsError> {
+    async fn load_segment_if_needed(
+        &self,
+        variant: usize,
+        segment_index: usize,
+    ) -> Result<(), HlsError> {
         // Check if already loaded
         if let Some(map) = self.offset_maps.get(&variant) {
             if map.get(segment_index).is_some() {
@@ -141,12 +153,14 @@ impl<L: Loader + 'static> Source for CachedLoader<L> {
             iterations += 1;
             if iterations > MAX_WAIT_ITERATIONS {
                 return Err(StreamError::Source(HlsError::Driver(
-                    "wait_range timeout: max iterations exceeded".into()
+                    "wait_range timeout: max iterations exceeded".into(),
                 )));
             }
 
             // Check if segment covering range.start exists
-            if let Some((_segment_index, _local_offset)) = self.find_cached_segment(range.start, current_var) {
+            if let Some((_segment_index, _local_offset)) =
+                self.find_cached_segment(range.start, current_var)
+            {
                 // Segment found in cache
                 return Ok(WaitOutcome::Ready);
             }
@@ -157,7 +171,10 @@ impl<L: Loader + 'static> Source for CachedLoader<L> {
                 drop(map);
 
                 // Try to load segment
-                if let Err(e) = self.load_segment_if_needed(current_var, segment_index).await {
+                if let Err(e) = self
+                    .load_segment_if_needed(current_var, segment_index)
+                    .await
+                {
                     return Err(StreamError::Source(e));
                 }
 
@@ -183,11 +200,14 @@ impl<L: Loader + 'static> Source for CachedLoader<L> {
         }
 
         // Detect seek
-        let last_pos = self.last_read_pos.load(std::sync::atomic::Ordering::Relaxed);
+        let last_pos = self
+            .last_read_pos
+            .load(std::sync::atomic::Ordering::Relaxed);
         let _is_seek = offset < last_pos || offset > last_pos.saturating_add(1024 * 1024);
 
         // Update last_read_pos
-        self.last_read_pos.store(offset, std::sync::atomic::Ordering::Relaxed);
+        self.last_read_pos
+            .store(offset, std::sync::atomic::Ordering::Relaxed);
 
         let current_var = self.current_variant();
 
@@ -196,7 +216,8 @@ impl<L: Loader + 'static> Source for CachedLoader<L> {
             Some(seg) => seg,
             None => {
                 // Segment not cached - estimate and load
-                let segment_index = self.offset_maps
+                let segment_index = self
+                    .offset_maps
                     .get(&current_var)
                     .map(|map| map.estimate_segment_index(offset))
                     .unwrap_or(0);
@@ -215,10 +236,15 @@ impl<L: Loader + 'static> Source for CachedLoader<L> {
 
         // Get segment URL and encryption from OffsetMap
         let (segment_url, encryption) = {
-            let map_ref = self.offset_maps.get(&current_var)
-                .ok_or_else(|| StreamError::Source(HlsError::SegmentNotFound("variant not found".into())))?;
-            let cached_seg = map_ref.get(segment_index)
-                .ok_or_else(|| StreamError::Source(HlsError::SegmentNotFound(format!("segment {} not found", segment_index))))?;
+            let map_ref = self.offset_maps.get(&current_var).ok_or_else(|| {
+                StreamError::Source(HlsError::SegmentNotFound("variant not found".into()))
+            })?;
+            let cached_seg = map_ref.get(segment_index).ok_or_else(|| {
+                StreamError::Source(HlsError::SegmentNotFound(format!(
+                    "segment {} not found",
+                    segment_index
+                )))
+            })?;
             (cached_seg.url.clone(), cached_seg.encryption.clone())
         };
 
@@ -231,11 +257,14 @@ impl<L: Loader + 'static> Source for CachedLoader<L> {
         let bytes_read = if self.assets.has_processing() && encryption.is_some() {
             // Encrypted segment - use processed resource with decryption callback
             let enc_info = encryption.unwrap();
-            let resource = self.assets.open_processed(&key, enc_info)
+            let resource = self
+                .assets
+                .open_processed(&key, enc_info)
                 .await
                 .map_err(|e| StreamError::Source(HlsError::Assets(e)))?;
 
-            resource.read_at(local_offset, buf)
+            resource
+                .read_at(local_offset, buf)
                 .await
                 .map_err(|e| StreamError::Source(HlsError::Storage(e)))?
         } else {
@@ -244,7 +273,9 @@ impl<L: Loader + 'static> Source for CachedLoader<L> {
                 .await
                 .map_err(|e| StreamError::Source(HlsError::Assets(e)))?;
 
-            resource.inner().read_at(local_offset, buf)
+            resource
+                .inner()
+                .read_at(local_offset, buf)
                 .await
                 .map_err(|e| StreamError::Source(HlsError::Storage(e)))?
         };
@@ -265,21 +296,25 @@ impl<L: Loader + 'static> Source for CachedLoader<L> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::cache::loader::MockLoader;
-    use crate::cache::types::SegmentMeta;
     use std::time::Duration;
-    use url::Url;
+
     use kithara_assets::AssetStoreBuilder;
     use tempfile::TempDir;
+    use url::Url;
+
+    use super::*;
+    use crate::cache::{loader::MockLoader, types::SegmentMeta};
 
     fn create_test_meta(variant: usize, segment_index: usize, len: u64) -> SegmentMeta {
         SegmentMeta {
             variant,
             segment_index,
             sequence: segment_index as u64,
-            url: Url::parse(&format!("http://test.com/v{}/seg{}.ts", variant, segment_index))
-                .expect("valid URL"),
+            url: Url::parse(&format!(
+                "http://test.com/v{}/seg{}.ts",
+                variant, segment_index
+            ))
+            .expect("valid URL"),
             duration: Some(Duration::from_secs(4)),
             key: None,
             len,
@@ -303,7 +338,8 @@ mod tests {
         let mut loader = MockLoader::new();
         loader.expect_num_variants().returning(|| 3);
         loader.expect_num_segments().returning(|_| Ok(10));
-        loader.expect_load_segment()
+        loader
+            .expect_load_segment()
             .returning(|variant, idx| Ok(create_test_meta(variant, idx, 200_000)));
 
         (Arc::new(loader), assets, temp_dir)
@@ -319,7 +355,10 @@ mod tests {
 
         // This should fail because methods are not implemented yet
         let result = cached.read_at(0, &mut buf).await;
-        assert!(result.is_err() || result.unwrap() == 0, "read_at not implemented yet");
+        assert!(
+            result.is_err() || result.unwrap() == 0,
+            "read_at not implemented yet"
+        );
     }
 
     // CL-2: Random access from different segments
@@ -437,10 +476,8 @@ mod tests {
         let cached = CachedLoader::new(loader, assets);
 
         // Attempt to wait with timeout
-        let result = tokio::time::timeout(
-            Duration::from_millis(100),
-            cached.wait_range(0..1000)
-        ).await;
+        let result =
+            tokio::time::timeout(Duration::from_millis(100), cached.wait_range(0..1000)).await;
 
         // Should either timeout or complete quickly
         assert!(result.is_ok() || result.is_err());
@@ -457,8 +494,9 @@ mod tests {
         // Attempt to read at invalid offset
         let result = tokio::time::timeout(
             Duration::from_secs(1),
-            cached.read_at(u64::MAX - 1000, &mut buf)
-        ).await;
+            cached.read_at(u64::MAX - 1000, &mut buf),
+        )
+        .await;
 
         // Should not hang indefinitely
         assert!(result.is_ok(), "read_at should not hang");

@@ -6,14 +6,14 @@
 //! - `CachedLoader`: Full Source implementation with caching and ABR support
 //! - `FetchLoader`: Adapter from FetchManager to Loader trait
 
-mod loader;
-mod offset_map;
 mod cached_loader;
 mod fetch_loader;
+mod loader;
+mod offset_map;
 mod types;
 
-pub use loader::{Loader, MockLoader};
-pub use offset_map::{OffsetMap, CachedSegment};
 pub use cached_loader::CachedLoader;
 pub use fetch_loader::FetchLoader;
-pub use types::{SegmentMeta, EncryptionInfo};
+pub use loader::{Loader, MockLoader};
+pub use offset_map::{CachedSegment, OffsetMap};
+pub use types::{EncryptionInfo, SegmentMeta};

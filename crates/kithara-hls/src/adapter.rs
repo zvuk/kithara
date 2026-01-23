@@ -5,11 +5,10 @@
 use std::{ops::Range, sync::Arc};
 
 use async_trait::async_trait;
-use kithara_stream::{
-    ContainerFormat as StreamContainerFormat, MediaInfo, Source,
-    StreamResult as KitharaIoResult,
-};
 use kithara_storage::WaitOutcome;
+use kithara_stream::{
+    ContainerFormat as StreamContainerFormat, MediaInfo, Source, StreamResult as KitharaIoResult,
+};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 
