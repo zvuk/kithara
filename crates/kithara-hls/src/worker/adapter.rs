@@ -7,7 +7,7 @@ use kithara_storage::WaitOutcome;
 use kithara_worker::Fetch;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
-use tracing::{debug, trace};
+use tracing::trace;
 
 use crate::{events::HlsEvent, parsing::ContainerFormat, HlsError};
 

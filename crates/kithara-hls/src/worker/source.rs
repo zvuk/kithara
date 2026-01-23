@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
 use crate::{
-    abr::{AbrController, AbrDecision, AbrReason, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant},
+    abr::{AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant},
     cache::Loader,
     events::HlsEvent,
     fetch::DefaultFetchManager,

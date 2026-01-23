@@ -21,7 +21,7 @@ mod throughput;
 
 pub use adapter::HlsSourceAdapter;
 pub use buffer::BufferTracker;
-pub use chunk::{HlsChunk, HlsMessage};
+pub use chunk::HlsMessage;
 pub use command::HlsCommand;
 pub use metadata::VariantMetadata;
 pub use segment_metadata::HlsSegmentMetadata;

@@ -1,6 +1,6 @@
 //! Traits for testability and abstraction.
 
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(test)]
 use mockall::automock;
 
 use crate::PcmSpec;
@@ -8,7 +8,7 @@ use crate::PcmSpec;
 /// Trait for PCM buffer abstraction.
 ///
 /// Allows PcmSource to be generic over buffer implementation for testing.
-#[cfg_attr(any(test, feature = "test-utils"), automock)]
+#[cfg_attr(test, automock)]
 pub trait PcmBufferTrait: Send + Sync {
     /// Get PCM specification.
     fn spec(&self) -> PcmSpec;

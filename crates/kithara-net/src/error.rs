@@ -33,16 +33,6 @@ impl NetError {
         Self::Timeout
     }
 
-    /// Creates an HTTP error from a reqwest error
-    pub fn from_reqwest(error: reqwest::Error) -> Self {
-        Self::Http(error.to_string())
-    }
-
-    /// Creates a structured HTTP error with status and (optional) response body
-    pub fn http_error(status: u16, url: Url, body: Option<String>) -> Self {
-        Self::HttpError { status, url, body }
-    }
-
     /// Creates an HTTP error from a generic string
     pub fn http<S: Into<String>>(msg: S) -> Self {
         Self::Http(msg.into())
@@ -73,19 +63,6 @@ impl NetError {
                 *status >= 500 || *status == 429 || *status == 408
             }
             NetError::InvalidRange(_) | NetError::Unimplemented => false,
-        }
-    }
-
-    /// Checks if this error indicates a timeout
-    pub fn is_timeout(&self) -> bool {
-        matches!(self, NetError::Timeout)
-    }
-
-    /// Gets the HTTP status code if this is an HTTP status error
-    pub fn status_code(&self) -> Option<u16> {
-        match self {
-            NetError::HttpError { status, .. } => Some(*status),
-            _ => None,
         }
     }
 }

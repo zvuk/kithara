@@ -9,7 +9,6 @@ test-utils = ["mockall"]
 [dependencies]
 async-trait = { workspace = true }
 bitflags = { workspace = true }
-futures = { workspace = true }
 kanal = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }

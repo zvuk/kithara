@@ -9,16 +9,11 @@ kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
-bytes = { workspace = true }
-futures = { workspace = true }
-hex = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-tokio-stream = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
-async-stream = { workspace = true }
 async-trait = { workspace = true }
 dhat = { workspace = true, optional = true }
 

@@ -98,16 +98,6 @@ impl ChunkedReader {
         // No-op: chunks are already released in read() loop
         // consumed_bytes is just for tracking/stats
     }
-
-    /// Get total available bytes.
-    pub fn len(&self) -> usize {
-        self.total_len
-    }
-
-    /// Check if empty.
-    pub fn is_empty(&self) -> bool {
-        self.total_len == 0
-    }
 }
 
 impl Default for ChunkedReader {

@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetStoreBuilder, ProcessFn, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
 use kithara_stream::{OpenedSource, SourceFactory, StreamError};
 use kithara_worker::Worker;
@@ -10,12 +10,10 @@ use tokio::sync::broadcast;
 use url::Url;
 
 use crate::{
-    abr::{AbrConfig, AbrController},
-    cache::{EncryptionInfo, FetchLoader, Loader},
+    cache::{FetchLoader, Loader},
     error::{HlsError, HlsResult},
     events::HlsEvent,
     fetch::FetchManager,
-    keys::KeyManager,
     options::HlsParams,
     playlist::PlaylistManager,
     worker::{HlsSourceAdapter, HlsWorkerSource, VariantMetadata},
