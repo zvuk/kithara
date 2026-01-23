@@ -9,7 +9,7 @@ use std::{
 use async_trait::async_trait;
 use kithara_storage::WaitOutcome;
 use kithara_worker::{Fetch, Worker};
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace};
 
 use crate::{
     error::{StreamError, StreamResult},
@@ -370,28 +370,14 @@ where
             self.current_chunk = None;
         }
 
-        // Wait for matching chunk (non-blocking loop with yield)
-        let mut spin_count: u64 = 0;
+        // Wait for matching chunk (blocking recv, no busy loop)
         loop {
-            match self.data_rx.try_recv() {
-                Ok(Some(item)) => {
+            match self.data_rx.recv() {
+                Ok(item) => {
                     if let Some(n) = self.process_item(item, buf) {
                         return Ok(n);
                     }
-                    // Item was stale, continue waiting
-                }
-                Ok(None) => {
-                    // No data yet, yield and retry
-                    spin_count += 1;
-                    if spin_count.is_multiple_of(10_000_000) {
-                        warn!(
-                            pos = self.pos,
-                            epoch = self.epoch,
-                            spin_count,
-                            "SyncReader: spinning waiting for data"
-                        );
-                    }
-                    std::thread::yield_now();
+                    // Item was stale (old epoch), continue waiting for valid chunk
                 }
                 Err(_) => {
                     return Err(std::io::Error::new(

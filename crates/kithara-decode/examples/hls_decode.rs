@@ -94,12 +94,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Pipeline created, consuming PCM chunks...");
 
-    // Create simple PCM buffer for accumulating audio
+    // Create simple PCM buffer for streaming (no random access)
     let spec = kithara_decode::PcmSpec {
         sample_rate: 44100,
         channels: 2,
     };
-    let (buffer, sample_rx) = PcmBuffer::new(spec);
+    let (buffer, sample_rx) = PcmBuffer::new_streaming(spec);
     let buffer = Arc::new(buffer);
 
     // Spawn consumer task for PCM chunks

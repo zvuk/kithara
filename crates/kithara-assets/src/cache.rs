@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::{path::Path, sync::Arc};
+use std::{num::NonZeroUsize, path::Path, sync::Arc};
 
 use async_trait::async_trait;
-use dashmap::DashMap;
 use kithara_storage::AtomicResource;
+use lru::LruCache;
+use parking_lot::Mutex;
 
 use crate::{base::Assets, error::AssetsResult, key::ResourceKey};
 
@@ -23,21 +24,33 @@ enum CacheEntry<S, A> {
     Index(AtomicResource),
 }
 
-type Cache<S, A> = DashMap<CacheKey, CacheEntry<S, A>>;
+type Cache<S, A> = Mutex<LruCache<CacheKey, CacheEntry<S, A>>>;
 
-/// A decorator that caches opened resources in memory.
+/// A decorator that caches opened resources in memory with LRU eviction.
 ///
 /// ## Normative
 /// - Caching is done at the resource level (not asset level).
 /// - Same `ResourceKey` returns the same resource handle.
 /// - Cache is process-scoped and not persisted.
-#[derive(Clone, Debug)]
+/// - LRU capacity: 5 entries (enough for init + 2-3 media segments).
+#[derive(Clone)]
 pub struct CachedAssets<A>
 where
     A: Assets,
 {
     base: Arc<A>,
     cache: Arc<Cache<A::StreamingRes, A::AtomicRes>>,
+}
+
+impl<A> std::fmt::Debug for CachedAssets<A>
+where
+    A: Assets,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedAssets")
+            .field("cache_size", &self.cache.lock().len())
+            .finish()
+    }
 }
 
 impl<A> CachedAssets<A>
@@ -47,7 +60,9 @@ where
     pub fn new(base: Arc<A>) -> Self {
         Self {
             base,
-            cache: Arc::new(DashMap::new()),
+            cache: Arc::new(Mutex::new(LruCache::new(
+                NonZeroUsize::new(5).expect("capacity must be non-zero"),
+            ))),
         }
     }
 
@@ -75,107 +90,113 @@ where
     async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<Self::AtomicRes> {
         let cache_key = CacheKey::Atomic(key.clone());
 
-        if let Some(entry) = self.cache.get(&cache_key)
-            && let CacheEntry::Atomic(res) = entry.value()
+        // Check cache first
         {
-            return Ok(res.clone());
+            let mut cache = self.cache.lock();
+            if let Some(CacheEntry::Atomic(res)) = cache.get(&cache_key) {
+                return Ok(res.clone());
+            }
         }
 
+        // Cache miss - load from base
         let res = self.base.open_atomic_resource(key).await?;
 
-        match self.cache.entry(cache_key) {
-            dashmap::mapref::entry::Entry::Occupied(e) => {
-                if let CacheEntry::Atomic(existing) = e.get() {
-                    Ok(existing.clone())
-                } else {
-                    Ok(res)
-                }
-            }
-            dashmap::mapref::entry::Entry::Vacant(e) => {
-                e.insert(CacheEntry::Atomic(res.clone()));
-                Ok(res)
-            }
+        // Insert into cache (LRU evicts oldest if full)
+        {
+            let mut cache = self.cache.lock();
+            cache.put(cache_key, CacheEntry::Atomic(res.clone()));
         }
+
+        Ok(res)
     }
 
     async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<Self::StreamingRes> {
         let cache_key = CacheKey::Streaming(key.clone());
 
-        if let Some(entry) = self.cache.get(&cache_key)
-            && let CacheEntry::Streaming(res) = entry.value()
+        // Check cache first
         {
-            return Ok(res.clone());
+            let mut cache = self.cache.lock();
+            if let Some(CacheEntry::Streaming(res)) = cache.get(&cache_key) {
+                return Ok(res.clone());
+            }
         }
 
+        // Cache miss - load from base
         let res = self.base.open_streaming_resource(key).await?;
 
-        match self.cache.entry(cache_key) {
-            dashmap::mapref::entry::Entry::Occupied(e) => {
-                if let CacheEntry::Streaming(existing) = e.get() {
-                    Ok(existing.clone())
-                } else {
-                    Ok(res)
-                }
-            }
-            dashmap::mapref::entry::Entry::Vacant(e) => {
-                e.insert(CacheEntry::Streaming(res.clone()));
-                Ok(res)
-            }
+        // Insert into cache (LRU evicts oldest if full)
+        {
+            let mut cache = self.cache.lock();
+            cache.put(cache_key, CacheEntry::Streaming(res.clone()));
         }
+
+        Ok(res)
     }
 
     async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
-        if let Some(entry) = self.cache.get(&CacheKey::PinsIndex)
-            && let CacheEntry::Index(res) = entry.value()
+        // Check cache first
         {
-            return Ok(res.clone());
+            let mut cache = self.cache.lock();
+            if let Some(CacheEntry::Index(res)) = cache.get(&CacheKey::PinsIndex) {
+                return Ok(res.clone());
+            }
         }
 
+        // Cache miss - load from base
         let res = self.base.open_pins_index_resource().await?;
 
-        match self.cache.entry(CacheKey::PinsIndex) {
-            dashmap::mapref::entry::Entry::Occupied(e) => {
-                if let CacheEntry::Index(existing) = e.get() {
-                    Ok(existing.clone())
-                } else {
-                    Ok(res)
-                }
-            }
-            dashmap::mapref::entry::Entry::Vacant(e) => {
-                e.insert(CacheEntry::Index(res.clone()));
-                Ok(res)
-            }
+        // Insert into cache
+        {
+            let mut cache = self.cache.lock();
+            cache.put(CacheKey::PinsIndex, CacheEntry::Index(res.clone()));
         }
+
+        Ok(res)
     }
 
     async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
-        if let Some(entry) = self.cache.get(&CacheKey::LruIndex)
-            && let CacheEntry::Index(res) = entry.value()
+        // Check cache first
         {
-            return Ok(res.clone());
+            let mut cache = self.cache.lock();
+            if let Some(CacheEntry::Index(res)) = cache.get(&CacheKey::LruIndex) {
+                return Ok(res.clone());
+            }
         }
 
+        // Cache miss - load from base
         let res = self.base.open_lru_index_resource().await?;
 
-        match self.cache.entry(CacheKey::LruIndex) {
-            dashmap::mapref::entry::Entry::Occupied(e) => {
-                if let CacheEntry::Index(existing) = e.get() {
-                    Ok(existing.clone())
-                } else {
-                    Ok(res)
-                }
-            }
-            dashmap::mapref::entry::Entry::Vacant(e) => {
-                e.insert(CacheEntry::Index(res.clone()));
-                Ok(res)
-            }
+        // Insert into cache
+        {
+            let mut cache = self.cache.lock();
+            cache.put(CacheKey::LruIndex, CacheEntry::Index(res.clone()));
         }
+
+        Ok(res)
     }
 
     async fn delete_asset(&self) -> AssetsResult<()> {
         // Clear streaming and atomic caches for this asset (keep index entries)
-        self.cache
-            .retain(|k, _| matches!(k, CacheKey::PinsIndex | CacheKey::LruIndex));
+        {
+            let mut cache = self.cache.lock();
+
+            // Collect keys to remove (LruCache doesn't have retain())
+            let keys_to_remove: Vec<CacheKey> = cache
+                .iter()
+                .filter_map(|(k, _)| {
+                    if !matches!(k, CacheKey::PinsIndex | CacheKey::LruIndex) {
+                        Some(k.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            // Remove collected keys
+            for key in keys_to_remove {
+                cache.pop(&key);
+            }
+        }
 
         self.base.delete_asset().await
     }

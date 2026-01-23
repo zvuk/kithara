@@ -122,6 +122,7 @@ rangemap = { version = "1.7.1", features = ["serde1"] }
 random-access-disk = { path = "../random-access-disk", default-features = false, features = ["tokio"] }
 random-access-storage = "5.0.0"
 dashmap = "5.5.3"
+lru = "0.12"
 
 # memory profiling
 dhat = "0.3"
