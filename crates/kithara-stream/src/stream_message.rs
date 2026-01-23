@@ -178,11 +178,11 @@ impl StreamData for bytes::Bytes {
     type Item = u8;
 
     fn len(&self) -> usize {
-        bytes::Bytes::len(self)
+        Self::len(self)
     }
 
     fn is_empty(&self) -> bool {
-        bytes::Bytes::is_empty(self)
+        Self::is_empty(self)
     }
 }
 
@@ -190,11 +190,11 @@ impl StreamData for Vec<u8> {
     type Item = u8;
 
     fn len(&self) -> usize {
-        Vec::len(self)
+        Self::len(self)
     }
 
     fn is_empty(&self) -> bool {
-        Vec::is_empty(self)
+        Self::is_empty(self)
     }
 }
 
@@ -202,11 +202,11 @@ impl StreamData for Vec<f32> {
     type Item = f32;
 
     fn len(&self) -> usize {
-        Vec::len(self)
+        Self::len(self)
     }
 
     fn is_empty(&self) -> bool {
-        Vec::is_empty(self)
+        Self::is_empty(self)
     }
 }
 

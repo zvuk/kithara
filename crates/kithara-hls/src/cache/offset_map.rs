@@ -1,8 +1,10 @@
 //! Offset mapping for a single variant.
 
 use std::collections::BTreeMap;
+
 use url::Url;
-use super::types::{SegmentMeta, EncryptionInfo};
+
+use super::types::{EncryptionInfo, SegmentMeta};
 use crate::playlist::EncryptionMethod;
 
 /// Cached segment with computed global_offset.
@@ -101,7 +103,8 @@ impl OffsetMap {
 
     /// Get total loaded size.
     pub fn total_size(&self) -> u64 {
-        self.segments.values()
+        self.segments
+            .values()
             .map(|s| s.global_offset + s.len)
             .max()
             .unwrap_or(0)
@@ -166,13 +169,14 @@ fn extract_encryption(meta: &SegmentMeta) -> Option<EncryptionInfo> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use rstest::rstest;
     use std::time::Duration;
 
+    use rstest::rstest;
+
+    use super::*;
+
     fn test_url(seg: usize) -> Url {
-        Url::parse(&format!("http://test.com/seg{}.ts", seg))
-            .expect("valid URL")
+        Url::parse(&format!("http://test.com/seg{}.ts", seg)).expect("valid URL")
     }
 
     fn create_meta(idx: usize, len: u64) -> SegmentMeta {
@@ -202,7 +206,8 @@ mod tests {
             let cached = map.get(idx).expect("segment not found");
             assert_eq!(
                 cached.global_offset, expected_offset,
-                "segment {} has wrong offset", idx
+                "segment {} has wrong offset",
+                idx
             );
             assert_eq!(cached.len, len);
 
@@ -217,10 +222,7 @@ mod tests {
     #[rstest]
     #[case(vec![4, 5, 6], vec![0, 1, 2, 3])]
     #[case(vec![7, 8, 9], vec![0, 1, 2])]
-    fn test_out_of_order_insert(
-        #[case] first_batch: Vec<usize>,
-        #[case] second_batch: Vec<usize>,
-    ) {
+    fn test_out_of_order_insert(#[case] first_batch: Vec<usize>, #[case] second_batch: Vec<usize>) {
         let mut map = OffsetMap::new();
         let seg_size = 200_000u64;
 
@@ -235,7 +237,8 @@ mod tests {
         }
 
         // CRITICAL: ALL segments must have correct global_offset
-        let all_indices: Vec<_> = first_batch.iter()
+        let all_indices: Vec<_> = first_batch
+            .iter()
             .chain(second_batch.iter())
             .copied()
             .collect();
@@ -280,8 +283,8 @@ mod tests {
 
     // OM-4: Gap detection
     #[rstest]
-    #[case(vec![0, 1, 3, 4], 2)]  // Missing seg 2
-    #[case(vec![0, 2, 3], 1)]     // Missing seg 1
+    #[case(vec![0, 1, 3, 4], 2)] // Missing seg 2
+    #[case(vec![0, 2, 3], 1)] // Missing seg 1
     fn test_gap_detection(#[case] loaded: Vec<usize>, #[case] gap_at: usize) {
         let mut map = OffsetMap::new();
         let seg_size = 200_000u64;
@@ -295,7 +298,8 @@ mod tests {
             let offset = idx as u64 * seg_size;
             assert!(
                 map.find_segment_for_offset(offset).is_some(),
-                "segment {} before gap should be found", idx
+                "segment {} before gap should be found",
+                idx
             );
         }
 
@@ -303,7 +307,8 @@ mod tests {
         let gap_offset = gap_at as u64 * seg_size;
         assert!(
             map.find_segment_for_offset(gap_offset).is_none(),
-            "gap at segment {} should return None", gap_at
+            "gap at segment {} should return None",
+            gap_at
         );
     }
 

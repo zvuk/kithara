@@ -120,7 +120,7 @@ impl StreamingResource {
     pub async fn status(&self) -> ResourceStatus {
         let state = self.inner.state.read().await;
 
-        if let Some(_e) = &state.failed {
+        if state.failed.is_some() {
             return ResourceStatus::Failed;
         }
 

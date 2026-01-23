@@ -75,8 +75,6 @@ impl From<ReqwestError> for NetError {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use rstest::*;
 
     use super::*;
@@ -85,7 +83,6 @@ mod tests {
     #[rstest]
     #[case::timeout_error(NetError::timeout(), NetError::Timeout)]
     #[case::http_from_string(NetError::http("test error"), NetError::Http("test error".to_string()))]
-    #[timeout(Duration::from_secs(5))]
     #[tokio::test]
     async fn test_error_creation_methods(
         #[case] created_error: NetError,
@@ -101,41 +98,15 @@ mod tests {
     // Test is_retryable method - parameterized
     #[rstest]
     #[case::timeout(NetError::Timeout, true)]
-    #[case::http_500(NetError::http_error(500, Url::parse("http://example.com").unwrap(), None), true)]
-    #[case::http_429(NetError::http_error(429, Url::parse("http://example.com").unwrap(), None), true)]
-    #[case::http_404(NetError::http_error(404, Url::parse("http://example.com").unwrap(), None), false)]
+    #[case::http_500(NetError::HttpError { status: 500, url: Url::parse("http://example.com").unwrap(), body: None }, true)]
+    #[case::http_429(NetError::HttpError { status: 429, url: Url::parse("http://example.com").unwrap(), body: None }, true)]
+    #[case::http_404(NetError::HttpError { status: 404, url: Url::parse("http://example.com").unwrap(), body: None }, false)]
     #[case::invalid_range(NetError::InvalidRange("test".to_string()), false)]
     #[case::unimplemented(NetError::Unimplemented, false)]
     #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) }, false)]
-    #[timeout(Duration::from_secs(5))]
     #[tokio::test]
     async fn test_is_retryable(#[case] error: NetError, #[case] expected_retryable: bool) {
         assert_eq!(error.is_retryable(), expected_retryable);
-    }
-
-    // Test is_timeout method
-    #[rstest]
-    #[case::timeout(NetError::Timeout, true)]
-    #[case::http_timeout_in_string(NetError::Http("timeout".to_string()), false)] // Only NetError::Timeout variant
-    #[case::http_error(NetError::http_error(408, Url::parse("http://example.com").unwrap(), None), false)]
-    #[case::other_error(NetError::InvalidRange("test".to_string()), false)]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
-    async fn test_is_timeout(#[case] error: NetError, #[case] expected_is_timeout: bool) {
-        assert_eq!(error.is_timeout(), expected_is_timeout);
-    }
-
-    // Test status_code method
-    #[rstest]
-    #[case::http_error_with_status(NetError::http_error(404, Url::parse("http://example.com").unwrap(), None), Some(404))]
-    #[case::http_error_500(NetError::http_error(500, Url::parse("http://example.com").unwrap(), None), Some(500))]
-    #[case::timeout_error(NetError::Timeout, None)]
-    #[case::http_string_error(NetError::Http("test".to_string()), None)]
-    #[case::invalid_range_error(NetError::InvalidRange("test".to_string()), None)]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
-    async fn test_status_code(#[case] error: NetError, #[case] expected_status: Option<u16>) {
-        assert_eq!(error.status_code(), expected_status);
     }
 
     // Test error display formatting
@@ -151,10 +122,9 @@ mod tests {
     #[case::timeout(NetError::Timeout, "Timeout")]
     #[case::unimplemented(NetError::Unimplemented, "not implemented")]
     #[case::http_error_with_details(
-        NetError::http_error(404, Url::parse("http://example.com/test").unwrap(), Some("Not found".to_string())),
+        NetError::HttpError { status: 404, url: Url::parse("http://example.com/test").unwrap(), body: Some("Not found".to_string()) },
         "HTTP 404: Some(\"Not found\") for URL: Url { scheme: \"http\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"example.com\")), port: None, path: \"/test\", query: None, fragment: None }"
     )]
-    #[timeout(Duration::from_secs(5))]
     #[tokio::test]
     async fn test_error_display(#[case] error: NetError, #[case] expected_prefix: &str) {
         let display = error.to_string();
@@ -168,7 +138,6 @@ mod tests {
 
     // Test RetryExhausted error display
     #[rstest]
-    #[timeout(Duration::from_secs(5))]
     #[tokio::test]
     async fn test_retry_exhausted_display() {
         let source = Box::new(NetError::Timeout);
@@ -181,31 +150,13 @@ mod tests {
         assert!(display.contains("Request failed after 3 retries: Timeout"));
     }
 
-    // Test from_reqwest_error conversion
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
-    async fn test_from_reqwest_error() {
-        // Note: We can't easily create a real reqwest::Error without making actual HTTP requests
-        // This test verifies the conversion exists and compiles
-
-        // The From<ReqwestError> implementation should exist
-        // We'll test this by verifying the trait bound exists
-        // This is a compile-time test
-        // Create a dummy closure to verify the conversion compiles
-        let _converter = |e: reqwest::Error| -> NetError { e.into() };
-
-        // This is mostly a compile-time test
-    }
-
     // Test error cloning
     #[rstest]
     #[case::timeout(NetError::Timeout)]
-    #[case::http_error(NetError::http_error(500, Url::parse("http://example.com").unwrap(), None))]
+    #[case::http_error(NetError::HttpError { status: 500, url: Url::parse("http://example.com").unwrap(), body: None })]
     #[case::invalid_range(NetError::InvalidRange("test".to_string()))]
     #[case::unimplemented(NetError::Unimplemented)]
     #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) })]
-    #[timeout(Duration::from_secs(5))]
     #[tokio::test]
     async fn test_error_cloning(#[case] error: NetError) {
         let cloned = error.clone();
@@ -215,19 +166,12 @@ mod tests {
 
         // Verify is_retryable is preserved
         assert_eq!(error.is_retryable(), cloned.is_retryable());
-
-        // Verify is_timeout is preserved
-        assert_eq!(error.is_timeout(), cloned.is_timeout());
-
-        // Verify status_code is preserved
-        assert_eq!(error.status_code(), cloned.status_code());
     }
 
     // Test error debug formatting
     #[rstest]
     #[case::timeout(NetError::Timeout)]
-    #[case::http_error(NetError::http_error(404, Url::parse("http://example.com").unwrap(), None))]
-    #[timeout(Duration::from_secs(5))]
+    #[case::http_error(NetError::HttpError { status: 404, url: Url::parse("http://example.com").unwrap(), body: None })]
     #[tokio::test]
     async fn test_error_debug(#[case] error: NetError) {
         let debug_output = format!("{:?}", error);
@@ -242,7 +186,6 @@ mod tests {
 
     // Test NetResult type alias
     #[rstest]
-    #[timeout(Duration::from_secs(5))]
     #[tokio::test]
     async fn test_net_result_type() {
         // Test Ok variant
@@ -257,33 +200,6 @@ mod tests {
         match err_result {
             Err(NetError::Timeout) => (),
             _ => panic!("Expected Timeout error"),
-        }
-    }
-
-    // Test http_error factory method with different body types
-    #[rstest]
-    #[case::with_string_body(Some("Error body".to_string()))]
-    #[case::with_none_body(None)]
-    #[case::with_empty_string_body(Some("".to_string()))]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
-    async fn test_http_error_factory(#[case] body: Option<String>) {
-        let url = Url::parse("http://example.com/test").unwrap();
-        let status = 404;
-
-        let error = NetError::http_error(status, url.clone(), body.clone());
-
-        match error {
-            NetError::HttpError {
-                status: actual_status,
-                url: actual_url,
-                body: actual_body,
-            } => {
-                assert_eq!(actual_status, status);
-                assert_eq!(actual_url, url);
-                assert_eq!(actual_body, body);
-            }
-            _ => panic!("Expected HttpError variant"),
         }
     }
 
@@ -302,7 +218,6 @@ mod tests {
     #[case("400 Bad Request", false)]
     #[case("403 Forbidden", false)]
     #[case("401 Unauthorized", false)]
-    #[timeout(Duration::from_secs(5))]
     #[tokio::test]
     async fn test_http_error_string_parsing(
         #[case] error_string: &str,
@@ -314,7 +229,6 @@ mod tests {
 
     // Test error equality (where applicable)
     #[rstest]
-    #[timeout(Duration::from_secs(5))]
     #[tokio::test]
     async fn test_error_equality() {
         // Timeout errors should be equal

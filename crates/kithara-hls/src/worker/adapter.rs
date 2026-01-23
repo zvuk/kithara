@@ -2,16 +2,15 @@ use std::{ops::Range, sync::Arc};
 
 use async_trait::async_trait;
 use kanal::{AsyncReceiver, AsyncSender};
-use kithara_stream::{ContainerFormat as StreamContainerFormat, MediaInfo, Source, StreamResult};
 use kithara_storage::WaitOutcome;
+use kithara_stream::{ContainerFormat as StreamContainerFormat, MediaInfo, Source, StreamResult};
 use kithara_worker::Fetch;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 use tracing::trace;
 
-use crate::{events::HlsEvent, parsing::ContainerFormat, HlsError};
-
-use super::{HlsMessage, HlsCommand};
+use super::{HlsCommand, HlsMessage};
+use crate::{HlsError, events::HlsEvent, parsing::ContainerFormat};
 
 /// Adapter from HLS worker chunks to Source trait.
 ///
@@ -121,7 +120,10 @@ impl HlsSourceAdapter {
                     debug!(num_chunks = chunks.len(), "range already covered");
                     return Ok(());
                 }
-                debug!(num_chunks = chunks.len(), "range not covered, waiting for chunk");
+                debug!(
+                    num_chunks = chunks.len(),
+                    "range not covered, waiting for chunk"
+                );
             }
 
             debug!("waiting for chunk from worker");
@@ -152,8 +154,7 @@ impl HlsSourceAdapter {
             if fetch.epoch != current_epoch {
                 trace!(
                     fetch_epoch = fetch.epoch,
-                    current_epoch,
-                    "discarding stale chunk"
+                    current_epoch, "discarding stale chunk"
                 );
                 continue;
             }
@@ -207,11 +208,7 @@ impl HlsSourceAdapter {
     }
 
     /// Find chunk containing the given offset and return (chunk_index, offset_in_chunk).
-    fn find_chunk_at_offset(
-        &self,
-        chunks: &[HlsMessage],
-        offset: u64,
-    ) -> Option<(usize, usize)> {
+    fn find_chunk_at_offset(&self, chunks: &[HlsMessage], offset: u64) -> Option<(usize, usize)> {
         for (idx, chunk) in chunks.iter().enumerate() {
             let chunk_start = chunk.byte_offset;
             let chunk_end = chunk.byte_offset + chunk.len() as u64;
@@ -354,8 +351,7 @@ impl Source for HlsSourceAdapter {
 
         let chunks = self.buffered_chunks.lock();
 
-        let Some((chunk_idx, offset_in_chunk)) = self.find_chunk_at_offset(&chunks, offset)
-        else {
+        let Some((chunk_idx, offset_in_chunk)) = self.find_chunk_at_offset(&chunks, offset) else {
             return Ok(0);
         };
 
@@ -408,9 +404,10 @@ impl Source for HlsSourceAdapter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bytes::Bytes;
     use url::Url;
+
+    use super::*;
 
     fn create_test_chunk(offset: u64, len: usize) -> HlsMessage {
         HlsMessage {

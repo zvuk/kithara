@@ -14,7 +14,7 @@ use std::{env::args, error::Error, sync::Arc};
 
 use bytes::Bytes;
 use kithara_decode::{GenericStreamDecoder, PcmBuffer, StreamPipeline};
-use kithara_hls::{worker::HlsSegmentMetadata, AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams, worker::HlsSegmentMetadata};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;

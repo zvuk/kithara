@@ -5,15 +5,18 @@
 //! These tests specifically verify edge cases that caused bugs in the old
 //! SegmentIndex/VariantIndex implementation.
 
-use std::time::Duration;
-use kithara_hls::cache::{CachedLoader, MockLoader, OffsetMap};
-use kithara_stream::{Source, StreamResult};
-use kithara_storage::WaitOutcome;
-use rstest::rstest;
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
+
 use kithara_assets::AssetStoreBuilder;
+use kithara_hls::{
+    HlsError,
+    cache::{CachedLoader, MockLoader, OffsetMap},
+    stream::types::SegmentMeta,
+};
+use kithara_storage::WaitOutcome;
+use kithara_stream::{Source, StreamResult};
+use rstest::rstest;
 use tempfile::TempDir;
-use kithara_hls::{stream::types::SegmentMeta, HlsError};
 use url::Url;
 
 // ==================== Test Helpers ====================
@@ -23,15 +26,21 @@ fn create_test_meta(variant: usize, segment_index: usize, len: u64) -> SegmentMe
         variant,
         segment_index,
         sequence: segment_index as u64,
-        url: Url::parse(&format!("http://test.com/v{}/seg{}.ts", variant, segment_index))
-            .expect("valid URL"),
+        url: Url::parse(&format!(
+            "http://test.com/v{}/seg{}.ts",
+            variant, segment_index
+        ))
+        .expect("valid URL"),
         duration: Some(Duration::from_secs(4)),
         key: None,
         len,
     }
 }
 
-async fn create_test_assets() -> (kithara_assets::AssetStore<kithara_hls::index::EncryptionInfo>, TempDir) {
+async fn create_test_assets() -> (
+    kithara_assets::AssetStore<kithara_hls::index::EncryptionInfo>,
+    TempDir,
+) {
     let temp_dir = tempfile::tempdir().expect("create temp dir");
 
     // Dummy process_fn for tests - doesn't actually decrypt, just passes through
@@ -77,9 +86,9 @@ async fn test_ec2_abr_midstream_then_backward_seek() -> Result<(), Box<dyn std::
 
     // Segment size: 200KB each
     let seg_size = 200_000u64;
-    loader.expect_load_segment().returning(move |variant, idx| {
-        Ok(create_test_meta(variant, idx, seg_size))
-    });
+    loader
+        .expect_load_segment()
+        .returning(move |variant, idx| Ok(create_test_meta(variant, idx, seg_size)));
 
     let cached = CachedLoader::new(Arc::new(loader), assets);
 
@@ -106,28 +115,31 @@ async fn test_ec2_abr_midstream_then_backward_seek() -> Result<(), Box<dyn std::
     // CRITICAL VERIFICATION: Check that ALL segments have correct offsets
     // In old implementation, segments 0-3 would have WRONG offsets
 
-
     // Verify each segment can be accessed at its expected offset
     let expected_offsets = vec![
-        (0, 0),           // seg 0: 0..200KB
-        (1, 200_000),     // seg 1: 200KB..400KB
-        (2, 400_000),     // seg 2: 400KB..600KB
-        (3, 600_000),     // seg 3: 600KB..800KB
-        (4, 800_000),     // seg 4: 800KB..1000KB
-        (5, 1_000_000),   // seg 5: 1000KB..1200KB
-        (6, 1_200_000),   // seg 6: 1200KB..1400KB
+        (0, 0),         // seg 0: 0..200KB
+        (1, 200_000),   // seg 1: 200KB..400KB
+        (2, 400_000),   // seg 2: 400KB..600KB
+        (3, 600_000),   // seg 3: 600KB..800KB
+        (4, 800_000),   // seg 4: 800KB..1000KB
+        (5, 1_000_000), // seg 5: 1000KB..1200KB
+        (6, 1_200_000), // seg 6: 1200KB..1400KB
     ];
 
     for (seg_idx, expected_offset) in expected_offsets {
-        let result: StreamResult<WaitOutcome, HlsError> =
-            cached.wait_range(expected_offset..expected_offset + 1000).await;
+        let result: StreamResult<WaitOutcome, HlsError> = cached
+            .wait_range(expected_offset..expected_offset + 1000)
+            .await;
         assert!(
             result.is_ok(),
             "Segment {} at offset {} should be accessible (old impl would FAIL here)",
             seg_idx,
             expected_offset
         );
-        println!("  ✓ Segment {} correctly accessible at offset {}", seg_idx, expected_offset);
+        println!(
+            "  ✓ Segment {} correctly accessible at offset {}",
+            seg_idx, expected_offset
+        );
     }
 
     println!("\n✅ EC-2 PASSED: Out-of-order segment loading handled correctly!");
@@ -150,9 +162,9 @@ async fn test_ec2b_extreme_out_of_order() -> Result<(), Box<dyn std::error::Erro
     loader.expect_num_segments().returning(|_| Ok(10));
 
     let seg_size = 200_000u64;
-    loader.expect_load_segment().returning(move |variant, idx| {
-        Ok(create_test_meta(variant, idx, seg_size))
-    });
+    loader
+        .expect_load_segment()
+        .returning(move |variant, idx| Ok(create_test_meta(variant, idx, seg_size)));
 
     let cached = CachedLoader::new(Arc::new(loader), assets);
 
@@ -215,7 +227,10 @@ fn test_offset_map_out_of_order_insert() {
                 "Segment {} has WRONG global_offset: expected {}, got {}",
                 seg_idx, expected_offset, cached_seg.global_offset
             );
-            println!("  ✓ Segment {} has correct offset: {}", seg_idx, cached_seg.global_offset);
+            println!(
+                "  ✓ Segment {} has correct offset: {}",
+                seg_idx, cached_seg.global_offset
+            );
         } else {
             panic!("Segment {} not found in OffsetMap", seg_idx);
         }
@@ -236,9 +251,9 @@ async fn test_ec1_empty_playlist() -> Result<(), Box<dyn std::error::Error>> {
     let mut loader = MockLoader::new();
     loader.expect_num_variants().returning(|| 1);
     loader.expect_num_segments().returning(|_| Ok(0)); // Empty!
-    loader.expect_load_segment().returning(|_, _| {
-        Err(kithara_hls::HlsError::SegmentNotFound("no segments".into()))
-    });
+    loader
+        .expect_load_segment()
+        .returning(|_, _| Err(kithara_hls::HlsError::SegmentNotFound("no segments".into())));
 
     let cached = CachedLoader::new(Arc::new(loader), assets);
 
@@ -269,9 +284,9 @@ async fn test_ec3_single_variant() -> Result<(), Box<dyn std::error::Error>> {
     loader.expect_num_variants().returning(|| 1); // Only 1 variant
     loader.expect_num_segments().returning(|_| Ok(5));
 
-    loader.expect_load_segment().returning(|variant, idx| {
-        Ok(create_test_meta(variant, idx, 200_000))
-    });
+    loader
+        .expect_load_segment()
+        .returning(|variant, idx| Ok(create_test_meta(variant, idx, 200_000)));
 
     let cached = CachedLoader::new(Arc::new(loader), assets);
 
@@ -321,8 +336,13 @@ async fn test_ec4_rapid_variant_switches() -> Result<(), Box<dyn std::error::Err
 
         let result: StreamResult<WaitOutcome, HlsError> =
             cached.wait_range(offset..offset + 1000).await;
-        println!("  Switch {}: variant {} segment {} - {:?}",
-                 i, variant, seg_idx, result.is_ok());
+        println!(
+            "  Switch {}: variant {} segment {} - {:?}",
+            i,
+            variant,
+            seg_idx,
+            result.is_ok()
+        );
     }
 
     println!("✅ EC-4 PASSED: Rapid variant switches handled");

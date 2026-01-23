@@ -133,10 +133,7 @@ where
     ///
     /// let pcm_chunk = decoder.decode_message(message).await?;
     /// ```
-    async fn decode_message(
-        &mut self,
-        message: StreamMessage<M, D>,
-    ) -> DecodeResult<Self::Output>;
+    async fn decode_message(&mut self, message: StreamMessage<M, D>) -> DecodeResult<Self::Output>;
 
     /// Flush any pending output data.
     ///
@@ -161,10 +158,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bytes::Bytes;
     use kithara_stream::StreamMessage;
 
+    use super::*;
     use crate::types::DecodeError;
 
     // Test metadata type
@@ -322,7 +319,10 @@ mod tests {
 
             // Simulate failure at specific sequence
             if self.should_fail_at == Some(seq) {
-                return Err(DecodeError::DecodeError(format!("Mock error at seq {}", seq)));
+                return Err(DecodeError::DecodeError(format!(
+                    "Mock error at seq {}",
+                    seq
+                )));
             }
 
             Ok(format!("mock_output_{}", seq))
@@ -392,7 +392,10 @@ mod tests {
         );
         let result = decoder.decode_message(msg2).await;
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err().to_string(), "decode error: Mock error at seq 2");
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "decode error: Mock error at seq 2"
+        );
 
         // Verify both calls were attempted
         assert_eq!(decoder.decode_calls, vec![1, 2]);

@@ -26,7 +26,10 @@ use kithara_worker::{AsyncWorker, AsyncWorkerSource, Fetch, Worker};
 use tokio::task::JoinHandle;
 use tracing::{debug, error};
 
-use crate::{stream_decoder::StreamDecoder, types::{DecodeResult, PcmChunk}};
+use crate::{
+    stream_decoder::StreamDecoder,
+    types::{DecodeResult, PcmChunk},
+};
 
 /// Stream-based decoding pipeline.
 ///
@@ -229,11 +232,12 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use async_trait::async_trait;
     use bytes::Bytes;
     use kithara_stream::{StreamMessage, StreamMetadata};
     use kithara_worker::Fetch;
+
+    use super::*;
 
     // Test metadata
     #[derive(Clone, Debug)]

@@ -159,9 +159,7 @@ impl SourceFactory for Hls {
         };
 
         // Open HLS worker source
-        let worker_source = Hls::open(url, params)
-            .await
-            .map_err(StreamError::Source)?;
+        let worker_source = Hls::open(url, params).await.map_err(StreamError::Source)?;
 
         // Create channels for worker
         let (cmd_tx, cmd_rx) = kanal::bounded_async(16);

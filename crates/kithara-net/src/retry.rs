@@ -80,7 +80,6 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
 #[async_trait]
 impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        // Updated for HttpClient compatibility: no major changes needed as it decorates Net
         let mut last_error = None;
 
         for attempt in 0..=self.retry_policy.max_attempts() {
@@ -107,7 +106,6 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
     }
 
     async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        // Ensured short names are used
         let mut last_error = None;
 
         for attempt in 0..=self.retry_policy.max_attempts() {
@@ -139,7 +137,6 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
-        // Compatible with HttpClient via Net trait
         let mut last_error = None;
 
         for attempt in 0..=self.retry_policy.max_attempts() {

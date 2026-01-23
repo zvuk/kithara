@@ -83,10 +83,7 @@ where
 
     /// Create decoder from chunked reader and media info.
     fn create_decoder(&mut self, media_info: &MediaInfo) -> DecodeResult<()> {
-        debug!(
-            ?media_info,
-            "creating decoder from shared chunked reader"
-        );
+        debug!(?media_info, "creating decoder from shared chunked reader");
 
         // Clone the reader (Arc clone, cheap) and pass to decoder
         // Decoder owns the clone, we keep our reference for appending data
@@ -158,7 +155,10 @@ where
 {
     type Output = PcmChunk<f32>;
 
-    async fn decode_message(&mut self, message: StreamMessage<M, bytes::Bytes>) -> DecodeResult<Self::Output> {
+    async fn decode_message(
+        &mut self,
+        message: StreamMessage<M, bytes::Bytes>,
+    ) -> DecodeResult<Self::Output> {
         let (meta, data) = message.into_parts();
 
         self.messages_processed += 1;
@@ -203,9 +203,9 @@ where
             self.chunked_reader.append(data);
 
             // Get media info and create new decoder
-            let media_info = meta.media_info().ok_or_else(|| {
-                DecodeError::DecodeError("No media info on boundary".to_string())
-            })?;
+            let media_info = meta
+                .media_info()
+                .ok_or_else(|| DecodeError::DecodeError("No media info on boundary".to_string()))?;
 
             self.create_decoder(&media_info)?;
         } else {
@@ -253,9 +253,10 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bytes::Bytes;
     use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+
+    use super::*;
 
     #[derive(Debug, Clone)]
     struct TestMetadata {

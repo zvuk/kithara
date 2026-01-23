@@ -82,8 +82,6 @@ impl Default for AbrOptions {
 /// Encryption key handling configuration.
 #[derive(Clone, Default)]
 pub struct KeyOptions {
-    /// Custom key processor callback (internal, for DRM).
-    pub(crate) processor: Option<KeyProcessor>,
     /// Query parameters to append to key URLs.
     pub query_params: Option<HashMap<String, String>>,
     /// Headers to include in key requests.

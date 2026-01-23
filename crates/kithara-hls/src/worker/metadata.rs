@@ -35,10 +35,7 @@ mod tests {
 
         assert_eq!(metadata.index, 0);
         assert!(matches!(metadata.codec, Some(AudioCodec::AacLc)));
-        assert!(matches!(
-            metadata.container,
-            Some(ContainerFormat::Fmp4)
-        ));
+        assert!(matches!(metadata.container, Some(ContainerFormat::Fmp4)));
         assert_eq!(metadata.bitrate, Some(128000));
     }
 

@@ -173,15 +173,6 @@ where
     cancel: CancellationToken,
 }
 
-impl<A> LeaseGuard<A>
-where
-    A: Assets,
-{
-    pub fn asset_root(&self) -> &str {
-        &self.asset_root
-    }
-}
-
 impl<A> Drop for LeaseGuard<A>
 where
     A: Assets,
