@@ -42,13 +42,18 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Opening HLS stream: {}", url);
 
-    let hls_params = HlsParams::default().with_abr(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        ..Default::default()
-    });
+    // Create events channel
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+
+    let hls_params = HlsParams::default()
+        .with_abr(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..Default::default()
+        })
+        .with_events(events_tx);
 
     // Open HLS stream and get worker source
-    let (worker_source, mut events_rx) = Hls::open_stream(url, hls_params).await?;
+    let worker_source = Hls::open(url, hls_params).await?;
 
     // Subscribe to HLS events
     tokio::spawn(async move {

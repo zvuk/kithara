@@ -5,6 +5,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use bytes::Bytes;
 use kithara_assets::StoreOptions;
 use kithara_net::NetOptions;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -91,7 +92,7 @@ pub struct KeyOptions {
 
 /// Unified parameters for HLS streaming.
 ///
-/// Used with `StreamSource::<Hls>::open(url, params)` for the unified API.
+/// Used with `Hls::open(url, params)` for the unified API.
 #[derive(Clone)]
 pub struct HlsParams {
     /// Storage configuration (required).
@@ -106,8 +107,8 @@ pub struct HlsParams {
     pub base_url: Option<Url>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// Capacity of the events broadcast channel.
-    pub event_capacity: usize,
+    /// Events broadcast sender (optional - if not provided, events are not sent).
+    pub events_tx: Option<broadcast::Sender<crate::HlsEvent>>,
     /// Capacity of the command mpsc channel.
     pub command_capacity: usize,
 }
@@ -128,7 +129,7 @@ impl HlsParams {
             keys: KeyOptions::default(),
             base_url: None,
             cancel: None,
-            event_capacity: 32,
+            events_tx: None,
             command_capacity: 8,
         }
     }
@@ -163,9 +164,12 @@ impl HlsParams {
         self
     }
 
-    /// Set event channel capacity.
-    pub fn with_event_capacity(mut self, capacity: usize) -> Self {
-        self.event_capacity = capacity;
+    /// Set events broadcast sender.
+    ///
+    /// If provided, HLS events will be sent to this channel.
+    /// If not provided, events will not be sent (no overhead).
+    pub fn with_events(mut self, events_tx: broadcast::Sender<crate::HlsEvent>) -> Self {
+        self.events_tx = Some(events_tx);
         self
     }
 

@@ -436,9 +436,9 @@ impl PcmBuffer {
     /// Set `enable_random_access = true` when using PcmSource for random access.
     pub fn new(spec: PcmSpec, enable_random_access: bool) -> (Self, kanal::Receiver<Vec<f32>>) {
         // Channel capacity: Balance between memory and smooth playback
-        // ~50 chunks (assuming ~100ms per chunk = 5 seconds buffered)
-        // Too small = blocking and stuttering, too large = high memory
-        let channel_capacity = 50;
+        // ~20 chunks (assuming ~100ms per chunk = 2 seconds buffered)
+        // Reduced from 50 to 20 for lower memory consumption
+        let channel_capacity = 20;
 
         let (sample_tx, sample_rx) = kanal::bounded(channel_capacity);
 
