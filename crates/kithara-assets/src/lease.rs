@@ -320,8 +320,15 @@ where
 
         // Remove pin from in-memory set immediately (sync operation)
         // Persistence is deferred to next eviction check or explicit save
-        let mut pins = self.owner.pins.blocking_lock();
-        pins.remove(&self.asset_root);
-        tracing::debug!(asset_root = %self.asset_root, "Pin removed from in-memory set");
+        // Use try_lock to avoid blocking in Drop (which might run in async context)
+        if let Ok(mut pins) = self.owner.pins.try_lock() {
+            pins.remove(&self.asset_root);
+            tracing::debug!(asset_root = %self.asset_root, "Pin removed from in-memory set");
+        } else {
+            tracing::warn!(
+                asset_root = %self.asset_root,
+                "Could not acquire pins lock in Drop; pin removal deferred"
+            );
+        }
     }
 }
