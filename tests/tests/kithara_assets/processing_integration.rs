@@ -75,7 +75,10 @@ async fn processing_buffers_and_transforms_data(temp_dir: tempfile::TempDir) {
 
     // Open processed resource with XOR key.
     let ctx = TestContext { xor_key: 0x42 };
-    let processed_res = store.open_streaming_resource_with_ctx(&key, Some(ctx.clone())).await.unwrap();
+    let processed_res = store
+        .open_streaming_resource_with_ctx(&key, Some(ctx.clone()))
+        .await
+        .unwrap();
 
     // Read processed data.
     let mut buf = vec![0u8; original_data.len()];
@@ -119,7 +122,10 @@ async fn processing_caches_result_on_subsequent_reads(temp_dir: tempfile::TempDi
     let ctx = TestContext { xor_key: 0xAB };
 
     // First read - should call callback.
-    let processed_res = store.open_streaming_resource_with_ctx(&key, Some(ctx.clone())).await.unwrap();
+    let processed_res = store
+        .open_streaming_resource_with_ctx(&key, Some(ctx.clone()))
+        .await
+        .unwrap();
     let mut buf1 = vec![0u8; original_data.len()];
     processed_res.read_at(0, &mut buf1).await.unwrap();
     assert_eq!(call_count.load(Ordering::SeqCst), 1);
@@ -166,14 +172,20 @@ async fn processing_different_contexts_are_cached_separately(temp_dir: tempfile:
 
     // First context.
     let ctx1 = TestContext { xor_key: 0x11 };
-    let res1 = store.open_streaming_resource_with_ctx(&key, Some(ctx1.clone())).await.unwrap();
+    let res1 = store
+        .open_streaming_resource_with_ctx(&key, Some(ctx1.clone()))
+        .await
+        .unwrap();
     let mut buf1 = vec![0u8; original_data.len()];
     res1.read_at(0, &mut buf1).await.unwrap();
     assert_eq!(call_count.load(Ordering::SeqCst), 1);
 
     // Different context - should call callback again.
     let ctx2 = TestContext { xor_key: 0x22 };
-    let res2 = store.open_streaming_resource_with_ctx(&key, Some(ctx2.clone())).await.unwrap();
+    let res2 = store
+        .open_streaming_resource_with_ctx(&key, Some(ctx2.clone()))
+        .await
+        .unwrap();
     let mut buf2 = vec![0u8; original_data.len()];
     res2.read_at(0, &mut buf2).await.unwrap();
     assert_eq!(call_count.load(Ordering::SeqCst), 2);
@@ -188,7 +200,10 @@ async fn processing_different_contexts_are_cached_separately(temp_dir: tempfile:
     assert_eq!(buf2, expected2);
 
     // Re-open same context - should use cache.
-    let res1_again = store.open_streaming_resource_with_ctx(&key, Some(ctx1)).await.unwrap();
+    let res1_again = store
+        .open_streaming_resource_with_ctx(&key, Some(ctx1))
+        .await
+        .unwrap();
     let mut buf1_again = vec![0u8; original_data.len()];
     res1_again.read_at(0, &mut buf1_again).await.unwrap();
     assert_eq!(call_count.load(Ordering::SeqCst), 2); // Still 2!
@@ -222,7 +237,10 @@ async fn processing_partial_reads_work_correctly(temp_dir: tempfile::TempDir) {
     }
 
     let ctx = TestContext { xor_key: 0xFF };
-    let processed_res = store.open_streaming_resource_with_ctx(&key, Some(ctx)).await.unwrap();
+    let processed_res = store
+        .open_streaming_resource_with_ctx(&key, Some(ctx))
+        .await
+        .unwrap();
 
     // Read middle portion.
     let mut buf = vec![0u8; 20];
@@ -272,7 +290,10 @@ async fn processing_read_past_end_returns_zero(temp_dir: tempfile::TempDir) {
     }
 
     let ctx = TestContext { xor_key: 0x00 };
-    let processed_res = store.open_streaming_resource_with_ctx(&key, Some(ctx)).await.unwrap();
+    let processed_res = store
+        .open_streaming_resource_with_ctx(&key, Some(ctx))
+        .await
+        .unwrap();
 
     // Read past end.
     let mut buf = vec![0u8; 100];

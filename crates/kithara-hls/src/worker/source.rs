@@ -2,20 +2,22 @@ use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use kithara_abr::{
+    AbrController, AbrOptions, AbrReason, ThroughputEstimator, ThroughputSample,
+    ThroughputSampleSource, Variant,
+};
 use kithara_assets::{Assets, ResourceKey};
 use kithara_storage::Resource;
 use kithara_worker::{AsyncWorkerSource, Fetch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
-use kithara_abr::{
-    AbrController, AbrOptions, AbrReason, ThroughputEstimator, ThroughputSample,
-    ThroughputSampleSource, Variant,
-};
-
 use super::{HlsCommand, HlsMessage, VariantMetadata};
 use crate::{
-    HlsResult, cache::{Loader, SegmentType}, events::HlsEvent, fetch::DefaultFetchManager,
+    HlsResult,
+    cache::{Loader, SegmentType},
+    events::HlsEvent,
+    fetch::DefaultFetchManager,
 };
 
 /// HLS worker source implementing AsyncWorkerSource.

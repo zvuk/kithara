@@ -449,11 +449,18 @@ async fn sequential_read_across_segments_maintains_variant(
 
             // Safety limit to prevent infinite loop
             if read_count > 10000 {
-                panic!("Read loop exceeded 10000 iterations, likely infinite loop. Total bytes: {}", all_data.len());
+                panic!(
+                    "Read loop exceeded 10000 iterations, likely infinite loop. Total bytes: {}",
+                    all_data.len()
+                );
             }
         }
 
-        info!("Completed reading {} bytes in {} iterations", all_data.len(), read_count);
+        info!(
+            "Completed reading {} bytes in {} iterations",
+            all_data.len(),
+            read_count
+        );
         all_data
     })
     .await
@@ -467,12 +474,13 @@ async fn sequential_read_across_segments_maintains_variant(
     ]
     .concat();
 
-    info!("Expected {} bytes, got {} bytes", expected.len(), result.len());
-
-    assert_eq!(
-        result.len(), expected.len(),
-        "Data length mismatch"
+    info!(
+        "Expected {} bytes, got {} bytes",
+        expected.len(),
+        result.len()
     );
+
+    assert_eq!(result.len(), expected.len(), "Data length mismatch");
 
     assert_eq!(
         result, expected,

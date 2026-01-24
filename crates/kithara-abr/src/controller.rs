@@ -281,7 +281,10 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{super::estimator::MockEstimator, super::types::Variant, *};
+    use super::{
+        super::{estimator::MockEstimator, types::Variant},
+        *,
+    };
 
     fn variants() -> Vec<Variant> {
         vec![

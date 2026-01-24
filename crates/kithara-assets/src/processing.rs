@@ -14,7 +14,7 @@ use kithara_storage::{
 };
 use tokio::sync::Mutex;
 
-use crate::{AssetsResult, base::Assets, ResourceKey};
+use crate::{AssetsResult, ResourceKey, base::Assets};
 
 /// Transform function signature.
 ///
@@ -62,7 +62,10 @@ where
         f.debug_struct("ProcessedResource")
             .field("inner", &self.inner)
             .field("ctx", &self.ctx)
-            .field("has_buffer", &self.buffer.try_lock().map(|b| b.is_some()).unwrap_or(false))
+            .field(
+                "has_buffer",
+                &self.buffer.try_lock().map(|b| b.is_some()).unwrap_or(false),
+            )
             .finish()
     }
 }
@@ -323,10 +326,7 @@ where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + std::fmt::Debug + 'static,
 {
     pub fn new(inner: Arc<A>, process: ProcessFn<Ctx>) -> Self {
-        Self {
-            inner,
-            process,
-        }
+        Self { inner, process }
     }
 
     /// Get the underlying assets store.
@@ -366,11 +366,7 @@ where
         let ctx = ctx.unwrap_or_default();
 
         // Create processed wrapper (will be cached by CachedAssets)
-        let processed = ProcessedResource::new(
-            inner,
-            ctx,
-            Arc::clone(&self.process),
-        );
+        let processed = ProcessedResource::new(inner, ctx, Arc::clone(&self.process));
 
         Ok(processed)
     }
