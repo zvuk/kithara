@@ -6,6 +6,7 @@ use std::{
     time::Duration,
 };
 
+use kithara_bufpool::SharedPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use symphonia::core::{
     codecs::{
@@ -45,6 +46,7 @@ pub struct SymphoniaDecoder {
     decoder: Box<dyn AudioDecoder>,
     track_id: u32,
     spec: PcmSpec,
+    pcm_pool: SharedPool<32, Vec<f32>>,
 }
 
 impl SymphoniaDecoder {
@@ -83,11 +85,15 @@ impl SymphoniaDecoder {
         let spec = extract_spec(&codec_params)?;
         let decoder = create_decoder(&codec_params)?;
 
+        // Create PCM buffer pool: 32 shards, 1024 max buffers, trim to 200K samples
+        let pcm_pool = SharedPool::<32, Vec<f32>>::new(1024, 200_000);
+
         Ok(Self {
             format_reader,
             decoder,
             track_id,
             spec,
+            pcm_pool,
         })
     }
 
@@ -158,11 +164,15 @@ impl SymphoniaDecoder {
         let spec = extract_spec(&codec_params)?;
         let decoder = create_decoder(&codec_params)?;
 
+        // Create PCM buffer pool: 32 shards, 1024 max buffers, trim to 200K samples
+        let pcm_pool = SharedPool::<32, Vec<f32>>::new(1024, 200_000);
+
         Ok(Self {
             format_reader,
             decoder,
             track_id,
             spec,
+            pcm_pool,
         })
     }
 
@@ -196,11 +206,15 @@ impl SymphoniaDecoder {
         let spec = extract_spec(&cached.codec_params)?;
         let decoder = create_decoder(&cached.codec_params)?;
 
+        // Create PCM buffer pool: 32 shards, 1024 max buffers, trim to 200K samples
+        let pcm_pool = SharedPool::<32, Vec<f32>>::new(1024, 200_000);
+
         Ok(Self {
             format_reader,
             decoder,
             track_id,
             spec,
+            pcm_pool,
         })
     }
 
@@ -289,16 +303,19 @@ impl SymphoniaDecoder {
                 continue;
             }
 
-            // Convert to f32 interleaved
-            let mut pcm = vec![0.0f32; num_samples];
-            decoded.copy_to_slice_interleaved(&mut pcm);
+            // Convert to f32 interleaved using pooled buffer
+            let mut pcm = self.pcm_pool.get_with(|b| {
+                b.clear();
+                b.resize(num_samples, 0.0);
+            });
+            decoded.copy_to_slice_interleaved(&mut **pcm);
 
             let pcm_spec = PcmSpec {
                 sample_rate: spec.rate(),
                 channels: channels as u16,
             };
 
-            return Ok(Some(PcmChunk::new(pcm_spec, pcm)));
+            return Ok(Some(PcmChunk::new(pcm_spec, pcm.into_inner())));
         }
     }
 }

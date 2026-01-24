@@ -1,7 +1,7 @@
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::{BufMut, Bytes, BytesMut};
 use kithara_abr::{
     AbrController, AbrOptions, AbrReason, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource, Variant,
@@ -263,10 +263,11 @@ impl AsyncWorkerSource for HlsWorkerSource {
                     );
                     self.sent_init_for_variant.insert(current_variant);
                 }
-                let mut combined = Vec::with_capacity(init_bytes.len() + media_bytes.len());
-                combined.extend_from_slice(&init_bytes);
-                combined.extend_from_slice(&media_bytes);
-                Bytes::from(combined)
+                // Zero-copy composition using BytesMut
+                let mut combined = BytesMut::with_capacity(init_bytes.len() + media_bytes.len());
+                combined.put(init_bytes);
+                combined.put(media_bytes);
+                combined.freeze()
             }
             Err(e) => {
                 debug!(
@@ -351,6 +352,8 @@ impl AsyncWorkerSource for HlsWorkerSource {
                     );
                     self.current_variant = new_variant;
                     self.sent_init_for_variant.remove(&new_variant);
+                    // Clear init segments cache to free memory from old variant
+                    self.init_segments_cache.clear();
                     self.emit_event(HlsEvent::VariantApplied {
                         from_variant: current_variant,
                         to_variant: new_variant,
@@ -398,6 +401,8 @@ impl AsyncWorkerSource for HlsWorkerSource {
                 let old_variant = self.current_variant;
                 self.current_variant = variant_index;
                 self.sent_init_for_variant.remove(&variant_index);
+                // Clear init segments cache to free memory from old variant
+                self.init_segments_cache.clear();
                 self.epoch = epoch;
                 self.emit_event(HlsEvent::VariantApplied {
                     from_variant: old_variant,

@@ -31,7 +31,7 @@ pub struct EvictConfig {
 /// - We track per-asset metadata:
 ///   - `last_touch`: monotonically increasing counter (logical clock)
 ///   - `bytes`: best-effort size accounting provided by higher layers (or left as `None`)
-/// - The on-disk representation is internal to this module (JSON).
+/// - The on-disk representation is internal to this module (binary format via bincode).
 ///
 /// ## What this is NOT
 /// - It is not a filesystem walker.
@@ -49,7 +49,7 @@ impl LruIndex {
     /// Load the entire LRU table from storage.
     ///
     /// Missing/empty file is treated as an empty index.
-    /// Invalid JSON is treated as an empty index (best-effort).
+    /// Invalid or corrupted data is treated as an empty index (best-effort).
     pub async fn load(&self) -> AssetsResult<LruState> {
         let bytes = self.res.read().await?;
 
@@ -57,7 +57,7 @@ impl LruIndex {
             return Ok(LruState::default());
         }
 
-        let file: LruIndexFile = match serde_json::from_slice(&bytes) {
+        let file: LruIndexFile = match bincode::deserialize(&bytes) {
             Ok(file) => file,
             Err(_) => return Ok(LruState::default()),
         };
@@ -68,7 +68,7 @@ impl LruIndex {
     /// Persist the provided state to storage atomically.
     pub async fn store(&self, state: &LruState) -> AssetsResult<()> {
         let file = state.to_file();
-        let bytes = serde_json::to_vec_pretty(&file)?;
+        let bytes = bincode::serialize(&file)?;
         self.res.write(&bytes).await?;
         Ok(())
     }
@@ -258,7 +258,7 @@ impl LruState {
             })
             .collect();
 
-        // Stable output: sort by asset_root for deterministic JSON diffs.
+        // Stable output: sort by asset_root for deterministic serialization.
         entries.sort_by(|a, b| a.asset_root.cmp(&b.asset_root));
 
         LruIndexFile {
@@ -275,7 +275,7 @@ pub struct LruEntry {
     pub bytes: Option<u64>,
 }
 
-/// On-disk JSON format (private).
+/// On-disk binary format (private).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 struct LruIndexFile {
     version: u32,

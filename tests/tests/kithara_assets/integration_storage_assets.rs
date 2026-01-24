@@ -26,13 +26,19 @@ fn mp3_bytes() -> Bytes {
     Bytes::from(v)
 }
 
-fn read_pins_file(root: &std::path::Path) -> Option<serde_json::Value> {
+#[derive(serde::Deserialize)]
+struct PinsIndexFile {
+    pinned: Vec<String>,
+}
+
+fn read_pins_file(root: &std::path::Path) -> Option<Vec<String>> {
     let path = root.join("_index").join("pins.json");
     if !path.exists() {
         return None;
     }
     let bytes = std::fs::read(&path).expect("pins index file should be readable if exists");
-    Some(serde_json::from_slice(&bytes).expect("pins index must be valid json if exists"))
+    let file: PinsIndexFile = bincode::deserialize(&bytes).expect("pins index must be valid bincode if exists");
+    Some(file.pinned)
 }
 
 #[fixture]
@@ -80,14 +86,9 @@ async fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     assert_eq!(read_back, payload);
 
     // Pins may be persisted; check if pins file exists
-    if let Some(pins_json) = read_pins_file(&dir) {
-        let pinned = pins_json
-            .get("pinned")
-            .and_then(|v| v.as_array())
-            .expect("pins index must contain `pinned` array if exists");
-
+    if let Some(pinned) = read_pins_file(&dir) {
         assert!(
-            pinned.iter().any(|v| v.as_str() == Some(asset_root)),
+            pinned.iter().any(|v| v == asset_root),
             "mp3 asset_root {} must be pinned while resource is open if pins file exists",
             asset_root
         );
@@ -300,14 +301,9 @@ async fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     }
 
     // Pins may be persisted; check if pins file exists
-    if let Some(pins_json) = read_pins_file(&dir) {
-        let pinned = pins_json
-            .get("pinned")
-            .and_then(|v| v.as_array())
-            .expect("pins index must contain `pinned` array if exists");
-
+    if let Some(pinned) = read_pins_file(&dir) {
         assert!(
-            pinned.iter().any(|v| v.as_str() == Some(asset_root)),
+            pinned.iter().any(|v| v == asset_root),
             "hls asset_root must be pinned while any resource is open if pins file exists"
         );
     }

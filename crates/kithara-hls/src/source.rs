@@ -166,7 +166,8 @@ impl SourceFactory for Hls {
 
         // Create channels for worker
         let (cmd_tx, cmd_rx) = kanal::bounded_async(16);
-        let (chunk_tx, chunk_rx) = kanal::bounded_async(2);
+        const HLS_CHUNK_CHANNEL_CAPACITY: usize = 8;
+        let (chunk_tx, chunk_rx) = kanal::bounded_async(HLS_CHUNK_CHANNEL_CAPACITY);
 
         // Create AsyncWorker and spawn it
         let worker = kithara_worker::AsyncWorker::new(worker_source, cmd_rx, chunk_tx);

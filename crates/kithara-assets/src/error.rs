@@ -12,8 +12,8 @@ pub enum AssetsError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("json error: {0}")]
-    Json(#[from] serde_json::Error),
+    #[error("bincode error: {0}")]
+    Bincode(#[from] Box<bincode::ErrorKind>),
 
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),

@@ -54,7 +54,7 @@ tracing-subscriber = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
-serde_json = { workspace = true }
+bincode = { workspace = true }
 
 # Crypto (for HLS encryption tests)
 hex = { workspace = true }

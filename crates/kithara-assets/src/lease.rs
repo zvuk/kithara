@@ -125,15 +125,6 @@ where
         })
     }
 
-    async fn unpin_best_effort(&self, asset_root: &str) {
-        let snapshot = {
-            let mut guard = self.pins.lock().await;
-            guard.remove(asset_root);
-            guard.clone()
-        };
-
-        let _ = self.persist_pins_best_effort(&snapshot).await;
-    }
 }
 
 /// Resource wrapper that combines lease guard with byte recording on commit.
@@ -321,19 +312,16 @@ where
     A: Assets,
 {
     fn drop(&mut self) {
-        let owner = self.owner.clone();
-        let asset_root = self.asset_root.clone();
-        let cancel = self.cancel.clone();
+        if self.cancel.is_cancelled() {
+            return;
+        }
 
-        tracing::debug!(asset_root = %asset_root, "LeaseGuard::drop - starting async unpin");
+        tracing::debug!(asset_root = %self.asset_root, "LeaseGuard::drop - removing pin in-memory");
 
-        tokio::spawn(async move {
-            if cancel.is_cancelled() {
-                return;
-            }
-            tracing::debug!(asset_root = %asset_root, "Unpinning asset");
-            owner.unpin_best_effort(&asset_root).await;
-            tracing::debug!(asset_root = %asset_root, "Asset unpinned");
-        });
+        // Remove pin from in-memory set immediately (sync operation)
+        // Persistence is deferred to next eviction check or explicit save
+        let mut pins = self.owner.pins.blocking_lock();
+        pins.remove(&self.asset_root);
+        tracing::debug!(asset_root = %self.asset_root, "Pin removed from in-memory set");
     }
 }
