@@ -61,28 +61,12 @@ impl From<String> for ResourceKey {
     }
 }
 
-/// Unique identifier for an asset, derived from a URL.
-///
-/// `AssetId` is computed by hashing the canonicalized URL. Two URLs that differ
-/// only in case, default ports, query parameters, or fragments will produce
-/// the same `AssetId`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub struct AssetId([u8; 32]);
-
-impl AssetId {
-    pub fn from_url(url: &Url) -> AssetsResult<AssetId> {
-        let canonical = canonicalize_for_asset(url)?;
-        let hash = Sha256::digest(canonical.as_bytes());
-        Ok(AssetId(hash.into()))
-    }
-}
-
 /// Generates an asset root identifier from a URL.
 ///
 /// This is typically used with the master playlist URL to create a unique
 /// directory name for all resources of an HLS stream.
 ///
-/// Uses the same canonicalization as `AssetId` to ensure consistency:
+/// Uses canonicalization to ensure consistency:
 /// URLs that differ only in case, default ports, or query/fragment
 /// will produce the same asset root.
 pub fn asset_root_for_url(url: &Url) -> String {
@@ -151,46 +135,46 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::{AssetsError, canonicalize_for_asset};
+    use crate::AssetsError;
 
     #[rstest]
     #[case(
         "https://example.com/audio.mp3?token=123&quality=high#section",
         "https://example.com/audio.mp3?different=456#other",
         true,
-        "AssetId should ignore both query and fragment"
+        "asset_root should ignore both query and fragment"
     )]
     #[case(
         "https://example.com/audio.mp3?token=123&quality=high#section",
         "https://example.com/audio.mp3",
         true,
-        "AssetId should ignore query and fragment compared to clean URL"
+        "asset_root should ignore query and fragment compared to clean URL"
     )]
     #[case(
         "HTTPS://EXAMPLE.COM/audio.mp3",
         "https://example.com/audio.mp3",
         true,
-        "AssetId should normalize scheme and host to lowercase"
+        "asset_root should normalize scheme and host to lowercase"
     )]
     #[case(
         "https://example.com:443/audio.mp3",
         "https://example.com/audio.mp3",
         true,
-        "AssetId should remove default HTTPS port 443"
+        "asset_root should remove default HTTPS port 443"
     )]
     #[case(
         "http://example.com:80/audio.mp3",
         "http://example.com/audio.mp3",
         true,
-        "AssetId should remove default HTTP port 80"
+        "asset_root should remove default HTTP port 80"
     )]
     #[case(
         "https://example.com:8443/audio.mp3",
         "https://example.com/audio.mp3",
         false,
-        "AssetId should preserve explicit non-default port"
+        "asset_root should preserve explicit non-default port"
     )]
-    fn test_asset_id_comparisons(
+    fn test_asset_root_comparisons(
         #[case] url1: &str,
         #[case] url2: &str,
         #[case] should_be_equal: bool,
@@ -199,46 +183,26 @@ mod tests {
         let url1 = Url::parse(url1).unwrap();
         let url2 = Url::parse(url2).unwrap();
 
-        let asset1 = AssetId::from_url(&url1).unwrap();
-        let asset2 = AssetId::from_url(&url2).unwrap();
+        let root1 = asset_root_for_url(&url1);
+        let root2 = asset_root_for_url(&url2);
 
         if should_be_equal {
-            assert_eq!(asset1, asset2, "{}", description);
+            assert_eq!(root1, root2, "{}", description);
         } else {
-            assert_ne!(asset1, asset2, "{}", description);
+            assert_ne!(root1, root2, "{}", description);
         }
     }
 
     #[test]
-    fn test_asset_id_stable_across_calls() {
+    fn test_asset_root_stable_across_calls() {
         let url = Url::parse("https://example.com/path/to/audio.mp3?version=1.2").unwrap();
 
-        let asset1 = AssetId::from_url(&url).unwrap();
-        let asset2 = AssetId::from_url(&url).unwrap();
+        let root1 = asset_root_for_url(&url);
+        let root2 = asset_root_for_url(&url);
 
         assert_eq!(
-            asset1, asset2,
-            "AssetId should be stable across multiple calls"
-        );
-    }
-
-    #[rstest]
-    #[case("file:///path/to/audio.mp3", "URL without host should error")]
-    #[case("", "Empty URL should error")]
-    fn test_asset_id_errors_on_missing_host(#[case] url_str: &str, #[case] description: &str) {
-        if url_str.is_empty() {
-            // Empty string cannot be parsed as URL
-            return;
-        }
-
-        let url = Url::parse(url_str).unwrap();
-        let result = AssetId::from_url(&url);
-
-        assert!(result.is_err(), "{}", description);
-        assert!(
-            matches!(result, Err(AssetsError::MissingComponent(_))),
-            "{} should return MissingComponent error",
-            description
+            root1, root2,
+            "asset_root should be stable across multiple calls"
         );
     }
 
@@ -249,15 +213,13 @@ mod tests {
         "URL with non-default port and query"
     )]
     #[case("HTTPS://EXAMPLE.COM/PATH/TO/FILE.MP3", "URL with uppercase")]
-    fn test_asset_id_creation_success(#[case] url_str: &str, #[case] description: &str) {
+    fn test_asset_root_creation_success(#[case] url_str: &str, #[case] _description: &str) {
         let url = Url::parse(url_str).unwrap();
-        let result = AssetId::from_url(&url);
+        let root = asset_root_for_url(&url);
 
-        assert!(
-            result.is_ok(),
-            "{} should create AssetId successfully",
-            description
-        );
+        // Should return a non-empty hex string
+        assert!(!root.is_empty());
+        assert!(root.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[rstest]

@@ -188,8 +188,8 @@ async fn test_decode_hls_abr_variant_switch() -> Result<(), Box<dyn Error + Send
         .with_cancel(cancel_token.clone())
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
-            min_buffer_for_up_switch: 0.5,
-            down_switch_buffer: 0.3,
+            min_buffer_for_up_switch_secs: 0.5,
+            down_switch_buffer_secs: 0.3,
             throughput_safety_factor: 1.2,
             ..Default::default()
         });

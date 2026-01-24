@@ -187,6 +187,141 @@ Events are emitted through a broadcast channel accessible via `HlsSession::event
 - Uses both `AtomicResource` (playlists, keys) and `StreamingResource` (segments)
 - Manages asset lifecycle with lease/eviction semantics
 
+## Data Flow Diagrams
+
+### HLS Playback Pipeline
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant HLS as HlsWorkerSource
+    participant Playlist
+    participant Fetch
+    participant Assets
+    participant ABR
+    participant Decoder
+
+    App->>HLS: open(master_url)
+    HLS->>Playlist: load master.m3u8
+    Playlist->>Assets: open_atomic_resource
+    Playlist-->>HLS: variants
+
+    loop Each segment
+        HLS->>Playlist: get_segment_metadata(idx)
+        HLS->>Fetch: start_fetch(segment_url)
+
+        par Download
+            Fetch->>Assets: open_streaming_resource
+            Fetch->>Fetch: HTTP stream
+            Fetch->>Assets: write_at(offset, bytes)
+        and Read
+            HLS->>Assets: wait_range(offset..end)
+            HLS->>Assets: read_at(offset, buf)
+        end
+
+        HLS->>HLS: combine init + media
+        HLS->>ABR: update_throughput(bytes, duration)
+        ABR->>ABR: EWMA calculation
+        ABR-->>HLS: recommend_variant()
+
+        HLS->>Decoder: decode_message(bytes)
+        Decoder-->>App: PCM samples
+    end
+```
+
+### ABR Decision Flow
+
+```mermaid
+flowchart TD
+    Start[New Segment Downloaded] --> Measure[Measure Throughput]
+    Measure --> EWMA[Update EWMA Estimator]
+    EWMA --> Buffer{Check Buffer Level}
+
+    Buffer -->|< down_switch_buffer| Down[Consider Downgrade]
+    Buffer -->|> min_buffer_for_up| Up[Consider Upgrade]
+    Buffer -->|In range| Stay[Stay on Current]
+
+    Down --> CheckLower{Throughput < current bitrate?}
+    CheckLower -->|Yes| Downgrade[Switch to Lower Variant]
+    CheckLower -->|No| Stay
+
+    Up --> CheckHigher{Throughput > next_bitrate * safety?}
+    CheckHigher -->|Yes| CheckHyst{Hysteresis OK?}
+    CheckHigher -->|No| Stay
+
+    CheckHyst -->|Yes| Upgrade[Switch to Higher Variant]
+    CheckHyst -->|No| Stay
+
+    Downgrade --> Emit[Emit VariantSwitched Event]
+    Upgrade --> Emit
+    Stay --> Continue[Continue Playback]
+    Emit --> Continue
+```
+
+## Performance Characteristics
+
+### Memory Usage (Typical HLS Stream)
+
+| Component | Memory | Notes |
+|-----------|--------|-------|
+| **PlaylistManager** | ~15 KB | Master + 3 media playlists |
+| **HlsWorkerSource** | | |
+| - init_segments_cache | ~6 KB | 3 variants × ~2KB each |
+| - buffered_chunks (⚠️) | **~20 MB** | Can grow unbounded! |
+| **Channels** | ~8 MB | cmd(16) + chunk(2) + events |
+| **FetchManager metadata** | ~10 KB | Minimal overhead |
+| **ABR state** | ~1 KB | EWMA + config |
+| **TOTAL** | **~28 MB** | Dominated by buffered_chunks |
+
+**⚠️ Critical Issue**: `HlsSourceAdapter::buffered_chunks` can grow without limit during fast fetching.
+
+**Recommendation**: Limit to max 3-5 segments (~6-10 MB).
+
+### CPU Utilization
+
+| Operation | Duration | CPU | Waiting |
+|-----------|----------|-----|---------|
+| Segment fetch (2MB) | 200-2000ms | <5% | 95% (network) |
+| Init+Media combine | 1-3ms | 100% | 0% (memcpy) |
+| ABR decision | <100μs | 100% | 0% |
+| Playlist parse | 1-5ms | 100% | 0% |
+
+**Inefficiencies:**
+- ❌ **Spin loop в wait_range**: 10ms sleep × 1000 iterations = 10s max
+- ❌ **Паузированный worker**: 100ms sleep в бесконечном цикле
+- ❌ **Init+Media копирование**: Полная копия данных вместо zero-copy
+
+### Throughput
+
+- **Sequential downloads**: ~1-50 Mbps (зависит от сети и сервера)
+- **Prefetch**: Отсутствует (загрузка only-when-needed)
+- **ABR switching**: ~1-3 секунды latency
+
+## Critical Files for Understanding
+
+1. `src/source.rs` - Entry point, Hls::open()
+2. `src/worker/source.rs` - Worker loop, segment fetching
+3. `src/worker/adapter.rs` - Source trait adapter
+4. `src/abr/controller.rs` - ABR logic
+5. `src/fetch.rs` - HTTP fetching + caching
+6. `src/playlist.rs` - Playlist management
+
+## Known Issues & Optimization Opportunities
+
+### High Priority
+1. **[Memory]** Limit `buffered_chunks` to max 5 segments
+2. **[CPU]** Replace spin loops with `Notify` in wait_range
+3. **[Memory]** Use `Bytes` chain instead of init+media copy
+
+### Medium Priority
+4. **[Throughput]** Implement prefetch for N+1 segment
+5. **[CPU]** Increase chunk channel capacity from 2 to 8-16
+6. **[Memory]** Clear `init_segments_cache` on variant switch
+
+### Low Priority (Observability)
+7. Add metrics for buffer levels, throughput, ABR decisions
+8. Tracing spans for segment downloads
+
 ## Design philosophy
 
 1. **Modular architecture**: Separated concerns (playlist, fetch, keys, ABR)
@@ -196,3 +331,7 @@ Events are emitted through a broadcast channel accessible via `HlsSession::event
 5. **Offline capability**: Full support for offline playback
 6. **Event-driven**: Comprehensive event system for monitoring
 7. **Storage integration**: Deep integration with `kithara-assets`
+
+---
+
+**Performance Analysis**: См. `/ARCHITECTURE.md` для детального анализа памяти и CPU.

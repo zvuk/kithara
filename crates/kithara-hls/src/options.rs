@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use kithara_assets::StoreOptions;
@@ -9,7 +9,7 @@ use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
-use crate::{error::HlsResult, playlist::MasterPlaylist};
+use crate::error::HlsResult;
 
 #[derive(Clone, Debug)]
 pub struct KeyContext {
@@ -17,67 +17,11 @@ pub struct KeyContext {
     pub iv: Option<[u8; 16]>,
 }
 
-/// Callback for selecting variant stream index from master playlist.
-pub type VariantSelector = Arc<dyn Fn(&MasterPlaylist) -> Option<usize> + Send + Sync>;
-
 /// Callback for processing encryption keys.
 pub type KeyProcessor = Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send + Sync>;
 
-/// ABR mode selection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum AbrMode {
-    /// Automatic bitrate adaptation (ABR enabled).
-    /// Optionally specify initial variant index (defaults to 0).
-    Auto(Option<usize>),
-    /// Manual variant selection (ABR disabled).
-    /// Always use the specified variant index.
-    Manual(usize),
-}
-
-impl Default for AbrMode {
-    fn default() -> Self {
-        Self::Auto(None)
-    }
-}
-
-/// ABR (Adaptive Bitrate) configuration.
-#[derive(Clone)]
-pub struct AbrOptions {
-    /// ABR mode: Auto (adaptive) or Manual (fixed variant).
-    pub mode: AbrMode,
-    /// Custom variant selector callback.
-    pub variant_selector: Option<VariantSelector>,
-    /// Minimum buffer level (seconds) required for up-switch.
-    pub min_buffer_for_up_switch: f32,
-    /// Buffer level (seconds) that triggers down-switch.
-    pub down_switch_buffer: f32,
-    /// Safety factor for throughput estimation (e.g., 1.5 means use 66% of estimated throughput).
-    pub throughput_safety_factor: f32,
-    /// Hysteresis ratio for up-switch (bandwidth must exceed target by this factor).
-    pub up_hysteresis_ratio: f32,
-    /// Hysteresis ratio for down-switch.
-    pub down_hysteresis_ratio: f32,
-    /// Minimum interval between variant switches.
-    pub min_switch_interval: Duration,
-    /// Minimum bytes to accumulate before pushing a throughput sample.
-    pub min_sample_bytes: u64,
-}
-
-impl Default for AbrOptions {
-    fn default() -> Self {
-        Self {
-            mode: AbrMode::default(),
-            variant_selector: None,
-            min_buffer_for_up_switch: 10.0,
-            down_switch_buffer: 5.0,
-            throughput_safety_factor: 1.5,
-            up_hysteresis_ratio: 1.3,
-            down_hysteresis_ratio: 0.8,
-            min_switch_interval: Duration::from_secs(30),
-            min_sample_bytes: 32_000, // 32KB
-        }
-    }
-}
+// Re-export ABR types from kithara-abr crate
+pub use kithara_abr::{AbrMode, AbrOptions};
 
 /// Encryption key handling configuration.
 #[derive(Clone, Default)]

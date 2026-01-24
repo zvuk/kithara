@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_assets::{
-    AssetResource, AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard,
-    ResourceKey,
+    AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard, LeaseResource,
+    ProcessedResource, ProcessingAssets, ResourceKey,
 };
 use kithara_net::{ByteStream, Headers, HttpClient, Net};
 use kithara_storage::{Resource as _, ResourceStatus, StreamingResource, StreamingResourceExt};
@@ -15,8 +15,10 @@ use url::Url;
 
 use crate::HlsResult;
 
-pub type StreamingAssetResource =
-    AssetResource<StreamingResource, LeaseGuard<CachedAssets<EvictAssets<DiskAssetStore>>>>;
+pub type StreamingAssetResource = LeaseResource<
+    ProcessedResource<StreamingResource, ()>,
+    LeaseGuard<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, ()>>>,
+>;
 
 #[derive(Clone)]
 pub struct FetchManager<N> {
@@ -103,7 +105,7 @@ impl<N: Net> FetchManager<N> {
         let key = ResourceKey::from_url(url);
         let res = self.assets.open_streaming_resource(&key).await?;
 
-        let status = res.inner().status().await;
+        let status = res.status().await;
         let from_cache = matches!(status, ResourceStatus::Committed { .. });
 
         let start = Instant::now();
@@ -113,7 +115,7 @@ impl<N: Net> FetchManager<N> {
         }
 
         let duration = start.elapsed();
-        let bytes = match res.inner().status().await {
+        let bytes = match res.status().await {
             ResourceStatus::Committed { final_len } => final_len.unwrap_or(0),
             _ => 0,
         };
@@ -131,7 +133,7 @@ impl<N: Net> FetchManager<N> {
         let key = ResourceKey::from_url(url);
         let res = self.assets.open_streaming_resource(&key).await?;
 
-        let status = res.inner().status().await;
+        let status = res.status().await;
         if let ResourceStatus::Committed { final_len } = status {
             let len = final_len.unwrap_or(0);
             trace!(url = %url, len, "start_fetch: cache hit");

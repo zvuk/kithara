@@ -253,32 +253,18 @@ impl<L: Loader + 'static> Source for CachedLoader<L> {
 
         let key = ResourceKey::from_url(&segment_url);
 
-        // Choose between encrypted and plain resource
-        let bytes_read = if self.assets.has_processing() && encryption.is_some() {
-            // Encrypted segment - use processed resource with decryption callback
-            let enc_info = encryption.unwrap();
-            let resource = self
-                .assets
-                .open_processed(&key, enc_info)
-                .await
-                .map_err(|e| StreamError::Source(HlsError::Assets(e)))?;
+        // Open resource with encryption context (uses ProcessingAssets with context)
+        let resource = self
+            .assets
+            .open_streaming_resource_with_ctx(&key, encryption)
+            .await
+            .map_err(|e| StreamError::Source(HlsError::Assets(e)))?;
 
-            resource
-                .read_at(local_offset, buf)
-                .await
-                .map_err(|e| StreamError::Source(HlsError::Storage(e)))?
-        } else {
-            // Plain segment - use streaming resource directly
-            let resource = Assets::open_streaming_resource(&*self.assets, &key)
-                .await
-                .map_err(|e| StreamError::Source(HlsError::Assets(e)))?;
-
-            resource
-                .inner()
-                .read_at(local_offset, buf)
-                .await
-                .map_err(|e| StreamError::Source(HlsError::Storage(e)))?
-        };
+        // Read from processed resource (decrypted if encryption was provided)
+        let bytes_read = resource
+            .read_at(local_offset, buf)
+            .await
+            .map_err(|e| StreamError::Source(HlsError::Storage(e)))?;
 
         Ok(bytes_read)
     }
@@ -303,12 +289,12 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::cache::{loader::MockLoader, types::SegmentMeta};
+    use crate::cache::{SegmentType, loader::MockLoader, types::SegmentMeta};
 
     fn create_test_meta(variant: usize, segment_index: usize, len: u64) -> SegmentMeta {
         SegmentMeta {
             variant,
-            segment_index,
+            segment_type: SegmentType::Media(segment_index),
             sequence: segment_index as u64,
             url: Url::parse(&format!(
                 "http://test.com/v{}/seg{}.ts",

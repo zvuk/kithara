@@ -10,9 +10,9 @@ use parking_lot::Mutex;
 use crate::{base::Assets, error::AssetsResult, key::ResourceKey};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
-enum CacheKey {
-    Streaming(ResourceKey),
-    Atomic(ResourceKey),
+enum CacheKey<C> {
+    Streaming(ResourceKey, Option<C>),
+    Atomic(ResourceKey, Option<C>),
     PinsIndex,
     LruIndex,
 }
@@ -24,13 +24,13 @@ enum CacheEntry<S, A> {
     Index(AtomicResource),
 }
 
-type Cache<S, A> = Mutex<LruCache<CacheKey, CacheEntry<S, A>>>;
+type Cache<S, A, C> = Mutex<LruCache<CacheKey<C>, CacheEntry<S, A>>>;
 
 /// A decorator that caches opened resources in memory with LRU eviction.
 ///
 /// ## Normative
 /// - Caching is done at the resource level (not asset level).
-/// - Same `ResourceKey` returns the same resource handle.
+/// - Same `(ResourceKey, Context)` returns the same resource handle.
 /// - Cache is process-scoped and not persisted.
 /// - LRU capacity: 5 entries (enough for init + 2-3 media segments).
 #[derive(Clone)]
@@ -38,8 +38,8 @@ pub struct CachedAssets<A>
 where
     A: Assets,
 {
-    base: Arc<A>,
-    cache: Arc<Cache<A::StreamingRes, A::AtomicRes>>,
+    inner: Arc<A>,
+    cache: Arc<Cache<A::StreamingRes, A::AtomicRes, A::Context>>,
 }
 
 impl<A> std::fmt::Debug for CachedAssets<A>
@@ -57,17 +57,17 @@ impl<A> CachedAssets<A>
 where
     A: Assets,
 {
-    pub fn new(base: Arc<A>) -> Self {
+    pub fn new(inner: Arc<A>) -> Self {
         Self {
-            base,
+            inner,
             cache: Arc::new(Mutex::new(LruCache::new(
                 NonZeroUsize::new(5).expect("capacity must be non-zero"),
             ))),
         }
     }
 
-    pub fn base(&self) -> &A {
-        &self.base
+    pub fn inner(&self) -> &A {
+        &self.inner
     }
 }
 
@@ -78,40 +78,22 @@ where
 {
     type StreamingRes = A::StreamingRes;
     type AtomicRes = A::AtomicRes;
+    type Context = A::Context;
 
     fn root_dir(&self) -> &Path {
-        self.base.root_dir()
+        self.inner.root_dir()
     }
 
     fn asset_root(&self) -> &str {
-        self.base.asset_root()
+        self.inner.asset_root()
     }
 
-    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<Self::AtomicRes> {
-        let cache_key = CacheKey::Atomic(key.clone());
-
-        // Check cache first
-        {
-            let mut cache = self.cache.lock();
-            if let Some(CacheEntry::Atomic(res)) = cache.get(&cache_key) {
-                return Ok(res.clone());
-            }
-        }
-
-        // Cache miss - load from base
-        let res = self.base.open_atomic_resource(key).await?;
-
-        // Insert into cache (LRU evicts oldest if full)
-        {
-            let mut cache = self.cache.lock();
-            cache.put(cache_key, CacheEntry::Atomic(res.clone()));
-        }
-
-        Ok(res)
-    }
-
-    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<Self::StreamingRes> {
-        let cache_key = CacheKey::Streaming(key.clone());
+    async fn open_streaming_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::StreamingRes> {
+        let cache_key = CacheKey::Streaming(key.clone(), ctx.clone());
 
         // Check cache first
         {
@@ -122,7 +104,7 @@ where
         }
 
         // Cache miss - load from base
-        let res = self.base.open_streaming_resource(key).await?;
+        let res = self.inner.open_streaming_resource_with_ctx(key, ctx).await?;
 
         // Insert into cache (LRU evicts oldest if full)
         {
@@ -133,17 +115,44 @@ where
         Ok(res)
     }
 
-    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
+    async fn open_atomic_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::AtomicRes> {
+        let cache_key = CacheKey::Atomic(key.clone(), ctx.clone());
+
         // Check cache first
         {
             let mut cache = self.cache.lock();
-            if let Some(CacheEntry::Index(res)) = cache.get(&CacheKey::PinsIndex) {
+            if let Some(CacheEntry::Atomic(res)) = cache.get(&cache_key) {
                 return Ok(res.clone());
             }
         }
 
         // Cache miss - load from base
-        let res = self.base.open_pins_index_resource().await?;
+        let res = self.inner.open_atomic_resource_with_ctx(key, ctx).await?;
+
+        // Insert into cache (LRU evicts oldest if full)
+        {
+            let mut cache = self.cache.lock();
+            cache.put(cache_key, CacheEntry::Atomic(res.clone()));
+        }
+
+        Ok(res)
+    }
+
+    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
+        // Check cache first
+        {
+            let cache = self.cache.lock();
+            if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::PinsIndex) {
+                return Ok(res.clone());
+            }
+        }
+
+        // Cache miss - load from base
+        let res = self.inner.open_pins_index_resource().await?;
 
         // Insert into cache
         {
@@ -157,14 +166,14 @@ where
     async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
         // Check cache first
         {
-            let mut cache = self.cache.lock();
-            if let Some(CacheEntry::Index(res)) = cache.get(&CacheKey::LruIndex) {
+            let cache = self.cache.lock();
+            if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::LruIndex) {
                 return Ok(res.clone());
             }
         }
 
         // Cache miss - load from base
-        let res = self.base.open_lru_index_resource().await?;
+        let res = self.inner.open_lru_index_resource().await?;
 
         // Insert into cache
         {
@@ -181,10 +190,10 @@ where
             let mut cache = self.cache.lock();
 
             // Collect keys to remove (LruCache doesn't have retain())
-            let keys_to_remove: Vec<CacheKey> = cache
+            let keys_to_remove: Vec<CacheKey<A::Context>> = cache
                 .iter()
                 .filter_map(|(k, _)| {
-                    if !matches!(k, CacheKey::PinsIndex | CacheKey::LruIndex) {
+                    if !matches!(k, CacheKey::<A::Context>::PinsIndex | CacheKey::<A::Context>::LruIndex) {
                         Some(k.clone())
                     } else {
                         None
@@ -198,6 +207,6 @@ where
             }
         }
 
-        self.base.delete_asset().await
+        self.inner.delete_asset().await
     }
 }

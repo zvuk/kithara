@@ -4,7 +4,8 @@ use std::{ops::Range, sync::Arc};
 
 use async_trait::async_trait;
 use kithara_assets::{
-    AssetResource, AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard,
+    AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard, LeaseResource,
+    ProcessedResource, ProcessingAssets,
 };
 use kithara_net::{HttpClient, Net};
 use kithara_storage::{StreamingResource, StreamingResourceExt};
@@ -16,8 +17,10 @@ use url::Url;
 
 use crate::{error::SourceError, events::FileEvent};
 
-pub(crate) type AssetResourceType =
-    AssetResource<StreamingResource, LeaseGuard<CachedAssets<EvictAssets<DiskAssetStore>>>>;
+pub(crate) type AssetResourceType = LeaseResource<
+    ProcessedResource<StreamingResource, ()>,
+    LeaseGuard<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, ()>>>,
+>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileStreamState {

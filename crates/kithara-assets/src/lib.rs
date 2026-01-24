@@ -12,7 +12,7 @@
 //! ## Key mapping (normative)
 //!
 //! Resources are addressed by strings chosen by higher layers:
-//! - `asset_root`: e.g. hex(AssetId)
+//! - `asset_root`: e.g. hex(hash(canonical_url))
 //! - `rel_path`: e.g. `media/audio.mp3`, `segments/0001.m4s`
 //!
 //! Disk mapping is:
@@ -26,7 +26,7 @@
 //! All resources opened through the leasing decorator (`LeaseAssets`) are automatically pinned by
 //! `asset_root` for the lifetime of the returned handle.
 //!
-//! The pin is expressed as an RAII guard stored inside [`AssetResource`]. Drop the handle to release
+//! The pin is expressed as an RAII guard stored inside [`LeaseResource`]. Drop the handle to release
 //! the pin.
 //!
 //! ## Global index (best-effort)
@@ -42,7 +42,6 @@ mod index;
 mod key;
 mod lease;
 mod processing;
-mod resource;
 mod store;
 
 // Public API - used by other crates
@@ -55,8 +54,7 @@ pub use index::EvictConfig;
 pub use index::PinsIndex;
 #[cfg(feature = "internal")]
 pub use key::canonicalize_for_asset;
-pub use key::{AssetId, ResourceKey, asset_root_for_url};
-pub use lease::{LeaseAssets, LeaseGuard};
+pub use key::{ResourceKey, asset_root_for_url};
+pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
 pub use processing::{ProcessFn, ProcessedResource, ProcessingAssets};
-pub use resource::AssetResource;
 pub use store::{AssetStore, AssetStoreBuilder, StoreOptions};

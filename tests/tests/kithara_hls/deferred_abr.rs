@@ -125,7 +125,7 @@ async fn sequential_read_after_abr_switch_continues_from_old_variant(
         .with_cancel(cancel_token)
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(2)), // Start from variant 2
-            down_switch_buffer: 0.0,
+            down_switch_buffer_secs: 0.0,
             min_switch_interval: Duration::from_millis(50),
             throughput_safety_factor: 1.0,
             ..AbrOptions::default()
@@ -202,7 +202,7 @@ async fn seek_backward_after_abr_switch_returns_new_variant(
         .with_cancel(cancel_token)
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(2)),
-            down_switch_buffer: 0.0,
+            down_switch_buffer_secs: 0.0,
             min_switch_interval: Duration::from_millis(50),
             throughput_safety_factor: 1.0,
             ..AbrOptions::default()
@@ -296,7 +296,7 @@ async fn seek_forward_after_abr_switch_triggers_switch(
         .with_cancel(cancel_token)
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(2)),
-            down_switch_buffer: 0.0,
+            down_switch_buffer_secs: 0.0,
             min_switch_interval: Duration::from_millis(50),
             throughput_safety_factor: 1.0,
             ..AbrOptions::default()
@@ -437,15 +437,23 @@ async fn sequential_read_across_segments_maintains_variant(
         let mut reader = SyncReader::new(source, SyncReaderParams::default());
         let mut all_data = Vec::new();
         let mut buf = [0u8; 100];
+        let mut read_count = 0;
 
         loop {
             let n = reader.read(&mut buf).unwrap();
             if n == 0 {
                 break;
             }
+            read_count += 1;
             all_data.extend_from_slice(&buf[..n]);
+
+            // Safety limit to prevent infinite loop
+            if read_count > 10000 {
+                panic!("Read loop exceeded 10000 iterations, likely infinite loop. Total bytes: {}", all_data.len());
+            }
         }
 
+        info!("Completed reading {} bytes in {} iterations", all_data.len(), read_count);
         all_data
     })
     .await
@@ -458,6 +466,13 @@ async fn sequential_read_across_segments_maintains_variant(
         test_segment_data(1, 2),
     ]
     .concat();
+
+    info!("Expected {} bytes, got {} bytes", expected.len(), result.len());
+
+    assert_eq!(
+        result.len(), expected.len(),
+        "Data length mismatch"
+    );
 
     assert_eq!(
         result, expected,

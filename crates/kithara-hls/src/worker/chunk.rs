@@ -5,7 +5,10 @@ use kithara_stream::{AudioCodec, StreamMessage};
 use url::Url;
 
 use super::HlsSegmentMetadata;
-use crate::{cache::EncryptionInfo, parsing::ContainerFormat};
+use crate::{
+    cache::{EncryptionInfo, SegmentType},
+    parsing::ContainerFormat,
+};
 
 /// HLS message with complete metadata.
 ///
@@ -20,7 +23,6 @@ use crate::{cache::EncryptionInfo, parsing::ContainerFormat};
 ///
 /// ## Invariants
 ///
-/// - `is_init_segment == true` implies `segment_index == usize::MAX`
 /// - `is_segment_start && is_segment_end` means entire segment in one message
 /// - `is_variant_switch == true` implies `is_segment_start == true`
 #[derive(Debug, Clone)]
@@ -34,8 +36,8 @@ pub struct HlsMessage {
     /// Variant index this chunk belongs to.
     pub variant: usize,
 
-    /// Segment index (usize::MAX for init segments).
-    pub segment_index: usize,
+    /// Segment type (Init or Media with index).
+    pub segment_type: SegmentType,
 
     /// URL of the segment.
     pub segment_url: Url,
@@ -55,9 +57,6 @@ pub struct HlsMessage {
     /// Encryption metadata (if segment is encrypted).
     pub encryption: Option<EncryptionInfo>,
 
-    /// True if this is an initialization segment.
-    pub is_init_segment: bool,
-
     /// True if this is the first chunk of a segment.
     pub is_segment_start: bool,
 
@@ -75,14 +74,13 @@ impl HlsMessage {
             bytes: Bytes::new(),
             byte_offset: 0,
             variant: 0,
-            segment_index: 0,
+            segment_type: SegmentType::Media(0),
             segment_url: Url::parse("http://localhost").expect("valid url"),
             segment_duration: None,
             codec: None,
             container: None,
             bitrate: None,
             encryption: None,
-            is_init_segment: false,
             is_segment_start: false,
             is_segment_end: false,
             is_variant_switch: false,
@@ -106,14 +104,13 @@ impl HlsMessage {
         let meta = HlsSegmentMetadata {
             byte_offset: self.byte_offset,
             variant: self.variant,
-            segment_index: self.segment_index,
+            segment_type: self.segment_type,
             segment_url: self.segment_url,
             segment_duration: self.segment_duration,
             codec: self.codec,
             container: self.container,
             bitrate: self.bitrate,
             encryption: self.encryption,
-            is_init_segment: self.is_init_segment,
             is_segment_start: self.is_segment_start,
             is_segment_end: self.is_segment_end,
             is_variant_switch: self.is_variant_switch,
@@ -132,14 +129,13 @@ impl HlsMessage {
             bytes,
             byte_offset: meta.byte_offset,
             variant: meta.variant,
-            segment_index: meta.segment_index,
+            segment_type: meta.segment_type,
             segment_url: meta.segment_url,
             segment_duration: meta.segment_duration,
             codec: meta.codec,
             container: meta.container,
             bitrate: meta.bitrate,
             encryption: meta.encryption,
-            is_init_segment: meta.is_init_segment,
             is_segment_start: meta.is_segment_start,
             is_segment_end: meta.is_segment_end,
             is_variant_switch: meta.is_variant_switch,
@@ -168,7 +164,7 @@ mod tests {
         let msg = HlsMessage::empty();
         assert!(msg.is_empty());
         assert_eq!(msg.len(), 0);
-        assert!(!msg.is_init_segment);
+        assert!(!msg.segment_type.is_init());
         assert!(!msg.is_segment_start);
         assert!(!msg.is_segment_end);
         assert!(!msg.is_variant_switch);
@@ -181,21 +177,19 @@ mod tests {
             bytes: Bytes::from_static(b"init data"),
             byte_offset: 0,
             variant: 0,
-            segment_index: usize::MAX,
+            segment_type: SegmentType::Init,
             segment_url: url.clone(),
             segment_duration: None,
             codec: Some(AudioCodec::AacLc),
             container: Some(ContainerFormat::Fmp4),
             bitrate: Some(128000),
             encryption: None,
-            is_init_segment: true,
             is_segment_start: true,
             is_segment_end: true,
             is_variant_switch: true,
         };
 
-        assert_eq!(init_msg.segment_index, usize::MAX);
-        assert!(init_msg.is_init_segment);
+        assert!(init_msg.segment_type.is_init());
         assert!(init_msg.is_segment_start);
         assert!(init_msg.is_segment_end);
     }

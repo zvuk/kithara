@@ -1,7 +1,7 @@
 #[cfg(test)]
 use mockall::automock;
 
-use super::{AbrConfig, ThroughputSample, ThroughputSampleSource};
+use super::{AbrOptions, ThroughputSample, ThroughputSampleSource};
 
 /// Trait for throughput estimation strategies.
 ///
@@ -13,6 +13,12 @@ pub trait Estimator {
 
     /// Push a new throughput sample for estimation.
     fn push_sample(&mut self, sample: ThroughputSample);
+
+    /// Get buffer level in seconds (total buffered content duration).
+    fn buffer_level_secs(&self) -> f64;
+
+    /// Reset buffer level.
+    fn reset_buffer(&mut self);
 }
 
 #[derive(Clone, Debug)]
@@ -21,6 +27,7 @@ pub struct ThroughputEstimator {
     slow_ewma: Ewma,
     bytes_sampled: u64,
     initial_bps: f64,
+    buffered_content_secs: f64,
 }
 
 impl ThroughputEstimator {
@@ -29,12 +36,13 @@ impl ThroughputEstimator {
     const MIN_CHUNK_BYTES: u64 = 16_000;
     const MIN_DURATION_MS: f64 = 0.5;
 
-    pub fn new(_cfg: &AbrConfig) -> Self {
+    pub fn new(_cfg: &AbrOptions) -> Self {
         Self {
             fast_ewma: Ewma::new(Self::FAST_HALF_LIFE_SECS),
             slow_ewma: Ewma::new(Self::SLOW_HALF_LIFE_SECS),
             bytes_sampled: 0,
             initial_bps: 0.0,
+            buffered_content_secs: 0.0,
         }
     }
 
@@ -54,6 +62,11 @@ impl ThroughputEstimator {
     }
 
     pub fn push_sample(&mut self, sample: ThroughputSample) {
+        // Accumulate buffered content duration
+        if let Some(content_duration) = sample.content_duration {
+            self.buffered_content_secs += content_duration.as_secs_f64();
+        }
+
         if !matches!(sample.source, ThroughputSampleSource::Network) {
             return;
         }
@@ -69,6 +82,14 @@ impl ThroughputEstimator {
         self.slow_ewma.add_sample(weight_secs, bps);
         self.bytes_sampled = self.bytes_sampled.saturating_add(sample.bytes);
     }
+
+    pub fn buffer_level_secs(&self) -> f64 {
+        self.buffered_content_secs
+    }
+
+    pub fn reset_buffer(&mut self) {
+        self.buffered_content_secs = 0.0;
+    }
 }
 
 impl Estimator for ThroughputEstimator {
@@ -78,6 +99,14 @@ impl Estimator for ThroughputEstimator {
 
     fn push_sample(&mut self, sample: ThroughputSample) {
         self.push_sample(sample)
+    }
+
+    fn buffer_level_secs(&self) -> f64 {
+        self.buffer_level_secs()
+    }
+
+    fn reset_buffer(&mut self) {
+        self.reset_buffer()
     }
 }
 
@@ -124,7 +153,7 @@ mod tests {
 
     #[test]
     fn cache_hit_does_not_affect_throughput() {
-        let cfg = AbrConfig::default();
+        let cfg = AbrOptions::default();
         let mut est = ThroughputEstimator::new(&cfg);
 
         est.push_sample(ThroughputSample {
@@ -132,6 +161,7 @@ mod tests {
             duration: Duration::from_millis(100),
             at: Instant::now(),
             source: ThroughputSampleSource::Cache,
+            content_duration: None,
         });
 
         assert_eq!(est.estimate_bps(), None);
@@ -146,7 +176,7 @@ mod tests {
         #[case] expected_min_bps: u64,
         #[case] _description: &str,
     ) {
-        let cfg = AbrConfig::default();
+        let cfg = AbrOptions::default();
         let mut est = ThroughputEstimator::new(&cfg);
         let now = Instant::now();
 
@@ -156,6 +186,7 @@ mod tests {
                 duration: Duration::from_millis(duration_ms),
                 at: now,
                 source: ThroughputSampleSource::Network,
+                content_duration: None,
             });
         }
 
@@ -172,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_min_chunk_size_filtering() {
-        let cfg = AbrConfig::default();
+        let cfg = AbrOptions::default();
         let mut est = ThroughputEstimator::new(&cfg);
         let now = Instant::now();
 
@@ -182,6 +213,7 @@ mod tests {
             duration: Duration::from_millis(100),
             at: now,
             source: ThroughputSampleSource::Network,
+            content_duration: None,
         });
 
         assert_eq!(est.estimate_bps(), None, "Small chunks should be ignored");
@@ -192,6 +224,7 @@ mod tests {
             duration: Duration::from_secs(1),
             at: now,
             source: ThroughputSampleSource::Network,
+            content_duration: None,
         });
 
         assert!(
@@ -202,7 +235,7 @@ mod tests {
 
     #[test]
     fn test_min_duration_clamping() {
-        let cfg = AbrConfig::default();
+        let cfg = AbrOptions::default();
         let mut est = ThroughputEstimator::new(&cfg);
         let now = Instant::now();
 
@@ -212,6 +245,7 @@ mod tests {
             duration: Duration::from_nanos(1),
             at: now,
             source: ThroughputSampleSource::Network,
+            content_duration: None,
         });
 
         let estimate = est.estimate_bps();
@@ -225,7 +259,7 @@ mod tests {
 
     #[test]
     fn test_no_estimate_without_samples() {
-        let cfg = AbrConfig::default();
+        let cfg = AbrOptions::default();
         let est = ThroughputEstimator::new(&cfg);
 
         assert_eq!(est.estimate_bps(), None, "No estimate without samples");

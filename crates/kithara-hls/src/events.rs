@@ -2,11 +2,16 @@
 
 use std::time::Duration;
 
-use crate::abr::AbrReason;
+use kithara_abr::{AbrReason, VariantInfo};
 
 /// Events emitted during HLS playback.
 #[derive(Clone, Debug)]
 pub enum HlsEvent {
+    /// Master playlist loaded and variants discovered.
+    VariantsDiscovered {
+        variants: Vec<VariantInfo>,
+        initial_variant: usize,
+    },
     /// Variant (quality level) changed.
     VariantApplied {
         from_variant: usize,

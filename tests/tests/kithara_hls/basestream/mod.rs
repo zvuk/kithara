@@ -6,7 +6,7 @@ use futures::StreamExt;
 use kithara_assets::AssetStore;
 use kithara_hls::{
     AbrMode, HlsEvent,
-    abr::{AbrConfig, DefaultAbrController},
+    abr::{AbrOptions, DefaultAbrController},
     fetch::DefaultFetchManager,
     playlist::PlaylistManager,
     stream::{PipelineHandle, SegmentMeta, SegmentStream, SegmentStreamParams},
@@ -26,9 +26,9 @@ pub fn make_fetch_and_playlist(
 }
 
 pub fn make_abr(initial_variant: usize) -> DefaultAbrController {
-    let mut cfg = AbrConfig::default();
+    let mut cfg = AbrOptions::default();
     cfg.mode = AbrMode::Auto(Some(initial_variant));
-    DefaultAbrController::new(cfg, None)
+    DefaultAbrController::new(cfg)
 }
 
 pub async fn build_basestream(

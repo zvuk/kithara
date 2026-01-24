@@ -34,15 +34,22 @@ impl OffsetMap {
     }
 
     /// Insert loaded segment and compute global_offset.
+    /// Init segments are ignored (not part of offset map).
     pub fn insert(&mut self, meta: SegmentMeta) {
-        let global_offset = self.compute_global_offset(meta.segment_index, meta.len);
+        // Only insert media segments, not init segments
+        let segment_index = match meta.segment_type.media_index() {
+            Some(idx) => idx,
+            None => return, // Skip init segments
+        };
+
+        let global_offset = self.compute_global_offset(segment_index, meta.len);
 
         let encryption = extract_encryption(&meta);
 
         self.segments.insert(
-            meta.segment_index,
+            segment_index,
             CachedSegment {
-                segment_index: meta.segment_index,
+                segment_index,
                 global_offset,
                 len: meta.len,
                 url: meta.url,
@@ -174,6 +181,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+    use crate::cache::SegmentType;
 
     fn test_url(seg: usize) -> Url {
         Url::parse(&format!("http://test.com/seg{}.ts", seg)).expect("valid URL")
@@ -182,7 +190,7 @@ mod tests {
     fn create_meta(idx: usize, len: u64) -> SegmentMeta {
         SegmentMeta {
             variant: 0,
-            segment_index: idx,
+            segment_type: SegmentType::Media(idx),
             sequence: idx as u64,
             url: test_url(idx),
             duration: Some(Duration::from_secs(4)),

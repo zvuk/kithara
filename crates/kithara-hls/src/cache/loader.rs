@@ -31,11 +31,12 @@ mod tests {
     use url::Url;
 
     use super::*;
+    use crate::cache::SegmentType;
 
     fn create_test_meta(variant: usize, segment_index: usize, len: u64) -> SegmentMeta {
         SegmentMeta {
             variant,
-            segment_index,
+            segment_type: SegmentType::Media(segment_index),
             sequence: segment_index as u64,
             url: Url::parse(&format!(
                 "http://test.com/v{}/seg{}.ts",
@@ -71,7 +72,7 @@ mod tests {
 
         let meta = loader.load_segment(0, 5).await.unwrap();
         assert_eq!(meta.variant, 0);
-        assert_eq!(meta.segment_index, 5);
+        assert_eq!(meta.segment_type.media_index(), Some(5));
         assert_eq!(meta.len, 200_000);
     }
 

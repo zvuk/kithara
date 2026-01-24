@@ -8,15 +8,14 @@ use kithara_worker::{AsyncWorkerSource, Fetch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
-use super::{BufferTracker, HlsCommand, HlsMessage, ThroughputAccumulator, VariantMetadata};
+use kithara_abr::{
+    AbrController, AbrOptions, AbrReason, ThroughputEstimator, ThroughputSample,
+    ThroughputSampleSource, Variant,
+};
+
+use super::{HlsCommand, HlsMessage, VariantMetadata};
 use crate::{
-    HlsResult,
-    abr::{AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant},
-    cache::Loader,
-    events::HlsEvent,
-    fetch::DefaultFetchManager,
-    options::AbrOptions,
-    parsing::MasterPlaylist,
+    HlsResult, cache::{Loader, SegmentType}, events::HlsEvent, fetch::DefaultFetchManager,
 };
 
 /// HLS worker source implementing AsyncWorkerSource.
@@ -28,9 +27,6 @@ pub struct HlsWorkerSource {
 
     /// Fetch manager for reading segment data.
     fetch_manager: Arc<DefaultFetchManager>,
-
-    /// Master playlist.
-    master: MasterPlaylist,
 
     /// Variant metadata (codec, container, bitrate).
     variant_metadata: Vec<VariantMetadata>,
@@ -53,13 +49,7 @@ pub struct HlsWorkerSource {
     /// Paused state.
     paused: bool,
 
-    /// Throughput tracking.
-    throughput_accumulator: ThroughputAccumulator,
-
-    /// Buffer tracking.
-    buffer_tracker: BufferTracker,
-
-    /// ABR controller.
+    /// ABR controller (includes buffer tracking).
     abr_controller: Option<AbrController<ThroughputEstimator>>,
 
     /// ABR variants list (for decision making).
@@ -81,7 +71,6 @@ impl HlsWorkerSource {
     /// # Arguments
     /// - `loader`: Segment loader (FetchLoader or mock)
     /// - `fetch_manager`: Fetch manager for reading segment data
-    /// - `master`: Parsed master playlist
     /// - `variant_metadata`: Metadata for each variant
     /// - `initial_variant`: Starting variant index
     /// - `abr_options`: ABR configuration (None for no ABR)
@@ -90,7 +79,6 @@ impl HlsWorkerSource {
     pub fn new(
         loader: Arc<dyn Loader>,
         fetch_manager: Arc<DefaultFetchManager>,
-        master: MasterPlaylist,
         variant_metadata: Vec<VariantMetadata>,
         initial_variant: usize,
         abr_options: Option<AbrOptions>,
@@ -106,30 +94,15 @@ impl HlsWorkerSource {
             })
             .collect();
 
-        // Create ABR controller if enabled
-        let abr_controller = abr_options.as_ref().and_then(|opts| {
-            if matches!(opts.mode, crate::options::AbrMode::Auto(_)) {
-                use std::time::Duration;
-                let config = crate::abr::AbrConfig {
-                    mode: opts.mode.clone(),
-                    min_buffer_for_up_switch_secs: opts.min_buffer_for_up_switch as f64,
-                    down_switch_buffer_secs: opts.down_switch_buffer as f64,
-                    throughput_safety_factor: opts.throughput_safety_factor as f64,
-                    up_hysteresis_ratio: opts.up_hysteresis_ratio as f64,
-                    down_hysteresis_ratio: opts.down_hysteresis_ratio as f64,
-                    min_switch_interval: opts.min_switch_interval,
-                    sample_window: Duration::from_secs(30),
-                };
-                Some(AbrController::new(config, None))
-            } else {
-                None
-            }
-        });
+        // Create ABR controller if Auto mode is enabled
+        let abr_controller = abr_options
+            .as_ref()
+            .filter(|opts| opts.is_auto())
+            .map(|opts| AbrController::new(opts.clone()));
 
         Self {
             loader,
             fetch_manager,
-            master,
             variant_metadata,
             current_variant: initial_variant,
             current_segment_index: 0,
@@ -137,8 +110,6 @@ impl HlsWorkerSource {
             init_segments_cache: std::collections::HashMap::new(),
             epoch: 0,
             paused: false,
-            throughput_accumulator: ThroughputAccumulator::new(),
-            buffer_tracker: BufferTracker::new(),
             abr_controller,
             abr_variants,
             byte_offset: 0,
@@ -165,7 +136,7 @@ impl HlsWorkerSource {
                 .assets()
                 .open_streaming_resource(&key)
                 .await?;
-            resource.inner().read().await?
+            resource.read().await?
         };
 
         Ok(bytes)
@@ -311,14 +282,13 @@ impl AsyncWorkerSource for HlsWorkerSource {
             bytes: combined_bytes.clone(),
             byte_offset: self.byte_offset,
             variant: current_variant,
-            segment_index: self.current_segment_index,
+            segment_type: SegmentType::Media(self.current_segment_index),
             segment_url: meta.url.clone(),
             segment_duration: meta.duration,
             codec: variant_meta.codec,
             container: meta.container,
             bitrate: variant_meta.bitrate,
             encryption: None,
-            is_init_segment: false,
             is_segment_start: true,
             is_segment_end: true,
             is_variant_switch,
@@ -327,32 +297,34 @@ impl AsyncWorkerSource for HlsWorkerSource {
         self.byte_offset += combined_bytes.len() as u64;
         self.current_segment_index += 1;
 
-        // ABR: Update buffer level
-        if let Some(duration) = meta.duration {
-            self.buffer_tracker.add_segment(duration);
-        }
+        // ABR: Update buffer level, record throughput sample and make decision
+        let (abr_decision, throughput_bps, buffer_level) =
+            if let Some(ref mut controller) = self.abr_controller {
+                // Calculate throughput
+                let throughput_bps = if download_duration.as_secs_f64() > 0.0 {
+                    (meta.len as f64 * 8.0) / download_duration.as_secs_f64()
+                } else {
+                    0.0
+                };
 
-        // ABR: Calculate throughput
-        let throughput_bps = if download_duration.as_secs_f64() > 0.0 {
-            (meta.len as f64 * 8.0) / download_duration.as_secs_f64()
-        } else {
-            0.0
-        };
-        let buffer_level = self.buffer_tracker.buffer_level_secs();
+                // Push throughput sample with content duration
+                let sample = ThroughputSample {
+                    bytes: meta.len,
+                    duration: download_duration,
+                    at: download_start,
+                    source: ThroughputSampleSource::Network,
+                    content_duration: meta.duration,
+                };
+                controller.push_throughput_sample(sample);
 
-        // ABR: Record throughput sample and make decision
-        let abr_decision = if let Some(ref mut controller) = self.abr_controller {
-            let sample = ThroughputSample {
-                bytes: meta.len,
-                duration: download_duration,
-                at: download_start,
-                source: ThroughputSampleSource::Network,
+                // Get buffer level and make decision
+                let buffer_level = controller.buffer_level_secs();
+                let decision = controller.decide(&self.abr_variants, std::time::Instant::now());
+
+                (Some(decision), throughput_bps, buffer_level)
+            } else {
+                (None, 0.0, 0.0)
             };
-            controller.push_throughput_sample(sample);
-            Some(controller.decide(&self.abr_variants, buffer_level, std::time::Instant::now()))
-        } else {
-            None
-        };
 
         // Emit events (after releasing mutable borrow)
         self.emit_event(HlsEvent::ThroughputSample {
@@ -411,7 +383,9 @@ impl AsyncWorkerSource for HlsWorkerSource {
                 debug!(segment_index, epoch, "seek command");
                 self.current_segment_index = segment_index;
                 self.epoch = epoch;
-                self.buffer_tracker.reset();
+                if let Some(ref mut controller) = self.abr_controller {
+                    controller.reset_buffer();
+                }
                 self.epoch
             }
             HlsCommand::ForceVariant {
@@ -426,7 +400,7 @@ impl AsyncWorkerSource for HlsWorkerSource {
                 self.emit_event(HlsEvent::VariantApplied {
                     from_variant: old_variant,
                     to_variant: variant_index,
-                    reason: crate::abr::AbrReason::ManualOverride,
+                    reason: AbrReason::ManualOverride,
                 });
                 self.epoch
             }
@@ -452,7 +426,6 @@ impl AsyncWorkerSource for HlsWorkerSource {
 mod tests {
     use std::time::Duration;
 
-    use kithara_assets::AssetStore;
     use kithara_net::HttpClient;
     use url::Url;
 
@@ -460,20 +433,7 @@ mod tests {
     use crate::{
         cache::{MockLoader, SegmentMeta},
         fetch::DefaultFetchManager,
-        parsing::{MasterPlaylist, VariantId, VariantStream},
     };
-
-    fn create_test_master() -> MasterPlaylist {
-        MasterPlaylist {
-            variants: vec![VariantStream {
-                id: VariantId(0),
-                uri: "http://test.com/variant0.m3u8".to_string(),
-                bandwidth: Some(128000),
-                name: None,
-                codec: None,
-            }],
-        }
-    }
 
     fn create_test_metadata() -> Vec<VariantMetadata> {
         vec![VariantMetadata {
@@ -491,9 +451,15 @@ mod tests {
             format!("http://test.com/v{}/seg{}.ts", variant, segment_index)
         };
 
+        let segment_type = if segment_index == usize::MAX {
+            crate::cache::SegmentType::Init
+        } else {
+            crate::cache::SegmentType::Media(segment_index)
+        };
+
         SegmentMeta {
             variant,
-            segment_index,
+            segment_type,
             sequence: if segment_index == usize::MAX {
                 0
             } else {
@@ -586,14 +552,12 @@ mod tests {
             .times(2)
             .returning(|variant, idx| Ok(create_test_segment_meta(variant, idx, 10000)));
 
-        let master = create_test_master();
         let metadata = create_test_metadata();
         let cancel = CancellationToken::new();
 
         let mut source = HlsWorkerSource::new(
             Arc::new(loader),
             ctx.fetch_manager.clone(),
-            master,
             metadata,
             0,
             None, // no ABR
@@ -604,17 +568,15 @@ mod tests {
         let fetch1 = source.fetch_next().await;
         assert!(!fetch1.is_eof);
         assert_eq!(fetch1.epoch, 0);
-        assert!(fetch1.data.is_init_segment);
+        assert!(fetch1.data.segment_type.is_init());
 
         let fetch2 = source.fetch_next().await;
         assert!(!fetch2.is_eof);
-        assert_eq!(fetch2.data.segment_index, 0);
-        assert!(!fetch2.data.is_init_segment);
+        assert_eq!(fetch2.data.segment_type.media_index(), Some(0));
 
         let fetch3 = source.fetch_next().await;
         assert!(!fetch3.is_eof);
-        assert_eq!(fetch3.data.segment_index, 1);
-        assert!(!fetch3.data.is_init_segment);
+        assert_eq!(fetch3.data.segment_type.media_index(), Some(1));
     }
 
     #[tokio::test]
@@ -643,14 +605,12 @@ mod tests {
             )
             .returning(|variant, idx| Ok(create_test_segment_meta(variant, idx, 1000)));
 
-        let master = create_test_master();
         let metadata = create_test_metadata();
         let cancel = CancellationToken::new();
 
         let mut source = HlsWorkerSource::new(
             Arc::new(loader),
             ctx.fetch_manager.clone(),
-            master,
             metadata,
             0,
             None, // no ABR
@@ -676,14 +636,12 @@ mod tests {
 
         loader.expect_num_segments().returning(|_| Ok(10));
 
-        let master = create_test_master();
         let metadata = create_test_metadata();
         let cancel = CancellationToken::new();
 
         let mut source = HlsWorkerSource::new(
             Arc::new(loader),
             ctx.fetch_manager.clone(),
-            master,
             metadata,
             0,
             None, // no ABR

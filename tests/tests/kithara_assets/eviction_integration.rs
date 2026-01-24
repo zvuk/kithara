@@ -182,14 +182,6 @@ async fn eviction_with_zero_byte_assets(temp_dir: tempfile::TempDir) {
         let res = store.open_atomic_resource(&key).await.unwrap();
         res.write(&Bytes::new()).await.unwrap();
         res.commit(None).await.unwrap();
-
-        // Explicitly record zero bytes
-        store
-            .base()
-            .base()
-            .touch_asset_bytes(&asset_root, 0)
-            .await
-            .unwrap();
     }
 
     // Should have at most 2 zero-byte assets

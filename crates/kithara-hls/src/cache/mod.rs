@@ -16,4 +16,4 @@ pub use cached_loader::CachedLoader;
 pub use fetch_loader::FetchLoader;
 pub use loader::{Loader, MockLoader};
 pub use offset_map::{CachedSegment, OffsetMap};
-pub use types::{EncryptionInfo, SegmentMeta};
+pub use types::{EncryptionInfo, SegmentMeta, SegmentType};

@@ -163,6 +163,10 @@ impl HlsSourceAdapter {
                 {
                     self.buffered_chunks.lock().push(fetch.data);
                 }
+            } else {
+                // Empty chunk without EOF - worker might be paused or sending empty data
+                // Continue waiting, but log for debugging
+                trace!("received empty chunk without EOF, continuing to wait");
             }
         }
     }
@@ -303,8 +307,7 @@ impl HlsSourceAdapter {
         self.buffered_chunks
             .lock()
             .iter()
-            .map(|chunk| chunk.segment_index)
-            .filter(|&idx| idx != usize::MAX)
+            .filter_map(|chunk| chunk.segment_type.media_index())
             .collect()
     }
 
@@ -315,7 +318,7 @@ impl HlsSourceAdapter {
         self.buffered_chunks
             .lock()
             .iter()
-            .any(|chunk| chunk.segment_index == segment_index)
+            .any(|chunk| chunk.segment_type.media_index() == Some(segment_index))
     }
 }
 
@@ -408,20 +411,20 @@ mod tests {
     use url::Url;
 
     use super::*;
+    use crate::cache::SegmentType;
 
     fn create_test_chunk(offset: u64, len: usize) -> HlsMessage {
         HlsMessage {
             bytes: Bytes::from(vec![0u8; len]),
             byte_offset: offset,
             variant: 0,
-            segment_index: 0,
+            segment_type: SegmentType::Media(0),
             segment_url: Url::parse("http://test.com/seg0.ts").expect("valid url"),
             segment_duration: None,
             codec: None,
             container: None,
             bitrate: None,
             encryption: None,
-            is_init_segment: false,
             is_segment_start: true,
             is_segment_end: true,
             is_variant_switch: false,

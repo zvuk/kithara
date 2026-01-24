@@ -8,7 +8,7 @@ use axum::{Router, routing::get};
 use futures::StreamExt;
 use kithara_hls::{
     AbrMode, HlsEvent,
-    abr::{AbrConfig, AbrReason, DefaultAbrController},
+    abr::{AbrOptions, AbrReason, DefaultAbrController},
     fetch::DefaultFetchManager,
     playlist::PlaylistManager,
     stream::{SegmentMeta, SegmentStream, SegmentStreamParams},
@@ -237,14 +237,14 @@ seg/v{}_2.bin
     ));
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
 
-    let mut cfg = AbrConfig::default();
+    let mut cfg = AbrOptions::default();
     cfg.mode = AbrMode::Auto(Some(2));
     cfg.min_buffer_for_up_switch_secs = 0.0;
     cfg.down_switch_buffer_secs = 0.0;
     cfg.throughput_safety_factor = 1.0;
     cfg.min_switch_interval = Duration::ZERO;
 
-    let abr = DefaultAbrController::new(cfg, None);
+    let abr = DefaultAbrController::new(cfg);
     let cancel = CancellationToken::new();
     let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 
@@ -402,14 +402,14 @@ seg/v{}_2.bin
     ));
     let playlist = Arc::new(PlaylistManager::new(Arc::clone(&fetch), None::<Url>));
 
-    let mut cfg = AbrConfig::default();
+    let mut cfg = AbrOptions::default();
     cfg.mode = AbrMode::Auto(Some(2));
     cfg.min_buffer_for_up_switch_secs = 0.0;
     cfg.down_switch_buffer_secs = 0.0;
     cfg.throughput_safety_factor = 1.0;
     cfg.min_switch_interval = Duration::ZERO;
 
-    let abr = DefaultAbrController::new(cfg, None);
+    let abr = DefaultAbrController::new(cfg);
     let cancel = CancellationToken::new();
     let (events_tx, _) = broadcast::channel::<HlsEvent>(32);
 
