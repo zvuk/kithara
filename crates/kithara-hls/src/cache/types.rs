@@ -6,6 +6,30 @@ use url::Url;
 
 use crate::{parsing::ContainerFormat, playlist::SegmentKey};
 
+/// Segment type: initialization segment or media segment with index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SegmentType {
+    /// Initialization segment (fMP4 only, contains codec metadata).
+    Init,
+    /// Media segment with index in the playlist.
+    Media(usize),
+}
+
+impl SegmentType {
+    /// Get media segment index, or None for init segment.
+    pub fn media_index(self) -> Option<usize> {
+        match self {
+            SegmentType::Media(idx) => Some(idx),
+            SegmentType::Init => None,
+        }
+    }
+
+    /// Check if this is an init segment.
+    pub fn is_init(self) -> bool {
+        matches!(self, SegmentType::Init)
+    }
+}
+
 /// Encryption info for a segment (resolved key URL and IV).
 /// Also used as context for decryption callback in `AssetStore`.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -18,7 +42,7 @@ pub struct EncryptionInfo {
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
     pub variant: usize,
-    pub segment_index: usize,
+    pub segment_type: SegmentType,
     pub sequence: u64,
     pub url: Url,
     pub duration: Option<Duration>,

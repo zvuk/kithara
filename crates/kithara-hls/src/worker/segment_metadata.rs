@@ -5,7 +5,10 @@ use std::time::Duration;
 use kithara_stream::{AudioCodec, MediaInfo, StreamMetadata};
 use url::Url;
 
-use crate::{cache::EncryptionInfo, parsing::ContainerFormat};
+use crate::{
+    cache::{EncryptionInfo, SegmentType},
+    parsing::ContainerFormat,
+};
 
 /// HLS segment metadata implementing StreamMetadata trait.
 ///
@@ -25,8 +28,8 @@ pub struct HlsSegmentMetadata {
     /// Variant index this segment belongs to.
     pub variant: usize,
 
-    /// Segment index (usize::MAX for init segments).
-    pub segment_index: usize,
+    /// Segment type (Init or Media with index).
+    pub segment_type: SegmentType,
 
     /// URL of the segment.
     pub segment_url: Url,
@@ -45,9 +48,6 @@ pub struct HlsSegmentMetadata {
 
     /// Encryption metadata (if segment is encrypted).
     pub encryption: Option<EncryptionInfo>,
-
-    /// True if this is an initialization segment.
-    pub is_init_segment: bool,
 
     /// True if this is the first chunk of a segment.
     pub is_segment_start: bool,
@@ -72,8 +72,9 @@ impl StreamMetadata for HlsSegmentMetadata {
     fn sequence_id(&self) -> u64 {
         // Combine variant + segment for unique ID
         // High 32 bits: variant index
-        // Low 32 bits: segment index
-        ((self.variant as u64) << 32) | (self.segment_index as u64 & 0xFFFF_FFFF)
+        // Low 32 bits: segment index (or 0xFFFF_FFFF for init)
+        let segment_idx = self.segment_type.media_index().unwrap_or(usize::MAX);
+        ((self.variant as u64) << 32) | (segment_idx as u64 & 0xFFFF_FFFF)
     }
 
     fn is_boundary(&self) -> bool {
@@ -82,7 +83,7 @@ impl StreamMetadata for HlsSegmentMetadata {
         // - Variant switches may change codec/bitrate
         // NOTE: We send init+media for EVERY segment, but decoder doesn't need
         // reinitialization unless codec/format changes (variant switch)
-        self.is_init_segment || self.is_variant_switch
+        self.segment_type.is_init() || self.is_variant_switch
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
@@ -112,14 +113,13 @@ mod tests {
         let meta1 = HlsSegmentMetadata {
             byte_offset: 0,
             variant: 0,
-            segment_index: 0,
+            segment_type: SegmentType::Media(0),
             segment_url: url.clone(),
             segment_duration: None,
             codec: None,
             container: None,
             bitrate: None,
             encryption: None,
-            is_init_segment: false,
             is_segment_start: true,
             is_segment_end: true,
             is_variant_switch: false,
@@ -127,13 +127,13 @@ mod tests {
 
         let meta2 = HlsSegmentMetadata {
             variant: 0,
-            segment_index: 1,
+            segment_type: SegmentType::Media(1),
             ..meta1.clone()
         };
 
         let meta3 = HlsSegmentMetadata {
             variant: 1,
-            segment_index: 0,
+            segment_type: SegmentType::Media(0),
             ..meta1.clone()
         };
 
@@ -150,14 +150,13 @@ mod tests {
         let init_meta = HlsSegmentMetadata {
             byte_offset: 0,
             variant: 0,
-            segment_index: usize::MAX,
+            segment_type: SegmentType::Init,
             segment_url: url,
             segment_duration: None,
             codec: Some(AudioCodec::AacLc),
             container: Some(ContainerFormat::Fmp4),
             bitrate: Some(128000),
             encryption: None,
-            is_init_segment: true,
             is_segment_start: true,
             is_segment_end: true,
             is_variant_switch: false,
@@ -174,14 +173,13 @@ mod tests {
         let switch_meta = HlsSegmentMetadata {
             byte_offset: 1000,
             variant: 1,
-            segment_index: 5,
+            segment_type: SegmentType::Media(5),
             segment_url: url,
             segment_duration: Some(Duration::from_secs(4)),
             codec: Some(AudioCodec::AacLc),
             container: Some(ContainerFormat::Ts),
             bitrate: Some(256000),
             encryption: None,
-            is_init_segment: false,
             is_segment_start: true,
             is_segment_end: true,
             is_variant_switch: true,
@@ -198,14 +196,13 @@ mod tests {
         let regular_meta = HlsSegmentMetadata {
             byte_offset: 2000,
             variant: 0,
-            segment_index: 1,
+            segment_type: SegmentType::Media(1),
             segment_url: url,
             segment_duration: Some(Duration::from_secs(4)),
             codec: Some(AudioCodec::AacLc),
             container: Some(ContainerFormat::Ts),
             bitrate: Some(128000),
             encryption: None,
-            is_init_segment: false,
             is_segment_start: true,
             is_segment_end: true,
             is_variant_switch: false,

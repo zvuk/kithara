@@ -14,16 +14,65 @@ pub use crate::parsing::{
     MediaPlaylist, MediaSegment, SegmentKey, VariantId, VariantStream, parse_master_playlist,
     parse_media_playlist,
 };
-use crate::{
-    HlsError, HlsResult,
-    abr::{Variant, variants_from_master},
-    fetch::DefaultFetchManager,
-};
+use kithara_abr::{Variant, VariantInfo, VariantSource};
+
+use crate::{HlsError, HlsResult, fetch::DefaultFetchManager};
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {
     let no_query = uri.split('?').next().unwrap_or(uri);
     let base = no_query.rsplit('/').next().unwrap_or(no_query);
     if base.is_empty() { None } else { Some(base) }
+}
+
+/// Convert HLS master playlist variants to ABR variant list.
+pub fn variants_from_master(master: &MasterPlaylist) -> Vec<Variant> {
+    master
+        .variants
+        .iter()
+        .map(|v| Variant {
+            variant_index: v.id.0,
+            bandwidth_bps: v.bandwidth.unwrap_or(0),
+        })
+        .collect()
+}
+
+/// Extract extended variant metadata from master playlist.
+///
+/// This creates `VariantInfo` structures with all available metadata
+/// for each variant, including bandwidth, name, codecs, and container format.
+pub fn variant_info_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
+    master
+        .variants
+        .iter()
+        .map(|v| VariantInfo {
+            index: v.id.0,
+            bandwidth_bps: v.bandwidth,
+            name: v.name.clone(),
+            codecs: v.codec.as_ref().and_then(|c| c.codecs.clone()),
+            container: v
+                .codec
+                .as_ref()
+                .and_then(|c| c.container)
+                .map(|fmt| format!("{:?}", fmt)),
+        })
+        .collect()
+}
+
+/// Implement VariantSource for MasterPlaylist.
+///
+/// This allows ABR controller to work directly with HLS master playlists
+/// without intermediate Vec<Variant> allocation.
+impl VariantSource for MasterPlaylist {
+    fn variant_count(&self) -> usize {
+        self.variants.len()
+    }
+
+    fn variant_bandwidth(&self, index: usize) -> Option<u64> {
+        self.variants
+            .iter()
+            .find(|v| v.id.0 == index)
+            .and_then(|v| v.bandwidth)
+    }
 }
 
 /// Thin wrapper: fetches + parses playlists with caching via `kithara-assets`.

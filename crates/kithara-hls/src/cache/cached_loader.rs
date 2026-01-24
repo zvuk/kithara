@@ -303,12 +303,12 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::cache::{loader::MockLoader, types::SegmentMeta};
+    use crate::cache::{SegmentType, loader::MockLoader, types::SegmentMeta};
 
     fn create_test_meta(variant: usize, segment_index: usize, len: u64) -> SegmentMeta {
         SegmentMeta {
             variant,
-            segment_index,
+            segment_type: SegmentType::Media(segment_index),
             sequence: segment_index as u64,
             url: Url::parse(&format!(
                 "http://test.com/v{}/seg{}.ts",

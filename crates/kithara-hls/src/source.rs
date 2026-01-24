@@ -15,7 +15,7 @@ use crate::{
     events::HlsEvent,
     fetch::FetchManager,
     options::HlsParams,
-    playlist::PlaylistManager,
+    playlist::{PlaylistManager, variant_info_from_master},
     worker::{HlsSourceAdapter, HlsWorkerSource, VariantMetadata},
 };
 
@@ -98,6 +98,18 @@ impl Hls {
         // Load master playlist
         let master = playlist_manager.master_playlist(&url).await?;
 
+        // Determine initial variant from ABR mode
+        let initial_variant = params.abr.initial_variant();
+
+        // Emit VariantsDiscovered event
+        if let Some(ref events_tx) = params.events_tx {
+            let variant_info = variant_info_from_master(&master);
+            let _ = events_tx.send(HlsEvent::VariantsDiscovered {
+                variants: variant_info,
+                initial_variant,
+            });
+        }
+
         // Extract variant metadata
         let variant_metadata: Vec<VariantMetadata> = master
             .variants
@@ -118,19 +130,10 @@ impl Hls {
             Arc::clone(&playlist_manager),
         ));
 
-        // Determine initial variant
-        let initial_variant = params
-            .abr
-            .variant_selector
-            .as_ref()
-            .and_then(|selector| (selector)(&master))
-            .unwrap_or(0);
-
         // Create and return HlsWorkerSource
         Ok(HlsWorkerSource::new(
             fetch_loader as Arc<dyn Loader>,
             Arc::clone(&fetch_manager),
-            master,
             variant_metadata,
             initial_variant,
             Some(params.abr.clone()),

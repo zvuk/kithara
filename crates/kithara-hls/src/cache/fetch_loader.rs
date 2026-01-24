@@ -6,7 +6,10 @@ use async_trait::async_trait;
 use parking_lot::RwLock;
 use url::Url;
 
-use super::{Loader, types::SegmentMeta};
+use super::{
+    Loader,
+    types::{SegmentMeta, SegmentType},
+};
 use crate::{
     HlsError, HlsResult,
     fetch::{ActiveFetchResult, DefaultFetchManager},
@@ -77,8 +80,14 @@ impl Loader for FetchLoader {
             Some(ContainerFormat::Ts)
         };
 
-        // Handle init segment (segment_index == usize::MAX)
-        if segment_index == usize::MAX {
+        // Handle init segment
+        let segment_type = if segment_index == usize::MAX {
+            SegmentType::Init
+        } else {
+            SegmentType::Media(segment_index)
+        };
+
+        if segment_type.is_init() {
             use tracing::debug;
             debug!(variant, "looking for init segment in playlist");
             let init_segment = playlist.init_segment.as_ref().ok_or_else(|| {
@@ -116,7 +125,7 @@ impl Loader for FetchLoader {
 
             return Ok(SegmentMeta {
                 variant,
-                segment_index: usize::MAX,
+                segment_type: SegmentType::Init,
                 sequence: 0,
                 url: init_url,
                 duration: None,
@@ -158,7 +167,7 @@ impl Loader for FetchLoader {
         // Build SegmentMeta
         Ok(SegmentMeta {
             variant,
-            segment_index,
+            segment_type,
             sequence: segment.sequence,
             url: segment_url,
             duration: Some(segment.duration),

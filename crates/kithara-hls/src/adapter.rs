@@ -5,16 +5,15 @@
 use std::{ops::Range, sync::Arc};
 
 use async_trait::async_trait;
+use kithara_abr::AbrReason;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     ContainerFormat as StreamContainerFormat, MediaInfo, Source, StreamResult as KitharaIoResult,
 };
-use parking_lot::Mutex;
 use tokio::sync::broadcast;
 
 use crate::{
     HlsError,
-    abr::{AbrController, ThroughputEstimator},
     cache::{CachedLoader, FetchLoader},
     events::HlsEvent,
     parsing::{CodecInfo, ContainerFormat},
@@ -25,7 +24,6 @@ use crate::{
 /// NEW ARCHITECTURE: Wraps CachedLoader<FetchLoader> instead of SegmentStream.
 pub struct HlsSource {
     loader: Arc<CachedLoader<FetchLoader>>,
-    abr: Arc<Mutex<AbrController<ThroughputEstimator>>>,
     events_tx: broadcast::Sender<HlsEvent>,
     /// Codec info for each variant (indexed by variant number).
     variant_codecs: Arc<Vec<Option<CodecInfo>>>,
@@ -35,15 +33,14 @@ pub struct HlsSource {
 
 impl HlsSource {
     /// Create HLS source from CachedLoader (NEW architecture).
+    #[allow(dead_code)]
     pub(crate) fn new(
         loader: CachedLoader<FetchLoader>,
-        abr: AbrController<ThroughputEstimator>,
         events_tx: broadcast::Sender<HlsEvent>,
         variant_codecs: Vec<Option<CodecInfo>>,
     ) -> Self {
         Self {
             loader: Arc::new(loader),
-            abr: Arc::new(Mutex::new(abr)),
             events_tx,
             variant_codecs: Arc::new(variant_codecs),
             last_read_pos: std::sync::atomic::AtomicU64::new(0),
@@ -56,6 +53,7 @@ impl HlsSource {
     }
 
     /// Get the events sender (for StreamSource implementation).
+    #[allow(dead_code)]
     pub(crate) fn events_tx(&self) -> &broadcast::Sender<HlsEvent> {
         &self.events_tx
     }
@@ -73,7 +71,7 @@ impl HlsSource {
             let _ = self.events_tx.send(HlsEvent::VariantApplied {
                 from_variant: old_variant,
                 to_variant: variant,
-                reason: crate::abr::AbrReason::ManualOverride,
+                reason: AbrReason::ManualOverride,
             });
         }
     }

@@ -2,19 +2,15 @@
 
 use std::time::{Duration, Instant};
 
-use kithara_hls::{
-    abr::{AbrConfig, AbrController, AbrReason, variants_from_master},
-    playlist::parse_master_playlist,
-};
+use kithara_abr::{AbrController, AbrMode, AbrOptions, AbrReason};
+use kithara_hls::playlist::{parse_master_playlist, variants_from_master};
 use rstest::{fixture, rstest};
-
-use super::fixture;
 
 // ==================== Fixtures ====================
 
 #[fixture]
-fn abr_config_default() -> AbrConfig {
-    AbrConfig::default()
+fn abr_config_default() -> AbrOptions {
+    AbrOptions::default()
 }
 
 #[fixture]
@@ -42,7 +38,7 @@ fn parsed_master_playlist(
 #[fixture]
 fn variants_from_parsed_playlist(
     parsed_master_playlist: kithara_hls::playlist::MasterPlaylist,
-) -> Vec<kithara_hls::abr::Variant> {
+) -> Vec<kithara_abr::Variant> {
     variants_from_master(&parsed_master_playlist)
 }
 
@@ -50,75 +46,52 @@ fn variants_from_parsed_playlist(
 
 #[rstest]
 fn test_variant_selection_manual_override(
-    abr_config_default: AbrConfig,
-    parsed_master_playlist: kithara_hls::playlist::MasterPlaylist,
-    variants_from_parsed_playlist: Vec<kithara_hls::abr::Variant>,
+    variants_from_parsed_playlist: Vec<kithara_abr::Variant>,
 ) {
-    let selector = std::sync::Arc::new(|_playlist: &kithara_hls::playlist::MasterPlaylist| Some(2));
-    let controller = AbrController::new(abr_config_default, Some(selector));
+    let opts = AbrOptions {
+        mode: AbrMode::Manual(2),
+        ..Default::default()
+    };
+    let controller = AbrController::new(opts);
 
-    let decision = controller.decide_for_master(
-        &parsed_master_playlist,
-        &variants_from_parsed_playlist,
-        0.0,
-        Instant::now(),
-    );
+    let decision = controller.decide(&variants_from_parsed_playlist, Instant::now());
 
     assert_eq!(decision.target_variant_index, 2);
     assert_eq!(decision.reason, AbrReason::ManualOverride);
 }
 
 #[rstest]
-#[case(0, Some(0))]
-#[case(1, Some(1))]
-#[case(2, Some(2))]
-#[case(3, None)]
+#[case(0)]
+#[case(1)]
+#[case(2)]
+#[case(3)]
 fn test_manual_selector_different_indices(
     #[case] selector_index: usize,
-    #[case] expected_variant_index: Option<usize>,
-    abr_config_default: AbrConfig,
-    parsed_master_playlist: kithara_hls::playlist::MasterPlaylist,
-    variants_from_parsed_playlist: Vec<kithara_hls::abr::Variant>,
+    variants_from_parsed_playlist: Vec<kithara_abr::Variant>,
 ) {
-    let selector = std::sync::Arc::new(move |_playlist: &kithara_hls::playlist::MasterPlaylist| {
-        Some(selector_index)
-    });
-    let controller = AbrController::new(abr_config_default, Some(selector));
+    let opts = AbrOptions {
+        mode: AbrMode::Manual(selector_index),
+        ..Default::default()
+    };
+    let controller = AbrController::new(opts);
 
-    let decision = controller.decide_for_master(
-        &parsed_master_playlist,
-        &variants_from_parsed_playlist,
-        0.0,
-        Instant::now(),
-    );
+    let decision = controller.decide(&variants_from_parsed_playlist, Instant::now());
 
-    if let Some(expected) = expected_variant_index {
-        assert_eq!(decision.target_variant_index, expected);
-        assert_eq!(decision.reason, AbrReason::ManualOverride);
-    } else {
-        // If selector returns index out of bounds, controller should handle it gracefully
-        // It might choose a default variant or handle the error internally
-        // We just verify the decision is valid (not necessarily checking bounds)
-        assert!(decision.target_variant_index <= variants_from_parsed_playlist.len());
-    }
+    // Manual mode always returns the configured index
+    assert_eq!(decision.target_variant_index, selector_index);
+    assert_eq!(decision.reason, AbrReason::ManualOverride);
 }
 
 #[rstest]
 fn test_abr_controller_no_selector(
-    abr_config_default: AbrConfig,
-    parsed_master_playlist: kithara_hls::playlist::MasterPlaylist,
-    variants_from_parsed_playlist: Vec<kithara_hls::abr::Variant>,
+    abr_config_default: AbrOptions,
+    variants_from_parsed_playlist: Vec<kithara_abr::Variant>,
 ) {
-    let controller = AbrController::new(abr_config_default, None);
+    let controller = AbrController::new(abr_config_default);
 
-    let decision = controller.decide_for_master(
-        &parsed_master_playlist,
-        &variants_from_parsed_playlist,
-        0.0,
-        Instant::now(),
-    );
+    let decision = controller.decide(&variants_from_parsed_playlist, Instant::now());
 
-    // Without selector, should use default logic (likely first variant)
+    // Without manual mode, should use default ABR logic
     assert!(decision.target_variant_index < variants_from_parsed_playlist.len());
     assert_ne!(decision.reason, AbrReason::ManualOverride);
 }
@@ -130,24 +103,17 @@ fn test_abr_controller_no_selector(
 #[case(0.0, 2.0)] // No buffer, 2 seconds since last switch
 #[case(3.0, 5.0)] // 3 second buffer, 5 seconds since last switch
 fn test_abr_decision_with_different_conditions(
-    #[case] buffer_secs: f64,
-    #[case] time_since_last_switch_secs: f64,
-    abr_config_default: AbrConfig,
-    parsed_master_playlist: kithara_hls::playlist::MasterPlaylist,
-    variants_from_parsed_playlist: Vec<kithara_hls::abr::Variant>,
+    #[case] _buffer_secs: f64,
+    #[case] _time_since_last_switch_secs: f64,
+    variants_from_parsed_playlist: Vec<kithara_abr::Variant>,
 ) {
-    let selector = std::sync::Arc::new(|_playlist: &kithara_hls::playlist::MasterPlaylist| Some(1));
-    let controller = AbrController::new(abr_config_default, Some(selector));
+    let opts = AbrOptions {
+        mode: AbrMode::Manual(1),
+        ..Default::default()
+    };
+    let controller = AbrController::new(opts);
 
-    let time_since_last_switch = Duration::from_secs_f64(time_since_last_switch_secs);
-    let last_switch_time = Instant::now() - time_since_last_switch;
-
-    let decision = controller.decide_for_master(
-        &parsed_master_playlist,
-        &variants_from_parsed_playlist,
-        buffer_secs,
-        last_switch_time,
-    );
+    let decision = controller.decide(&variants_from_parsed_playlist, Instant::now());
 
     // Should still respect manual override regardless of conditions
     assert_eq!(decision.target_variant_index, 1);
@@ -178,9 +144,11 @@ fn test_variants_from_master_structure(
 #[tokio::test]
 async fn test_abr_controller_async_usage() {
     // Test that ABR controller can be used in async context
-    let config = AbrConfig::default();
-    let selector = std::sync::Arc::new(|_playlist: &kithara_hls::playlist::MasterPlaylist| Some(0));
-    let _controller = AbrController::new(config, Some(selector));
+    let config = AbrOptions {
+        mode: AbrMode::Manual(0),
+        ..Default::default()
+    };
+    let _controller = AbrController::new(config);
 
     // Just verify it compiles and can be created in async context
     assert!(true);
