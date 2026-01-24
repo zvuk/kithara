@@ -240,17 +240,51 @@ where
     }
 
     async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        let processed = self.ensure_processed().await?;
-
-        let offset_usize = offset as usize;
-        if offset_usize >= processed.len() {
-            return Ok(0);
+        // Check if already processed and buffered
+        {
+            let buffer = self.buffer.lock().await;
+            if let Some(ref processed) = *buffer {
+                let offset_usize = offset as usize;
+                if offset_usize >= processed.len() {
+                    return Ok(0);
+                }
+                let available = processed.len() - offset_usize;
+                let to_copy = buf.len().min(available);
+                buf[..to_copy].copy_from_slice(&processed[offset_usize..offset_usize + to_copy]);
+                return Ok(to_copy);
+            }
         }
 
-        let available = processed.len() - offset_usize;
-        let to_copy = buf.len().min(available);
-        buf[..to_copy].copy_from_slice(&processed[offset_usize..offset_usize + to_copy]);
-        Ok(to_copy)
+        // Try to read entire resource and process it
+        match self.inner.read().await {
+            Ok(raw) => {
+                // Resource is committed - process and buffer
+                let processed = (self.process)(raw, self.ctx.clone())
+                    .await
+                    .map_err(StorageError::Failed)?;
+
+                // Store in buffer
+                {
+                    let mut buffer = self.buffer.lock().await;
+                    *buffer = Some(processed.clone());
+                }
+
+                // Now read from buffer
+                let offset_usize = offset as usize;
+                if offset_usize >= processed.len() {
+                    return Ok(0);
+                }
+                let available = processed.len() - offset_usize;
+                let to_copy = buf.len().min(available);
+                buf[..to_copy].copy_from_slice(&processed[offset_usize..offset_usize + to_copy]);
+                Ok(to_copy)
+            }
+            Err(StorageError::NotCommitted) => {
+                // Resource not committed yet - pass through to inner read_at without processing
+                self.inner.read_at(offset, buf).await
+            }
+            Err(e) => Err(e),
+        }
     }
 
     async fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
