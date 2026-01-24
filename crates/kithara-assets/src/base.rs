@@ -1,9 +1,16 @@
 #![forbid(unsafe_code)]
 
-use std::path::{Path, PathBuf};
+use std::{
+    fmt::Debug,
+    hash::Hash,
+    path::{Path, PathBuf},
+};
 
 use async_trait::async_trait;
-use kithara_storage::{AtomicOptions, AtomicResource, DiskOptions, StreamingResource};
+use kithara_storage::{
+    AtomicOptions, AtomicResource, AtomicResourceExt, DiskOptions, StreamingResource,
+    StreamingResourceExt,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -46,11 +53,11 @@ use crate::{
 #[async_trait]
 pub trait Assets: Clone + Send + Sync + 'static {
     /// Type returned by `open_streaming_resource`. Must be Clone for caching.
-    type StreamingRes: Clone + Send + Sync + std::fmt::Debug + 'static;
+    type StreamingRes: StreamingResourceExt + Clone + Send + Sync + Debug + 'static;
     /// Type returned by `open_atomic_resource`. Must be Clone for caching.
-    type AtomicRes: Clone + Send + Sync + std::fmt::Debug + 'static;
+    type AtomicRes: AtomicResourceExt + Clone + Send + Sync + Debug + 'static;
     /// Context type for resource processing. Use `()` for no context.
-    type Context: Clone + Send + Sync + std::hash::Hash + Eq + std::fmt::Debug + 'static;
+    type Context: Clone + Send + Sync + Hash + Eq + Debug + 'static;
 
     /// Open a streaming resource with optional context (main method).
     async fn open_streaming_resource_with_ctx(

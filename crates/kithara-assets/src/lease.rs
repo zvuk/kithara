@@ -4,7 +4,10 @@ use std::{collections::HashSet, ops::Range, path::Path, sync::Arc};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_storage::{AtomicResource, Resource, ResourceStatus, StorageError, StreamingResourceExt, WaitOutcome};
+use kithara_storage::{
+    AtomicResource, AtomicResourceExt, Resource, ResourceStatus, StorageError,
+    StreamingResourceExt, WaitOutcome,
+};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -207,6 +210,13 @@ where
     async fn write_at(&self, offset: u64, data: &[u8]) -> Result<(), StorageError> {
         self.inner.write_at(offset, data).await
     }
+}
+
+impl<R, L> AtomicResourceExt for LeaseResource<R, L>
+where
+    R: AtomicResourceExt + Send + Sync,
+    L: Send + Sync + 'static,
+{
 }
 
 /// Add status() method for ProcessedResource<StreamingResource> inner.
