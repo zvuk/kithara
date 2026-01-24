@@ -136,7 +136,7 @@ impl HlsWorkerSource {
                 .assets()
                 .open_streaming_resource(&key)
                 .await?;
-            resource.inner().read().await?
+            resource.read().await?
         };
 
         Ok(bytes)

@@ -1,54 +1,69 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashSet, path::Path, sync::Arc};
+use std::{collections::HashSet, ops::Range, path::Path, sync::Arc};
 
 use async_trait::async_trait;
-use kithara_storage::AtomicResource;
+use bytes::Bytes;
+use kithara_storage::{AtomicResource, Resource, ResourceStatus, StorageError, StreamingResourceExt, WaitOutcome};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::{
-    base::Assets, error::AssetsResult, index::PinsIndex, key::ResourceKey, resource::AssetResource,
-};
+use crate::{base::Assets, error::AssetsResult, evict::ByteRecorder, index::PinsIndex, key::ResourceKey, ProcessedResource};
 
-/// Decorator that adds "pin (lease) while handle lives" semantics on top of a base [`Assets`].
+/// Decorator that adds "pin (lease) while handle lives" semantics on top of inner [`Assets`].
 ///
 /// ## Normative behavior
 /// - Every successful `open_*_resource()` pins `key.asset_root`.
 /// - The pin table is stored as a `HashSet<String>` (unique roots) in memory.
 /// - Every pin/unpin operation immediately persists the full table to disk using
-///   `base.open_pin_index_resource(...)` (best-effort).
+///   `inner.open_pin_index_resource(...)` (best-effort).
 /// - The pin index resource must be excluded from pinning to avoid recursion.
 ///
-/// This type does **not** do any filesystem/path logic; it uses the base `Assets` abstraction.
-#[derive(Clone, Debug)]
+/// This type does **not** do any filesystem/path logic; it uses the inner `Assets` abstraction.
+#[derive(Clone)]
 pub struct LeaseAssets<A>
 where
     A: Assets,
 {
-    base: Arc<A>,
+    inner: Arc<A>,
     pins: Arc<Mutex<HashSet<String>>>,
     cancel: CancellationToken,
+    byte_recorder: Option<Arc<dyn ByteRecorder>>,
 }
 
 impl<A> LeaseAssets<A>
 where
     A: Assets,
 {
-    pub fn new(base: Arc<A>, cancel: CancellationToken) -> Self {
+    pub fn new(inner: Arc<A>, cancel: CancellationToken) -> Self {
         Self {
-            base,
+            inner,
             pins: Arc::new(Mutex::new(HashSet::new())),
             cancel,
+            byte_recorder: None,
         }
     }
 
-    pub fn base(&self) -> &A {
-        &self.base
+    /// Create with byte recorder for eviction tracking.
+    pub fn with_byte_recorder(
+        inner: Arc<A>,
+        cancel: CancellationToken,
+        byte_recorder: Arc<dyn ByteRecorder>,
+    ) -> Self {
+        Self {
+            inner,
+            pins: Arc::new(Mutex::new(HashSet::new())),
+            cancel,
+            byte_recorder: Some(byte_recorder),
+        }
+    }
+
+    pub(crate) fn inner(&self) -> &A {
+        &self.inner
     }
 
     async fn open_index(&self) -> AssetsResult<PinsIndex> {
-        PinsIndex::open(self.base()).await
+        PinsIndex::open(self.inner()).await
     }
 
     async fn persist_pins_best_effort(&self, pins: &HashSet<String>) -> AssetsResult<()> {
@@ -115,47 +130,158 @@ where
     }
 }
 
+/// Resource wrapper that combines lease guard with byte recording on commit.
+#[derive(Clone)]
+pub struct LeaseResource<R, L> {
+    inner: R,
+    _lease: L,
+    asset_root: String,
+    byte_recorder: Option<Arc<dyn ByteRecorder>>,
+}
+
+impl<R, L> std::fmt::Debug for LeaseResource<R, L>
+where
+    R: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LeaseResource")
+            .field("inner", &self.inner)
+            .field("asset_root", &self.asset_root)
+            .finish()
+    }
+}
+
+#[async_trait]
+impl<R, L> Resource for LeaseResource<R, L>
+where
+    R: Resource + Send + Sync,
+    L: Send + Sync + 'static,
+{
+    async fn write(&self, data: &[u8]) -> Result<(), StorageError> {
+        self.inner.write(data).await
+    }
+
+    async fn read(&self) -> Result<Bytes, StorageError> {
+        self.inner.read().await
+    }
+
+    async fn commit(&self, final_len: Option<u64>) -> Result<(), StorageError> {
+        // Commit inner resource first
+        self.inner.commit(final_len).await?;
+
+        // Record bytes if recorder is set
+        if let Some(ref recorder) = self.byte_recorder {
+            if let Ok(metadata) = tokio::fs::metadata(self.inner.path()).await {
+                if metadata.is_file() {
+                    recorder.record_bytes(&self.asset_root, metadata.len()).await;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn fail(&self, error: impl Into<String> + Send) -> Result<(), StorageError> {
+        self.inner.fail(error).await
+    }
+
+    fn path(&self) -> &Path {
+        self.inner.path()
+    }
+}
+
+#[async_trait]
+impl<R, L> StreamingResourceExt for LeaseResource<R, L>
+where
+    R: StreamingResourceExt + Send + Sync,
+    L: Send + Sync + 'static,
+{
+    async fn wait_range(&self, range: Range<u64>) -> Result<WaitOutcome, StorageError> {
+        self.inner.wait_range(range).await
+    }
+
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, StorageError> {
+        self.inner.read_at(offset, buf).await
+    }
+
+    async fn write_at(&self, offset: u64, data: &[u8]) -> Result<(), StorageError> {
+        self.inner.write_at(offset, data).await
+    }
+}
+
+/// Add status() method for ProcessedResource<StreamingResource> inner.
+impl<L, Ctx> LeaseResource<ProcessedResource<kithara_storage::StreamingResource, Ctx>, L>
+where
+    Ctx: Clone + std::fmt::Debug,
+{
+    /// Get resource status.
+    pub async fn status(&self) -> ResourceStatus {
+        self.inner.status().await
+    }
+}
+
 #[async_trait]
 impl<A> Assets for LeaseAssets<A>
 where
     A: Assets,
 {
-    type StreamingRes = AssetResource<A::StreamingRes, LeaseGuard<A>>;
-    type AtomicRes = AssetResource<A::AtomicRes, LeaseGuard<A>>;
+    type StreamingRes = LeaseResource<A::StreamingRes, LeaseGuard<A>>;
+    type AtomicRes = LeaseResource<A::AtomicRes, LeaseGuard<A>>;
+    type Context = A::Context;
 
     fn root_dir(&self) -> &Path {
-        self.base.root_dir()
+        self.inner.root_dir()
     }
 
     fn asset_root(&self) -> &str {
-        self.base.asset_root()
+        self.inner.asset_root()
     }
 
-    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<Self::AtomicRes> {
-        let inner = self.base.open_atomic_resource(key).await?;
-        let lease = self.pin(self.base.asset_root()).await?;
-        Ok(AssetResource::new(inner, lease))
+    async fn open_streaming_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::StreamingRes> {
+        let inner = self.inner.open_streaming_resource_with_ctx(key, ctx).await?;
+        let lease = self.pin(self.inner.asset_root()).await?;
+
+        Ok(LeaseResource {
+            inner,
+            _lease: lease,
+            asset_root: self.inner.asset_root().to_string(),
+            byte_recorder: self.byte_recorder.clone(),
+        })
     }
 
-    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<Self::StreamingRes> {
-        let inner = self.base.open_streaming_resource(key).await?;
-        let lease = self.pin(self.base.asset_root()).await?;
-        Ok(AssetResource::new(inner, lease))
+    async fn open_atomic_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::AtomicRes> {
+        let inner = self.inner.open_atomic_resource_with_ctx(key, ctx).await?;
+        let lease = self.pin(self.inner.asset_root()).await?;
+
+        Ok(LeaseResource {
+            inner,
+            _lease: lease,
+            asset_root: self.inner.asset_root().to_string(),
+            byte_recorder: self.byte_recorder.clone(),
+        })
     }
 
     async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
         // Pins index must be opened without pinning to avoid recursion
-        self.base.open_pins_index_resource().await
+        self.inner.open_pins_index_resource().await
     }
 
     async fn delete_asset(&self) -> AssetsResult<()> {
-        // Delete asset through base implementation
-        self.base.delete_asset().await
+        // Delete asset through inner implementation
+        self.inner.delete_asset().await
     }
 
     async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
         // LRU index must be opened without pinning
-        self.base.open_lru_index_resource().await
+        self.inner.open_lru_index_resource().await
     }
 }
 
@@ -182,11 +308,15 @@ where
         let asset_root = self.asset_root.clone();
         let cancel = self.cancel.clone();
 
+        tracing::debug!(asset_root = %asset_root, "LeaseGuard::drop - starting async unpin");
+
         tokio::spawn(async move {
             if cancel.is_cancelled() {
                 return;
             }
+            tracing::debug!(asset_root = %asset_root, "Unpinning asset");
             owner.unpin_best_effort(&asset_root).await;
+            tracing::debug!(asset_root = %asset_root, "Asset unpinned");
         });
     }
 }

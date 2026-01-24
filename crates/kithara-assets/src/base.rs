@@ -40,18 +40,41 @@ use crate::{
 ///
 /// The `StreamingRes` and `AtomicRes` associated types allow decorators to wrap resources.
 /// For example, `LeaseAssets` returns `AssetResource<R, LeaseGuard>` instead of raw `R`.
+///
+/// The `Context` associated type allows decorators to pass additional processing context
+/// (e.g. encryption info) when opening resources. Use `()` for no context.
 #[async_trait]
 pub trait Assets: Clone + Send + Sync + 'static {
     /// Type returned by `open_streaming_resource`. Must be Clone for caching.
-    type StreamingRes: Clone + Send + Sync + 'static;
+    type StreamingRes: Clone + Send + Sync + std::fmt::Debug + 'static;
     /// Type returned by `open_atomic_resource`. Must be Clone for caching.
-    type AtomicRes: Clone + Send + Sync + 'static;
+    type AtomicRes: Clone + Send + Sync + std::fmt::Debug + 'static;
+    /// Context type for resource processing. Use `()` for no context.
+    type Context: Clone + Send + Sync + std::hash::Hash + Eq + std::fmt::Debug + 'static;
 
-    /// Open an atomic resource (small object) addressed by `key`.
-    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<Self::AtomicRes>;
+    /// Open a streaming resource with optional context (main method).
+    async fn open_streaming_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::StreamingRes>;
 
-    /// Open a streaming resource (large object) addressed by `key`.
-    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<Self::StreamingRes>;
+    /// Open an atomic resource with optional context (main method).
+    async fn open_atomic_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::AtomicRes>;
+
+    /// Convenience method - open a streaming resource without context.
+    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<Self::StreamingRes> {
+        self.open_streaming_resource_with_ctx(key, None).await
+    }
+
+    /// Convenience method - open an atomic resource without context.
+    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<Self::AtomicRes> {
+        self.open_atomic_resource_with_ctx(key, None).await
+    }
 
     /// Open the atomic resource used for persisting the pins index.
     ///
@@ -156,6 +179,7 @@ impl DiskAssetStore {
 impl Assets for DiskAssetStore {
     type StreamingRes = StreamingResource;
     type AtomicRes = AtomicResource;
+    type Context = ();
 
     fn root_dir(&self) -> &Path {
         &self.root_dir
@@ -165,23 +189,38 @@ impl Assets for DiskAssetStore {
         &self.asset_root
     }
 
-    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<Self::AtomicRes> {
+    async fn open_streaming_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        _ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::StreamingRes> {
+        let path = self.resource_path(key)?;
+
+        // Check if file exists and get its size to mark as committed.
+        let initial_len = tokio::fs::metadata(&path)
+            .await
+            .ok()
+            .and_then(|m| if m.is_file() { Some(m.len()) } else { None });
+
+        let res = StreamingResource::open_disk(DiskOptions {
+            path,
+            cancel: self.cancel.clone(),
+            initial_len,
+        })
+        .await?;
+        Ok(res)
+    }
+
+    async fn open_atomic_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        _ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::AtomicRes> {
         let path = self.resource_path(key)?;
         Ok(AtomicResource::open(AtomicOptions {
             path,
             cancel: self.cancel.clone(),
         }))
-    }
-
-    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<Self::StreamingRes> {
-        let path = self.resource_path(key)?;
-        let res = StreamingResource::open_disk(DiskOptions {
-            path,
-            cancel: self.cancel.clone(),
-            initial_len: None,
-        })
-        .await?;
-        Ok(res)
     }
 
     async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {

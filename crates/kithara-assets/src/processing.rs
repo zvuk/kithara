@@ -8,11 +8,13 @@ use std::{future::Future, hash::Hash, ops::Range, path::Path, pin::Pin, sync::Ar
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use dashmap::DashMap;
-use kithara_storage::{Resource, StorageError, StorageResult, StreamingResourceExt, WaitOutcome};
+use kithara_storage::{
+    AtomicResource, Resource, ResourceStatus, StorageError, StorageResult, StreamingResource,
+    StreamingResourceExt, WaitOutcome,
+};
 use tokio::sync::Mutex;
 
-use crate::{AssetsResult, ResourceKey, base::Assets};
+use crate::{AssetsResult, base::Assets, ResourceKey};
 
 /// Transform function signature.
 ///
@@ -33,51 +35,126 @@ pub struct ProcessedResource<R, Ctx> {
     inner: R,
     ctx: Ctx,
     process: ProcessFn<Ctx>,
-    buffer: Mutex<Option<Bytes>>,
+    buffer: Arc<Mutex<Option<Bytes>>>,
+}
+
+impl<R, Ctx> Clone for ProcessedResource<R, Ctx>
+where
+    R: Clone,
+    Ctx: Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+            ctx: self.ctx.clone(),
+            process: Arc::clone(&self.process),
+            buffer: Arc::clone(&self.buffer),
+        }
+    }
+}
+
+impl<R, Ctx> std::fmt::Debug for ProcessedResource<R, Ctx>
+where
+    R: std::fmt::Debug,
+    Ctx: std::fmt::Debug,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProcessedResource")
+            .field("inner", &self.inner)
+            .field("ctx", &self.ctx)
+            .field("has_buffer", &self.buffer.try_lock().map(|b| b.is_some()).unwrap_or(false))
+            .finish()
+    }
 }
 
 impl<R, Ctx> ProcessedResource<R, Ctx>
 where
-    Ctx: Clone,
+    R: std::fmt::Debug,
+    Ctx: Clone + std::fmt::Debug,
 {
     pub fn new(inner: R, ctx: Ctx, process: ProcessFn<Ctx>) -> Self {
         Self {
             inner,
             ctx,
             process,
-            buffer: Mutex::new(None),
+            buffer: Arc::new(Mutex::new(None)),
         }
     }
 
-    /// Get the inner resource.
-    pub fn inner(&self) -> &R {
+    /// Get the inner resource (crate-private).
+    #[allow(dead_code)]
+    pub(crate) fn inner(&self) -> &R {
         &self.inner
+    }
+}
+
+/// Специализация для StreamingResource - добавляет метод status().
+impl<Ctx> ProcessedResource<StreamingResource, Ctx>
+where
+    Ctx: Clone + std::fmt::Debug,
+{
+    /// Get resource status.
+    pub async fn status(&self) -> ResourceStatus {
+        self.inner.status().await
     }
 }
 
 impl<R, Ctx> ProcessedResource<R, Ctx>
 where
-    R: StreamingResourceExt + Send + Sync,
-    Ctx: Clone + Send + Sync,
+    R: StreamingResourceExt + Send + Sync + std::fmt::Debug,
+    Ctx: Clone + Send + Sync + std::fmt::Debug,
 {
     /// Wait until the inner resource is fully available (committed with known length).
     ///
     /// This is needed because `read()` requires the resource to be committed.
+    #[allow(dead_code)]
     async fn wait_for_full_content(&self) -> StorageResult<()> {
-        let mut offset = 0u64;
+        // Check if resource is empty (EOF at offset 0).
+        match self.inner.wait_range(0..1).await? {
+            WaitOutcome::Eof => {
+                // Empty file, already committed.
+                return Ok(());
+            }
+            WaitOutcome::Ready => {
+                // File has data, need to find EOF.
+            }
+        }
+
+        // Binary search for EOF position.
+        // Start with small range and double until we find EOF.
+        let mut low = 0u64;
+        let mut high = 1u64;
+
+        // Find upper bound: double high until wait_range returns Eof.
         loop {
-            let outcome = self.inner.wait_range(offset..offset + 1).await?;
-            match outcome {
+            match self.inner.wait_range(high..high + 1).await? {
                 WaitOutcome::Eof => {
-                    // Hit EOF, resource is committed with known length.
-                    return Ok(());
+                    // EOF is between low and high.
+                    break;
                 }
                 WaitOutcome::Ready => {
-                    // Data at this offset is ready, check further ahead.
-                    offset = offset.saturating_add(64 * 1024);
+                    // Data available at high, double it.
+                    low = high;
+                    high = high.saturating_mul(2).max(high + 1);
                 }
             }
         }
+
+        // Now binary search between low and high to find exact EOF.
+        while low + 1 < high {
+            let mid = low + (high - low) / 2;
+            match self.inner.wait_range(mid..mid + 1).await? {
+                WaitOutcome::Eof => {
+                    high = mid;
+                }
+                WaitOutcome::Ready => {
+                    low = mid;
+                }
+            }
+        }
+
+        // At this point, resource is committed with known length.
+        Ok(())
     }
 
     async fn ensure_processed(&self) -> StorageResult<Bytes> {
@@ -88,10 +165,6 @@ where
             }
         }
 
-        // Wait for the resource to be fully available (committed).
-        // This is required because read() fails with NotCommitted otherwise.
-        self.wait_for_full_content().await?;
-
         let mut buffer = self.buffer.lock().await;
 
         // Double-check after re-acquiring lock.
@@ -99,15 +172,16 @@ where
             return Ok(data.clone());
         }
 
-        // 1. Read entire content (now safe because resource is committed).
+        // Read entire content. Note: for disk resources that are already written,
+        // they should be immediately readable without NotCommitted errors.
         let raw = self.inner.read().await?;
 
-        // 2. Transform
+        // Transform
         let processed = (self.process)(raw, self.ctx.clone())
             .await
             .map_err(StorageError::Failed)?;
 
-        // 3. Store in buffer
+        // Store in buffer
         *buffer = Some(processed.clone());
 
         Ok(processed)
@@ -117,8 +191,8 @@ where
 #[async_trait]
 impl<R, Ctx> Resource for ProcessedResource<R, Ctx>
 where
-    R: StreamingResourceExt + Send + Sync,
-    Ctx: Clone + Send + Sync + 'static,
+    R: StreamingResourceExt + Send + Sync + std::fmt::Debug,
+    Ctx: Clone + Send + Sync + std::fmt::Debug + 'static,
 {
     async fn write(&self, data: &[u8]) -> StorageResult<()> {
         self.inner.write(data).await
@@ -144,8 +218,8 @@ where
 #[async_trait]
 impl<R, Ctx> StreamingResourceExt for ProcessedResource<R, Ctx>
 where
-    R: StreamingResourceExt + Send + Sync,
-    Ctx: Clone + Send + Sync + 'static,
+    R: StreamingResourceExt + Send + Sync + std::fmt::Debug,
+    Ctx: Clone + Send + Sync + std::fmt::Debug + 'static,
 {
     async fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         // Check if already processed.
@@ -189,36 +263,35 @@ where
     }
 }
 
-/// Cache key for processed resources.
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
-struct ProcessedCacheKey<Ctx: Hash + Eq> {
-    resource_key: ResourceKey,
-    ctx: Ctx,
-}
-
-/// Decorator that caches processed resources.
+/// Decorator that applies processing to streaming resources based on context.
 ///
-/// For same (ResourceKey, Ctx) returns the same ProcessedResource handle.
+/// Implements the Assets trait with Context = Ctx.
+/// When opening a streaming resource with context, wraps it in ProcessedResource.
+/// Atomic resources are passed through unchanged.
+///
+/// Note: This decorator does NOT cache ProcessedResource instances.
+/// Caching is handled by CachedAssets decorator which caches by (ResourceKey, Context).
+#[derive(Clone)]
 pub struct ProcessingAssets<A, Ctx>
 where
     A: Assets,
-    Ctx: Clone + Hash + Eq + Send + Sync + 'static,
+    A::Context: Default,
+    Ctx: Clone + Hash + Eq + Send + Sync + Default + std::fmt::Debug + 'static,
 {
     inner: Arc<A>,
     process: ProcessFn<Ctx>,
-    cache: DashMap<ProcessedCacheKey<Ctx>, Arc<ProcessedResource<A::StreamingRes, Ctx>>>,
 }
 
 impl<A, Ctx> ProcessingAssets<A, Ctx>
 where
     A: Assets,
-    Ctx: Clone + Hash + Eq + Send + Sync + 'static,
+    A::Context: Default,
+    Ctx: Clone + Hash + Eq + Send + Sync + Default + std::fmt::Debug + 'static,
 {
     pub fn new(inner: Arc<A>, process: ProcessFn<Ctx>) -> Self {
         Self {
             inner,
             process,
-            cache: DashMap::new(),
         }
     }
 
@@ -226,43 +299,67 @@ where
     pub fn inner(&self) -> &A {
         &self.inner
     }
+}
 
-    /// Open a processed streaming resource.
-    ///
-    /// If same (key, ctx) was opened before, returns cached handle.
-    pub async fn open_processed(
+#[async_trait]
+impl<A, Ctx> Assets for ProcessingAssets<A, Ctx>
+where
+    A: Assets,
+    A::Context: Default,
+    Ctx: Clone + Hash + Eq + Send + Sync + Default + std::fmt::Debug + 'static,
+{
+    type StreamingRes = ProcessedResource<A::StreamingRes, Ctx>;
+    type AtomicRes = A::AtomicRes;
+    type Context = Ctx;
+
+    fn root_dir(&self) -> &Path {
+        self.inner.root_dir()
+    }
+
+    fn asset_root(&self) -> &str {
+        self.inner.asset_root()
+    }
+
+    async fn open_streaming_resource_with_ctx(
         &self,
         key: &ResourceKey,
-        ctx: Ctx,
-    ) -> AssetsResult<Arc<ProcessedResource<A::StreamingRes, Ctx>>> {
-        let cache_key = ProcessedCacheKey {
-            resource_key: key.clone(),
-            ctx: ctx.clone(),
-        };
-
-        // Check cache first
-        if let Some(res) = self.cache.get(&cache_key) {
-            return Ok(Arc::clone(res.value()));
-        }
-
-        // Open inner resource
+        ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::StreamingRes> {
+        // Open inner resource without context (use convenience method)
         let inner = self.inner.open_streaming_resource(key).await?;
 
-        // Create processed wrapper
-        let processed = Arc::new(ProcessedResource::new(
+        // Use context if provided, otherwise use Default::default()
+        let ctx = ctx.unwrap_or_default();
+
+        // Create processed wrapper (will be cached by CachedAssets)
+        let processed = ProcessedResource::new(
             inner,
             ctx,
             Arc::clone(&self.process),
-        ));
+        );
 
-        // Cache and return
-        self.cache.insert(cache_key, Arc::clone(&processed));
         Ok(processed)
     }
 
-    /// Clear all cached processed resources.
-    pub fn clear(&self) {
-        self.cache.clear();
+    async fn open_atomic_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        _ctx: Option<Self::Context>,
+    ) -> AssetsResult<Self::AtomicRes> {
+        // Atomic resources are not processed - delegate to inner
+        self.inner.open_atomic_resource(key).await
+    }
+
+    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
+        self.inner.open_pins_index_resource().await
+    }
+
+    async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
+        self.inner.open_lru_index_resource().await
+    }
+
+    async fn delete_asset(&self) -> AssetsResult<()> {
+        self.inner.delete_asset().await
     }
 }
 

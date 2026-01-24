@@ -15,7 +15,6 @@ use bytes::Bytes;
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
 use kithara_storage::Resource;
 use rstest::{fixture, rstest};
-use tokio::task::yield_now;
 use tokio_util::sync::CancellationToken;
 
 fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
@@ -64,6 +63,10 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     cancel_token: CancellationToken,
     temp_dir: tempfile::TempDir,
 ) {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+
     let dir = temp_dir.path().to_path_buf();
 
     // Asset A
@@ -74,7 +77,6 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             Some(100),
             cancel_token.clone(),
         );
-        let evict_a = store_a.base().base().clone();
         let key_a = ResourceKey::new("media/a.bin");
         let res_a = store_a.open_atomic_resource(&key_a).await.unwrap();
 
@@ -83,14 +85,10 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             .await
             .unwrap();
         res_a.commit(None).await.unwrap();
-
-        evict_a
-            .touch_asset_bytes(asset_a_name, bytes_a as u64)
-            .await
-            .unwrap();
     }
 
-    yield_now().await;
+    // Wait for async unpinning to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     // Asset B
     {
@@ -100,7 +98,6 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             Some(100),
             cancel_token.clone(),
         );
-        let evict_b = store_b.base().base().clone();
         let key_b = ResourceKey::new("media/b.bin");
         let res_b = store_b.open_atomic_resource(&key_b).await.unwrap();
 
@@ -109,14 +106,10 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             .await
             .unwrap();
         res_b.commit(None).await.unwrap();
-
-        evict_b
-            .touch_asset_bytes(asset_b_name, bytes_b as u64)
-            .await
-            .unwrap();
     }
 
-    yield_now().await;
+    // Wait for async unpinning to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
 
     // Asset C: triggers eviction
     {
@@ -132,6 +125,9 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
         res_c.write(&Bytes::from_static(b"C")).await.unwrap();
         res_c.commit(None).await.unwrap();
     }
+
+    // Wait for async eviction callback to complete
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
     // Expect A evicted (oldest) to satisfy max_bytes.
     let asset_a_path = dir.join(asset_a_name).join("media/a.bin");
@@ -186,7 +182,6 @@ async fn eviction_corner_cases_different_byte_limits(
             Some(max_bytes as u64),
             cancel.clone(),
         );
-        let evict = store.base().base().clone();
         let key = ResourceKey::new(format!("data{}.bin", i));
 
         let res = store.open_atomic_resource(&key).await.unwrap();
@@ -194,8 +189,6 @@ async fn eviction_corner_cases_different_byte_limits(
             .await
             .unwrap();
         res.commit(None).await.unwrap();
-
-        evict.touch_asset_bytes(name, *size as u64).await.unwrap();
     }
 
     // Create a new asset and account its bytes
@@ -206,7 +199,6 @@ async fn eviction_corner_cases_different_byte_limits(
             Some(max_bytes as u64),
             cancel.clone(),
         );
-        let evict = store.base().base().clone();
         let trigger_key = ResourceKey::new("trigger.bin");
 
         let res = store.open_atomic_resource(&trigger_key).await.unwrap();
@@ -214,11 +206,6 @@ async fn eviction_corner_cases_different_byte_limits(
             .await
             .unwrap();
         res.commit(None).await.unwrap();
-
-        evict
-            .touch_asset_bytes("asset-trigger", new_asset_size as u64)
-            .await
-            .unwrap();
     }
 
     // Trigger eviction by creating another asset_root.

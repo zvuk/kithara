@@ -56,7 +56,7 @@ pub use index::PinsIndex;
 #[cfg(feature = "internal")]
 pub use key::canonicalize_for_asset;
 pub use key::{AssetId, ResourceKey, asset_root_for_url};
-pub use lease::{LeaseAssets, LeaseGuard};
+pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
 pub use processing::{ProcessFn, ProcessedResource, ProcessingAssets};
 pub use resource::AssetResource;
 pub use store::{AssetStore, AssetStoreBuilder, StoreOptions};
