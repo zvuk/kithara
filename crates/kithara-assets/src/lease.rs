@@ -173,13 +173,11 @@ where
         self.inner.commit(final_len).await?;
 
         // Record bytes if recorder is set
-        if let Some(ref recorder) = self.byte_recorder {
-            if let Ok(metadata) = tokio::fs::metadata(self.inner.path()).await {
-                if metadata.is_file() {
+        if let Some(ref recorder) = self.byte_recorder
+            && let Ok(metadata) = tokio::fs::metadata(self.inner.path()).await
+                && metadata.is_file() {
                     recorder.record_bytes(&self.asset_root, metadata.len()).await;
                 }
-            }
-        }
 
         Ok(())
     }
