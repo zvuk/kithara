@@ -22,7 +22,7 @@ exclude-files = [
 ]
 
 # Timeout for slow tests (5 minutes)
-timeout = 300
+timeout = "300s"
 
 # Run types: Tests + Doctests
 run-types = ["Tests", "Doctests"]

@@ -121,7 +121,7 @@ async-trait = "0.1.89"
 
 # storage (range maps + async random-access disk)
 rangemap = { version = "1.7.1", features = ["serde1"] }
-random-access-disk = { path = "../random-access-disk", default-features = false, features = ["tokio"] }
+random-access-disk = { git = "https://github.com/gerasim13/random-access-disk", branch = "master", default-features = false, features = ["tokio"] }
 random-access-storage = "5.0.0"
 dashmap = "5.5.3"
 lru = "0.12"
