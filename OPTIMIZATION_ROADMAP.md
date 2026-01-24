@@ -127,7 +127,7 @@ let (chunk_tx, chunk_rx) = kanal::bounded_async(HLS_CHUNK_CHANNEL_CAPACITY);
 
 ---
 
-## Sprint 2: High Priority (2-3 дня)
+## Sprint 2: High Priority ✅ ЗАВЕРШЕН
 
 ### Задача 2.1: Arc<OnceCell> для ProcessedResource ⚠️⚠️
 **Приоритет:** HIGH
@@ -281,7 +281,7 @@ let bytes = serde_json::to_vec(&file)?;  // Remove _pretty
 
 ---
 
-## Sprint 3: Medium Priority (3-5 дней)
+## Sprint 3: Medium Priority ✅ ЗАВЕРШЕН
 
 ### Задача 3.1: Binary format для indexes (bincode) ⚠️
 **Приоритет:** MEDIUM
