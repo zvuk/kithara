@@ -11,7 +11,10 @@ use kithara_storage::{
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-use crate::{base::Assets, error::AssetsResult, evict::ByteRecorder, index::PinsIndex, key::ResourceKey, ProcessedResource};
+use crate::{
+    ProcessedResource, base::Assets, error::AssetsResult, evict::ByteRecorder, index::PinsIndex,
+    key::ResourceKey,
+};
 
 /// Decorator that adds "pin (lease) while handle lives" semantics on top of inner [`Assets`].
 ///
@@ -122,15 +125,6 @@ where
         })
     }
 
-    async fn unpin_best_effort(&self, asset_root: &str) {
-        let snapshot = {
-            let mut guard = self.pins.lock().await;
-            guard.remove(asset_root);
-            guard.clone()
-        };
-
-        let _ = self.persist_pins_best_effort(&snapshot).await;
-    }
 }
 
 /// Resource wrapper that combines lease guard with byte recording on commit.
@@ -175,9 +169,12 @@ where
         // Record bytes if recorder is set
         if let Some(ref recorder) = self.byte_recorder
             && let Ok(metadata) = tokio::fs::metadata(self.inner.path()).await
-                && metadata.is_file() {
-                    recorder.record_bytes(&self.asset_root, metadata.len()).await;
-                }
+            && metadata.is_file()
+        {
+            recorder
+                .record_bytes(&self.asset_root, metadata.len())
+                .await;
+        }
 
         Ok(())
     }
@@ -250,7 +247,10 @@ where
         key: &ResourceKey,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::StreamingRes> {
-        let inner = self.inner.open_streaming_resource_with_ctx(key, ctx).await?;
+        let inner = self
+            .inner
+            .open_streaming_resource_with_ctx(key, ctx)
+            .await?;
         let lease = self.pin(self.inner.asset_root()).await?;
 
         Ok(LeaseResource {
@@ -312,19 +312,23 @@ where
     A: Assets,
 {
     fn drop(&mut self) {
-        let owner = self.owner.clone();
-        let asset_root = self.asset_root.clone();
-        let cancel = self.cancel.clone();
+        if self.cancel.is_cancelled() {
+            return;
+        }
 
-        tracing::debug!(asset_root = %asset_root, "LeaseGuard::drop - starting async unpin");
+        tracing::debug!(asset_root = %self.asset_root, "LeaseGuard::drop - removing pin in-memory");
 
-        tokio::spawn(async move {
-            if cancel.is_cancelled() {
-                return;
-            }
-            tracing::debug!(asset_root = %asset_root, "Unpinning asset");
-            owner.unpin_best_effort(&asset_root).await;
-            tracing::debug!(asset_root = %asset_root, "Asset unpinned");
-        });
+        // Remove pin from in-memory set immediately (sync operation)
+        // Persistence is deferred to next eviction check or explicit save
+        // Use try_lock to avoid blocking in Drop (which might run in async context)
+        if let Ok(mut pins) = self.owner.pins.try_lock() {
+            pins.remove(&self.asset_root);
+            tracing::debug!(asset_root = %self.asset_root, "Pin removed from in-memory set");
+        } else {
+            tracing::warn!(
+                asset_root = %self.asset_root,
+                "Could not acquire pins lock in Drop; pin removal deferred"
+            );
+        }
     }
 }

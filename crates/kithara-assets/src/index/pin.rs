@@ -44,7 +44,7 @@ impl PinsIndex {
 
     /// Load the pins set from storage.
     ///
-    /// Empty, missing, or invalid JSON is treated as an empty set (best-effort).
+    /// Empty, missing, or corrupted data is treated as an empty set (best-effort).
     pub async fn load(&self) -> AssetsResult<HashSet<String>> {
         let bytes = self.res.read().await?;
 
@@ -52,7 +52,7 @@ impl PinsIndex {
             return Ok(HashSet::new());
         }
 
-        let file: PinsIndexFile = match serde_json::from_slice(&bytes) {
+        let file: PinsIndexFile = match bincode::deserialize(&bytes) {
             Ok(file) => file,
             Err(_) => return Ok(HashSet::new()),
         };
@@ -62,13 +62,13 @@ impl PinsIndex {
 
     /// Persist the given set to storage.
     pub async fn store(&self, pins: &HashSet<String>) -> AssetsResult<()> {
-        // Stored as a list for stable JSON; treated as a set by higher layers.
+        // Stored as a list for stable serialization; treated as a set by higher layers.
         let file = PinsIndexFile {
             version: 1,
             pinned: pins.iter().cloned().collect(),
         };
 
-        let bytes = serde_json::to_vec_pretty(&file)?;
+        let bytes = bincode::serialize(&file)?;
         self.res.write(&bytes).await?;
         Ok(())
     }
@@ -204,12 +204,12 @@ mod tests {
         pins.insert("asset".to_string());
         index.store(&pins).await.unwrap();
 
-        // Read raw bytes and parse
+        // Read raw bytes and deserialize using bincode
         let bytes = res.read().await.unwrap();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        let file: PinsIndexFile = bincode::deserialize(&bytes).unwrap();
 
-        assert_eq!(json["version"], 1);
-        assert!(json["pinned"].is_array());
-        assert_eq!(json["pinned"].as_array().unwrap().len(), 1);
+        assert_eq!(file.version, 1);
+        assert_eq!(file.pinned.len(), 1);
+        assert!(file.pinned.contains(&"asset".to_string()));
     }
 }

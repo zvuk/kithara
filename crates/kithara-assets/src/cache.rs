@@ -104,7 +104,10 @@ where
         }
 
         // Cache miss - load from base
-        let res = self.inner.open_streaming_resource_with_ctx(key, ctx).await?;
+        let res = self
+            .inner
+            .open_streaming_resource_with_ctx(key, ctx)
+            .await?;
 
         // Insert into cache (LRU evicts oldest if full)
         {
@@ -193,7 +196,10 @@ where
             let keys_to_remove: Vec<CacheKey<A::Context>> = cache
                 .iter()
                 .filter_map(|(k, _)| {
-                    if !matches!(k, CacheKey::<A::Context>::PinsIndex | CacheKey::<A::Context>::LruIndex) {
+                    if !matches!(
+                        k,
+                        CacheKey::<A::Context>::PinsIndex | CacheKey::<A::Context>::LruIndex
+                    ) {
                         Some(k.clone())
                     } else {
                         None

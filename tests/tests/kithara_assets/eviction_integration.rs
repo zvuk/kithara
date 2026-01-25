@@ -16,15 +16,13 @@ use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, Resourc
 use kithara_storage::Resource;
 use rstest::{fixture, rstest};
 
-fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
-    root.join(asset_root).exists()
+#[derive(serde::Deserialize)]
+struct PinsIndexFile {
+    pinned: Vec<String>,
 }
 
-#[allow(dead_code)]
-fn read_pins_file(root: &std::path::Path) -> serde_json::Value {
-    let path = root.join("_index").join("pins.json");
-    let bytes = std::fs::read(&path).expect("pins index file must exist on disk");
-    serde_json::from_slice(&bytes).expect("pins index must be valid json")
+fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
+    root.join(asset_root).exists()
 }
 
 #[fixture]
@@ -76,17 +74,14 @@ async fn eviction_max_assets_skips_pinned_assets(
         if i == create_count - 1 {
             let res_b = res;
             // Sanity: pins file should contain last asset while handle is alive.
-            if let Ok(pins_json) = std::fs::read_to_string(dir.join("_index/pins.json"))
-                && let Ok(pins_val) = serde_json::from_str::<serde_json::Value>(&pins_json)
+            if let Ok(pins_bytes) = std::fs::read(dir.join("_index/pins.json"))
+                && let Ok(pins_file) = bincode::deserialize::<PinsIndexFile>(&pins_bytes)
             {
-                let pinned = pins_val
-                    .get("pinned")
-                    .and_then(|v| v.as_array())
-                    .expect("pins index must contain `pinned` array");
                 assert!(
-                    pinned
+                    pins_file
+                        .pinned
                         .iter()
-                        .any(|v| v.as_str() == Some(&format!("asset-{}", i))),
+                        .any(|v| v == &format!("asset-{}", i)),
                     "asset-{} must be pinned while its handle is alive",
                     i
                 );

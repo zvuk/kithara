@@ -2,11 +2,7 @@
 
 //! Diagnostic test for sequential_read_across_segments_maintains_variant
 
-use std::{
-    io::Read,
-    sync::Arc,
-    time::Duration,
-};
+use std::{io::Read, sync::Arc, time::Duration};
 
 use fixture::{TestServer, test_segment_data};
 use kithara_assets::StoreOptions;
@@ -102,16 +98,26 @@ async fn debug_sequential_read(
             all_data.extend_from_slice(&buf[..n]);
 
             if read_count % 100 == 0 {
-                info!("Progress: {} reads, {} bytes total", read_count, total_bytes);
+                info!(
+                    "Progress: {} reads, {} bytes total",
+                    read_count, total_bytes
+                );
             }
 
             // Safety limit
             if read_count > 10000 {
-                panic!("Read loop exceeded 10000 iterations. Total bytes: {}, likely infinite loop", all_data.len());
+                panic!(
+                    "Read loop exceeded 10000 iterations. Total bytes: {}, likely infinite loop",
+                    all_data.len()
+                );
             }
         }
 
-        info!("Read loop completed: {} bytes in {} reads", all_data.len(), read_count);
+        info!(
+            "Read loop completed: {} bytes in {} reads",
+            all_data.len(),
+            read_count
+        );
         all_data
     })
     .await
@@ -127,7 +133,11 @@ async fn debug_sequential_read(
     ]
     .concat();
 
-    info!("Expected {} bytes, got {} bytes", expected.len(), result.len());
+    info!(
+        "Expected {} bytes, got {} bytes",
+        expected.len(),
+        result.len()
+    );
 
     // Compare sizes first
     if result.len() != expected.len() {
@@ -139,7 +149,10 @@ async fn debug_sequential_read(
     }
 
     // Check first 100 bytes for debugging
-    info!("First 100 bytes match: {}", result[..100] == expected[..100]);
+    info!(
+        "First 100 bytes match: {}",
+        result[..100] == expected[..100]
+    );
 
     // Full comparison
     assert_eq!(result, expected, "Data content mismatch");

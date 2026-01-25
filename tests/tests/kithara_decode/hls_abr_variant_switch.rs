@@ -71,7 +71,7 @@ async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error 
     let hls_params = HlsParams::default()
         .with_cancel(cancel_token.clone())
         .with_abr(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),  // Start with variant 0
+            mode: AbrMode::Auto(Some(0)),       // Start with variant 0
             min_buffer_for_up_switch_secs: 1.0, // Low threshold for quick upswitch
             down_switch_buffer_secs: 0.5,
             throughput_safety_factor: 1.2,

@@ -7,6 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use kithara_bufpool::SharedPool;
 use kithara_storage::WaitOutcome;
 use kithara_worker::{Fetch, Worker};
 use tracing::{debug, trace};
@@ -141,19 +142,28 @@ where
     chunk_size: usize,
     read_pos: u64,
     epoch: u64,
+    pool: SharedPool<32, Vec<u8>>,
 }
 
 impl<S> BytePrefetchSource<S>
 where
     S: Source<Item = u8>,
 {
-    /// Create a new byte prefetch source.
+    /// Create a new byte prefetch source with default buffer pool.
     pub fn new(src: Arc<S>, chunk_size: usize) -> Self {
+        // Create pool with 32 shards, up to 1024 buffers, trim to chunk_size * 2
+        let pool = SharedPool::<32, Vec<u8>>::new(1024, chunk_size * 2);
+        Self::with_pool(src, chunk_size, pool)
+    }
+
+    /// Create a new byte prefetch source with custom buffer pool.
+    pub fn with_pool(src: Arc<S>, chunk_size: usize, pool: SharedPool<32, Vec<u8>>) -> Self {
         Self {
             src,
             chunk_size,
             read_pos: 0,
             epoch: 0,
+            pool,
         }
     }
 }
@@ -208,8 +218,11 @@ where
             }
         }
 
-        // Read data
-        let mut buf = vec![0u8; self.chunk_size];
+        // Read data using pooled buffer
+        let mut buf = self.pool.get_with(|b| {
+            b.clear();
+            b.resize(self.chunk_size, 0);
+        });
         let read_result = self.src.read_at(self.read_pos, &mut buf).await;
 
         match read_result {
@@ -217,7 +230,7 @@ where
                 buf.truncate(n);
                 let chunk = ByteChunk {
                     file_pos: self.read_pos,
-                    data: buf,
+                    data: buf.into_inner(),  // Extract Vec from pooled buffer
                 };
                 trace!(
                     file_pos = self.read_pos,

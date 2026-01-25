@@ -5,6 +5,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+use kithara_abr::{Variant, VariantInfo, VariantSource};
 use tokio::sync::OnceCell;
 use url::Url;
 
@@ -14,8 +15,6 @@ pub use crate::parsing::{
     MediaPlaylist, MediaSegment, SegmentKey, VariantId, VariantStream, parse_master_playlist,
     parse_media_playlist,
 };
-use kithara_abr::{Variant, VariantInfo, VariantSource};
-
 use crate::{HlsError, HlsResult, fetch::DefaultFetchManager};
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {

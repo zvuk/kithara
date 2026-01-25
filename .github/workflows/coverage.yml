@@ -17,6 +17,9 @@ jobs:
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install ALSA development libraries
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev
+
       - name: Cache cargo registry
         uses: actions/cache@v4
         with:
@@ -51,10 +54,11 @@ jobs:
 
       - name: Upload to codecov.io
         uses: codecov/codecov-action@v4
+        continue-on-error: true
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           files: ./coverage/cobertura.xml
-          fail_ci_if_error: true
+          fail_ci_if_error: false
           verbose: true
           flags: unittests
           name: codecov-umbrella
@@ -71,8 +75,14 @@ jobs:
           echo "## Coverage Report" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           if [ -f coverage/cobertura.xml ]; then
-            echo "Coverage report generated successfully." >> $GITHUB_STEP_SUMMARY
-            echo "View detailed report in Codecov or download artifacts." >> $GITHUB_STEP_SUMMARY
+            echo "✅ Coverage report generated successfully" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            if [ -n "${{ secrets.CODECOV_TOKEN }}" ]; then
+              echo "📊 Uploaded to Codecov" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "⚠️  Codecov upload skipped (no CODECOV_TOKEN configured)" >> $GITHUB_STEP_SUMMARY
+              echo "Coverage artifacts are available for download below" >> $GITHUB_STEP_SUMMARY
+            fi
           else
-            echo "⚠️ Coverage report not found." >> $GITHUB_STEP_SUMMARY
+            echo "❌ Coverage report not found" >> $GITHUB_STEP_SUMMARY
           fi

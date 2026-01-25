@@ -71,7 +71,10 @@ impl std::fmt::Debug for AbrOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AbrOptions")
             .field("mode", &self.mode)
-            .field("min_buffer_for_up_switch_secs", &self.min_buffer_for_up_switch_secs)
+            .field(
+                "min_buffer_for_up_switch_secs",
+                &self.min_buffer_for_up_switch_secs,
+            )
             .field("down_switch_buffer_secs", &self.down_switch_buffer_secs)
             .field("throughput_safety_factor", &self.throughput_safety_factor)
             .field("up_hysteresis_ratio", &self.up_hysteresis_ratio)
@@ -112,7 +115,6 @@ pub struct ThroughputSample {
     pub source: ThroughputSampleSource,
     pub content_duration: Option<Duration>,
 }
-
 
 /// Minimal variant information needed for ABR decisions.
 ///

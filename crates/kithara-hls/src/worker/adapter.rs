@@ -12,6 +12,10 @@ use tracing::trace;
 use super::{HlsCommand, HlsMessage};
 use crate::{HlsError, events::HlsEvent, parsing::ContainerFormat};
 
+/// Maximum number of chunks to buffer in memory (prevents unbounded growth).
+/// At ~2MB per segment, this limits buffer to ~10MB.
+const MAX_BUFFERED_CHUNKS: usize = 5;
+
 /// Adapter from HLS worker chunks to Source trait.
 ///
 /// Buffers chunks in memory and provides random-access read interface.
@@ -161,7 +165,18 @@ impl HlsSourceAdapter {
 
             if !fetch.data.is_empty() {
                 {
-                    self.buffered_chunks.lock().push(fetch.data);
+                    let mut chunks = self.buffered_chunks.lock();
+
+                    // Enforce maximum buffer size to prevent unbounded memory growth
+                    while chunks.len() >= MAX_BUFFERED_CHUNKS {
+                        chunks.remove(0); // Drop oldest chunk
+                        trace!(
+                            max_buffered = MAX_BUFFERED_CHUNKS,
+                            "dropped oldest chunk to enforce buffer limit"
+                        );
+                    }
+
+                    chunks.push(fetch.data);
                 }
             } else {
                 // Empty chunk without EOF - worker might be paused or sending empty data

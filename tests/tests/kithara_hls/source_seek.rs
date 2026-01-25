@@ -569,7 +569,7 @@ async fn hls_seek_after_real_abr_switch_returns_new_variant_data(
         .with_cancel(cancel_token)
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(2)), // Start from highest variant
-            down_switch_buffer_secs: 0.0,      // Trigger downswitch immediately on low throughput
+            down_switch_buffer_secs: 0.0, // Trigger downswitch immediately on low throughput
             min_switch_interval: Duration::from_millis(100), // Allow quick switching
             throughput_safety_factor: 1.0, // No safety margin
             ..AbrOptions::default()

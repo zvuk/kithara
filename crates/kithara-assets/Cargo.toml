@@ -9,6 +9,7 @@ internal = []  # Expose internal types for testing
 
 [dependencies]
 async-trait = { workspace = true }
+bincode = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 hex = { workspace = true }
@@ -16,7 +17,6 @@ kithara-storage = { workspace = true }
 lru = { workspace = true }
 parking_lot = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

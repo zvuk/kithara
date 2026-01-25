@@ -187,19 +187,8 @@ async fn pins_index_empty_set_stores_and_loads_correctly(
         "empty pins set should roundtrip correctly"
     );
 
-    // Verify file exists (may not be created for empty set)
-    let path = pins_path(temp_dir.path());
-    // File may or may not exist for empty set - both are acceptable
-    if path.exists() {
-        // If file exists, it should contain empty array
-        let content = std::fs::read_to_string(&path).unwrap();
-        let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let pinned = parsed.get("pinned").and_then(|v| v.as_array()).unwrap();
-        assert!(
-            pinned.is_empty(),
-            "pins.json should contain empty array if it exists"
-        );
-    }
+    // File format is an implementation detail (binary via bincode)
+    // No need to verify internal structure
 }
 
 #[rstest]

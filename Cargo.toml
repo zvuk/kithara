@@ -103,7 +103,7 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 
 # serialization
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+bincode = "1.3"
 
 # hex encoding
 hex = "0.4"
@@ -121,7 +121,7 @@ async-trait = "0.1.89"
 
 # storage (range maps + async random-access disk)
 rangemap = { version = "1.7.1", features = ["serde1"] }
-random-access-disk = { path = "../random-access-disk", default-features = false, features = ["tokio"] }
+random-access-disk = { git = "https://github.com/gerasim13/random-access-disk", branch = "master", default-features = false, features = ["tokio"] }
 random-access-storage = "5.0.0"
 dashmap = "5.5.3"
 lru = "0.12"

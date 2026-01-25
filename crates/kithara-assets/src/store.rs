@@ -76,8 +76,8 @@ impl StoreOptions {
 ///
 /// Generic parameter `Ctx` is the context type for processing.
 /// Use `()` (default) for no processing (ProcessingAssets will pass through unchanged).
-pub type AssetStore<Ctx = ()> = LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
-
+pub type AssetStore<Ctx = ()> =
+    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
 /// Constructor for the ready-to-use [`AssetStore`].
 ///
@@ -120,9 +120,7 @@ impl AssetStoreBuilder<()> {
     /// Builder with defaults (no root_dir/asset_root/evict/cancel/process set).
     pub fn new() -> Self {
         // Default pass-through process_fn for ()
-        let dummy_process: ProcessFn<()> = Arc::new(|data, _ctx| {
-            Box::pin(async move { Ok(data) })
-        });
+        let dummy_process: ProcessFn<()> = Arc::new(|data, _ctx| Box::pin(async move { Ok(data) }));
 
         Self {
             root_dir: None,
@@ -187,7 +185,11 @@ where
         let cached = Arc::new(CachedAssets::new(processing));
 
         // LeaseAssets holds evict for byte recording
-        LeaseAssets::with_byte_recorder(cached, cancel, evict as Arc<dyn crate::evict::ByteRecorder>)
+        LeaseAssets::with_byte_recorder(
+            cached,
+            cancel,
+            evict as Arc<dyn crate::evict::ByteRecorder>,
+        )
     }
 }
 
