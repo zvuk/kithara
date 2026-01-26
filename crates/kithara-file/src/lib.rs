@@ -5,29 +5,33 @@
 //! # Example
 //!
 //! ```ignore
-//! use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
-//! use kithara_file::{File, FileParams};
+//! use kithara_decode::{MediaSource, StreamDecoder};
+//! use kithara_file::{FileMediaSource, FileParams};
 //!
-//! // Async source with events
-//! let source = StreamSource::<File>::open(url, FileParams::default()).await?;
-//! let events = source.events();  // Receiver<FileEvent>
+//! // Open file media source
+//! let source = FileMediaSource::open(url, FileParams::default()).await?;
+//! let events = source.events();
 //!
-//! // Sync reader for decoders (Read + Seek)
-//! let reader = SyncReader::<StreamSource<File>>::open(
-//!     url,
-//!     FileParams::default(),
-//!     SyncReaderParams::default()
-//! ).await?;
+//! // Create stream for decoding
+//! let stream = source.open()?;
+//! let mut decoder = StreamDecoder::new(stream)?;
+//!
+//! // Decode loop
+//! while let Some(chunk) = decoder.decode_next()? {
+//!     play_audio(chunk);
+//! }
 //! ```
 
 mod error;
 mod events;
+mod media_source;
 mod options;
 mod session;
 mod source;
 
 pub use error::SourceError;
 pub use events::FileEvent;
+pub use media_source::FileMediaSource;
 pub use options::FileParams;
 pub use session::{Progress, SessionSource};
 pub use source::File;

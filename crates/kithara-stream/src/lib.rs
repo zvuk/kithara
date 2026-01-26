@@ -18,7 +18,6 @@ mod msg;
 mod pipe;
 mod prefetch;
 mod source;
-mod stream_message;
 mod stream_source;
 
 pub use error::{StreamError, StreamResult};
@@ -32,5 +31,4 @@ pub use prefetch::{
     PrefetchConsumer, PrefetchResult, PrefetchSource, PrefetchWorker, PrefetchedItem, WorkerItem,
 };
 pub use source::{DirectSyncReader, Source, SyncReader, SyncReaderParams};
-pub use stream_message::{StreamData, StreamMessage, StreamMetadata};
 pub use stream_source::StreamSource;

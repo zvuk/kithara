@@ -151,7 +151,7 @@ impl StreamDecoder {
                     Ok(None)
                 } else {
                     self.fill_reader()?;
-                    Ok(None)
+                    self.decode_next()
                 }
             }
         }
