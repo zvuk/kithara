@@ -4,37 +4,34 @@
 //!
 //! ## Architecture
 //!
-//! - [`Pipeline`] - Async pipeline running decoder in spawn_blocking
-//! - [`SegmentStreamDecoder`] - Zero-copy decoder using SegmentSource trait
+//! - [`StreamDecoder`] - Streaming decoder using MediaSource/MediaStream
+//! - [`Pipeline`] - Async pipeline for progressive files
 //! - [`SymphoniaDecoder`] - Symphonia-based audio decoder
-//! - [`SourceReader`] - Sync Read+Seek adapter over async Source
 //! - [`AudioSyncReader`] - rodio::Source adapter (requires `rodio` feature)
 //!
-//! ## Segment-based Decoding (recommended for HLS)
+//! ## Streaming Decode (HLS, progressive files)
 //!
 //! ```ignore
-//! use kithara_decode::{SegmentStreamDecoder, SegmentSource};
-//! use kithara_hls::HlsSegmentSource;
+//! use kithara_decode::{StreamDecoder, MediaSource};
+//! use kithara_hls::HlsMediaSource;
 //!
-//! // Create segment source
-//! let source = HlsSegmentSource::new(/* ... */);
+//! // Open media source
+//! let source = HlsMediaSource::new(/* ... */);
+//! let stream = source.open()?;
 //!
 //! // Create decoder
-//! let mut decoder = SegmentStreamDecoder::new(Arc::new(source));
+//! let mut decoder = StreamDecoder::new(stream)?;
 //!
-//! // Decode loop
+//! // Decode loop - bytes read on-demand, may block waiting for network
 //! while let Some(chunk) = decoder.decode_next()? {
 //!     play_audio(chunk);
 //! }
 //! ```
 //!
-//! ## Random-access Decoding (for progressive files)
+//! ## Pipeline (for random-access playback)
 //!
 //! ```ignore
-//! // Create pipeline from async Source
 //! let mut pipeline = Pipeline::open(source_arc).await?;
-//!
-//! // Get buffer for playback
 //! let buffer = pipeline.buffer();
 //! ```
 
@@ -43,14 +40,13 @@
 // Internal modules
 #[cfg(feature = "rodio")]
 mod audio_sync_reader;
-mod chunked_reader;
 mod decoder;
+mod media_source;
 mod pcm_source;
 mod pipeline;
 pub mod resampler;
-mod segment_decoder;
-mod segment_source;
 mod source_reader;
+mod stream_decoder;
 mod symphonia_mod;
 mod traits;
 mod types;
@@ -59,10 +55,10 @@ mod types;
 #[cfg(feature = "rodio")]
 pub use audio_sync_reader::AudioSyncReader;
 pub use decoder::Decoder;
+pub use media_source::{AudioCodec, ContainerFormat, MediaInfo, MediaSource, MediaStream};
 pub use pcm_source::PcmSource;
 pub use pipeline::{PcmBuffer, Pipeline, PipelineCommand};
-pub use segment_decoder::SegmentStreamDecoder;
-pub use segment_source::{AudioCodec, ContainerFormat, SegmentId, SegmentInfo, SegmentSource};
 pub use source_reader::SourceReader;
+pub use stream_decoder::StreamDecoder;
 pub use symphonia_mod::{CachedCodecInfo, SymphoniaDecoder};
 pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};

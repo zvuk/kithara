@@ -43,8 +43,8 @@ pub mod keys;
 pub mod playlist;
 
 // Private modules
+mod media_source;
 mod parsing;
-mod segment_source;
 mod source;
 
 // ============================================================================
@@ -58,7 +58,7 @@ pub use events::HlsEvent;
 pub use kithara_abr::{
     AbrDecision, AbrMode, AbrOptions, AbrReason, ThroughputSample, Variant, VariantInfo,
 };
+pub use media_source::HlsMediaSource;
 pub use options::{HlsParams, KeyContext, KeyOptions, KeyProcessor};
 pub use parsing::ContainerFormat;
-pub use segment_source::HlsSegmentSource;
 pub use source::Hls;

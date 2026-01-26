@@ -1,9 +1,9 @@
-//! Example: Play audio from an HLS stream using zero-copy segment-based architecture.
+//! Example: Play audio from an HLS stream using streaming decode.
 //!
-//! This demonstrates the new SegmentStreamDecoder architecture:
-//! - HlsSegmentSource provides segments on-demand
-//! - SegmentStreamDecoder reads bytes directly (zero-copy)
-//! - No intermediate channel buffers
+//! This demonstrates the streaming decode architecture:
+//! - HlsMediaSource provides media stream
+//! - StreamDecoder reads bytes incrementally
+//! - Decoding starts before full segment downloads
 //!
 //! Run with:
 //! ```
@@ -12,7 +12,7 @@
 
 use std::{env::args, error::Error, sync::Arc};
 
-use kithara_decode::{PcmBuffer, SegmentStreamDecoder};
+use kithara_decode::{MediaSource, PcmBuffer, StreamDecoder};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
@@ -51,8 +51,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         })
         .with_events(events_tx);
 
-    // Open HLS segment source (zero-copy architecture)
-    let source = Hls::open_segment_source(url, hls_params).await?;
+    // Open HLS media source (streaming architecture)
+    let source = Hls::open_media_source(url, hls_params).await?;
 
     // Subscribe to HLS events
     tokio::spawn(async move {
@@ -88,10 +88,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     });
 
-    info!("Creating segment stream decoder...");
+    info!("Creating stream decoder...");
 
-    // Create segment stream decoder (zero-copy)
-    let mut decoder = SegmentStreamDecoder::new(Arc::new(source));
+    // Open media stream
+    let stream = source.open()?;
+
+    // Create stream decoder
+    let mut decoder = StreamDecoder::new(stream)?;
 
     // Create simple PCM buffer for streaming (no random access)
     let spec = kithara_decode::PcmSpec {

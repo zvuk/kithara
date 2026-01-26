@@ -14,55 +14,56 @@ use crate::{
     error::{HlsError, HlsResult},
     events::HlsEvent,
     fetch::FetchManager,
+    media_source::HlsMediaSource,
     options::HlsParams,
     playlist::{PlaylistManager, variant_info_from_master},
-    segment_source::HlsSegmentSource,
     worker::{HlsSourceAdapter, HlsWorkerSource, VariantMetadata},
 };
 
-/// Marker type for HLS streaming with the unified `StreamSource<S>` API.
+/// Marker type for HLS streaming.
 ///
 /// ## Usage
 ///
 /// ```ignore
-/// use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
+/// use kithara_decode::{StreamDecoder, MediaSource};
 /// use kithara_hls::{Hls, HlsParams};
 ///
-/// // Async source with events
-/// let source = StreamSource::<Hls>::open(url, HlsParams::default()).await?;
-/// let events = source.events();  // Receiver<HlsEvent>
+/// // Open media source
+/// let source = Hls::open_media_source(url, HlsParams::default()).await?;
+/// let stream = source.open()?;
 ///
-/// // Sync reader for decoders (Read + Seek)
-/// let reader = SyncReader::<StreamSource<Hls>>::open(
-///     url,
-///     HlsParams::default(),
-///     SyncReaderParams::default()
-/// ).await?;
-/// let events = reader.events();
+/// // Create decoder
+/// let mut decoder = StreamDecoder::new(stream)?;
+///
+/// // Decode - bytes read on-demand
+/// while let Some(chunk) = decoder.decode_next()? {
+///     play_audio(chunk);
+/// }
 /// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Hls;
 
 impl Hls {
-    /// Open an HLS stream and return a SegmentSource for zero-copy decoding.
+    /// Open an HLS stream and return a MediaSource for streaming decode.
     ///
-    /// This is the recommended way to use HLS with kithara-decode for efficient
-    /// memory usage. The decoder reads segment bytes directly from disk.
+    /// This is the recommended way to use HLS with kithara-decode.
+    /// Bytes are read incrementally, allowing decode to start before full download.
     ///
     /// ## Example
     ///
     /// ```ignore
-    /// use kithara_decode::SegmentStreamDecoder;
+    /// use kithara_decode::{StreamDecoder, MediaSource};
     /// use kithara_hls::{Hls, HlsParams};
     ///
-    /// let source = Hls::open_segment_source(url, HlsParams::default()).await?;
-    /// let mut decoder = SegmentStreamDecoder::new(Arc::new(source));
+    /// let source = Hls::open_media_source(url, HlsParams::default()).await?;
+    /// let stream = source.open()?;
+    /// let mut decoder = StreamDecoder::new(stream)?;
     ///
     /// while let Some(chunk) = decoder.decode_next()? {
     ///     play_audio(chunk);
     /// }
     /// ```
-    pub async fn open_segment_source(url: Url, params: HlsParams) -> HlsResult<HlsSegmentSource> {
+    pub async fn open_media_source(url: Url, params: HlsParams) -> HlsResult<HlsMediaSource> {
         let asset_root = asset_root_for_url(&url);
         let cancel = params.cancel.clone().unwrap_or_default();
         let net = HttpClient::new(params.net.clone());
@@ -119,8 +120,8 @@ impl Hls {
             Arc::clone(&playlist_manager),
         ));
 
-        // Create and return HlsSegmentSource
-        Ok(HlsSegmentSource::new(
+        // Create and return HlsMediaSource
+        Ok(HlsMediaSource::new(
             fetch_loader as Arc<dyn Loader>,
             base_assets,
             variant_metadata,
@@ -133,11 +134,10 @@ impl Hls {
 
     /// Open an HLS stream from a master playlist URL.
     ///
-    /// Returns `HlsWorkerSource` which can be used with `AsyncWorker` for
-    /// push-based streaming.
+    /// Returns `HlsWorkerSource` for push-based streaming with AsyncWorker.
     ///
-    /// **Note:** For new code, prefer `open_segment_source()` which provides
-    /// better memory efficiency through zero-copy decoding.
+    /// **Note:** For new code, prefer `open_media_source()` which provides
+    /// better latency through streaming decode.
     pub async fn open(url: Url, params: HlsParams) -> HlsResult<HlsWorkerSource> {
         let asset_root = asset_root_for_url(&url);
         let cancel = params.cancel.clone().unwrap_or_default();
