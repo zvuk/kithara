@@ -144,6 +144,7 @@ struct VariantSwitchTracker {
     variant_switches: Vec<usize>,
     current_variant: Option<usize>,
     init_segments: Vec<usize>,
+    pending_meta: Option<MockHlsMetadata>,
 }
 
 impl VariantSwitchTracker {
@@ -153,20 +154,11 @@ impl VariantSwitchTracker {
             variant_switches: vec![],
             current_variant: None,
             init_segments: vec![],
+            pending_meta: None,
         }
     }
-}
 
-#[async_trait]
-impl StreamDecoder<MockHlsMetadata, Bytes> for VariantSwitchTracker {
-    type Output = PcmChunk<f32>;
-
-    async fn decode_message(
-        &mut self,
-        message: StreamMessage<MockHlsMetadata, Bytes>,
-    ) -> DecodeResult<Self::Output> {
-        let (meta, _data) = message.into_parts();
-
+    fn process_meta(&mut self, meta: &MockHlsMetadata) {
         self.decoded_count += 1;
 
         // Track init segments
@@ -181,15 +173,35 @@ impl StreamDecoder<MockHlsMetadata, Bytes> for VariantSwitchTracker {
             }
         }
         self.current_variant = Some(meta.variant);
+    }
+}
 
-        // Return empty PCM chunk
-        Ok(PcmChunk::new(
-            PcmSpec {
-                sample_rate: 44100,
-                channels: 2,
-            },
-            vec![],
-        ))
+#[async_trait]
+impl StreamDecoder<MockHlsMetadata, Bytes> for VariantSwitchTracker {
+    type Output = PcmChunk<f32>;
+
+    async fn prepare_message(
+        &mut self,
+        message: StreamMessage<MockHlsMetadata, Bytes>,
+    ) -> DecodeResult<()> {
+        let (meta, _data) = message.into_parts();
+        self.pending_meta = Some(meta);
+        Ok(())
+    }
+
+    async fn try_decode_chunk(&mut self) -> DecodeResult<Option<Self::Output>> {
+        if let Some(meta) = self.pending_meta.take() {
+            self.process_meta(&meta);
+            Ok(Some(PcmChunk::new(
+                PcmSpec {
+                    sample_rate: 44100,
+                    channels: 2,
+                },
+                vec![],
+            )))
+        } else {
+            Ok(None)
+        }
     }
 
     async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>> {
@@ -269,7 +281,8 @@ async fn test_variant_switch_boundary_handling() {
     ];
 
     for msg in messages {
-        decoder.decode_message(msg).await.expect("Decode failed");
+        decoder.prepare_message(msg).await.expect("Prepare failed");
+        while decoder.try_decode_chunk().await.expect("Decode failed").is_some() {}
     }
 
     // Verify decoder tracked variant switch
@@ -305,7 +318,8 @@ async fn test_multiple_variant_switches() {
             },
             Bytes::new(),
         );
-        decoder.decode_message(msg).await.expect("Decode failed");
+        decoder.prepare_message(msg).await.expect("Prepare failed");
+        while decoder.try_decode_chunk().await.expect("Decode failed").is_some() {}
     }
 
     // Verify all switches were detected
@@ -352,7 +366,8 @@ async fn test_variant_switch_with_codec_change() {
     ];
 
     for msg in messages {
-        decoder.decode_message(msg).await.expect("Decode failed");
+        decoder.prepare_message(msg).await.expect("Prepare failed");
+        while decoder.try_decode_chunk().await.expect("Decode failed").is_some() {}
     }
 
     // Verify switch was detected
@@ -376,7 +391,8 @@ async fn test_no_variant_switch_same_variant() {
             },
             Bytes::new(),
         );
-        decoder.decode_message(msg).await.expect("Decode failed");
+        decoder.prepare_message(msg).await.expect("Prepare failed");
+        while decoder.try_decode_chunk().await.expect("Decode failed").is_some() {}
     }
 
     // No variant switches should be detected

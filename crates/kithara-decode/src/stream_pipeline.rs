@@ -106,9 +106,9 @@ where
         // Keep msg buffer small to limit memory usage (backpressure)
         // 1 segment = ~1-2 MB in flight (reduced from 2 for memory optimization)
         let (msg_tx, msg_rx) = kanal::bounded_async(1);
-        // PCM buffer: ~1s of audio (10 chunks at ~100ms/chunk)
-        // Reduced from 20 to 10 for lower memory consumption
-        let (pcm_tx, pcm_rx) = kanal::bounded(10);
+        // PCM buffer: ~400ms of audio (4 chunks at ~100ms/chunk)
+        // Reduced from 10 to 4 for lower memory consumption (~140KB)
+        let (pcm_tx, pcm_rx) = kanal::bounded(4);
 
         // 2. Create and spawn worker (HLS fetcher)
         let worker = AsyncWorker::new(source, cmd_rx, msg_tx);
@@ -142,7 +142,8 @@ where
 
     /// Decode loop running in blocking thread.
     ///
-    /// Receives messages from worker, decodes them, and sends PCM chunks to output.
+    /// Receives messages from worker, decodes them incrementally, and sends
+    /// PCM chunks to output. Each chunk is ~4KB (1024 samples for AAC).
     fn decode_loop<Dec>(
         msg_rx: AsyncReceiver<Fetch<S::Chunk>>,
         mut decoder: Dec,
@@ -151,10 +152,9 @@ where
         Dec: StreamDecoder<M, D, Output = PcmChunk<f32>>,
         S::Chunk: Into<kithara_stream::StreamMessage<M, D>>,
     {
-        // Get tokio handle for block_on in blocking context
         let handle = tokio::runtime::Handle::current();
 
-        debug!("Decode loop started");
+        debug!("Decode loop started (incremental mode)");
 
         loop {
             // Receive message from worker
@@ -170,7 +170,6 @@ where
             if fetch.is_eof {
                 debug!("EOF received, flushing decoder");
 
-                // Flush decoder
                 match handle.block_on(decoder.flush()) {
                     Ok(chunks) => {
                         for chunk in chunks {
@@ -191,20 +190,31 @@ where
             // Convert chunk to StreamMessage
             let message: kithara_stream::StreamMessage<M, D> = fetch.data.into();
 
-            // Decode message
-            match handle.block_on(decoder.decode_message(message)) {
-                Ok(pcm_chunk) => {
-                    // Skip empty chunks
-                    if !pcm_chunk.pcm.is_empty() {
-                        if pcm_tx.send(pcm_chunk).is_err() {
-                            debug!("PCM receiver dropped, exiting decode loop");
-                            break;
+            // Prepare message for incremental decoding
+            if let Err(e) = handle.block_on(decoder.prepare_message(message)) {
+                error!(?e, "Error preparing message, continuing");
+                continue;
+            }
+
+            // Decode incrementally - each chunk is ~4KB
+            loop {
+                match handle.block_on(decoder.try_decode_chunk()) {
+                    Ok(Some(pcm_chunk)) => {
+                        if !pcm_chunk.pcm.is_empty() {
+                            if pcm_tx.send(pcm_chunk).is_err() {
+                                debug!("PCM receiver dropped, exiting decode loop");
+                                return;
+                            }
                         }
                     }
-                }
-                Err(e) => {
-                    error!(?e, "Decode error, continuing");
-                    // Continue on error instead of breaking
+                    Ok(None) => {
+                        // No more chunks from this message
+                        break;
+                    }
+                    Err(e) => {
+                        error!(?e, "Decode chunk error, continuing to next message");
+                        break;
+                    }
                 }
             }
         }
@@ -299,26 +309,35 @@ mod tests {
     // Test decoder
     struct TestDecoder {
         decoded_count: usize,
+        has_pending: bool,
     }
 
     #[async_trait]
     impl StreamDecoder<TestMetadata, Bytes> for TestDecoder {
         type Output = PcmChunk<f32>;
 
-        async fn decode_message(
+        async fn prepare_message(
             &mut self,
             _message: StreamMessage<TestMetadata, Bytes>,
-        ) -> DecodeResult<Self::Output> {
+        ) -> DecodeResult<()> {
             self.decoded_count += 1;
+            self.has_pending = true;
+            Ok(())
+        }
 
-            // Return empty PCM chunk
-            Ok(PcmChunk::new(
-                crate::types::PcmSpec {
-                    sample_rate: 44100,
-                    channels: 2,
-                },
-                vec![],
-            ))
+        async fn try_decode_chunk(&mut self) -> DecodeResult<Option<Self::Output>> {
+            if self.has_pending {
+                self.has_pending = false;
+                Ok(Some(PcmChunk::new(
+                    crate::types::PcmSpec {
+                        sample_rate: 44100,
+                        channels: 2,
+                    },
+                    vec![],
+                )))
+            } else {
+                Ok(None)
+            }
         }
 
         async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>> {
@@ -351,7 +370,10 @@ mod tests {
             epoch: 0,
         };
 
-        let decoder = TestDecoder { decoded_count: 0 };
+        let decoder = TestDecoder {
+            decoded_count: 0,
+            has_pending: false,
+        };
 
         let pipeline = StreamPipeline::new(source, decoder).await.unwrap();
 

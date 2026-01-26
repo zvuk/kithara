@@ -122,6 +122,7 @@ impl AsyncWorkerSource for ExampleSource {
 struct ExampleDecoder {
     decoded_count: usize,
     current_variant: Option<usize>,
+    pending: Option<(ExampleMetadata, usize)>,
 }
 
 impl ExampleDecoder {
@@ -129,6 +130,7 @@ impl ExampleDecoder {
         Self {
             decoded_count: 0,
             current_variant: None,
+            pending: None,
         }
     }
 }
@@ -137,11 +139,19 @@ impl ExampleDecoder {
 impl StreamDecoder<ExampleMetadata, Bytes> for ExampleDecoder {
     type Output = PcmChunk<f32>;
 
-    async fn decode_message(
+    async fn prepare_message(
         &mut self,
         message: StreamMessage<ExampleMetadata, Bytes>,
-    ) -> DecodeResult<Self::Output> {
+    ) -> DecodeResult<()> {
         let (meta, data) = message.into_parts();
+        self.pending = Some((meta, data.len()));
+        Ok(())
+    }
+
+    async fn try_decode_chunk(&mut self) -> DecodeResult<Option<Self::Output>> {
+        let Some((meta, data_len)) = self.pending.take() else {
+            return Ok(None);
+        };
 
         self.decoded_count += 1;
 
@@ -169,7 +179,7 @@ impl StreamDecoder<ExampleMetadata, Bytes> for ExampleDecoder {
         info!(
             segment = meta.segment_index,
             variant = meta.variant,
-            bytes = data.len(),
+            bytes = data_len,
             total_decoded = self.decoded_count,
             "Decoded message"
         );
@@ -183,7 +193,7 @@ impl StreamDecoder<ExampleMetadata, Bytes> for ExampleDecoder {
         // Generate 100 samples (50 frames for stereo)
         let pcm = vec![0.1f32 * meta.segment_index as f32; 100];
 
-        Ok(PcmChunk::new(spec, pcm))
+        Ok(Some(PcmChunk::new(spec, pcm)))
     }
 
     async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>> {

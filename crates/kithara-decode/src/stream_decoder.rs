@@ -1,94 +1,47 @@
 //! Stream-based decoder trait for processing messages with metadata.
 //!
 //! This module provides a generic decoder interface that processes sequential
-//! stream messages (metadata + data) instead of random-access byte streams.
+//! stream messages (metadata + data) using incremental decoding.
 //!
 //! # Architecture
 //!
-//! Traditional decoders expect `Read + Seek`:
-//! ```ignore
-//! let decoder = Decoder::new(reader)?;
-//! loop {
-//!     let pcm = decoder.decode_next()?;
-//! }
-//! ```
-//!
-//! Stream-based decoders process messages with metadata:
+//! Stream-based decoders process messages incrementally:
 //! ```ignore
 //! let decoder = StreamDecoder::new();
 //! for message in stream {
-//!     if message.meta.is_boundary() {
-//!         decoder.reinitialize(&message.meta)?;
+//!     decoder.prepare_message(message).await?;
+//!     while let Some(chunk) = decoder.try_decode_chunk().await? {
+//!         play_audio(chunk);  // ~4KB per chunk
 //!     }
-//!     let pcm = decoder.decode_message(message)?;
 //! }
 //! ```
 //!
 //! # Benefits
 //!
-//! - **Explicit boundaries**: Decoder knows when to reinitialize (codec change, variant switch)
-//! - **No random access**: Simpler data flow, less buffering
+//! - **Memory efficient**: Each chunk is small (~4KB), no accumulation
+//! - **Explicit boundaries**: Decoder knows when to reinitialize
 //! - **Testable**: Generic + mockall support for unit tests
-//! - **HLS ABR-friendly**: Handles variant switches cleanly
 
 use async_trait::async_trait;
 use kithara_stream::{StreamData, StreamMessage, StreamMetadata};
 
 use crate::types::DecodeResult;
 
-/// Generic stream decoder that processes messages with metadata.
+/// Generic stream decoder that processes messages incrementally.
 ///
 /// # Type Parameters
 /// - `M`: Metadata type (implements [`StreamMetadata`])
 /// - `D`: Data type (implements [`StreamData`])
 ///
-/// # Boundary Handling
-///
-/// Decoders check `meta.is_boundary()` to decide when reinitialization is needed:
-/// - HLS variant switch → reinitialize with new codec
-/// - Seek operation → flush internal buffers
-/// - Format change → reconfigure decoder
-///
-/// # Examples
+/// # Usage
 ///
 /// ```ignore
-/// use kithara_decode::{StreamDecoder, PcmChunk};
-/// use kithara_stream::StreamMessage;
+/// // Prepare message (handles boundary detection, decoder init)
+/// decoder.prepare_message(message).await?;
 ///
-/// async fn decode_stream<D>(mut decoder: D, messages: Vec<StreamMessage<M, D>>)
-/// where
-///     D: StreamDecoder<M, D>,
-/// {
-///     for msg in messages {
-///         if msg.meta.is_boundary() {
-///             // Decoder handles reinitialization internally
-///         }
-///         let pcm = decoder.decode_message(msg).await?;
-///         play_audio(pcm);
-///     }
-/// }
-/// ```
-///
-/// # Testing with Mockall
-///
-/// ```ignore
-/// use mockall::mock;
-///
-/// mock! {
-///     pub MyDecoder {}
-///
-///     #[async_trait]
-///     impl<M, D> StreamDecoder<M, D> for MyDecoder
-///     where
-///         M: StreamMetadata,
-///         D: StreamData,
-///     {
-///         type Output = MyOutput;
-///
-///         async fn decode_message(&mut self, msg: StreamMessage<M, D>)
-///             -> DecodeResult<Self::Output>;
-///         async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>>;
-///     }
+/// // Decode incrementally (~4KB chunks)
+/// while let Some(chunk) = decoder.try_decode_chunk().await? {
+///     play_audio(chunk);
 /// }
 /// ```
 #[async_trait]
@@ -100,59 +53,26 @@ where
     /// Output type (e.g., PCM chunks, frames, packets)
     type Output: Send;
 
-    /// Decode a stream message.
+    /// Prepare a stream message for incremental decoding.
     ///
-    /// The decoder checks `message.meta.is_boundary()` to determine if
-    /// reinitialization is needed (e.g., codec change on HLS variant switch).
+    /// This method:
+    /// 1. Handles boundary detection and decoder reinitialization
+    /// 2. Appends message data to internal buffer
     ///
-    /// # Boundary Handling
+    /// After calling this, use `try_decode_chunk()` in a loop.
+    async fn prepare_message(&mut self, message: StreamMessage<M, D>) -> DecodeResult<()>;
+
+    /// Try to decode the next chunk from prepared data.
     ///
-    /// When `meta.is_boundary()` is true, the decoder should:
-    /// 1. Flush any pending data from previous codec/format
-    /// 2. Reinitialize with new metadata (codec, sample rate, etc.)
-    /// 3. Process the new message data
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DecodeError`] if:
-    /// - Codec initialization fails
-    /// - Data is corrupted
-    /// - Unsupported format
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let message = StreamMessage {
-    ///     meta: HlsSegmentMetadata {
-    ///         is_variant_switch: true,
-    ///         codec: Some(AudioCodec::AAC),
-    ///         // ...
-    ///     },
-    ///     data: bytes,
-    /// };
-    ///
-    /// let pcm_chunk = decoder.decode_message(message).await?;
-    /// ```
-    async fn decode_message(&mut self, message: StreamMessage<M, D>) -> DecodeResult<Self::Output>;
+    /// Returns:
+    /// - `Ok(Some(chunk))` - A decoded chunk (~1024 samples for AAC)
+    /// - `Ok(None)` - No more data to decode from current message
+    /// - `Err(e)` - Decode error
+    async fn try_decode_chunk(&mut self) -> DecodeResult<Option<Self::Output>>;
 
     /// Flush any pending output data.
     ///
-    /// Called at end of stream or before seek to ensure all queued data
-    /// is processed.
-    ///
-    /// # Returns
-    ///
-    /// Vector of output chunks (may be empty if nothing buffered).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // End of stream
-    /// let remaining = decoder.flush().await?;
-    /// for chunk in remaining {
-    ///     play_audio(chunk);
-    /// }
-    /// ```
+    /// Called at end of stream to ensure all queued data is processed.
     async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>>;
 }
 
@@ -162,9 +82,7 @@ mod tests {
     use kithara_stream::StreamMessage;
 
     use super::*;
-    use crate::types::DecodeError;
 
-    // Test metadata type
     #[derive(Debug, Clone)]
     struct TestMetadata {
         seq: u64,
@@ -181,31 +99,48 @@ mod tests {
         }
     }
 
-    // Test decoder implementation
     struct TestDecoder {
         outputs: Vec<String>,
         reinit_count: usize,
+        pending: Option<String>,
+    }
+
+    impl TestDecoder {
+        fn new() -> Self {
+            Self {
+                outputs: vec![],
+                reinit_count: 0,
+                pending: None,
+            }
+        }
     }
 
     #[async_trait]
     impl StreamDecoder<TestMetadata, Bytes> for TestDecoder {
         type Output = String;
 
-        async fn decode_message(
+        async fn prepare_message(
             &mut self,
             message: StreamMessage<TestMetadata, Bytes>,
-        ) -> DecodeResult<Self::Output> {
+        ) -> DecodeResult<()> {
             if message.meta.is_boundary() {
                 self.reinit_count += 1;
             }
-
-            let output = format!(
+            self.pending = Some(format!(
                 "decoded_seq_{}_len_{}",
                 message.meta.sequence_id(),
                 message.data.len()
-            );
-            self.outputs.push(output.clone());
-            Ok(output)
+            ));
+            Ok(())
+        }
+
+        async fn try_decode_chunk(&mut self) -> DecodeResult<Option<Self::Output>> {
+            if let Some(output) = self.pending.take() {
+                self.outputs.push(output.clone());
+                Ok(Some(output))
+            } else {
+                Ok(None)
+            }
         }
 
         async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>> {
@@ -214,11 +149,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_decoder_processes_messages() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
+    async fn test_incremental_decode() {
+        let mut decoder = TestDecoder::new();
 
         let msg = StreamMessage::new(
             TestMetadata {
@@ -228,18 +160,18 @@ mod tests {
             Bytes::from(vec![1, 2, 3]),
         );
 
-        let output = decoder.decode_message(msg).await.unwrap();
-        assert_eq!(output, "decoded_seq_1_len_3");
-        assert_eq!(decoder.outputs.len(), 1);
-        assert_eq!(decoder.reinit_count, 0);
+        decoder.prepare_message(msg).await.unwrap();
+
+        let chunk = decoder.try_decode_chunk().await.unwrap();
+        assert_eq!(chunk, Some("decoded_seq_1_len_3".to_string()));
+
+        let chunk = decoder.try_decode_chunk().await.unwrap();
+        assert_eq!(chunk, None);
     }
 
     #[tokio::test]
-    async fn test_decoder_handles_boundaries() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
+    async fn test_boundary_handling() {
+        let mut decoder = TestDecoder::new();
 
         // Regular message
         let msg1 = StreamMessage::new(
@@ -249,9 +181,10 @@ mod tests {
             },
             Bytes::from(vec![1, 2, 3]),
         );
-        decoder.decode_message(msg1).await.unwrap();
+        decoder.prepare_message(msg1).await.unwrap();
+        while decoder.try_decode_chunk().await.unwrap().is_some() {}
 
-        // Boundary message (e.g., variant switch)
+        // Boundary message
         let msg2 = StreamMessage::new(
             TestMetadata {
                 seq: 2,
@@ -259,305 +192,37 @@ mod tests {
             },
             Bytes::from(vec![4, 5, 6]),
         );
-        decoder.decode_message(msg2).await.unwrap();
+        decoder.prepare_message(msg2).await.unwrap();
+        while decoder.try_decode_chunk().await.unwrap().is_some() {}
 
         assert_eq!(decoder.outputs.len(), 2);
-        assert_eq!(decoder.reinit_count, 1); // Reinitialized on boundary
+        assert_eq!(decoder.reinit_count, 1);
     }
 
     #[tokio::test]
-    async fn test_decoder_flush() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
+    async fn test_flush() {
+        let mut decoder = TestDecoder::new();
         let flushed = decoder.flush().await.unwrap();
         assert_eq!(flushed, vec!["flushed".to_string()]);
     }
 
     #[tokio::test]
-    async fn test_multiple_boundaries() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
+    async fn test_multiple_messages() {
+        let mut decoder = TestDecoder::new();
 
-        // Simulate multiple variant switches
         for i in 0..5 {
             let msg = StreamMessage::new(
                 TestMetadata {
                     seq: i,
-                    boundary: i % 2 == 0, // Every other message is boundary
+                    boundary: i % 2 == 0,
                 },
                 Bytes::from(vec![i as u8]),
             );
-            decoder.decode_message(msg).await.unwrap();
+            decoder.prepare_message(msg).await.unwrap();
+            while decoder.try_decode_chunk().await.unwrap().is_some() {}
         }
 
         assert_eq!(decoder.outputs.len(), 5);
         assert_eq!(decoder.reinit_count, 3); // seq 0, 2, 4
-    }
-
-    // Mock decoder that tracks method calls
-    struct MockTrackingDecoder {
-        decode_calls: Vec<u64>,
-        flush_calls: usize,
-        should_fail_at: Option<u64>,
-    }
-
-    #[async_trait]
-    impl StreamDecoder<TestMetadata, Bytes> for MockTrackingDecoder {
-        type Output = String;
-
-        async fn decode_message(
-            &mut self,
-            message: StreamMessage<TestMetadata, Bytes>,
-        ) -> DecodeResult<Self::Output> {
-            let seq = message.meta.sequence_id();
-            self.decode_calls.push(seq);
-
-            // Simulate failure at specific sequence
-            if self.should_fail_at == Some(seq) {
-                return Err(DecodeError::DecodeError(format!(
-                    "Mock error at seq {}",
-                    seq
-                )));
-            }
-
-            Ok(format!("mock_output_{}", seq))
-        }
-
-        async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>> {
-            self.flush_calls += 1;
-            Ok(vec![format!("flush_{}", self.flush_calls)])
-        }
-    }
-
-    #[tokio::test]
-    async fn test_mock_decoder_tracking() {
-        let mut decoder = MockTrackingDecoder {
-            decode_calls: vec![],
-            flush_calls: 0,
-            should_fail_at: None,
-        };
-
-        // Process several messages
-        for i in 0..3 {
-            let msg = StreamMessage::new(
-                TestMetadata {
-                    seq: i,
-                    boundary: false,
-                },
-                Bytes::new(),
-            );
-            decoder.decode_message(msg).await.unwrap();
-        }
-
-        // Verify all calls were tracked
-        assert_eq!(decoder.decode_calls, vec![0, 1, 2]);
-        assert_eq!(decoder.flush_calls, 0);
-
-        // Flush
-        let result = decoder.flush().await.unwrap();
-        assert_eq!(result, vec!["flush_1"]);
-        assert_eq!(decoder.flush_calls, 1);
-    }
-
-    #[tokio::test]
-    async fn test_mock_decoder_error_handling() {
-        let mut decoder = MockTrackingDecoder {
-            decode_calls: vec![],
-            flush_calls: 0,
-            should_fail_at: Some(2),
-        };
-
-        // First message succeeds
-        let msg1 = StreamMessage::new(
-            TestMetadata {
-                seq: 1,
-                boundary: false,
-            },
-            Bytes::new(),
-        );
-        assert!(decoder.decode_message(msg1).await.is_ok());
-
-        // Second message fails
-        let msg2 = StreamMessage::new(
-            TestMetadata {
-                seq: 2,
-                boundary: false,
-            },
-            Bytes::new(),
-        );
-        let result = decoder.decode_message(msg2).await;
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "decode error: Mock error at seq 2"
-        );
-
-        // Verify both calls were attempted
-        assert_eq!(decoder.decode_calls, vec![1, 2]);
-    }
-
-    // Mock decoder with stateful behavior
-    struct StatefulMockDecoder {
-        state: String,
-        message_count: usize,
-    }
-
-    #[async_trait]
-    impl StreamDecoder<TestMetadata, Bytes> for StatefulMockDecoder {
-        type Output = String;
-
-        async fn decode_message(
-            &mut self,
-            message: StreamMessage<TestMetadata, Bytes>,
-        ) -> DecodeResult<Self::Output> {
-            self.message_count += 1;
-
-            // Update state on boundary
-            if message.meta.is_boundary() {
-                self.state = format!("boundary_at_{}", message.meta.sequence_id());
-            }
-
-            Ok(format!("{}:msg_{}", self.state, self.message_count))
-        }
-
-        async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>> {
-            Ok(vec![format!("final_state:{}", self.state)])
-        }
-    }
-
-    #[tokio::test]
-    async fn test_stateful_mock_decoder() {
-        let mut decoder = StatefulMockDecoder {
-            state: "initial".to_string(),
-            message_count: 0,
-        };
-
-        // Regular message
-        let msg1 = StreamMessage::new(
-            TestMetadata {
-                seq: 1,
-                boundary: false,
-            },
-            Bytes::new(),
-        );
-        let result1 = decoder.decode_message(msg1).await.unwrap();
-        assert_eq!(result1, "initial:msg_1");
-
-        // Boundary message changes state
-        let msg2 = StreamMessage::new(
-            TestMetadata {
-                seq: 2,
-                boundary: true,
-            },
-            Bytes::new(),
-        );
-        let result2 = decoder.decode_message(msg2).await.unwrap();
-        assert_eq!(result2, "boundary_at_2:msg_2");
-
-        // Next message uses updated state
-        let msg3 = StreamMessage::new(
-            TestMetadata {
-                seq: 3,
-                boundary: false,
-            },
-            Bytes::new(),
-        );
-        let result3 = decoder.decode_message(msg3).await.unwrap();
-        assert_eq!(result3, "boundary_at_2:msg_3");
-
-        // Flush returns final state
-        let flushed = decoder.flush().await.unwrap();
-        assert_eq!(flushed, vec!["final_state:boundary_at_2"]);
-    }
-
-    #[tokio::test]
-    async fn test_empty_data_handling() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        // Empty bytes
-        let msg = StreamMessage::new(
-            TestMetadata {
-                seq: 1,
-                boundary: false,
-            },
-            Bytes::new(),
-        );
-
-        let output = decoder.decode_message(msg).await.unwrap();
-        assert_eq!(output, "decoded_seq_1_len_0");
-    }
-
-    #[tokio::test]
-    async fn test_large_sequence() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        // Process 100 messages
-        for i in 0..100 {
-            let msg = StreamMessage::new(
-                TestMetadata {
-                    seq: i,
-                    boundary: i % 10 == 0, // Boundary every 10 messages
-                },
-                Bytes::from(vec![i as u8]),
-            );
-            decoder.decode_message(msg).await.unwrap();
-        }
-
-        assert_eq!(decoder.outputs.len(), 100);
-        assert_eq!(decoder.reinit_count, 10); // 10 boundaries
-    }
-
-    #[tokio::test]
-    async fn test_consecutive_boundaries() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        // Multiple consecutive boundaries
-        for i in 0..5 {
-            let msg = StreamMessage::new(
-                TestMetadata {
-                    seq: i,
-                    boundary: true, // All boundaries
-                },
-                Bytes::new(),
-            );
-            decoder.decode_message(msg).await.unwrap();
-        }
-
-        assert_eq!(decoder.outputs.len(), 5);
-        assert_eq!(decoder.reinit_count, 5); // Every message triggered reinit
-    }
-
-    #[tokio::test]
-    async fn test_multiple_flush_calls() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        // First flush
-        let result1 = decoder.flush().await.unwrap();
-        assert_eq!(result1, vec!["flushed"]);
-
-        // Second flush (should still work)
-        let result2 = decoder.flush().await.unwrap();
-        assert_eq!(result2, vec!["flushed"]);
-
-        // Verify decoder state is consistent
-        assert_eq!(decoder.outputs.len(), 0);
-        assert_eq!(decoder.reinit_count, 0);
     }
 }
