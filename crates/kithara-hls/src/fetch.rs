@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use bytes::Bytes;
 use futures::StreamExt;
@@ -10,7 +10,7 @@ use kithara_assets::{
 };
 use kithara_net::{ByteStream, Headers, HttpClient, Net};
 use kithara_storage::{Resource as _, ResourceStatus, StreamingResource, StreamingResourceExt};
-use tracing::{debug, trace, warn};
+use tracing::{debug, trace};
 use url::Url;
 
 use crate::HlsResult;
@@ -100,33 +100,6 @@ impl<N: Net> FetchManager<N> {
         Ok(bytes)
     }
 
-    /// Fetch init segment completely (no bytes in memory, data goes to disk).
-    pub(crate) async fn fetch_init(&self, url: &Url) -> HlsResult<FetchResult> {
-        let key = ResourceKey::from_url(url);
-        let res = self.assets.open_streaming_resource(&key).await?;
-
-        let status = res.status().await;
-        let from_cache = matches!(status, ResourceStatus::Committed { .. });
-
-        let start = Instant::now();
-
-        if !from_cache {
-            Self::download_to_resource(&self.net, url, &res).await;
-        }
-
-        let duration = start.elapsed();
-        let bytes = match res.status().await {
-            ResourceStatus::Committed { final_len } => final_len.unwrap_or(0),
-            _ => 0,
-        };
-
-        Ok(FetchResult {
-            bytes,
-            duration,
-            from_cache,
-        })
-    }
-
     /// Start fetching a segment. Returns cached size if already cached.
     /// Caller iterates over chunks via `ActiveFetch::next_chunk()`.
     pub(crate) async fn start_fetch(&self, url: &Url) -> HlsResult<ActiveFetchResult> {
@@ -148,49 +121,6 @@ impl<N: Net> FetchManager<N> {
             resource: res,
             offset: 0,
         }))
-    }
-
-    /// Download URL to streaming resource (no spawn, runs in current task).
-    async fn download_to_resource<TNet: Net>(net: &TNet, url: &Url, res: &StreamingAssetResource) {
-        let start_time = Instant::now();
-        trace!(url = %url, "kithara-hls segment download: START");
-
-        let mut stream = match net.stream(url.clone(), None).await {
-            Ok(s) => s,
-            Err(e) => {
-                warn!(url = %url, error = %e, "kithara-hls download: net open error");
-                let _ = res.fail(format!("net error: {e}")).await;
-                return;
-            }
-        };
-
-        let mut off: u64 = 0;
-        while let Some(chunk_result) = stream.next().await {
-            match chunk_result {
-                Ok(chunk_bytes) => {
-                    let chunk_len = chunk_bytes.len() as u64;
-                    if let Err(e) = res.write_at(off, &chunk_bytes).await {
-                        warn!(url = %url, off, error = %e, "kithara-hls download: write error");
-                        let _ = res.fail(format!("storage write_at error: {e}")).await;
-                        return;
-                    }
-                    off = off.saturating_add(chunk_len);
-                }
-                Err(e) => {
-                    warn!(url = %url, off, error = %e, "kithara-hls download: stream error");
-                    let _ = res.fail(format!("net stream error: {e}")).await;
-                    return;
-                }
-            }
-        }
-
-        let _ = res.commit(Some(off)).await;
-        trace!(
-            url = %url,
-            bytes = off,
-            elapsed_ms = start_time.elapsed().as_millis(),
-            "kithara-hls segment download: END"
-        );
     }
 }
 

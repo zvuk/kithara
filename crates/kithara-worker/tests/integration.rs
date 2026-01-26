@@ -1017,3 +1017,64 @@ mod result_combinations {
         assert!(valid3.validate().is_ok());
     }
 }
+
+/// Test command coalescing: multiple rapid seeks should result in only the last one being processed.
+///
+/// This test sends 10 seek commands rapidly and verifies that only the final position is used.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_command_coalescing() {
+    let source = MockAsyncSource::new(1024, 200);
+    let (cmd_tx, cmd_rx) = kanal::bounded_async(16);
+    let (data_tx, data_rx) = kanal::bounded_async(8);
+
+    let worker = AsyncWorker::new(source, cmd_rx, data_tx);
+    tokio::spawn(worker.run());
+
+    // Receive first item to ensure worker is running
+    let first_item = data_rx.recv().await.unwrap();
+    assert_eq!(first_item.epoch, 0);
+    assert_eq!(first_item.data[0], 0);
+
+    // Send 10 seek commands rapidly (before worker can process them)
+    // These should be coalesced to only the last one (offset=90)
+    for i in 1..=10 {
+        cmd_tx
+            .send(SeekCommand {
+                offset: i * 9, // 9, 18, 27, ..., 90
+                epoch: i as u64,
+            })
+            .await
+            .unwrap();
+    }
+
+    // Small delay to let commands arrive before worker processes them
+    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+
+    // Wait for first item after coalesced commands
+    // Due to command coalescing, we expect data from offset ~90 with epoch=10
+    let mut found_coalesced = false;
+    for _ in 0..20 {
+        let item = data_rx.recv().await.unwrap();
+        if item.is_eof {
+            break;
+        }
+        if item.epoch == 10 {
+            // The offset should be 90 or higher (from the last seek command)
+            // First chunk after seek to offset 90 will have data[0] = 90
+            assert!(
+                item.data[0] >= 90,
+                "Expected data from offset >= 90 due to command coalescing, got {}",
+                item.data[0]
+            );
+            found_coalesced = true;
+            break;
+        }
+    }
+
+    assert!(
+        found_coalesced,
+        "Should have received data with epoch=10 from coalesced commands"
+    );
+
+    drop(cmd_tx);
+}

@@ -21,6 +21,12 @@ use crate::{
 /// This type aligns with the stream-based architecture where messages carry
 /// both data (bytes) and metadata (codec, segment info, boundaries).
 ///
+/// ## Direct Disk Access (Optimization)
+///
+/// When `bytes` is empty, the adapter should read data directly from disk
+/// using `init_url` and `segment_url`. This reduces memory usage by avoiding
+/// buffering segment data in memory.
+///
 /// ## Invariants
 ///
 /// - `is_segment_start && is_segment_end` means entire segment in one message
@@ -28,6 +34,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct HlsMessage {
     /// Chunk data (can be entire segment or part of it).
+    /// May be empty when using direct disk access mode.
     pub bytes: Bytes,
 
     /// Global byte offset in the stream.
@@ -41,6 +48,17 @@ pub struct HlsMessage {
 
     /// URL of the segment.
     pub segment_url: Url,
+
+    /// URL of the init segment for this variant (fMP4 only).
+    /// Used for direct disk reading when bytes is empty.
+    pub init_url: Option<Url>,
+
+    /// Length of init segment in bytes.
+    /// The combined segment is init_len + media_len bytes.
+    pub init_len: u64,
+
+    /// Length of media segment in bytes.
+    pub media_len: u64,
 
     /// Duration of the segment (None for init segments).
     pub segment_duration: Option<Duration>,
@@ -76,6 +94,9 @@ impl HlsMessage {
             variant: 0,
             segment_type: SegmentType::Media(0),
             segment_url: Url::parse("http://localhost").expect("valid url"),
+            init_url: None,
+            init_len: 0,
+            media_len: 0,
             segment_duration: None,
             codec: None,
             container: None,
@@ -125,12 +146,16 @@ impl HlsMessage {
     pub fn from_stream_message(msg: StreamMessage<HlsSegmentMetadata, Bytes>) -> Self {
         let (meta, bytes) = msg.into_parts();
 
+        let media_len = bytes.len() as u64;
         Self {
             bytes,
             byte_offset: meta.byte_offset,
             variant: meta.variant,
             segment_type: meta.segment_type,
             segment_url: meta.segment_url,
+            init_url: None,
+            init_len: 0,
+            media_len,
             segment_duration: meta.segment_duration,
             codec: meta.codec,
             container: meta.container,
@@ -179,6 +204,9 @@ mod tests {
             variant: 0,
             segment_type: SegmentType::Init,
             segment_url: url.clone(),
+            init_url: None,
+            init_len: 0,
+            media_len: 9,
             segment_duration: None,
             codec: Some(AudioCodec::AacLc),
             container: Some(ContainerFormat::Fmp4),

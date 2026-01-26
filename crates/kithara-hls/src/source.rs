@@ -164,6 +164,9 @@ impl SourceFactory for Hls {
         // Open HLS worker source
         let worker_source = Hls::open(url, params).await.map_err(StreamError::Source)?;
 
+        // Get assets before passing worker_source to AsyncWorker
+        let assets = worker_source.assets();
+
         // Create channels for worker
         let (cmd_tx, cmd_rx) = kanal::bounded_async(16);
         const HLS_CHUNK_CHANNEL_CAPACITY: usize = 8;
@@ -173,8 +176,8 @@ impl SourceFactory for Hls {
         let worker = kithara_worker::AsyncWorker::new(worker_source, cmd_rx, chunk_tx);
         tokio::spawn(worker.run());
 
-        // Create HlsSourceAdapter
-        let adapter = HlsSourceAdapter::new(chunk_rx, cmd_tx, events_tx.clone());
+        // Create HlsSourceAdapter with assets for direct disk access
+        let adapter = HlsSourceAdapter::new(chunk_rx, cmd_tx, assets, events_tx.clone());
 
         Ok(OpenedSource {
             source: Arc::new(adapter),

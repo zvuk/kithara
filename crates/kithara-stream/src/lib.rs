@@ -31,6 +31,6 @@ pub use prefetch::{
     AlwaysValid, BlockingSource, BlockingWorker, EpochValidator, Fetch, ItemValidator,
     PrefetchConsumer, PrefetchResult, PrefetchSource, PrefetchWorker, PrefetchedItem, WorkerItem,
 };
-pub use source::{Source, SyncReader, SyncReaderParams};
+pub use source::{DirectSyncReader, Source, SyncReader, SyncReaderParams};
 pub use stream_message::{StreamData, StreamMessage, StreamMetadata};
 pub use stream_source::StreamSource;

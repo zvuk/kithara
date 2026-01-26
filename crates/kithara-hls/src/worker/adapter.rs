@@ -2,32 +2,161 @@ use std::{ops::Range, sync::Arc};
 
 use async_trait::async_trait;
 use kanal::{AsyncReceiver, AsyncSender};
-use kithara_storage::WaitOutcome;
+use kithara_assets::{AssetStore, Assets, ResourceKey};
+use kithara_storage::{StreamingResourceExt, WaitOutcome};
 use kithara_stream::{ContainerFormat as StreamContainerFormat, MediaInfo, Source, StreamResult};
 use kithara_worker::Fetch;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
-use tracing::trace;
+use tracing::{debug, trace};
+use url::Url;
 
 use super::{HlsCommand, HlsMessage};
-use crate::{HlsError, events::HlsEvent, parsing::ContainerFormat};
+use crate::{HlsError, events::HlsEvent, fetch::StreamingAssetResource, parsing::ContainerFormat};
 
-/// Maximum number of chunks to buffer in memory (prevents unbounded growth).
-/// At ~2MB per segment, this limits buffer to ~10MB.
-const MAX_BUFFERED_CHUNKS: usize = 5;
+/// Entry tracking a loaded segment in the virtual stream.
+#[derive(Debug, Clone)]
+struct SegmentEntry {
+    /// URL of the media segment (for opening resource).
+    segment_url: Url,
 
-/// Adapter from HLS worker chunks to Source trait.
+    /// URL of the init segment (fMP4 only).
+    init_url: Option<Url>,
+
+    /// Start position in virtual stream.
+    byte_offset: u64,
+
+    /// Length of init segment in bytes.
+    init_len: u64,
+
+    /// Length of media segment in bytes.
+    media_len: u64,
+
+    /// Variant index.
+    variant: usize,
+
+    /// Container format.
+    container: Option<ContainerFormat>,
+
+    /// Audio codec.
+    codec: Option<kithara_stream::AudioCodec>,
+}
+
+impl SegmentEntry {
+    /// Total length of this entry (init + media).
+    fn total_len(&self) -> u64 {
+        self.init_len + self.media_len
+    }
+
+    /// End position in virtual stream.
+    fn end_offset(&self) -> u64 {
+        self.byte_offset + self.total_len()
+    }
+
+    /// Check if this entry contains the given offset.
+    fn contains(&self, offset: u64) -> bool {
+        offset >= self.byte_offset && offset < self.end_offset()
+    }
+}
+
+/// Index of loaded segments for direct disk access.
+#[derive(Debug, Default)]
+struct SegmentIndex {
+    /// Loaded segments in order.
+    entries: Vec<SegmentEntry>,
+}
+
+impl SegmentIndex {
+    fn new() -> Self {
+        Self { entries: Vec::new() }
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    fn push(&mut self, entry: SegmentEntry) {
+        self.entries.push(entry);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    fn last(&self) -> Option<&SegmentEntry> {
+        self.entries.last()
+    }
+
+    /// Find entry containing the given offset.
+    fn find_at_offset(&self, offset: u64) -> Option<&SegmentEntry> {
+        self.entries.iter().find(|e| e.contains(offset))
+    }
+
+    /// Check if range is covered by loaded segments.
+    fn range_covered(&self, range: &Range<u64>) -> bool {
+        if range.is_empty() {
+            return true;
+        }
+
+        if self.entries.is_empty() {
+            return false;
+        }
+
+        // Check continuous coverage
+        let mut current_pos = range.start;
+
+        for entry in &self.entries {
+            if entry.byte_offset > current_pos {
+                return false; // Gap
+            }
+
+            if entry.end_offset() > current_pos {
+                current_pos = entry.end_offset();
+            }
+
+            if current_pos >= range.end {
+                return true;
+            }
+        }
+
+        current_pos >= range.end
+    }
+
+    /// Get total bytes loaded.
+    fn total_bytes(&self) -> u64 {
+        self.entries.last().map(|e| e.end_offset()).unwrap_or(0)
+    }
+
+    /// Get segment indices (for compatibility).
+    fn segment_indices(&self) -> Vec<usize> {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(i, _)| i)
+            .collect()
+    }
+}
+
+/// Adapter from HLS worker to Source trait.
 ///
-/// Buffers chunks in memory and provides random-access read interface.
+/// Receives segment metadata from worker, tracks loaded segments,
+/// and reads data directly from disk via AssetStore.
 pub struct HlsSourceAdapter {
-    /// Receiver for chunks from worker.
+    /// Receiver for segment metadata from worker.
     chunk_rx: AsyncReceiver<Fetch<HlsMessage>>,
 
     /// Sender for commands to worker.
     cmd_tx: AsyncSender<HlsCommand>,
 
-    /// Buffered chunks (in order).
-    buffered_chunks: Arc<Mutex<Vec<HlsMessage>>>,
+    /// Asset store for reading segments from disk.
+    assets: AssetStore,
+
+    /// Index of loaded segments.
+    segments: Arc<Mutex<SegmentIndex>>,
 
     /// Current epoch (for validation).
     current_epoch: Arc<Mutex<u64>>,
@@ -44,12 +173,14 @@ impl HlsSourceAdapter {
     pub fn new(
         chunk_rx: AsyncReceiver<Fetch<HlsMessage>>,
         cmd_tx: AsyncSender<HlsCommand>,
+        assets: AssetStore,
         events_tx: broadcast::Sender<HlsEvent>,
     ) -> Self {
         Self {
             chunk_rx,
             cmd_tx,
-            buffered_chunks: Arc::new(Mutex::new(Vec::new())),
+            assets,
+            segments: Arc::new(Mutex::new(SegmentIndex::new())),
             current_epoch: Arc::new(Mutex::new(0)),
             events_tx,
             eof_reached: Arc::new(Mutex::new(false)),
@@ -61,53 +192,8 @@ impl HlsSourceAdapter {
         self.events_tx.subscribe()
     }
 
-    /// Get events sender.
-    pub(crate) fn events_tx(&self) -> &broadcast::Sender<HlsEvent> {
-        &self.events_tx
-    }
-
-    /// Release chunks that are fully consumed (before given offset).
-    /// Keeps at least one chunk for media_info().
-    fn release_consumed_chunks(&self, read_offset: u64) {
-        let mut chunks = self.buffered_chunks.lock();
-
-        // Keep at least 1 chunk for media_info and avoiding edge cases
-        if chunks.len() <= 1 {
-            return;
-        }
-
-        // Find how many chunks we can safely remove
-        let mut remove_count = 0;
-        for chunk in chunks.iter() {
-            let chunk_end = chunk.byte_offset + chunk.len() as u64;
-
-            // Only remove if chunk is fully behind read position
-            if chunk_end <= read_offset {
-                remove_count += 1;
-            } else {
-                break;
-            }
-        }
-
-        // Always keep at least 1 chunk
-        if remove_count >= chunks.len() {
-            remove_count = chunks.len() - 1;
-        }
-
-        if remove_count > 0 {
-            chunks.drain(0..remove_count);
-            tracing::debug!(
-                removed = remove_count,
-                remaining = chunks.len(),
-                "released consumed chunks"
-            );
-        }
-    }
-
-    /// Ensure we have chunks covering the given range.
-    async fn ensure_chunks_for_range(&self, range: Range<u64>) -> Result<(), HlsError> {
-        use tracing::debug;
-        debug!(?range, "ensure_chunks_for_range called");
+    /// Ensure we have segments covering the given range.
+    async fn ensure_segments_for_range(&self, range: Range<u64>) -> Result<(), HlsError> {
         loop {
             {
                 let eof = *self.eof_reached.lock();
@@ -118,127 +204,129 @@ impl HlsSourceAdapter {
             }
 
             {
-                let chunks = self.buffered_chunks.lock();
-                let covered = self.range_covered_by_chunks(&chunks, range.clone());
+                let segments = self.segments.lock();
+                let covered = segments.range_covered(&range);
                 if covered {
-                    debug!(num_chunks = chunks.len(), "range already covered");
+                    debug!(num_segments = segments.len(), "range already covered");
                     return Ok(());
                 }
                 debug!(
-                    num_chunks = chunks.len(),
-                    "range not covered, waiting for chunk"
+                    num_segments = segments.len(),
+                    "range not covered, waiting for segment"
                 );
             }
 
-            debug!("waiting for chunk from worker");
+            debug!("waiting for segment from worker");
             let fetch = match self.chunk_rx.recv().await {
                 Ok(f) => f,
                 Err(_) => {
                     debug!("chunk channel closed");
-                    {
-                        *self.eof_reached.lock() = true;
-                    }
+                    *self.eof_reached.lock() = true;
                     return Ok(());
                 }
             };
-            debug!(?fetch.is_eof, epoch = fetch.epoch, "received chunk from worker");
+            debug!(?fetch.is_eof, epoch = fetch.epoch, "received message from worker");
 
             if fetch.is_eof {
-                {
-                    *self.eof_reached.lock() = true;
-                }
+                *self.eof_reached.lock() = true;
                 return Ok(());
             }
 
-            let current_epoch = {
-                let epoch = self.current_epoch.lock();
-                *epoch
-            };
+            let current_epoch = *self.current_epoch.lock();
 
             if fetch.epoch != current_epoch {
                 trace!(
                     fetch_epoch = fetch.epoch,
-                    current_epoch, "discarding stale chunk"
+                    current_epoch, "discarding stale message"
                 );
                 continue;
             }
 
-            if !fetch.data.is_empty() {
-                {
-                    let mut chunks = self.buffered_chunks.lock();
-
-                    // Enforce maximum buffer size to prevent unbounded memory growth
-                    while chunks.len() >= MAX_BUFFERED_CHUNKS {
-                        chunks.remove(0); // Drop oldest chunk
-                        trace!(
-                            max_buffered = MAX_BUFFERED_CHUNKS,
-                            "dropped oldest chunk to enforce buffer limit"
-                        );
-                    }
-
-                    chunks.push(fetch.data);
-                }
+            // Add segment to index
+            let msg = fetch.data;
+            if msg.media_len > 0 || msg.init_len > 0 {
+                let entry = SegmentEntry {
+                    segment_url: msg.segment_url,
+                    init_url: msg.init_url,
+                    byte_offset: msg.byte_offset,
+                    init_len: msg.init_len,
+                    media_len: msg.media_len,
+                    variant: msg.variant,
+                    container: msg.container,
+                    codec: msg.codec,
+                };
+                self.segments.lock().push(entry);
             } else {
-                // Empty chunk without EOF - worker might be paused or sending empty data
-                // Continue waiting, but log for debugging
-                trace!("received empty chunk without EOF, continuing to wait");
+                trace!("received empty message, continuing to wait");
             }
         }
     }
 
-    /// Check if buffered chunks cover the given range.
-    fn range_covered_by_chunks(&self, chunks: &[HlsMessage], range: Range<u64>) -> bool {
-        if range.is_empty() {
-            return true;
-        }
+    /// Read bytes from a segment entry at given offset.
+    async fn read_from_entry(
+        &self,
+        entry: &SegmentEntry,
+        offset: u64,
+        buf: &mut [u8],
+    ) -> Result<usize, HlsError> {
+        let local_offset = offset - entry.byte_offset;
 
-        if chunks.is_empty() {
-            return false;
-        }
+        // Determine if we're reading from init or media segment
+        if local_offset < entry.init_len {
+            // Reading from init segment
+            let Some(ref init_url) = entry.init_url else {
+                // No init segment but offset is in init range - shouldn't happen
+                return Ok(0);
+            };
 
-        // Sort chunks by byte_offset to check continuous coverage
-        let mut sorted_chunks: Vec<_> = chunks.iter().collect();
-        sorted_chunks.sort_by_key(|c| c.byte_offset);
+            let key = ResourceKey::from_url(init_url);
+            let resource: StreamingAssetResource =
+                self.assets.open_streaming_resource(&key).await?;
 
-        let mut current_pos = range.start;
+            // Wait for data to be available
+            let read_end = (local_offset + buf.len() as u64).min(entry.init_len);
+            resource.wait_range(local_offset..read_end).await?;
 
-        for chunk in sorted_chunks {
-            let chunk_start = chunk.byte_offset;
-            let chunk_end = chunk.byte_offset + chunk.len() as u64;
+            // Read from init
+            let available_in_init = (entry.init_len - local_offset) as usize;
+            let to_read_init = buf.len().min(available_in_init);
+            let bytes_from_init = resource.read_at(local_offset, &mut buf[..to_read_init]).await?;
 
-            // If there's a gap before this chunk, range is not covered
-            if chunk_start > current_pos {
-                return false;
+            // If we need more bytes from media segment
+            if bytes_from_init < buf.len() && entry.media_len > 0 {
+                let remaining = &mut buf[bytes_from_init..];
+                let bytes_from_media = self
+                    .read_from_media_segment(entry, 0, remaining)
+                    .await?;
+                Ok(bytes_from_init + bytes_from_media)
+            } else {
+                Ok(bytes_from_init)
             }
-
-            // If this chunk extends our coverage, update position
-            if chunk_end > current_pos {
-                current_pos = chunk_end;
-            }
-
-            // If we've covered the entire range, we're done
-            if current_pos >= range.end {
-                return true;
-            }
+        } else {
+            // Reading from media segment
+            let media_offset = local_offset - entry.init_len;
+            self.read_from_media_segment(entry, media_offset, buf).await
         }
-
-        // Check if we covered the entire range
-        current_pos >= range.end
     }
 
-    /// Find chunk containing the given offset and return (chunk_index, offset_in_chunk).
-    fn find_chunk_at_offset(&self, chunks: &[HlsMessage], offset: u64) -> Option<(usize, usize)> {
-        for (idx, chunk) in chunks.iter().enumerate() {
-            let chunk_start = chunk.byte_offset;
-            let chunk_end = chunk.byte_offset + chunk.len() as u64;
+    /// Read from media segment at given offset.
+    async fn read_from_media_segment(
+        &self,
+        entry: &SegmentEntry,
+        media_offset: u64,
+        buf: &mut [u8],
+    ) -> Result<usize, HlsError> {
+        let key = ResourceKey::from_url(&entry.segment_url);
+        let resource: StreamingAssetResource =
+            self.assets.open_streaming_resource(&key).await?;
 
-            if offset >= chunk_start && offset < chunk_end {
-                let offset_in_chunk = (offset - chunk_start) as usize;
-                return Some((idx, offset_in_chunk));
-            }
-        }
+        // Wait for data to be available
+        let read_end = (media_offset + buf.len() as u64).min(entry.media_len);
+        resource.wait_range(media_offset..read_end).await?;
 
-        None
+        // Read from media
+        let bytes_read = resource.read_at(media_offset, buf).await?;
+        Ok(bytes_read)
     }
 
     /// Send seek command.
@@ -249,7 +337,7 @@ impl HlsSourceAdapter {
             *epoch
         };
 
-        self.buffered_chunks.lock().clear();
+        self.segments.lock().clear();
         *self.eof_reached.lock() = false;
 
         self.cmd_tx
@@ -271,7 +359,7 @@ impl HlsSourceAdapter {
             *epoch
         };
 
-        self.buffered_chunks.lock().clear();
+        self.segments.lock().clear();
         *self.eof_reached.lock() = false;
 
         self.cmd_tx
@@ -286,21 +374,15 @@ impl HlsSourceAdapter {
     }
 
     /// Get current variant (compatibility method).
-    ///
-    /// Note: In worker architecture, variant can change asynchronously.
-    /// This returns the variant from the last received chunk.
     pub fn current_variant(&self) -> usize {
-        self.buffered_chunks
+        self.segments
             .lock()
             .last()
-            .map(|chunk| chunk.variant)
+            .map(|e| e.variant)
             .unwrap_or(0)
     }
 
     /// Set current variant (compatibility method).
-    ///
-    /// Note: This is an async operation in worker architecture.
-    /// For synchronous API compatibility, we just send the command without waiting.
     pub fn set_current_variant(&self, variant: usize) {
         let _ = self.cmd_tx.try_send(HlsCommand::ForceVariant {
             variant_index: variant,
@@ -309,31 +391,18 @@ impl HlsSourceAdapter {
     }
 
     /// Get loaded segment count (compatibility method).
-    ///
-    /// Note: In worker architecture this is approximate.
     pub fn loaded_segment_count(&self) -> usize {
-        self.buffered_chunks.lock().len()
+        self.segments.lock().len()
     }
 
     /// Get loaded segment indices (compatibility method).
-    ///
-    /// Note: In worker architecture this is approximate.
     pub fn loaded_segment_indices(&self) -> Vec<usize> {
-        self.buffered_chunks
-            .lock()
-            .iter()
-            .filter_map(|chunk| chunk.segment_type.media_index())
-            .collect()
+        self.segments.lock().segment_indices()
     }
 
     /// Check if segment is loaded (compatibility method).
-    ///
-    /// Note: In worker architecture this is approximate.
     pub fn has_segment(&self, segment_index: usize) -> bool {
-        self.buffered_chunks
-            .lock()
-            .iter()
-            .any(|chunk| chunk.segment_type.media_index() == Some(segment_index))
+        self.segments.lock().entries.len() > segment_index
     }
 }
 
@@ -345,12 +414,12 @@ impl Source for HlsSourceAdapter {
     async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
         use kithara_stream::StreamError;
 
-        self.ensure_chunks_for_range(range.clone())
+        self.ensure_segments_for_range(range.clone())
             .await
             .map_err(StreamError::Source)?;
 
-        let chunks = self.buffered_chunks.lock();
-        let covered = self.range_covered_by_chunks(&chunks, range);
+        let segments = self.segments.lock();
+        let covered = segments.range_covered(&range);
 
         Ok(if covered {
             WaitOutcome::Ready
@@ -363,57 +432,48 @@ impl Source for HlsSourceAdapter {
         use kithara_stream::StreamError;
 
         let range = offset..offset + buf.len() as u64;
-        self.ensure_chunks_for_range(range)
+        self.ensure_segments_for_range(range)
             .await
             .map_err(StreamError::Source)?;
 
-        let chunks = self.buffered_chunks.lock();
+        // Find segment containing offset
+        let entry = {
+            let segments = self.segments.lock();
+            segments.find_at_offset(offset).cloned()
+        };
 
-        let Some((chunk_idx, offset_in_chunk)) = self.find_chunk_at_offset(&chunks, offset) else {
+        let Some(entry) = entry else {
             return Ok(0);
         };
 
-        let chunk = &chunks[chunk_idx];
-        let available = chunk.len() - offset_in_chunk;
-        let to_copy = available.min(buf.len());
-
-        buf[..to_copy].copy_from_slice(&chunk.bytes[offset_in_chunk..offset_in_chunk + to_copy]);
-
-        // Release lock before cleanup
-        drop(chunks);
-
-        // Release consumed chunks to free memory (sequential reads)
-        self.release_consumed_chunks(offset);
-
-        Ok(to_copy)
+        self.read_from_entry(&entry, offset, buf)
+            .await
+            .map_err(StreamError::Source)
     }
 
     fn len(&self) -> Option<u64> {
-        let chunks = self.buffered_chunks.lock();
-        if chunks.is_empty() {
+        let segments = self.segments.lock();
+        if segments.is_empty() {
             return None;
         }
-
-        let last_chunk = chunks.last()?;
-        Some(last_chunk.byte_offset + last_chunk.len() as u64)
+        Some(segments.total_bytes())
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        use tracing::debug;
-        let chunks = self.buffered_chunks.lock();
-        let last_chunk = chunks.last()?;
+        let segments = self.segments.lock();
+        let last = segments.last()?;
 
-        let container = match last_chunk.container {
+        let container = match last.container {
             Some(ContainerFormat::Fmp4) => Some(StreamContainerFormat::Fmp4),
             Some(ContainerFormat::Ts) => Some(StreamContainerFormat::MpegTs),
             Some(ContainerFormat::Other) | None => None,
         };
 
-        debug!(?container, codec = ?last_chunk.codec, "media_info called");
+        debug!(?container, codec = ?last.codec, "media_info called");
 
         Some(MediaInfo {
             container,
-            codec: last_chunk.codec,
+            codec: last.codec,
             sample_rate: None,
             channels: None,
         })
@@ -422,81 +482,105 @@ impl Source for HlsSourceAdapter {
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use url::Url;
-
     use super::*;
-    use crate::cache::SegmentType;
 
-    fn create_test_chunk(offset: u64, len: usize) -> HlsMessage {
-        HlsMessage {
-            bytes: Bytes::from(vec![0u8; len]),
-            byte_offset: offset,
+    #[test]
+    fn test_segment_entry() {
+        let entry = SegmentEntry {
+            segment_url: Url::parse("http://test.com/seg0.ts").unwrap(),
+            init_url: Some(Url::parse("http://test.com/init.mp4").unwrap()),
+            byte_offset: 100,
+            init_len: 50,
+            media_len: 200,
             variant: 0,
-            segment_type: SegmentType::Media(0),
-            segment_url: Url::parse("http://test.com/seg0.ts").expect("valid url"),
-            segment_duration: None,
+            container: Some(ContainerFormat::Fmp4),
             codec: None,
+        };
+
+        assert_eq!(entry.total_len(), 250);
+        assert_eq!(entry.end_offset(), 350);
+        assert!(entry.contains(100));
+        assert!(entry.contains(349));
+        assert!(!entry.contains(99));
+        assert!(!entry.contains(350));
+    }
+
+    #[test]
+    fn test_segment_index_range_covered() {
+        let mut index = SegmentIndex::new();
+
+        // Empty index doesn't cover anything
+        assert!(!index.range_covered(&(0..100)));
+        assert!(index.range_covered(&(0..0))); // Empty range is always covered
+
+        // Add first segment
+        index.push(SegmentEntry {
+            segment_url: Url::parse("http://test.com/seg0.ts").unwrap(),
+            init_url: None,
+            byte_offset: 0,
+            init_len: 0,
+            media_len: 100,
+            variant: 0,
             container: None,
-            bitrate: None,
-            encryption: None,
-            is_segment_start: true,
-            is_segment_end: true,
-            is_variant_switch: false,
-        }
+            codec: None,
+        });
+
+        assert!(index.range_covered(&(0..50)));
+        assert!(index.range_covered(&(0..100)));
+        assert!(!index.range_covered(&(0..101))); // Beyond first segment
+
+        // Add second segment
+        index.push(SegmentEntry {
+            segment_url: Url::parse("http://test.com/seg1.ts").unwrap(),
+            init_url: None,
+            byte_offset: 100,
+            init_len: 0,
+            media_len: 100,
+            variant: 0,
+            container: None,
+            codec: None,
+        });
+
+        assert!(index.range_covered(&(0..200)));
+        assert!(index.range_covered(&(50..150)));
+        assert!(!index.range_covered(&(0..201)));
     }
 
     #[test]
-    fn test_range_covered_by_chunks() {
-        let (chunk_tx, chunk_rx) = kanal::bounded_async(10);
-        let (cmd_tx, _cmd_rx) = kanal::bounded_async(10);
-        let (events_tx, _) = broadcast::channel(10);
+    fn test_segment_index_find_at_offset() {
+        let mut index = SegmentIndex::new();
 
-        let adapter = HlsSourceAdapter::new(chunk_rx, cmd_tx, events_tx);
+        index.push(SegmentEntry {
+            segment_url: Url::parse("http://test.com/seg0.ts").unwrap(),
+            init_url: None,
+            byte_offset: 0,
+            init_len: 0,
+            media_len: 100,
+            variant: 0,
+            container: None,
+            codec: None,
+        });
 
-        let chunks = vec![
-            create_test_chunk(0, 100),
-            create_test_chunk(100, 100),
-            create_test_chunk(200, 100),
-        ];
+        index.push(SegmentEntry {
+            segment_url: Url::parse("http://test.com/seg1.ts").unwrap(),
+            init_url: None,
+            byte_offset: 100,
+            init_len: 0,
+            media_len: 100,
+            variant: 0,
+            container: None,
+            codec: None,
+        });
 
-        // Single chunks
-        assert!(adapter.range_covered_by_chunks(&chunks, 0..50));
-        assert!(adapter.range_covered_by_chunks(&chunks, 50..100));
-        assert!(adapter.range_covered_by_chunks(&chunks, 100..200));
-        assert!(adapter.range_covered_by_chunks(&chunks, 200..250));
+        let found = index.find_at_offset(50);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().byte_offset, 0);
 
-        // Multiple chunks (collective coverage)
-        assert!(adapter.range_covered_by_chunks(&chunks, 0..101));
-        assert!(adapter.range_covered_by_chunks(&chunks, 0..200));
-        assert!(adapter.range_covered_by_chunks(&chunks, 50..150));
-        assert!(adapter.range_covered_by_chunks(&chunks, 150..250));
+        let found = index.find_at_offset(150);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().byte_offset, 100);
 
-        // Gaps (not covered)
-        assert!(!adapter.range_covered_by_chunks(&chunks, 300..400));
-
-        drop(chunk_tx);
-    }
-
-    #[test]
-    fn test_find_chunk_at_offset() {
-        let (_chunk_tx, chunk_rx) = kanal::bounded_async(10);
-        let (cmd_tx, _cmd_rx) = kanal::bounded_async(10);
-        let (events_tx, _) = broadcast::channel(10);
-
-        let adapter = HlsSourceAdapter::new(chunk_rx, cmd_tx, events_tx);
-
-        let chunks = vec![
-            create_test_chunk(0, 100),
-            create_test_chunk(100, 100),
-            create_test_chunk(200, 100),
-        ];
-
-        assert_eq!(adapter.find_chunk_at_offset(&chunks, 0), Some((0, 0)));
-        assert_eq!(adapter.find_chunk_at_offset(&chunks, 50), Some((0, 50)));
-        assert_eq!(adapter.find_chunk_at_offset(&chunks, 100), Some((1, 0)));
-        assert_eq!(adapter.find_chunk_at_offset(&chunks, 150), Some((1, 50)));
-        assert_eq!(adapter.find_chunk_at_offset(&chunks, 200), Some((2, 0)));
-        assert_eq!(adapter.find_chunk_at_offset(&chunks, 300), None);
+        let found = index.find_at_offset(200);
+        assert!(found.is_none());
     }
 }

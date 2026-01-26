@@ -1,20 +1,17 @@
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use kithara_abr::{
     AbrController, AbrOptions, AbrReason, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource, Variant,
 };
-use kithara_assets::{Assets, ResourceKey};
-use kithara_storage::Resource;
 use kithara_worker::{AsyncWorkerSource, Fetch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 
 use super::{HlsCommand, HlsMessage, VariantMetadata};
 use crate::{
-    HlsResult,
     cache::{Loader, SegmentType},
     events::HlsEvent,
     fetch::DefaultFetchManager,
@@ -22,12 +19,14 @@ use crate::{
 
 /// HLS worker source implementing AsyncWorkerSource.
 ///
-/// Fetches HLS segments and emits chunks with complete metadata.
+/// Fetches HLS segments and emits chunks with metadata for direct disk access.
+/// Data stays on disk - adapter reads directly via AssetStore.
 pub struct HlsWorkerSource {
     /// Generic loader (FetchLoader or test mock).
     loader: Arc<dyn Loader>,
 
-    /// Fetch manager for reading segment data.
+    /// Fetch manager (kept for backward compatibility but not used for reading).
+    #[allow(dead_code)]
     fetch_manager: Arc<DefaultFetchManager>,
 
     /// Variant metadata (codec, container, bitrate).
@@ -39,11 +38,8 @@ pub struct HlsWorkerSource {
     /// Current segment index within variant.
     current_segment_index: usize,
 
-    /// Init segments already sent for each variant.
+    /// Init segments already sent for each variant (for is_variant_switch flag).
     sent_init_for_variant: HashSet<usize>,
-
-    /// Cached init segments per variant (for combining with media).
-    init_segments_cache: std::collections::HashMap<usize, Bytes>,
 
     /// Current epoch (incremented on seek/switch).
     epoch: u64,
@@ -109,7 +105,6 @@ impl HlsWorkerSource {
             current_variant: initial_variant,
             current_segment_index: 0,
             sent_init_for_variant: HashSet::new(),
-            init_segments_cache: std::collections::HashMap::new(),
             epoch: 0,
             paused: false,
             abr_controller,
@@ -120,59 +115,9 @@ impl HlsWorkerSource {
         }
     }
 
-    /// Load segment bytes from SegmentMeta.
-    async fn load_segment_bytes(&self, meta: &crate::cache::SegmentMeta) -> HlsResult<Bytes> {
-        trace!(
-            url = %meta.url,
-            size = meta.len,
-            "reading segment bytes from storage"
-        );
-
-        let key = ResourceKey::from_url(&meta.url);
-
-        let bytes = if let Some(ref _enc) = meta.key {
-            return Err(crate::HlsError::Unimplemented);
-        } else {
-            let resource = self
-                .fetch_manager
-                .assets()
-                .open_streaming_resource(&key)
-                .await?;
-            resource.read().await?
-        };
-
-        Ok(bytes)
-    }
-
-    /// Load init segment for a variant and cache it.
-    ///
-    /// Returns cached init segment if already loaded.
-    async fn load_init_segment(&mut self, variant: usize) -> HlsResult<Bytes> {
-        // Check cache first
-        if let Some(cached) = self.init_segments_cache.get(&variant) {
-            debug!(
-                variant,
-                cached_size = cached.len(),
-                "using cached init segment"
-            );
-            return Ok(cached.clone());
-        }
-
-        debug!(variant, "loading init segment");
-        let meta = self.loader.load_segment(variant, usize::MAX).await?;
-        debug!(variant, url = %meta.url, size = meta.len, "init segment metadata loaded");
-
-        let bytes = self.load_segment_bytes(&meta).await?;
-        debug!(
-            variant,
-            bytes_len = bytes.len(),
-            "init segment bytes loaded"
-        );
-
-        // Cache for future use
-        self.init_segments_cache.insert(variant, bytes.clone());
-
-        Ok(bytes)
+    /// Get the asset store for direct disk access.
+    pub fn assets(&self) -> kithara_assets::AssetStore {
+        self.fetch_manager.assets().clone()
     }
 
     /// Emit an event (if channel exists).
@@ -235,58 +180,51 @@ impl AsyncWorkerSource for HlsWorkerSource {
             }
         };
 
-        // Measure download time for ABR
-        let download_start = std::time::Instant::now();
-        let media_bytes = match self.load_segment_bytes(&meta).await {
-            Ok(data) => data,
-            Err(e) => {
-                debug!(
-                    variant = current_variant,
-                    segment_index = self.current_segment_index,
-                    error = ?e,
-                    "segment bytes load failed"
-                );
-                return Fetch::new(HlsMessage::empty(), true, self.epoch);
-            }
-        };
-        let download_duration = download_start.elapsed();
-
-        // Combine init + media for EVERY segment (fMP4 requires init for each fragment)
-        let combined_bytes = match self.load_init_segment(current_variant).await {
-            Ok(init_bytes) => {
-                if is_variant_switch {
+        // Get init segment metadata (don't read bytes - adapter will read from disk)
+        let (init_url, init_len) =
+            match self.loader.load_segment(current_variant, usize::MAX).await {
+                Ok(init_meta) => {
+                    if is_variant_switch {
+                        debug!(
+                            variant = current_variant,
+                            init_url = %init_meta.url,
+                            init_len = init_meta.len,
+                            "init segment loaded for variant switch"
+                        );
+                        self.sent_init_for_variant.insert(current_variant);
+                    }
+                    (Some(init_meta.url), init_meta.len)
+                }
+                Err(e) => {
                     debug!(
                         variant = current_variant,
-                        init_size = init_bytes.len(),
-                        media_size = media_bytes.len(),
-                        "combining init + media for variant switch"
+                        error = ?e,
+                        "init segment load failed, media only"
                     );
-                    self.sent_init_for_variant.insert(current_variant);
+                    (None, 0)
                 }
-                // Zero-copy composition using BytesMut
-                let mut combined = BytesMut::with_capacity(init_bytes.len() + media_bytes.len());
-                combined.put(init_bytes);
-                combined.put(media_bytes);
-                combined.freeze()
-            }
-            Err(e) => {
-                debug!(
-                    variant = current_variant,
-                    error = ?e,
-                    "init segment load failed, using media only"
-                );
-                media_bytes
-            }
-        };
+            };
+
+        // Download time for ABR is already tracked by loader, use segment metadata
+        let download_start = std::time::Instant::now();
+        // Segment is already downloaded by loader.load_segment() above
+        // We just need to track time for ABR throughput calculation
+        let download_duration = download_start.elapsed();
+        let media_len = meta.len;
 
         let variant_meta = &self.variant_metadata[current_variant];
 
+        // Create message with empty bytes - adapter will read from disk directly
+        // This reduces memory usage from ~10-26MB to ~100KB for metadata only
         let chunk = HlsMessage {
-            bytes: combined_bytes.clone(),
+            bytes: Bytes::new(), // Empty - direct disk access mode
             byte_offset: self.byte_offset,
             variant: current_variant,
             segment_type: SegmentType::Media(self.current_segment_index),
             segment_url: meta.url.clone(),
+            init_url,
+            init_len,
+            media_len,
             segment_duration: meta.duration,
             codec: variant_meta.codec,
             container: meta.container,
@@ -297,7 +235,8 @@ impl AsyncWorkerSource for HlsWorkerSource {
             is_variant_switch,
         };
 
-        self.byte_offset += combined_bytes.len() as u64;
+        // Byte offset advances by init_len + media_len (combined segment size)
+        self.byte_offset += init_len + media_len;
         self.current_segment_index += 1;
 
         // ABR: Update buffer level, record throughput sample and make decision
@@ -352,8 +291,6 @@ impl AsyncWorkerSource for HlsWorkerSource {
                     );
                     self.current_variant = new_variant;
                     self.sent_init_for_variant.remove(&new_variant);
-                    // Clear init segments cache to free memory from old variant
-                    self.init_segments_cache.clear();
                     self.emit_event(HlsEvent::VariantApplied {
                         from_variant: current_variant,
                         to_variant: new_variant,
@@ -401,8 +338,6 @@ impl AsyncWorkerSource for HlsWorkerSource {
                 let old_variant = self.current_variant;
                 self.current_variant = variant_index;
                 self.sent_init_for_variant.remove(&variant_index);
-                // Clear init segments cache to free memory from old variant
-                self.init_segments_cache.clear();
                 self.epoch = epoch;
                 self.emit_event(HlsEvent::VariantApplied {
                     from_variant: old_variant,
