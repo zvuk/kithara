@@ -1,14 +1,16 @@
 use std::{collections::HashSet, sync::Arc};
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use bytes::BytesMut;
 use kithara_abr::{
     AbrController, AbrOptions, AbrReason, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource, Variant,
 };
+use kithara_assets::{Assets, ResourceKey};
+use kithara_storage::Resource;
 use kithara_worker::{AsyncWorkerSource, Fetch};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use super::{HlsCommand, HlsMessage, VariantMetadata};
 use crate::{
@@ -214,10 +216,65 @@ impl AsyncWorkerSource for HlsWorkerSource {
 
         let variant_meta = &self.variant_metadata[current_variant];
 
-        // Create message with empty bytes - adapter will read from disk directly
-        // This reduces memory usage from ~10-26MB to ~100KB for metadata only
+        // Read segment data from disk for StreamPipeline consumers
+        let assets = self.fetch_manager.assets();
+        let mut segment_bytes = BytesMut::new();
+
+        // Read init segment if this is a variant switch
+        if is_variant_switch {
+            if let Some(ref init_segment_url) = init_url {
+                let init_key = ResourceKey::from_url(init_segment_url);
+                match assets.open_streaming_resource(&init_key).await {
+                    Ok(resource) => match resource.read().await {
+                        Ok(bytes) => {
+                            trace!(variant = current_variant, len = bytes.len(), "read init segment");
+                            segment_bytes.extend_from_slice(&bytes);
+                        }
+                        Err(e) => {
+                            warn!(variant = current_variant, error = ?e, "failed to read init segment");
+                        }
+                    },
+                    Err(e) => {
+                        warn!(variant = current_variant, error = ?e, "failed to open init resource");
+                    }
+                }
+            }
+        }
+
+        // Read media segment
+        let media_key = ResourceKey::from_url(&meta.url);
+        match assets.open_streaming_resource(&media_key).await {
+            Ok(resource) => match resource.read().await {
+                Ok(bytes) => {
+                    trace!(
+                        variant = current_variant,
+                        segment = self.current_segment_index,
+                        len = bytes.len(),
+                        "read media segment"
+                    );
+                    segment_bytes.extend_from_slice(&bytes);
+                }
+                Err(e) => {
+                    warn!(
+                        variant = current_variant,
+                        segment = self.current_segment_index,
+                        error = ?e,
+                        "failed to read media segment"
+                    );
+                }
+            },
+            Err(e) => {
+                warn!(
+                    variant = current_variant,
+                    segment = self.current_segment_index,
+                    error = ?e,
+                    "failed to open media resource"
+                );
+            }
+        }
+
         let chunk = HlsMessage {
-            bytes: Bytes::new(), // Empty - direct disk access mode
+            bytes: segment_bytes.freeze(),
             byte_offset: self.byte_offset,
             variant: current_variant,
             segment_type: SegmentType::Media(self.current_segment_index),
