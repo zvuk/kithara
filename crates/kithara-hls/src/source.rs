@@ -16,6 +16,7 @@ use crate::{
     fetch::FetchManager,
     options::HlsParams,
     playlist::{PlaylistManager, variant_info_from_master},
+    segment_source::HlsSegmentSource,
     worker::{HlsSourceAdapter, HlsWorkerSource, VariantMetadata},
 };
 
@@ -43,36 +44,100 @@ use crate::{
 pub struct Hls;
 
 impl Hls {
-    /// Open an HLS stream from a master playlist URL.
+    /// Open an HLS stream and return a SegmentSource for zero-copy decoding.
     ///
-    /// Returns `HlsWorkerSource` which can be used directly with `StreamPipeline`
-    /// or wrapped with `HlsSourceAdapter` for `Source` trait compatibility.
-    ///
-    /// ## Events
-    ///
-    /// To receive HLS events, create a broadcast channel and pass the sender via
-    /// `params.with_events(sender)`. Keep the receiver to subscribe to events.
+    /// This is the recommended way to use HLS with kithara-decode for efficient
+    /// memory usage. The decoder reads segment bytes directly from disk.
     ///
     /// ## Example
     ///
     /// ```ignore
-    /// // Create events channel
-    /// let (events_tx, events_rx) = broadcast::channel(32);
-    /// let params = HlsParams::default().with_events(events_tx);
+    /// use kithara_decode::SegmentStreamDecoder;
+    /// use kithara_hls::{Hls, HlsParams};
     ///
-    /// // Open HLS worker source
-    /// let worker_source = Hls::open(url, params).await?;
+    /// let source = Hls::open_segment_source(url, HlsParams::default()).await?;
+    /// let mut decoder = SegmentStreamDecoder::new(Arc::new(source));
     ///
-    /// // Use with StreamPipeline
-    /// let pipeline = StreamPipeline::new(worker_source, decoder).await?;
-    ///
-    /// // Subscribe to events
-    /// tokio::spawn(async move {
-    ///     while let Ok(event) = events_rx.recv().await {
-    ///         println!("HLS event: {:?}", event);
-    ///     }
-    /// });
+    /// while let Some(chunk) = decoder.decode_next()? {
+    ///     play_audio(chunk);
+    /// }
     /// ```
+    pub async fn open_segment_source(url: Url, params: HlsParams) -> HlsResult<HlsSegmentSource> {
+        let asset_root = asset_root_for_url(&url);
+        let cancel = params.cancel.clone().unwrap_or_default();
+        let net = HttpClient::new(params.net.clone());
+
+        // Build base asset store
+        let base_assets = AssetStoreBuilder::new()
+            .asset_root(&asset_root)
+            .cancel(cancel.clone())
+            .root_dir(&params.store.cache_dir)
+            .evict_config(params.store.to_evict_config())
+            .build();
+
+        // Build FetchManager
+        let fetch_manager = Arc::new(FetchManager::new(base_assets.clone(), net));
+
+        // Build PlaylistManager
+        let playlist_manager = Arc::new(PlaylistManager::new(
+            Arc::clone(&fetch_manager),
+            params.base_url.clone(),
+        ));
+
+        // Load master playlist
+        let master = playlist_manager.master_playlist(&url).await?;
+
+        // Determine initial variant from ABR mode
+        let initial_variant = params.abr.initial_variant();
+
+        // Emit VariantsDiscovered event
+        if let Some(ref events_tx) = params.events_tx {
+            let variant_info = variant_info_from_master(&master);
+            let _ = events_tx.send(HlsEvent::VariantsDiscovered {
+                variants: variant_info,
+                initial_variant,
+            });
+        }
+
+        // Extract variant metadata
+        let variant_metadata: Vec<VariantMetadata> = master
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(index, v)| VariantMetadata {
+                index,
+                codec: v.codec.as_ref().and_then(|c| c.audio_codec),
+                container: v.codec.as_ref().and_then(|c| c.container),
+                bitrate: v.bandwidth,
+            })
+            .collect();
+
+        // Create FetchLoader
+        let fetch_loader = Arc::new(FetchLoader::new(
+            url.clone(),
+            Arc::clone(&fetch_manager),
+            Arc::clone(&playlist_manager),
+        ));
+
+        // Create and return HlsSegmentSource
+        Ok(HlsSegmentSource::new(
+            fetch_loader as Arc<dyn Loader>,
+            base_assets,
+            variant_metadata,
+            initial_variant,
+            Some(params.abr.clone()),
+            params.events_tx.clone(),
+            cancel,
+        ))
+    }
+
+    /// Open an HLS stream from a master playlist URL.
+    ///
+    /// Returns `HlsWorkerSource` which can be used with `AsyncWorker` for
+    /// push-based streaming.
+    ///
+    /// **Note:** For new code, prefer `open_segment_source()` which provides
+    /// better memory efficiency through zero-copy decoding.
     pub async fn open(url: Url, params: HlsParams) -> HlsResult<HlsWorkerSource> {
         let asset_root = asset_root_for_url(&url);
         let cancel = params.cancel.clone().unwrap_or_default();

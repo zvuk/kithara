@@ -44,6 +44,7 @@ pub mod playlist;
 
 // Private modules
 mod parsing;
+mod segment_source;
 mod source;
 
 // ============================================================================
@@ -59,4 +60,5 @@ pub use kithara_abr::{
 };
 pub use options::{HlsParams, KeyContext, KeyOptions, KeyProcessor};
 pub use parsing::ContainerFormat;
+pub use segment_source::HlsSegmentSource;
 pub use source::Hls;

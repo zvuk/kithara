@@ -1,9 +1,9 @@
-//! Example: Play audio from an HLS stream using stream-based architecture.
+//! Example: Play audio from an HLS stream using zero-copy segment-based architecture.
 //!
-//! This demonstrates the new StreamPipeline architecture:
-//! - HlsWorkerSource → GenericStreamDecoder → PCM output (3-loop design)
-//! - Stream messages with full metadata (variant, codec, boundaries)
-//! - Generic decoder that works with any StreamMetadata implementation
+//! This demonstrates the new SegmentStreamDecoder architecture:
+//! - HlsSegmentSource provides segments on-demand
+//! - SegmentStreamDecoder reads bytes directly (zero-copy)
+//! - No intermediate channel buffers
 //!
 //! Run with:
 //! ```
@@ -12,9 +12,8 @@
 
 use std::{env::args, error::Error, sync::Arc};
 
-use bytes::Bytes;
-use kithara_decode::{GenericStreamDecoder, PcmBuffer, StreamPipeline};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams, worker::HlsSegmentMetadata};
+use kithara_decode::{PcmBuffer, SegmentStreamDecoder};
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -52,8 +51,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         })
         .with_events(events_tx);
 
-    // Open HLS stream and get worker source
-    let worker_source = Hls::open(url, hls_params).await?;
+    // Open HLS segment source (zero-copy architecture)
+    let source = Hls::open_segment_source(url, hls_params).await?;
 
     // Subscribe to HLS events
     tokio::spawn(async move {
@@ -89,15 +88,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     });
 
-    info!("Creating stream decoder and pipeline...");
+    info!("Creating segment stream decoder...");
 
-    // Create generic stream decoder for HLS
-    let decoder = GenericStreamDecoder::<HlsSegmentMetadata, Bytes>::new();
-
-    // Create StreamPipeline (connects worker → decoder → PCM output)
-    let pipeline = StreamPipeline::new(worker_source, decoder).await?;
-
-    info!("Pipeline created, consuming PCM chunks...");
+    // Create segment stream decoder (zero-copy)
+    let mut decoder = SegmentStreamDecoder::new(Arc::new(source));
 
     // Create simple PCM buffer for streaming (no random access)
     let spec = kithara_decode::PcmSpec {
@@ -107,35 +101,33 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let (buffer, sample_rx) = PcmBuffer::new_streaming(spec);
     let buffer = Arc::new(buffer);
 
-    // Spawn consumer task for PCM chunks
-    let pcm_rx = pipeline.pcm_rx().clone();
-    let buffer_clone = buffer.clone();
-    let _consumer_handle = tokio::spawn(async move {
-        let mut chunks_received = 0;
-        loop {
-            match pcm_rx.recv() {
-                Ok(chunk) => {
-                    chunks_received += 1;
-                    if !chunk.pcm.is_empty() {
-                        info!(
-                            chunk = chunks_received,
-                            frames = chunk.frames(),
-                            sample_rate = chunk.spec.sample_rate,
-                            channels = chunk.spec.channels,
-                            "Received PCM chunk"
-                        );
+    info!("Starting decode loop...");
 
-                        // STREAMING MODE: Send to rodio via channel (no Vec accumulation)
-                        buffer_clone.append(&chunk);
-                    }
+    // Decode loop - runs in current thread
+    let buffer_clone = buffer.clone();
+    let decode_handle = tokio::task::spawn_blocking(move || {
+        let mut chunks_decoded = 0;
+
+        while let Ok(Some(chunk)) = decoder.decode_next() {
+            chunks_decoded += 1;
+
+            if !chunk.pcm.is_empty() {
+                if chunks_decoded % 100 == 0 {
+                    info!(
+                        chunk = chunks_decoded,
+                        frames = chunk.frames(),
+                        sample_rate = chunk.spec.sample_rate,
+                        channels = chunk.spec.channels,
+                        "Decoded PCM chunk"
+                    );
                 }
-                Err(_) => {
-                    info!("PCM channel closed");
-                    break;
-                }
+
+                // Send to rodio via channel (streaming mode)
+                buffer_clone.append(&chunk);
             }
         }
-        info!(total_chunks = chunks_received, "Consumer finished");
+
+        info!(total_chunks = chunks_decoded, "Decode loop finished");
     });
 
     // Create rodio adapter from sample channel
@@ -162,13 +154,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     #[cfg(not(feature = "rodio"))]
     {
-        info!("Rodio feature not enabled, just consuming PCM chunks without playback");
-        // Wait for consumer to finish
-        _consumer_handle.await?;
+        info!("Rodio feature not enabled, just decoding without playback");
     }
 
-    // Wait for pipeline to complete
-    pipeline.wait().await?;
+    // Wait for decode loop to complete
+    decode_handle.await?;
 
     info!("HLS decode example finished");
 

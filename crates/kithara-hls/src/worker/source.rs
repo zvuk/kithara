@@ -216,7 +216,7 @@ impl AsyncWorkerSource for HlsWorkerSource {
 
         let variant_meta = &self.variant_metadata[current_variant];
 
-        // Read segment data from disk for StreamPipeline consumers
+        // Read segment data from disk
         let assets = self.fetch_manager.assets();
         let mut segment_bytes = BytesMut::new();
 
