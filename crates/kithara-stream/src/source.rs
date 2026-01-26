@@ -597,11 +597,6 @@ where
     pub fn into_source(self) -> Arc<S> {
         self.source
     }
-
-    /// Get reference to the underlying source.
-    pub(crate) fn source_ref(&self) -> &S {
-        &self.source
-    }
 }
 
 impl<S> Read for DirectSyncReader<S>
