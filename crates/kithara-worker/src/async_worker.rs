@@ -33,11 +33,31 @@ impl<S: AsyncWorkerSource> AsyncWorker<S> {
         }
     }
 
-    /// Drain all pending commands.
+    /// Drain all pending commands, keeping only the last one (command coalescing).
+    ///
+    /// When multiple commands arrive rapidly (e.g., fast seek operations),
+    /// only the final command is processed. This reduces unnecessary work
+    /// and improves responsiveness.
     fn drain_pending_commands(&mut self) {
+        let mut last_cmd: Option<S::Command> = None;
+        let mut coalesced_count = 0u32;
+
         while let Ok(Some(cmd)) = self.cmd_rx.try_recv() {
+            last_cmd = Some(cmd);
+            coalesced_count += 1;
+        }
+
+        if let Some(cmd) = last_cmd {
             let new_epoch = self.source.handle_command(cmd);
-            trace!(epoch = new_epoch, "AsyncWorker: drained pending command");
+            if coalesced_count > 1 {
+                trace!(
+                    epoch = new_epoch,
+                    coalesced = coalesced_count,
+                    "AsyncWorker: coalesced multiple commands"
+                );
+            } else {
+                trace!(epoch = new_epoch, "AsyncWorker: drained pending command");
+            }
         }
     }
 

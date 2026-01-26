@@ -1,10 +1,9 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use kithara_stream::{AudioCodec, StreamMessage};
+use kithara_stream::AudioCodec;
 use url::Url;
 
-use super::HlsSegmentMetadata;
 use crate::{
     cache::{EncryptionInfo, SegmentType},
     parsing::ContainerFormat,
@@ -12,14 +11,11 @@ use crate::{
 
 /// HLS message with complete metadata.
 ///
-/// Each message represents a portion of HLS stream with full context:
-/// - Codec information (no codec mixing within message)
+/// Each message represents a segment of HLS stream with full context:
+/// - Codec information
 /// - Segment boundaries (init vs media, start/end)
 /// - Encryption metadata
 /// - ABR context (variant switches)
-///
-/// This type aligns with the stream-based architecture where messages carry
-/// both data (bytes) and metadata (codec, segment info, boundaries).
 ///
 /// ## Invariants
 ///
@@ -41,6 +37,15 @@ pub struct HlsMessage {
 
     /// URL of the segment.
     pub segment_url: Url,
+
+    /// URL of the init segment for this variant (fMP4 only).
+    pub init_url: Option<Url>,
+
+    /// Length of init segment in bytes.
+    pub init_len: u64,
+
+    /// Length of media segment in bytes.
+    pub media_len: u64,
 
     /// Duration of the segment (None for init segments).
     pub segment_duration: Option<Duration>,
@@ -76,6 +81,9 @@ impl HlsMessage {
             variant: 0,
             segment_type: SegmentType::Media(0),
             segment_url: Url::parse("http://localhost").expect("valid url"),
+            init_url: None,
+            init_len: 0,
+            media_len: 0,
             segment_duration: None,
             codec: None,
             container: None,
@@ -95,63 +103,6 @@ impl HlsMessage {
     /// Get the size of this message in bytes.
     pub fn len(&self) -> usize {
         self.bytes.len()
-    }
-
-    /// Convert to StreamMessage<HlsSegmentMetadata, Bytes>.
-    ///
-    /// Separates metadata and data for stream-based architecture.
-    pub fn to_stream_message(self) -> StreamMessage<HlsSegmentMetadata, Bytes> {
-        let meta = HlsSegmentMetadata {
-            byte_offset: self.byte_offset,
-            variant: self.variant,
-            segment_type: self.segment_type,
-            segment_url: self.segment_url,
-            segment_duration: self.segment_duration,
-            codec: self.codec,
-            container: self.container,
-            bitrate: self.bitrate,
-            encryption: self.encryption,
-            is_segment_start: self.is_segment_start,
-            is_segment_end: self.is_segment_end,
-            is_variant_switch: self.is_variant_switch,
-        };
-
-        StreamMessage::new(meta, self.bytes)
-    }
-
-    /// Create from StreamMessage<HlsSegmentMetadata, Bytes>.
-    ///
-    /// Combines metadata and data back into HlsMessage.
-    pub fn from_stream_message(msg: StreamMessage<HlsSegmentMetadata, Bytes>) -> Self {
-        let (meta, bytes) = msg.into_parts();
-
-        Self {
-            bytes,
-            byte_offset: meta.byte_offset,
-            variant: meta.variant,
-            segment_type: meta.segment_type,
-            segment_url: meta.segment_url,
-            segment_duration: meta.segment_duration,
-            codec: meta.codec,
-            container: meta.container,
-            bitrate: meta.bitrate,
-            encryption: meta.encryption,
-            is_segment_start: meta.is_segment_start,
-            is_segment_end: meta.is_segment_end,
-            is_variant_switch: meta.is_variant_switch,
-        }
-    }
-}
-
-impl From<HlsMessage> for StreamMessage<HlsSegmentMetadata, Bytes> {
-    fn from(msg: HlsMessage) -> Self {
-        msg.to_stream_message()
-    }
-}
-
-impl From<StreamMessage<HlsSegmentMetadata, Bytes>> for HlsMessage {
-    fn from(msg: StreamMessage<HlsSegmentMetadata, Bytes>) -> Self {
-        HlsMessage::from_stream_message(msg)
     }
 }
 
@@ -179,6 +130,9 @@ mod tests {
             variant: 0,
             segment_type: SegmentType::Init,
             segment_url: url.clone(),
+            init_url: None,
+            init_len: 0,
+            media_len: 9,
             segment_duration: None,
             codec: Some(AudioCodec::AacLc),
             container: Some(ContainerFormat::Fmp4),

@@ -431,14 +431,14 @@ impl PcmBuffer {
     /// Returns (PcmBuffer, receiver for streaming).
     ///
     /// Set `enable_random_access = false` for streaming-only use cases
-    /// (hls_decode, StreamPipeline) to save memory.
+    /// (HLS decoding) to save memory.
     ///
     /// Set `enable_random_access = true` when using PcmSource for random access.
     pub fn new(spec: PcmSpec, enable_random_access: bool) -> (Self, kanal::Receiver<Vec<f32>>) {
         // Channel capacity: Balance between memory and smooth playback
-        // ~20 chunks (assuming ~100ms per chunk = 2 seconds buffered)
-        // Reduced from 50 to 20 for lower memory consumption
-        let channel_capacity = 20;
+        // ~8 chunks (assuming ~100ms per chunk = 800ms buffered)
+        // Reduced from 20 to 8 for lower memory (~280KB)
+        let channel_capacity = 8;
 
         let (sample_tx, sample_rx) = kanal::bounded(channel_capacity);
 
@@ -462,7 +462,7 @@ impl PcmBuffer {
     /// Create new PCM buffer for streaming only (no random access).
     ///
     /// This is a convenience method equivalent to `new(spec, false)`.
-    /// Use for hls_decode, StreamPipeline, and other streaming scenarios.
+    /// Use for HLS decoding and other streaming scenarios.
     pub fn new_streaming(spec: PcmSpec) -> (Self, kanal::Receiver<Vec<f32>>) {
         Self::new(spec, false)
     }

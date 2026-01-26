@@ -151,8 +151,9 @@ where
 {
     /// Create a new byte prefetch source with default buffer pool.
     pub fn new(src: Arc<S>, chunk_size: usize) -> Self {
-        // Create pool with 32 shards, up to 1024 buffers, trim to chunk_size * 2
-        let pool = SharedPool::<32, Vec<u8>>::new(1024, chunk_size * 2);
+        // Create pool with 32 shards, up to 32 buffers (reduced from 1024), trim to chunk_size * 2
+        // In practice only 4-8 buffers are in flight at any time
+        let pool = SharedPool::<32, Vec<u8>>::new(32, chunk_size * 2);
         Self::with_pool(src, chunk_size, pool)
     }
 
@@ -540,5 +541,320 @@ where
         }
 
         Ok(self.pos)
+    }
+}
+
+/// Direct synchronous reader without prefetch worker.
+///
+/// This reader calls `wait_range()` + `read_at()` directly via `block_on()`,
+/// avoiding the overhead of a separate prefetch task. Ideal for sources that
+/// already have efficient internal buffering (like disk-backed HLS segments).
+///
+/// ## Usage
+///
+/// Use this instead of `SyncReader` when:
+/// - Source reads from disk cache (like HLS with AssetStore)
+/// - Prefetch overhead is not justified
+/// - You want fewer tokio tasks
+///
+/// ```ignore
+/// let source: Arc<dyn Source<Item = u8, Error = MyError>> = ...;
+/// let mut reader = DirectSyncReader::new(source);
+/// let mut buf = [0u8; 1024];
+/// let n = reader.read(&mut buf)?;
+/// ```
+pub struct DirectSyncReader<S>
+where
+    S: Source<Item = u8>,
+{
+    source: Arc<S>,
+    pos: u64,
+    handle: tokio::runtime::Handle,
+}
+
+impl<S> DirectSyncReader<S>
+where
+    S: Source<Item = u8>,
+{
+    /// Create a new direct reader bound to the current Tokio runtime.
+    ///
+    /// This must be called from within a Tokio runtime context.
+    pub fn new(source: Arc<S>) -> Self {
+        let handle = tokio::runtime::Handle::current();
+        trace!("DirectSyncReader::new (no prefetch worker)");
+        Self {
+            source,
+            pos: 0,
+            handle,
+        }
+    }
+
+    /// Get current position.
+    pub fn position(&self) -> u64 {
+        self.pos
+    }
+
+    /// Consume reader and return source.
+    pub fn into_source(self) -> Arc<S> {
+        self.source
+    }
+}
+
+impl<S> Read for DirectSyncReader<S>
+where
+    S: Source<Item = u8>,
+{
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        let range = self.pos..self.pos + buf.len() as u64;
+
+        // Wait for data to be available
+        let wait_result = self.handle.block_on(self.source.wait_range(range));
+
+        match wait_result {
+            Ok(WaitOutcome::Ready) => {
+                // Data is ready, read it
+                let read_result = self.handle.block_on(self.source.read_at(self.pos, buf));
+
+                match read_result {
+                    Ok(n) => {
+                        if n > 0 {
+                            self.pos = self.pos.saturating_add(n as u64);
+                            trace!(bytes = n, new_pos = self.pos, "DirectSyncReader::read OK");
+                        } else {
+                            trace!(pos = self.pos, "DirectSyncReader::read EOF");
+                        }
+                        Ok(n)
+                    }
+                    Err(e) => {
+                        debug!(error = %e, "DirectSyncReader::read error");
+                        Err(std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            e.to_string(),
+                        ))
+                    }
+                }
+            }
+            Ok(WaitOutcome::Eof) => {
+                trace!(pos = self.pos, "DirectSyncReader::read EOF (wait)");
+                Ok(0)
+            }
+            Err(e) => {
+                debug!(error = %e, "DirectSyncReader::wait_range error");
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e.to_string(),
+                ))
+            }
+        }
+    }
+}
+
+impl<S> Seek for DirectSyncReader<S>
+where
+    S: Source<Item = u8>,
+{
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        trace!(cur = self.pos, ?pos, "DirectSyncReader::seek enter");
+
+        let new_pos: i128 = match pos {
+            SeekFrom::Start(p) => p as i128,
+            SeekFrom::Current(delta) => (self.pos as i128).saturating_add(delta as i128),
+            SeekFrom::End(delta) => {
+                let Some(len) = self.source.len() else {
+                    trace!("DirectSyncReader::seek from end but source len unknown");
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        StreamError::<S::Error>::UnknownLength.to_string(),
+                    ));
+                };
+                (len as i128).saturating_add(delta as i128)
+            }
+        };
+
+        if new_pos < 0 {
+            trace!(new_pos, "DirectSyncReader::seek invalid (negative)");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                StreamError::<S::Error>::InvalidSeek.to_string(),
+            ));
+        }
+
+        let new_pos_u64 = new_pos as u64;
+
+        if let Some(len) = self.source.len()
+            && new_pos_u64 > len
+        {
+            trace!(new_pos_u64, len, "DirectSyncReader::seek invalid (past EOF)");
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                StreamError::<S::Error>::InvalidSeek.to_string(),
+            ));
+        }
+
+        let old_pos = self.pos;
+        self.pos = new_pos_u64;
+
+        if new_pos_u64 != old_pos {
+            trace!(
+                from = old_pos,
+                to = new_pos_u64,
+                "DirectSyncReader::seek position updated"
+            );
+        }
+
+        Ok(self.pos)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Seek, SeekFrom};
+
+    /// Mock source for testing DirectSyncReader.
+    struct MockSource {
+        data: Vec<u8>,
+    }
+
+    impl MockSource {
+        fn new(data: Vec<u8>) -> Self {
+            Self { data }
+        }
+    }
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("mock error")]
+    struct MockError;
+
+    #[async_trait]
+    impl Source for MockSource {
+        type Item = u8;
+        type Error = MockError;
+
+        async fn wait_range(&self, _range: Range<u64>) -> StreamResult<WaitOutcome, MockError> {
+            Ok(WaitOutcome::Ready)
+        }
+
+        async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, MockError> {
+            let offset = offset as usize;
+            if offset >= self.data.len() {
+                return Ok(0);
+            }
+            let available = self.data.len() - offset;
+            let to_copy = available.min(buf.len());
+            buf[..to_copy].copy_from_slice(&self.data[offset..offset + to_copy]);
+            Ok(to_copy)
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(self.data.len() as u64)
+        }
+    }
+
+    #[tokio::test]
+    async fn test_direct_sync_reader_basic_read() {
+        let data = b"hello world".to_vec();
+        let source = Arc::new(MockSource::new(data.clone()));
+
+        // DirectSyncReader uses block_on, must be called from spawn_blocking
+        tokio::task::spawn_blocking(move || {
+            let mut reader = DirectSyncReader::new(source);
+
+            let mut buf = [0u8; 5];
+            let n = reader.read(&mut buf).unwrap();
+            assert_eq!(n, 5);
+            assert_eq!(&buf, b"hello");
+            assert_eq!(reader.position(), 5);
+
+            let n = reader.read(&mut buf).unwrap();
+            assert_eq!(n, 5);
+            assert_eq!(&buf, b" worl");
+            assert_eq!(reader.position(), 10);
+
+            let n = reader.read(&mut buf).unwrap();
+            assert_eq!(n, 1);
+            assert_eq!(&buf[..1], b"d");
+            assert_eq!(reader.position(), 11);
+
+            // EOF
+            let n = reader.read(&mut buf).unwrap();
+            assert_eq!(n, 0);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_direct_sync_reader_seek() {
+        let data = b"0123456789".to_vec();
+        let source = Arc::new(MockSource::new(data));
+
+        tokio::task::spawn_blocking(move || {
+            let mut reader = DirectSyncReader::new(source);
+
+            // Seek to middle
+            let pos = reader.seek(SeekFrom::Start(5)).unwrap();
+            assert_eq!(pos, 5);
+            assert_eq!(reader.position(), 5);
+
+            let mut buf = [0u8; 3];
+            let n = reader.read(&mut buf).unwrap();
+            assert_eq!(n, 3);
+            assert_eq!(&buf, b"567");
+
+            // Seek from current
+            let pos = reader.seek(SeekFrom::Current(-3)).unwrap();
+            assert_eq!(pos, 5);
+
+            // Seek from end
+            let pos = reader.seek(SeekFrom::End(-2)).unwrap();
+            assert_eq!(pos, 8);
+
+            let n = reader.read(&mut buf).unwrap();
+            assert_eq!(n, 2);
+            assert_eq!(&buf[..2], b"89");
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_direct_sync_reader_seek_errors() {
+        let data = b"test".to_vec();
+        let source = Arc::new(MockSource::new(data));
+
+        tokio::task::spawn_blocking(move || {
+            let mut reader = DirectSyncReader::new(source);
+
+            // Seek past EOF should fail
+            let result = reader.seek(SeekFrom::Start(10));
+            assert!(result.is_err());
+
+            // Seek to negative should fail
+            let result = reader.seek(SeekFrom::Current(-100));
+            assert!(result.is_err());
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_direct_sync_reader_into_source() {
+        let data = b"test".to_vec();
+        let source = Arc::new(MockSource::new(data.clone()));
+
+        let len = tokio::task::spawn_blocking(move || {
+            let reader = DirectSyncReader::new(source);
+            let recovered = reader.into_source();
+            recovered.len()
+        })
+        .await
+        .unwrap();
+
+        assert_eq!(len, Some(data.len() as u64));
     }
 }

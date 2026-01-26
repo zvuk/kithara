@@ -73,6 +73,31 @@ pub trait StreamingResourceExt: Resource {
 
     /// Write bytes at the given offset (HTTP Range response writes).
     async fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+
+    /// Write bytes in batches with yield between chunks.
+    ///
+    /// This method writes data in fixed-size batches (default 64KB), calling
+    /// `tokio::task::yield_now()` after each batch to prevent blocking the
+    /// event loop during large writes.
+    ///
+    /// This is useful for writing large segments while maintaining responsiveness
+    /// for other async tasks.
+    async fn write_batched(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        const BATCH_SIZE: usize = 64 * 1024; // 64KB batches
+
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        let mut current_offset = offset;
+        for chunk in data.chunks(BATCH_SIZE) {
+            self.write_at(current_offset, chunk).await?;
+            current_offset = current_offset.saturating_add(chunk.len() as u64);
+            tokio::task::yield_now().await;
+        }
+
+        Ok(())
+    }
 }
 
 /// Marker extension trait for atomic small-object resources.

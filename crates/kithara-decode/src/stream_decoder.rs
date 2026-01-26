@@ -1,563 +1,397 @@
-//! Stream-based decoder trait for processing messages with metadata.
+//! Streaming decoder using MediaStream.
 //!
-//! This module provides a generic decoder interface that processes sequential
-//! stream messages (metadata + data) instead of random-access byte streams.
-//!
-//! # Architecture
-//!
-//! Traditional decoders expect `Read + Seek`:
-//! ```ignore
-//! let decoder = Decoder::new(reader)?;
-//! loop {
-//!     let pcm = decoder.decode_next()?;
-//! }
-//! ```
-//!
-//! Stream-based decoders process messages with metadata:
-//! ```ignore
-//! let decoder = StreamDecoder::new();
-//! for message in stream {
-//!     if message.meta.is_boundary() {
-//!         decoder.reinitialize(&message.meta)?;
-//!     }
-//!     let pcm = decoder.decode_message(message)?;
-//! }
-//! ```
-//!
-//! # Benefits
-//!
-//! - **Explicit boundaries**: Decoder knows when to reinitialize (codec change, variant switch)
-//! - **No random access**: Simpler data flow, less buffering
-//! - **Testable**: Generic + mockall support for unit tests
-//! - **HLS ABR-friendly**: Handles variant switches cleanly
+//! Reads bytes on-demand from MediaStream, decoding as data arrives.
+//! Supports both HLS (segmented) and progressive files.
 
-use async_trait::async_trait;
-use kithara_stream::{StreamData, StreamMessage, StreamMetadata};
+use std::io::{self, Read, Seek, SeekFrom};
 
-use crate::types::DecodeResult;
+use tracing::{debug, trace};
 
-/// Generic stream decoder that processes messages with metadata.
+use crate::{
+    decoder::Decoder,
+    media_source::{AudioCodec, ContainerFormat, MediaInfo, MediaStream},
+    symphonia_mod::SymphoniaDecoder,
+    types::{DecodeResult, PcmChunk, PcmSpec},
+};
+
+/// Streaming decoder that reads from MediaStream.
 ///
-/// # Type Parameters
-/// - `M`: Metadata type (implements [`StreamMetadata`])
-/// - `D`: Data type (implements [`StreamData`])
+/// # Architecture
 ///
-/// # Boundary Handling
+/// The decoder pulls data on-demand:
+/// 1. Check `take_boundary()` - reinit decoder if needed
+/// 2. Read bytes via `read()` (may block waiting for data)
+/// 3. Decode and return PCM chunks
 ///
-/// Decoders check `meta.is_boundary()` to decide when reinitialization is needed:
-/// - HLS variant switch → reinitialize with new codec
-/// - Seek operation → flush internal buffers
-/// - Format change → reconfigure decoder
+/// # Streaming
 ///
-/// # Examples
+/// Unlike segment-based approach, bytes are read incrementally.
+/// This reduces latency - decoding starts before full segment downloads.
+///
+/// # Example
 ///
 /// ```ignore
-/// use kithara_decode::{StreamDecoder, PcmChunk};
-/// use kithara_stream::StreamMessage;
+/// let source = HlsMediaSource::new(/* ... */);
+/// let stream = source.open()?;
+/// let mut decoder = StreamDecoder::new(stream)?;
 ///
-/// async fn decode_stream<D>(mut decoder: D, messages: Vec<StreamMessage<M, D>>)
-/// where
-///     D: StreamDecoder<M, D>,
-/// {
-///     for msg in messages {
-///         if msg.meta.is_boundary() {
-///             // Decoder handles reinitialization internally
-///         }
-///         let pcm = decoder.decode_message(msg).await?;
-///         play_audio(pcm);
-///     }
+/// while let Some(chunk) = decoder.decode_next()? {
+///     play_audio(chunk);
 /// }
 /// ```
-///
-/// # Testing with Mockall
-///
-/// ```ignore
-/// use mockall::mock;
-///
-/// mock! {
-///     pub MyDecoder {}
-///
-///     #[async_trait]
-///     impl<M, D> StreamDecoder<M, D> for MyDecoder
-///     where
-///         M: StreamMetadata,
-///         D: StreamData,
-///     {
-///         type Output = MyOutput;
-///
-///         async fn decode_message(&mut self, msg: StreamMessage<M, D>)
-///             -> DecodeResult<Self::Output>;
-///         async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>>;
-///     }
-/// }
-/// ```
-#[async_trait]
-pub trait StreamDecoder<M, D>: Send + Sync
-where
-    M: StreamMetadata,
-    D: StreamData,
-{
-    /// Output type (e.g., PCM chunks, frames, packets)
-    type Output: Send;
+pub struct StreamDecoder {
+    /// Media stream (owned)
+    stream: Box<dyn MediaStream>,
 
-    /// Decode a stream message.
-    ///
-    /// The decoder checks `message.meta.is_boundary()` to determine if
-    /// reinitialization is needed (e.g., codec change on HLS variant switch).
-    ///
-    /// # Boundary Handling
-    ///
-    /// When `meta.is_boundary()` is true, the decoder should:
-    /// 1. Flush any pending data from previous codec/format
-    /// 2. Reinitialize with new metadata (codec, sample rate, etc.)
-    /// 3. Process the new message data
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DecodeError`] if:
-    /// - Codec initialization fails
-    /// - Data is corrupted
-    /// - Unsupported format
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let message = StreamMessage {
-    ///     meta: HlsSegmentMetadata {
-    ///         is_variant_switch: true,
-    ///         codec: Some(AudioCodec::AAC),
-    ///         // ...
-    ///     },
-    ///     data: bytes,
-    /// };
-    ///
-    /// let pcm_chunk = decoder.decode_message(message).await?;
-    /// ```
-    async fn decode_message(&mut self, message: StreamMessage<M, D>) -> DecodeResult<Self::Output>;
+    /// Current Symphonia decoder
+    decoder: Option<Box<dyn Decoder + Send + Sync>>,
 
-    /// Flush any pending output data.
+    /// Reader wrapper for Symphonia
+    reader: StreamReader,
+
+    /// Current PCM spec
+    current_spec: Option<PcmSpec>,
+
+    /// Boundaries encountered
+    boundaries_count: usize,
+
+    /// Chunks decoded
+    chunks_decoded: usize,
+}
+
+impl StreamDecoder {
+    /// Create a new streaming decoder.
     ///
-    /// Called at end of stream or before seek to ensure all queued data
-    /// is processed.
+    /// Initializes decoder from first boundary info.
+    pub fn new(stream: Box<dyn MediaStream>) -> DecodeResult<Self> {
+        let reader = StreamReader::new();
+
+        let mut decoder = Self {
+            stream,
+            decoder: None,
+            reader,
+            current_spec: None,
+            boundaries_count: 0,
+            chunks_decoded: 0,
+        };
+
+        // Check for initial boundary
+        decoder.check_boundary()?;
+
+        Ok(decoder)
+    }
+
+    /// Get current PCM specification.
+    pub fn spec(&self) -> Option<PcmSpec> {
+        self.current_spec
+    }
+
+    /// Get number of boundaries encountered.
+    pub fn boundaries_count(&self) -> usize {
+        self.boundaries_count
+    }
+
+    /// Get number of chunks decoded.
+    pub fn chunks_decoded(&self) -> usize {
+        self.chunks_decoded
+    }
+
+    /// Decode next PCM chunk.
     ///
-    /// # Returns
-    ///
-    /// Vector of output chunks (may be empty if nothing buffered).
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // End of stream
-    /// let remaining = decoder.flush().await?;
-    /// for chunk in remaining {
-    ///     play_audio(chunk);
-    /// }
-    /// ```
-    async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>>;
+    /// May block waiting for data from network.
+    /// Returns `None` when stream is exhausted.
+    pub fn decode_next(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+        // Check for boundary (codec/format change)
+        self.check_boundary()?;
+
+        // Check EOF
+        if self.stream.is_eof() && self.reader.available() == 0 {
+            debug!(
+                boundaries = self.boundaries_count,
+                chunks = self.chunks_decoded,
+                "stream exhausted"
+            );
+            return Ok(None);
+        }
+
+        // Fill reader buffer from stream
+        self.fill_reader()?;
+
+        // Check for boundary again - it may have been set during fill_reader
+        // (e.g., when stream loaded first segment with format info)
+        self.check_boundary()?;
+
+        // Try to decode
+        let Some(decoder) = self.decoder.as_mut() else {
+            // No decoder yet - try to create one
+            self.try_create_decoder()?;
+            return self.decode_next();
+        };
+
+        match decoder.next_chunk() {
+            Ok(Some(chunk)) => {
+                self.current_spec = Some(chunk.spec);
+                self.chunks_decoded += 1;
+                Ok(Some(chunk))
+            }
+            Ok(None) => {
+                // Need more data
+                if self.stream.is_eof() {
+                    Ok(None)
+                } else {
+                    // Try to get more data
+                    self.fill_reader()?;
+                    self.decode_next()
+                }
+            }
+            Err(e) => {
+                trace!(?e, "decode error, trying to continue");
+                // Try to continue
+                if self.stream.is_eof() {
+                    Ok(None)
+                } else {
+                    self.fill_reader()?;
+                    Ok(None)
+                }
+            }
+        }
+    }
+
+    /// Check for boundary and reinit decoder if needed.
+    fn check_boundary(&mut self) -> DecodeResult<()> {
+        if let Some(info) = self.stream.take_boundary() {
+            self.boundaries_count += 1;
+            debug!(
+                boundaries = self.boundaries_count,
+                codec = ?info.codec,
+                container = ?info.container,
+                "boundary detected - reinitializing decoder"
+            );
+
+            // Only clear reader if we have an existing decoder (mid-stream switch).
+            // For first boundary, keep the data that was just loaded.
+            if self.decoder.is_some() {
+                self.reader.clear();
+            }
+            self.decoder = None;
+
+            // Create new decoder
+            self.create_decoder(&info)?;
+        }
+        Ok(())
+    }
+
+    /// Try to create decoder if we have enough data.
+    fn try_create_decoder(&mut self) -> DecodeResult<()> {
+        if self.reader.available() > 0 {
+            let info = MediaInfo::default();
+            self.create_decoder(&info)?;
+        }
+        Ok(())
+    }
+
+    /// Create decoder from media info.
+    fn create_decoder(&mut self, info: &MediaInfo) -> DecodeResult<()> {
+        // Fill reader with some initial data
+        self.fill_reader()?;
+
+        if self.reader.available() == 0 {
+            return Ok(());
+        }
+
+        let stream_info = convert_to_stream_info(info);
+
+        debug!(?stream_info, "creating decoder");
+
+        let reader = self.reader.clone();
+        let decoder = SymphoniaDecoder::new_from_media_info(reader, &stream_info, true)?;
+
+        self.current_spec = Some(decoder.spec());
+        self.decoder = Some(Box::new(decoder));
+
+        debug!(spec = ?self.current_spec, "decoder created");
+        Ok(())
+    }
+
+    /// Fill reader buffer from stream.
+    fn fill_reader(&mut self) -> io::Result<()> {
+        const CHUNK_SIZE: usize = 32 * 1024; // 32KB chunks
+        let mut buf = vec![0u8; CHUNK_SIZE];
+
+        match self.stream.read(&mut buf) {
+            Ok(0) => Ok(()), // EOF or no data available
+            Ok(n) => {
+                buf.truncate(n);
+                self.reader.append(&buf);
+                trace!(bytes = n, "filled reader buffer");
+                Ok(())
+            }
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+/// Internal reader that wraps bytes for Symphonia.
+///
+/// Accumulates bytes from stream and provides Read + Seek.
+#[derive(Clone)]
+struct StreamReader {
+    /// Accumulated data
+    buffer: std::sync::Arc<std::sync::RwLock<Vec<u8>>>,
+    /// Current read position
+    position: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl StreamReader {
+    fn new() -> Self {
+        Self {
+            buffer: std::sync::Arc::new(std::sync::RwLock::new(Vec::new())),
+            position: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        }
+    }
+
+    fn append(&self, data: &[u8]) {
+        let mut buf = self.buffer.write().unwrap();
+        buf.extend_from_slice(data);
+    }
+
+    fn clear(&self) {
+        let mut buf = self.buffer.write().unwrap();
+        buf.clear();
+        self.position
+            .store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn available(&self) -> usize {
+        let buf = self.buffer.read().unwrap();
+        let pos = self.position.load(std::sync::atomic::Ordering::Relaxed);
+        buf.len().saturating_sub(pos)
+    }
+}
+
+impl Read for StreamReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let data = self.buffer.read().unwrap();
+        let pos = self.position.load(std::sync::atomic::Ordering::Relaxed);
+
+        if pos >= data.len() {
+            return Ok(0);
+        }
+
+        let available = &data[pos..];
+        let to_read = buf.len().min(available.len());
+        buf[..to_read].copy_from_slice(&available[..to_read]);
+
+        self.position
+            .fetch_add(to_read, std::sync::atomic::Ordering::Relaxed);
+        Ok(to_read)
+    }
+}
+
+impl Seek for StreamReader {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        let data = self.buffer.read().unwrap();
+        let len = data.len() as i64;
+        let current = self.position.load(std::sync::atomic::Ordering::Relaxed) as i64;
+
+        let new_pos = match pos {
+            SeekFrom::Start(p) => p as i64,
+            SeekFrom::End(p) => len + p,
+            SeekFrom::Current(p) => current + p,
+        };
+
+        if new_pos < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "seek before start",
+            ));
+        }
+
+        let new_pos = new_pos as usize;
+        self.position
+            .store(new_pos, std::sync::atomic::Ordering::Relaxed);
+        Ok(new_pos as u64)
+    }
+}
+
+/// Convert MediaInfo to kithara_stream::MediaInfo for Symphonia.
+fn convert_to_stream_info(info: &MediaInfo) -> kithara_stream::MediaInfo {
+    let container = info.container.map(|c| match c {
+        ContainerFormat::Fmp4 => kithara_stream::ContainerFormat::Fmp4,
+        ContainerFormat::MpegTs => kithara_stream::ContainerFormat::MpegTs,
+        ContainerFormat::MpegAudio => kithara_stream::ContainerFormat::MpegAudio,
+        ContainerFormat::Wav => kithara_stream::ContainerFormat::Wav,
+        ContainerFormat::Ogg => kithara_stream::ContainerFormat::Ogg,
+    });
+
+    let codec = info.codec.map(|c| match c {
+        AudioCodec::AacLc => kithara_stream::AudioCodec::AacLc,
+        AudioCodec::AacHe => kithara_stream::AudioCodec::AacHe,
+        AudioCodec::AacHeV2 => kithara_stream::AudioCodec::AacHeV2,
+        AudioCodec::Mp3 => kithara_stream::AudioCodec::Mp3,
+        AudioCodec::Flac => kithara_stream::AudioCodec::Flac,
+        AudioCodec::Vorbis => kithara_stream::AudioCodec::Vorbis,
+        AudioCodec::Opus => kithara_stream::AudioCodec::Opus,
+        AudioCodec::Alac => kithara_stream::AudioCodec::Alac,
+        AudioCodec::Pcm => kithara_stream::AudioCodec::Pcm,
+    });
+
+    kithara_stream::MediaInfo {
+        container,
+        codec,
+        sample_rate: None,
+        channels: None,
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use bytes::Bytes;
-    use kithara_stream::StreamMessage;
-
     use super::*;
-    use crate::types::DecodeError;
 
-    // Test metadata type
-    #[derive(Debug, Clone)]
-    struct TestMetadata {
-        seq: u64,
-        boundary: bool,
+    #[test]
+    fn test_stream_reader_basic() {
+        let reader = StreamReader::new();
+        reader.append(b"hello world");
+        assert_eq!(reader.available(), 11);
     }
 
-    impl StreamMetadata for TestMetadata {
-        fn sequence_id(&self) -> u64 {
-            self.seq
-        }
+    #[test]
+    fn test_stream_reader_read() {
+        let mut reader = StreamReader::new();
+        reader.append(b"hello");
 
-        fn is_boundary(&self) -> bool {
-            self.boundary
-        }
+        let mut buf = [0u8; 3];
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 3);
+        assert_eq!(&buf, b"hel");
+        assert_eq!(reader.available(), 2);
     }
 
-    // Test decoder implementation
-    struct TestDecoder {
-        outputs: Vec<String>,
-        reinit_count: usize,
+    #[test]
+    fn test_stream_reader_seek() {
+        let mut reader = StreamReader::new();
+        reader.append(b"hello world");
+
+        reader.seek(SeekFrom::Start(6)).unwrap();
+        let mut buf = [0u8; 5];
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, b"world");
     }
 
-    #[async_trait]
-    impl StreamDecoder<TestMetadata, Bytes> for TestDecoder {
-        type Output = String;
+    #[test]
+    fn test_stream_reader_clear() {
+        let mut reader = StreamReader::new();
+        reader.append(b"hello");
 
-        async fn decode_message(
-            &mut self,
-            message: StreamMessage<TestMetadata, Bytes>,
-        ) -> DecodeResult<Self::Output> {
-            if message.meta.is_boundary() {
-                self.reinit_count += 1;
-            }
+        let mut buf = [0u8; 2];
+        reader.read(&mut buf).unwrap();
 
-            let output = format!(
-                "decoded_seq_{}_len_{}",
-                message.meta.sequence_id(),
-                message.data.len()
-            );
-            self.outputs.push(output.clone());
-            Ok(output)
-        }
+        reader.clear();
+        assert_eq!(reader.available(), 0);
 
-        async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>> {
-            Ok(vec!["flushed".to_string()])
-        }
-    }
-
-    #[tokio::test]
-    async fn test_decoder_processes_messages() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        let msg = StreamMessage::new(
-            TestMetadata {
-                seq: 1,
-                boundary: false,
-            },
-            Bytes::from(vec![1, 2, 3]),
-        );
-
-        let output = decoder.decode_message(msg).await.unwrap();
-        assert_eq!(output, "decoded_seq_1_len_3");
-        assert_eq!(decoder.outputs.len(), 1);
-        assert_eq!(decoder.reinit_count, 0);
-    }
-
-    #[tokio::test]
-    async fn test_decoder_handles_boundaries() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        // Regular message
-        let msg1 = StreamMessage::new(
-            TestMetadata {
-                seq: 1,
-                boundary: false,
-            },
-            Bytes::from(vec![1, 2, 3]),
-        );
-        decoder.decode_message(msg1).await.unwrap();
-
-        // Boundary message (e.g., variant switch)
-        let msg2 = StreamMessage::new(
-            TestMetadata {
-                seq: 2,
-                boundary: true,
-            },
-            Bytes::from(vec![4, 5, 6]),
-        );
-        decoder.decode_message(msg2).await.unwrap();
-
-        assert_eq!(decoder.outputs.len(), 2);
-        assert_eq!(decoder.reinit_count, 1); // Reinitialized on boundary
-    }
-
-    #[tokio::test]
-    async fn test_decoder_flush() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        let flushed = decoder.flush().await.unwrap();
-        assert_eq!(flushed, vec!["flushed".to_string()]);
-    }
-
-    #[tokio::test]
-    async fn test_multiple_boundaries() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        // Simulate multiple variant switches
-        for i in 0..5 {
-            let msg = StreamMessage::new(
-                TestMetadata {
-                    seq: i,
-                    boundary: i % 2 == 0, // Every other message is boundary
-                },
-                Bytes::from(vec![i as u8]),
-            );
-            decoder.decode_message(msg).await.unwrap();
-        }
-
-        assert_eq!(decoder.outputs.len(), 5);
-        assert_eq!(decoder.reinit_count, 3); // seq 0, 2, 4
-    }
-
-    // Mock decoder that tracks method calls
-    struct MockTrackingDecoder {
-        decode_calls: Vec<u64>,
-        flush_calls: usize,
-        should_fail_at: Option<u64>,
-    }
-
-    #[async_trait]
-    impl StreamDecoder<TestMetadata, Bytes> for MockTrackingDecoder {
-        type Output = String;
-
-        async fn decode_message(
-            &mut self,
-            message: StreamMessage<TestMetadata, Bytes>,
-        ) -> DecodeResult<Self::Output> {
-            let seq = message.meta.sequence_id();
-            self.decode_calls.push(seq);
-
-            // Simulate failure at specific sequence
-            if self.should_fail_at == Some(seq) {
-                return Err(DecodeError::DecodeError(format!(
-                    "Mock error at seq {}",
-                    seq
-                )));
-            }
-
-            Ok(format!("mock_output_{}", seq))
-        }
-
-        async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>> {
-            self.flush_calls += 1;
-            Ok(vec![format!("flush_{}", self.flush_calls)])
-        }
-    }
-
-    #[tokio::test]
-    async fn test_mock_decoder_tracking() {
-        let mut decoder = MockTrackingDecoder {
-            decode_calls: vec![],
-            flush_calls: 0,
-            should_fail_at: None,
-        };
-
-        // Process several messages
-        for i in 0..3 {
-            let msg = StreamMessage::new(
-                TestMetadata {
-                    seq: i,
-                    boundary: false,
-                },
-                Bytes::new(),
-            );
-            decoder.decode_message(msg).await.unwrap();
-        }
-
-        // Verify all calls were tracked
-        assert_eq!(decoder.decode_calls, vec![0, 1, 2]);
-        assert_eq!(decoder.flush_calls, 0);
-
-        // Flush
-        let result = decoder.flush().await.unwrap();
-        assert_eq!(result, vec!["flush_1"]);
-        assert_eq!(decoder.flush_calls, 1);
-    }
-
-    #[tokio::test]
-    async fn test_mock_decoder_error_handling() {
-        let mut decoder = MockTrackingDecoder {
-            decode_calls: vec![],
-            flush_calls: 0,
-            should_fail_at: Some(2),
-        };
-
-        // First message succeeds
-        let msg1 = StreamMessage::new(
-            TestMetadata {
-                seq: 1,
-                boundary: false,
-            },
-            Bytes::new(),
-        );
-        assert!(decoder.decode_message(msg1).await.is_ok());
-
-        // Second message fails
-        let msg2 = StreamMessage::new(
-            TestMetadata {
-                seq: 2,
-                boundary: false,
-            },
-            Bytes::new(),
-        );
-        let result = decoder.decode_message(msg2).await;
-        assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().to_string(),
-            "decode error: Mock error at seq 2"
-        );
-
-        // Verify both calls were attempted
-        assert_eq!(decoder.decode_calls, vec![1, 2]);
-    }
-
-    // Mock decoder with stateful behavior
-    struct StatefulMockDecoder {
-        state: String,
-        message_count: usize,
-    }
-
-    #[async_trait]
-    impl StreamDecoder<TestMetadata, Bytes> for StatefulMockDecoder {
-        type Output = String;
-
-        async fn decode_message(
-            &mut self,
-            message: StreamMessage<TestMetadata, Bytes>,
-        ) -> DecodeResult<Self::Output> {
-            self.message_count += 1;
-
-            // Update state on boundary
-            if message.meta.is_boundary() {
-                self.state = format!("boundary_at_{}", message.meta.sequence_id());
-            }
-
-            Ok(format!("{}:msg_{}", self.state, self.message_count))
-        }
-
-        async fn flush(&mut self) -> DecodeResult<Vec<Self::Output>> {
-            Ok(vec![format!("final_state:{}", self.state)])
-        }
-    }
-
-    #[tokio::test]
-    async fn test_stateful_mock_decoder() {
-        let mut decoder = StatefulMockDecoder {
-            state: "initial".to_string(),
-            message_count: 0,
-        };
-
-        // Regular message
-        let msg1 = StreamMessage::new(
-            TestMetadata {
-                seq: 1,
-                boundary: false,
-            },
-            Bytes::new(),
-        );
-        let result1 = decoder.decode_message(msg1).await.unwrap();
-        assert_eq!(result1, "initial:msg_1");
-
-        // Boundary message changes state
-        let msg2 = StreamMessage::new(
-            TestMetadata {
-                seq: 2,
-                boundary: true,
-            },
-            Bytes::new(),
-        );
-        let result2 = decoder.decode_message(msg2).await.unwrap();
-        assert_eq!(result2, "boundary_at_2:msg_2");
-
-        // Next message uses updated state
-        let msg3 = StreamMessage::new(
-            TestMetadata {
-                seq: 3,
-                boundary: false,
-            },
-            Bytes::new(),
-        );
-        let result3 = decoder.decode_message(msg3).await.unwrap();
-        assert_eq!(result3, "boundary_at_2:msg_3");
-
-        // Flush returns final state
-        let flushed = decoder.flush().await.unwrap();
-        assert_eq!(flushed, vec!["final_state:boundary_at_2"]);
-    }
-
-    #[tokio::test]
-    async fn test_empty_data_handling() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        // Empty bytes
-        let msg = StreamMessage::new(
-            TestMetadata {
-                seq: 1,
-                boundary: false,
-            },
-            Bytes::new(),
-        );
-
-        let output = decoder.decode_message(msg).await.unwrap();
-        assert_eq!(output, "decoded_seq_1_len_0");
-    }
-
-    #[tokio::test]
-    async fn test_large_sequence() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        // Process 100 messages
-        for i in 0..100 {
-            let msg = StreamMessage::new(
-                TestMetadata {
-                    seq: i,
-                    boundary: i % 10 == 0, // Boundary every 10 messages
-                },
-                Bytes::from(vec![i as u8]),
-            );
-            decoder.decode_message(msg).await.unwrap();
-        }
-
-        assert_eq!(decoder.outputs.len(), 100);
-        assert_eq!(decoder.reinit_count, 10); // 10 boundaries
-    }
-
-    #[tokio::test]
-    async fn test_consecutive_boundaries() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        // Multiple consecutive boundaries
-        for i in 0..5 {
-            let msg = StreamMessage::new(
-                TestMetadata {
-                    seq: i,
-                    boundary: true, // All boundaries
-                },
-                Bytes::new(),
-            );
-            decoder.decode_message(msg).await.unwrap();
-        }
-
-        assert_eq!(decoder.outputs.len(), 5);
-        assert_eq!(decoder.reinit_count, 5); // Every message triggered reinit
-    }
-
-    #[tokio::test]
-    async fn test_multiple_flush_calls() {
-        let mut decoder = TestDecoder {
-            outputs: vec![],
-            reinit_count: 0,
-        };
-
-        // First flush
-        let result1 = decoder.flush().await.unwrap();
-        assert_eq!(result1, vec!["flushed"]);
-
-        // Second flush (should still work)
-        let result2 = decoder.flush().await.unwrap();
-        assert_eq!(result2, vec!["flushed"]);
-
-        // Verify decoder state is consistent
-        assert_eq!(decoder.outputs.len(), 0);
-        assert_eq!(decoder.reinit_count, 0);
+        let n = reader.read(&mut buf).unwrap();
+        assert_eq!(n, 0);
     }
 }

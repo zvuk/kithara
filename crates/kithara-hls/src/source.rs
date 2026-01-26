@@ -14,65 +14,130 @@ use crate::{
     error::{HlsError, HlsResult},
     events::HlsEvent,
     fetch::FetchManager,
+    media_source::HlsMediaSource,
     options::HlsParams,
     playlist::{PlaylistManager, variant_info_from_master},
     worker::{HlsSourceAdapter, HlsWorkerSource, VariantMetadata},
 };
 
-/// Marker type for HLS streaming with the unified `StreamSource<S>` API.
+/// Marker type for HLS streaming.
 ///
 /// ## Usage
 ///
 /// ```ignore
-/// use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
+/// use kithara_decode::{StreamDecoder, MediaSource};
 /// use kithara_hls::{Hls, HlsParams};
 ///
-/// // Async source with events
-/// let source = StreamSource::<Hls>::open(url, HlsParams::default()).await?;
-/// let events = source.events();  // Receiver<HlsEvent>
+/// // Open media source
+/// let source = Hls::open_media_source(url, HlsParams::default()).await?;
+/// let stream = source.open()?;
 ///
-/// // Sync reader for decoders (Read + Seek)
-/// let reader = SyncReader::<StreamSource<Hls>>::open(
-///     url,
-///     HlsParams::default(),
-///     SyncReaderParams::default()
-/// ).await?;
-/// let events = reader.events();
+/// // Create decoder
+/// let mut decoder = StreamDecoder::new(stream)?;
+///
+/// // Decode - bytes read on-demand
+/// while let Some(chunk) = decoder.decode_next()? {
+///     play_audio(chunk);
+/// }
 /// ```
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Hls;
 
 impl Hls {
-    /// Open an HLS stream from a master playlist URL.
+    /// Open an HLS stream and return a MediaSource for streaming decode.
     ///
-    /// Returns `HlsWorkerSource` which can be used directly with `StreamPipeline`
-    /// or wrapped with `HlsSourceAdapter` for `Source` trait compatibility.
-    ///
-    /// ## Events
-    ///
-    /// To receive HLS events, create a broadcast channel and pass the sender via
-    /// `params.with_events(sender)`. Keep the receiver to subscribe to events.
+    /// This is the recommended way to use HLS with kithara-decode.
+    /// Bytes are read incrementally, allowing decode to start before full download.
     ///
     /// ## Example
     ///
     /// ```ignore
-    /// // Create events channel
-    /// let (events_tx, events_rx) = broadcast::channel(32);
-    /// let params = HlsParams::default().with_events(events_tx);
+    /// use kithara_decode::{StreamDecoder, MediaSource};
+    /// use kithara_hls::{Hls, HlsParams};
     ///
-    /// // Open HLS worker source
-    /// let worker_source = Hls::open(url, params).await?;
+    /// let source = Hls::open_media_source(url, HlsParams::default()).await?;
+    /// let stream = source.open()?;
+    /// let mut decoder = StreamDecoder::new(stream)?;
     ///
-    /// // Use with StreamPipeline
-    /// let pipeline = StreamPipeline::new(worker_source, decoder).await?;
-    ///
-    /// // Subscribe to events
-    /// tokio::spawn(async move {
-    ///     while let Ok(event) = events_rx.recv().await {
-    ///         println!("HLS event: {:?}", event);
-    ///     }
-    /// });
+    /// while let Some(chunk) = decoder.decode_next()? {
+    ///     play_audio(chunk);
+    /// }
     /// ```
+    pub async fn open_media_source(url: Url, params: HlsParams) -> HlsResult<HlsMediaSource> {
+        let asset_root = asset_root_for_url(&url);
+        let cancel = params.cancel.clone().unwrap_or_default();
+        let net = HttpClient::new(params.net.clone());
+
+        // Build base asset store
+        let base_assets = AssetStoreBuilder::new()
+            .asset_root(&asset_root)
+            .cancel(cancel.clone())
+            .root_dir(&params.store.cache_dir)
+            .evict_config(params.store.to_evict_config())
+            .build();
+
+        // Build FetchManager
+        let fetch_manager = Arc::new(FetchManager::new(base_assets.clone(), net));
+
+        // Build PlaylistManager
+        let playlist_manager = Arc::new(PlaylistManager::new(
+            Arc::clone(&fetch_manager),
+            params.base_url.clone(),
+        ));
+
+        // Load master playlist
+        let master = playlist_manager.master_playlist(&url).await?;
+
+        // Determine initial variant from ABR mode
+        let initial_variant = params.abr.initial_variant();
+
+        // Emit VariantsDiscovered event
+        if let Some(ref events_tx) = params.events_tx {
+            let variant_info = variant_info_from_master(&master);
+            let _ = events_tx.send(HlsEvent::VariantsDiscovered {
+                variants: variant_info,
+                initial_variant,
+            });
+        }
+
+        // Extract variant metadata
+        let variant_metadata: Vec<VariantMetadata> = master
+            .variants
+            .iter()
+            .enumerate()
+            .map(|(index, v)| VariantMetadata {
+                index,
+                codec: v.codec.as_ref().and_then(|c| c.audio_codec),
+                container: v.codec.as_ref().and_then(|c| c.container),
+                bitrate: v.bandwidth,
+            })
+            .collect();
+
+        // Create FetchLoader
+        let fetch_loader = Arc::new(FetchLoader::new(
+            url.clone(),
+            Arc::clone(&fetch_manager),
+            Arc::clone(&playlist_manager),
+        ));
+
+        // Create and return HlsMediaSource
+        Ok(HlsMediaSource::new(
+            fetch_loader as Arc<dyn Loader>,
+            base_assets,
+            variant_metadata,
+            initial_variant,
+            Some(params.abr.clone()),
+            params.events_tx.clone(),
+            cancel,
+        ))
+    }
+
+    /// Open an HLS stream from a master playlist URL.
+    ///
+    /// Returns `HlsWorkerSource` for push-based streaming with AsyncWorker.
+    ///
+    /// **Note:** For new code, prefer `open_media_source()` which provides
+    /// better latency through streaming decode.
     pub async fn open(url: Url, params: HlsParams) -> HlsResult<HlsWorkerSource> {
         let asset_root = asset_root_for_url(&url);
         let cancel = params.cancel.clone().unwrap_or_default();
@@ -164,6 +229,9 @@ impl SourceFactory for Hls {
         // Open HLS worker source
         let worker_source = Hls::open(url, params).await.map_err(StreamError::Source)?;
 
+        // Get assets before passing worker_source to AsyncWorker
+        let assets = worker_source.assets();
+
         // Create channels for worker
         let (cmd_tx, cmd_rx) = kanal::bounded_async(16);
         const HLS_CHUNK_CHANNEL_CAPACITY: usize = 8;
@@ -173,8 +241,8 @@ impl SourceFactory for Hls {
         let worker = kithara_worker::AsyncWorker::new(worker_source, cmd_rx, chunk_tx);
         tokio::spawn(worker.run());
 
-        // Create HlsSourceAdapter
-        let adapter = HlsSourceAdapter::new(chunk_rx, cmd_tx, events_tx.clone());
+        // Create HlsSourceAdapter with assets for direct disk access
+        let adapter = HlsSourceAdapter::new(chunk_rx, cmd_tx, assets, events_tx.clone());
 
         Ok(OpenedSource {
             source: Arc::new(adapter),
