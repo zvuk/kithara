@@ -151,8 +151,9 @@ where
 {
     /// Create a new byte prefetch source with default buffer pool.
     pub fn new(src: Arc<S>, chunk_size: usize) -> Self {
-        // Create pool with 32 shards, up to 1024 buffers, trim to chunk_size * 2
-        let pool = SharedPool::<32, Vec<u8>>::new(1024, chunk_size * 2);
+        // Create pool with 32 shards, up to 32 buffers (reduced from 1024), trim to chunk_size * 2
+        // In practice only 4-8 buffers are in flight at any time
+        let pool = SharedPool::<32, Vec<u8>>::new(32, chunk_size * 2);
         Self::with_pool(src, chunk_size, pool)
     }
 
