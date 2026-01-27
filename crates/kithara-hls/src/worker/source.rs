@@ -27,8 +27,7 @@ pub struct HlsWorkerSource {
     /// Generic loader (FetchLoader or test mock).
     loader: Arc<dyn Loader>,
 
-    /// Fetch manager (kept for backward compatibility but not used for reading).
-    #[allow(dead_code)]
+    /// Fetch manager (provides access to assets).
     fetch_manager: Arc<DefaultFetchManager>,
 
     /// Variant metadata (codec, container, bitrate).
@@ -438,7 +437,7 @@ mod tests {
         vec![VariantMetadata {
             index: 0,
             codec: Some(kithara_stream::AudioCodec::AacLc),
-            container: Some(crate::parsing::ContainerFormat::Fmp4),
+            container: Some(kithara_stream::ContainerFormat::Fmp4),
             bitrate: Some(128000),
         }]
     }
@@ -468,7 +467,7 @@ mod tests {
             duration: Some(Duration::from_secs(4)),
             key: None,
             len,
-            container: Some(crate::parsing::ContainerFormat::Fmp4),
+            container: Some(kithara_stream::ContainerFormat::Fmp4),
         }
     }
 

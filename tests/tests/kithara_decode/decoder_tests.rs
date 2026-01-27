@@ -101,8 +101,7 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool) {
 fn from_media_info_wav(audio: EmbeddedAudio, wav_media_info: MediaInfo) {
     let reader = Cursor::new(audio.wav());
 
-    let mut decoder =
-        SymphoniaDecoder::new_from_media_info(reader, &wav_media_info, false).unwrap();
+    let mut decoder = SymphoniaDecoder::new_from_media_info(reader, &wav_media_info).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
@@ -116,7 +115,7 @@ fn from_media_info_wav(audio: EmbeddedAudio, wav_media_info: MediaInfo) {
 fn from_media_info_mp3(audio: EmbeddedAudio, mp3_media_info: MediaInfo) {
     let reader = Cursor::new(audio.mp3());
 
-    let decoder = SymphoniaDecoder::new_from_media_info(reader, &mp3_media_info, false).unwrap();
+    let decoder = SymphoniaDecoder::new_from_media_info(reader, &mp3_media_info).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
@@ -249,18 +248,7 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     }
 }
 
-// ==================== Streaming Mode Tests ====================
-
-#[rstest]
-fn streaming_mode_wav(audio: EmbeddedAudio, wav_media_info: MediaInfo) {
-    let reader = Cursor::new(audio.wav());
-
-    // is_streaming = true
-    let mut decoder = SymphoniaDecoder::new_from_media_info(reader, &wav_media_info, true).unwrap();
-
-    let chunk = decoder.next_chunk().unwrap();
-    assert!(chunk.is_some());
-}
+// ==================== Decode Consistency Tests ====================
 
 #[rstest]
 fn consecutive_chunks_differ(audio: EmbeddedAudio) {

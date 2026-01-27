@@ -1,19 +1,21 @@
-//! Example: Play audio from an HLS stream using streaming decode.
+//! Example: Play audio from an HLS stream using Decoder.
 //!
-//! This demonstrates the streaming decode architecture:
-//! - HlsMediaSource provides media stream
-//! - StreamDecoder reads bytes incrementally
-//! - Decoding starts before full segment downloads
+//! This demonstrates the decode architecture:
+//! - DecoderConfig::<Hls>::new(hls_config) creates config with stream settings
+//! - Decoder::new(config) creates stream and decoder
+//! - Decoder runs symphonia in separate thread with PCM buffer
+//! - Decoder impl rodio::Source for direct playback
 //!
 //! Run with:
 //! ```
 //! cargo run -p kithara-decode --example hls_decode --features rodio [URL]
 //! ```
 
-use std::{env::args, error::Error, sync::Arc};
+use std::{env::args, error::Error};
 
-use kithara_decode::{MediaSource, PcmBuffer, StreamDecoder};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
+use kithara_decode::{Decoder, DecoderConfig};
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
+use kithara_stream::Stream;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -44,126 +46,40 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Create events channel
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
 
-    let hls_params = HlsParams::default()
+    let hls_config = HlsConfig::new(url)
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()
         })
         .with_events(events_tx);
 
-    // Open HLS media source (streaming architecture)
-    let source = Hls::open_media_source(url, hls_params).await?;
+    // Create decoder via target API
+    let config = DecoderConfig::<Hls>::new(hls_config);
+    let decoder = Decoder::<Stream<Hls>>::new(config).await?;
 
-    // Subscribe to HLS events
+    // Log events
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
-            match ev {
-                HlsEvent::VariantApplied {
-                    from_variant,
-                    to_variant,
-                    reason,
-                } => {
-                    info!(
-                        ?reason,
-                        "Variant switch: {} -> {}", from_variant, to_variant
-                    );
-                }
-                HlsEvent::SegmentComplete {
-                    segment_index,
-                    variant,
-                    bytes_transferred,
-                    ..
-                } => {
-                    info!(
-                        segment_index,
-                        variant, bytes_transferred, "Segment complete"
-                    );
-                }
-                HlsEvent::EndOfStream => {
-                    info!("End of stream");
-                    break;
-                }
-                _ => {}
-            }
+            info!(?ev);
         }
     });
 
-    info!("Creating stream decoder...");
+    info!("Starting playback...");
 
-    // Open media stream
-    let stream = source.open()?;
+    let handle = tokio::task::spawn_blocking(move || {
+        let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
+        let sink = rodio::Sink::connect_new(stream_handle.mixer());
+        sink.set_volume(0.3);
+        sink.append(decoder);
 
-    // Create stream decoder
-    let mut decoder = StreamDecoder::new(stream)?;
+        info!("Playing...");
+        sink.sleep_until_end();
 
-    // Create simple PCM buffer for streaming (no random access)
-    let spec = kithara_decode::PcmSpec {
-        sample_rate: 44100,
-        channels: 2,
-    };
-    let (buffer, sample_rx) = PcmBuffer::new_streaming(spec);
-    let buffer = Arc::new(buffer);
-
-    info!("Starting decode loop...");
-
-    // Decode loop - runs in current thread
-    let buffer_clone = buffer.clone();
-    let decode_handle = tokio::task::spawn_blocking(move || {
-        let mut chunks_decoded = 0;
-
-        while let Ok(Some(chunk)) = decoder.decode_next() {
-            chunks_decoded += 1;
-
-            if !chunk.pcm.is_empty() {
-                if chunks_decoded % 100 == 0 {
-                    info!(
-                        chunk = chunks_decoded,
-                        frames = chunk.frames(),
-                        sample_rate = chunk.spec.sample_rate,
-                        channels = chunk.spec.channels,
-                        "Decoded PCM chunk"
-                    );
-                }
-
-                // Send to rodio via channel (streaming mode)
-                buffer_clone.append(&chunk);
-            }
-        }
-
-        info!(total_chunks = chunks_decoded, "Decode loop finished");
+        info!("Playback complete");
+        Ok::<_, Box<dyn Error + Send + Sync>>(())
     });
 
-    // Create rodio adapter from sample channel
-    #[cfg(feature = "rodio")]
-    {
-        let audio_source = kithara_decode::AudioSyncReader::new(sample_rx, buffer.clone(), spec);
-
-        // Play via rodio in blocking thread
-        let play_handle = tokio::task::spawn_blocking(move || {
-            let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
-            let sink = rodio::Sink::connect_new(stream_handle.mixer());
-            sink.set_volume(0.3);
-            sink.append(audio_source);
-
-            info!("Playing HLS stream via rodio...");
-            sink.sleep_until_end();
-
-            info!("Playback complete");
-            Ok::<_, Box<dyn Error + Send + Sync>>(())
-        });
-
-        play_handle.await??;
-    }
-
-    #[cfg(not(feature = "rodio"))]
-    {
-        info!("Rodio feature not enabled, just decoding without playback");
-    }
-
-    // Wait for decode loop to complete
-    decode_handle.await?;
-
-    info!("HLS decode example finished");
+    handle.await??;
 
     Ok(())
 }

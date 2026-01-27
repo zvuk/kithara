@@ -149,6 +149,7 @@ impl StreamingResource {
         };
 
         if offset >= final_len {
+            eprintln!("[DEBUG] clamp_len_to_eof: offset={} >= final_len={}, returning 0", offset, final_len);
             return Ok(Some(0));
         }
 
@@ -218,6 +219,7 @@ impl Resource for StreamingResource {
     }
 
     async fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
+        eprintln!("[DEBUG] commit called with final_len={:?}", final_len);
         {
             let mut state = self.inner.state.write().await;
 
@@ -309,13 +311,19 @@ impl StreamingResourceExt for StreamingResource {
 
         let len = buf.len();
         let read_len = match self.clamp_len_to_eof(offset, len).await? {
-            Some(0) => return Ok(0),
+            Some(0) => {
+                eprintln!("[DEBUG] read_at: clamp returned Some(0) at offset={}", offset);
+                return Ok(0);
+            }
             Some(clamped) => clamped,
             None => len,
         };
 
         let mut disk = self.inner.disk.lock().await;
         let bytes_read = disk.read_to(offset, &mut buf[..read_len]).await?;
+        if bytes_read == 0 && read_len > 0 {
+            eprintln!("[DEBUG] read_at: disk.read_to returned 0 at offset={}, read_len={}", offset, read_len);
+        }
         Ok(bytes_read)
     }
 

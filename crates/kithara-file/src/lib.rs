@@ -5,29 +5,22 @@
 //! # Example
 //!
 //! ```ignore
-//! use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
-//! use kithara_file::{File, FileParams};
+//! use kithara_stream::{Stream, StreamType};
+//! use kithara_file::{File, FileConfig};
 //!
-//! // Async source with events
-//! let source = StreamSource::<File>::open(url, FileParams::default()).await?;
-//! let events = source.events();  // Receiver<FileEvent>
-//!
-//! // Sync reader for decoders (Read + Seek)
-//! let reader = SyncReader::<StreamSource<File>>::open(
-//!     url,
-//!     FileParams::default(),
-//!     SyncReaderParams::default()
-//! ).await?;
+//! // Using StreamType API
+//! let config = FileConfig::new(url);
+//! let inner = File::create(config).await?;
 //! ```
 
 mod error;
 mod events;
+mod inner;
 mod options;
 mod session;
-mod source;
 
 pub use error::SourceError;
 pub use events::FileEvent;
-pub use options::FileParams;
+pub use inner::{File, FileInner};
+pub use options::FileConfig;
 pub use session::{Progress, SessionSource};
-pub use source::File;

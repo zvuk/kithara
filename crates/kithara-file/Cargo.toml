@@ -27,6 +27,3 @@ tracing-subscriber = { workspace = true }
 memory-stats = { workspace = true }
 reqwest = { workspace = true }
 mockall = { workspace = true }
-
-[features]
-memprofile = ["dhat"]

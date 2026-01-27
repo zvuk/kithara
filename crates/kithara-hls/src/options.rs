@@ -32,14 +32,16 @@ pub struct KeyOptions {
     pub request_headers: Option<HashMap<String, String>>,
 }
 
-/// Unified parameters for HLS streaming.
+/// Configuration for HLS streaming.
 ///
-/// Used with `Hls::open(url, params)` for the unified API.
+/// Used with `Stream::<Hls>::new(config)`.
 #[derive(Clone)]
-pub struct HlsParams {
-    /// Storage configuration (required).
+pub struct HlsConfig {
+    /// Master playlist URL.
+    pub url: Url,
+    /// Storage configuration.
     pub store: StoreOptions,
-    /// Network configuration (from kithara-net).
+    /// Network configuration.
     pub net: NetOptions,
     /// ABR (Adaptive Bitrate) configuration.
     pub abr: AbrOptions,
@@ -49,31 +51,56 @@ pub struct HlsParams {
     pub base_url: Option<Url>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// Events broadcast sender (optional - if not provided, events are not sent).
+    /// Events broadcast sender (optional - if not provided, one is created internally).
     pub events_tx: Option<broadcast::Sender<crate::HlsEvent>>,
-    /// Capacity of the command mpsc channel.
-    pub command_capacity: usize,
+    /// Capacity of the command channel.
+    pub command_channel_capacity: usize,
+    /// Capacity of the chunk/data channel.
+    pub chunk_channel_capacity: usize,
+    /// Capacity of the events broadcast channel (used when events_tx is not provided).
+    pub events_channel_capacity: usize,
 }
 
-impl Default for HlsParams {
+impl Default for HlsConfig {
     fn default() -> Self {
-        Self::new(StoreOptions::default())
-    }
-}
-
-impl HlsParams {
-    /// Create new HLS params with the given store options.
-    pub fn new(store: StoreOptions) -> Self {
         Self {
-            store,
+            url: Url::parse("http://localhost/stream.m3u8").expect("valid default URL"),
+            store: StoreOptions::default(),
             net: NetOptions::default(),
             abr: AbrOptions::default(),
             keys: KeyOptions::default(),
             base_url: None,
             cancel: None,
             events_tx: None,
-            command_capacity: 8,
+            command_channel_capacity: 16,
+            chunk_channel_capacity: 8,
+            events_channel_capacity: 32,
         }
+    }
+}
+
+impl HlsConfig {
+    /// Create new HLS config with URL.
+    pub fn new(url: Url) -> Self {
+        Self {
+            url,
+            store: StoreOptions::default(),
+            net: NetOptions::default(),
+            abr: AbrOptions::default(),
+            keys: KeyOptions::default(),
+            base_url: None,
+            cancel: None,
+            events_tx: None,
+            command_channel_capacity: 16,
+            chunk_channel_capacity: 8,
+            events_channel_capacity: 32,
+        }
+    }
+
+    /// Set storage options.
+    pub fn with_store(mut self, store: StoreOptions) -> Self {
+        self.store = store;
+        self
     }
 
     /// Set network options.
@@ -107,17 +134,26 @@ impl HlsParams {
     }
 
     /// Set events broadcast sender.
-    ///
-    /// If provided, HLS events will be sent to this channel.
-    /// If not provided, events will not be sent (no overhead).
     pub fn with_events(mut self, events_tx: broadcast::Sender<crate::HlsEvent>) -> Self {
         self.events_tx = Some(events_tx);
         self
     }
 
     /// Set command channel capacity.
-    pub fn with_command_capacity(mut self, capacity: usize) -> Self {
-        self.command_capacity = capacity;
+    pub fn with_command_channel_capacity(mut self, capacity: usize) -> Self {
+        self.command_channel_capacity = capacity;
+        self
+    }
+
+    /// Set chunk/data channel capacity.
+    pub fn with_chunk_channel_capacity(mut self, capacity: usize) -> Self {
+        self.chunk_channel_capacity = capacity;
+        self
+    }
+
+    /// Set events broadcast channel capacity.
+    pub fn with_events_channel_capacity(mut self, capacity: usize) -> Self {
+        self.events_channel_capacity = capacity;
         self
     }
 }

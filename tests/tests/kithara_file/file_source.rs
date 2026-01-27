@@ -2,15 +2,14 @@
 
 use std::{
     io::{Read, Seek, SeekFrom},
-    sync::Arc,
     time::Duration,
 };
 
 use axum::{Router, response::Response, routing::get};
 use bytes::Bytes;
 use kithara_assets::StoreOptions;
-use kithara_file::{File, FileParams};
-use kithara_stream::{Source, StreamSource, SyncReader, SyncReaderParams, WaitOutcome};
+use kithara_file::{File, FileConfig};
+use kithara_stream::Stream;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
@@ -61,56 +60,11 @@ fn temp_dir() -> TempDir {
 }
 
 #[fixture]
-fn default_params(temp_dir: TempDir) -> FileParams {
-    FileParams::new(StoreOptions::new(temp_dir.path()))
-}
-
-#[fixture]
 async fn test_server() -> String {
     run_test_server().await
 }
 
-// ==================== StreamSource<File> Tests ====================
-
-#[rstest]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[timeout(Duration::from_secs(10))]
-async fn stream_source_file_read_at_works(#[future] test_server: String, temp_dir: TempDir) {
-    let server_url = test_server.await;
-    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
-
-    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
-    let source = StreamSource::<File>::open(url, params).await.unwrap();
-    let source = Arc::new(source);
-
-    // Wait for data to be available
-    let outcome = Source::wait_range(source.as_ref(), 0..27).await.unwrap();
-    assert!(matches!(outcome, WaitOutcome::Ready));
-
-    // Read from start
-    let mut buf = [0u8; 3];
-    let n = Source::read_at(source.as_ref(), 0, &mut buf).await.unwrap();
-    assert_eq!(n, 3);
-    assert_eq!(&buf, b"ID3");
-
-    // Read from middle
-    let mut buf = [0u8; 5];
-    let n = Source::read_at(source.as_ref(), 13, &mut buf)
-        .await
-        .unwrap();
-    assert_eq!(n, 5);
-    assert_eq!(&buf, b"Audio");
-
-    // Read at end
-    let len = Source::len(source.as_ref()).unwrap();
-    let mut buf = [0u8; 10];
-    let n = Source::read_at(source.as_ref(), len, &mut buf)
-        .await
-        .unwrap();
-    assert_eq!(n, 0); // EOF
-}
-
-// ==================== SyncReader<StreamSource<File>> Seek Tests ====================
+// ==================== Stream<File> Seek Tests ====================
 
 #[rstest]
 #[case(0, b"ID3\x04\x00")]
@@ -128,11 +82,8 @@ async fn stream_file_seek_start_reads_correct_bytes(
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
-    let mut stream =
-        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default())
-            .await
-            .unwrap();
+    let config = FileConfig::new(url).with_store(StoreOptions::new(temp_dir.path()));
+    let mut stream = Stream::<File>::new(config).await.unwrap();
 
     let expected_len = expected.len();
     let expected_vec = expected.to_vec();
@@ -159,11 +110,8 @@ async fn stream_file_seek_current_works(#[future] test_server: String, temp_dir:
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
-    let mut stream =
-        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default())
-            .await
-            .unwrap();
+    let config = FileConfig::new(url).with_store(StoreOptions::new(temp_dir.path()));
+    let mut stream = Stream::<File>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {
         // Read first 5 bytes
@@ -192,11 +140,8 @@ async fn stream_file_seek_end_works(#[future] test_server: String, temp_dir: Tem
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
-    let mut stream =
-        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default())
-            .await
-            .unwrap();
+    let config = FileConfig::new(url).with_store(StoreOptions::new(temp_dir.path()));
+    let mut stream = Stream::<File>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {
         // Seek from end (-5 bytes)
@@ -221,11 +166,8 @@ async fn stream_file_seek_past_eof_fails(#[future] test_server: String, temp_dir
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
-    let mut stream =
-        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default())
-            .await
-            .unwrap();
+    let config = FileConfig::new(url).with_store(StoreOptions::new(temp_dir.path()));
+    let mut stream = Stream::<File>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {
         // Attempt to seek past EOF
@@ -244,11 +186,8 @@ async fn stream_file_multiple_seeks_work(#[future] test_server: String, temp_dir
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-    let params = FileParams::new(StoreOptions::new(temp_dir.path()));
-    let mut stream =
-        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default())
-            .await
-            .unwrap();
+    let config = FileConfig::new(url).with_store(StoreOptions::new(temp_dir.path()));
+    let mut stream = Stream::<File>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {
         // Read from start

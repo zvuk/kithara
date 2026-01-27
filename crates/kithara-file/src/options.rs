@@ -1,38 +1,60 @@
 use kithara_assets::StoreOptions;
 use kithara_net::NetOptions;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
-/// Unified parameters for file streaming.
+use crate::FileEvent;
+
+/// Configuration for file streaming.
 ///
-/// Used with `StreamSource::<File>::open(url, params)` or
-/// `SyncReader::<StreamSource<File>>::open(url, params, reader_params)`.
+/// Used with `Stream::<File>::new(config)`.
 #[derive(Clone, Debug)]
-pub struct FileParams {
-    /// Storage configuration (required).
+pub struct FileConfig {
+    /// File URL.
+    pub url: Url,
+    /// Storage configuration.
     pub store: StoreOptions,
     /// Network configuration.
     pub net: NetOptions,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// Capacity of the events broadcast channel.
-    pub event_capacity: usize,
+    /// Events broadcast sender (optional - if not provided, events are not sent).
+    pub events_tx: Option<broadcast::Sender<FileEvent>>,
+    /// Events broadcast channel capacity (used when events_tx is not provided).
+    pub events_channel_capacity: usize,
 }
 
-impl Default for FileParams {
+impl Default for FileConfig {
     fn default() -> Self {
-        Self::new(StoreOptions::default())
+        Self {
+            url: Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
+            store: StoreOptions::default(),
+            net: NetOptions::default(),
+            cancel: None,
+            events_tx: None,
+            events_channel_capacity: 16,
+        }
     }
 }
 
-impl FileParams {
-    /// Create new file params with the given store options.
-    pub fn new(store: StoreOptions) -> Self {
+impl FileConfig {
+    /// Create new file config with URL.
+    pub fn new(url: Url) -> Self {
         Self {
-            store,
+            url,
+            store: StoreOptions::default(),
             net: NetOptions::default(),
             cancel: None,
-            event_capacity: 32,
+            events_tx: None,
+            events_channel_capacity: 16,
         }
+    }
+
+    /// Set storage options.
+    pub fn with_store(mut self, store: StoreOptions) -> Self {
+        self.store = store;
+        self
     }
 
     /// Set network options.
@@ -47,65 +69,66 @@ impl FileParams {
         self
     }
 
-    /// Set event channel capacity.
-    pub fn with_event_capacity(mut self, capacity: usize) -> Self {
-        self.event_capacity = capacity;
+    /// Set events sender for subscribing to file events.
+    pub fn with_events(mut self, events_tx: broadcast::Sender<FileEvent>) -> Self {
+        self.events_tx = Some(events_tx);
+        self
+    }
+
+    /// Set events broadcast channel capacity.
+    pub fn with_events_channel_capacity(mut self, capacity: usize) -> Self {
+        self.events_channel_capacity = capacity;
         self
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use rstest::*;
-
     use super::*;
 
-    #[test]
-    fn test_file_params_new() {
-        let store = StoreOptions::default();
-        let params = FileParams::new(store.clone());
-
-        assert_eq!(params.event_capacity, 32);
-        assert!(params.cancel.is_none());
+    fn test_url() -> Url {
+        Url::parse("http://example.com/audio.mp3").unwrap()
     }
 
     #[test]
-    fn test_file_params_default() {
-        let params = FileParams::default();
+    fn test_file_config_new() {
+        let config = FileConfig::new(test_url());
 
-        assert_eq!(params.event_capacity, 32);
-        assert!(params.cancel.is_none());
+        assert_eq!(config.url.as_str(), "http://example.com/audio.mp3");
+        assert!(config.events_tx.is_none());
+        assert!(config.cancel.is_none());
+    }
+
+    #[test]
+    fn test_with_store() {
+        let store = StoreOptions::default();
+        let config = FileConfig::new(test_url()).with_store(store);
+
+        assert!(config.events_tx.is_none());
     }
 
     #[test]
     fn test_with_net() {
-        let store = StoreOptions::default();
         let net = NetOptions::default();
-        let params = FileParams::new(store).with_net(net);
+        let config = FileConfig::new(test_url()).with_net(net);
 
-        // NetOptions doesn't impl PartialEq, just verify it compiles
-        assert_eq!(params.event_capacity, 32);
+        assert!(config.events_tx.is_none());
     }
 
     #[test]
     fn test_with_cancel() {
-        let store = StoreOptions::default();
         let cancel = CancellationToken::new();
-        let params = FileParams::new(store).with_cancel(cancel.clone());
+        let config = FileConfig::new(test_url()).with_cancel(cancel.clone());
 
-        assert!(params.cancel.is_some());
+        assert!(config.cancel.is_some());
     }
 
-    #[rstest]
-    #[case(1)]
-    #[case(16)]
-    #[case(64)]
-    #[case(128)]
-    fn test_with_event_capacity(#[case] capacity: usize) {
-        let store = StoreOptions::default();
-        let params = FileParams::new(store).with_event_capacity(capacity);
+    #[test]
+    fn test_with_events() {
+        let (events_tx, _events_rx) = broadcast::channel(32);
+        let config = FileConfig::new(test_url()).with_events(events_tx);
 
-        assert_eq!(params.event_capacity, capacity);
+        assert!(config.events_tx.is_some());
     }
 
     #[test]
@@ -113,30 +136,33 @@ mod tests {
         let store = StoreOptions::default();
         let net = NetOptions::default();
         let cancel = CancellationToken::new();
+        let (events_tx, _) = broadcast::channel(32);
 
-        let params = FileParams::new(store)
+        let config = FileConfig::new(test_url())
+            .with_store(store)
             .with_net(net)
             .with_cancel(cancel.clone())
-            .with_event_capacity(64);
+            .with_events(events_tx);
 
-        assert!(params.cancel.is_some());
-        assert_eq!(params.event_capacity, 64);
+        assert!(config.cancel.is_some());
+        assert!(config.events_tx.is_some());
     }
 
     #[test]
     fn test_debug_impl() {
-        let params = FileParams::default();
-        let debug_str = format!("{:?}", params);
+        let config = FileConfig::new(test_url());
+        let debug_str = format!("{:?}", config);
 
-        assert!(debug_str.contains("FileParams"));
+        assert!(debug_str.contains("FileConfig"));
     }
 
     #[test]
     fn test_clone() {
-        let params = FileParams::default().with_event_capacity(64);
+        let (events_tx, _) = broadcast::channel(32);
+        let config = FileConfig::new(test_url()).with_events(events_tx);
 
-        let cloned = params.clone();
+        let cloned = config.clone();
 
-        assert_eq!(cloned.event_capacity, params.event_capacity);
+        assert!(cloned.events_tx.is_some());
     }
 }

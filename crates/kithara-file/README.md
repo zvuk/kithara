@@ -1,14 +1,15 @@
 # `kithara-file` — progressive file download and playback
 
-`kithara-file` provides progressive download and playback capabilities for single-file media resources (MP3, AAC, etc.) in Kithara. It implements the `SourceFactory` trait from `kithara-stream` to provide HTTP downloads with seeking, caching, and event-driven playback.
+`kithara-file` provides progressive download and playback capabilities for single-file media resources (MP3, AAC, etc.) in Kithara. It implements the `MediaSource` trait from `kithara-decode` to provide HTTP downloads with seeking, caching, and event-driven playback.
 
 ## Public contract (normative)
 
 The public contract is expressed by the following items re-exported from `src/lib.rs`:
 
 ### Core components
-- `struct File` — Marker type implementing `SourceFactory` trait
-- `struct SessionSource` — Implementation of `Source` trait for file streams
+- `struct FileMediaSource` — File source implementing `MediaSource` trait for streaming decode
+- `struct File` — Marker type implementing `SourceFactory` trait (legacy)
+- `struct SessionSource` — Implementation of `Source` trait for file streams (legacy)
 - `struct Progress` — Progress tracker for download and playback positions
 
 ### Configuration
@@ -23,16 +24,16 @@ The public contract is expressed by the following items re-exported from `src/li
 `kithara-file` bridges several Kithara crates:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    kithara-stream                       │
-│              (StreamSource<File>, SyncReader)           │
-└──────────────────────────┬──────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                    kithara-decode                           │
+│              (StreamDecoder, AudioSyncReader)               │
+└──────────────────────────┬──────────────────────────────────┘
                            │
-┌──────────────────────────▼──────────────────────────────┐
-│                    kithara-file                         │
-│      (File implements SourceFactory)                    │
-│      (SessionSource implements Source)                  │
-└─────────────┬─────────────────────────────┬─────────────┘
+┌──────────────────────────▼──────────────────────────────────┐
+│                    kithara-file                             │
+│      (FileMediaSource implements MediaSource)               │
+│      (FileMediaStream implements MediaStream)               │
+└─────────────┬─────────────────────────────┬─────────────────┘
               │                             │
 ┌─────────────▼─────────────┐   ┌──────────▼─────────────┐
 │      kithara-net          │   │    kithara-assets      │
@@ -43,7 +44,7 @@ The public contract is expressed by the following items re-exported from `src/li
 ### Key responsibilities
 
 1. **HTTP progressive download**: Downloads files with range request support
-2. **Seek support**: Random access via `Source::wait_range()` and `read_at()`
+2. **Seek support**: Random access via `MediaStream` Read/Seek traits
 3. **Storage integration**: Writes downloaded data to `kithara-assets` storage
 4. **Event emission**: Emits progress events via broadcast channel
 5. **Session management**: Manages download lifecycle and resource cleanup
@@ -51,20 +52,20 @@ The public contract is expressed by the following items re-exported from `src/li
 ## Core invariants
 
 1. **Progressive playback**: Playback can start before download completes
-2. **Seek support**: `SyncReader` can seek anywhere; download catches up
+2. **Seek support**: Decoder can seek anywhere; download catches up
 3. **Storage persistence**: Downloaded data persists in `kithara-assets` for offline playback
 4. **Event-driven**: Emits events for download and playback progress
 5. **Cancellation**: All operations respect cancellation tokens
 
 ## Usage
 
-### Basic file download and playback
+### With StreamDecoder (recommended)
 ```rust
-use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
-use kithara_file::{File, FileParams};
+use kithara_decode::{MediaSource, StreamDecoder};
+use kithara_file::{FileMediaSource, FileParams, FileEvent};
 
-// Open source (async)
-let source = StreamSource::<File>::open(url, FileParams::default()).await?;
+// Open file media source
+let source = FileMediaSource::open(url, FileParams::default()).await?;
 
 // Subscribe to events
 let mut events = source.events();
@@ -81,26 +82,42 @@ tokio::spawn(async move {
     }
 });
 
-// Create sync reader for decoder
-let reader = SyncReader::new(source.into_inner(), SyncReaderParams::default());
+// Open media stream and create decoder
+let stream = source.open()?;
+let mut decoder = StreamDecoder::new(stream)?;
 
-// Use with Symphonia or rodio
+// Decode loop
+while let Some(chunk) = decoder.decode_next()? {
+    // chunk.pcm contains f32 samples
+    // chunk.spec contains sample_rate and channels
+    play_audio(chunk);
+}
 ```
 
-### With AudioPipeline (kithara-decode)
+### With rodio playback
 ```rust
-use kithara_decode::{AudioPipeline, AudioSyncReader};
-use kithara_stream::{StreamSource, SyncReaderParams};
-use kithara_file::{File, FileParams};
+use kithara_decode::{MediaSource, StreamDecoder, AudioSyncReader, PcmSpec};
+use kithara_file::{FileMediaSource, FileParams};
 
-let source = StreamSource::<File>::open(url, FileParams::default()).await?;
-let source_arc = Arc::new(source);
+let source = FileMediaSource::open(url, FileParams::default()).await?;
+let stream = source.open()?;
+let mut decoder = StreamDecoder::new(stream)?;
 
-let mut pipeline = AudioPipeline::open(source_arc, SyncReaderParams::default()).await?;
-let audio_rx = pipeline.take_audio_receiver().unwrap();
-let audio_source = AudioSyncReader::new(audio_rx, pipeline.spec());
+// Create channel for PCM data
+let (tx, rx) = kanal::bounded::<Vec<f32>>(16);
+
+// Decode in background thread
+std::thread::spawn(move || {
+    while let Ok(Some(chunk)) = decoder.decode_next() {
+        if tx.send(chunk.pcm).is_err() {
+            break;
+        }
+    }
+});
 
 // Play via rodio
+let spec = PcmSpec { sample_rate: 44100, channels: 2 };
+let audio_source = AudioSyncReader::new(rx, spec);
 let sink = rodio::Sink::connect_new(stream_handle.mixer());
 sink.append(audio_source);
 sink.sleep_until_end();
@@ -123,10 +140,11 @@ sink.sleep_until_end();
 
 ## Integration with other Kithara crates
 
-### `kithara-stream`
-- `File` implements `SourceFactory`
-- `SessionSource` implements `Source`
-- Works with `StreamSource<File>` and `SyncReader`
+### `kithara-decode`
+- `FileMediaSource` implements `MediaSource` trait
+- `FileMediaStream` implements `MediaStream` trait
+- Works with `StreamDecoder` for PCM output
+- `AudioSyncReader` bridges to rodio for playback
 
 ### `kithara-net`
 - Uses `HttpClient` for HTTP operations
@@ -136,10 +154,6 @@ sink.sleep_until_end();
 - Stores downloaded files as streaming resources
 - Uses `StreamingResource` for progressive storage
 - Manages asset lifecycle via `AssetStore`
-
-### `kithara-decode`
-- `SyncReader` works with `SymphoniaDecoder`
-- `AudioPipeline` orchestrates decoding
 
 ## Design philosophy
 

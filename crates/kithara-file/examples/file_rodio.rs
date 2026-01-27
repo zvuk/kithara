@@ -1,7 +1,18 @@
+//! Example: Play audio from an HTTP file using rodio.
+//!
+//! This demonstrates the Stream API:
+//! - Stream::<File>::new() creates a Read + Seek stream
+//! - rodio::Decoder handles audio decoding
+//!
+//! Run with:
+//! ```
+//! cargo run -p kithara-file --example rodio [URL]
+//! ```
+
 use std::{env::args, error::Error};
 
-use kithara_file::{File, FileEvent, FileParams};
-use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
+use kithara_file::{File, FileConfig};
+use kithara_stream::Stream;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -12,10 +23,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .with_env_filter(
             EnvFilter::default()
                 .add_directive("kithara_file=info".parse()?)
-                .add_directive("kithara_stream::io=info".parse()?)
+                .add_directive("kithara_stream=info".parse()?)
                 .add_directive("kithara_net=info".parse()?)
-                .add_directive("kithara_storage=info".parse()?)
-                .add_directive("kithara_assets=info".parse()?)
                 .add_directive(LevelFilter::INFO.into()),
         )
         .with_line_number(false)
@@ -28,32 +37,37 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .to_string()
     });
     let url: Url = url.parse()?;
-    let params = FileParams::default();
 
-    let reader =
-        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default()).await?;
-    let mut events_rx = reader.events();
+    info!("Opening file: {}", url);
 
+    // Create events channel
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+
+    let config = FileConfig::new(url).with_events(events_tx);
+    let stream = Stream::<File>::new(config).await?;
+
+    // Log events
     tokio::spawn(async move {
-        while let Ok(msg) = events_rx.recv().await {
-            match msg {
-                FileEvent::DownloadProgress { offset, percent } => {
-                    info!(offset, ?percent, "Stream event: download");
-                }
-                FileEvent::PlaybackProgress { position, percent } => {
-                    info!(position, ?percent, "Stream event: playback");
-                }
-            }
+        while let Ok(ev) = events_rx.recv().await {
+            info!(?ev);
         }
     });
+
+    info!("Starting playback...");
 
     let handle = tokio::task::spawn_blocking(move || {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
-        sink.append(rodio::Decoder::new(reader)?);
+        sink.set_volume(1.0);
+        sink.append(rodio::Decoder::new(stream)?);
+
+        info!("Playing...");
         sink.sleep_until_end();
+
+        info!("Playback complete");
         Ok::<_, Box<dyn Error + Send + Sync>>(())
     });
+
     handle.await??;
 
     Ok(())

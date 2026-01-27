@@ -67,9 +67,14 @@ pub struct MediaInfo {
 }
 
 impl MediaInfo {
-    /// Create empty `MediaInfo`.
-    pub fn new() -> Self {
-        Self::default()
+    /// Create `MediaInfo` with optional codec and container.
+    pub fn new(codec: Option<AudioCodec>, container: Option<ContainerFormat>) -> Self {
+        Self {
+            container,
+            codec,
+            sample_rate: None,
+            channels: None,
+        }
     }
 
     /// Set container format.
@@ -168,7 +173,7 @@ mod tests {
 
     #[test]
     fn test_media_info_new() {
-        let info = MediaInfo::new();
+        let info = MediaInfo::default();
         assert_eq!(info.container, None);
         assert_eq!(info.codec, None);
         assert_eq!(info.sample_rate, None);
@@ -193,7 +198,7 @@ mod tests {
     #[case(ContainerFormat::Caf)]
     #[case(ContainerFormat::Mkv)]
     fn test_media_info_with_container(#[case] container: ContainerFormat) {
-        let info = MediaInfo::new().with_container(container);
+        let info = MediaInfo::default().with_container(container);
         assert_eq!(info.container, Some(container));
         assert_eq!(info.codec, None);
         assert_eq!(info.sample_rate, None);
@@ -212,7 +217,7 @@ mod tests {
     #[case(AudioCodec::Pcm)]
     #[case(AudioCodec::Adpcm)]
     fn test_media_info_with_codec(#[case] codec: AudioCodec) {
-        let info = MediaInfo::new().with_codec(codec);
+        let info = MediaInfo::default().with_codec(codec);
         assert_eq!(info.container, None);
         assert_eq!(info.codec, Some(codec));
         assert_eq!(info.sample_rate, None);
@@ -226,7 +231,7 @@ mod tests {
     #[case(96000)]
     #[case(192000)]
     fn test_media_info_with_sample_rate(#[case] sample_rate: u32) {
-        let info = MediaInfo::new().with_sample_rate(sample_rate);
+        let info = MediaInfo::default().with_sample_rate(sample_rate);
         assert_eq!(info.container, None);
         assert_eq!(info.codec, None);
         assert_eq!(info.sample_rate, Some(sample_rate));
@@ -239,7 +244,7 @@ mod tests {
     #[case(6)] // 5.1 surround
     #[case(8)] // 7.1 surround
     fn test_media_info_with_channels(#[case] channels: u16) {
-        let info = MediaInfo::new().with_channels(channels);
+        let info = MediaInfo::default().with_channels(channels);
         assert_eq!(info.container, None);
         assert_eq!(info.codec, None);
         assert_eq!(info.sample_rate, None);
@@ -248,7 +253,7 @@ mod tests {
 
     #[test]
     fn test_media_info_builder_chain() {
-        let info = MediaInfo::new()
+        let info = MediaInfo::default()
             .with_container(ContainerFormat::Fmp4)
             .with_codec(AudioCodec::AacLc)
             .with_sample_rate(44100)
@@ -262,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_media_info_partial_builder() {
-        let info = MediaInfo::new()
+        let info = MediaInfo::default()
             .with_codec(AudioCodec::Mp3)
             .with_sample_rate(48000);
 
@@ -288,7 +293,7 @@ mod tests {
 
     #[test]
     fn test_media_info_clone() {
-        let info = MediaInfo::new()
+        let info = MediaInfo::default()
             .with_container(ContainerFormat::Fmp4)
             .with_codec(AudioCodec::AacLc);
 
@@ -298,9 +303,9 @@ mod tests {
 
     #[test]
     fn test_media_info_partial_eq() {
-        let info1 = MediaInfo::new().with_codec(AudioCodec::AacLc);
-        let info2 = MediaInfo::new().with_codec(AudioCodec::AacLc);
-        let info3 = MediaInfo::new().with_codec(AudioCodec::Mp3);
+        let info1 = MediaInfo::default().with_codec(AudioCodec::AacLc);
+        let info2 = MediaInfo::default().with_codec(AudioCodec::AacLc);
+        let info3 = MediaInfo::default().with_codec(AudioCodec::Mp3);
 
         assert_eq!(info1, info2);
         assert_ne!(info1, info3);

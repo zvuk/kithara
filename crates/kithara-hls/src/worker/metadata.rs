@@ -1,6 +1,4 @@
-use kithara_stream::AudioCodec;
-
-use crate::parsing::ContainerFormat;
+use kithara_stream::{AudioCodec, ContainerFormat};
 
 /// Metadata for an HLS variant.
 ///

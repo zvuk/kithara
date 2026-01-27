@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use fixture::TestServer;
 use kithara_assets::StoreOptions;
-use kithara_hls::{Hls, HlsParams};
-use kithara_stream::StreamSource;
+use kithara_hls::{Hls, HlsConfig};
+use kithara_stream::Stream;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -23,11 +23,6 @@ fn temp_dir() -> TempDir {
 }
 
 #[fixture]
-fn hls_params(temp_dir: TempDir) -> HlsParams {
-    HlsParams::new(StoreOptions::new(temp_dir.path())).with_cancel(CancellationToken::new())
-}
-
-#[fixture]
 fn minimal_tracing_setup() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
@@ -42,22 +37,24 @@ fn minimal_tracing_setup() {
 #[tokio::test]
 async fn test_hls_session_creation(
     _minimal_tracing_setup: (),
-    hls_params: HlsParams,
+    temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS session creation with URL: {}", test_stream_url);
 
-    // Test 1: Open HLS source
-    let source = StreamSource::<Hls>::open(test_stream_url.clone(), hls_params).await?;
+    // Create events channel
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+
+    // Create HLS config with events
+    let config = HlsConfig::new(test_stream_url.clone())
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(CancellationToken::new())
+        .with_events(events_tx);
+
+    // Test: Open HLS source
+    let _stream = Stream::<Hls>::new(config).await?;
     info!("HLS source opened successfully");
-
-    // Test 2: Get events channel
-    let mut events_rx = source.events();
-
-    // Source is ready for use
-    let _source = source;
-    info!("HLS source obtained successfully");
 
     // Spawn a task to consume events (prevent channel from filling up)
     let events_handle = tokio::spawn(async move {
@@ -89,13 +86,17 @@ async fn test_hls_session_creation(
 #[tokio::test]
 async fn test_hls_with_local_fixture(
     _minimal_tracing_setup: (),
-    hls_params: HlsParams,
+    temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8")?;
     info!("Testing HLS with local fixture at: {}", url);
 
-    let _source = StreamSource::<Hls>::open(url, hls_params).await?;
+    let config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(CancellationToken::new());
+
+    let _stream = Stream::<Hls>::new(config).await?;
 
     info!("Local fixture test passed");
     Ok(())
@@ -106,13 +107,17 @@ async fn test_hls_with_local_fixture(
 #[tokio::test]
 async fn test_hls_session_with_init_segments(
     _minimal_tracing_setup: (),
-    hls_params: HlsParams,
+    temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;
     let url = server.url("/master-init.m3u8")?;
     info!("Testing HLS session with init segments at URL: {}", url);
 
-    let _source = StreamSource::<Hls>::open(url, hls_params).await?;
+    let config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(CancellationToken::new());
+
+    let _stream = Stream::<Hls>::new(config).await?;
 
     info!("HLS source with init segments opened successfully");
     Ok(())
@@ -123,18 +128,21 @@ async fn test_hls_session_with_init_segments(
 #[tokio::test]
 async fn test_hls_session_events_consumption(
     _minimal_tracing_setup: (),
-    hls_params: HlsParams,
+    temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS session events consumption");
 
-    let source = StreamSource::<Hls>::open(test_stream_url, hls_params).await?;
+    // Create events channel
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
 
-    // Get events channel
-    let mut events_rx = source.events();
+    let config = HlsConfig::new(test_stream_url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(CancellationToken::new())
+        .with_events(events_tx);
 
-    let _source = source;
+    let _stream = Stream::<Hls>::new(config).await?;
 
     // Try to receive events with timeout
     let timeout = Duration::from_millis(500);
@@ -160,7 +168,7 @@ async fn test_hls_session_events_consumption(
 #[tokio::test]
 async fn test_hls_invalid_url_handling(
     _minimal_tracing_setup: (),
-    hls_params: HlsParams,
+    temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Test with invalid URL
     let invalid_url = "http://invalid-domain-that-does-not-exist-12345.com/master.m3u8";
@@ -168,7 +176,11 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         // If URL parses, try to open HLS (should fail with network error)
-        let result = StreamSource::<Hls>::open(url, hls_params).await;
+        let config = HlsConfig::new(url)
+            .with_store(StoreOptions::new(temp_dir.path()))
+            .with_cancel(CancellationToken::new());
+
+        let result = Stream::<Hls>::new(config).await;
         // Either Ok (if somehow connects) or Err (expected) is acceptable
         assert!(result.is_ok() || result.is_err());
     } else {
@@ -184,15 +196,19 @@ async fn test_hls_invalid_url_handling(
 #[tokio::test]
 async fn test_hls_session_drop_cleanup(
     _minimal_tracing_setup: (),
-    hls_params: HlsParams,
+    temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS session drop cleanup");
 
+    let config = HlsConfig::new(test_stream_url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(CancellationToken::new());
+
     // Create and immediately drop session
-    let session = StreamSource::<Hls>::open(test_stream_url, hls_params).await?;
-    drop(session);
+    let stream = Stream::<Hls>::new(config).await?;
+    drop(stream);
 
     // Wait a bit to ensure cleanup happens
     tokio::time::sleep(Duration::from_millis(100)).await;

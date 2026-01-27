@@ -1,0 +1,135 @@
+//! File inner stream implementation.
+//!
+//! Provides `FileInner` - a sync `Read + Seek` adapter for file streams.
+
+use std::{
+    io::{Read, Seek, SeekFrom},
+    sync::Arc,
+};
+
+use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
+use kithara_net::HttpClient;
+use kithara_stream::{StreamMsg, StreamType, SyncReader, Writer};
+use tokio::sync::broadcast;
+
+use crate::{
+    error::SourceError,
+    events::FileEvent,
+    options::FileConfig,
+    session::{FileStreamState, Progress, SessionSource},
+};
+
+/// File inner stream implementing `Read + Seek`.
+///
+/// This wraps `SyncReader<SessionSource>` to provide sync access to file streams.
+pub struct FileInner {
+    reader: SyncReader<SessionSource>,
+}
+
+impl FileInner {
+    /// Create new file inner stream.
+    pub async fn new(config: FileConfig) -> Result<Self, SourceError> {
+        let asset_root = asset_root_for_url(&config.url);
+        let cancel = config.cancel.clone().unwrap_or_default();
+
+        let store = AssetStoreBuilder::new()
+            .root_dir(&config.store.cache_dir)
+            .asset_root(&asset_root)
+            .evict_config(config.store.to_evict_config())
+            .cancel(cancel.clone())
+            .build();
+
+        let net_client = HttpClient::new(config.net.clone());
+
+        let state = FileStreamState::create(
+            Arc::new(store),
+            net_client.clone(),
+            config.url,
+            cancel.clone(),
+            config.events_tx.clone(),
+            config.events_channel_capacity,
+        )
+        .await?;
+
+        let progress = Arc::new(Progress::new());
+
+        spawn_download_writer(
+            &net_client,
+            state.clone(),
+            progress.clone(),
+            state.events().clone(),
+        );
+
+        let source = SessionSource::new(
+            state.res().clone(),
+            progress,
+            state.events().clone(),
+            state.len(),
+        );
+
+        let reader = SyncReader::new(source);
+
+        Ok(Self { reader })
+    }
+
+    /// Get current read position.
+    pub fn position(&self) -> u64 {
+        self.reader.position()
+    }
+}
+
+impl Read for FileInner {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.reader.read(buf)
+    }
+}
+
+impl Seek for FileInner {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.reader.seek(pos)
+    }
+}
+
+/// Marker type for file streaming.
+pub struct File;
+
+impl StreamType for File {
+    type Config = FileConfig;
+    type Inner = FileInner;
+    type Error = SourceError;
+
+    async fn create(config: Self::Config) -> Result<Self::Inner, Self::Error> {
+        FileInner::new(config).await
+    }
+}
+
+fn spawn_download_writer(
+    net_client: &HttpClient,
+    state: Arc<FileStreamState>,
+    progress: Arc<Progress>,
+    events_tx: broadcast::Sender<FileEvent>,
+) {
+    let net = net_client.clone();
+    let url = state.url().clone();
+    let len = state.len();
+    let res = state.res().clone();
+    let cancel = state.cancel().clone();
+
+    tokio::spawn(async move {
+        let writer = Writer::<_, _, FileEvent>::new(net, url, None, res, cancel).with_event(
+            move |offset, _len| {
+                progress.set_download_pos(offset);
+                let percent =
+                    len.map(|len| ((offset as f64 / len as f64) * 100.0).min(100.0) as f32);
+                FileEvent::DownloadProgress { offset, percent }
+            },
+            move |msg| {
+                if let StreamMsg::Event(ev) = msg {
+                    let _ = events_tx.send(ev);
+                }
+            },
+        );
+
+        let _ = writer.run_with_fail().await;
+    });
+}

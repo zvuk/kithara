@@ -1,13 +1,10 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use kithara_stream::AudioCodec;
+use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
-use crate::{
-    cache::{EncryptionInfo, SegmentType},
-    parsing::ContainerFormat,
-};
+use crate::cache::{EncryptionInfo, SegmentType};
 
 /// HLS message with complete metadata.
 ///
