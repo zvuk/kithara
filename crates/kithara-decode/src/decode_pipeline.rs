@@ -1,37 +1,44 @@
 //! Generic decoder that runs in a separate thread using SyncWorker.
 
-use std::io::{Read, Seek};
+use std::{
+    io::{Read, Seek},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use kanal::Receiver;
 use kithara_stream::{MediaInfo, Stream, StreamType};
-use kithara_worker::{Fetch, SyncWorker, SyncWorkerSource};
+use kithara_worker::{EpochValidator, Fetch, ItemValidator as _, SyncWorker, SyncWorkerSource};
 use tracing::{debug, trace, warn};
 
 use crate::{
     symphonia_decoder::SymphoniaDecoder,
-    types::{DecodeError, DecodeResult, PcmChunk},
+    types::{DecodeError, DecodeResult, PcmChunk, PcmSpec},
 };
-
-#[cfg(feature = "rodio")]
-use crate::types::PcmSpec;
 
 /// Command for decode worker.
 #[derive(Debug)]
 pub enum DecodeCommand {
-    // Future: Seek(Duration), Stop, etc.
+    /// Seek to position with new epoch.
+    Seek { position: Duration, epoch: u64 },
 }
 
 /// Decode source implementing SyncWorkerSource.
 struct DecodeSource {
     decoder: SymphoniaDecoder,
+    epoch: Arc<AtomicU64>,
     chunks_decoded: u64,
     total_samples: u64,
 }
 
 impl DecodeSource {
-    fn new(decoder: SymphoniaDecoder) -> Self {
+    fn new(decoder: SymphoniaDecoder, epoch: Arc<AtomicU64>) -> Self {
         Self {
             decoder,
+            epoch,
             chunks_decoded: 0,
             total_samples: 0,
         }
@@ -43,6 +50,8 @@ impl SyncWorkerSource for DecodeSource {
     type Command = DecodeCommand;
 
     fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
+        let current_epoch = self.epoch.load(Ordering::Acquire);
+
         loop {
             match self.decoder.next_chunk() {
                 Ok(Some(chunk)) => {
@@ -58,19 +67,21 @@ impl SyncWorkerSource for DecodeSource {
                             chunks = self.chunks_decoded,
                             samples = self.total_samples,
                             spec = ?chunk.spec,
+                            epoch = current_epoch,
                             "decode progress"
                         );
                     }
 
-                    return Fetch::new(chunk, false, 0);
+                    return Fetch::new(chunk, false, current_epoch);
                 }
                 Ok(None) => {
                     debug!(
                         chunks = self.chunks_decoded,
                         samples = self.total_samples,
+                        epoch = current_epoch,
                         "decode complete (EOF)"
                     );
-                    return Fetch::new(PcmChunk::default(), true, 0);
+                    return Fetch::new(PcmChunk::default(), true, current_epoch);
                 }
                 Err(e) => {
                     warn!(?e, "decode error, attempting to continue");
@@ -82,55 +93,70 @@ impl SyncWorkerSource for DecodeSource {
 
     fn handle_command(&mut self, cmd: Self::Command) {
         match cmd {
-            // Future: handle seek, etc.
+            DecodeCommand::Seek { position, epoch } => {
+                debug!(?position, epoch, "seek command received");
+                // Update epoch first
+                self.epoch.store(epoch, Ordering::Release);
+                // Then perform seek
+                if let Err(e) = self.decoder.seek(position) {
+                    warn!(?e, "seek failed");
+                }
+            }
         }
     }
 }
 
 /// Generic audio decoder running in a separate thread.
 ///
-/// Uses SyncWorker from kithara-worker for consistent patterns.
+/// Provides a simple interface for reading decoded PCM audio,
+/// compatible with cpal and rodio audio backends.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use kithara_decode::Decoder;
-/// use kithara_hls::{Hls, HlsConfig};
-/// use kithara_stream::Stream;
+/// use kithara_decode::{Decoder, DecodeOptions};
+/// use std::io::Cursor;
 ///
-/// // Create decoder from config
-/// let config = DecoderConfig::<Hls>::new(hls_config);
-/// let decoder = Decoder::new(config).await?;
+/// let source = Cursor::new(wav_data);
+/// let mut decoder = Decoder::from_source(source, DecodeOptions::new())?;
 ///
-/// // Or read PCM from channel directly
-/// while let Ok(chunk) = decoder.pcm_rx().recv() {
-///     play_audio(chunk);
+/// // Get audio format
+/// let spec = decoder.spec();
+/// println!("{}Hz, {} channels", spec.sample_rate, spec.channels);
+///
+/// // Read PCM samples
+/// let mut buf = [0.0f32; 1024];
+/// while !decoder.is_eof() {
+///     let n = decoder.read(&mut buf);
+///     play_samples(&buf[..n]);
 /// }
 /// ```
 pub struct Decoder<S> {
-    /// Command sender (for future seek support)
-    _cmd_tx: kanal::Sender<DecodeCommand>,
+    /// Command sender for seek.
+    cmd_tx: kanal::Sender<DecodeCommand>,
 
-    /// PCM chunk receiver
+    /// PCM chunk receiver.
     pcm_rx: Receiver<Fetch<PcmChunk<f32>>>,
 
+    /// Shared epoch counter with worker.
+    epoch: Arc<AtomicU64>,
+
+    /// Epoch validator for filtering stale chunks.
+    validator: EpochValidator,
+
     /// Current audio specification (updated from chunks).
-    #[cfg(feature = "rodio")]
     spec: PcmSpec,
 
     /// Current chunk being read.
-    #[cfg(feature = "rodio")]
     current_chunk: Option<Vec<f32>>,
 
     /// Current position in chunk.
-    #[cfg(feature = "rodio")]
     chunk_offset: usize,
 
     /// End of stream reached.
-    #[cfg(feature = "rodio")]
     eof: bool,
 
-    /// Marker for source type
+    /// Marker for source type.
     _marker: std::marker::PhantomData<S>,
 }
 
@@ -216,9 +242,13 @@ where
         let (cmd_tx, cmd_rx) = kanal::bounded(cmd_capacity);
         let (data_tx, data_rx) = kanal::bounded(options.pcm_buffer_chunks.max(1));
 
-        // Create Symphonia decoder
+        // Create shared epoch counter
+        let epoch = Arc::new(AtomicU64::new(0));
+
+        // Create Symphonia decoder and get initial spec
         let symphonia = Self::create_decoder(source, &options)?;
-        let decode_source = DecodeSource::new(symphonia);
+        let initial_spec = symphonia.spec();
+        let decode_source = DecodeSource::new(symphonia, Arc::clone(&epoch));
 
         // Create and spawn SyncWorker
         let worker = SyncWorker::new(decode_source, cmd_rx, data_tx);
@@ -236,24 +266,19 @@ where
             })?;
 
         Ok(Self {
-            _cmd_tx: cmd_tx,
+            cmd_tx,
             pcm_rx: data_rx,
-            #[cfg(feature = "rodio")]
-            spec: PcmSpec {
-                sample_rate: 44100,
-                channels: 2,
-            },
-            #[cfg(feature = "rodio")]
+            epoch,
+            validator: EpochValidator::new(),
+            spec: initial_spec,
             current_chunk: None,
-            #[cfg(feature = "rodio")]
             chunk_offset: 0,
-            #[cfg(feature = "rodio")]
             eof: false,
             _marker: std::marker::PhantomData,
         })
     }
 
-    /// Get reference to PCM receiver.
+    /// Get reference to PCM receiver for direct channel access.
     pub fn pcm_rx(&self) -> &Receiver<Fetch<PcmChunk<f32>>> {
         &self.pcm_rx
     }
@@ -264,6 +289,138 @@ where
             SymphoniaDecoder::new_from_media_info(source, media_info)
         } else {
             SymphoniaDecoder::new_with_probe(source, options.hint.as_deref())
+        }
+    }
+}
+
+// ============================================================================
+// Public API for cpal/rodio compatibility
+// ============================================================================
+
+impl<S> Decoder<S> {
+    /// Get current audio specification.
+    ///
+    /// Returns sample rate and channel count for audio output setup.
+    pub fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+
+    /// Check if end of stream has been reached.
+    pub fn is_eof(&self) -> bool {
+        self.eof
+    }
+
+    /// Read decoded PCM samples into buffer.
+    ///
+    /// Returns number of samples written (may be less than buffer size).
+    /// Returns 0 when EOF is reached.
+    ///
+    /// Samples are interleaved f32 (e.g., LRLRLR for stereo).
+    pub fn read(&mut self, buf: &mut [f32]) -> usize {
+        if self.eof || buf.is_empty() {
+            return 0;
+        }
+
+        let mut written = 0;
+
+        while written < buf.len() {
+            // Try to read from current chunk
+            if let Some(ref chunk) = self.current_chunk {
+                let remaining_in_chunk = chunk.len() - self.chunk_offset;
+                let to_copy = (buf.len() - written).min(remaining_in_chunk);
+
+                buf[written..written + to_copy]
+                    .copy_from_slice(&chunk[self.chunk_offset..self.chunk_offset + to_copy]);
+
+                written += to_copy;
+                self.chunk_offset += to_copy;
+
+                if self.chunk_offset >= chunk.len() {
+                    self.current_chunk = None;
+                    self.chunk_offset = 0;
+                }
+
+                if written >= buf.len() {
+                    break;
+                }
+            }
+
+            // Need more data - fetch next chunk
+            if !self.fill_buffer() {
+                break;
+            }
+        }
+
+        written
+    }
+
+    /// Seek to position in the audio stream.
+    ///
+    /// Note: Seek clears internal buffers and invalidates pending chunks.
+    pub fn seek(&mut self, position: Duration) -> DecodeResult<()> {
+        // Increment epoch to invalidate pending chunks
+        let new_epoch = self.validator.next_epoch();
+        self.epoch.store(new_epoch, Ordering::Release);
+
+        // Send seek command to worker with new epoch
+        self.cmd_tx
+            .send(DecodeCommand::Seek {
+                position,
+                epoch: new_epoch,
+            })
+            .map_err(|_| DecodeError::SeekError("channel closed".to_string()))?;
+
+        // Clear local state
+        self.current_chunk = None;
+        self.chunk_offset = 0;
+        self.eof = false;
+
+        debug!(?position, epoch = new_epoch, "seek initiated");
+        Ok(())
+    }
+
+    /// Receive next chunk from channel, filtering stale chunks.
+    fn fill_buffer(&mut self) -> bool {
+        if self.eof {
+            return false;
+        }
+
+        loop {
+            match self.pcm_rx.recv() {
+                Ok(fetch) => {
+                    // Skip stale chunks (from before seek)
+                    if !self.validator.is_valid(&fetch) {
+                        trace!(
+                            chunk_epoch = fetch.epoch(),
+                            current_epoch = self.validator.epoch,
+                            "skipping stale chunk"
+                        );
+                        continue;
+                    }
+
+                    if fetch.is_eof() {
+                        debug!(epoch = fetch.epoch(), "Decoder: received EOF");
+                        self.eof = true;
+                        return false;
+                    }
+
+                    let chunk = fetch.into_inner();
+                    trace!(
+                        samples = chunk.pcm.len(),
+                        spec = ?chunk.spec,
+                        "Decoder: received chunk"
+                    );
+                    self.spec = chunk.spec;
+                    self.current_chunk = Some(chunk.pcm);
+                    self.chunk_offset = 0;
+                    return true;
+                }
+                Err(_) => {
+                    debug!("Decoder: channel closed (EOF)");
+                    self.eof = true;
+                    return false;
+                }
+            }
         }
     }
 }
@@ -297,42 +454,6 @@ where
 }
 
 // rodio::Source implementation for Decoder
-#[cfg(feature = "rodio")]
-impl<S> Decoder<S> {
-    /// Receive next chunk from channel.
-    fn fill_buffer(&mut self) -> bool {
-        if self.eof {
-            return false;
-        }
-
-        match self.pcm_rx.recv() {
-            Ok(fetch) => {
-                if fetch.is_eof() {
-                    debug!("Decoder: received EOF");
-                    self.eof = true;
-                    return false;
-                }
-
-                let chunk = fetch.into_inner();
-                trace!(
-                    samples = chunk.pcm.len(),
-                    spec = ?chunk.spec,
-                    "Decoder: received chunk"
-                );
-                self.spec = chunk.spec;
-                self.current_chunk = Some(chunk.pcm);
-                self.chunk_offset = 0;
-                true
-            }
-            Err(_) => {
-                debug!("Decoder: channel closed (EOF)");
-                self.eof = true;
-                false
-            }
-        }
-    }
-}
-
 #[cfg(feature = "rodio")]
 impl<S> Iterator for Decoder<S> {
     type Item = f32;
@@ -482,5 +603,93 @@ mod tests {
             options.media_info.unwrap().container,
             Some(kithara_stream::ContainerFormat::Wav)
         );
+    }
+
+    #[test]
+    fn test_decoder_spec() {
+        let wav_data = create_test_wav(1000);
+        let cursor = Cursor::new(wav_data);
+
+        let options = DecodeOptions::new().with_hint("wav");
+        let decoder = Decoder::from_source(cursor, options).unwrap();
+
+        let spec = decoder.spec();
+        assert_eq!(spec.sample_rate, 44100);
+        assert_eq!(spec.channels, 2);
+    }
+
+    #[test]
+    fn test_decoder_read() {
+        let wav_data = create_test_wav(1000);
+        let cursor = Cursor::new(wav_data);
+
+        let options = DecodeOptions::new().with_hint("wav");
+        let mut decoder = Decoder::from_source(cursor, options).unwrap();
+
+        let mut buf = [0.0f32; 256];
+        let mut total_read = 0;
+
+        while !decoder.is_eof() {
+            let n = decoder.read(&mut buf);
+            if n == 0 {
+                break;
+            }
+            total_read += n;
+        }
+
+        assert!(total_read > 0);
+        assert!(decoder.is_eof());
+    }
+
+    #[test]
+    fn test_decoder_read_small_buffer() {
+        let wav_data = create_test_wav(100);
+        let cursor = Cursor::new(wav_data);
+
+        let options = DecodeOptions::new().with_hint("wav");
+        let mut decoder = Decoder::from_source(cursor, options).unwrap();
+
+        // Read with very small buffer
+        let mut buf = [0.0f32; 4];
+        let n = decoder.read(&mut buf);
+
+        assert_eq!(n, 4);
+    }
+
+    #[test]
+    fn test_decoder_is_eof() {
+        let wav_data = create_test_wav(10);
+        let cursor = Cursor::new(wav_data);
+
+        let options = DecodeOptions::new().with_hint("wav");
+        let mut decoder = Decoder::from_source(cursor, options).unwrap();
+
+        assert!(!decoder.is_eof());
+
+        // Read all data
+        let mut buf = [0.0f32; 1024];
+        while decoder.read(&mut buf) > 0 {}
+
+        assert!(decoder.is_eof());
+    }
+
+    #[test]
+    fn test_decoder_seek() {
+        let wav_data = create_test_wav(44100); // 1 second
+        let cursor = Cursor::new(wav_data);
+
+        let options = DecodeOptions::new().with_hint("wav");
+        let mut decoder = Decoder::from_source(cursor, options).unwrap();
+
+        // Read some data
+        let mut buf = [0.0f32; 256];
+        decoder.read(&mut buf);
+
+        // Seek to beginning
+        let result = decoder.seek(Duration::from_secs(0));
+        assert!(result.is_ok());
+
+        // Should be able to read again
+        assert!(!decoder.is_eof());
     }
 }

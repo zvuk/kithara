@@ -45,11 +45,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Opening file: {}", url);
 
     // Detect format hint from URL extension
-    let hint = url
-        .path()
-        .rsplit('.')
-        .next()
-        .map(|ext| ext.to_lowercase());
+    let hint = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
 
     // Create events channel
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
@@ -77,7 +73,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let handle = tokio::task::spawn_blocking(move || {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
-        sink.set_volume(0.3);
+        sink.set_volume(1.0);
         sink.append(decoder);
 
         info!("Playing...");

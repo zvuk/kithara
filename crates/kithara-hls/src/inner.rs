@@ -2,14 +2,11 @@
 //!
 //! Provides `HlsInner` - a sync `Read + Seek` adapter for HLS streams.
 
-use std::{
-    io::{Read, Seek, SeekFrom},
-    sync::Arc,
-};
+use std::{io::{Read, Seek, SeekFrom}, sync::Arc};
 
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
-use kithara_stream::{StreamType, SyncReader, SyncReaderParams};
+use kithara_stream::{StreamType, SyncReader};
 use kithara_worker::Worker;
 use tokio::sync::broadcast;
 
@@ -124,8 +121,7 @@ impl HlsInner {
         // Create HlsSourceAdapter
         let adapter = HlsSourceAdapter::new(chunk_rx, cmd_tx, assets, events_tx);
 
-        // Wrap in SyncReader (it takes Arc<S> internally)
-        let reader = SyncReader::new(Arc::new(adapter), SyncReaderParams::default());
+        let reader = SyncReader::new(adapter);
 
         Ok(Self { reader })
     }

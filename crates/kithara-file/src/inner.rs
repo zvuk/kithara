@@ -9,7 +9,7 @@ use std::{
 
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
-use kithara_stream::{StreamMsg, StreamType, SyncReader, SyncReaderParams, Writer};
+use kithara_stream::{StreamMsg, StreamType, SyncReader, Writer};
 use tokio::sync::broadcast;
 
 use crate::{
@@ -67,12 +67,7 @@ impl FileInner {
             state.len(),
         );
 
-        let reader_params = SyncReaderParams {
-            chunk_size: config.chunk_size,
-            prefetch_chunks: config.prefetch_chunks,
-            command_channel_capacity: config.command_channel_capacity,
-        };
-        let reader = SyncReader::new(Arc::new(source), reader_params);
+        let reader = SyncReader::new(source);
 
         Ok(Self { reader })
     }

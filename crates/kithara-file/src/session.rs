@@ -9,7 +9,7 @@ use kithara_assets::{
 };
 use kithara_net::{HttpClient, Net};
 use kithara_storage::{StreamingResource, StreamingResourceExt};
-use kithara_stream::{Source, StreamError, StreamResult, WaitOutcome};
+use kithara_stream::{Source, StreamError, StreamResult, SyncSource, WaitOutcome};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
@@ -123,6 +123,7 @@ pub struct SessionSource {
     progress: Arc<Progress>,
     events: broadcast::Sender<FileEvent>,
     len: Option<u64>,
+    runtime: tokio::runtime::Handle,
 }
 
 impl SessionSource {
@@ -137,6 +138,7 @@ impl SessionSource {
             progress,
             events,
             len,
+            runtime: tokio::runtime::Handle::current(),
         }
     }
 
@@ -201,6 +203,67 @@ impl Source for SessionSource {
             requested = buf.len(),
             got = bytes_read,
             "kithara-file SessionSource read_at done"
+        );
+        Ok(bytes_read)
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.len
+    }
+}
+
+impl SyncSource for SessionSource {
+    fn wait_range(&self, range: Range<u64>) -> std::io::Result<WaitOutcome> {
+        trace!(
+            start = range.start,
+            end = range.end,
+            "kithara-file SessionSource sync wait_range"
+        );
+
+        let outcome = self
+            .runtime
+            .block_on(self.res.wait_range(range.clone()))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        match outcome {
+            kithara_storage::WaitOutcome::Ready => {
+                trace!("kithara-file SessionSource sync wait_range -> Ready");
+                Ok(WaitOutcome::Ready)
+            }
+            kithara_storage::WaitOutcome::Eof => {
+                trace!("kithara-file SessionSource sync wait_range -> Eof");
+                Ok(WaitOutcome::Eof)
+            }
+        }
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+        trace!(
+            offset,
+            len = buf.len(),
+            "kithara-file SessionSource sync read_at"
+        );
+
+        let bytes_read = self
+            .runtime
+            .block_on(self.res.read_at(offset, buf))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        let new_pos = offset.saturating_add(bytes_read as u64);
+        self.progress.set_read_pos(new_pos);
+        let percent = self
+            .len
+            .map(|len| ((new_pos as f64 / len as f64) * 100.0).min(100.0) as f32);
+        let _ = self.events.send(FileEvent::PlaybackProgress {
+            position: new_pos,
+            percent,
+        });
+
+        trace!(
+            offset,
+            requested = buf.len(),
+            got = bytes_read,
+            "kithara-file SessionSource sync read_at done"
         );
         Ok(bytes_read)
     }

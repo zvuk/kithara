@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use kanal::{AsyncReceiver, AsyncSender};
 use kithara_assets::{AssetStore, Assets, ResourceKey};
 use kithara_storage::{StreamingResourceExt, WaitOutcome};
-use kithara_stream::{ContainerFormat, MediaInfo, Source, StreamResult};
+use kithara_stream::{ContainerFormat, MediaInfo, Source, StreamResult, SyncSource, WaitOutcome as StreamWaitOutcome};
 use kithara_worker::Fetch;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
@@ -166,6 +166,9 @@ pub struct HlsSourceAdapter {
 
     /// EOF flag.
     eof_reached: Arc<Mutex<bool>>,
+
+    /// Tokio runtime handle for sync operations.
+    runtime: tokio::runtime::Handle,
 }
 
 impl HlsSourceAdapter {
@@ -184,6 +187,7 @@ impl HlsSourceAdapter {
             current_epoch: Arc::new(Mutex::new(0)),
             events_tx,
             eof_reached: Arc::new(Mutex::new(false)),
+            runtime: tokio::runtime::Handle::current(),
         }
     }
 
@@ -466,6 +470,52 @@ impl Source for HlsSourceAdapter {
         debug!(container = ?last.container, codec = ?last.codec, "media_info called");
 
         Some(MediaInfo::new(last.codec, last.container))
+    }
+}
+
+impl SyncSource for HlsSourceAdapter {
+    fn wait_range(&self, range: std::ops::Range<u64>) -> std::io::Result<StreamWaitOutcome> {
+        self.runtime
+            .block_on(self.ensure_segments_for_range(range.clone()))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        let segments = self.segments.lock();
+        let covered = segments.range_covered(&range);
+
+        Ok(if covered {
+            StreamWaitOutcome::Ready
+        } else {
+            StreamWaitOutcome::Eof
+        })
+    }
+
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
+        let range = offset..offset + buf.len() as u64;
+        self.runtime
+            .block_on(self.ensure_segments_for_range(range))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+        // Find segment containing offset
+        let entry = {
+            let segments = self.segments.lock();
+            segments.find_at_offset(offset).cloned()
+        };
+
+        let Some(entry) = entry else {
+            return Ok(0);
+        };
+
+        self.runtime
+            .block_on(self.read_from_entry(&entry, offset, buf))
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+    }
+
+    fn len(&self) -> Option<u64> {
+        let segments = self.segments.lock();
+        if segments.is_empty() {
+            return None;
+        }
+        Some(segments.total_bytes())
     }
 }
 
