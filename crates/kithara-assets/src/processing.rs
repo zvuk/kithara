@@ -2,12 +2,13 @@
 
 //! Processing layer for streaming resources.
 //!
-//! Buffers entire resource, transforms via callback, caches result.
+//! Processes content chunk-by-chunk on commit, writes to disk.
+//! Uses buffer pool — no allocations during processing.
 
-use std::{future::Future, hash::Hash, ops::Range, path::Path, pin::Pin, sync::Arc};
+use std::{hash::Hash, ops::Range, path::Path, sync::Arc};
 
 use async_trait::async_trait;
-use bytes::Bytes;
+use kithara_bufpool::BytePool;
 use kithara_storage::{
     AtomicResource, Resource, ResourceStatus, StorageError, StorageResult, StreamingResource,
     StreamingResourceExt, WaitOutcome,
@@ -16,26 +17,39 @@ use tokio::sync::OnceCell;
 
 use crate::{AssetsResult, ResourceKey, base::Assets};
 
-/// Transform function signature.
-///
-/// Takes raw bytes and context, returns transformed bytes.
-pub type ProcessFn<Ctx> = Arc<
-    dyn Fn(Bytes, Ctx) -> Pin<Box<dyn Future<Output = Result<Bytes, String>> + Send>> + Send + Sync,
->;
+/// Chunk size for streaming processing (64KB, multiple of AES block size 16).
+const PROCESS_CHUNK_SIZE: usize = 64 * 1024;
 
-/// A streaming resource wrapper that buffers and transforms content.
+/// Chunk-based transform function for streaming processing.
 ///
-/// On first `read_at`:
-/// 1. Reads entire inner resource
-/// 2. Transforms via callback
-/// 3. Buffers the result
+/// Processes data in chunks without allocating new buffers.
+/// Suitable for AES-128-CBC and similar block ciphers.
 ///
-/// Subsequent `read_at` calls return data from the buffer (lock-free).
+/// # Arguments
+/// - `input`: source bytes to process
+/// - `output`: buffer to write processed bytes into (same size as input)
+/// - `ctx`: processing context (e.g., encryption key, IV)
+/// - `is_last`: true if this is the final chunk (for PKCS7 padding)
+///
+/// # Returns
+/// Number of bytes written to output buffer.
+pub type ProcessChunkFn<Ctx> =
+    Arc<dyn Fn(&[u8], &mut [u8], &Ctx, bool) -> Result<usize, String> + Send + Sync>;
+
+/// A streaming resource wrapper that processes content on commit.
+///
+/// On `commit`:
+/// 1. Reads raw content in chunks
+/// 2. Transforms each chunk via callback (no allocation)
+/// 3. Writes processed chunks back to disk
+///
+/// `read_at` returns data directly from disk (already processed).
 pub struct ProcessedResource<R, Ctx> {
     inner: R,
     ctx: Ctx,
-    process: ProcessFn<Ctx>,
-    buffer: Arc<OnceCell<Bytes>>,
+    process: ProcessChunkFn<Ctx>,
+    pool: BytePool,
+    processed: Arc<OnceCell<()>>,
 }
 
 impl<R, Ctx> Clone for ProcessedResource<R, Ctx>
@@ -48,7 +62,8 @@ where
             inner: self.inner.clone(),
             ctx: self.ctx.clone(),
             process: Arc::clone(&self.process),
-            buffer: Arc::clone(&self.buffer),
+            pool: self.pool.clone(),
+            processed: Arc::clone(&self.processed),
         }
     }
 }
@@ -62,7 +77,7 @@ where
         f.debug_struct("ProcessedResource")
             .field("inner", &self.inner)
             .field("ctx", &self.ctx)
-            .field("has_buffer", &self.buffer.get().is_some())
+            .field("is_processed", &self.processed.get().is_some())
             .finish()
     }
 }
@@ -72,12 +87,13 @@ where
     R: std::fmt::Debug,
     Ctx: Clone + std::fmt::Debug,
 {
-    pub fn new(inner: R, ctx: Ctx, process: ProcessFn<Ctx>) -> Self {
+    pub fn new(inner: R, ctx: Ctx, process: ProcessChunkFn<Ctx>, pool: BytePool) -> Self {
         Self {
             inner,
             ctx,
             process,
-            buffer: Arc::new(OnceCell::new()),
+            pool,
+            processed: Arc::new(OnceCell::new()),
         }
     }
 
@@ -88,7 +104,7 @@ where
     }
 }
 
-/// Специализация для StreamingResource - добавляет метод status().
+/// Specialization for StreamingResource — adds status() method.
 impl<Ctx> ProcessedResource<StreamingResource, Ctx>
 where
     Ctx: Clone + std::fmt::Debug,
@@ -104,81 +120,42 @@ where
     R: StreamingResourceExt + Send + Sync + std::fmt::Debug,
     Ctx: Clone + Send + Sync + std::fmt::Debug,
 {
-    /// Wait until the inner resource is fully available (committed with known length).
+    /// Process content chunk-by-chunk and write back to disk.
     ///
-    /// This is needed because `read()` requires the resource to be committed.
-    #[allow(dead_code)]
-    async fn wait_for_full_content(&self) -> StorageResult<()> {
-        // Check if resource is empty (EOF at offset 0).
-        match self.inner.wait_range(0..1).await? {
-            WaitOutcome::Eof => {
-                // Empty file, already committed.
-                return Ok(());
+    /// Uses pool buffers, no allocations during processing loop.
+    async fn process_and_write(&self, final_len: u64) -> StorageResult<()> {
+        // Get buffers from pool
+        let mut input_buf = self.pool.get_with(|b| b.resize(PROCESS_CHUNK_SIZE, 0));
+        let mut output_buf = self.pool.get_with(|b| b.resize(PROCESS_CHUNK_SIZE, 0));
+
+        let chunk_size = PROCESS_CHUNK_SIZE;
+        let mut offset = 0u64;
+
+        while offset < final_len {
+            let remaining = (final_len - offset) as usize;
+            let to_read = remaining.min(chunk_size);
+            let is_last = offset + to_read as u64 >= final_len;
+
+            // Read chunk from disk
+            let n = self
+                .inner
+                .read_at(offset, &mut input_buf[..to_read])
+                .await?;
+            if n == 0 {
+                break;
             }
-            WaitOutcome::Ready => {
-                // File has data, need to find EOF.
-            }
+
+            // Process chunk (no allocation)
+            let written = (self.process)(&input_buf[..n], &mut output_buf[..n], &self.ctx, is_last)
+                .map_err(StorageError::Failed)?;
+
+            // Write processed chunk back to disk
+            self.inner.write_at(offset, &output_buf[..written]).await?;
+
+            offset += n as u64;
         }
 
-        // Binary search for EOF position.
-        // Start with small range and double until we find EOF.
-        let mut low = 0u64;
-        let mut high = 1u64;
-
-        // Find upper bound: double high until wait_range returns Eof.
-        loop {
-            match self.inner.wait_range(high..high + 1).await? {
-                WaitOutcome::Eof => {
-                    // EOF is between low and high.
-                    break;
-                }
-                WaitOutcome::Ready => {
-                    // Data available at high, double it.
-                    low = high;
-                    high = high.saturating_mul(2).max(high + 1);
-                }
-            }
-        }
-
-        // Now binary search between low and high to find exact EOF.
-        while low + 1 < high {
-            let mid = low + (high - low) / 2;
-            match self.inner.wait_range(mid..mid + 1).await? {
-                WaitOutcome::Eof => {
-                    high = mid;
-                }
-                WaitOutcome::Ready => {
-                    low = mid;
-                }
-            }
-        }
-
-        // At this point, resource is committed with known length.
         Ok(())
-    }
-
-    async fn ensure_processed(&self) -> StorageResult<Bytes> {
-        // Lock-free fast path: if already initialized, return immediately
-        if let Some(data) = self.buffer.get() {
-            return Ok(data.clone());
-        }
-
-        // Slow path: initialize once using OnceCell
-        self.buffer
-            .get_or_try_init(|| async {
-                // Read entire content. Note: for disk resources that are already written,
-                // they should be immediately readable without NotCommitted errors.
-                let raw = self.inner.read().await?;
-
-                // Transform
-                let processed = (self.process)(raw, self.ctx.clone())
-                    .await
-                    .map_err(StorageError::Failed)?;
-
-                Ok(processed)
-            })
-            .await
-            .map(|data| data.clone())
     }
 }
 
@@ -188,16 +165,23 @@ where
     R: StreamingResourceExt + Send + Sync + std::fmt::Debug,
     Ctx: Clone + Send + Sync + std::fmt::Debug + 'static,
 {
-    async fn write(&self, data: &[u8]) -> StorageResult<()> {
-        self.inner.write(data).await
-    }
-
-    async fn read(&self) -> StorageResult<Bytes> {
-        self.ensure_processed().await
-    }
-
     async fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.inner.commit(final_len).await
+        // First commit inner to mark it as committed
+        self.inner.commit(final_len).await?;
+
+        // Process on commit (once) using pool buffers
+        self.processed
+            .get_or_try_init(|| async {
+                if let Some(len) = final_len {
+                    if len > 0 {
+                        self.process_and_write(len).await?;
+                    }
+                }
+                Ok::<(), StorageError>(())
+            })
+            .await?;
+
+        Ok(())
     }
 
     async fn fail(&self, error: impl Into<String> + Send) -> StorageResult<()> {
@@ -216,60 +200,16 @@ where
     Ctx: Clone + Send + Sync + std::fmt::Debug + 'static,
 {
     async fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        // Check if already processed.
-        // Lock-free check if already processed
-        if self.buffer.get().is_some() {
-            return Ok(WaitOutcome::Ready);
-        }
-
-        // Wait for inner resource. We need all bytes for processing.
-        let outcome = self.inner.wait_range(range.clone()).await?;
-        if outcome == WaitOutcome::Eof {
-            return Ok(WaitOutcome::Eof);
-        }
-
-        Ok(WaitOutcome::Ready)
+        // After processing, just delegate to inner
+        self.inner.wait_range(range).await
     }
 
     async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        // Lock-free check if already processed and buffered
-        if let Some(processed) = self.buffer.get() {
-            let offset_usize = offset as usize;
-            if offset_usize >= processed.len() {
-                return Ok(0);
-            }
-            let available = processed.len() - offset_usize;
-            let to_copy = buf.len().min(available);
-            buf[..to_copy].copy_from_slice(&processed[offset_usize..offset_usize + to_copy]);
-            return Ok(to_copy);
-        }
-
-        // Process and cache the entire resource
-        match self.ensure_processed().await {
-            Ok(processed) => {
-                // Now read from buffered processed data
-                let offset_usize = offset as usize;
-                if offset_usize >= processed.len() {
-                    return Ok(0);
-                }
-                let available = processed.len() - offset_usize;
-                let to_copy = buf.len().min(available);
-                buf[..to_copy].copy_from_slice(&processed[offset_usize..offset_usize + to_copy]);
-                Ok(to_copy)
-            }
-            Err(StorageError::NotCommitted) => {
-                // Resource not committed yet - pass through to inner read_at without processing
-                self.inner.read_at(offset, buf).await
-            }
-            Err(e) => Err(e),
-        }
+        // After processing, data is on disk. Just delegate to inner.
+        self.inner.read_at(offset, buf).await
     }
 
     async fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        // Note: OnceCell cannot be cleared after initialization.
-        // In practice, ProcessedResource is used for read-after-commit scenarios
-        // where writes happen before processing, so this is not an issue.
-        // If content changes after processing, a new ProcessedResource should be created.
         self.inner.write_at(offset, data).await
     }
 }
@@ -290,7 +230,8 @@ where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + std::fmt::Debug + 'static,
 {
     inner: Arc<A>,
-    process: ProcessFn<Ctx>,
+    process: ProcessChunkFn<Ctx>,
+    pool: BytePool,
 }
 
 impl<A, Ctx> ProcessingAssets<A, Ctx>
@@ -299,8 +240,12 @@ where
     A::Context: Default,
     Ctx: Clone + Hash + Eq + Send + Sync + Default + std::fmt::Debug + 'static,
 {
-    pub fn new(inner: Arc<A>, process: ProcessFn<Ctx>) -> Self {
-        Self { inner, process }
+    pub fn new(inner: Arc<A>, process: ProcessChunkFn<Ctx>, pool: BytePool) -> Self {
+        Self {
+            inner,
+            process,
+            pool,
+        }
     }
 
     /// Get the underlying assets store.
@@ -339,8 +284,9 @@ where
         // Use context if provided, otherwise use Default::default()
         let ctx = ctx.unwrap_or_default();
 
-        // Create processed wrapper (will be cached by CachedAssets)
-        let processed = ProcessedResource::new(inner, ctx, Arc::clone(&self.process));
+        // Create processed wrapper with pool
+        let processed =
+            ProcessedResource::new(inner, ctx, Arc::clone(&self.process), self.pool.clone());
 
         Ok(processed)
     }
@@ -377,6 +323,10 @@ mod tests {
 
     use super::*;
 
+    fn test_pool() -> BytePool {
+        BytePool::new(4, PROCESS_CHUNK_SIZE)
+    }
+
     /// Simple mock streaming resource for testing.
     async fn mock_resource(content: &[u8]) -> StreamingResource {
         let dir = tempdir().unwrap();
@@ -390,105 +340,86 @@ mod tests {
         })
         .await
         .unwrap();
-        res.write(content).await.unwrap();
-        res.commit(Some(content.len() as u64)).await.unwrap();
+        res.write_at(0, content).await.unwrap();
+        // Don't commit here - let the test control when commit happens
         res
     }
 
-    #[tokio::test]
-    async fn test_process_fn_called_once() {
-        let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = Arc::clone(&call_count);
-
-        let process_fn: ProcessFn<()> = Arc::new(move |data, _ctx| {
-            let count = Arc::clone(&count_clone);
-            Box::pin(async move {
-                count.fetch_add(1, Ordering::SeqCst);
-                Ok(data)
-            })
-        });
-
-        let resource = mock_resource(b"test content").await;
-        let processed = ProcessedResource::new(resource, (), process_fn);
-
-        // First read - should call process_fn
-        let result1 = processed.read().await.unwrap();
-        assert_eq!(result1.as_ref(), b"test content");
-        assert_eq!(
-            call_count.load(Ordering::SeqCst),
-            1,
-            "First read should call process_fn"
-        );
-
-        // Second read - should NOT call process_fn (cached)
-        let result2 = processed.read().await.unwrap();
-        assert_eq!(result2.as_ref(), b"test content");
-        assert_eq!(
-            call_count.load(Ordering::SeqCst),
-            1,
-            "Second read should use cached result"
-        );
+    /// Create XOR chunk processor (no allocation).
+    fn xor_chunk_processor(xor_key: u8, call_count: Arc<AtomicUsize>) -> ProcessChunkFn<()> {
+        Arc::new(move |input, output, _ctx, _is_last| {
+            call_count.fetch_add(1, Ordering::SeqCst);
+            for (i, &b) in input.iter().enumerate() {
+                output[i] = b ^ xor_key;
+            }
+            Ok(input.len())
+        })
     }
 
     #[tokio::test]
-    async fn test_process_fn_called_once_via_read_at() {
+    async fn test_process_on_commit() {
         let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = Arc::clone(&call_count);
-
-        let process_fn: ProcessFn<()> = Arc::new(move |data, _ctx| {
-            let count = Arc::clone(&count_clone);
-            Box::pin(async move {
-                count.fetch_add(1, Ordering::SeqCst);
-                Ok(data)
-            })
-        });
+        let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
 
         let resource = mock_resource(b"test content").await;
-        let processed = ProcessedResource::new(resource, (), process_fn);
+        let processed = ProcessedResource::new(resource, (), process_fn, test_pool());
 
-        // First read_at - should call process_fn
-        let mut buf1 = vec![0u8; 4];
-        let n1 = processed.read_at(0, &mut buf1).await.unwrap();
-        assert_eq!(n1, 4);
-        assert_eq!(&buf1, b"test");
-        assert_eq!(
-            call_count.load(Ordering::SeqCst),
-            1,
-            "First read_at should call process_fn"
-        );
+        // Before commit - no processing
+        assert_eq!(call_count.load(Ordering::SeqCst), 0);
 
-        // Second read_at - should NOT call process_fn (cached)
-        let mut buf2 = vec![0u8; 7];
-        let n2 = processed.read_at(5, &mut buf2).await.unwrap();
-        assert_eq!(n2, 7);
-        assert_eq!(&buf2, b"content");
-        assert_eq!(
-            call_count.load(Ordering::SeqCst),
-            1,
-            "Second read_at should use cached result"
-        );
+        // Commit triggers processing
+        processed
+            .commit(Some(b"test content".len() as u64))
+            .await
+            .unwrap();
+        assert!(call_count.load(Ordering::SeqCst) > 0);
+
+        // Read processed data
+        let mut buf = vec![0u8; 12];
+        let n = processed.read_at(0, &mut buf).await.unwrap();
+        assert_eq!(n, 12);
+
+        // Verify XOR was applied
+        let expected: Vec<u8> = b"test content".iter().map(|b| b ^ 0x42).collect();
+        assert_eq!(buf, expected);
     }
 
     #[tokio::test]
-    async fn test_process_fn_transformation() {
+    async fn test_process_called_once_on_multiple_commits() {
         let call_count = Arc::new(AtomicUsize::new(0));
-        let count_clone = Arc::clone(&call_count);
+        let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
 
-        // Process function that uppercases the content
-        let process_fn: ProcessFn<()> = Arc::new(move |data, _ctx| {
-            let count = Arc::clone(&count_clone);
-            Box::pin(async move {
-                count.fetch_add(1, Ordering::SeqCst);
-                let upper: Vec<u8> = data.iter().map(|b| b.to_ascii_uppercase()).collect();
-                Ok(Bytes::from(upper))
-            })
-        });
+        let resource = mock_resource(b"data").await;
+        let processed = ProcessedResource::new(resource, (), process_fn, test_pool());
 
-        let resource = mock_resource(b"hello").await;
-        let processed = ProcessedResource::new(resource, (), process_fn);
+        // First commit
+        processed.commit(Some(4)).await.unwrap();
+        let count_after_first = call_count.load(Ordering::SeqCst);
+        assert!(count_after_first > 0);
 
-        let result = processed.read().await.unwrap();
-        assert_eq!(result.as_ref(), b"HELLO");
-        assert_eq!(call_count.load(Ordering::SeqCst), 1);
+        // Second commit - should not process again
+        processed.commit(Some(4)).await.unwrap();
+        assert_eq!(call_count.load(Ordering::SeqCst), count_after_first);
+    }
+
+    #[tokio::test]
+    async fn test_read_at_after_processing() {
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let process_fn = xor_chunk_processor(0xFF, Arc::clone(&call_count));
+
+        let content: Vec<u8> = (0..100).collect();
+        let resource = mock_resource(&content).await;
+        let processed = ProcessedResource::new(resource, (), process_fn, test_pool());
+
+        processed.commit(Some(100)).await.unwrap();
+
+        // Read middle portion
+        let mut buf = vec![0u8; 20];
+        let n = processed.read_at(40, &mut buf).await.unwrap();
+        assert_eq!(n, 20);
+
+        // Verify XOR
+        let expected: Vec<u8> = (40..60).map(|b: u8| b ^ 0xFF).collect();
+        assert_eq!(buf, expected);
     }
 }

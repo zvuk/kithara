@@ -512,6 +512,12 @@ impl<const SHARDS: usize, T> AsMut<[T]> for PooledSliceOwned<SHARDS, T> {
     }
 }
 
+/// Standard byte buffer pool type for the entire workspace.
+///
+/// Use this type everywhere instead of creating custom SharedPool aliases.
+/// Create once at application startup and pass through the entire chain.
+pub type BytePool = SharedPool<32, Vec<u8>>;
+
 /// Helper to create Arc-wrapped Pool for shared access.
 ///
 /// Useful when pool needs to be shared across multiple components.

@@ -9,7 +9,9 @@ use kithara_assets::{
     ProcessedResource, ProcessingAssets, ResourceKey,
 };
 use kithara_net::{ByteStream, Headers, HttpClient, Net};
-use kithara_storage::{Resource as _, ResourceStatus, StreamingResource, StreamingResourceExt};
+use kithara_storage::{
+    AtomicResourceExt, Resource as _, ResourceStatus, StreamingResource, StreamingResourceExt,
+};
 use tracing::{debug, trace};
 use url::Url;
 

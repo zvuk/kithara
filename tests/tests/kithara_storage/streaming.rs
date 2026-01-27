@@ -166,7 +166,7 @@ async fn streaming_resource_zero_length_commit() {
     let outcome = resource.wait_range(0..10).await.unwrap();
     assert_eq!(outcome, WaitOutcome::Eof);
 
-    let data = resource.read().await.unwrap();
+    let data = read_bytes(&resource, 0, 0).await;
     assert!(data.is_empty());
 }
 
@@ -353,8 +353,14 @@ async fn streaming_resource_commit_without_final_len() {
     resource.write_at(0, b"Hello").await.unwrap();
     resource.commit(None).await.unwrap();
 
-    let result = resource.read().await;
-    assert!(matches!(result, Err(StorageError::NotCommitted)));
+    // Commit without final_len means we don't know the total size.
+    // read_at still works, but wait_range doesn't know when EOF is reached.
+    let status = resource.status().await;
+    assert_eq!(status, ResourceStatus::Committed { final_len: None });
+
+    // We can still read the written data
+    let data = read_bytes(&resource, 0, 5).await;
+    assert_eq!(&data, b"Hello");
 }
 
 #[rstest]
@@ -507,7 +513,8 @@ async fn streaming_resource_whole_object_operations() {
             .await
             .unwrap();
 
-    resource.write(b"Hello, World!").await.unwrap();
+    resource.write_at(0, b"Hello, World!").await.unwrap();
+    resource.commit(Some(13)).await.unwrap();
 
     let status = resource.status().await;
     assert_eq!(
@@ -517,8 +524,9 @@ async fn streaming_resource_whole_object_operations() {
         }
     );
 
-    let data = resource.read().await.unwrap();
-    assert_eq!(&*data, b"Hello, World!");
+    resource.wait_range(0..13).await.unwrap();
+    let data = read_bytes(&resource, 0, 13).await;
+    assert_eq!(&data, b"Hello, World!");
 }
 
 #[rstest]
@@ -541,7 +549,7 @@ async fn streaming_resource_empty_operations() {
 
     resource.commit(Some(0)).await.unwrap();
 
-    let data = resource.read().await.unwrap();
+    let data = read_bytes(&resource, 0, 0).await;
     assert!(data.is_empty());
 }
 

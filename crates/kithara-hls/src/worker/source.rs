@@ -6,8 +6,8 @@ use kithara_abr::{
     AbrController, AbrOptions, AbrReason, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource, Variant,
 };
-use kithara_assets::{Assets, ResourceKey};
-use kithara_storage::Resource;
+use kithara_assets::{Assets, BytePool, ResourceKey};
+use kithara_storage::StreamingResourceExt;
 use kithara_worker::{AsyncWorkerSource, Fetch};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
@@ -62,6 +62,9 @@ pub struct HlsWorkerSource {
 
     /// Cancellation token.
     cancel: CancellationToken,
+
+    /// Buffer pool for reading segments (shared across all components).
+    pool: BytePool,
 }
 
 impl HlsWorkerSource {
@@ -75,6 +78,7 @@ impl HlsWorkerSource {
     /// - `abr_options`: ABR configuration (None for no ABR)
     /// - `events_tx`: Optional event broadcast channel
     /// - `cancel`: Cancellation token
+    /// - `pool`: Buffer pool for segment reads (shared)
     pub fn new(
         loader: Arc<dyn Loader>,
         fetch_manager: Arc<DefaultFetchManager>,
@@ -83,6 +87,7 @@ impl HlsWorkerSource {
         abr_options: Option<AbrOptions>,
         events_tx: Option<tokio::sync::broadcast::Sender<HlsEvent>>,
         cancel: CancellationToken,
+        pool: BytePool,
     ) -> Self {
         // Build ABR variants list from variant_metadata
         let abr_variants: Vec<Variant> = variant_metadata
@@ -113,6 +118,7 @@ impl HlsWorkerSource {
             byte_offset: 0,
             events_tx,
             cancel,
+            pool,
         }
     }
 
@@ -224,15 +230,18 @@ impl AsyncWorkerSource for HlsWorkerSource {
             if let Some(ref init_segment_url) = init_url {
                 let init_key = ResourceKey::from_url(init_segment_url);
                 match assets.open_streaming_resource(&init_key).await {
-                    Ok(resource) => match resource.read().await {
-                        Ok(bytes) => {
-                            trace!(variant = current_variant, len = bytes.len(), "read init segment");
-                            segment_bytes.extend_from_slice(&bytes);
+                    Ok(resource) => {
+                        let mut buf = self.pool.get_with(|b| b.resize(init_len as usize, 0));
+                        match resource.read_at(0, &mut buf).await {
+                            Ok(n) => {
+                                trace!(variant = current_variant, len = n, "read init segment");
+                                segment_bytes.extend_from_slice(&buf[..n]);
+                            }
+                            Err(e) => {
+                                warn!(variant = current_variant, error = ?e, "failed to read init segment");
+                            }
                         }
-                        Err(e) => {
-                            warn!(variant = current_variant, error = ?e, "failed to read init segment");
-                        }
-                    },
+                    }
                     Err(e) => {
                         warn!(variant = current_variant, error = ?e, "failed to open init resource");
                     }
@@ -243,25 +252,28 @@ impl AsyncWorkerSource for HlsWorkerSource {
         // Read media segment
         let media_key = ResourceKey::from_url(&meta.url);
         match assets.open_streaming_resource(&media_key).await {
-            Ok(resource) => match resource.read().await {
-                Ok(bytes) => {
-                    trace!(
-                        variant = current_variant,
-                        segment = self.current_segment_index,
-                        len = bytes.len(),
-                        "read media segment"
-                    );
-                    segment_bytes.extend_from_slice(&bytes);
+            Ok(resource) => {
+                let mut buf = self.pool.get_with(|b| b.resize(media_len as usize, 0));
+                match resource.read_at(0, &mut buf).await {
+                    Ok(n) => {
+                        trace!(
+                            variant = current_variant,
+                            segment = self.current_segment_index,
+                            len = n,
+                            "read media segment"
+                        );
+                        segment_bytes.extend_from_slice(&buf[..n]);
+                    }
+                    Err(e) => {
+                        warn!(
+                            variant = current_variant,
+                            segment = self.current_segment_index,
+                            error = ?e,
+                            "failed to read media segment"
+                        );
+                    }
                 }
-                Err(e) => {
-                    warn!(
-                        variant = current_variant,
-                        segment = self.current_segment_index,
-                        error = ?e,
-                        "failed to read media segment"
-                    );
-                }
-            },
+            }
             Err(e) => {
                 warn!(
                     variant = current_variant,
@@ -433,6 +445,10 @@ mod tests {
         fetch::DefaultFetchManager,
     };
 
+    fn test_pool() -> BytePool {
+        BytePool::new(16, 64 * 1024)
+    }
+
     fn create_test_metadata() -> Vec<VariantMetadata> {
         vec![VariantMetadata {
             index: 0,
@@ -561,6 +577,7 @@ mod tests {
             None, // no ABR
             None, // no events
             cancel,
+            test_pool(),
         );
 
         let fetch1 = source.fetch_next().await;
@@ -614,6 +631,7 @@ mod tests {
             None, // no ABR
             None, // no events
             cancel,
+            test_pool(),
         );
 
         let fetch1 = source.fetch_next().await;
@@ -645,6 +663,7 @@ mod tests {
             None, // no ABR
             None, // no events
             cancel,
+            test_pool(),
         );
 
         let new_epoch = source.handle_command(HlsCommand::Seek {

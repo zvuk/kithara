@@ -106,7 +106,6 @@ impl<S: SyncSource> Read for SyncReader<S> {
         match self.source.wait_range(range)? {
             WaitOutcome::Ready => {}
             WaitOutcome::Eof => {
-                eprintln!("[DEBUG] SyncReader::read wait_range returned Eof at pos={}", self.pos);
                 self.eof = true;
                 return Ok(0);
             }
@@ -114,7 +113,6 @@ impl<S: SyncSource> Read for SyncReader<S> {
 
         let n = self.source.read_at(self.pos, buf)?;
         if n == 0 {
-            eprintln!("[DEBUG] SyncReader::read read_at returned 0 at pos={}", self.pos);
             self.eof = true;
         } else {
             self.pos = self.pos.saturating_add(n as u64);

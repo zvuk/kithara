@@ -156,7 +156,15 @@ Requirements:
 - No cyclic dependencies
 - Facade crate may re-export but should not contain core logic
 
-### 11. Single source of truth for shared types
+### 11. No allocations for buffers — use SharedPool
+- **NEVER** use `vec![0u8; size]` or `Vec::with_capacity()` for temporary buffers
+- Use `SharedPool` (from `kithara-bufpool`) which is passed through the entire chain
+- Create pool once at initialization, share via `Arc` across all components
+- Get buffer: `pool.get_with(|b| b.resize(size, 0))`
+- Buffer automatically returns to pool when dropped
+- This applies to: segment reads, chunk processing, network I/O buffers
+
+### 12. Single source of truth for shared types
 - `AudioCodec`, `ContainerFormat`, `MediaInfo` — ONLY in `kithara-stream`
 - Other crates re-export from `kithara-stream`, never define own copies
 - No type conversion between duplicate types — use the canonical one

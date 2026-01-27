@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
-use kithara_storage::{Resource, StreamingResourceExt};
+use kithara_storage::{AtomicResourceExt, Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
 
 /// Helper to read bytes from resource into a new Vec

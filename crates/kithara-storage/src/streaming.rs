@@ -8,7 +8,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-use bytes::Bytes;
 use random_access_disk::RandomAccessDisk;
 use random_access_storage::RandomAccess;
 use rangemap::RangeSet;
@@ -149,7 +148,6 @@ impl StreamingResource {
         };
 
         if offset >= final_len {
-            eprintln!("[DEBUG] clamp_len_to_eof: offset={} >= final_len={}, returning 0", offset, final_len);
             return Ok(Some(0));
         }
 
@@ -170,56 +168,7 @@ impl StreamingResource {
 
 #[async_trait]
 impl Resource for StreamingResource {
-    async fn write(&self, data: &[u8]) -> StorageResult<()> {
-        // Whole-object convenience for streaming resources:
-        // write at offset 0, then commit with known final_len.
-        self.write_at(0, data).await?;
-        self.commit(Some(data.len() as u64)).await?;
-        Ok(())
-    }
-
-    async fn read(&self) -> StorageResult<Bytes> {
-        // Whole-object reads are only well-defined once committed with a known final_len.
-        let final_len = match self.inner.state.try_read() {
-            Err(err) => {
-                return Err(StorageError::Failed(format!(
-                    "Failed to acquire lock {:?}",
-                    err
-                )));
-            }
-            Ok(state) => {
-                if let Some(err) = &state.failed {
-                    return Err(StorageError::Failed(err.clone()));
-                }
-                if !state.committed {
-                    return Err(StorageError::NotCommitted);
-                }
-                match state.final_len {
-                    Some(len) => len,
-                    None => return Err(StorageError::NotCommitted),
-                }
-            }
-        };
-
-        if final_len == 0 {
-            return Ok(Bytes::new());
-        }
-
-        self.wait_range(0..final_len).await?;
-        let len_usize: usize = final_len
-            .try_into()
-            .map_err(|_| StorageError::InvalidRange {
-                start: 0,
-                end: final_len,
-            })?;
-        let mut buf = vec![0u8; len_usize];
-        let bytes_read = self.read_at(0, &mut buf).await?;
-        buf.truncate(bytes_read);
-        Ok(Bytes::from(buf))
-    }
-
     async fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        eprintln!("[DEBUG] commit called with final_len={:?}", final_len);
         {
             let mut state = self.inner.state.write().await;
 
@@ -311,19 +260,13 @@ impl StreamingResourceExt for StreamingResource {
 
         let len = buf.len();
         let read_len = match self.clamp_len_to_eof(offset, len).await? {
-            Some(0) => {
-                eprintln!("[DEBUG] read_at: clamp returned Some(0) at offset={}", offset);
-                return Ok(0);
-            }
+            Some(0) => return Ok(0),
             Some(clamped) => clamped,
             None => len,
         };
 
         let mut disk = self.inner.disk.lock().await;
         let bytes_read = disk.read_to(offset, &mut buf[..read_len]).await?;
-        if bytes_read == 0 && read_len > 0 {
-            eprintln!("[DEBUG] read_at: disk.read_to returned 0 at offset={}, read_len={}", offset, read_len);
-        }
         Ok(bytes_read)
     }
 

@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
-use kithara_storage::{Resource, StreamingResourceExt};
+use kithara_storage::{AtomicResourceExt, Resource, StreamingResourceExt};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 

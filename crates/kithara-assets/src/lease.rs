@@ -154,14 +154,6 @@ where
     R: Resource + Send + Sync,
     L: Send + Sync + 'static,
 {
-    async fn write(&self, data: &[u8]) -> Result<(), StorageError> {
-        self.inner.write(data).await
-    }
-
-    async fn read(&self) -> Result<Bytes, StorageError> {
-        self.inner.read().await
-    }
-
     async fn commit(&self, final_len: Option<u64>) -> Result<(), StorageError> {
         // Commit inner resource first
         self.inner.commit(final_len).await?;
@@ -207,11 +199,19 @@ where
     }
 }
 
+#[async_trait]
 impl<R, L> AtomicResourceExt for LeaseResource<R, L>
 where
     R: AtomicResourceExt + Send + Sync,
     L: Send + Sync + 'static,
 {
+    async fn write(&self, data: &[u8]) -> Result<(), StorageError> {
+        self.inner.write(data).await
+    }
+
+    async fn read(&self) -> Result<Bytes, StorageError> {
+        self.inner.read().await
+    }
 }
 
 /// Add status() method for ProcessedResource<StreamingResource> inner.

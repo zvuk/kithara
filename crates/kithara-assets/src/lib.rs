@@ -56,5 +56,6 @@ pub use index::PinsIndex;
 pub use key::canonicalize_for_asset;
 pub use key::{ResourceKey, asset_root_for_url};
 pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
-pub use processing::{ProcessFn, ProcessedResource, ProcessingAssets};
+pub use kithara_bufpool::BytePool;
+pub use processing::{ProcessChunkFn, ProcessedResource, ProcessingAssets};
 pub use store::{AssetStore, AssetStoreBuilder, StoreOptions};

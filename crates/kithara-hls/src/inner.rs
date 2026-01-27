@@ -4,7 +4,7 @@
 
 use std::{io::{Read, Seek, SeekFrom}, sync::Arc};
 
-use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, BytePool, asset_root_for_url};
 use kithara_net::HttpClient;
 use kithara_stream::{StreamType, SyncReader};
 use kithara_worker::Worker;
@@ -94,6 +94,9 @@ impl HlsInner {
             Arc::clone(&playlist_manager),
         ));
 
+        // Use provided pool or create default (1024 buffers, 64KB trim)
+        let pool = config.pool.clone().unwrap_or_else(|| BytePool::new(1024, 64 * 1024));
+
         // Create HlsWorkerSource
         let worker_source = HlsWorkerSource::new(
             fetch_loader,
@@ -103,6 +106,7 @@ impl HlsInner {
             Some(config.abr.clone()),
             config.events_tx.clone(),
             cancel,
+            pool,
         );
 
         // Get assets for adapter
