@@ -6,7 +6,7 @@ use std::io::{Read, Seek};
 use std::thread::JoinHandle;
 
 use kanal::{Receiver, Sender};
-use kithara_stream::MediaInfo;
+use kithara_stream::{MediaInfo, Stream, StreamType};
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -27,15 +27,13 @@ use crate::types::PcmSpec;
 /// ```ignore
 /// use kithara_decode::Decoder;
 /// use kithara_hls::{Hls, HlsConfig};
-/// use kithara_stream::StreamType;
+/// use kithara_stream::Stream;
 ///
-/// // Create HLS stream
-/// let inner = Hls::create(HlsConfig::new(url)).await?;
+/// // Create decoder from config
+/// let config = DecoderConfig::<Hls>::new(hls_config);
+/// let decoder = Decoder::new(config).await?;
 ///
-/// // Create decoder
-/// let decoder = Decoder::new(inner, DecoderConfig::default())?;
-///
-/// // Read PCM from channel
+/// // Or read PCM from channel directly
 /// while let Ok(chunk) = decoder.pcm_rx().recv() {
 ///     play_audio(chunk);
 /// }
@@ -67,9 +65,9 @@ pub struct Decoder<S> {
     _marker: std::marker::PhantomData<S>,
 }
 
-/// Configuration for decoder.
-#[derive(Debug, Clone)]
-pub struct DecoderConfig {
+/// Decode-specific options.
+#[derive(Debug, Clone, Default)]
+pub struct DecodeOptions {
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
     pub pcm_buffer_chunks: usize,
     /// Optional format hint (file extension like "mp3", "wav")
@@ -80,8 +78,9 @@ pub struct DecoderConfig {
     pub is_streaming: bool,
 }
 
-impl Default for DecoderConfig {
-    fn default() -> Self {
+impl DecodeOptions {
+    /// Create default options.
+    pub fn new() -> Self {
         Self {
             pcm_buffer_chunks: 10,
             hint: None,
@@ -89,14 +88,12 @@ impl Default for DecoderConfig {
             is_streaming: false,
         }
     }
-}
 
-impl DecoderConfig {
-    /// Create config for streaming source (HLS).
+    /// Create options for streaming source (HLS).
     pub fn streaming() -> Self {
         Self {
             is_streaming: true,
-            ..Default::default()
+            ..Self::new()
         }
     }
 
@@ -113,6 +110,45 @@ impl DecoderConfig {
     }
 }
 
+/// Configuration for decoder with stream config.
+///
+/// Generic over StreamType to include stream-specific configuration.
+#[derive(Debug, Clone)]
+pub struct DecoderConfig<T: StreamType> {
+    /// Stream configuration (HlsConfig, FileConfig, etc.)
+    pub stream: T::Config,
+    /// Decode-specific options
+    pub decode: DecodeOptions,
+}
+
+impl<T: StreamType> DecoderConfig<T> {
+    /// Create config with stream config.
+    pub fn new(stream: T::Config) -> Self {
+        Self {
+            stream,
+            decode: DecodeOptions::new(),
+        }
+    }
+
+    /// Set decode options.
+    pub fn with_decode(mut self, decode: DecodeOptions) -> Self {
+        self.decode = decode;
+        self
+    }
+
+    /// Set format hint.
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.decode.hint = Some(hint.into());
+        self
+    }
+
+    /// Set streaming mode.
+    pub fn streaming(mut self) -> Self {
+        self.decode.is_streaming = true;
+        self
+    }
+}
+
 impl<S> Decoder<S>
 where
     S: Read + Seek + Send + Sync + 'static,
@@ -121,8 +157,13 @@ where
     ///
     /// Spawns a blocking thread for decoding.
     /// If called from within Tokio runtime, captures handle for async operations.
-    pub fn new(source: S, config: DecoderConfig) -> DecodeResult<Self> {
-        let (pcm_tx, pcm_rx) = kanal::bounded(config.pcm_buffer_chunks);
+    pub fn from_source(source: S, options: DecodeOptions) -> DecodeResult<Self> {
+        let buffer_chunks = if options.pcm_buffer_chunks == 0 {
+            10
+        } else {
+            options.pcm_buffer_chunks
+        };
+        let (pcm_tx, pcm_rx) = kanal::bounded(buffer_chunks);
 
         // Try to capture tokio runtime handle (optional)
         let rt_handle = tokio::runtime::Handle::try_current().ok();
@@ -132,13 +173,13 @@ where
             .spawn(move || {
                 // Enter tokio runtime context if available
                 let _guard = rt_handle.as_ref().map(|h| h.enter());
-                Self::decode_loop(source, pcm_tx, config);
+                Self::decode_loop(source, pcm_tx, options);
             })
             .map_err(|e| {
-                DecodeError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("failed to spawn decode thread: {}", e),
-                ))
+    DecodeError::Io(std::io::Error::other(format!(
+                    "failed to spawn decode thread: {}",
+                    e
+                )))
             })?;
 
         Ok(Self {
@@ -178,9 +219,9 @@ where
     }
 
     /// Decode loop running in blocking thread.
-    fn decode_loop(source: S, pcm_tx: Sender<PcmChunk<f32>>, config: DecoderConfig) {
+    fn decode_loop(source: S, pcm_tx: Sender<PcmChunk<f32>>, options: DecodeOptions) {
         // Create Symphonia decoder
-        let mut decoder = match Self::create_decoder(source, &config) {
+        let mut decoder = match Self::create_decoder(source, &options) {
             Ok(d) => d,
             Err(e) => {
                 warn!(?e, "failed to create decoder");
@@ -201,7 +242,7 @@ where
                     chunks_decoded += 1;
                     total_samples += chunk.pcm.len() as u64;
 
-                    if chunks_decoded % 100 == 0 {
+                    if chunks_decoded.is_multiple_of(100) {
                         trace!(
                             chunks = chunks_decoded,
                             samples = total_samples,
@@ -232,12 +273,12 @@ where
         }
     }
 
-    /// Create Symphonia decoder with appropriate method based on config.
-    fn create_decoder(source: S, config: &DecoderConfig) -> DecodeResult<SymphoniaDecoder> {
-        if let Some(ref media_info) = config.media_info {
-            SymphoniaDecoder::new_from_media_info(source, media_info, config.is_streaming)
+    /// Create Symphonia decoder with appropriate method based on options.
+    fn create_decoder(source: S, options: &DecodeOptions) -> DecodeResult<SymphoniaDecoder> {
+        if let Some(ref media_info) = options.media_info {
+            SymphoniaDecoder::new_from_media_info(source, media_info, options.is_streaming)
         } else {
-            SymphoniaDecoder::new_with_probe(source, config.hint.as_deref())
+            SymphoniaDecoder::new_with_probe(source, options.hint.as_deref())
         }
     }
 }
@@ -254,8 +295,33 @@ impl<S> Drop for Decoder<S> {
     }
 }
 
-// Re-export old names for compatibility during transition
-pub type DecodePipelineConfig = DecoderConfig;
+/// Specialized impl for Stream-based decoders.
+///
+/// Provides async constructor that creates Stream internally.
+impl<T> Decoder<Stream<T>>
+where
+    T: StreamType,
+    T::Inner: Read + Seek + Send + Sync + 'static,
+{
+    /// Create decoder from DecoderConfig.
+    ///
+    /// This is the target API for Stream sources.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let config = DecoderConfig::<Hls>::new(hls_config).streaming();
+    /// let decoder = Decoder::new(config).await?;
+    /// sink.append(decoder);
+    /// ```
+    pub async fn new(config: DecoderConfig<T>) -> Result<Self, DecodeError> {
+        let stream = Stream::<T>::new(config.stream)
+            .await
+            .map_err(|e| DecodeError::Io(std::io::Error::other(e.to_string())))?;
+
+        Self::from_source(stream, config.decode)
+    }
+}
 
 // rodio::Source implementation for Decoder
 #[cfg(feature = "rodio")]
@@ -297,23 +363,22 @@ impl<S> Iterator for Decoder<S> {
         }
 
         // Try to get sample from current chunk
-        if let Some(ref chunk) = self.current_chunk {
-            if self.chunk_offset < chunk.len() {
-                let sample = chunk[self.chunk_offset];
-                self.chunk_offset += 1;
-                return Some(sample);
-            }
+        if let Some(ref chunk) = self.current_chunk
+            && self.chunk_offset < chunk.len()
+        {
+            let sample = chunk[self.chunk_offset];
+            self.chunk_offset += 1;
+            return Some(sample);
         }
 
         // Chunk exhausted or no chunk - need more data
-        if self.fill_buffer() {
-            if let Some(ref chunk) = self.current_chunk {
-                if self.chunk_offset < chunk.len() {
-                    let sample = chunk[self.chunk_offset];
-                    self.chunk_offset += 1;
-                    return Some(sample);
-                }
-            }
+        if self.fill_buffer()
+            && let Some(ref chunk) = self.current_chunk
+            && self.chunk_offset < chunk.len()
+        {
+            let sample = chunk[self.chunk_offset];
+            self.chunk_offset += 1;
+            return Some(sample);
         }
 
         None
@@ -323,10 +388,10 @@ impl<S> Iterator for Decoder<S> {
 #[cfg(feature = "rodio")]
 impl<S> rodio::Source for Decoder<S> {
     fn current_span_len(&self) -> Option<usize> {
-        if let Some(ref chunk) = self.current_chunk {
-            if self.chunk_offset < chunk.len() {
-                return Some(chunk.len() - self.chunk_offset);
-            }
+        if let Some(ref chunk) = self.current_chunk
+            && self.chunk_offset < chunk.len()
+        {
+            return Some(chunk.len() - self.chunk_offset);
         }
         None
     }
@@ -393,12 +458,12 @@ mod tests {
     }
 
     #[test]
-    fn test_decoder_new() {
+    fn test_decoder_from_source() {
         let wav_data = create_test_wav(1000);
         let cursor = Cursor::new(wav_data);
 
-        let config = DecoderConfig::default().with_hint("wav");
-        let decoder = Decoder::new(cursor, config).unwrap();
+        let options = DecodeOptions::new().with_hint("wav");
+        let decoder = Decoder::from_source(cursor, options).unwrap();
 
         assert!(decoder.is_running());
     }
@@ -408,8 +473,8 @@ mod tests {
         let wav_data = create_test_wav(1000);
         let cursor = Cursor::new(wav_data);
 
-        let config = DecoderConfig::default().with_hint("wav");
-        let decoder = Decoder::new(cursor, config).unwrap();
+        let options = DecodeOptions::new().with_hint("wav");
+        let decoder = Decoder::from_source(cursor, options).unwrap();
 
         let mut chunk_count = 0;
         while let Ok(chunk) = decoder.pcm_rx().recv() {
@@ -424,22 +489,22 @@ mod tests {
     }
 
     #[test]
-    fn test_decoder_config_streaming() {
-        let config = DecoderConfig::streaming();
-        assert!(config.is_streaming);
+    fn test_decode_options_streaming() {
+        let options = DecodeOptions::streaming();
+        assert!(options.is_streaming);
     }
 
     #[test]
-    fn test_decoder_config_with_media_info() {
+    fn test_decode_options_with_media_info() {
         let info = MediaInfo::default()
             .with_container(kithara_stream::ContainerFormat::Wav)
             .with_sample_rate(44100);
 
-        let config = DecoderConfig::default().with_media_info(info.clone());
+        let options = DecodeOptions::new().with_media_info(info.clone());
 
-        assert!(config.media_info.is_some());
+        assert!(options.media_info.is_some());
         assert_eq!(
-            config.media_info.unwrap().container,
+            options.media_info.unwrap().container,
             Some(kithara_stream::ContainerFormat::Wav)
         );
     }

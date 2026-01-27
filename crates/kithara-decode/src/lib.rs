@@ -8,20 +8,19 @@
 //! - [`SymphoniaDecoder`] - Symphonia-based audio decoder (internal)
 //! - [`AudioSyncReader`] - rodio::Source adapter (requires `rodio` feature)
 //!
-//! ## Decode from any Read + Seek source
+//! ## Target API
 //!
 //! ```ignore
 //! use kithara_decode::{Decoder, DecoderConfig};
 //! use kithara_hls::{Hls, HlsConfig};
-//! use kithara_stream::StreamType;
+//! use kithara_stream::Stream;
 //!
-//! // Create HLS stream (or File stream, etc.)
-//! let inner = Hls::create(HlsConfig::new(url)).await?;
+//! // HLS stream with decoding
+//! let config = DecoderConfig::<Hls>::new(hls_config).streaming();
+//! let decoder = Decoder::<Stream<Hls>>::new(config).await?;
+//! sink.append(decoder);  // rodio compatible
 //!
-//! // Create decoder
-//! let decoder = Decoder::new(inner, DecoderConfig::streaming())?;
-//!
-//! // Read PCM from channel
+//! // Or read PCM from channel directly
 //! while let Ok(chunk) = decoder.pcm_rx().recv() {
 //!     play_audio(chunk);
 //! }
@@ -41,7 +40,7 @@ mod types;
 // Public API exports
 #[cfg(feature = "rodio")]
 pub use audio_sync_reader::AudioSyncReader;
-pub use decode_pipeline::{Decoder, DecoderConfig, DecodePipelineConfig};
+pub use decode_pipeline::{DecodeOptions, Decoder, DecoderConfig};
 pub use decoder::InnerDecoder;
 pub use source_reader::SourceReader;
 pub use symphonia_mod::{CachedCodecInfo, SymphoniaDecoder};

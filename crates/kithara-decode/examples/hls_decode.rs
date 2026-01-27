@@ -1,7 +1,8 @@
 //! Example: Play audio from an HLS stream using Decoder.
 //!
 //! This demonstrates the decode architecture:
-//! - Stream::<Hls>::new() creates HlsInner (Read + Seek)
+//! - DecoderConfig::<Hls>::new(hls_config) creates config with stream settings
+//! - Decoder::new(config) creates stream and decoder
 //! - Decoder runs symphonia in separate thread with PCM buffer
 //! - Decoder impl rodio::Source for direct playback
 //!
@@ -44,7 +45,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Create events channel
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
-
     let hls_params = HlsParams::default()
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
@@ -52,8 +52,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         })
         .with_events(events_tx);
 
-    let config = HlsConfig::new(url).with_params(hls_params);
-    let stream = Stream::<Hls>::new(config).await?;
+    let hls_config = HlsConfig::new(url).with_params(hls_params);
+
+    // Create decoder via target API
+    let config = DecoderConfig::<Hls>::new(hls_config).streaming();
+    let decoder = Decoder::<Stream<Hls>>::new(config).await?;
 
     // Log events
     tokio::spawn(async move {
@@ -61,10 +64,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             info!(?ev);
         }
     });
-
-    info!("Creating decoder...");
-
-    let decoder = Decoder::new(stream, DecoderConfig::streaming())?;
 
     info!("Starting playback...");
 

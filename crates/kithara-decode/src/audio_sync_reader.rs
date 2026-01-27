@@ -89,24 +89,22 @@ impl Iterator for AudioSyncReader {
         }
 
         // Try to get sample from current chunk
-        if let Some(ref chunk) = self.current_chunk {
-            if self.chunk_offset < chunk.len() {
-                let sample = chunk[self.chunk_offset];
-                self.chunk_offset += 1;
-                return Some(sample);
-            }
+        if let Some(ref chunk) = self.current_chunk
+            && self.chunk_offset < chunk.len()
+        {
+            let sample = chunk[self.chunk_offset];
+            self.chunk_offset += 1;
+            return Some(sample);
         }
 
         // Chunk exhausted or no chunk - need more data
-        if self.fill_buffer() {
-            // Successfully received new chunk
-            if let Some(ref chunk) = self.current_chunk {
-                if self.chunk_offset < chunk.len() {
-                    let sample = chunk[self.chunk_offset];
-                    self.chunk_offset += 1;
-                    return Some(sample);
-                }
-            }
+        if self.fill_buffer()
+            && let Some(ref chunk) = self.current_chunk
+            && self.chunk_offset < chunk.len()
+        {
+            let sample = chunk[self.chunk_offset];
+            self.chunk_offset += 1;
+            return Some(sample);
         }
 
         // EOF
@@ -118,10 +116,10 @@ impl Iterator for AudioSyncReader {
 impl rodio::Source for AudioSyncReader {
     fn current_span_len(&self) -> Option<usize> {
         // Return remaining samples in current chunk
-        if let Some(ref chunk) = self.current_chunk {
-            if self.chunk_offset < chunk.len() {
-                return Some(chunk.len() - self.chunk_offset);
-            }
+        if let Some(ref chunk) = self.current_chunk
+            && self.chunk_offset < chunk.len()
+        {
+            return Some(chunk.len() - self.chunk_offset);
         }
         None
     }

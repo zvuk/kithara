@@ -1,7 +1,8 @@
 //! Example: Play audio from a progressive HTTP file using Decoder.
 //!
 //! This demonstrates the decode architecture:
-//! - Stream::<File>::new() creates FileInner (Read + Seek)
+//! - DecoderConfig::<File>::new(file_config) creates config with stream settings
+//! - Decoder::new(config) creates stream and decoder
 //! - Decoder runs symphonia in separate thread with PCM buffer
 //! - Decoder impl rodio::Source for direct playback
 //!
@@ -50,16 +51,16 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .next()
         .map(|ext| ext.to_lowercase());
 
-    let config = FileConfig::new(url).with_params(FileParams::default());
-    let stream = Stream::<File>::new(config).await?;
+    let file_config = FileConfig::new(url).with_params(FileParams::default());
 
     info!("Creating decoder...");
 
-    let mut decoder_config = DecoderConfig::default();
+    // Create decoder via target API
+    let mut config = DecoderConfig::<File>::new(file_config);
     if let Some(ext) = hint {
-        decoder_config = decoder_config.with_hint(ext);
+        config = config.with_hint(ext);
     }
-    let decoder = Decoder::new(stream, decoder_config)?;
+    let decoder = Decoder::<Stream<File>>::new(config).await?;
 
     info!("Starting playback...");
 
