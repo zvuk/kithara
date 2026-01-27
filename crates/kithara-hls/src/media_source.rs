@@ -7,9 +7,13 @@ use std::{
     collections::HashSet,
     io::{self, Read, Seek, SeekFrom},
     sync::Arc,
+    time::Instant,
 };
 
-use kithara_abr::{AbrController, AbrOptions, ThroughputEstimator, Variant};
+use kithara_abr::{
+    AbrController, AbrOptions, ThroughputEstimator, ThroughputSample, ThroughputSampleSource,
+    Variant,
+};
 use kithara_assets::{Assets, AssetStore, ResourceKey};
 use kithara_decode::{AudioCodec, ContainerFormat, MediaInfo, MediaSource, MediaStream};
 use kithara_storage::Resource;
@@ -144,11 +148,9 @@ pub struct HlsMediaStream {
     eof: bool,
 
     /// ABR controller
-    #[allow(dead_code)]
     abr_controller: Option<AbrController<ThroughputEstimator>>,
 
-    /// ABR variants
-    #[allow(dead_code)]
+    /// ABR variants for decision making
     abr_variants: Vec<Variant>,
 
     /// Events channel
@@ -216,116 +218,193 @@ impl HlsMediaStream {
 
     /// Async implementation of segment loading.
     async fn load_next_segment_async(&mut self) -> io::Result<bool> {
-            // Get total segments count
-            let total = match self.total_segments {
-                Some(n) => n,
-                None => {
-                    match self.loader.num_segments(self.current_variant).await {
-                        Ok(n) => {
-                            self.total_segments = Some(n);
-                            n
-                        }
-                        Err(e) => {
-                            debug!(error = ?e, "failed to get segment count");
-                            self.eof = true;
-                            return Ok(false);
-                        }
+        // Get total segments count
+        let total = match self.total_segments {
+            Some(n) => n,
+            None => {
+                match self.loader.num_segments(self.current_variant).await {
+                    Ok(n) => {
+                        self.total_segments = Some(n);
+                        n
+                    }
+                    Err(e) => {
+                        debug!(error = ?e, "failed to get segment count");
+                        self.eof = true;
+                        return Ok(false);
                     }
                 }
-            };
+            }
+        };
 
-            if self.current_segment_index >= total {
-                debug!("reached end of playlist");
-                self.emit_event(HlsEvent::EndOfStream);
+        if self.current_segment_index >= total {
+            debug!("reached end of playlist");
+            self.emit_event(HlsEvent::EndOfStream);
+            self.eof = true;
+            return Ok(false);
+        }
+
+        // Save current variant for ABR decision
+        let current_variant = self.current_variant;
+
+        // Check for variant switch
+        let is_variant_switch = !self.sent_init_for_variant.contains(&self.current_variant);
+
+        // Start timing for throughput measurement
+        let download_start = Instant::now();
+
+        // Load segment metadata
+        let meta = match self
+            .loader
+            .load_segment(self.current_variant, self.current_segment_index)
+            .await
+        {
+            Ok(m) => m,
+            Err(e) => {
+                debug!(
+                    variant = self.current_variant,
+                    segment = self.current_segment_index,
+                    error = ?e,
+                    "segment load failed"
+                );
                 self.eof = true;
                 return Ok(false);
             }
+        };
 
-            // Check for variant switch
-            let is_variant_switch = !self.sent_init_for_variant.contains(&self.current_variant);
+        // Clear buffer for new segment
+        self.segment_buffer.clear();
+        self.read_position = 0;
 
-            // Load segment metadata
-            let meta = match self
-                .loader
-                .load_segment(self.current_variant, self.current_segment_index)
-                .await
+        // Set boundary if variant switch
+        if is_variant_switch {
+            let codec = self
+                .variant_metadata
+                .get(self.current_variant)
+                .and_then(|v| convert_codec(v.codec));
+            let container = meta.container.and_then(convert_container);
+
+            self.pending_boundary = Some(MediaInfo::new(codec, container));
+
+            // Load init segment
+            if let Ok(init_meta) =
+                self.loader.load_segment(self.current_variant, usize::MAX).await
             {
-                Ok(m) => m,
-                Err(e) => {
-                    debug!(
+                debug!(
+                    variant = self.current_variant,
+                    init_url = %init_meta.url,
+                    "loading init segment"
+                );
+
+                if let Ok(resource) = self
+                    .assets
+                    .open_streaming_resource(&ResourceKey::from_url(&init_meta.url))
+                    .await
+                {
+                    if let Ok(bytes) = resource.read().await {
+                        trace!(len = bytes.len(), "read init segment");
+                        self.segment_buffer.extend_from_slice(&bytes);
+                    }
+                }
+            }
+
+            self.sent_init_for_variant.insert(self.current_variant);
+        }
+
+        // Load media segment
+        let media_key = ResourceKey::from_url(&meta.url);
+        let segment_bytes = match self.assets.open_streaming_resource(&media_key).await {
+            Ok(resource) => match resource.read().await {
+                Ok(bytes) => {
+                    trace!(
                         variant = self.current_variant,
                         segment = self.current_segment_index,
-                        error = ?e,
-                        "segment load failed"
+                        len = bytes.len(),
+                        "read media segment"
                     );
-                    self.eof = true;
-                    return Ok(false);
-                }
-            };
-
-            // Clear buffer for new segment
-            self.segment_buffer.clear();
-            self.read_position = 0;
-
-            // Set boundary if variant switch
-            if is_variant_switch {
-                let codec = self
-                    .variant_metadata
-                    .get(self.current_variant)
-                    .and_then(|v| convert_codec(v.codec));
-                let container = meta.container.and_then(convert_container);
-
-                self.pending_boundary = Some(MediaInfo::new(codec, container));
-
-                // Load init segment
-                if let Ok(init_meta) = self.loader.load_segment(self.current_variant, usize::MAX).await {
-                    debug!(
-                        variant = self.current_variant,
-                        init_url = %init_meta.url,
-                        "loading init segment"
-                    );
-
-                    if let Ok(resource) = self.assets.open_streaming_resource(&ResourceKey::from_url(&init_meta.url)).await {
-                        if let Ok(bytes) = resource.read().await {
-                            trace!(len = bytes.len(), "read init segment");
-                            self.segment_buffer.extend_from_slice(&bytes);
-                        }
-                    }
-                }
-
-                self.sent_init_for_variant.insert(self.current_variant);
-            }
-
-            // Load media segment
-            let media_key = ResourceKey::from_url(&meta.url);
-            match self.assets.open_streaming_resource(&media_key).await {
-                Ok(resource) => {
-                    match resource.read().await {
-                        Ok(bytes) => {
-                            trace!(
-                                variant = self.current_variant,
-                                segment = self.current_segment_index,
-                                len = bytes.len(),
-                                "read media segment"
-                            );
-                            self.segment_buffer.extend_from_slice(&bytes);
-                        }
-                        Err(e) => {
-                            warn!(error = ?e, "failed to read media segment");
-                            self.eof = true;
-                            return Ok(false);
-                        }
-                    }
+                    self.segment_buffer.extend_from_slice(&bytes);
+                    bytes.len() as u64
                 }
                 Err(e) => {
-                    warn!(error = ?e, "failed to open media resource");
+                    warn!(error = ?e, "failed to read media segment");
                     self.eof = true;
                     return Ok(false);
                 }
+            },
+            Err(e) => {
+                warn!(error = ?e, "failed to open media resource");
+                self.eof = true;
+                return Ok(false);
             }
+        };
 
-            self.current_segment_index += 1;
-            Ok(true)
+        let download_duration = download_start.elapsed();
+
+        // ABR: Update buffer level, record throughput sample and make decision
+        if let Some(ref mut controller) = self.abr_controller {
+            // Calculate throughput
+            let throughput_bps = if download_duration.as_secs_f64() > 0.0 {
+                (segment_bytes as f64 * 8.0) / download_duration.as_secs_f64()
+            } else {
+                0.0
+            };
+
+            // Push throughput sample with content duration
+            let sample = ThroughputSample {
+                bytes: segment_bytes,
+                duration: download_duration,
+                at: download_start,
+                source: ThroughputSampleSource::Network,
+                content_duration: meta.duration,
+            };
+            controller.push_throughput_sample(sample);
+
+            // Get buffer level and make decision
+            let buffer_level = controller.buffer_level_secs();
+            let decision = controller.decide(&self.abr_variants, Instant::now());
+
+            // Emit events
+            self.emit_event(HlsEvent::ThroughputSample {
+                bytes_per_second: throughput_bps,
+            });
+            self.emit_event(HlsEvent::BufferLevel {
+                level_seconds: buffer_level as f32,
+            });
+
+            // Apply ABR decision (only if variant actually changes)
+            if decision.changed {
+                let new_variant = decision.target_variant_index;
+
+                if new_variant != current_variant {
+                    debug!(
+                        from = current_variant,
+                        to = new_variant,
+                        reason = ?decision.reason,
+                        "ABR switching variant"
+                    );
+                    self.current_variant = new_variant;
+                    // Reset total_segments cache for new variant
+                    self.total_segments = None;
+                    self.sent_init_for_variant.remove(&new_variant);
+                    self.emit_event(HlsEvent::VariantApplied {
+                        from_variant: current_variant,
+                        to_variant: new_variant,
+                        reason: decision.reason,
+                    });
+                }
+            }
+        }
+
+        self.current_segment_index += 1;
+
+        // Emit segment complete event
+        self.emit_event(HlsEvent::SegmentComplete {
+            segment_index: self.current_segment_index - 1,
+            variant: current_variant,
+            bytes_transferred: segment_bytes,
+            duration: download_duration,
+        });
+
+        Ok(true)
     }
 }
 
@@ -333,12 +412,25 @@ impl Read for HlsMediaStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         // Check if we have data in buffer
         if self.read_position >= self.segment_buffer.len() {
+            // Current segment exhausted.
+            // If there's a pending boundary, don't load next segment yet.
+            // Decoder must consume boundary first via take_boundary().
+            if self.pending_boundary.is_some() {
+                return Ok(0);
+            }
+
             // Need to load next segment
             if self.eof {
                 return Ok(0);
             }
 
             if !self.load_next_segment()? {
+                return Ok(0);
+            }
+
+            // If boundary was set during this load (variant switch),
+            // don't return data yet - decoder must reinit first.
+            if self.pending_boundary.is_some() {
                 return Ok(0);
             }
         }
@@ -371,6 +463,10 @@ impl MediaStream for HlsMediaStream {
 
     fn is_eof(&self) -> bool {
         self.eof
+    }
+
+    fn rewind_current(&mut self) {
+        self.read_position = 0;
     }
 }
 

@@ -96,6 +96,12 @@ pub trait MediaStream: Read + Seek + Send {
 
     /// Check if stream has reached end of data.
     fn is_eof(&self) -> bool;
+
+    /// Reset read position for current segment/buffer.
+    ///
+    /// Called when decoder needs to re-read data after boundary detection.
+    /// Default implementation does nothing (for streams that don't support this).
+    fn rewind_current(&mut self) {}
 }
 
 #[cfg(test)]

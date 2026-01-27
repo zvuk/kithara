@@ -159,6 +159,12 @@ impl StreamDecoder {
 
     /// Check for boundary and reinit decoder if needed.
     fn check_boundary(&mut self) -> DecodeResult<()> {
+        // Don't process boundary if there's still data to decode in reader.
+        // This ensures we finish decoding current codec's data before switching.
+        if self.decoder.is_some() && self.reader.available() > 0 {
+            return Ok(());
+        }
+
         if let Some(info) = self.stream.take_boundary() {
             self.boundaries_count += 1;
             debug!(
@@ -172,6 +178,10 @@ impl StreamDecoder {
             // For first boundary, keep the data that was just loaded.
             if self.decoder.is_some() {
                 self.reader.clear();
+                // Reset stream position so we can re-read the segment from start.
+                // This is needed because some data may have been read before
+                // boundary was detected.
+                self.stream.rewind_current();
             }
             self.decoder = None;
 
@@ -192,8 +202,18 @@ impl StreamDecoder {
 
     /// Create decoder from media info.
     fn create_decoder(&mut self, info: &MediaInfo) -> DecodeResult<()> {
-        // Fill reader with some initial data
-        self.fill_reader()?;
+        // For fMP4/FLAC, we need init segment (~1KB) + some media data for probing.
+        // Read up to 1MB max for initial probe - decoder will pull more as needed.
+        const MAX_PROBE_SIZE: usize = 1024 * 1024;
+
+        while self.reader.available() < MAX_PROBE_SIZE {
+            let before = self.reader.available();
+            self.fill_reader()?;
+            if self.reader.available() == before {
+                // No more data available right now
+                break;
+            }
+        }
 
         if self.reader.available() == 0 {
             return Ok(());
@@ -201,7 +221,11 @@ impl StreamDecoder {
 
         let stream_info = convert_to_stream_info(info);
 
-        debug!(?stream_info, "creating decoder");
+        debug!(
+            ?stream_info,
+            available = self.reader.available(),
+            "creating decoder"
+        );
 
         let reader = self.reader.clone();
         let decoder = SymphoniaDecoder::new_from_media_info(reader, &stream_info, true)?;

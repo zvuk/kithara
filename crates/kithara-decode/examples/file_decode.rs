@@ -1,7 +1,9 @@
-//! Example: Play audio from a progressive HTTP file using SyncReader.
+//! Example: Play audio from a progressive HTTP file using DecodePipeline.
 //!
-//! This demonstrates progressive file playback with streaming decode.
-//! Uses SyncReader + rodio::Decoder for efficient streaming.
+//! This demonstrates progressive file playback with kithara-decode:
+//! - FileMediaSource provides media stream
+//! - DecodePipeline runs decoder in separate thread with PCM buffer
+//! - AudioSyncReader bridges to rodio for playback
 //!
 //! Run with:
 //! ```
@@ -10,8 +12,8 @@
 
 use std::{env::args, error::Error};
 
-use kithara_file::{File, FileEvent, FileParams};
-use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
+use kithara_decode::{DecodePipeline, DecodePipelineConfig, MediaSource};
+use kithara_file::{FileEvent, FileMediaSource, FileParams};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -21,7 +23,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::default()
-                .add_directive("kithara_file=info".parse()?)
+                .add_directive("kithara_decode=debug".parse()?)
+                .add_directive("kithara_file=debug".parse()?)
                 .add_directive("kithara_stream=info".parse()?)
                 .add_directive("kithara_net=info".parse()?)
                 .add_directive(LevelFilter::INFO.into()),
@@ -39,14 +42,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Opening file: {}", url);
 
-    let params = FileParams::default();
+    // Open file media source (streaming architecture)
+    let source = FileMediaSource::open(url, FileParams::default()).await?;
 
-    // Open file with SyncReader (efficient streaming)
-    let reader =
-        SyncReader::<StreamSource<File>>::open(url, params, SyncReaderParams::default()).await?;
-    let mut events_rx = reader.events();
-
-    // Monitor download/playback progress
+    // Subscribe to file events
+    let mut events_rx = source.events();
     tokio::spawn(async move {
         while let Ok(msg) = events_rx.recv().await {
             match msg {
@@ -63,28 +63,59 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     });
 
-    // Play via rodio in blocking thread
+    // Open media stream
+    let stream = source.open()?;
+
+    info!("Creating decode pipeline...");
+
+    // Create decode pipeline (runs decoder in separate thread with PCM buffer)
+    let config = DecodePipelineConfig {
+        pcm_buffer_chunks: 20, // ~2 seconds buffer
+    };
+    let pipeline = DecodePipeline::new(stream, config)?;
+
+    info!("Starting playback...");
+
+    // Play via rodio
     #[cfg(feature = "rodio")]
     {
-        let handle = tokio::task::spawn_blocking(move || {
+        let pcm_rx = pipeline.pcm_rx_clone();
+
+        // Get initial spec
+        let spec = kithara_decode::PcmSpec {
+            sample_rate: 44100,
+            channels: 2,
+        };
+
+        let audio_source = kithara_decode::AudioSyncReader::new(pcm_rx, spec);
+
+        // Play via rodio in blocking thread
+        let play_handle = tokio::task::spawn_blocking(move || {
             let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
             let sink = rodio::Sink::connect_new(stream_handle.mixer());
-            sink.append(rodio::Decoder::new(reader)?);
+            sink.set_volume(0.3);
+            sink.append(audio_source);
 
-            info!("Playing file...");
+            info!("Playing file via rodio...");
             sink.sleep_until_end();
 
             info!("Playback complete");
             Ok::<_, Box<dyn Error + Send + Sync>>(())
         });
-        handle.await??;
+
+        play_handle.await??;
     }
 
     #[cfg(not(feature = "rodio"))]
     {
-        info!("Rodio feature not enabled, decoding without playback");
-        drop(reader);
+        info!("Rodio feature not enabled, waiting for decode to complete...");
+        while pipeline.is_running() {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
     }
+
+    // Pipeline dropped here, decode thread will be joined
+    drop(pipeline);
 
     info!("File decode example finished");
 

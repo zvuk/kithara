@@ -8,15 +8,16 @@ use std::time::Duration;
 
 use tracing::{debug, trace};
 
-use crate::PcmSpec;
+use crate::{PcmChunk, PcmSpec};
 
 /// rodio-compatible audio source that reads from a channel.
 ///
 /// Implements `Iterator<Item=f32>` and `rodio::Source` traits.
+/// Spec is updated dynamically from received chunks (handles variant switches).
 pub struct AudioSyncReader {
-    /// Channel receiver for reading sample chunks.
-    sample_rx: kanal::Receiver<Vec<f32>>,
-    /// Audio specification.
+    /// Channel receiver for reading PCM chunks.
+    pcm_rx: kanal::Receiver<PcmChunk<f32>>,
+    /// Current audio specification (updated from chunks).
     spec: PcmSpec,
     /// End of stream reached.
     eof: bool,
@@ -27,22 +28,22 @@ pub struct AudioSyncReader {
 }
 
 impl AudioSyncReader {
-    /// Create a new AudioSyncReader from a sample channel.
+    /// Create a new AudioSyncReader from a PCM chunk channel.
     ///
     /// # Arguments
-    /// - `sample_rx`: Channel receiver for PCM sample chunks
-    /// - `spec`: Audio specification
-    pub fn new(sample_rx: kanal::Receiver<Vec<f32>>, spec: PcmSpec) -> Self {
+    /// - `pcm_rx`: Channel receiver for PCM chunks
+    /// - `initial_spec`: Initial audio specification (updated from chunks)
+    pub fn new(pcm_rx: kanal::Receiver<PcmChunk<f32>>, initial_spec: PcmSpec) -> Self {
         Self {
-            sample_rx,
-            spec,
+            pcm_rx,
+            spec: initial_spec,
             eof: false,
             current_chunk: None,
             chunk_offset: 0,
         }
     }
 
-    /// Get the audio specification.
+    /// Get the current audio specification.
     pub fn spec(&self) -> PcmSpec {
         self.spec
     }
@@ -56,10 +57,16 @@ impl AudioSyncReader {
         }
 
         // Blocking receive from channel
-        match self.sample_rx.recv() {
+        match self.pcm_rx.recv() {
             Ok(chunk) => {
-                debug!(samples = chunk.len(), "AudioSyncReader: received chunk");
-                self.current_chunk = Some(chunk);
+                trace!(
+                    samples = chunk.pcm.len(),
+                    spec = ?chunk.spec,
+                    "AudioSyncReader: received chunk"
+                );
+                // Update spec from chunk (handles dynamic format changes)
+                self.spec = chunk.spec;
+                self.current_chunk = Some(chunk.pcm);
                 self.chunk_offset = 0;
                 true
             }

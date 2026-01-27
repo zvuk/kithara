@@ -180,76 +180,72 @@ impl Read for FileMediaStream {
             }
         }
 
-        // Use block_in_place to safely call async code from sync context
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            tokio::task::block_in_place(|| {
-                let handle = tokio::runtime::Handle::current();
-                handle.block_on(async {
-                    // Calculate how much we want to read
-                    let want_end = if let Some(len) = self.len {
-                        (self.position + buf.len() as u64).min(len)
-                    } else {
-                        self.position + buf.len() as u64
-                    };
-                    let range = self.position..want_end;
+        // Get tokio runtime handle - works from any thread with enter() guard
+        let handle = match tokio::runtime::Handle::try_current() {
+            Ok(h) => h,
+            Err(e) => {
+                debug!(error = ?e, "no tokio runtime available");
+                return Err(io::Error::new(io::ErrorKind::Other, "no tokio runtime"));
+            }
+        };
 
-                    debug!(
-                        position = self.position,
-                        want_end,
-                        buf_len = buf.len(),
-                        "waiting for range"
-                    );
+        // Block on async operation
+        handle.block_on(async {
+            // Calculate how much we want to read
+            let want_end = if let Some(len) = self.len {
+                (self.position + buf.len() as u64).min(len)
+            } else {
+                self.position + buf.len() as u64
+            };
+            let range = self.position..want_end;
 
-                    // Wait for data to be available
-                    match self.res.wait_range(range.clone()).await {
-                        Ok(kithara_storage::WaitOutcome::Ready) => {
-                            debug!(position = self.position, "wait_range returned Ready");
-                            // Data is ready, read it
-                            match self.res.read_at(self.position, buf).await {
-                                Ok(bytes_read) => {
-                                    debug!(
-                                        position = self.position,
-                                        bytes_read, "read_at returned"
-                                    );
-                                    if bytes_read == 0 {
-                                        debug!("read_at returned 0 bytes, setting EOF");
-                                        self.eof = true;
-                                    } else {
-                                        self.position += bytes_read as u64;
-                                        self.progress.set_read_pos(self.position);
-                                        self.emit_progress();
-                                        trace!(position = self.position, bytes_read, "file read");
-                                    }
-                                    Ok(bytes_read)
-                                }
-                                Err(e) => {
-                                    debug!(error = ?e, "read_at error");
-                                    Err(io::Error::new(io::ErrorKind::Other, e.to_string()))
-                                }
+            trace!(
+                position = self.position,
+                want_end,
+                buf_len = buf.len(),
+                "waiting for range"
+            );
+
+            // Wait for data to be available
+            match self.res.wait_range(range.clone()).await {
+                Ok(kithara_storage::WaitOutcome::Ready) => {
+                    trace!(position = self.position, "wait_range returned Ready");
+                    // Data is ready, read it
+                    match self.res.read_at(self.position, buf).await {
+                        Ok(bytes_read) => {
+                            trace!(
+                                position = self.position,
+                                bytes_read, "read_at returned"
+                            );
+                            if bytes_read == 0 {
+                                debug!("read_at returned 0 bytes, setting EOF");
+                                self.eof = true;
+                            } else {
+                                self.position += bytes_read as u64;
+                                self.progress.set_read_pos(self.position);
+                                self.emit_progress();
+                                trace!(position = self.position, bytes_read, "file read");
                             }
-                        }
-                        Ok(kithara_storage::WaitOutcome::Eof) => {
-                            debug!("wait_range returned EOF");
-                            // EOF reached
-                            self.eof = true;
-                            Ok(0)
+                            Ok(bytes_read)
                         }
                         Err(e) => {
-                            debug!(error = ?e, "wait_range error");
+                            debug!(error = ?e, "read_at error");
                             Err(io::Error::new(io::ErrorKind::Other, e.to_string()))
                         }
                     }
-                })
-            })
-        }));
-
-        match result {
-            Ok(r) => r,
-            Err(e) => {
-                debug!("block_in_place panicked: {:?}", e);
-                Err(io::Error::new(io::ErrorKind::Other, "block_in_place panicked"))
+                }
+                Ok(kithara_storage::WaitOutcome::Eof) => {
+                    debug!("wait_range returned EOF");
+                    // EOF reached
+                    self.eof = true;
+                    Ok(0)
+                }
+                Err(e) => {
+                    debug!(error = ?e, "wait_range error");
+                    Err(io::Error::new(io::ErrorKind::Other, e.to_string()))
+                }
             }
-        }
+        })
     }
 }
 

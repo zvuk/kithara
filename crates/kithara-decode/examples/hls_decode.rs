@@ -1,9 +1,9 @@
-//! Example: Play audio from an HLS stream using streaming decode.
+//! Example: Play audio from an HLS stream using decode pipeline.
 //!
-//! This demonstrates the streaming decode architecture:
+//! This demonstrates the decode pipeline architecture:
 //! - HlsMediaSource provides media stream
-//! - StreamDecoder reads bytes incrementally
-//! - Decoding starts before full segment downloads
+//! - DecodePipeline runs decoder in separate thread with PCM buffer
+//! - Smooth playback during variant switches
 //!
 //! Run with:
 //! ```
@@ -12,7 +12,7 @@
 
 use std::{env::args, error::Error};
 
-use kithara_decode::{MediaSource, StreamDecoder};
+use kithara_decode::{DecodePipeline, DecodePipelineConfig, MediaSource};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
@@ -51,7 +51,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         })
         .with_events(events_tx);
 
-    // Open HLS media source (streaming architecture)
+    // Open HLS media source
     let source = Hls::open_media_source(url, hls_params).await?;
 
     // Subscribe to HLS events
@@ -88,58 +88,31 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     });
 
-    info!("Creating stream decoder...");
-
     // Open media stream
     let stream = source.open()?;
 
-    // Create stream decoder
-    let mut decoder = StreamDecoder::new(stream)?;
+    info!("Creating decode pipeline...");
 
-    // Create channel for streaming PCM to rodio
-    let (sample_tx, sample_rx) = kanal::bounded::<Vec<f32>>(16);
+    // Create decode pipeline (runs decoder in separate thread with PCM buffer)
+    let config = DecodePipelineConfig {
+        pcm_buffer_chunks: 20, // ~2 seconds buffer
+    };
+    let pipeline = DecodePipeline::new(stream, config)?;
 
-    info!("Starting decode loop...");
-
-    // Decode loop - runs in blocking thread
-    let decode_handle = tokio::task::spawn_blocking(move || {
-        let mut chunks_decoded = 0;
-
-        while let Ok(Some(chunk)) = decoder.decode_next() {
-            chunks_decoded += 1;
-
-            if !chunk.pcm.is_empty() {
-                if chunks_decoded % 100 == 0 {
-                    info!(
-                        chunk = chunks_decoded,
-                        frames = chunk.frames(),
-                        sample_rate = chunk.spec.sample_rate,
-                        channels = chunk.spec.channels,
-                        "Decoded PCM chunk"
-                    );
-                }
-
-                // Send to rodio via channel
-                if sample_tx.send(chunk.pcm).is_err() {
-                    // Receiver dropped (playback stopped)
-                    break;
-                }
-            }
-        }
-
-        info!(total_chunks = chunks_decoded, "Decode loop finished");
-    });
+    info!("Starting playback...");
 
     // Play via rodio
     #[cfg(feature = "rodio")]
     {
-        // Get initial spec from first decoded chunk
+        let pcm_rx = pipeline.pcm_rx_clone();
+
+        // Get initial spec
         let spec = kithara_decode::PcmSpec {
-            sample_rate: 44100, // Default, will be overridden by decoder
+            sample_rate: 44100,
             channels: 2,
         };
 
-        let audio_source = kithara_decode::AudioSyncReader::new(sample_rx, spec);
+        let audio_source = kithara_decode::AudioSyncReader::new(pcm_rx, spec);
 
         // Play via rodio in blocking thread
         let play_handle = tokio::task::spawn_blocking(move || {
@@ -160,12 +133,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     #[cfg(not(feature = "rodio"))]
     {
-        info!("Rodio feature not enabled, just decoding without playback");
-        drop(sample_rx);
+        info!("Rodio feature not enabled, waiting for decode to complete...");
+        while pipeline.is_running() {
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+        }
     }
 
-    // Wait for decode loop to complete
-    decode_handle.await?;
+    // Pipeline dropped here, decode thread will be joined
+    drop(pipeline);
 
     info!("HLS decode example finished");
 

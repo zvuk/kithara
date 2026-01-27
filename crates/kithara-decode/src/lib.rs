@@ -32,6 +32,7 @@
 // Internal modules
 #[cfg(feature = "rodio")]
 mod audio_sync_reader;
+mod decode_pipeline;
 mod decoder;
 mod media_source;
 mod source_reader;
@@ -42,6 +43,7 @@ mod types;
 // Public API exports
 #[cfg(feature = "rodio")]
 pub use audio_sync_reader::AudioSyncReader;
+pub use decode_pipeline::{DecodePipeline, DecodePipelineConfig};
 pub use decoder::Decoder;
 pub use media_source::{AudioCodec, ContainerFormat, MediaInfo, MediaSource, MediaStream};
 pub use source_reader::SourceReader;
