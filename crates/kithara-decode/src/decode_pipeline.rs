@@ -8,7 +8,7 @@ use kithara_worker::{Fetch, SyncWorker, SyncWorkerSource};
 use tracing::{debug, trace, warn};
 
 use crate::{
-    symphonia_mod::SymphoniaDecoder,
+    symphonia_decoder::SymphoniaDecoder,
     types::{DecodeError, DecodeResult, PcmChunk},
 };
 

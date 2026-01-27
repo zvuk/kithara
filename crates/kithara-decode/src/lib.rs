@@ -34,7 +34,7 @@ mod audio_sync_reader;
 mod decode_pipeline;
 mod decoder;
 mod source_reader;
-mod symphonia_mod;
+mod symphonia_decoder;
 mod types;
 
 // Public API exports
@@ -43,7 +43,7 @@ pub use audio_sync_reader::AudioSyncReader;
 pub use decode_pipeline::{DecodeOptions, Decoder, DecoderConfig};
 pub use decoder::InnerDecoder;
 pub use source_reader::SourceReader;
-pub use symphonia_mod::{CachedCodecInfo, SymphoniaDecoder};
+pub use symphonia_decoder::{CachedCodecInfo, SymphoniaDecoder};
 pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};
 
 // Re-export types from kithara-stream for convenience
