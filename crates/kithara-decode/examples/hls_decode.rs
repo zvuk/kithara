@@ -55,7 +55,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let hls_config = HlsConfig::new(url).with_params(hls_params);
 
     // Create decoder via target API
-    let config = DecoderConfig::<Hls>::new(hls_config).streaming();
+    let config = DecoderConfig::<Hls>::new(hls_config);
     let decoder = Decoder::<Stream<Hls>>::new(config).await?;
 
     // Log events

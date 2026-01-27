@@ -257,7 +257,7 @@ where
     /// Create Symphonia decoder with appropriate method based on options.
     fn create_decoder(source: S, options: &DecodeOptions) -> DecodeResult<SymphoniaDecoder> {
         if let Some(ref media_info) = options.media_info {
-            SymphoniaDecoder::new_from_media_info(source, media_info, options.is_streaming)
+            SymphoniaDecoder::new_from_media_info(source, media_info)
         } else {
             SymphoniaDecoder::new_with_probe(source, options.hint.as_deref())
         }
@@ -279,7 +279,7 @@ where
     /// # Example
     ///
     /// ```ignore
-    /// let config = DecoderConfig::<Hls>::new(hls_config).streaming();
+    /// let config = DecoderConfig::<Hls>::new(hls_config);
     /// let decoder = Decoder::new(config).await?;
     /// sink.append(decoder);
     /// ```
@@ -463,12 +463,6 @@ mod tests {
         }
 
         assert!(chunk_count > 0);
-    }
-
-    #[test]
-    fn test_decode_options_streaming() {
-        let options = DecodeOptions::streaming();
-        assert!(options.is_streaming);
     }
 
     #[test]

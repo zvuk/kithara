@@ -102,13 +102,9 @@ impl SymphoniaDecoder {
     /// This is used for ABR switch when we know the container/codec from HLS playlist.
     /// Creates FormatReader and AudioDecoder directly based on MediaInfo.
     ///
-    /// For streaming fMP4 sources, uses StreamingFmp4Adapter which provides virtual
+    /// For fMP4 sources, uses StreamingFmp4Adapter which provides virtual
     /// byte_len() to satisfy symphonia's seek requirements.
-    pub fn new_from_media_info<R>(
-        reader: R,
-        media_info: &MediaInfo,
-        is_streaming: bool,
-    ) -> DecodeResult<Self>
+    pub fn new_from_media_info<R>(reader: R, media_info: &MediaInfo) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
@@ -117,11 +113,10 @@ impl SymphoniaDecoder {
             ..Default::default()
         };
 
-        // For streaming fMP4 (or FLAC which is typically in fMP4), use StreamingFmp4Adapter
+        // fMP4 and FLAC (typically in fMP4 for HLS) need StreamingFmp4Adapter
         // with dynamic seekable control
-        let needs_fmp4_adapter = is_streaming
-            && (media_info.container == Some(ContainerFormat::Fmp4)
-                || media_info.codec == Some(AudioCodec::Flac));
+        let needs_fmp4_adapter = media_info.container == Some(ContainerFormat::Fmp4)
+            || media_info.codec == Some(AudioCodec::Flac);
 
         let format_reader: Box<dyn FormatReader> = if needs_fmp4_adapter {
             // Create adapter and save seekable flag before passing to MSS
@@ -129,13 +124,8 @@ impl SymphoniaDecoder {
             let seekable_flag = adapter.seekable_flag();
 
             let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
-            let reader = create_format_reader_direct(
-                mss,
-                media_info.container,
-                media_info.codec,
-                format_opts,
-                is_streaming,
-            )?;
+            let reader =
+                create_format_reader_direct(mss, media_info.container, media_info.codec, format_opts)?;
 
             // Probe complete - enable seeking for playback
             seekable_flag.store(true, std::sync::atomic::Ordering::Release);
@@ -145,13 +135,7 @@ impl SymphoniaDecoder {
         } else {
             let mss =
                 MediaSourceStream::new(Box::new(ReadSeekAdapter::new(reader)), Default::default());
-            create_format_reader_direct(
-                mss,
-                media_info.container,
-                media_info.codec,
-                format_opts,
-                is_streaming,
-            )?
+            create_format_reader_direct(mss, media_info.container, media_info.codec, format_opts)?
         };
 
         let track = format_reader
@@ -354,18 +338,11 @@ fn create_decoder(params: &AudioCodecParameters) -> DecodeResult<Box<dyn AudioDe
 }
 
 /// Create FormatReader directly based on container type without probe.
-///
-/// For streaming sources with fMP4, we use probe instead of direct creation
-/// because IsoMp4Reader requires seek to end for moov atom detection.
-///
-/// For streaming sources without known container but with AAC codec,
-/// we try AdtsReader first (streaming-friendly format).
 fn create_format_reader_direct<'a>(
     mss: MediaSourceStream<'a>,
     container: Option<ContainerFormat>,
     codec: Option<AudioCodec>,
     opts: FormatOptions,
-    is_streaming: bool,
 ) -> DecodeResult<Box<dyn FormatReader + 'a>> {
     use symphonia::default::formats;
 
@@ -373,8 +350,7 @@ fn create_format_reader_direct<'a>(
         Some(ContainerFormat::Fmp4) => {
             // For fMP4 (fragmented MP4), moov is at the beginning (in init segment),
             // so IsoMp4Reader should work without seeking to end.
-            // Try direct creation first, fall back to probe if it fails.
-            tracing::debug!(is_streaming, "Creating IsoMp4Reader for fMP4");
+            tracing::debug!("Creating IsoMp4Reader for fMP4");
             match formats::IsoMp4Reader::try_new(mss, opts) {
                 Ok(reader) => Ok(Box::new(reader)),
                 Err(e) => {
@@ -385,11 +361,9 @@ fn create_format_reader_direct<'a>(
         }
         Some(ContainerFormat::MpegTs) => {
             // MPEG-TS reader might not be available in default features
-            // Fall back to probe if not available
             probe_fallback(mss, opts)
         }
         Some(ContainerFormat::MpegAudio) => {
-            // For raw MPEG audio (MP3 without container), use MpaReader
             let reader = formats::MpaReader::try_new(mss, opts).map_err(DecodeError::Symphonia)?;
             Ok(Box::new(reader))
         }
@@ -410,12 +384,12 @@ fn create_format_reader_direct<'a>(
             Ok(Box::new(reader))
         }
         None => {
-            // No container hint - try to use codec hint for streaming sources
-            if is_streaming && let Some(codec) = codec {
+            // No container hint - try to use codec hint
+            if let Some(codec) = codec {
                 match codec {
                     AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-                        // Try AdtsReader for AAC streams (streaming-friendly, no seek required)
-                        tracing::debug!("Trying AdtsReader for streaming AAC");
+                        // Try AdtsReader for AAC (streaming-friendly, no seek required)
+                        tracing::debug!("Trying AdtsReader for AAC");
                         match formats::AdtsReader::try_new(mss, opts) {
                             Ok(reader) => return Ok(Box::new(reader)),
                             Err(e) => {
@@ -426,16 +400,11 @@ fn create_format_reader_direct<'a>(
                     }
                     AudioCodec::Flac => {
                         // FLAC in HLS is typically in fMP4 container
-                        // Try IsoMp4Reader first, fall back to FlacReader for raw FLAC
-                        tracing::debug!("Trying IsoMp4Reader for streaming FLAC (likely fMP4)");
+                        tracing::debug!("Trying IsoMp4Reader for FLAC (likely fMP4)");
                         match formats::IsoMp4Reader::try_new(mss, opts) {
                             Ok(reader) => return Ok(Box::new(reader)),
                             Err(e) => {
-                                tracing::debug!(
-                                    ?e,
-                                    "IsoMp4Reader failed for FLAC, trying raw FlacReader"
-                                );
-                                // Can't retry with mss since it's consumed
+                                tracing::debug!(?e, "IsoMp4Reader failed for FLAC");
                                 return Err(DecodeError::Symphonia(e));
                             }
                         }
@@ -675,7 +644,7 @@ mod tests {
             .with_sample_rate(44100)
             .with_channels(2);
 
-        let decoder = SymphoniaDecoder::new_from_media_info(cursor, &media_info, false).unwrap();
+        let decoder = SymphoniaDecoder::new_from_media_info(cursor, &media_info).unwrap();
 
         assert_eq!(decoder.spec().sample_rate, 44100);
         assert_eq!(decoder.spec().channels, 2);
@@ -984,7 +953,7 @@ mod tests {
             .with_sample_rate(44100)
             .with_channels(2);
 
-        let result = SymphoniaDecoder::new_from_media_info(cursor, &media_info, false);
+        let result = SymphoniaDecoder::new_from_media_info(cursor, &media_info);
 
         // Should either succeed with probe fallback or fail
         // Test just verifies it doesn't panic
@@ -1002,7 +971,7 @@ mod tests {
             .with_sample_rate(44100)
             .with_channels(2);
 
-        let result = SymphoniaDecoder::new_from_media_info(cursor, &media_info, false);
+        let result = SymphoniaDecoder::new_from_media_info(cursor, &media_info);
 
         // Should fail because WAV data can't be read as Ogg
         assert!(result.is_err());
