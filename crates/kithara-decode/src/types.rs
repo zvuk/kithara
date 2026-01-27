@@ -31,7 +31,7 @@ pub enum DecodeError {
 pub type DecodeResult<T> = Result<T, DecodeError>;
 
 /// PCM specification - core audio format information
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PcmSpec {
     pub sample_rate: u32,
     pub channels: u16,
@@ -53,6 +53,15 @@ impl fmt::Display for PcmSpec {
 pub struct PcmChunk<T> {
     pub spec: PcmSpec,
     pub pcm: Vec<T>,
+}
+
+impl<T> Default for PcmChunk<T> {
+    fn default() -> Self {
+        Self {
+            spec: PcmSpec::default(),
+            pcm: Vec::new(),
+        }
+    }
 }
 
 impl<T> PcmChunk<T> {

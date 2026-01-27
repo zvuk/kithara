@@ -45,8 +45,8 @@ impl<S: SyncWorkerSource> SyncWorker<S> {
 
     /// Run the blocking worker loop.
     ///
-    /// This should be called inside a `spawn_blocking` task.
-    fn run_worker(mut self) {
+    /// Call this from a dedicated thread or `spawn_blocking` task.
+    pub fn run_blocking(mut self) {
         trace!("SyncWorker started");
 
         let mut at_eof = false;
@@ -140,7 +140,7 @@ impl<S: SyncWorkerSource> SyncWorker<S> {
 impl<S: SyncWorkerSource> Worker for SyncWorker<S> {
     async fn run(self) {
         // Run sync worker in a blocking task
-        tokio::task::spawn_blocking(move || self.run_worker())
+        tokio::task::spawn_blocking(move || self.run_blocking())
             .await
             .ok();
     }

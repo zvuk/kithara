@@ -1,12 +1,10 @@
-//! Generic decoder that runs in a separate thread.
-//!
-//! Takes any `Read + Seek + Send` source and decodes to PCM via kanal channel.
+//! Generic decoder that runs in a separate thread using SyncWorker.
 
 use std::io::{Read, Seek};
-use std::thread::JoinHandle;
 
-use kanal::{Receiver, Sender};
+use kanal::Receiver;
 use kithara_stream::{MediaInfo, Stream, StreamType};
+use kithara_worker::{Fetch, SyncWorker, SyncWorkerSource};
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -17,10 +15,81 @@ use crate::{
 #[cfg(feature = "rodio")]
 use crate::types::PcmSpec;
 
+/// Command for decode worker.
+#[derive(Debug)]
+pub enum DecodeCommand {
+    // Future: Seek(Duration), Stop, etc.
+}
+
+/// Decode source implementing SyncWorkerSource.
+struct DecodeSource {
+    decoder: SymphoniaDecoder,
+    chunks_decoded: u64,
+    total_samples: u64,
+}
+
+impl DecodeSource {
+    fn new(decoder: SymphoniaDecoder) -> Self {
+        Self {
+            decoder,
+            chunks_decoded: 0,
+            total_samples: 0,
+        }
+    }
+}
+
+impl SyncWorkerSource for DecodeSource {
+    type Chunk = PcmChunk<f32>;
+    type Command = DecodeCommand;
+
+    fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
+        loop {
+            match self.decoder.next_chunk() {
+                Ok(Some(chunk)) => {
+                    if chunk.pcm.is_empty() {
+                        continue;
+                    }
+
+                    self.chunks_decoded += 1;
+                    self.total_samples += chunk.pcm.len() as u64;
+
+                    if self.chunks_decoded.is_multiple_of(100) {
+                        trace!(
+                            chunks = self.chunks_decoded,
+                            samples = self.total_samples,
+                            spec = ?chunk.spec,
+                            "decode progress"
+                        );
+                    }
+
+                    return Fetch::new(chunk, false, 0);
+                }
+                Ok(None) => {
+                    debug!(
+                        chunks = self.chunks_decoded,
+                        samples = self.total_samples,
+                        "decode complete (EOF)"
+                    );
+                    return Fetch::new(PcmChunk::default(), true, 0);
+                }
+                Err(e) => {
+                    warn!(?e, "decode error, attempting to continue");
+                    continue;
+                }
+            }
+        }
+    }
+
+    fn handle_command(&mut self, cmd: Self::Command) {
+        match cmd {
+            // Future: handle seek, etc.
+        }
+    }
+}
+
 /// Generic audio decoder running in a separate thread.
 ///
-/// Takes any `Read + Seek + Send` source (HlsInner, FileInner, etc.)
-/// and outputs PCM chunks via kanal bounded channel.
+/// Uses SyncWorker from kithara-worker for consistent patterns.
 ///
 /// # Example
 ///
@@ -39,11 +108,11 @@ use crate::types::PcmSpec;
 /// }
 /// ```
 pub struct Decoder<S> {
-    /// Decode thread handle
-    decode_thread: Option<JoinHandle<()>>,
+    /// Command sender (for future seek support)
+    _cmd_tx: kanal::Sender<DecodeCommand>,
 
     /// PCM chunk receiver
-    pcm_rx: Receiver<PcmChunk<f32>>,
+    pcm_rx: Receiver<Fetch<PcmChunk<f32>>>,
 
     /// Current audio specification (updated from chunks).
     #[cfg(feature = "rodio")]
@@ -155,36 +224,33 @@ where
 {
     /// Create a new decoder from any Read + Seek source.
     ///
-    /// Spawns a blocking thread for decoding.
-    /// If called from within Tokio runtime, captures handle for async operations.
+    /// Spawns SyncWorker in a blocking thread for decoding.
     pub fn from_source(source: S, options: DecodeOptions) -> DecodeResult<Self> {
-        let buffer_chunks = if options.pcm_buffer_chunks == 0 {
-            10
-        } else {
-            options.pcm_buffer_chunks
-        };
-        let (pcm_tx, pcm_rx) = kanal::bounded(buffer_chunks);
+        let (cmd_tx, cmd_rx) = kanal::bounded(4);
+        let (data_tx, data_rx) = kanal::bounded(options.pcm_buffer_chunks.max(1));
 
-        // Try to capture tokio runtime handle (optional)
-        let rt_handle = tokio::runtime::Handle::try_current().ok();
+        // Create Symphonia decoder
+        let symphonia = Self::create_decoder(source, &options)?;
+        let decode_source = DecodeSource::new(symphonia);
 
-        let decode_thread = std::thread::Builder::new()
+        // Create and spawn SyncWorker
+        let worker = SyncWorker::new(decode_source, cmd_rx, data_tx);
+
+        std::thread::Builder::new()
             .name("kithara-decode".to_string())
             .spawn(move || {
-                // Enter tokio runtime context if available
-                let _guard = rt_handle.as_ref().map(|h| h.enter());
-                Self::decode_loop(source, pcm_tx, options);
+                worker.run_blocking();
             })
             .map_err(|e| {
-    DecodeError::Io(std::io::Error::other(format!(
+                DecodeError::Io(std::io::Error::other(format!(
                     "failed to spawn decode thread: {}",
                     e
                 )))
             })?;
 
         Ok(Self {
-            decode_thread: Some(decode_thread),
-            pcm_rx,
+            _cmd_tx: cmd_tx,
+            pcm_rx: data_rx,
             #[cfg(feature = "rodio")]
             spec: PcmSpec {
                 sample_rate: 44100,
@@ -201,76 +267,8 @@ where
     }
 
     /// Get reference to PCM receiver.
-    pub fn pcm_rx(&self) -> &Receiver<PcmChunk<f32>> {
+    pub fn pcm_rx(&self) -> &Receiver<Fetch<PcmChunk<f32>>> {
         &self.pcm_rx
-    }
-
-    /// Clone the PCM receiver (for multiple consumers).
-    pub fn pcm_rx_clone(&self) -> Receiver<PcmChunk<f32>> {
-        self.pcm_rx.clone()
-    }
-
-    /// Check if decode thread is still running.
-    pub fn is_running(&self) -> bool {
-        self.decode_thread
-            .as_ref()
-            .map(|h| !h.is_finished())
-            .unwrap_or(false)
-    }
-
-    /// Decode loop running in blocking thread.
-    fn decode_loop(source: S, pcm_tx: Sender<PcmChunk<f32>>, options: DecodeOptions) {
-        // Create Symphonia decoder
-        let mut decoder = match Self::create_decoder(source, &options) {
-            Ok(d) => d,
-            Err(e) => {
-                warn!(?e, "failed to create decoder");
-                return;
-            }
-        };
-
-        let mut chunks_decoded = 0u64;
-        let mut total_samples = 0u64;
-
-        loop {
-            match decoder.next_chunk() {
-                Ok(Some(chunk)) => {
-                    if chunk.pcm.is_empty() {
-                        continue;
-                    }
-
-                    chunks_decoded += 1;
-                    total_samples += chunk.pcm.len() as u64;
-
-                    if chunks_decoded.is_multiple_of(100) {
-                        trace!(
-                            chunks = chunks_decoded,
-                            samples = total_samples,
-                            spec = ?chunk.spec,
-                            "decode progress"
-                        );
-                    }
-
-                    // Send chunk to channel (blocks if buffer full - backpressure)
-                    if pcm_tx.send(chunk).is_err() {
-                        debug!("pcm channel closed, stopping decode");
-                        break;
-                    }
-                }
-                Ok(None) => {
-                    debug!(
-                        chunks = chunks_decoded,
-                        samples = total_samples,
-                        "decode complete (EOF)"
-                    );
-                    break;
-                }
-                Err(e) => {
-                    warn!(?e, "decode error, attempting to continue");
-                    continue;
-                }
-            }
-        }
     }
 
     /// Create Symphonia decoder with appropriate method based on options.
@@ -279,18 +277,6 @@ where
             SymphoniaDecoder::new_from_media_info(source, media_info, options.is_streaming)
         } else {
             SymphoniaDecoder::new_with_probe(source, options.hint.as_deref())
-        }
-    }
-}
-
-impl<S> Drop for Decoder<S> {
-    fn drop(&mut self) {
-        // Close channel to signal decode thread to stop
-        drop(self.pcm_rx.clone());
-
-        // Wait for decode thread to finish
-        if let Some(handle) = self.decode_thread.take() {
-            let _ = handle.join();
         }
     }
 }
@@ -333,7 +319,14 @@ impl<S> Decoder<S> {
         }
 
         match self.pcm_rx.recv() {
-            Ok(chunk) => {
+            Ok(fetch) => {
+                if fetch.is_eof() {
+                    debug!("Decoder: received EOF");
+                    self.eof = true;
+                    return false;
+                }
+
+                let chunk = fetch.into_inner();
                 trace!(
                     samples = chunk.pcm.len(),
                     spec = ?chunk.spec,
@@ -463,9 +456,7 @@ mod tests {
         let cursor = Cursor::new(wav_data);
 
         let options = DecodeOptions::new().with_hint("wav");
-        let decoder = Decoder::from_source(cursor, options).unwrap();
-
-        assert!(decoder.is_running());
+        let _decoder = Decoder::from_source(cursor, options).unwrap();
     }
 
     #[test]
@@ -477,9 +468,12 @@ mod tests {
         let decoder = Decoder::from_source(cursor, options).unwrap();
 
         let mut chunk_count = 0;
-        while let Ok(chunk) = decoder.pcm_rx().recv() {
+        while let Ok(fetch) = decoder.pcm_rx().recv() {
+            if fetch.is_eof() {
+                break;
+            }
             chunk_count += 1;
-            assert!(!chunk.pcm.is_empty());
+            assert!(!fetch.data.pcm.is_empty());
             if chunk_count >= 5 {
                 break;
             }
