@@ -40,21 +40,17 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Opening file: {}", url);
 
-    // Create file config
     let config = FileConfig::new(url).with_params(FileParams::default());
-
-    // Create Stream via generic API
     let stream = Stream::<File>::new(config).await?;
 
     info!("Starting playback...");
 
-    // Play via rodio (rodio::Decoder handles audio decoding)
     let handle = tokio::task::spawn_blocking(move || {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
         sink.append(rodio::Decoder::new(stream)?);
 
-        info!("Playing file via rodio...");
+        info!("Playing...");
         sink.sleep_until_end();
 
         info!("Playback complete");

@@ -50,15 +50,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .next()
         .map(|ext| ext.to_lowercase());
 
-    // Create file config
     let config = FileConfig::new(url).with_params(FileParams::default());
-
-    // Create Stream via generic API
     let stream = Stream::<File>::new(config).await?;
 
     info!("Creating decoder...");
 
-    // Create decoder
     let mut decoder_config = DecoderConfig::default();
     if let Some(ext) = hint {
         decoder_config = decoder_config.with_hint(ext);
@@ -67,34 +63,20 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Starting playback...");
 
-    // Play via rodio - Decoder impl rodio::Source
-    #[cfg(feature = "rodio")]
-    {
-        let play_handle = tokio::task::spawn_blocking(move || {
-            let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
-            let sink = rodio::Sink::connect_new(stream_handle.mixer());
-            sink.set_volume(0.3);
-            sink.append(decoder);
+    let handle = tokio::task::spawn_blocking(move || {
+        let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
+        let sink = rodio::Sink::connect_new(stream_handle.mixer());
+        sink.set_volume(0.3);
+        sink.append(decoder);
 
-            info!("Playing file via rodio...");
-            sink.sleep_until_end();
+        info!("Playing...");
+        sink.sleep_until_end();
 
-            info!("Playback complete");
-            Ok::<_, Box<dyn Error + Send + Sync>>(())
-        });
+        info!("Playback complete");
+        Ok::<_, Box<dyn Error + Send + Sync>>(())
+    });
 
-        play_handle.await??;
-    }
-
-    #[cfg(not(feature = "rodio"))]
-    {
-        info!("Rodio feature not enabled, waiting for decode to complete...");
-        while decoder.is_running() {
-            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        }
-    }
-
-    info!("File decode example finished");
+    handle.await??;
 
     Ok(())
 }

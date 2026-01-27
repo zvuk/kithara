@@ -11,7 +11,7 @@
 
 use std::{env::args, error::Error};
 
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig, HlsEvent, HlsParams};
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig, HlsParams};
 use kithara_stream::Stream;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
@@ -48,56 +48,25 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         })
         .with_events(events_tx);
 
-    // Create HLS config
     let config = HlsConfig::new(url).with_params(hls_params);
-
-    // Create Stream via generic API
     let stream = Stream::<Hls>::new(config).await?;
 
-    // Subscribe to HLS events
+    // Log events
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
-            match ev {
-                HlsEvent::VariantApplied {
-                    from_variant,
-                    to_variant,
-                    reason,
-                } => {
-                    info!(
-                        ?reason,
-                        "Variant switch: {} -> {}", from_variant, to_variant
-                    );
-                }
-                HlsEvent::SegmentComplete {
-                    segment_index,
-                    variant,
-                    bytes_transferred,
-                    ..
-                } => {
-                    info!(
-                        segment_index,
-                        variant, bytes_transferred, "Segment complete"
-                    );
-                }
-                HlsEvent::EndOfStream => {
-                    info!("End of stream");
-                    break;
-                }
-                _ => {}
-            }
+            info!(?ev);
         }
     });
 
     info!("Starting playback...");
 
-    // Play via rodio (rodio::Decoder handles audio decoding)
     let handle = tokio::task::spawn_blocking(move || {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
         sink.set_volume(0.1);
         sink.append(rodio::Decoder::new(stream)?);
 
-        info!("Playing HLS stream via rodio...");
+        info!("Playing...");
         sink.sleep_until_end();
 
         info!("Playback complete");
