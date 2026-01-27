@@ -5,7 +5,6 @@
 //! ## Architecture
 //!
 //! - [`StreamDecoder`] - Streaming decoder using MediaSource/MediaStream
-//! - [`Pipeline`] - Async pipeline for progressive files
 //! - [`SymphoniaDecoder`] - Symphonia-based audio decoder
 //! - [`AudioSyncReader`] - rodio::Source adapter (requires `rodio` feature)
 //!
@@ -27,13 +26,6 @@
 //!     play_audio(chunk);
 //! }
 //! ```
-//!
-//! ## Pipeline (for random-access playback)
-//!
-//! ```ignore
-//! let mut pipeline = Pipeline::open(source_arc).await?;
-//! let buffer = pipeline.buffer();
-//! ```
 
 #![forbid(unsafe_code)]
 
@@ -42,13 +34,9 @@
 mod audio_sync_reader;
 mod decoder;
 mod media_source;
-mod pcm_source;
-mod pipeline;
-pub mod resampler;
 mod source_reader;
 mod stream_decoder;
 mod symphonia_mod;
-mod traits;
 mod types;
 
 // Public API exports
@@ -56,8 +44,6 @@ mod types;
 pub use audio_sync_reader::AudioSyncReader;
 pub use decoder::Decoder;
 pub use media_source::{AudioCodec, ContainerFormat, MediaInfo, MediaSource, MediaStream};
-pub use pcm_source::PcmSource;
-pub use pipeline::{PcmBuffer, Pipeline, PipelineCommand};
 pub use source_reader::SourceReader;
 pub use stream_decoder::StreamDecoder;
 pub use symphonia_mod::{CachedCodecInfo, SymphoniaDecoder};

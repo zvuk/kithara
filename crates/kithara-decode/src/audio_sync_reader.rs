@@ -1,23 +1,21 @@
 //! AudioSyncReader: rodio-compatible audio source adapter.
 //!
-//! Reads decoded audio from Pipeline buffer and implements rodio::Source.
+//! Reads decoded audio from a channel and implements rodio::Source.
 //!
 //! This module is only available when the `rodio` feature is enabled.
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use tracing::{debug, trace};
 
-use crate::{PcmBuffer, PcmSpec};
+use crate::PcmSpec;
 
-/// rodio-compatible audio source that reads from a pipeline buffer.
+/// rodio-compatible audio source that reads from a channel.
 ///
 /// Implements `Iterator<Item=f32>` and `rodio::Source` traits.
 pub struct AudioSyncReader {
-    /// Channel receiver for reading sample chunks (with backpressure).
+    /// Channel receiver for reading sample chunks.
     sample_rx: kanal::Receiver<Vec<f32>>,
-    /// Shared PCM buffer for metadata.
-    buffer: Arc<PcmBuffer>,
     /// Audio specification.
     spec: PcmSpec,
     /// End of stream reached.
@@ -29,20 +27,14 @@ pub struct AudioSyncReader {
 }
 
 impl AudioSyncReader {
-    /// Create a new AudioSyncReader from a pipeline sample receiver.
+    /// Create a new AudioSyncReader from a sample channel.
     ///
     /// # Arguments
-    /// - `sample_rx`: Channel receiver from Pipeline (get via pipeline.consumer())
-    /// - `buffer`: Shared PCM buffer for metadata
-    /// - `spec`: Audio specification (should match buffer spec)
-    pub fn new(
-        sample_rx: kanal::Receiver<Vec<f32>>,
-        buffer: Arc<PcmBuffer>,
-        spec: PcmSpec,
-    ) -> Self {
+    /// - `sample_rx`: Channel receiver for PCM sample chunks
+    /// - `spec`: Audio specification
+    pub fn new(sample_rx: kanal::Receiver<Vec<f32>>, spec: PcmSpec) -> Self {
         Self {
             sample_rx,
-            buffer,
             spec,
             eof: false,
             current_chunk: None,
@@ -58,13 +50,12 @@ impl AudioSyncReader {
     /// Receive next chunk from channel.
     ///
     /// Blocks until data is available or channel is closed.
-    /// No polling/sleep needed - kanal handles blocking efficiently.
     fn fill_buffer(&mut self) -> bool {
         if self.eof {
             return false;
         }
 
-        // Blocking receive from channel (automatic backpressure)
+        // Blocking receive from channel
         match self.sample_rx.recv() {
             Ok(chunk) => {
                 debug!(samples = chunk.len(), "AudioSyncReader: received chunk");

@@ -10,9 +10,9 @@
 //! cargo run -p kithara-decode --example hls_decode --features rodio [URL]
 //! ```
 
-use std::{env::args, error::Error, sync::Arc};
+use std::{env::args, error::Error};
 
-use kithara_decode::{MediaSource, PcmBuffer, StreamDecoder};
+use kithara_decode::{MediaSource, StreamDecoder};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
@@ -96,18 +96,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Create stream decoder
     let mut decoder = StreamDecoder::new(stream)?;
 
-    // Create simple PCM buffer for streaming (no random access)
-    let spec = kithara_decode::PcmSpec {
-        sample_rate: 44100,
-        channels: 2,
-    };
-    let (buffer, sample_rx) = PcmBuffer::new_streaming(spec);
-    let buffer = Arc::new(buffer);
+    // Create channel for streaming PCM to rodio
+    let (sample_tx, sample_rx) = kanal::bounded::<Vec<f32>>(16);
 
     info!("Starting decode loop...");
 
-    // Decode loop - runs in current thread
-    let buffer_clone = buffer.clone();
+    // Decode loop - runs in blocking thread
     let decode_handle = tokio::task::spawn_blocking(move || {
         let mut chunks_decoded = 0;
 
@@ -125,18 +119,27 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                     );
                 }
 
-                // Send to rodio via channel (streaming mode)
-                buffer_clone.append(&chunk);
+                // Send to rodio via channel
+                if sample_tx.send(chunk.pcm).is_err() {
+                    // Receiver dropped (playback stopped)
+                    break;
+                }
             }
         }
 
         info!(total_chunks = chunks_decoded, "Decode loop finished");
     });
 
-    // Create rodio adapter from sample channel
+    // Play via rodio
     #[cfg(feature = "rodio")]
     {
-        let audio_source = kithara_decode::AudioSyncReader::new(sample_rx, buffer.clone(), spec);
+        // Get initial spec from first decoded chunk
+        let spec = kithara_decode::PcmSpec {
+            sample_rate: 44100, // Default, will be overridden by decoder
+            channels: 2,
+        };
+
+        let audio_source = kithara_decode::AudioSyncReader::new(sample_rx, spec);
 
         // Play via rodio in blocking thread
         let play_handle = tokio::task::spawn_blocking(move || {
@@ -158,6 +161,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     #[cfg(not(feature = "rodio"))]
     {
         info!("Rodio feature not enabled, just decoding without playback");
+        drop(sample_rx);
     }
 
     // Wait for decode loop to complete

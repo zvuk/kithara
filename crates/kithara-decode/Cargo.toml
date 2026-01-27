@@ -8,17 +8,12 @@ license = "MIT OR Apache-2.0"
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-bufpool = { workspace = true }
-kithara-worker = { workspace = true }
 thiserror = { workspace = true }
 kanal = { workspace = true }
 symphonia = { workspace = true }
 tokio = { workspace = true }
 rodio = { workspace = true, optional = true }
-rubato = { workspace = true }
 tracing = { workspace = true }
-parking_lot = { workspace = true }
-async-trait = { workspace = true }
-ringbuf = { workspace = true }
 bytes = { workspace = true }
 
 [features]
@@ -41,11 +36,9 @@ kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
 tempfile = { workspace = true }
 rodio = { workspace = true }
-async-trait = { workspace = true }
 rstest = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
-mockall = { workspace = true }
 
 [[example]]
 name = "file_decode"

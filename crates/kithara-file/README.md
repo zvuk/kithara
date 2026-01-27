@@ -87,22 +87,19 @@ let reader = SyncReader::new(source.into_inner(), SyncReaderParams::default());
 // Use with Symphonia or rodio
 ```
 
-### With AudioPipeline (kithara-decode)
+### With rodio (kithara-decode)
 ```rust
-use kithara_decode::{AudioPipeline, AudioSyncReader};
-use kithara_stream::{StreamSource, SyncReaderParams};
+use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
 use kithara_file::{File, FileParams};
 
 let source = StreamSource::<File>::open(url, FileParams::default()).await?;
-let source_arc = Arc::new(source);
 
-let mut pipeline = AudioPipeline::open(source_arc, SyncReaderParams::default()).await?;
-let audio_rx = pipeline.take_audio_receiver().unwrap();
-let audio_source = AudioSyncReader::new(audio_rx, pipeline.spec());
+// Create sync reader for rodio
+let reader = SyncReader::new(Arc::new(source), SyncReaderParams::default());
 
 // Play via rodio
 let sink = rodio::Sink::connect_new(stream_handle.mixer());
-sink.append(audio_source);
+sink.append(rodio::Decoder::new(reader)?);
 sink.sleep_until_end();
 ```
 
@@ -138,8 +135,8 @@ sink.sleep_until_end();
 - Manages asset lifecycle via `AssetStore`
 
 ### `kithara-decode`
-- `SyncReader` works with `SymphoniaDecoder`
-- `AudioPipeline` orchestrates decoding
+- `SyncReader` works with `rodio::Decoder` for playback
+- `StreamDecoder` for on-demand decoding with MediaSource
 
 ## Design philosophy
 
