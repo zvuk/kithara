@@ -47,6 +47,7 @@ impl FileInner {
             config.url,
             cancel.clone(),
             config.events_tx.clone(),
+            config.events_channel_capacity,
         )
         .await?;
 
@@ -66,7 +67,12 @@ impl FileInner {
             state.len(),
         );
 
-        let reader = SyncReader::new(Arc::new(source), SyncReaderParams::default());
+        let reader_params = SyncReaderParams {
+            chunk_size: config.chunk_size,
+            prefetch_chunks: config.prefetch_chunks,
+            command_channel_capacity: config.command_channel_capacity,
+        };
+        let reader = SyncReader::new(Arc::new(source), reader_params);
 
         Ok(Self { reader })
     }

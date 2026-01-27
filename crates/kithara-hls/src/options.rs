@@ -51,10 +51,14 @@ pub struct HlsConfig {
     pub base_url: Option<Url>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// Events broadcast sender (optional - if not provided, events are not sent).
+    /// Events broadcast sender (optional - if not provided, one is created internally).
     pub events_tx: Option<broadcast::Sender<crate::HlsEvent>>,
-    /// Capacity of the command mpsc channel.
-    pub command_capacity: usize,
+    /// Capacity of the command channel.
+    pub command_channel_capacity: usize,
+    /// Capacity of the chunk/data channel.
+    pub chunk_channel_capacity: usize,
+    /// Capacity of the events broadcast channel (used when events_tx is not provided).
+    pub events_channel_capacity: usize,
 }
 
 impl Default for HlsConfig {
@@ -68,7 +72,9 @@ impl Default for HlsConfig {
             base_url: None,
             cancel: None,
             events_tx: None,
-            command_capacity: 8,
+            command_channel_capacity: 16,
+            chunk_channel_capacity: 8,
+            events_channel_capacity: 32,
         }
     }
 }
@@ -85,7 +91,9 @@ impl HlsConfig {
             base_url: None,
             cancel: None,
             events_tx: None,
-            command_capacity: 8,
+            command_channel_capacity: 16,
+            chunk_channel_capacity: 8,
+            events_channel_capacity: 32,
         }
     }
 
@@ -132,8 +140,20 @@ impl HlsConfig {
     }
 
     /// Set command channel capacity.
-    pub fn with_command_capacity(mut self, capacity: usize) -> Self {
-        self.command_capacity = capacity;
+    pub fn with_command_channel_capacity(mut self, capacity: usize) -> Self {
+        self.command_channel_capacity = capacity;
+        self
+    }
+
+    /// Set chunk/data channel capacity.
+    pub fn with_chunk_channel_capacity(mut self, capacity: usize) -> Self {
+        self.chunk_channel_capacity = capacity;
+        self
+    }
+
+    /// Set events broadcast channel capacity.
+    pub fn with_events_channel_capacity(mut self, capacity: usize) -> Self {
+        self.events_channel_capacity = capacity;
         self
     }
 }

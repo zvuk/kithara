@@ -98,8 +98,10 @@ pub trait Source: Send + Sync + 'static {
 pub struct SyncReaderParams {
     /// Size of each prefetch chunk in bytes.
     pub chunk_size: usize,
-    /// Number of chunks to prefetch ahead.
+    /// Number of chunks to prefetch ahead (data channel capacity).
     pub prefetch_chunks: usize,
+    /// Command channel capacity.
+    pub command_channel_capacity: usize,
 }
 
 impl Default for SyncReaderParams {
@@ -107,6 +109,7 @@ impl Default for SyncReaderParams {
         Self {
             chunk_size: 64 * 1024, // 64KB
             prefetch_chunks: 4,
+            command_channel_capacity: 4,
         }
     }
 }
@@ -329,12 +332,15 @@ where
     pub fn new(source: Arc<S>, params: SyncReaderParams) -> Self {
         let chunk_size = params.chunk_size.max(4096);
         let prefetch_chunks = params.prefetch_chunks.max(2);
+        let cmd_capacity = params.command_channel_capacity.max(1);
         trace!(
             prefetch_chunks,
-            chunk_size, "SyncReader::new (spawning prefetch worker)"
+            chunk_size,
+            cmd_capacity,
+            "SyncReader::new (spawning prefetch worker)"
         );
 
-        let (cmd_tx, cmd_rx) = kanal::bounded::<ByteSeekCmd>(4);
+        let (cmd_tx, cmd_rx) = kanal::bounded::<ByteSeekCmd>(cmd_capacity);
         let (data_tx, data_rx) = kanal::bounded::<Fetch<ByteChunk>>(prefetch_chunks);
 
         let prefetch_source = BytePrefetchSource::new(source.clone(), chunk_size);

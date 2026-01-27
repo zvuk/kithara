@@ -64,7 +64,8 @@ impl HlsInner {
         let events_tx = if let Some(tx) = config.events_tx.clone() {
             tx
         } else {
-            let (tx, _) = broadcast::channel(32);
+            let capacity = config.events_channel_capacity.max(1);
+            let (tx, _) = broadcast::channel(capacity);
             config.events_tx = Some(tx.clone());
             tx
         };
@@ -110,10 +111,11 @@ impl HlsInner {
         // Get assets for adapter
         let assets = worker_source.assets();
 
-        // Create channels for worker
-        let (cmd_tx, cmd_rx) = kanal::bounded_async(16);
-        const HLS_CHUNK_CHANNEL_CAPACITY: usize = 8;
-        let (chunk_tx, chunk_rx) = kanal::bounded_async(HLS_CHUNK_CHANNEL_CAPACITY);
+        // Create channels for worker (use config values)
+        let cmd_capacity = config.command_channel_capacity.max(1);
+        let chunk_capacity = config.chunk_channel_capacity.max(1);
+        let (cmd_tx, cmd_rx) = kanal::bounded_async(cmd_capacity);
+        let (chunk_tx, chunk_rx) = kanal::bounded_async(chunk_capacity);
 
         // Create AsyncWorker and spawn it
         let worker = kithara_worker::AsyncWorker::new(worker_source, cmd_rx, chunk_tx);

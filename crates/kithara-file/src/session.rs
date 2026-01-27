@@ -38,6 +38,7 @@ impl FileStreamState {
         url: Url,
         cancel: CancellationToken,
         events_tx: Option<broadcast::Sender<FileEvent>>,
+        events_channel_capacity: usize,
     ) -> Result<Arc<Self>, SourceError> {
         let headers = net_client.head(url.clone(), None).await?;
         let len = headers
@@ -51,8 +52,9 @@ impl FileStreamState {
             .await
             .map_err(SourceError::Assets)?;
 
-        // Use provided events_tx or create dummy (events go nowhere)
-        let events = events_tx.unwrap_or_else(|| broadcast::channel(1).0);
+        // Use provided events_tx or create one with configured capacity
+        let events =
+            events_tx.unwrap_or_else(|| broadcast::channel(events_channel_capacity.max(1)).0);
 
         Ok(Arc::new(FileStreamState {
             url,

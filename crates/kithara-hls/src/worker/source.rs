@@ -27,8 +27,7 @@ pub struct HlsWorkerSource {
     /// Generic loader (FetchLoader or test mock).
     loader: Arc<dyn Loader>,
 
-    /// Fetch manager (kept for backward compatibility but not used for reading).
-    #[allow(dead_code)]
+    /// Fetch manager (provides access to assets).
     fetch_manager: Arc<DefaultFetchManager>,
 
     /// Variant metadata (codec, container, bitrate).

@@ -139,6 +139,8 @@ pub struct Decoder<S> {
 pub struct DecodeOptions {
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
     pub pcm_buffer_chunks: usize,
+    /// Command channel capacity.
+    pub command_channel_capacity: usize,
     /// Optional format hint (file extension like "mp3", "wav")
     pub hint: Option<String>,
     /// Media info hint for format detection
@@ -150,6 +152,7 @@ impl DecodeOptions {
     pub fn new() -> Self {
         Self {
             pcm_buffer_chunks: 10,
+            command_channel_capacity: 4,
             hint: None,
             media_info: None,
         }
@@ -209,7 +212,8 @@ where
     ///
     /// Spawns SyncWorker in a blocking thread for decoding.
     pub fn from_source(source: S, options: DecodeOptions) -> DecodeResult<Self> {
-        let (cmd_tx, cmd_rx) = kanal::bounded(4);
+        let cmd_capacity = options.command_channel_capacity.max(1);
+        let (cmd_tx, cmd_rx) = kanal::bounded(cmd_capacity);
         let (data_tx, data_rx) = kanal::bounded(options.pcm_buffer_chunks.max(1));
 
         // Create Symphonia decoder
