@@ -10,10 +10,11 @@ use super::{
     Loader,
     types::{SegmentMeta, SegmentType},
 };
+use kithara_stream::ContainerFormat;
+
 use crate::{
     HlsError, HlsResult,
     fetch::{ActiveFetchResult, DefaultFetchManager},
-    parsing::ContainerFormat,
     playlist::{MediaPlaylist, PlaylistManager, VariantId},
 };
 
@@ -77,7 +78,7 @@ impl Loader for FetchLoader {
         let container = if playlist.init_segment.is_some() {
             Some(ContainerFormat::Fmp4)
         } else {
-            Some(ContainerFormat::Ts)
+            Some(ContainerFormat::MpegTs)
         };
 
         // Handle init segment

@@ -1,15 +1,15 @@
-// ! Generic decoder trait for audio decoding.
+//! Generic decoder trait for audio decoding.
 //!
 //! Allows using different decoders (Symphonia for production, mock for tests).
 
 use crate::{DecodeResult, PcmChunk, PcmSpec};
 
-/// Generic audio decoder trait.
+/// Generic audio decoder trait (internal).
 ///
 /// Implementations:
 /// - `SymphoniaDecoder` - production decoder using Symphonia (AAC/MP3/FLAC/etc)
 /// - `MockDecoder` - test decoder for unit tests
-pub trait Decoder: Send + 'static {
+pub trait InnerDecoder: Send + 'static {
     /// Decode next chunk of audio.
     ///
     /// Returns:

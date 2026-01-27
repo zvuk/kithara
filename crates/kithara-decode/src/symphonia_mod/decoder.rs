@@ -539,8 +539,8 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for Streamin
     }
 }
 
-// Implement generic Decoder trait for SymphoniaDecoder
-impl crate::Decoder for SymphoniaDecoder {
+// Implement generic InnerDecoder trait for SymphoniaDecoder
+impl crate::InnerDecoder for SymphoniaDecoder {
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
         self.next_chunk()
     }
@@ -670,7 +670,7 @@ mod tests {
         let wav_data = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let media_info = MediaInfo::new()
+        let media_info = MediaInfo::default()
             .with_container(ContainerFormat::Wav)
             .with_sample_rate(44100)
             .with_channels(2);
@@ -979,7 +979,7 @@ mod tests {
         let cursor = Cursor::new(wav_data);
 
         // Try to create with MpegTs container (likely not in default features)
-        let media_info = MediaInfo::new()
+        let media_info = MediaInfo::default()
             .with_container(ContainerFormat::MpegTs)
             .with_sample_rate(44100)
             .with_channels(2);
@@ -997,7 +997,7 @@ mod tests {
         let cursor = Cursor::new(wav_data);
 
         // Provide wrong container type (Ogg instead of WAV)
-        let media_info = MediaInfo::new()
+        let media_info = MediaInfo::default()
             .with_container(ContainerFormat::Ogg)
             .with_sample_rate(44100)
             .with_channels(2);

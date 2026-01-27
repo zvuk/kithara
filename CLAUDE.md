@@ -156,6 +156,11 @@ Requirements:
 - No cyclic dependencies
 - Facade crate may re-export but should not contain core logic
 
+### 11. Single source of truth for shared types
+- `AudioCodec`, `ContainerFormat`, `MediaInfo` — ONLY in `kithara-stream`
+- Other crates re-export from `kithara-stream`, never define own copies
+- No type conversion between duplicate types — use the canonical one
+
 ## Stack alignment
 
 Target engine uses:

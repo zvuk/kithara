@@ -438,7 +438,7 @@ mod tests {
         vec![VariantMetadata {
             index: 0,
             codec: Some(kithara_stream::AudioCodec::AacLc),
-            container: Some(crate::parsing::ContainerFormat::Fmp4),
+            container: Some(kithara_stream::ContainerFormat::Fmp4),
             bitrate: Some(128000),
         }]
     }
@@ -468,7 +468,7 @@ mod tests {
             duration: Some(Duration::from_secs(4)),
             key: None,
             len,
-            container: Some(crate::parsing::ContainerFormat::Fmp4),
+            container: Some(kithara_stream::ContainerFormat::Fmp4),
         }
     }
 

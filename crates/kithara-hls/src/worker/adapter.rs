@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use kanal::{AsyncReceiver, AsyncSender};
 use kithara_assets::{AssetStore, Assets, ResourceKey};
 use kithara_storage::{StreamingResourceExt, WaitOutcome};
-use kithara_stream::{ContainerFormat as StreamContainerFormat, MediaInfo, Source, StreamResult};
+use kithara_stream::{ContainerFormat, MediaInfo, Source, StreamResult};
 use kithara_worker::Fetch;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
@@ -12,7 +12,7 @@ use tracing::{debug, trace};
 use url::Url;
 
 use super::{HlsCommand, HlsMessage};
-use crate::{HlsError, events::HlsEvent, fetch::StreamingAssetResource, parsing::ContainerFormat};
+use crate::{HlsError, events::HlsEvent, fetch::StreamingAssetResource};
 
 /// Entry tracking a loaded segment in the virtual stream.
 #[derive(Debug, Clone)]
@@ -463,20 +463,9 @@ impl Source for HlsSourceAdapter {
         let segments = self.segments.lock();
         let last = segments.last()?;
 
-        let container = match last.container {
-            Some(ContainerFormat::Fmp4) => Some(StreamContainerFormat::Fmp4),
-            Some(ContainerFormat::Ts) => Some(StreamContainerFormat::MpegTs),
-            Some(ContainerFormat::Other) | None => None,
-        };
+        debug!(container = ?last.container, codec = ?last.codec, "media_info called");
 
-        debug!(?container, codec = ?last.codec, "media_info called");
-
-        Some(MediaInfo {
-            container,
-            codec: last.codec,
-            sample_rate: None,
-            channels: None,
-        })
+        Some(MediaInfo::new(last.codec, last.container))
     }
 }
 

@@ -1,9 +1,9 @@
-//! Example: Play audio from an HLS stream using decode pipeline.
+//! Example: Play audio from an HLS stream using Decoder.
 //!
-//! This demonstrates the decode pipeline architecture:
-//! - HlsMediaSource provides media stream
-//! - DecodePipeline runs decoder in separate thread with PCM buffer
-//! - Smooth playback during variant switches
+//! This demonstrates the decode architecture:
+//! - Stream::<Hls>::new() creates HlsInner (Read + Seek)
+//! - Decoder runs symphonia in separate thread with PCM buffer
+//! - Decoder impl rodio::Source for direct playback
 //!
 //! Run with:
 //! ```
@@ -12,8 +12,9 @@
 
 use std::{env::args, error::Error};
 
-use kithara_decode::{DecodePipeline, DecodePipelineConfig, MediaSource};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
+use kithara_decode::{Decoder, DecoderConfig};
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig, HlsEvent, HlsParams};
+use kithara_stream::Stream;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -51,8 +52,11 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         })
         .with_events(events_tx);
 
-    // Open HLS media source
-    let source = Hls::open_media_source(url, hls_params).await?;
+    // Create HLS config
+    let config = HlsConfig::new(url).with_params(hls_params);
+
+    // Create Stream via generic API
+    let stream = Stream::<Hls>::new(config).await?;
 
     // Subscribe to HLS events
     tokio::spawn(async move {
@@ -88,38 +92,22 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     });
 
-    // Open media stream
-    let stream = source.open()?;
+    info!("Creating decoder...");
 
-    info!("Creating decode pipeline...");
-
-    // Create decode pipeline (runs decoder in separate thread with PCM buffer)
-    let config = DecodePipelineConfig {
-        pcm_buffer_chunks: 20, // ~2 seconds buffer
-    };
-    let pipeline = DecodePipeline::new(stream, config)?;
+    // Create decoder with streaming config
+    let decoder_config = DecoderConfig::streaming();
+    let decoder = Decoder::new(stream, decoder_config)?;
 
     info!("Starting playback...");
 
-    // Play via rodio
+    // Play via rodio - Decoder impl rodio::Source
     #[cfg(feature = "rodio")]
     {
-        let pcm_rx = pipeline.pcm_rx_clone();
-
-        // Get initial spec
-        let spec = kithara_decode::PcmSpec {
-            sample_rate: 44100,
-            channels: 2,
-        };
-
-        let audio_source = kithara_decode::AudioSyncReader::new(pcm_rx, spec);
-
-        // Play via rodio in blocking thread
         let play_handle = tokio::task::spawn_blocking(move || {
             let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
             let sink = rodio::Sink::connect_new(stream_handle.mixer());
             sink.set_volume(0.3);
-            sink.append(audio_source);
+            sink.append(decoder);
 
             info!("Playing HLS stream via rodio...");
             sink.sleep_until_end();
@@ -134,13 +122,10 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     #[cfg(not(feature = "rodio"))]
     {
         info!("Rodio feature not enabled, waiting for decode to complete...");
-        while pipeline.is_running() {
+        while decoder.is_running() {
             tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         }
     }
-
-    // Pipeline dropped here, decode thread will be joined
-    drop(pipeline);
 
     info!("HLS decode example finished");
 

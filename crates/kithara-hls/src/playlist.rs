@@ -11,10 +11,11 @@ use url::Url;
 
 // Re-export parsing types and functions for external use
 pub use crate::parsing::{
-    CodecInfo, ContainerFormat, EncryptionMethod, InitSegment, KeyInfo, MasterPlaylist,
+    CodecInfo, EncryptionMethod, InitSegment, KeyInfo, MasterPlaylist,
     MediaPlaylist, MediaSegment, SegmentKey, VariantId, VariantStream, parse_master_playlist,
     parse_media_playlist,
 };
+pub use kithara_stream::ContainerFormat;
 use crate::{HlsError, HlsResult, fetch::DefaultFetchManager};
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {

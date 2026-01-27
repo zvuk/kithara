@@ -5,33 +5,23 @@
 //! # Example
 //!
 //! ```ignore
-//! use kithara_decode::{MediaSource, StreamDecoder};
-//! use kithara_file::{FileMediaSource, FileParams};
+//! use kithara_stream::{Stream, StreamType};
+//! use kithara_file::{File, FileConfig, FileParams};
 //!
-//! // Open file media source
-//! let source = FileMediaSource::open(url, FileParams::default()).await?;
-//! let events = source.events();
-//!
-//! // Create stream for decoding
-//! let stream = source.open()?;
-//! let mut decoder = StreamDecoder::new(stream)?;
-//!
-//! // Decode loop
-//! while let Some(chunk) = decoder.decode_next()? {
-//!     play_audio(chunk);
-//! }
+//! // Using StreamType API
+//! let config = FileConfig::new(url).with_params(FileParams::default());
+//! let inner = File::create(config).await?;
 //! ```
 
 mod error;
 mod events;
-mod media_source;
+mod inner;
 mod options;
 mod session;
 mod source;
 
 pub use error::SourceError;
 pub use events::FileEvent;
-pub use media_source::FileMediaSource;
+pub use inner::{File, FileConfig, FileInner};
 pub use options::FileParams;
 pub use session::{Progress, SessionSource};
-pub use source::File;

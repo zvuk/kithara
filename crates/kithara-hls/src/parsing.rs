@@ -6,24 +6,13 @@ use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,
     tags::VariantStream as HlsVariantStreamTag, types::DecryptionKey as HlsDecryptionKey,
 };
-use kithara_stream::AudioCodec;
+use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::HlsResult;
 
 /// Identifies a variant within a parsed master playlist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct VariantId(pub usize);
-
-/// Container format information (best-effort).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContainerFormat {
-    /// MPEG-2 Transport Stream.
-    Ts,
-    /// Fragmented MP4.
-    Fmp4,
-    /// Any other format we don't explicitly handle yet.
-    Other,
-}
 
 /// Codec/container information extracted from playlist attributes (best-effort).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -144,7 +133,7 @@ fn detect_container_from_uri(uri: &str) -> Option<ContainerFormat> {
     let ext = path.rsplit('.').next()?.to_lowercase();
 
     match ext.as_str() {
-        "ts" | "m2ts" => Some(ContainerFormat::Ts),
+        "ts" | "m2ts" => Some(ContainerFormat::MpegTs),
         "mp4" | "m4s" | "m4a" | "m4v" => Some(ContainerFormat::Fmp4),
         _ => None,
     }

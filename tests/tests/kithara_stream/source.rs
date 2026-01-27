@@ -121,7 +121,7 @@ fn small_data() -> Vec<u8> {
 #[case(10, b"KLMNO")]
 #[case(20, b"UVWXY")]
 #[case(25, b"Z")]
-#[timeout(Duration::from_secs(10))]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_start_reads_correct_bytes(
     test_data: Vec<u8>,
@@ -149,6 +149,7 @@ async fn seek_start_reads_correct_bytes(
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data.clone()));
@@ -178,7 +179,7 @@ async fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
 // ==================== SeekFrom::Current tests ====================
 
 #[rstest]
-#[timeout(Duration::from_secs(10))]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_current_forward(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
@@ -234,6 +235,7 @@ async fn seek_current_backward(test_data: Vec<u8>) {
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
@@ -259,6 +261,7 @@ async fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
 #[case(-5, b"VWXYZ")]
 #[case(-10, b"QRSTU")]
 #[case(-26, b"ABCDE")]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_end_reads_correct_bytes(
     test_data: Vec<u8>,
@@ -289,6 +292,7 @@ async fn seek_end_reads_correct_bytes(
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
@@ -311,6 +315,7 @@ async fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
     let source = Arc::new(UnknownLenSource::new(test_data));
@@ -328,6 +333,7 @@ async fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
 // ==================== Error cases ====================
 
 #[rstest]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_past_eof_fails(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
@@ -344,6 +350,7 @@ async fn seek_past_eof_fails(test_data: Vec<u8>) {
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_negative_position_fails(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
@@ -359,6 +366,7 @@ async fn seek_negative_position_fails(test_data: Vec<u8>) {
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
@@ -376,10 +384,9 @@ async fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
 // ==================== Multiple seeks ====================
 
 #[rstest]
-#[timeout(Duration::from_secs(10))]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
-    let data = test_data.clone();
     let source = Arc::new(MemSource::new(test_data));
     let mut reader = SyncReader::new(source, SyncReaderParams::default());
 
@@ -419,6 +426,7 @@ async fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn position_tracks_correctly(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
@@ -457,6 +465,7 @@ async fn position_tracks_correctly(test_data: Vec<u8>) {
 // ==================== Edge cases ====================
 
 #[rstest]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
     let source = Arc::new(MemSource::new(test_data));
@@ -481,6 +490,7 @@ async fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
 }
 
 #[rstest]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_exact_to_last_byte(small_data: Vec<u8>) {
     let len = small_data.len() as u64;
@@ -504,7 +514,7 @@ async fn seek_exact_to_last_byte(small_data: Vec<u8>) {
 }
 
 #[rstest]
-#[timeout(Duration::from_secs(10))]
+#[timeout(Duration::from_secs(3))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_to_exact_eof_returns_zero_on_read(small_data: Vec<u8>) {
     let len = small_data.len() as u64;

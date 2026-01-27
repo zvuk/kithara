@@ -2,9 +2,10 @@
 
 use std::time::Duration;
 
+use kithara_stream::ContainerFormat;
 use url::Url;
 
-use crate::{parsing::ContainerFormat, playlist::SegmentKey};
+use crate::playlist::SegmentKey;
 
 /// Segment type: initialization segment or media segment with index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

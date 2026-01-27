@@ -11,32 +11,10 @@ use url::Url;
 use crate::{
     error::SourceError,
     events::FileEvent,
+    inner::File,
     options::FileParams,
     session::{FileStreamState, Progress, SessionSource},
 };
-
-/// Marker type for file streaming with the unified `StreamSource<S>` API.
-///
-/// ## Usage
-///
-/// ```ignore
-/// use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
-/// use kithara_file::{File, FileParams};
-///
-/// // Async source with events
-/// let source = StreamSource::<File>::open(url, FileParams::default()).await?;
-/// let events = source.events();  // Receiver<FileEvent>
-///
-/// // Sync reader for decoders (Read + Seek)
-/// let reader = SyncReader::<StreamSource<File>>::open(
-///     url,
-///     FileParams::default(),
-///     SyncReaderParams::default()
-/// ).await?;
-/// let events = reader.events();
-/// ```
-#[derive(Clone, Copy, Debug, Default)]
-pub struct File;
 
 impl SourceFactory for File {
     type Params = FileParams;
