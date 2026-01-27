@@ -51,9 +51,20 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .next()
         .map(|ext| ext.to_lowercase());
 
-    let file_config = FileConfig::new(url).with_params(FileParams::default());
+    // Create events channel
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+
+    let file_params = FileParams::default().with_events(events_tx);
+    let file_config = FileConfig::new(url).with_params(file_params);
 
     info!("Creating decoder...");
+
+    // Log events
+    tokio::spawn(async move {
+        while let Ok(ev) = events_rx.recv().await {
+            info!(?ev);
+        }
+    });
 
     // Create decoder via target API
     let mut config = DecoderConfig::<File>::new(file_config);

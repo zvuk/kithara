@@ -143,8 +143,6 @@ pub struct DecodeOptions {
     pub hint: Option<String>,
     /// Media info hint for format detection
     pub media_info: Option<MediaInfo>,
-    /// Whether source is streaming (affects seek behavior)
-    pub is_streaming: bool,
 }
 
 impl DecodeOptions {
@@ -154,15 +152,6 @@ impl DecodeOptions {
             pcm_buffer_chunks: 10,
             hint: None,
             media_info: None,
-            is_streaming: false,
-        }
-    }
-
-    /// Create options for streaming source (HLS).
-    pub fn streaming() -> Self {
-        Self {
-            is_streaming: true,
-            ..Self::new()
         }
     }
 
@@ -208,12 +197,6 @@ impl<T: StreamType> DecoderConfig<T> {
     /// Set format hint.
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.decode.hint = Some(hint.into());
-        self
-    }
-
-    /// Set streaming mode.
-    pub fn streaming(mut self) -> Self {
-        self.decode.is_streaming = true;
         self
     }
 }

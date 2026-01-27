@@ -1,6 +1,9 @@
 use kithara_assets::StoreOptions;
 use kithara_net::NetOptions;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
+
+use crate::FileEvent;
 
 /// Unified parameters for file streaming.
 ///
@@ -14,8 +17,8 @@ pub struct FileParams {
     pub net: NetOptions,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// Capacity of the events broadcast channel.
-    pub event_capacity: usize,
+    /// Events broadcast sender (optional - if not provided, events are not sent).
+    pub events_tx: Option<broadcast::Sender<FileEvent>>,
 }
 
 impl Default for FileParams {
@@ -31,7 +34,7 @@ impl FileParams {
             store,
             net: NetOptions::default(),
             cancel: None,
-            event_capacity: 32,
+            events_tx: None,
         }
     }
 
@@ -47,17 +50,15 @@ impl FileParams {
         self
     }
 
-    /// Set event channel capacity.
-    pub fn with_event_capacity(mut self, capacity: usize) -> Self {
-        self.event_capacity = capacity;
+    /// Set events sender for subscribing to file events.
+    pub fn with_events(mut self, events_tx: broadcast::Sender<FileEvent>) -> Self {
+        self.events_tx = Some(events_tx);
         self
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use rstest::*;
-
     use super::*;
 
     #[test]
@@ -65,7 +66,7 @@ mod tests {
         let store = StoreOptions::default();
         let params = FileParams::new(store.clone());
 
-        assert_eq!(params.event_capacity, 32);
+        assert!(params.events_tx.is_none());
         assert!(params.cancel.is_none());
     }
 
@@ -73,7 +74,7 @@ mod tests {
     fn test_file_params_default() {
         let params = FileParams::default();
 
-        assert_eq!(params.event_capacity, 32);
+        assert!(params.events_tx.is_none());
         assert!(params.cancel.is_none());
     }
 
@@ -83,8 +84,7 @@ mod tests {
         let net = NetOptions::default();
         let params = FileParams::new(store).with_net(net);
 
-        // NetOptions doesn't impl PartialEq, just verify it compiles
-        assert_eq!(params.event_capacity, 32);
+        assert!(params.events_tx.is_none());
     }
 
     #[test]
@@ -96,16 +96,13 @@ mod tests {
         assert!(params.cancel.is_some());
     }
 
-    #[rstest]
-    #[case(1)]
-    #[case(16)]
-    #[case(64)]
-    #[case(128)]
-    fn test_with_event_capacity(#[case] capacity: usize) {
+    #[test]
+    fn test_with_events() {
         let store = StoreOptions::default();
-        let params = FileParams::new(store).with_event_capacity(capacity);
+        let (events_tx, _events_rx) = broadcast::channel(32);
+        let params = FileParams::new(store).with_events(events_tx);
 
-        assert_eq!(params.event_capacity, capacity);
+        assert!(params.events_tx.is_some());
     }
 
     #[test]
@@ -113,14 +110,15 @@ mod tests {
         let store = StoreOptions::default();
         let net = NetOptions::default();
         let cancel = CancellationToken::new();
+        let (events_tx, _) = broadcast::channel(32);
 
         let params = FileParams::new(store)
             .with_net(net)
             .with_cancel(cancel.clone())
-            .with_event_capacity(64);
+            .with_events(events_tx);
 
         assert!(params.cancel.is_some());
-        assert_eq!(params.event_capacity, 64);
+        assert!(params.events_tx.is_some());
     }
 
     #[test]
@@ -133,10 +131,11 @@ mod tests {
 
     #[test]
     fn test_clone() {
-        let params = FileParams::default().with_event_capacity(64);
+        let (events_tx, _) = broadcast::channel(32);
+        let params = FileParams::default().with_events(events_tx);
 
         let cloned = params.clone();
 
-        assert_eq!(cloned.event_capacity, params.event_capacity);
+        assert!(cloned.events_tx.is_some());
     }
 }

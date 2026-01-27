@@ -37,17 +37,18 @@ impl SourceFactory for File {
 
         let net_client = HttpClient::new(params.net.clone());
 
+        let events_tx = params.events_tx.clone();
+
         let state = FileStreamState::create(
             Arc::new(store),
             net_client.clone(),
             url,
             cancel.clone(),
-            params.event_capacity,
+            events_tx.clone(),
         )
         .await
         .map_err(StreamError::Source)?;
 
-        let (events_tx, _) = broadcast::channel(params.event_capacity);
         let progress = Arc::new(Progress::new());
 
         spawn_download_writer(&net_client, state.clone(), progress.clone());
@@ -55,13 +56,16 @@ impl SourceFactory for File {
         let source = SessionSource::new(
             state.res().clone(),
             progress,
-            events_tx.clone(),
+            state.events().clone(),
             state.len(),
         );
 
+        // For OpenedSource we need a sender - use state's events or create dummy
+        let events_tx_for_opened = events_tx.unwrap_or_else(|| broadcast::channel(1).0);
+
         Ok(OpenedSource {
             source: Arc::new(source),
-            events_tx,
+            events_tx: events_tx_for_opened,
         })
     }
 }

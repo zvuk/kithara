@@ -84,19 +84,23 @@ impl FileInner {
             net_client.clone(),
             url,
             cancel.clone(),
-            params.event_capacity,
+            params.events_tx.clone(),
         )
         .await?;
 
-        let (events_tx, _) = broadcast::channel(params.event_capacity);
         let progress = Arc::new(Progress::new());
 
-        spawn_download_writer(&net_client, state.clone(), progress.clone(), events_tx.clone());
+        spawn_download_writer(
+            &net_client,
+            state.clone(),
+            progress.clone(),
+            state.events().clone(),
+        );
 
         let source = SessionSource::new(
             state.res().clone(),
             progress,
-            events_tx,
+            state.events().clone(),
             state.len(),
         );
 

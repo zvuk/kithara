@@ -1,28 +1,28 @@
-//! Example: Play audio from an HLS stream using rodio.
+//! Example: Play audio from an HTTP file using rodio.
 //!
 //! This demonstrates the Stream API:
-//! - Stream::<Hls>::new() creates a Read + Seek stream
+//! - Stream::<File>::new() creates a Read + Seek stream
 //! - rodio::Decoder handles audio decoding
 //!
 //! Run with:
 //! ```
-//! cargo run -p kithara-hls --example hls --features rodio [URL]
+//! cargo run -p kithara-file --example rodio [URL]
 //! ```
 
 use std::{env::args, error::Error};
 
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig, HlsParams};
+use kithara_file::{File, FileConfig, FileParams};
 use kithara_stream::Stream;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::default()
-                .add_directive("kithara_hls=debug".parse()?)
+                .add_directive("kithara_file=info".parse()?)
                 .add_directive("kithara_stream=info".parse()?)
                 .add_directive("kithara_net=info".parse()?)
                 .add_directive(LevelFilter::INFO.into()),
@@ -31,25 +31,21 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .with_file(false)
         .init();
 
-    let url = args()
-        .nth(1)
-        .unwrap_or_else(|| "https://stream.silvercomet.top/hls/master.m3u8".to_string());
+    let url = args().nth(1).unwrap_or_else(|| {
+        "http://www.hyperion-records.co.uk/audiotest/14 Clementi Piano Sonata in D major, Op 25 No \
+         6 - Movement 2 Un poco andante.MP3"
+            .to_string()
+    });
     let url: Url = url.parse()?;
 
-    info!("Opening HLS stream: {}", url);
+    info!("Opening file: {}", url);
 
     // Create events channel
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
 
-    let hls_params = HlsParams::default()
-        .with_abr(AbrOptions {
-            mode: AbrMode::Manual(0),
-            ..Default::default()
-        })
-        .with_events(events_tx);
-
-    let config = HlsConfig::new(url).with_params(hls_params);
-    let stream = Stream::<Hls>::new(config).await?;
+    let file_params = FileParams::default().with_events(events_tx);
+    let config = FileConfig::new(url).with_params(file_params);
+    let stream = Stream::<File>::new(config).await?;
 
     // Log events
     tokio::spawn(async move {
@@ -63,7 +59,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let handle = tokio::task::spawn_blocking(move || {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
-        sink.set_volume(0.1);
         sink.append(rodio::Decoder::new(stream)?);
 
         info!("Playing...");
