@@ -14,7 +14,7 @@
 use std::{env::args, error::Error};
 
 use kithara_decode::{Decoder, DecoderConfig};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig, HlsParams};
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_stream::Stream;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
@@ -45,14 +45,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Create events channel
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
-    let hls_params = HlsParams::default()
+
+    let hls_config = HlsConfig::new(url)
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()
         })
         .with_events(events_tx);
-
-    let hls_config = HlsConfig::new(url).with_params(hls_params);
 
     // Create decoder via target API
     let config = DecoderConfig::<Hls>::new(hls_config);

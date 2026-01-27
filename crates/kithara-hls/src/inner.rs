@@ -12,51 +12,16 @@ use kithara_net::HttpClient;
 use kithara_stream::{StreamType, SyncReader, SyncReaderParams};
 use kithara_worker::Worker;
 use tokio::sync::broadcast;
-use url::Url;
 
 use crate::{
     cache::FetchLoader,
     error::HlsError,
     events::HlsEvent,
     fetch::FetchManager,
-    options::HlsParams,
+    options::HlsConfig,
     playlist::{PlaylistManager, variant_info_from_master},
     worker::{HlsSourceAdapter, HlsWorkerSource, VariantMetadata},
 };
-
-/// Configuration for HLS stream.
-#[derive(Clone)]
-pub struct HlsConfig {
-    /// Master playlist URL.
-    pub url: Url,
-    /// HLS parameters.
-    pub params: HlsParams,
-}
-
-impl Default for HlsConfig {
-    fn default() -> Self {
-        Self {
-            url: Url::parse("http://localhost/stream.m3u8").expect("valid default URL"),
-            params: HlsParams::default(),
-        }
-    }
-}
-
-impl HlsConfig {
-    /// Create config with URL.
-    pub fn new(url: Url) -> Self {
-        Self {
-            url,
-            params: HlsParams::default(),
-        }
-    }
-
-    /// Set HLS parameters.
-    pub fn with_params(mut self, params: HlsParams) -> Self {
-        self.params = params;
-        self
-    }
-}
 
 /// HLS inner stream implementing `Read + Seek`.
 ///
@@ -67,20 +32,17 @@ pub struct HlsInner {
 
 impl HlsInner {
     /// Create new HLS inner stream.
-    pub async fn new(config: HlsConfig) -> Result<Self, HlsError> {
-        let url = config.url;
-        let mut params = config.params;
-
-        let asset_root = asset_root_for_url(&url);
-        let cancel = params.cancel.clone().unwrap_or_default();
-        let net = HttpClient::new(params.net.clone());
+    pub async fn new(mut config: HlsConfig) -> Result<Self, HlsError> {
+        let asset_root = asset_root_for_url(&config.url);
+        let cancel = config.cancel.clone().unwrap_or_default();
+        let net = HttpClient::new(config.net.clone());
 
         // Build asset store
         let base_assets = AssetStoreBuilder::new()
             .asset_root(&asset_root)
             .cancel(cancel.clone())
-            .root_dir(&params.store.cache_dir)
-            .evict_config(params.store.to_evict_config())
+            .root_dir(&config.store.cache_dir)
+            .evict_config(config.store.to_evict_config())
             .build();
 
         // Build FetchManager
@@ -89,21 +51,21 @@ impl HlsInner {
         // Build PlaylistManager
         let playlist_manager = Arc::new(PlaylistManager::new(
             Arc::clone(&fetch_manager),
-            params.base_url.clone(),
+            config.base_url.clone(),
         ));
 
         // Load master playlist
-        let master = playlist_manager.master_playlist(&url).await?;
+        let master = playlist_manager.master_playlist(&config.url).await?;
 
         // Determine initial variant
-        let initial_variant = params.abr.initial_variant();
+        let initial_variant = config.abr.initial_variant();
 
         // Create events channel if not provided
-        let events_tx = if let Some(tx) = params.events_tx.clone() {
+        let events_tx = if let Some(tx) = config.events_tx.clone() {
             tx
         } else {
             let (tx, _) = broadcast::channel(32);
-            params.events_tx = Some(tx.clone());
+            config.events_tx = Some(tx.clone());
             tx
         };
 
@@ -129,7 +91,7 @@ impl HlsInner {
 
         // Create FetchLoader
         let fetch_loader = Arc::new(FetchLoader::new(
-            url.clone(),
+            config.url.clone(),
             Arc::clone(&fetch_manager),
             Arc::clone(&playlist_manager),
         ));
@@ -140,8 +102,8 @@ impl HlsInner {
             Arc::clone(&fetch_manager),
             variant_metadata,
             initial_variant,
-            Some(params.abr.clone()),
-            params.events_tx.clone(),
+            Some(config.abr.clone()),
+            config.events_tx.clone(),
             cancel,
         );
 

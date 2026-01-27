@@ -4,17 +4,16 @@
 //! The bug manifests when:
 //! 1. ABR switches from variant A to variant B
 //! 2. Pipeline pre-loads segments from variant B (e.g., segments 4, 5, 6)
-//! 3. SourceReader seeks backward to load earlier segment (e.g., segment 3)
+//! 3. Reader seeks backward to load earlier segment (e.g., segment 3)
 //! 4. Segment index gets corrupted, causing byte skips/glitches
 //!
-//! This test verifies that SourceReader (used by decode pipeline) reads continuous bytes
-//! without skips during ABR variant switches.
+//! This test verifies that Stream<Hls> reads continuous bytes without skips during ABR
+//! variant switches.
 
-use std::{env, error::Error, io::Read as _, sync::Arc, time::Duration};
+use std::{env, error::Error, io::Read as _, time::Duration};
 
-use kithara_decode::SourceReader;
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsEvent, HlsParams};
-use kithara_stream::StreamSource;
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig, HlsEvent};
+use kithara_stream::Stream;
 use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -67,9 +66,13 @@ async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error 
     // Create cancellation token
     let cancel_token = CancellationToken::new();
 
+    // Create events channel for tracking variant switches
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+
     // Configure HLS with ABR that will trigger switch due to slow variant 0
-    let hls_params = HlsParams::default()
+    let config = HlsConfig::new(url.clone())
         .with_cancel(cancel_token.clone())
+        .with_events(events_tx)
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),       // Start with variant 0
             min_buffer_for_up_switch_secs: 1.0, // Low threshold for quick upswitch
@@ -80,13 +83,11 @@ async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error 
 
     info!("Opening HLS stream with ABR enabled");
 
-    // Create HLS source
-    let source = StreamSource::<Hls>::open(url.clone(), hls_params).await?;
-    let source_arc = Arc::new(source);
+    // Create HLS stream
+    let mut stream = Stream::<Hls>::new(config).await?;
 
     // Track variant switches
-    let mut events_rx = source_arc.events();
-    let variant_switches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let variant_switches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let variant_switches_clone = variant_switches.clone();
 
     tokio::spawn(async move {
@@ -112,10 +113,7 @@ async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error 
         }
     });
 
-    info!("Creating SourceReader for byte-level reading");
-
-    // Create SourceReader (same mechanism used by Pipeline)
-    let mut reader = SourceReader::new(source_arc.clone());
+    info!("Reading bytes from Stream<Hls>");
 
     // Give ABR some time to trigger and load segments
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -129,7 +127,7 @@ async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error 
 
             // Read all available bytes
             loop {
-                match reader.read(&mut buffer) {
+                match stream.read(&mut buffer) {
                     Ok(n) if n > 0 => {
                         total_reads += 1;
                         tracing::debug!(
@@ -205,16 +203,14 @@ async fn test_basic_multi_segment_reading() -> Result<(), Box<dyn Error + Send +
     let url = server.url("/master.m3u8")?;
     let cancel_token = CancellationToken::new();
 
-    let hls_params = HlsParams::default()
+    let config = HlsConfig::new(url)
         .with_cancel(cancel_token.clone())
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(0), // Fixed variant - no ABR
             ..Default::default()
         });
 
-    let source = StreamSource::<Hls>::open(url, hls_params).await?;
-    let source_arc = Arc::new(source);
-    let mut reader = SourceReader::new(source_arc.clone());
+    let mut stream = Stream::<Hls>::new(config).await?;
 
     let result =
         tokio::task::spawn_blocking(move || -> Result<Vec<u8>, Box<dyn Error + Send + Sync>> {
@@ -222,7 +218,7 @@ async fn test_basic_multi_segment_reading() -> Result<(), Box<dyn Error + Send +
             let mut buffer = vec![0u8; 4096];
 
             loop {
-                match reader.read(&mut buffer) {
+                match stream.read(&mut buffer) {
                     Ok(n) if n > 0 => {
                         all_bytes.extend_from_slice(&buffer[..n]);
                     }
@@ -278,8 +274,12 @@ async fn test_abr_variant_switch_with_seek_backward() -> Result<(), Box<dyn Erro
     let url = server.url("/master.m3u8")?;
     let cancel_token = CancellationToken::new();
 
-    let hls_params = HlsParams::default()
+    // Create events channel for tracking variant switches
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+
+    let config = HlsConfig::new(url)
         .with_cancel(cancel_token.clone())
+        .with_events(events_tx)
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             min_buffer_for_up_switch_secs: 1.0,
@@ -288,13 +288,11 @@ async fn test_abr_variant_switch_with_seek_backward() -> Result<(), Box<dyn Erro
             ..Default::default()
         });
 
-    println!("\nCreating HLS source with ABR");
-    let source = StreamSource::<Hls>::open(url, hls_params).await?;
-    let source_arc = Arc::new(source);
+    println!("\nCreating HLS stream with ABR");
+    let mut stream = Stream::<Hls>::new(config).await?;
 
     // Track variant switches
-    let mut events_rx = source_arc.events();
-    let variant_switches = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let variant_switches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let variant_switches_clone = variant_switches.clone();
 
     tokio::spawn(async move {
@@ -314,46 +312,43 @@ async fn test_abr_variant_switch_with_seek_backward() -> Result<(), Box<dyn Erro
         }
     });
 
-    let mut reader = SourceReader::new(source_arc.clone());
-
     // Give ABR time to trigger and load some segments
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    let result =
-        tokio::task::spawn_blocking(move || -> Result<(), Box<dyn Error + Send + Sync>> {
-            use std::io::SeekFrom;
+    tokio::task::spawn_blocking(move || -> Result<(), Box<dyn Error + Send + Sync>> {
+        use std::io::SeekFrom;
 
-            // Read some bytes to trigger ABR switch
-            let mut buffer = vec![0u8; 50000];
-            let n1 = reader.read(&mut buffer)?;
-            println!("Read {} bytes initially", n1);
+        // Read some bytes to trigger ABR switch
+        let mut buffer = vec![0u8; 50000];
+        let n1 = stream.read(&mut buffer)?;
+        println!("Read {} bytes initially", n1);
 
-            // Seek back to beginning - this should trigger loading earlier segments
-            // if ABR switched to a variant that only has later segments loaded
-            println!("Seeking back to offset 0");
-            reader.seek(SeekFrom::Start(0))?;
+        // Seek back to beginning - this should trigger loading earlier segments
+        // if ABR switched to a variant that only has later segments loaded
+        println!("Seeking back to offset 0");
+        stream.seek(SeekFrom::Start(0))?;
 
-            // Try to read from beginning again
-            let mut buffer2 = vec![0u8; 1000];
-            let n2 = reader.read(&mut buffer2)?;
-            println!("Read {} bytes after seek to 0", n2);
+        // Try to read from beginning again
+        let mut buffer2 = vec![0u8; 1000];
+        let n2 = stream.read(&mut buffer2)?;
+        println!("Read {} bytes after seek to 0", n2);
 
-            // Verify we read some data (not EOF)
-            assert!(n2 > 0, "Should be able to read after seeking to beginning");
+        // Verify we read some data (not EOF)
+        assert!(n2 > 0, "Should be able to read after seeking to beginning");
 
-            // Verify we're reading from segment 0 (should start with "V")
-            let data_str = String::from_utf8_lossy(&buffer2[..n2]);
-            assert!(
-                data_str.starts_with("V"),
-                "Should read segment data after seek, got: {}",
-                &data_str[..20.min(data_str.len())]
-            );
+        // Verify we're reading from segment 0 (should start with "V")
+        let data_str = String::from_utf8_lossy(&buffer2[..n2]);
+        assert!(
+            data_str.starts_with("V"),
+            "Should read segment data after seek, got: {}",
+            &data_str[..20.min(data_str.len())]
+        );
 
-            println!("Successfully read after seek backward");
+        println!("Successfully read after seek backward");
 
-            Ok(())
-        })
-        .await??;
+        Ok(())
+    })
+    .await??;
 
     // Check if ABR switch occurred
     let switches = variant_switches.lock().unwrap();

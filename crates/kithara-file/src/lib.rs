@@ -6,10 +6,10 @@
 //!
 //! ```ignore
 //! use kithara_stream::{Stream, StreamType};
-//! use kithara_file::{File, FileConfig, FileParams};
+//! use kithara_file::{File, FileConfig};
 //!
 //! // Using StreamType API
-//! let config = FileConfig::new(url).with_params(FileParams::default());
+//! let config = FileConfig::new(url);
 //! let inner = File::create(config).await?;
 //! ```
 
@@ -18,10 +18,9 @@ mod events;
 mod inner;
 mod options;
 mod session;
-mod source;
 
 pub use error::SourceError;
 pub use events::FileEvent;
-pub use inner::{File, FileConfig, FileInner};
-pub use options::FileParams;
+pub use inner::{File, FileInner};
+pub use options::FileConfig;
 pub use session::{Progress, SessionSource};

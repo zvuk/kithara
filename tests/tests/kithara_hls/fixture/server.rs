@@ -174,7 +174,10 @@ seg/v{}_2.bin
     )
 }
 
-/// Test segment data
+/// Test segment data with padding.
+///
+/// Returns data with format "V{variant}-SEG-{segment}:TEST_SEGMENT_DATA" = 26 bytes prefix,
+/// padded to ~200KB for realistic HLS testing.
 pub fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
     let prefix = format!("V{}-SEG-{}:", variant, segment);
     let mut data = prefix.into_bytes();
@@ -217,7 +220,7 @@ v0-encrypted.m3u8
 }
 
 /// Media playlist with AES-128 encryption for testing
-pub fn test_media_playlist_encrypted(variant: usize) -> String {
+pub fn test_media_playlist_encrypted(_variant: usize) -> String {
     format!(
         r#"#EXTM3U
 #EXT-X-VERSION:6

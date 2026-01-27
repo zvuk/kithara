@@ -11,48 +11,13 @@ use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
 use kithara_stream::{StreamMsg, StreamType, SyncReader, SyncReaderParams, Writer};
 use tokio::sync::broadcast;
-use url::Url;
 
 use crate::{
     error::SourceError,
     events::FileEvent,
-    options::FileParams,
+    options::FileConfig,
     session::{FileStreamState, Progress, SessionSource},
 };
-
-/// Configuration for file stream.
-#[derive(Clone)]
-pub struct FileConfig {
-    /// File URL.
-    pub url: Url,
-    /// File parameters.
-    pub params: FileParams,
-}
-
-impl Default for FileConfig {
-    fn default() -> Self {
-        Self {
-            url: Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
-            params: FileParams::default(),
-        }
-    }
-}
-
-impl FileConfig {
-    /// Create config with URL.
-    pub fn new(url: Url) -> Self {
-        Self {
-            url,
-            params: FileParams::default(),
-        }
-    }
-
-    /// Set file parameters.
-    pub fn with_params(mut self, params: FileParams) -> Self {
-        self.params = params;
-        self
-    }
-}
 
 /// File inner stream implementing `Read + Seek`.
 ///
@@ -64,27 +29,24 @@ pub struct FileInner {
 impl FileInner {
     /// Create new file inner stream.
     pub async fn new(config: FileConfig) -> Result<Self, SourceError> {
-        let url = config.url;
-        let params = config.params;
-
-        let asset_root = asset_root_for_url(&url);
-        let cancel = params.cancel.clone().unwrap_or_default();
+        let asset_root = asset_root_for_url(&config.url);
+        let cancel = config.cancel.clone().unwrap_or_default();
 
         let store = AssetStoreBuilder::new()
-            .root_dir(&params.store.cache_dir)
+            .root_dir(&config.store.cache_dir)
             .asset_root(&asset_root)
-            .evict_config(params.store.to_evict_config())
+            .evict_config(config.store.to_evict_config())
             .cancel(cancel.clone())
             .build();
 
-        let net_client = HttpClient::new(params.net.clone());
+        let net_client = HttpClient::new(config.net.clone());
 
         let state = FileStreamState::create(
             Arc::new(store),
             net_client.clone(),
-            url,
+            config.url,
             cancel.clone(),
-            params.events_tx.clone(),
+            config.events_tx.clone(),
         )
         .await?;
 

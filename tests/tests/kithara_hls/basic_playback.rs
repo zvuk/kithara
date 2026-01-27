@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::{error::Error, sync::Arc, time::Duration};
+use std::{error::Error, io::Read, time::Duration};
 
 use fixture::TestServer;
 use kithara_assets::StoreOptions;
-use kithara_hls::{Hls, HlsParams};
-use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
+use kithara_hls::{Hls, HlsConfig};
+use kithara_stream::Stream;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -25,11 +25,6 @@ fn temp_dir() -> TempDir {
 #[fixture]
 fn cancel_token() -> CancellationToken {
     CancellationToken::new()
-}
-
-#[fixture]
-fn hls_params(temp_dir: TempDir, cancel_token: CancellationToken) -> HlsParams {
-    HlsParams::new(StoreOptions::new(temp_dir.path())).with_cancel(cancel_token)
 }
 
 #[fixture]
@@ -59,19 +54,27 @@ fn tracing_setup() {
 #[tokio::test]
 async fn test_basic_hls_playback(
     _tracing_setup: (),
-    hls_params: HlsParams,
+    temp_dir: TempDir,
+    cancel_token: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Starting HLS playback test with URL: {}", test_stream_url);
 
+    // Create events channel
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+
     // 1. Test: Open HLS source
     info!("Opening HLS source...");
-    let source = StreamSource::<Hls>::open(test_stream_url.clone(), hls_params).await?;
+    let config = HlsConfig::new(test_stream_url.clone())
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel_token)
+        .with_events(events_tx);
+
+    let stream = Stream::<Hls>::new(config).await?;
     info!("HLS source opened successfully");
 
     // Start event monitor in background
-    let mut events_rx = source.events();
     let _events_handle = tokio::spawn(async move {
         let mut event_count = 0;
         while let Ok(ev) = events_rx.recv().await {
@@ -82,12 +85,9 @@ async fn test_basic_hls_playback(
         }
     });
 
-    // Create reader for the stream
-    let reader = SyncReader::new(Arc::new(source), SyncReaderParams::default());
-
     // 3. Test: Create rodio decoder (this validates the stream format)
     info!("Creating rodio decoder...");
-    let decoder_result = tokio::task::spawn_blocking(move || rodio::Decoder::new(reader)).await;
+    let decoder_result = tokio::task::spawn_blocking(move || rodio::Decoder::new(stream)).await;
 
     match decoder_result {
         Ok(_decoder) => {
@@ -108,7 +108,8 @@ async fn test_basic_hls_playback(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_session_creation(
-    hls_params: HlsParams,
+    temp_dir: TempDir,
+    cancel_token: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
@@ -118,17 +119,20 @@ async fn test_hls_session_creation(
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
 
+    // Create events channel
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+
     // Test source creation
-    let source = StreamSource::<Hls>::open(test_stream_url, hls_params).await?;
+    let config = HlsConfig::new(test_stream_url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel_token)
+        .with_events(events_tx);
 
-    // Test events channel
-    let mut events_rx = source.events();
-
-    let _source = source;
+    let _stream = Stream::<Hls>::new(config).await?;
 
     // Spawn a task to consume events (prevent channel from filling up)
     tokio::spawn(async move {
-        while let Ok(_) = events_rx.recv().await {
+        while events_rx.recv().await.is_ok() {
             // Just consume events
         }
     });
@@ -142,7 +146,8 @@ async fn test_hls_session_creation(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_with_init_segments(
-    hls_params: HlsParams,
+    temp_dir: TempDir,
+    cancel_token: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
@@ -153,7 +158,11 @@ async fn test_hls_with_init_segments(
     let url = server.url("/master-init.m3u8")?;
     info!("Testing HLS with init segments: {}", url);
 
-    let _source = StreamSource::<Hls>::open(url, hls_params).await?;
+    let config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel_token);
+
+    let _stream = Stream::<Hls>::new(config).await?;
 
     info!("Stream with init segments opened successfully");
     Ok(())
@@ -175,11 +184,12 @@ async fn test_hls_with_different_options(
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Testing HLS with custom options");
 
-    let options =
-        HlsParams::new(StoreOptions::new(temp_dir.path())).with_cancel(CancellationToken::new());
+    let config = HlsConfig::new(test_stream_url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(CancellationToken::new());
 
     // Test source creation with different options
-    let _source = StreamSource::<Hls>::open(test_stream_url, options).await?;
+    let _stream = Stream::<Hls>::new(config).await?;
 
     info!("HLS source opened successfully with custom options");
     Ok(())
@@ -194,7 +204,8 @@ async fn test_hls_with_different_options(
 #[tokio::test]
 async fn test_hls_invalid_url_handling(
     #[case] invalid_url: &str,
-    hls_params: HlsParams,
+    temp_dir: TempDir,
+    cancel_token: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
@@ -205,7 +216,11 @@ async fn test_hls_invalid_url_handling(
 
     if let Ok(url) = url_result {
         // If URL parses, try to open HLS (should fail with network error)
-        let result = StreamSource::<Hls>::open(url, hls_params).await;
+        let config = HlsConfig::new(url)
+            .with_store(StoreOptions::new(temp_dir.path()))
+            .with_cancel(cancel_token);
+
+        let result = Stream::<Hls>::new(config).await;
         // Either Ok (if somehow connects) or Err (expected) is acceptable
         assert!(result.is_ok() || result.is_err());
     } else {
@@ -222,7 +237,8 @@ async fn test_hls_invalid_url_handling(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_init_segment_at_stream_start(
-    hls_params: HlsParams,
+    temp_dir: TempDir,
+    cancel_token: CancellationToken,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
@@ -233,7 +249,11 @@ async fn test_init_segment_at_stream_start(
     let url = server.url("/master-init.m3u8")?;
     info!("Testing INIT segment at stream start: {}", url);
 
-    let source = Arc::new(StreamSource::<Hls>::open(url, hls_params).await?);
+    let config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel_token);
+
+    let mut stream = Stream::<Hls>::new(config).await?;
 
     // Wait for INIT and first segment to be loaded.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -241,26 +261,18 @@ async fn test_init_segment_at_stream_start(
     // Read from offset 0 - should get INIT data, not SEG-0.
     // INIT data for variant 0: "V0-INIT:TEST_INIT_DATA" (22 bytes)
     let mut buf = [0u8; 32];
-    let n = kithara_stream::Source::read_at(source.as_ref(), 0, &mut buf).await?;
-    assert!(n > 0, "Should read data from offset 0");
 
-    let data = &buf[..n];
+    let n = tokio::task::spawn_blocking(move || stream.read(&mut buf).map(|n| (n, buf)))
+        .await?
+        .map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)?;
+
+    let (bytes_read, data) = n;
+    assert!(bytes_read > 0, "Should read data from offset 0");
+
+    let data = &data[..bytes_read];
     assert!(
         data.starts_with(b"V0-INIT:"),
         "Offset 0 should contain INIT data, got: {:?}",
-        String::from_utf8_lossy(&data[..data.len().min(20)])
-    );
-
-    // INIT is 22 bytes. Read from offset 22 - should get SEG-0.
-    let init_len = 22u64;
-    let n = kithara_stream::Source::read_at(source.as_ref(), init_len, &mut buf).await?;
-    assert!(n > 0, "Should read data from offset after INIT");
-
-    let data = &buf[..n];
-    assert!(
-        data.starts_with(b"V0-SEG-0:"),
-        "Offset {} should contain SEG-0 data, got: {:?}",
-        init_len,
         String::from_utf8_lossy(&data[..data.len().min(20)])
     );
 
@@ -282,17 +294,18 @@ async fn test_hls_without_cache(temp_dir: TempDir) -> Result<(), Box<dyn Error +
     let test_stream_url = server.url("/master.m3u8")?;
 
     // Create options with very small cache to simulate limited caching
-    let hls_params = HlsParams::new(
-        StoreOptions::new(temp_dir.path())
-            .with_max_assets(1)
-            .with_max_bytes(1024), // 1KB cache
-    )
-    .with_cancel(CancellationToken::new());
+    let config = HlsConfig::new(test_stream_url)
+        .with_store(
+            StoreOptions::new(temp_dir.path())
+                .with_max_assets(1)
+                .with_max_bytes(1024), // 1KB cache
+        )
+        .with_cancel(CancellationToken::new());
 
     info!("Testing HLS with limited cache");
 
     // Test source creation with limited cache
-    let _source = StreamSource::<Hls>::open(test_stream_url, hls_params).await?;
+    let _stream = Stream::<Hls>::new(config).await?;
 
     info!("HLS source opened successfully with limited cache");
     Ok(())

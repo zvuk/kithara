@@ -2,16 +2,18 @@ use kithara_assets::StoreOptions;
 use kithara_net::NetOptions;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
 use crate::FileEvent;
 
-/// Unified parameters for file streaming.
+/// Configuration for file streaming.
 ///
-/// Used with `StreamSource::<File>::open(url, params)` or
-/// `SyncReader::<StreamSource<File>>::open(url, params, reader_params)`.
+/// Used with `Stream::<File>::new(config)`.
 #[derive(Clone, Debug)]
-pub struct FileParams {
-    /// Storage configuration (required).
+pub struct FileConfig {
+    /// File URL.
+    pub url: Url,
+    /// Storage configuration.
     pub store: StoreOptions,
     /// Network configuration.
     pub net: NetOptions,
@@ -21,21 +23,34 @@ pub struct FileParams {
     pub events_tx: Option<broadcast::Sender<FileEvent>>,
 }
 
-impl Default for FileParams {
+impl Default for FileConfig {
     fn default() -> Self {
-        Self::new(StoreOptions::default())
-    }
-}
-
-impl FileParams {
-    /// Create new file params with the given store options.
-    pub fn new(store: StoreOptions) -> Self {
         Self {
-            store,
+            url: Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
+            store: StoreOptions::default(),
             net: NetOptions::default(),
             cancel: None,
             events_tx: None,
         }
+    }
+}
+
+impl FileConfig {
+    /// Create new file config with URL.
+    pub fn new(url: Url) -> Self {
+        Self {
+            url,
+            store: StoreOptions::default(),
+            net: NetOptions::default(),
+            cancel: None,
+            events_tx: None,
+        }
+    }
+
+    /// Set storage options.
+    pub fn with_store(mut self, store: StoreOptions) -> Self {
+        self.store = store;
+        self
     }
 
     /// Set network options.
@@ -61,48 +76,49 @@ impl FileParams {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_file_params_new() {
-        let store = StoreOptions::default();
-        let params = FileParams::new(store.clone());
-
-        assert!(params.events_tx.is_none());
-        assert!(params.cancel.is_none());
+    fn test_url() -> Url {
+        Url::parse("http://example.com/audio.mp3").unwrap()
     }
 
     #[test]
-    fn test_file_params_default() {
-        let params = FileParams::default();
+    fn test_file_config_new() {
+        let config = FileConfig::new(test_url());
 
-        assert!(params.events_tx.is_none());
-        assert!(params.cancel.is_none());
+        assert_eq!(config.url.as_str(), "http://example.com/audio.mp3");
+        assert!(config.events_tx.is_none());
+        assert!(config.cancel.is_none());
+    }
+
+    #[test]
+    fn test_with_store() {
+        let store = StoreOptions::default();
+        let config = FileConfig::new(test_url()).with_store(store);
+
+        assert!(config.events_tx.is_none());
     }
 
     #[test]
     fn test_with_net() {
-        let store = StoreOptions::default();
         let net = NetOptions::default();
-        let params = FileParams::new(store).with_net(net);
+        let config = FileConfig::new(test_url()).with_net(net);
 
-        assert!(params.events_tx.is_none());
+        assert!(config.events_tx.is_none());
     }
 
     #[test]
     fn test_with_cancel() {
-        let store = StoreOptions::default();
         let cancel = CancellationToken::new();
-        let params = FileParams::new(store).with_cancel(cancel.clone());
+        let config = FileConfig::new(test_url()).with_cancel(cancel.clone());
 
-        assert!(params.cancel.is_some());
+        assert!(config.cancel.is_some());
     }
 
     #[test]
     fn test_with_events() {
-        let store = StoreOptions::default();
         let (events_tx, _events_rx) = broadcast::channel(32);
-        let params = FileParams::new(store).with_events(events_tx);
+        let config = FileConfig::new(test_url()).with_events(events_tx);
 
-        assert!(params.events_tx.is_some());
+        assert!(config.events_tx.is_some());
     }
 
     #[test]
@@ -112,29 +128,30 @@ mod tests {
         let cancel = CancellationToken::new();
         let (events_tx, _) = broadcast::channel(32);
 
-        let params = FileParams::new(store)
+        let config = FileConfig::new(test_url())
+            .with_store(store)
             .with_net(net)
             .with_cancel(cancel.clone())
             .with_events(events_tx);
 
-        assert!(params.cancel.is_some());
-        assert!(params.events_tx.is_some());
+        assert!(config.cancel.is_some());
+        assert!(config.events_tx.is_some());
     }
 
     #[test]
     fn test_debug_impl() {
-        let params = FileParams::default();
-        let debug_str = format!("{:?}", params);
+        let config = FileConfig::new(test_url());
+        let debug_str = format!("{:?}", config);
 
-        assert!(debug_str.contains("FileParams"));
+        assert!(debug_str.contains("FileConfig"));
     }
 
     #[test]
     fn test_clone() {
         let (events_tx, _) = broadcast::channel(32);
-        let params = FileParams::default().with_events(events_tx);
+        let config = FileConfig::new(test_url()).with_events(events_tx);
 
-        let cloned = params.clone();
+        let cloned = config.clone();
 
         assert!(cloned.events_tx.is_some());
     }

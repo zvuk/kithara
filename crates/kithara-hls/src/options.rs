@@ -32,14 +32,16 @@ pub struct KeyOptions {
     pub request_headers: Option<HashMap<String, String>>,
 }
 
-/// Unified parameters for HLS streaming.
+/// Configuration for HLS streaming.
 ///
-/// Used with `Hls::open(url, params)` for the unified API.
+/// Used with `Stream::<Hls>::new(config)`.
 #[derive(Clone)]
-pub struct HlsParams {
-    /// Storage configuration (required).
+pub struct HlsConfig {
+    /// Master playlist URL.
+    pub url: Url,
+    /// Storage configuration.
     pub store: StoreOptions,
-    /// Network configuration (from kithara-net).
+    /// Network configuration.
     pub net: NetOptions,
     /// ABR (Adaptive Bitrate) configuration.
     pub abr: AbrOptions,
@@ -55,17 +57,11 @@ pub struct HlsParams {
     pub command_capacity: usize,
 }
 
-impl Default for HlsParams {
+impl Default for HlsConfig {
     fn default() -> Self {
-        Self::new(StoreOptions::default())
-    }
-}
-
-impl HlsParams {
-    /// Create new HLS params with the given store options.
-    pub fn new(store: StoreOptions) -> Self {
         Self {
-            store,
+            url: Url::parse("http://localhost/stream.m3u8").expect("valid default URL"),
+            store: StoreOptions::default(),
             net: NetOptions::default(),
             abr: AbrOptions::default(),
             keys: KeyOptions::default(),
@@ -74,6 +70,29 @@ impl HlsParams {
             events_tx: None,
             command_capacity: 8,
         }
+    }
+}
+
+impl HlsConfig {
+    /// Create new HLS config with URL.
+    pub fn new(url: Url) -> Self {
+        Self {
+            url,
+            store: StoreOptions::default(),
+            net: NetOptions::default(),
+            abr: AbrOptions::default(),
+            keys: KeyOptions::default(),
+            base_url: None,
+            cancel: None,
+            events_tx: None,
+            command_capacity: 8,
+        }
+    }
+
+    /// Set storage options.
+    pub fn with_store(mut self, store: StoreOptions) -> Self {
+        self.store = store;
+        self
     }
 
     /// Set network options.
@@ -107,9 +126,6 @@ impl HlsParams {
     }
 
     /// Set events broadcast sender.
-    ///
-    /// If provided, HLS events will be sent to this channel.
-    /// If not provided, events will not be sent (no overhead).
     pub fn with_events(mut self, events_tx: broadcast::Sender<crate::HlsEvent>) -> Self {
         self.events_tx = Some(events_tx);
         self

@@ -11,7 +11,7 @@
 
 use std::{env::args, error::Error};
 
-use kithara_file::{File, FileConfig, FileParams};
+use kithara_file::{File, FileConfig};
 use kithara_stream::Stream;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
@@ -43,8 +43,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Create events channel
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
 
-    let file_params = FileParams::default().with_events(events_tx);
-    let config = FileConfig::new(url).with_params(file_params);
+    let config = FileConfig::new(url).with_events(events_tx);
     let stream = Stream::<File>::new(config).await?;
 
     // Log events

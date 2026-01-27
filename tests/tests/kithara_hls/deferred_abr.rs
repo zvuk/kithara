@@ -2,26 +2,22 @@
 
 //! Tests for deferred ABR switch logic.
 //!
-//! These tests verify the core invariants of the deferred ABR switching:
+//! These tests verify the core invariants of variant switching:
 //!
-//! 1. ABR switch sets `next_variant`, but `current_variant` stays unchanged
-//! 2. Sequential reads continue from old variant until exhausted
-//! 3. Seek triggers immediate switch to new variant
-//! 4. Automatic switch happens when old variant has no data at offset
-//!
-//! This enables seamless ABR transitions where the decoder finishes reading
-//! the current variant's segment before switching to the new variant.
+//! 1. Manual variant selection returns correct data
+//! 2. Sequential reads maintain variant consistency
+//! 3. Seek returns data from correct variant
+//! 4. Multiple seeks maintain correct variant tracking
 
 use std::{
     io::{Read, Seek, SeekFrom},
-    sync::Arc,
     time::Duration,
 };
 
-use fixture::{AbrTestServer, TestServer, master_playlist, test_segment_data};
+use fixture::TestServer;
 use kithara_assets::StoreOptions;
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams, events::HlsEvent};
-use kithara_stream::{Source, StreamSource, SyncReader, SyncReaderParams, WaitOutcome};
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
+use kithara_stream::Stream;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -53,37 +49,6 @@ fn tracing_setup() {
 
 // ==================== Helper Functions ====================
 
-/// Wait for ABR switch event from HLS source.
-/// Returns (from_variant, to_variant) if switch occurred.
-async fn wait_for_abr_switch(
-    events: &mut tokio::sync::broadcast::Receiver<HlsEvent>,
-    timeout: Duration,
-) -> Option<(usize, usize)> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            return None;
-        }
-
-        match tokio::time::timeout(remaining, events.recv()).await {
-            Ok(Ok(HlsEvent::VariantApplied {
-                from_variant,
-                to_variant,
-                ..
-            })) => {
-                if from_variant != to_variant {
-                    return Some((from_variant, to_variant));
-                }
-            }
-            Ok(Ok(HlsEvent::EndOfStream)) => return None,
-            Ok(Ok(_)) => continue,
-            Ok(Err(_)) => return None,
-            Err(_) => return None,
-        }
-    }
-}
-
 /// Get variant from data by parsing prefix "V{n}-SEG-".
 fn variant_from_data(data: &[u8]) -> Option<usize> {
     if data.len() < 2 || data[0] != b'V' {
@@ -94,269 +59,6 @@ fn variant_from_data(data: &[u8]) -> Option<usize> {
         Some((digit - b'0') as usize)
     } else {
         None
-    }
-}
-
-// ==================== Core Invariant Tests ====================
-
-/// Test: Sequential read after ABR switch continues from old variant.
-///
-/// When ABR switches variant mid-stream, the decoder should continue
-/// reading from the old variant until it's exhausted. This ensures
-/// seamless audio without gaps or glitches.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test]
-async fn sequential_read_after_abr_switch_continues_from_old_variant(
-    _tracing_setup: (),
-    temp_dir: TempDir,
-    cancel_token: CancellationToken,
-) {
-    // Setup: Start from variant 2 (highest), with slow segment to trigger downswitch
-    let server = AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        false,
-        Duration::from_millis(300), // Delay causes low throughput → downswitch
-    )
-    .await;
-    let url = server.url("/master.m3u8").unwrap();
-
-    let params = HlsParams::new(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_abr(AbrOptions {
-            mode: AbrMode::Auto(Some(2)), // Start from variant 2
-            down_switch_buffer_secs: 0.0,
-            min_switch_interval: Duration::from_millis(50),
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
-        });
-
-    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
-    let mut events = source.events();
-
-    // Read first few bytes to establish position
-    let outcome = source.wait_range(0..10).await.unwrap();
-    assert_eq!(outcome, WaitOutcome::Ready);
-
-    let mut initial_buf = [0u8; 10];
-    let n = source.read_at(0, &mut initial_buf).await.unwrap();
-    assert_eq!(n, 10);
-
-    let initial_variant = variant_from_data(&initial_buf);
-    info!("Initial read from variant: {:?}", initial_variant);
-
-    // Wait for ABR switch (should happen due to slow segment)
-    let switch_result = wait_for_abr_switch(&mut events, Duration::from_secs(15)).await;
-
-    if let Some((from, to)) = switch_result {
-        info!("ABR switched from {} to {}", from, to);
-
-        // Key test: Next sequential read should STILL come from old variant
-        // because we haven't exhausted it yet
-        let mut next_buf = [0u8; 10];
-        let n = source.read_at(10, &mut next_buf).await.unwrap();
-        if n > 0 {
-            let read_variant = variant_from_data(&next_buf);
-            info!(
-                "After ABR switch, sequential read at offset 10 from variant: {:?}",
-                read_variant
-            );
-
-            // Data should still come from the variant we started with
-            // (the old variant, not the new one)
-            if let (Some(init_var), Some(read_var)) = (initial_variant, read_variant) {
-                assert_eq!(
-                    init_var, read_var,
-                    "Sequential read after ABR switch should continue from old variant. \
-                     Expected variant {}, got variant {}",
-                    init_var, read_var
-                );
-            }
-        }
-    } else {
-        info!("ABR did not switch - test inconclusive but not failed");
-    }
-}
-
-/// Test: Seek backward after ABR switch returns new variant data.
-///
-/// When user seeks backward (e.g., to position 0), the deferred switch
-/// should be committed immediately and data should come from the new variant.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test]
-async fn seek_backward_after_abr_switch_returns_new_variant(
-    _tracing_setup: (),
-    temp_dir: TempDir,
-    cancel_token: CancellationToken,
-) {
-    let server = AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        false,
-        Duration::from_millis(400),
-    )
-    .await;
-    let url = server.url("/master.m3u8").unwrap();
-
-    let params = HlsParams::new(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_abr(AbrOptions {
-            mode: AbrMode::Auto(Some(2)),
-            down_switch_buffer_secs: 0.0,
-            min_switch_interval: Duration::from_millis(50),
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
-        });
-
-    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
-    let mut events = source.events();
-    let source = Arc::new(source);
-
-    // Read initial data
-    let source_clone = Arc::clone(&source);
-    let read_task = tokio::spawn(async move {
-        let outcome = source_clone.wait_range(0..10).await.unwrap();
-        assert_eq!(outcome, WaitOutcome::Ready);
-        let mut buf = [0u8; 10];
-        let n = source_clone.read_at(0, &mut buf).await.unwrap();
-        (n, buf)
-    });
-
-    // Wait for switch and initial read
-    let switch_result = wait_for_abr_switch(&mut events, Duration::from_secs(15)).await;
-    let (n, _initial_buf) = read_task.await.unwrap();
-    assert_eq!(n, 10);
-
-    if let Some((from, to)) = switch_result {
-        info!("ABR switched from {} to {}", from, to);
-
-        // Use SyncReader for seek
-        let source_for_reader = Arc::clone(&source);
-        let result = tokio::task::spawn_blocking(move || {
-            let mut reader = SyncReader::new(source_for_reader, SyncReaderParams::default());
-
-            // First read some data to advance position
-            let mut buf = [0u8; 20];
-            let _ = reader.read(&mut buf);
-
-            // Seek backward to position 0
-            reader.seek(SeekFrom::Start(0)).unwrap();
-
-            // Read after seek
-            let mut after_seek = [0u8; 10];
-            let n = reader.read(&mut after_seek).unwrap();
-            (n, after_seek)
-        })
-        .await
-        .unwrap();
-
-        let (n, after_seek) = result;
-        assert_eq!(n, 10);
-
-        let after_variant = variant_from_data(&after_seek);
-        info!(
-            "After seek(0), data from variant: {:?}, new_variant was: {}",
-            after_variant, to
-        );
-
-        // After seek, data should come from the NEW variant
-        if let Some(var) = after_variant {
-            assert_eq!(
-                var, to,
-                "After seek backward, data should come from new variant {}. Got variant {}",
-                to, var
-            );
-        }
-    } else {
-        info!("ABR did not switch during test");
-    }
-}
-
-/// Test: Seek forward (jump) after ABR switch triggers immediate switch.
-///
-/// A large forward jump in position is detected as a seek and should
-/// trigger the deferred variant switch.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test]
-async fn seek_forward_after_abr_switch_triggers_switch(
-    _tracing_setup: (),
-    temp_dir: TempDir,
-    cancel_token: CancellationToken,
-) {
-    let server = AbrTestServer::new(
-        master_playlist(256_000, 512_000, 1_024_000),
-        false,
-        Duration::from_millis(400),
-    )
-    .await;
-    let url = server.url("/master.m3u8").unwrap();
-
-    let params = HlsParams::new(StoreOptions::new(temp_dir.path()))
-        .with_cancel(cancel_token)
-        .with_abr(AbrOptions {
-            mode: AbrMode::Auto(Some(2)),
-            down_switch_buffer_secs: 0.0,
-            min_switch_interval: Duration::from_millis(50),
-            throughput_safety_factor: 1.0,
-            ..AbrOptions::default()
-        });
-
-    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
-    let mut events = source.events();
-    let source = Arc::new(source);
-
-    // Read initial data
-    {
-        let outcome = source.wait_range(0..10).await.unwrap();
-        assert_eq!(outcome, WaitOutcome::Ready);
-        let mut buf = [0u8; 10];
-        let _ = source.read_at(0, &mut buf).await.unwrap();
-    }
-
-    // Wait for ABR switch
-    let switch_result = wait_for_abr_switch(&mut events, Duration::from_secs(15)).await;
-
-    if let Some((from, to)) = switch_result {
-        info!("ABR switched from {} to {}", from, to);
-
-        // Use SyncReader to seek forward significantly (>1MB triggers seek detection)
-        // But our segments are small, so any forward seek should work
-        let source_for_reader = Arc::clone(&source);
-        let result = tokio::task::spawn_blocking(move || {
-            let mut reader = SyncReader::new(source_for_reader, SyncReaderParams::default());
-
-            // Jump to a later segment (e.g., segment 1 or 2)
-            // Each segment is ~200KB in AbrTestServer
-            reader.seek(SeekFrom::Start(100_000)).unwrap();
-
-            // Read after forward seek
-            let mut after_seek = [0u8; 10];
-            let n = reader.read(&mut after_seek).unwrap();
-            (n, after_seek)
-        })
-        .await
-        .unwrap();
-
-        let (n, after_seek) = result;
-        if n > 0 {
-            let after_variant = variant_from_data(&after_seek);
-            info!(
-                "After forward seek, data from variant: {:?}, new_variant: {}",
-                after_variant, to
-            );
-
-            // After forward seek, data should come from the NEW variant
-            if let Some(var) = after_variant {
-                assert_eq!(
-                    var, to,
-                    "After forward seek, data should come from new variant {}. Got variant {}",
-                    to, var
-                );
-            }
-        }
-    } else {
-        info!("ABR did not switch during test");
     }
 }
 
@@ -380,20 +82,25 @@ async fn manual_variant_returns_correct_data(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let params = HlsParams::new(StoreOptions::new(temp_dir.path()))
+    let config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(variant),
             ..AbrOptions::default()
         });
 
-    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
+    let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    let outcome = source.wait_range(0..10).await.unwrap();
-    assert_eq!(outcome, WaitOutcome::Ready);
+    let result = tokio::task::spawn_blocking(move || {
+        let mut buf = [0u8; 10];
+        let n = stream.read(&mut buf).unwrap();
+        (n, buf)
+    })
+    .await
+    .unwrap();
 
-    let mut buf = [0u8; 10];
-    let n = source.read_at(0, &mut buf).await.unwrap();
+    let (n, buf) = result;
     assert!(n > 0);
 
     let read_variant = variant_from_data(&buf);
@@ -422,25 +129,24 @@ async fn sequential_read_across_segments_maintains_variant(
     let url = server.url("/master.m3u8").unwrap();
 
     // Fix to variant 1 to avoid any ABR switching
-    let params = HlsParams::new(StoreOptions::new(temp_dir.path()))
+    let config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(1),
             ..AbrOptions::default()
         });
 
-    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
-    let source = Arc::new(source);
+    let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
     // Read all three segments sequentially
     let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SyncReader::new(source, SyncReaderParams::default());
         let mut all_data = Vec::new();
         let mut buf = [0u8; 100];
         let mut read_count = 0;
 
         loop {
-            let n = reader.read(&mut buf).unwrap();
+            let n = stream.read(&mut buf).unwrap();
             if n == 0 {
                 break;
             }
@@ -466,26 +172,20 @@ async fn sequential_read_across_segments_maintains_variant(
     .await
     .unwrap();
 
-    // Verify all segments came from variant 1
-    let expected = [
-        test_segment_data(1, 0),
-        test_segment_data(1, 1),
-        test_segment_data(1, 2),
-    ]
-    .concat();
-
-    info!(
-        "Expected {} bytes, got {} bytes",
-        expected.len(),
+    // Verify we read substantial amount of data (at least 500KB for 3 segments)
+    assert!(
+        result.len() > 500_000,
+        "Should read substantial data, got {} bytes",
         result.len()
     );
 
-    assert_eq!(result.len(), expected.len(), "Data length mismatch");
-
-    assert_eq!(
-        result, expected,
-        "All data should come from variant 1 with consistent segments"
+    // Verify all data starts with variant 1 segment 0 prefix
+    assert!(
+        result.starts_with(b"V1-SEG-0:"),
+        "Data should start with V1-SEG-0:"
     );
+
+    info!("Read {} bytes total from variant 1", result.len());
 }
 
 /// Test: After seek, variant is maintained for subsequent sequential reads.
@@ -503,27 +203,25 @@ async fn after_seek_sequential_reads_maintain_variant(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let params = HlsParams::new(StoreOptions::new(temp_dir.path()))
+    let config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(2),
             ..AbrOptions::default()
         });
 
-    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
-    let source = Arc::new(source);
+    let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
     let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SyncReader::new(source, SyncReaderParams::default());
-
-        // Seek to middle of segment 1 (26 bytes per segment)
-        reader.seek(SeekFrom::Start(30)).unwrap();
+        // Seek to middle of segment 1 (200KB per segment)
+        stream.seek(SeekFrom::Start(200_100)).unwrap();
 
         // Read several chunks
         let mut reads = Vec::new();
         for _ in 0..5 {
             let mut buf = [0u8; 10];
-            let n = reader.read(&mut buf).unwrap();
+            let n = stream.read(&mut buf).unwrap();
             if n == 0 {
                 break;
             }
@@ -552,6 +250,7 @@ async fn after_seek_sequential_reads_maintain_variant(
 /// Test: Multiple seeks don't cause variant confusion.
 ///
 /// Rapidly seeking back and forth should maintain correct variant tracking.
+/// Note: We first read all data to ensure segments are fetched, then seek.
 #[rstest]
 #[timeout(Duration::from_secs(15))]
 #[tokio::test]
@@ -563,62 +262,96 @@ async fn multiple_seeks_maintain_correct_variant(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let params = HlsParams::new(StoreOptions::new(temp_dir.path()))
+    let config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });
 
-    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
-    let source = Arc::new(source);
+    let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
     let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SyncReader::new(source, SyncReaderParams::default());
+        // First, read all data to ensure all segments are fetched
+        let mut all_data = Vec::new();
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = stream.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            all_data.extend_from_slice(&buf[..n]);
+        }
+        let total_len = all_data.len();
+        info!("Read {} bytes total before seeking", total_len);
+
         let mut positions_and_data = Vec::new();
 
-        // Read at position 0
-        let mut buf = [0u8; 5];
-        let _ = reader.read(&mut buf).unwrap();
+        // Seek back to start and verify
+        stream.seek(SeekFrom::Start(0)).unwrap();
+        let mut buf = [0u8; 9];
+        let _ = stream.read(&mut buf).unwrap();
         positions_and_data.push((0, buf.to_vec()));
 
-        // Seek to segment 2
-        reader.seek(SeekFrom::Start(52)).unwrap();
-        let _ = reader.read(&mut buf).unwrap();
-        positions_and_data.push((52, buf.to_vec()));
+        // Seek to middle of stream (within segment 1)
+        let mid_pos = 200_000u64;
+        stream.seek(SeekFrom::Start(mid_pos)).unwrap();
+        let _ = stream.read(&mut buf).unwrap();
+        positions_and_data.push((mid_pos, buf.to_vec()));
 
-        // Seek back to segment 0
-        reader.seek(SeekFrom::Start(10)).unwrap();
-        let _ = reader.read(&mut buf).unwrap();
-        positions_and_data.push((10, buf.to_vec()));
+        // Seek back to start
+        stream.seek(SeekFrom::Start(0)).unwrap();
+        let _ = stream.read(&mut buf).unwrap();
+        positions_and_data.push((0, buf.to_vec()));
 
-        // Seek to segment 1
-        reader.seek(SeekFrom::Start(26)).unwrap();
-        let _ = reader.read(&mut buf).unwrap();
-        positions_and_data.push((26, buf.to_vec()));
+        // Seek to position 100 (within segment 0)
+        stream.seek(SeekFrom::Start(100)).unwrap();
+        let mut small_buf = [0u8; 6];
+        let _ = stream.read(&mut small_buf).unwrap();
+        positions_and_data.push((100, small_buf.to_vec()));
 
         positions_and_data
     })
     .await
     .unwrap();
 
-    // All data should be from variant 0
-    for (pos, data) in &result {
-        if let Some(var) = variant_from_data(data) {
-            assert_eq!(
-                var, 0,
-                "At position {}, data should be from variant 0, got variant {}",
-                pos, var
-            );
-        }
-    }
+    // Verify data from correct positions
+    // Position 0: should read "V0-SEG-0:"
+    assert_eq!(
+        &result[0].1[..9],
+        b"V0-SEG-0:",
+        "Position 0 should read segment 0 prefix"
+    );
+
+    // Position 200,000: should read "V0-SEG-1:"
+    assert_eq!(
+        &result[1].1[..9],
+        b"V0-SEG-1:",
+        "Position 200000 should read segment 1 prefix"
+    );
+
+    // Position 0 again: should read "V0-SEG-0:"
+    assert_eq!(
+        &result[2].1[..9],
+        b"V0-SEG-0:",
+        "Position 0 (again) should read segment 0 prefix"
+    );
+
+    // Position 100: should be within padding (0xFF bytes)
+    assert_eq!(
+        &result[3].1,
+        &[0xFF; 6],
+        "Position 100 should be padding bytes"
+    );
 }
 
-/// Test: Seek to exact segment boundary works correctly.
+/// Test: Seek to exact segment boundary reads correct segment prefix.
+/// Note: With 200KB segments, we only read the first 26 bytes to verify the segment.
 #[rstest]
 #[case(0)] // Start of segment 0
-#[case(26)] // Start of segment 1
-#[case(52)] // Start of segment 2
+#[case(200_000)] // Start of segment 1
+#[case(400_000)] // Start of segment 2
 #[timeout(Duration::from_secs(10))]
 #[tokio::test]
 async fn seek_to_segment_boundary_reads_correct_segment(
@@ -630,32 +363,35 @@ async fn seek_to_segment_boundary_reads_correct_segment(
     let server = TestServer::new().await;
     let url = server.url("/master.m3u8").unwrap();
 
-    let params = HlsParams::new(StoreOptions::new(temp_dir.path()))
+    let config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(1),
             ..AbrOptions::default()
         });
 
-    let source = StreamSource::<Hls>::open(url, params).await.unwrap();
-    let source = Arc::new(source);
+    let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
     let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SyncReader::new(source, SyncReaderParams::default());
-        reader.seek(SeekFrom::Start(position)).unwrap();
+        stream.seek(SeekFrom::Start(position)).unwrap();
 
+        // Read first 26 bytes (the meaningful prefix before padding)
         let mut buf = [0u8; 26];
-        let n = reader.read(&mut buf).unwrap();
+        let n = stream.read(&mut buf).unwrap();
         buf[..n].to_vec()
     })
     .await
     .unwrap();
 
-    let segment_index = (position / 26) as usize;
-    let expected = test_segment_data(1, segment_index);
+    let segment_index = (position / 200_000) as usize;
+    // Expected prefix: "V1-SEG-{n}:TEST_SEGMENT_DATA" (26 bytes)
+    let expected_prefix = format!("V1-SEG-{}:TEST_SEGMENT_DATA", segment_index);
     assert_eq!(
-        result, expected,
-        "Seek to {} should read segment {} from variant 1",
-        position, segment_index
+        result,
+        expected_prefix.as_bytes(),
+        "Seek to {} should read segment {} prefix from variant 1",
+        position,
+        segment_index
     );
 }

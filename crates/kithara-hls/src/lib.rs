@@ -11,19 +11,11 @@
 //! # Example
 //!
 //! ```ignore
-//! use kithara_stream::{StreamSource, SyncReader, SyncReaderParams};
-//! use kithara_hls::{Hls, HlsParams};
+//! use kithara_stream::Stream;
+//! use kithara_hls::{Hls, HlsConfig};
 //!
-//! // Async source with events
-//! let source = StreamSource::<Hls>::open(url, HlsParams::default()).await?;
-//! let events = source.events();  // Receiver<HlsEvent>
-//!
-//! // Sync reader for decoders (Read + Seek)
-//! let reader = SyncReader::<StreamSource<Hls>>::open(
-//!     url,
-//!     HlsParams::default(),
-//!     SyncReaderParams::default()
-//! ).await?;
+//! let config = HlsConfig::new(url);
+//! let stream = Stream::<Hls>::new(config).await?;
 //! ```
 
 // Public modules
@@ -45,19 +37,17 @@ pub mod playlist;
 // Private modules
 mod inner;
 mod parsing;
-mod source;
 
 // ============================================================================
 // Public API re-exports
 // ============================================================================
 
-// Re-export ABR types from kithara-abr
 pub use cache::EncryptionInfo;
 pub use error::{HlsError, HlsResult};
 pub use events::HlsEvent;
-pub use inner::{Hls, HlsConfig, HlsInner};
+pub use inner::{Hls, HlsInner};
 pub use kithara_abr::{
     AbrDecision, AbrMode, AbrOptions, AbrReason, ThroughputSample, Variant, VariantInfo,
 };
 pub use kithara_stream::ContainerFormat;
-pub use options::{HlsParams, KeyContext, KeyOptions, KeyProcessor};
+pub use options::{HlsConfig, KeyContext, KeyOptions, KeyProcessor};
