@@ -62,6 +62,14 @@ impl BackendAccess for MemBackend {
     fn len(&self) -> Option<u64> {
         self.len
     }
+
+    fn media_info(&self) -> Option<kithara_stream::MediaInfo> {
+        None
+    }
+
+    fn current_segment_range(&self) -> std::ops::Range<u64> {
+        0..self.len.unwrap_or(u64::MAX)
+    }
 }
 
 /// Backend without known length for testing SeekFrom::End error.
@@ -110,6 +118,14 @@ impl BackendAccess for UnknownLenBackend {
 
     fn len(&self) -> Option<u64> {
         None
+    }
+
+    fn media_info(&self) -> Option<kithara_stream::MediaInfo> {
+        None
+    }
+
+    fn current_segment_range(&self) -> std::ops::Range<u64> {
+        0..u64::MAX
     }
 }
 

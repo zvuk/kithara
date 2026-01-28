@@ -50,6 +50,16 @@ impl<B: BackendAccess> Reader<B> {
         self.backend.len().map(|l| l == 0).unwrap_or(true)
     }
 
+    /// Get media info if known.
+    pub fn media_info(&self) -> Option<crate::MediaInfo> {
+        self.backend.media_info()
+    }
+
+    /// Get current segment byte range.
+    pub fn current_segment_range(&self) -> std::ops::Range<u64> {
+        self.backend.current_segment_range()
+    }
+
     /// Request data from backend and wait for response.
     fn request_and_receive(&mut self, len: usize) -> std::io::Result<Option<Bytes>> {
         self.backend
@@ -79,6 +89,7 @@ impl<B: BackendAccess> Reader<B> {
 impl<B: BackendAccess> Read for Reader<B> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() || self.eof {
+            tracing::debug!(pos = self.pos, eof = self.eof, buf_empty = buf.is_empty(), "Reader.read early return");
             return Ok(0);
         }
 
@@ -92,10 +103,13 @@ impl<B: BackendAccess> Read for Reader<B> {
             return Ok(to_copy);
         }
 
+        tracing::debug!(pos = self.pos, buf_len = buf.len(), "Reader.read requesting data");
+
         // Buffer exhausted, request new data
         match self.request_and_receive(buf.len())? {
             Some(bytes) => {
                 if bytes.is_empty() {
+                    tracing::debug!(pos = self.pos, "Reader.read: empty bytes, setting eof");
                     self.eof = true;
                     return Ok(0);
                 }
@@ -116,6 +130,7 @@ impl<B: BackendAccess> Read for Reader<B> {
                 Ok(to_copy)
             }
             None => {
+                tracing::debug!(pos = self.pos, "Reader.read: None response, setting eof");
                 self.eof = true;
                 Ok(0)
             }

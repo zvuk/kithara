@@ -90,8 +90,13 @@ impl<T: StreamType> Stream<T> {
     }
 
     /// Get current media info if known.
-    pub fn media_info(&self) -> Option<&MediaInfo> {
-        self.media_info.as_ref()
+    ///
+    /// First checks locally stored info, then delegates to backend.
+    pub fn media_info(&self) -> Option<MediaInfo> {
+        if let Some(ref info) = self.media_info {
+            return Some(info.clone());
+        }
+        self.reader.media_info()
     }
 
     /// Set media info.
@@ -109,6 +114,11 @@ impl<T: StreamType> Stream<T> {
     /// Signal a format change.
     pub fn signal_format_change(&mut self, info: MediaInfo) {
         self.pending_format_change = Some(info);
+    }
+
+    /// Get current segment byte range.
+    pub fn current_segment_range(&self) -> std::ops::Range<u64> {
+        self.reader.current_segment_range()
     }
 }
 

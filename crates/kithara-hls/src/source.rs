@@ -339,6 +339,11 @@ impl HlsSource {
     async fn ensure_range(&mut self, range: Range<u64>) -> Result<(), HlsError> {
         loop {
             if self.eof_reached {
+                debug!(
+                    range_start = range.start,
+                    range_end = range.end,
+                    "ensure_range: eof already reached"
+                );
                 return Ok(());
             }
 
@@ -346,8 +351,17 @@ impl HlsSource {
                 return Ok(());
             }
 
+            debug!(
+                range_start = range.start,
+                range_end = range.end,
+                current_segment_index = self.current_segment_index,
+                total_bytes = self.segments.total_bytes(),
+                "ensure_range: fetching next segment"
+            );
+
             let is_eof = self.fetch_next_segment().await?;
             if is_eof {
+                debug!("ensure_range: EOF reached after fetch");
                 self.eof_reached = true;
                 return Ok(());
             }
@@ -416,30 +430,67 @@ impl Source for HlsSource {
     type Error = HlsError;
 
     async fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
+        debug!(
+            range_start = range.start,
+            range_end = range.end,
+            "wait_range called"
+        );
+
         self.ensure_range(range.clone())
             .await
             .map_err(StreamError::Source)?;
 
-        Ok(if self.segments.range_covered(&range) {
+        // Return Ready if ANY data is available at range.start.
+        // The caller will read what's available and request more.
+        // Only return Eof if we're past all loaded data AND stream is finished.
+        let has_segment = self.segments.find_at_offset(range.start).is_some();
+        let total = self.segments.total_bytes();
+
+        let outcome = if has_segment {
             WaitOutcome::Ready
-        } else {
+        } else if self.eof_reached && range.start >= total {
             WaitOutcome::Eof
-        })
+        } else {
+            WaitOutcome::Ready
+        };
+
+        debug!(
+            range_start = range.start,
+            ?outcome,
+            has_segment,
+            total,
+            eof_reached = self.eof_reached,
+            "wait_range result"
+        );
+
+        Ok(outcome)
     }
 
     async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, HlsError> {
         let range = offset..offset + buf.len() as u64;
+        debug!(offset, range_end = range.end, "read_at called");
+
         self.ensure_range(range).await.map_err(StreamError::Source)?;
 
         let entry = self.segments.find_at_offset(offset).cloned();
 
         let Some(entry) = entry else {
+            debug!(
+                offset,
+                total_bytes = self.segments.total_bytes(),
+                eof_reached = self.eof_reached,
+                "read_at: no entry found at offset, returning 0"
+            );
             return Ok(0);
         };
 
-        self.read_from_entry(&entry, offset, buf)
+        let bytes = self
+            .read_from_entry(&entry, offset, buf)
             .await
-            .map_err(StreamError::Source)
+            .map_err(StreamError::Source)?;
+
+        debug!(offset, bytes, "read_at complete");
+        Ok(bytes)
     }
 
     fn len(&self) -> Option<u64> {
@@ -452,5 +503,12 @@ impl Source for HlsSource {
     fn media_info(&self) -> Option<MediaInfo> {
         let last = self.segments.last()?;
         Some(MediaInfo::new(last.codec, last.container))
+    }
+
+    fn current_segment_range(&self) -> Range<u64> {
+        match self.segments.last() {
+            Some(entry) => entry.byte_offset..entry.end_offset(),
+            None => 0..0,
+        }
     }
 }
