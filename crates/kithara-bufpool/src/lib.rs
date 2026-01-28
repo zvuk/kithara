@@ -515,8 +515,18 @@ impl<const SHARDS: usize, T> AsMut<[T]> for PooledSliceOwned<SHARDS, T> {
 /// Standard byte buffer pool type for the entire workspace.
 ///
 /// Use this type everywhere instead of creating custom SharedPool aliases.
-/// Create once at application startup and pass through the entire chain.
 pub type BytePool = SharedPool<32, Vec<u8>>;
+
+// Global byte pool (32 shards, 1024 max buffers, 64KB trim capacity)
+static GLOBAL_BYTE_POOL: std::sync::OnceLock<BytePool> = std::sync::OnceLock::new();
+
+/// Get global byte buffer pool for the entire workspace.
+///
+/// Lazily initialized on first call. Use this instead of creating
+/// separate BytePool instances.
+pub fn byte_pool() -> &'static BytePool {
+    GLOBAL_BYTE_POOL.get_or_init(|| BytePool::new(1024, 64 * 1024))
+}
 
 /// Helper to create Arc-wrapped Pool for shared access.
 ///

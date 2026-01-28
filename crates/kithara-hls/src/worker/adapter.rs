@@ -469,8 +469,6 @@ impl Source for HlsSourceAdapter {
     }
 }
 
-/// HLS backend - alias for Backend.
-pub type HlsBackend = kithara_stream::Backend;
 
 #[cfg(test)]
 mod tests {

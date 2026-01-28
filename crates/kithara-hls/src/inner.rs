@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetStoreBuilder, BytePool, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, asset_root_for_url, byte_pool};
 use kithara_net::HttpClient;
 use kithara_stream::StreamType;
 use kithara_worker::Worker;
@@ -17,7 +17,7 @@ use crate::{
     fetch::FetchManager,
     options::HlsConfig,
     playlist::{PlaylistManager, variant_info_from_master},
-    worker::{HlsBackend, HlsSourceAdapter, HlsWorkerSource, VariantMetadata},
+    worker::{HlsSourceAdapter, HlsWorkerSource, VariantMetadata},
 };
 
 /// Marker type for HLS streaming.
@@ -25,7 +25,7 @@ pub struct Hls;
 
 impl StreamType for Hls {
     type Config = HlsConfig;
-    type Backend = HlsBackend;
+    type Backend = kithara_stream::Backend;
     type Error = HlsError;
 
     async fn create_backend(mut config: Self::Config) -> Result<Self::Backend, Self::Error> {
@@ -93,11 +93,8 @@ impl StreamType for Hls {
             Arc::clone(&playlist_manager),
         ));
 
-        // Use provided pool or create default (1024 buffers, 64KB trim)
-        let pool = config
-            .pool
-            .clone()
-            .unwrap_or_else(|| BytePool::new(1024, 64 * 1024));
+        // Use provided pool or global pool
+        let pool = config.pool.clone().unwrap_or_else(|| byte_pool().clone());
 
         // Create HlsWorkerSource
         let worker_source = HlsWorkerSource::new(
@@ -126,7 +123,7 @@ impl StreamType for Hls {
 
         // Create HlsSourceAdapter and backend
         let adapter = HlsSourceAdapter::new(chunk_rx, cmd_tx, assets, events_tx);
-        let backend = HlsBackend::new(adapter);
+        let backend = kithara_stream::Backend::new(adapter);
 
         Ok(backend)
     }

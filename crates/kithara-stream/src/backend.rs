@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use kanal::{Receiver, Sender};
+use kithara_bufpool::byte_pool;
 use kithara_storage::WaitOutcome;
 use parking_lot::Mutex;
 use tracing::{debug, trace, warn};
@@ -83,81 +84,93 @@ impl Backend {
     ) {
         debug!("Backend worker started");
 
+        let pool = byte_pool();
+
         loop {
-            let cmd = match cmd_rx.as_async().recv().await {
-                Ok(cmd) => cmd,
-                Err(_) => {
-                    debug!("Backend cmd channel closed");
-                    break;
-                }
-            };
+            tokio::select! {
+                biased;
 
-            match cmd {
-                Command::Read { offset, len: read_len } => {
-                    trace!(offset, read_len, "Backend read request");
-
-                    let range = offset..offset + read_len as u64;
-
-                    // Wait for data to be available
-                    let wait_result = source.wait_range(range.clone()).await;
-                    let outcome = match wait_result {
-                        Ok(outcome) => outcome,
-                        Err(e) => {
-                            warn!(?e, "Backend wait_range error");
-                            if data_tx.as_async().send(Response::Error(e.to_string())).await.is_err() {
-                                debug!("Backend data channel closed");
-                                break;
-                            }
-                            continue;
+                cmd = cmd_rx.as_async().recv() => {
+                    let cmd = match cmd {
+                        Ok(cmd) => cmd,
+                        Err(_) => {
+                            debug!("Backend cmd channel closed");
+                            break;
                         }
                     };
 
-                    // Handle EOF
-                    if matches!(outcome, WaitOutcome::Eof) {
-                        if data_tx.as_async().send(Response::Eof).await.is_err() {
-                            debug!("Backend data channel closed");
+                    match cmd {
+                        Command::Read { offset, len: read_len } => {
+                            trace!(offset, read_len, "Backend read request");
+
+                            let range = offset..offset + read_len as u64;
+
+                            // Wait for data to be available
+                            let wait_result = source.wait_range(range.clone()).await;
+                            let outcome = match wait_result {
+                                Ok(outcome) => outcome,
+                                Err(e) => {
+                                    warn!(?e, "Backend wait_range error");
+                                    if data_tx.as_async().send(Response::Error(e.to_string())).await.is_err() {
+                                        debug!("Backend data channel closed");
+                                        break;
+                                    }
+                                    continue;
+                                }
+                            };
+
+                            // Handle EOF
+                            if matches!(outcome, WaitOutcome::Eof) {
+                                if data_tx.as_async().send(Response::Eof).await.is_err() {
+                                    debug!("Backend data channel closed");
+                                    break;
+                                }
+                                continue;
+                            }
+
+                            // Get buffer from pool and read data
+                            let mut buf = pool.get();
+                            buf.resize(read_len, 0);
+
+                            match source.read_at(offset, &mut buf).await {
+                                Ok(0) => {
+                                    if data_tx.as_async().send(Response::Eof).await.is_err() {
+                                        debug!("Backend data channel closed");
+                                        break;
+                                    }
+                                }
+                                Ok(n) => {
+                                    // Update len if we now know it
+                                    if source.len().is_some() {
+                                        *len.lock() = source.len();
+                                    }
+                                    // Copy to Bytes and return pooled buffer
+                                    let bytes = Bytes::copy_from_slice(&buf[..n]);
+                                    drop(buf); // Return to pool before sending
+                                    if data_tx.as_async().send(Response::Data(bytes)).await.is_err() {
+                                        debug!("Backend data channel closed");
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!(?e, "Backend read_at error");
+                                    if data_tx.as_async().send(Response::Error(e.to_string())).await.is_err() {
+                                        debug!("Backend data channel closed");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        Command::Seek { offset } => {
+                            trace!(offset, "Backend seek (no-op, Reader handles position)");
+                            // Seek is handled by Reader updating its position.
+                            // Backend just serves read requests at specified offsets.
+                        }
+                        Command::Stop => {
+                            debug!("Backend stop");
                             break;
                         }
-                        continue;
                     }
-
-                    // Read the data
-                    let mut buf = vec![0u8; read_len];
-                    match source.read_at(offset, &mut buf).await {
-                        Ok(0) => {
-                            if data_tx.as_async().send(Response::Eof).await.is_err() {
-                                debug!("Backend data channel closed");
-                                break;
-                            }
-                        }
-                        Ok(n) => {
-                            buf.truncate(n);
-                            // Update len if we now know it
-                            if source.len().is_some() {
-                                *len.lock() = source.len();
-                            }
-                            if data_tx.as_async().send(Response::Data(Bytes::from(buf))).await.is_err() {
-                                debug!("Backend data channel closed");
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            warn!(?e, "Backend read_at error");
-                            if data_tx.as_async().send(Response::Error(e.to_string())).await.is_err() {
-                                debug!("Backend data channel closed");
-                                break;
-                            }
-                        }
-                    }
-                }
-                Command::Seek { offset } => {
-                    trace!(offset, "Backend seek (no-op, Reader handles position)");
-                    // Seek is handled by Reader updating its position.
-                    // Backend just serves read requests at specified offsets.
-                }
-                Command::Stop => {
-                    debug!("Backend stop");
-                    break;
                 }
             }
         }

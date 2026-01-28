@@ -5,7 +5,7 @@ use std::{hash::Hash, path::PathBuf, sync::Arc};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
-use kithara_bufpool::BytePool;
+use kithara_bufpool::{BytePool, byte_pool};
 
 use crate::{
     base::DiskAssetStore,
@@ -191,8 +191,8 @@ where
             .process_fn
             .expect("process_fn is required for AssetStoreBuilder");
 
-        // Use provided pool or create default (64KB chunks, 32 shards, 1024 max buffers)
-        let pool = self.pool.unwrap_or_else(|| BytePool::new(1024, 64 * 1024));
+        // Use provided pool or global pool
+        let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
         // Build decorator chain: Disk -> Evict -> Processing -> Cached -> Lease
         let disk = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));

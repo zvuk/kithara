@@ -15,7 +15,7 @@ use crate::{
     error::SourceError,
     events::FileEvent,
     options::FileConfig,
-    session::{FileBackend, FileSource, FileStreamState, Progress},
+    session::{FileSource, FileStreamState, Progress},
 };
 
 /// Marker type for file streaming.
@@ -23,7 +23,7 @@ pub struct File;
 
 impl StreamType for File {
     type Config = FileConfig;
-    type Backend = FileBackend;
+    type Backend = kithara_stream::Backend;
     type Error = SourceError;
 
     async fn create_backend(config: Self::Config) -> Result<Self::Backend, Self::Error> {
@@ -66,7 +66,7 @@ impl StreamType for File {
             state.events().clone(),
             state.len(),
         );
-        let backend = FileBackend::new(source);
+        let backend = kithara_stream::Backend::new(source);
 
         Ok(backend)
     }
