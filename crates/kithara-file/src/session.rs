@@ -196,4 +196,3 @@ impl kithara_stream::Source for FileSource {
         self.len
     }
 }
-

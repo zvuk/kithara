@@ -39,7 +39,8 @@ fn read_pins_file(root: &std::path::Path) -> Option<Vec<String>> {
         return None;
     }
     let bytes = std::fs::read(&path).expect("pins index file should be readable if exists");
-    let file: PinsIndexFile = bincode::deserialize(&bytes).expect("pins index must be valid bincode if exists");
+    let file: PinsIndexFile =
+        bincode::deserialize(&bytes).expect("pins index must be valid bincode if exists");
     Some(file.pinned)
 }
 

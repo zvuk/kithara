@@ -39,12 +39,11 @@ mod types;
 
 // Public API exports
 pub use decoder::InnerDecoder;
+// Re-export types from kithara-stream for convenience
+pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 pub use pipeline::{DecodeOptions, Decoder, DecoderConfig};
 pub use reader::SourceReader;
 pub use symphonia::{CachedCodecInfo, SymphoniaDecoder};
 #[cfg(feature = "rodio")]
 pub use sync::AudioSyncReader;
 pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};
-
-// Re-export types from kithara-stream for convenience
-pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};

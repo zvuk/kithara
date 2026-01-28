@@ -1,8 +1,10 @@
 #![forbid(unsafe_code)]
 
-use std::pin::Pin;
-use std::sync::Arc;
-use std::task::{Context, Poll};
+use std::{
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+};
 
 use futures::{Stream, StreamExt};
 use kithara_net::{ByteStream, NetError};

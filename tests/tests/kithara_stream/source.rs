@@ -46,7 +46,11 @@ impl MemBackend {
             }
         });
 
-        Self { cmd_tx, data_rx, len }
+        Self {
+            cmd_tx,
+            data_rx,
+            len,
+        }
     }
 }
 
@@ -264,11 +268,7 @@ fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
 #[case(-26, b"ABCDE")]
 #[timeout(Duration::from_secs(3))]
 #[test]
-fn seek_end_reads_correct_bytes(
-    test_data: Vec<u8>,
-    #[case] offset: i64,
-    #[case] expected: &[u8],
-) {
+fn seek_end_reads_correct_bytes(test_data: Vec<u8>, #[case] offset: i64, #[case] expected: &[u8]) {
     let data_len = test_data.len();
     let backend = MemBackend::new(test_data);
     let mut reader = Reader::new(backend);

@@ -25,11 +25,23 @@ use url::Url;
 
 use crate::{
     HlsError,
-    cache::Loader,
     events::HlsEvent,
-    fetch::{DefaultFetchManager, StreamingAssetResource},
-    worker::VariantMetadata,
+    fetch::{DefaultFetchManager, Loader, StreamingAssetResource},
 };
+
+/// Metadata for an HLS variant.
+#[derive(Debug, Clone)]
+pub struct VariantMetadata {
+    /// Variant index in master playlist.
+    pub index: usize,
+    /// Audio codec.
+    pub codec: Option<AudioCodec>,
+    /// Container format (fMP4, TS, etc.).
+    #[allow(dead_code)]
+    pub container: Option<ContainerFormat>,
+    /// Advertised bitrate in bits per second.
+    pub bitrate: Option<u64>,
+}
 
 /// Entry tracking a loaded segment in the virtual stream.
 #[derive(Debug, Clone)]
@@ -67,7 +79,9 @@ struct SegmentIndex {
 
 impl SegmentIndex {
     fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     fn push(&mut self, entry: SegmentEntry) {
@@ -118,8 +132,7 @@ impl SegmentIndex {
 /// Fetches segments on demand and provides random-access reading.
 /// Implements `kithara_stream::Source` directly.
 pub struct HlsSource {
-    loader: Arc<dyn Loader>,
-    fetch_manager: Arc<DefaultFetchManager>,
+    fetch: Arc<DefaultFetchManager>,
     variant_metadata: Vec<VariantMetadata>,
     current_segment_index: usize,
     sent_init_for_variant: HashSet<usize>,
@@ -134,8 +147,7 @@ pub struct HlsSource {
 impl HlsSource {
     /// Create new HLS source.
     pub fn new(
-        loader: Arc<dyn Loader>,
-        fetch_manager: Arc<DefaultFetchManager>,
+        fetch: Arc<DefaultFetchManager>,
         variant_metadata: Vec<VariantMetadata>,
         initial_variant: usize,
         abr_options: Option<AbrOptions>,
@@ -161,8 +173,7 @@ impl HlsSource {
         let abr = AbrController::new(abr_opts);
 
         Self {
-            loader,
-            fetch_manager,
+            fetch,
             variant_metadata,
             current_segment_index: 0,
             sent_init_for_variant: HashSet::new(),
@@ -177,7 +188,7 @@ impl HlsSource {
 
     /// Get asset store.
     pub fn assets(&self) -> AssetStore {
-        self.fetch_manager.assets().clone()
+        self.fetch.assets().clone()
     }
 
     /// Subscribe to events.
@@ -207,7 +218,7 @@ impl HlsSource {
         // Check if variant changed (for init segment handling and events)
         let is_variant_switch = !self.sent_init_for_variant.contains(&current_variant);
 
-        let num_segments = self.loader.num_segments(current_variant).await?;
+        let num_segments = self.fetch.num_segments(current_variant).await?;
 
         if self.current_segment_index >= num_segments {
             debug!("reached end of playlist");
@@ -226,7 +237,7 @@ impl HlsSource {
         let fetch_start = Instant::now();
 
         let meta = self
-            .loader
+            .fetch
             .load_segment(current_variant, self.current_segment_index)
             .await?;
 
@@ -253,7 +264,7 @@ impl HlsSource {
         }
 
         // Get init segment info
-        let (init_url, init_len) = match self.loader.load_segment(current_variant, usize::MAX).await
+        let (init_url, init_len) = match self.fetch.load_segment(current_variant, usize::MAX).await
         {
             Ok(init_meta) => {
                 if is_variant_switch {
@@ -470,7 +481,9 @@ impl Source for HlsSource {
         let range = offset..offset + buf.len() as u64;
         debug!(offset, range_end = range.end, "read_at called");
 
-        self.ensure_range(range).await.map_err(StreamError::Source)?;
+        self.ensure_range(range)
+            .await
+            .map_err(StreamError::Source)?;
 
         let entry = self.segments.find_at_offset(offset).cloned();
 

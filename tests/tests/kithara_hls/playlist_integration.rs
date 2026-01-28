@@ -1,13 +1,9 @@
 #![forbid(unsafe_code)]
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use fixture::*;
-use kithara_hls::{
-    HlsResult,
-    fetch::FetchManager,
-    playlist::{PlaylistManager, VariantId},
-};
+use kithara_hls::{HlsResult, fetch::FetchManager, playlist::VariantId};
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
 
@@ -54,10 +50,9 @@ async fn fetch_master_playlist_from_network(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = Arc::new(FetchManager::new(assets, net, CancellationToken::new()));
-    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), None);
+    let fetch_manager = FetchManager::new(assets, net, CancellationToken::new());
     let master_url = server.url("/master.m3u8")?;
-    let master_playlist = playlist_manager.master_playlist(&master_url).await?;
+    let master_playlist = fetch_manager.master_playlist(&master_url).await?;
 
     assert_eq!(master_playlist.variants.len(), 3);
     Ok(())
@@ -76,11 +71,10 @@ async fn fetch_media_playlist_from_network(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = Arc::new(FetchManager::new(assets, net, CancellationToken::new()));
-    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), None);
+    let fetch_manager = FetchManager::new(assets, net, CancellationToken::new());
     let media_url = server.url("/video/480p/playlist.m3u8")?;
 
-    let media_playlist = playlist_manager
+    let media_playlist = fetch_manager
         .media_playlist(&media_url, variant_id_0)
         .await?;
 
@@ -102,11 +96,11 @@ async fn resolve_url_with_base_override(
     let net = net_fixture;
 
     let base_url = server.url("/custom/base/")?;
-    let fetch_manager = Arc::new(FetchManager::new(assets, net, CancellationToken::new()));
-    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), Some(base_url.clone()));
+    let fetch_manager = FetchManager::new(assets, net, CancellationToken::new())
+        .with_base_url(Some(base_url.clone()));
 
     let relative_url = "video/480p/playlist.m3u8";
-    let resolved = playlist_manager.resolve_url(&base_url, relative_url)?;
+    let resolved = fetch_manager.resolve_url(&base_url, relative_url)?;
 
     assert!(
         resolved
@@ -131,19 +125,18 @@ async fn fetch_media_playlist_for_different_variants(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = Arc::new(FetchManager::new(assets.clone(), net.clone(), CancellationToken::new()));
-    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), None);
+    let fetch_manager = FetchManager::new(assets, net, CancellationToken::new());
 
     // Test variant 0
     let media_url_0 = server.url("/video/480p/playlist.m3u8")?;
-    let media_playlist_0 = playlist_manager
+    let media_playlist_0 = fetch_manager
         .media_playlist(&media_url_0, variant_id_0)
         .await?;
     assert_eq!(media_playlist_0.segments.len(), 3);
 
     // Test variant 1 (different playlist)
     let media_url_1 = server.url("/video/720p/playlist.m3u8")?;
-    let media_playlist_1 = playlist_manager
+    let media_playlist_1 = fetch_manager
         .media_playlist(&media_url_1, variant_id_1)
         .await?;
     assert_eq!(media_playlist_1.segments.len(), 3);
@@ -154,7 +147,7 @@ async fn fetch_media_playlist_for_different_variants(
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn playlist_manager_caching_behavior(
+async fn fetch_manager_caching_behavior(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
     net_fixture: kithara_net::HttpClient,
@@ -163,16 +156,15 @@ async fn playlist_manager_caching_behavior(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = Arc::new(FetchManager::new(assets, net, CancellationToken::new()));
-    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), None);
+    let fetch_manager = FetchManager::new(assets, net, CancellationToken::new());
     let master_url = server.url("/master.m3u8")?;
 
     // First fetch
-    let master1 = playlist_manager.master_playlist(&master_url).await?;
+    let master1 = fetch_manager.master_playlist(&master_url).await?;
     assert_eq!(master1.variants.len(), 3);
 
-    // Second fetch (should potentially use cache)
-    let master2 = playlist_manager.master_playlist(&master_url).await?;
+    // Second fetch (should use cache)
+    let master2 = fetch_manager.master_playlist(&master_url).await?;
     assert_eq!(master2.variants.len(), 3);
 
     // Variants should be the same
@@ -184,22 +176,21 @@ async fn playlist_manager_caching_behavior(
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn playlist_manager_error_handling_invalid_url(
+async fn fetch_manager_error_handling_invalid_url(
     assets_fixture: TestAssets,
     net_fixture: kithara_net::HttpClient,
 ) -> HlsResult<()> {
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = Arc::new(FetchManager::new(assets, net, CancellationToken::new()));
-    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), None);
+    let fetch_manager = FetchManager::new(assets, net, CancellationToken::new());
 
     // Try to fetch from invalid URL
     let invalid_url =
         url::Url::parse("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")
             .map_err(|e| kithara_hls::HlsError::InvalidUrl(e.to_string()))?;
 
-    let result = playlist_manager.master_playlist(&invalid_url).await;
+    let result = fetch_manager.master_playlist(&invalid_url).await;
 
     // Should fail with network error (or succeed if somehow connects)
     assert!(result.is_ok() || result.is_err());
@@ -220,8 +211,8 @@ async fn resolve_multiple_relative_urls(
     let net = net_fixture;
 
     let base_url = server.url("/base/")?;
-    let fetch_manager = Arc::new(FetchManager::new(assets, net, CancellationToken::new()));
-    let playlist_manager = PlaylistManager::new(fetch_manager.clone(), Some(base_url.clone()));
+    let fetch_manager = FetchManager::new(assets, net, CancellationToken::new())
+        .with_base_url(Some(base_url.clone()));
 
     // Test different relative URLs
     let test_cases = vec![
@@ -232,7 +223,7 @@ async fn resolve_multiple_relative_urls(
     ];
 
     for (relative, expected_suffix) in test_cases {
-        let resolved = playlist_manager.resolve_url(&base_url, relative)?;
+        let resolved = fetch_manager.resolve_url(&base_url, relative)?;
         assert!(
             resolved.as_str().ends_with(expected_suffix),
             "Expected {} to end with {}, got {}",
@@ -248,7 +239,7 @@ async fn resolve_multiple_relative_urls(
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
-async fn playlist_manager_with_different_base_urls(
+async fn fetch_manager_with_different_base_urls(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
     net_fixture: kithara_net::HttpClient,
@@ -258,24 +249,19 @@ async fn playlist_manager_with_different_base_urls(
     let net = net_fixture;
 
     // Test with no base URL
-    let fetch_manager_no_base = Arc::new(FetchManager::new(assets.clone(), net.clone(), CancellationToken::new()));
-    let playlist_manager_no_base = PlaylistManager::new(fetch_manager_no_base.clone(), None);
+    let fetch_manager_no_base =
+        FetchManager::new(assets.clone(), net.clone(), CancellationToken::new());
     let master_url = server.url("/master.m3u8")?;
-    let master_no_base = playlist_manager_no_base
-        .master_playlist(&master_url)
-        .await?;
+    let master_no_base = fetch_manager_no_base.master_playlist(&master_url).await?;
     assert_eq!(master_no_base.variants.len(), 3);
 
     // Test with base URL
     let base_url = server.url("/custom/base/")?;
-    let fetch_manager_with_base = Arc::new(FetchManager::new(assets, net, CancellationToken::new()));
-    let playlist_manager_with_base =
-        PlaylistManager::new(fetch_manager_with_base.clone(), Some(base_url));
+    let fetch_manager_with_base =
+        FetchManager::new(assets, net, CancellationToken::new()).with_base_url(Some(base_url));
 
     // Fetch should still work with base URL
-    let master_with_base = playlist_manager_with_base
-        .master_playlist(&master_url)
-        .await?;
+    let master_with_base = fetch_manager_with_base.master_playlist(&master_url).await?;
     assert_eq!(master_with_base.variants.len(), 3);
 
     Ok(())

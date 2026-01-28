@@ -89,7 +89,11 @@ async fn key_manager_with_different_processors(
         Ok(bytes::Bytes::from(upper))
     });
 
-    let fetch_manager = Arc::new(FetchManager::new(assets.clone(), net.clone(), CancellationToken::new()));
+    let fetch_manager = Arc::new(FetchManager::new(
+        assets.clone(),
+        net.clone(),
+        CancellationToken::new(),
+    ));
     let key_manager = KeyManager::new(fetch_manager.clone(), Some(uppercase_processor), None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -206,7 +210,11 @@ async fn aes128_key_decrypts_ciphertext(
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let fetch_manager = Arc::new(FetchManager::new(assets, net.clone(), CancellationToken::new()));
+    let fetch_manager = Arc::new(FetchManager::new(
+        assets,
+        net.clone(),
+        CancellationToken::new(),
+    ));
     let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
 
     let key_url = server.url("/aes/key.bin")?;

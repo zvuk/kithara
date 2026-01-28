@@ -12,7 +12,7 @@ use std::{
     io::{Read, Seek, SeekFrom},
 };
 
-use crate::{backend::BackendAccess, reader::Reader, MediaInfo};
+use crate::{MediaInfo, backend::BackendAccess, reader::Reader};
 
 /// Defines a stream type and how to create it.
 ///

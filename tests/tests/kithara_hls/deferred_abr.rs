@@ -341,8 +341,7 @@ async fn multiple_seeks_maintain_correct_variant(
 
     // Position 100: should be within padding (0xFF bytes)
     assert_eq!(
-        &result[3].1,
-        &[0xFF; 6],
+        &result[3].1, &[0xFF; 6],
         "Position 100 should be padding bytes"
     );
 }

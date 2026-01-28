@@ -124,8 +124,12 @@ impl SymphoniaDecoder {
             let seekable_flag = adapter.seekable_flag();
 
             let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
-            let reader =
-                create_format_reader_direct(mss, media_info.container, media_info.codec, format_opts)?;
+            let reader = create_format_reader_direct(
+                mss,
+                media_info.container,
+                media_info.codec,
+                format_opts,
+            )?;
 
             // Probe complete - enable seeking for playback
             seekable_flag.store(true, std::sync::atomic::Ordering::Release);

@@ -99,7 +99,10 @@ fn spawn_download_writer(
 
         while let Some(result) = writer.next().await {
             match result {
-                Ok(WriterItem::ChunkWritten { offset, len: chunk_len }) => {
+                Ok(WriterItem::ChunkWritten {
+                    offset,
+                    len: chunk_len,
+                }) => {
                     let download_offset = offset + chunk_len as u64;
                     progress.set_download_pos(download_offset);
                     let percent = len.map(|total| {

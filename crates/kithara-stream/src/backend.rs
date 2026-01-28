@@ -14,8 +14,7 @@ use kithara_storage::WaitOutcome;
 use parking_lot::Mutex;
 use tracing::{debug, trace, warn};
 
-use crate::media::MediaInfo;
-use crate::source::Source;
+use crate::{media::MediaInfo, source::Source};
 
 /// Command sent from Reader to Backend.
 #[derive(Debug, Clone)]

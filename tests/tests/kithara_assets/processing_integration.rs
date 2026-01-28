@@ -34,14 +34,16 @@ struct TestContext {
 
 /// Create a simple XOR chunk transform callback (no allocation).
 fn create_xor_chunk_callback(call_count: Arc<AtomicUsize>) -> ProcessChunkFn<TestContext> {
-    Arc::new(move |input: &[u8], output: &mut [u8], ctx: &TestContext, _is_last: bool| {
-        call_count.fetch_add(1, Ordering::SeqCst);
-        // XOR each byte with the key
-        for (i, &b) in input.iter().enumerate() {
-            output[i] = b ^ ctx.xor_key;
-        }
-        Ok(input.len())
-    })
+    Arc::new(
+        move |input: &[u8], output: &mut [u8], ctx: &TestContext, _is_last: bool| {
+            call_count.fetch_add(1, Ordering::SeqCst);
+            // XOR each byte with the key
+            for (i, &b) in input.iter().enumerate() {
+                output[i] = b ^ ctx.xor_key;
+            }
+            Ok(input.len())
+        },
+    )
 }
 
 #[rstest]

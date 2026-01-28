@@ -124,7 +124,6 @@ where
             cancel: self.cancel.clone(),
         })
     }
-
 }
 
 /// Resource wrapper that combines lease guard with byte recording on commit.

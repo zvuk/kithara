@@ -10,14 +10,12 @@ use kithara_stream::StreamType;
 use tokio::sync::broadcast;
 
 use crate::{
-    cache::FetchLoader,
     error::HlsError,
     events::HlsEvent,
     fetch::FetchManager,
     options::HlsConfig,
-    playlist::{PlaylistManager, variant_info_from_master},
-    source::HlsSource,
-    worker::VariantMetadata,
+    playlist::variant_info_from_master,
+    source::{HlsSource, VariantMetadata},
 };
 
 /// Marker type for HLS streaming.
@@ -41,17 +39,15 @@ impl StreamType for Hls {
             .evict_config(config.store.to_evict_config())
             .build();
 
-        // Build FetchManager
-        let fetch_manager = Arc::new(FetchManager::new(base_assets.clone(), net, cancel.clone()));
-
-        // Build PlaylistManager
-        let playlist_manager = Arc::new(PlaylistManager::new(
-            Arc::clone(&fetch_manager),
-            config.base_url.clone(),
-        ));
+        // Build FetchManager (unified: fetch + playlist cache + Loader)
+        let fetch_manager = Arc::new(
+            FetchManager::new(base_assets.clone(), net, cancel.clone())
+                .with_master_url(config.url.clone())
+                .with_base_url(config.base_url.clone()),
+        );
 
         // Load master playlist
-        let master = playlist_manager.master_playlist(&config.url).await?;
+        let master = fetch_manager.master_playlist(&config.url).await?;
 
         // Determine initial variant
         let initial_variant = config.abr.initial_variant();
@@ -86,16 +82,8 @@ impl StreamType for Hls {
             })
             .collect();
 
-        // Create FetchLoader
-        let fetch_loader = Arc::new(FetchLoader::new(
-            config.url.clone(),
-            Arc::clone(&fetch_manager),
-            Arc::clone(&playlist_manager),
-        ));
-
         // Create HlsSource (implements Source directly)
         let source = HlsSource::new(
-            fetch_loader,
             Arc::clone(&fetch_manager),
             variant_metadata,
             initial_variant,

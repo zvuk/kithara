@@ -68,7 +68,6 @@ impl<T: StreamType> SharedStream<T> {
     fn current_segment_range(&self) -> std::ops::Range<u64> {
         self.inner.lock().current_segment_range()
     }
-
 }
 
 impl<T: StreamType> Clone for SharedStream<T> {
@@ -855,9 +854,7 @@ where
         let _ = stream.read(&mut probe_buf);
 
         // Seek back to start
-        stream
-            .seek(SeekFrom::Start(0))
-            .map_err(DecodeError::Io)?;
+        stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
 
         // Get initial MediaInfo
         let initial_media_info = stream.media_info();

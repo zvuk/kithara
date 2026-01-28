@@ -68,16 +68,12 @@ impl<B: BackendAccess> Reader<B> {
                 offset: self.pos,
                 len,
             })
-            .map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "backend stopped")
-            })?;
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "backend stopped"))?;
 
         match self.backend.response_rx().recv() {
             Ok(Response::Data(bytes)) => Ok(Some(bytes)),
             Ok(Response::Eof) => Ok(None),
-            Ok(Response::Error(msg)) => {
-                Err(std::io::Error::other(msg))
-            }
+            Ok(Response::Error(msg)) => Err(std::io::Error::other(msg)),
             Err(_) => Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "backend channel closed",
@@ -89,7 +85,12 @@ impl<B: BackendAccess> Reader<B> {
 impl<B: BackendAccess> Read for Reader<B> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() || self.eof {
-            tracing::debug!(pos = self.pos, eof = self.eof, buf_empty = buf.is_empty(), "Reader.read early return");
+            tracing::debug!(
+                pos = self.pos,
+                eof = self.eof,
+                buf_empty = buf.is_empty(),
+                "Reader.read early return"
+            );
             return Ok(0);
         }
 
@@ -103,7 +104,11 @@ impl<B: BackendAccess> Read for Reader<B> {
             return Ok(to_copy);
         }
 
-        tracing::debug!(pos = self.pos, buf_len = buf.len(), "Reader.read requesting data");
+        tracing::debug!(
+            pos = self.pos,
+            buf_len = buf.len(),
+            "Reader.read requesting data"
+        );
 
         // Buffer exhausted, request new data
         match self.request_and_receive(buf.len())? {
@@ -176,9 +181,7 @@ impl<B: BackendAccess> Seek for Reader<B> {
         self.backend
             .command_tx()
             .send(Command::Seek { offset: new_pos })
-            .map_err(|_| {
-                std::io::Error::new(std::io::ErrorKind::BrokenPipe, "backend stopped")
-            })?;
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "backend stopped"))?;
 
         // Clear buffer and reset state
         self.buffer = Bytes::new();
