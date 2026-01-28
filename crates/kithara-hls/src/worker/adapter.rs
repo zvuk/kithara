@@ -1,10 +1,11 @@
 use std::{ops::Range, sync::Arc};
 
 use async_trait::async_trait;
-use kanal::{AsyncReceiver, AsyncSender};
+use bytes::Bytes;
+use kanal::{AsyncReceiver, AsyncSender, Receiver, Sender};
 use kithara_assets::{AssetStore, Assets, ResourceKey};
 use kithara_storage::{StreamingResourceExt, WaitOutcome};
-use kithara_stream::{ContainerFormat, MediaInfo, Source, StreamResult, SyncSource, WaitOutcome as StreamWaitOutcome};
+use kithara_stream::{BackendCommand, BackendResponse, ContainerFormat, MediaInfo, RandomAccessBackend, Source, StreamResult};
 use kithara_worker::Fetch;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
@@ -166,9 +167,6 @@ pub struct HlsSourceAdapter {
 
     /// EOF flag.
     eof_reached: Arc<Mutex<bool>>,
-
-    /// Tokio runtime handle for sync operations.
-    runtime: tokio::runtime::Handle,
 }
 
 impl HlsSourceAdapter {
@@ -187,7 +185,6 @@ impl HlsSourceAdapter {
             current_epoch: Arc::new(Mutex::new(0)),
             events_tx,
             eof_reached: Arc::new(Mutex::new(false)),
-            runtime: tokio::runtime::Handle::current(),
         }
     }
 
@@ -473,49 +470,129 @@ impl Source for HlsSourceAdapter {
     }
 }
 
-impl SyncSource for HlsSourceAdapter {
-    fn wait_range(&self, range: std::ops::Range<u64>) -> std::io::Result<StreamWaitOutcome> {
-        self.runtime
-            .block_on(self.ensure_segments_for_range(range.clone()))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+/// HLS backend implementing RandomAccessBackend.
+///
+/// Spawns an async worker that reads from HlsSourceAdapter and sends data via channel.
+pub struct HlsBackend {
+    cmd_tx: Sender<BackendCommand>,
+    data_rx: Receiver<BackendResponse>,
+    len: Arc<Mutex<Option<u64>>>,
+}
 
-        let segments = self.segments.lock();
-        let covered = segments.range_covered(&range);
+impl HlsBackend {
+    /// Create new HLS backend.
+    ///
+    /// Takes ownership of the adapter and spawns async worker.
+    pub fn new(adapter: Arc<HlsSourceAdapter>) -> Self {
+        let (cmd_tx, cmd_rx) = kanal::bounded(4);
+        let (data_tx, data_rx) = kanal::bounded(4);
+        let len = Arc::new(Mutex::new(None));
 
-        Ok(if covered {
-            StreamWaitOutcome::Ready
-        } else {
-            StreamWaitOutcome::Eof
-        })
+        // Spawn async worker
+        tokio::spawn(Self::run_worker(adapter, len.clone(), cmd_rx, data_tx));
+
+        Self { cmd_tx, data_rx, len }
     }
 
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
-        let range = offset..offset + buf.len() as u64;
-        self.runtime
-            .block_on(self.ensure_segments_for_range(range))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    async fn run_worker(
+        adapter: Arc<HlsSourceAdapter>,
+        len: Arc<Mutex<Option<u64>>>,
+        cmd_rx: Receiver<BackendCommand>,
+        data_tx: Sender<BackendResponse>,
+    ) {
+        debug!("HlsBackend worker started");
+
+        loop {
+            let cmd = match cmd_rx.as_async().recv().await {
+                Ok(cmd) => cmd,
+                Err(_) => {
+                    debug!("HlsBackend cmd channel closed");
+                    break;
+                }
+            };
+
+            match cmd {
+                BackendCommand::Read { offset, len: read_len } => {
+                    let response = Self::handle_read(&adapter, offset, read_len).await;
+
+                    // Update length if known
+                    if let Some(l) = Source::len(&*adapter) {
+                        *len.lock() = Some(l);
+                    }
+
+                    if data_tx.as_async().send(response).await.is_err() {
+                        debug!("HlsBackend data channel closed");
+                        break;
+                    }
+                }
+                BackendCommand::Seek { offset } => {
+                    trace!(offset, "HlsBackend seek command");
+                    // HLS seek is more complex - for now just acknowledge
+                }
+                BackendCommand::Stop => {
+                    debug!("HlsBackend stop command");
+                    break;
+                }
+            }
+        }
+
+        debug!("HlsBackend worker stopped");
+    }
+
+    async fn handle_read(
+        adapter: &HlsSourceAdapter,
+        offset: u64,
+        len: usize,
+    ) -> BackendResponse {
+        trace!(offset, len, "HlsBackend read request");
+
+        // Wait for range to be available
+        let range = offset..offset.saturating_add(len as u64);
+        match adapter.ensure_segments_for_range(range).await {
+            Ok(()) => {}
+            Err(e) => {
+                return BackendResponse::Error(format!("ensure_segments error: {}", e));
+            }
+        }
 
         // Find segment containing offset
         let entry = {
-            let segments = self.segments.lock();
+            let segments = adapter.segments.lock();
             segments.find_at_offset(offset).cloned()
         };
 
         let Some(entry) = entry else {
-            return Ok(0);
+            return BackendResponse::Eof;
         };
 
-        self.runtime
-            .block_on(self.read_from_entry(&entry, offset, buf))
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))
+        // Read data
+        let mut buf = vec![0u8; len];
+        match adapter.read_from_entry(&entry, offset, &mut buf).await {
+            Ok(n) => {
+                if n == 0 {
+                    return BackendResponse::Eof;
+                }
+
+                buf.truncate(n);
+                trace!(offset, bytes = n, "HlsBackend read complete");
+                BackendResponse::Data(Bytes::from(buf))
+            }
+            Err(e) => BackendResponse::Error(format!("read_from_entry error: {}", e)),
+        }
+    }
+}
+
+impl RandomAccessBackend for HlsBackend {
+    fn data_rx(&self) -> &Receiver<BackendResponse> {
+        &self.data_rx
+    }
+
+    fn cmd_tx(&self) -> &Sender<BackendCommand> {
+        &self.cmd_tx
     }
 
     fn len(&self) -> Option<u64> {
-        let segments = self.segments.lock();
-        if segments.is_empty() {
-            return None;
-        }
-        Some(segments.total_bytes())
+        *self.len.lock()
     }
 }
 

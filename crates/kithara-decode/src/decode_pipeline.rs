@@ -431,7 +431,6 @@ impl<S> Decoder<S> {
 impl<T> Decoder<Stream<T>>
 where
     T: StreamType,
-    T::Inner: Read + Seek + Send + Sync + 'static,
 {
     /// Create decoder from DecoderConfig.
     ///

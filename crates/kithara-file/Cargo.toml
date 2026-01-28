@@ -5,10 +5,13 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+bytes = { workspace = true }
+kanal = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
+futures = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }

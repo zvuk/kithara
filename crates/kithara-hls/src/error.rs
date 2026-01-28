@@ -14,6 +14,9 @@ pub enum HlsError {
     #[error("Storage error: {0}")]
     Storage(#[from] kithara_storage::StorageError),
 
+    #[error("Writer error: {0}")]
+    Writer(#[from] kithara_stream::WriterError),
+
     #[error("Playlist parsing error: {0}")]
     PlaylistParse(String),
 

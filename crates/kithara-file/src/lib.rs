@@ -21,6 +21,6 @@ mod session;
 
 pub use error::SourceError;
 pub use events::FileEvent;
-pub use inner::{File, FileInner};
+pub use inner::File;
 pub use options::FileConfig;
-pub use session::{Progress, SessionSource};
+pub use session::Progress;

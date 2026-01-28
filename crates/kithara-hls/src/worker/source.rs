@@ -503,7 +503,7 @@ mod tests {
                 .build();
 
             let net = HttpClient::new(Default::default());
-            let fetch_manager = Arc::new(DefaultFetchManager::new(assets, net));
+            let fetch_manager = Arc::new(DefaultFetchManager::new(assets, net, CancellationToken::new()));
 
             Self {
                 _temp_dir: temp_dir,

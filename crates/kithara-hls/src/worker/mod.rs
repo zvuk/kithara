@@ -16,7 +16,7 @@ mod command;
 mod metadata;
 mod source;
 
-pub use adapter::HlsSourceAdapter;
+pub use adapter::{HlsBackend, HlsSourceAdapter};
 pub use chunk::HlsMessage;
 pub use command::HlsCommand;
 pub use metadata::VariantMetadata;
