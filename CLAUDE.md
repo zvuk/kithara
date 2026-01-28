@@ -164,7 +164,13 @@ Requirements:
 - Buffer automatically returns to pool when dropped
 - This applies to: segment reads, chunk processing, network I/O buffers
 
-### 12. Single source of truth for shared types
+### 12. No error-driven control flow
+- Never use errors/exceptions as triggers for state transitions (decoder recreation, format switching)
+- Use proactive detection and boundary mechanisms instead (e.g., read boundaries for format changes)
+- Errors are logged and handled as errors, not as control flow signals
+- Example: ABR variant switch uses read boundary → natural EOF → decoder recreation, NOT DecodeError → recreation
+
+### 13. Single source of truth for shared types
 - `AudioCodec`, `ContainerFormat`, `MediaInfo` — ONLY in `kithara-stream`
 - Other crates re-export from `kithara-stream`, never define own copies
 - No type conversion between duplicate types — use the canonical one
