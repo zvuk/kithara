@@ -5,7 +5,7 @@ use std::{num::NonZeroUsize, path::Path, sync::Arc};
 use async_trait::async_trait;
 use kithara_storage::AtomicResource;
 use lru::LruCache;
-use parking_lot::Mutex;
+use tokio::sync::Mutex;
 
 use crate::{base::Assets, error::AssetsResult, key::ResourceKey};
 
@@ -47,8 +47,10 @@ where
     A: Assets,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Can't await in Debug::fmt, so try_lock instead
+        let size = self.cache.try_lock().map(|c| c.len()).ok();
         f.debug_struct("CachedAssets")
-            .field("cache_size", &self.cache.lock().len())
+            .field("cache_size", &size)
             .finish()
     }
 }
@@ -95,25 +97,22 @@ where
     ) -> AssetsResult<Self::StreamingRes> {
         let cache_key = CacheKey::Streaming(key.clone(), ctx.clone());
 
-        // Check cache first
-        {
-            let mut cache = self.cache.lock();
-            if let Some(CacheEntry::Streaming(res)) = cache.get(&cache_key) {
-                return Ok(res.clone());
-            }
+        // Hold lock across async call to prevent race condition
+        // where two callers both miss cache and create separate resources
+        let mut cache = self.cache.lock().await;
+
+        if let Some(CacheEntry::Streaming(res)) = cache.get(&cache_key) {
+            return Ok(res.clone());
         }
 
-        // Cache miss - load from base
+        // Cache miss - load from base (still holding lock)
         let res = self
             .inner
             .open_streaming_resource_with_ctx(key, ctx)
             .await?;
 
         // Insert into cache (LRU evicts oldest if full)
-        {
-            let mut cache = self.cache.lock();
-            cache.put(cache_key, CacheEntry::Streaming(res.clone()));
-        }
+        cache.put(cache_key, CacheEntry::Streaming(res.clone()));
 
         Ok(res)
     }
@@ -125,64 +124,52 @@ where
     ) -> AssetsResult<Self::AtomicRes> {
         let cache_key = CacheKey::Atomic(key.clone(), ctx.clone());
 
-        // Check cache first
-        {
-            let mut cache = self.cache.lock();
-            if let Some(CacheEntry::Atomic(res)) = cache.get(&cache_key) {
-                return Ok(res.clone());
-            }
+        // Hold lock across async call to prevent race condition
+        let mut cache = self.cache.lock().await;
+
+        if let Some(CacheEntry::Atomic(res)) = cache.get(&cache_key) {
+            return Ok(res.clone());
         }
 
-        // Cache miss - load from base
+        // Cache miss - load from base (still holding lock)
         let res = self.inner.open_atomic_resource_with_ctx(key, ctx).await?;
 
         // Insert into cache (LRU evicts oldest if full)
-        {
-            let mut cache = self.cache.lock();
-            cache.put(cache_key, CacheEntry::Atomic(res.clone()));
-        }
+        cache.put(cache_key, CacheEntry::Atomic(res.clone()));
 
         Ok(res)
     }
 
     async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
-        // Check cache first
-        {
-            let cache = self.cache.lock();
-            if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::PinsIndex) {
-                return Ok(res.clone());
-            }
+        // Hold lock across async call to prevent race condition
+        let mut cache = self.cache.lock().await;
+
+        if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::PinsIndex) {
+            return Ok(res.clone());
         }
 
-        // Cache miss - load from base
+        // Cache miss - load from base (still holding lock)
         let res = self.inner.open_pins_index_resource().await?;
 
         // Insert into cache
-        {
-            let mut cache = self.cache.lock();
-            cache.put(CacheKey::PinsIndex, CacheEntry::Index(res.clone()));
-        }
+        cache.put(CacheKey::PinsIndex, CacheEntry::Index(res.clone()));
 
         Ok(res)
     }
 
     async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
-        // Check cache first
-        {
-            let cache = self.cache.lock();
-            if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::LruIndex) {
-                return Ok(res.clone());
-            }
+        // Hold lock across async call to prevent race condition
+        let mut cache = self.cache.lock().await;
+
+        if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::LruIndex) {
+            return Ok(res.clone());
         }
 
-        // Cache miss - load from base
+        // Cache miss - load from base (still holding lock)
         let res = self.inner.open_lru_index_resource().await?;
 
         // Insert into cache
-        {
-            let mut cache = self.cache.lock();
-            cache.put(CacheKey::LruIndex, CacheEntry::Index(res.clone()));
-        }
+        cache.put(CacheKey::LruIndex, CacheEntry::Index(res.clone()));
 
         Ok(res)
     }
@@ -190,7 +177,7 @@ where
     async fn delete_asset(&self) -> AssetsResult<()> {
         // Clear streaming and atomic caches for this asset (keep index entries)
         {
-            let mut cache = self.cache.lock();
+            let mut cache = self.cache.lock().await;
 
             // Collect keys to remove (LruCache doesn't have retain())
             let keys_to_remove: Vec<CacheKey<A::Context>> = cache

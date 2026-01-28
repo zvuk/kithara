@@ -166,10 +166,8 @@ where
     Ctx: Clone + Send + Sync + std::fmt::Debug + 'static,
 {
     async fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        // First commit inner to mark it as committed
-        self.inner.commit(final_len).await?;
-
         // Process on commit (once) using pool buffers
+        // Do this BEFORE final commit to avoid resetting committed state
         self.processed
             .get_or_try_init(|| async {
                 if let Some(len) = final_len {
@@ -180,6 +178,9 @@ where
                 Ok::<(), StorageError>(())
             })
             .await?;
+
+        // Commit inner AFTER processing to set final committed state
+        self.inner.commit(final_len).await?;
 
         Ok(())
     }

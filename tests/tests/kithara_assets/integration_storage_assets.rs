@@ -27,7 +27,9 @@ fn mp3_bytes() -> Bytes {
 }
 
 #[derive(serde::Deserialize)]
+#[allow(dead_code)]
 struct PinsIndexFile {
+    version: u32,
     pinned: Vec<String>,
 }
 
