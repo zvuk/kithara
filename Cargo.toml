@@ -10,7 +10,6 @@ members = [
     "crates/kithara-storage",
     "crates/kithara-assets",
     "crates/kithara-bufpool",
-    "crates/kithara-worker",
     "tests",
 ]
 
@@ -63,11 +62,9 @@ kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
-kithara-worker = { path = "crates/kithara-worker", version = "0.1.0" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.3.1"
 mockall = "0.13"
-bitflags = "2.10.0"
 
 # async/runtime
 tokio = { version = "1.49.0", features = ["full"] }

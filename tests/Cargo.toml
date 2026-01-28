@@ -17,7 +17,6 @@ kithara-hls = { workspace = true }
 kithara-net = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-stream = { workspace = true }
-kithara-worker = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }

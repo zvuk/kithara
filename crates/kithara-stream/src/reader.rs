@@ -76,7 +76,7 @@ impl<B: BackendAccess> Reader<B> {
             Ok(Response::Data(bytes)) => Ok(Some(bytes)),
             Ok(Response::Eof) => Ok(None),
             Ok(Response::Error(msg)) => {
-                Err(std::io::Error::new(std::io::ErrorKind::Other, msg))
+                Err(std::io::Error::other(msg))
             }
             Err(_) => Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
@@ -163,13 +163,13 @@ impl<B: BackendAccess> Seek for Reader<B> {
 
         let new_pos = new_pos as u64;
 
-        if let Some(len) = self.backend.len() {
-            if new_pos > len {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "seek past EOF",
-                ));
-            }
+        if let Some(len) = self.backend.len()
+            && new_pos > len
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "seek past EOF",
+            ));
         }
 
         // Send seek command to backend

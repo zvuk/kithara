@@ -33,7 +33,7 @@ pub enum WriterItem {
     Completed { total_bytes: u64 },
 }
 
-/// Generic writer: ByteStream -> `write_at` -> commit/fail.
+/// Generic writer: `ByteStream` -> `write_at` -> commit/fail.
 ///
 /// Implements `Stream` trait. Each poll writes a chunk and yields `WriterItem`.
 ///

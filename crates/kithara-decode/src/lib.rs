@@ -29,21 +29,21 @@
 #![forbid(unsafe_code)]
 
 // Internal modules
-#[cfg(feature = "rodio")]
-mod audio_sync_reader;
-mod decode_pipeline;
 mod decoder;
-mod source_reader;
-mod symphonia_decoder;
+mod pipeline;
+mod reader;
+mod symphonia;
+#[cfg(feature = "rodio")]
+mod sync;
 mod types;
 
 // Public API exports
-#[cfg(feature = "rodio")]
-pub use audio_sync_reader::AudioSyncReader;
-pub use decode_pipeline::{DecodeOptions, Decoder, DecoderConfig};
 pub use decoder::InnerDecoder;
-pub use source_reader::SourceReader;
-pub use symphonia_decoder::{CachedCodecInfo, SymphoniaDecoder};
+pub use pipeline::{DecodeOptions, Decoder, DecoderConfig};
+pub use reader::SourceReader;
+pub use symphonia::{CachedCodecInfo, SymphoniaDecoder};
+#[cfg(feature = "rodio")]
+pub use sync::AudioSyncReader;
 pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};
 
 // Re-export types from kithara-stream for convenience

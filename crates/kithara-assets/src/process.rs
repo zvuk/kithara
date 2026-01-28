@@ -170,10 +170,10 @@ where
         // Do this BEFORE final commit to avoid resetting committed state
         self.processed
             .get_or_try_init(|| async {
-                if let Some(len) = final_len {
-                    if len > 0 {
-                        self.process_and_write(len).await?;
-                    }
+                if let Some(len) = final_len
+                    && len > 0
+                {
+                    self.process_and_write(len).await?;
                 }
                 Ok::<(), StorageError>(())
             })

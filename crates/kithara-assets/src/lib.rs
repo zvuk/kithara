@@ -41,7 +41,7 @@ mod evict;
 mod index;
 mod key;
 mod lease;
-mod processing;
+mod process;
 mod store;
 
 // Public API - used by other crates
@@ -57,5 +57,5 @@ pub use key::canonicalize_for_asset;
 pub use key::{ResourceKey, asset_root_for_url};
 pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
 pub use kithara_bufpool::{BytePool, byte_pool};
-pub use processing::{ProcessChunkFn, ProcessedResource, ProcessingAssets};
+pub use process::{ProcessChunkFn, ProcessedResource, ProcessingAssets};
 pub use store::{AssetStore, AssetStoreBuilder, StoreOptions};

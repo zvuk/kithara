@@ -22,7 +22,7 @@ pub trait StreamType: Send + 'static {
     /// Configuration for this stream type.
     type Config: Default + Send;
 
-    /// Backend implementing BackendAccess.
+    /// Backend implementing `BackendAccess`.
     type Backend: BackendAccess;
 
     /// Error type for stream creation.

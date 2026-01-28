@@ -56,7 +56,7 @@ pub trait Source: Send + 'static {
     /// Get current segment byte range.
     ///
     /// For segmented sources (HLS), returns the range of the current segment.
-    /// For non-segmented sources (File), returns 0..len or 0..u64::MAX if unknown.
+    /// For non-segmented sources (File), returns `0..len` or `0..u64::MAX` if unknown.
     /// Used by decoder to detect segment boundaries for format change handling.
     fn current_segment_range(&self) -> Range<u64> {
         0..self.len().unwrap_or(u64::MAX)

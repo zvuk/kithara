@@ -1,4 +1,4 @@
-//! Generic decoder that runs in a separate thread using SyncWorker.
+//! Generic decoder that runs in a separate blocking thread.
 
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -10,13 +10,12 @@ use std::{
 };
 
 use kanal::Receiver;
-use kithara_stream::{MediaInfo, Stream, StreamType};
-use kithara_worker::{EpochValidator, Fetch, ItemValidator as _, SyncWorker, SyncWorkerSource};
+use kithara_stream::{EpochValidator, Fetch, MediaInfo, Stream, StreamType};
 use parking_lot::Mutex;
 use tracing::{debug, trace, warn};
 
 use crate::{
-    symphonia_decoder::SymphoniaDecoder,
+    symphonia::SymphoniaDecoder,
     types::{DecodeError, DecodeResult, PcmChunk, PcmSpec},
 };
 
@@ -152,7 +151,80 @@ impl<T: StreamType> Seek for OffsetReader<T> {
     }
 }
 
-/// Decode source implementing SyncWorkerSource.
+/// Trait for decode sources processed in a blocking worker thread.
+trait DecodeWorkerSource: Send + 'static {
+    type Chunk: Send + 'static;
+    type Command: Send + 'static;
+
+    fn fetch_next(&mut self) -> Fetch<Self::Chunk>;
+    fn handle_command(&mut self, cmd: Self::Command);
+}
+
+/// Run a blocking decode loop: drain commands, fetch data, send through channel.
+fn run_decode_loop<S: DecodeWorkerSource>(
+    mut source: S,
+    cmd_rx: kanal::Receiver<S::Command>,
+    data_tx: kanal::Sender<Fetch<S::Chunk>>,
+) {
+    trace!("decode worker started");
+    let mut at_eof = false;
+
+    loop {
+        // Drain pending commands
+        let mut cmd_received = false;
+        while let Ok(Some(cmd)) = cmd_rx.try_recv() {
+            source.handle_command(cmd);
+            cmd_received = true;
+        }
+        if cmd_received {
+            at_eof = false;
+        }
+
+        if !at_eof {
+            let fetch = source.fetch_next();
+            let is_eof = fetch.is_eof();
+
+            let mut item = Some(Fetch::new(fetch.data, is_eof, 0));
+
+            // Non-blocking send with backpressure
+            loop {
+                match data_tx.try_send_option(&mut item) {
+                    Ok(true) => break,
+                    Ok(false) => match cmd_rx.try_recv() {
+                        Ok(Some(cmd)) => {
+                            source.handle_command(cmd);
+                            break; // Discard stale chunk, refetch
+                        }
+                        Ok(None) => {
+                            std::thread::sleep(std::time::Duration::from_micros(100));
+                        }
+                        Err(_) => return,
+                    },
+                    Err(_) => return,
+                }
+            }
+
+            if is_eof {
+                at_eof = true;
+            }
+        } else {
+            match cmd_rx.try_recv() {
+                Ok(Some(cmd)) => {
+                    source.handle_command(cmd);
+                    at_eof = false;
+                }
+                Ok(None) => {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                Err(_) => break,
+            }
+        }
+    }
+
+    trace!("decode worker stopped");
+}
+
+/// Simple decode source (non-streaming, e.g. file).
 struct DecodeSource {
     decoder: SymphoniaDecoder,
     epoch: Arc<AtomicU64>,
@@ -171,7 +243,7 @@ impl DecodeSource {
     }
 }
 
-impl SyncWorkerSource for DecodeSource {
+impl DecodeWorkerSource for DecodeSource {
     type Chunk = PcmChunk<f32>;
     type Command = DecodeCommand;
 
@@ -358,7 +430,7 @@ impl<T: StreamType> StreamDecodeSource<T> {
     }
 }
 
-impl<T: StreamType> SyncWorkerSource for StreamDecodeSource<T> {
+impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
     type Chunk = PcmChunk<f32>;
     type Command = DecodeCommand;
 
@@ -567,7 +639,7 @@ where
 {
     /// Create a new decoder from any Read + Seek source.
     ///
-    /// Spawns SyncWorker in a blocking thread for decoding.
+    /// Spawns a blocking decode thread.
     pub fn from_source(source: S, options: DecodeOptions) -> DecodeResult<Self> {
         let cmd_capacity = options.command_channel_capacity.max(1);
         let (cmd_tx, cmd_rx) = kanal::bounded(cmd_capacity);
@@ -581,13 +653,10 @@ where
         let initial_spec = symphonia.spec();
         let decode_source = DecodeSource::new(symphonia, Arc::clone(&epoch));
 
-        // Create and spawn SyncWorker
-        let worker = SyncWorker::new(decode_source, cmd_rx, data_tx);
-
         std::thread::Builder::new()
             .name("kithara-decode".to_string())
             .spawn(move || {
-                worker.run_blocking();
+                run_decode_loop(decode_source, cmd_rx, data_tx);
             })
             .map_err(|e| {
                 DecodeError::Io(std::io::Error::other(format!(
@@ -821,12 +890,10 @@ where
             Arc::clone(&epoch),
         );
 
-        let worker = SyncWorker::new(decode_source, cmd_rx, data_tx);
-
         std::thread::Builder::new()
             .name("kithara-decode".to_string())
             .spawn(move || {
-                worker.run_blocking();
+                run_decode_loop(decode_source, cmd_rx, data_tx);
             })
             .map_err(|e| {
                 DecodeError::Io(std::io::Error::other(format!(

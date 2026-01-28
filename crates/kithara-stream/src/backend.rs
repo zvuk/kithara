@@ -40,6 +40,7 @@ pub enum Response {
 }
 
 /// Trait for backend channel access (used by Reader).
+#[expect(clippy::len_without_is_empty)]
 pub trait BackendAccess: Send + Sync + 'static {
     /// Receiver for responses.
     fn response_rx(&self) -> &Receiver<Response>;

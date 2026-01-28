@@ -98,7 +98,7 @@ impl Estimator for ThroughputEstimator {
     }
 
     fn push_sample(&mut self, sample: ThroughputSample) {
-        self.push_sample(sample)
+        self.push_sample(sample);
     }
 
     fn buffer_level_secs(&self) -> f64 {
@@ -106,7 +106,7 @@ impl Estimator for ThroughputEstimator {
     }
 
     fn reset_buffer(&mut self) {
-        self.reset_buffer()
+        self.reset_buffer();
     }
 }
 

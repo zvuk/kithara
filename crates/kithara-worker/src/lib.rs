@@ -34,10 +34,10 @@
 #![forbid(unsafe_code)]
 
 // Module declarations
-mod async_worker;
+mod background;
+mod blocking;
 mod item;
 mod result;
-mod sync_worker;
 mod traits;
 mod validator;
 
@@ -46,10 +46,10 @@ mod validator;
 pub mod testing;
 
 // Public re-exports
-pub use async_worker::AsyncWorker;
+pub use background::AsyncWorker;
 pub use item::{Fetch, WorkerItem};
 pub use result::{WorkerResult, WorkerResultExt};
-pub use sync_worker::SyncWorker;
+pub use blocking::SyncWorker;
 // Export mock types when testing or test-utils feature is enabled
 // Note: Only Worker trait has auto-generated mock (MockWorker).
 // AsyncWorkerSource and SyncWorkerSource use manual mocking because

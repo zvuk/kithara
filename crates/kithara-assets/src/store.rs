@@ -13,7 +13,7 @@ use crate::{
     evict::EvictAssets,
     index::EvictConfig,
     lease::LeaseAssets,
-    processing::{ProcessChunkFn, ProcessingAssets},
+    process::{ProcessChunkFn, ProcessingAssets},
 };
 
 /// Simplified storage options for creating an asset store.
