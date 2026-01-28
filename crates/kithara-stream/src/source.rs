@@ -17,24 +17,28 @@ use crate::media::MediaInfo;
 ///
 /// Provides async interface for waiting and reading data at arbitrary offsets.
 /// Backend wraps this to provide sync `Read + Seek` via channels.
+///
+/// Methods take `&mut self` to allow sources to fetch data on demand
+/// (e.g., HLS segments, progressive download chunks).
 #[async_trait]
 pub trait Source: Send + 'static {
-    /// Item type (usually u8 for byte streams).
-    type Item;
+    /// Item type (bytes for raw streams, samples for decoded audio).
+    type Item: Send;
 
     /// Error type.
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Wait for data in range to be available.
     ///
+    /// May fetch data if not yet available.
     /// Returns `WaitOutcome::Ready` when range is available,
     /// `WaitOutcome::Eof` if EOF reached before range end.
-    async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>;
+    async fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>;
 
     /// Read data at offset into buffer.
     ///
     /// Returns number of bytes read. May return less than `buf.len()`.
-    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error>;
+    async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error>;
 
     /// Total length if known.
     fn len(&self) -> Option<u64>;

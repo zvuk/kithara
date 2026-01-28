@@ -148,7 +148,7 @@ impl kithara_stream::Source for FileSource {
     type Error = SourceError;
 
     async fn wait_range(
-        &self,
+        &mut self,
         range: std::ops::Range<u64>,
     ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
         use kithara_stream::StreamError;
@@ -160,7 +160,7 @@ impl kithara_stream::Source for FileSource {
     }
 
     async fn read_at(
-        &self,
+        &mut self,
         offset: u64,
         buf: &mut [u8],
     ) -> kithara_stream::StreamResult<usize, SourceError> {

@@ -5,7 +5,6 @@
 use std::{
     io::{Read, Seek, SeekFrom},
     ops::Range,
-    sync::Arc,
 };
 
 use async_trait::async_trait;
@@ -39,10 +38,7 @@ impl Source for MemorySource {
     type Item = u8;
     type Error = MemorySourceError;
 
-    async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>
-    where
-        Self: Send + Sync,
-    {
+    async fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
         if range.start >= self.data.len() as u64 {
             Ok(WaitOutcome::Eof)
         } else {
@@ -50,10 +46,7 @@ impl Source for MemorySource {
         }
     }
 
-    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error>
-    where
-        Self: Send + Sync,
-    {
+    async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
         let offset = offset as usize;
         if offset >= self.data.len() {
             return Ok(0);
@@ -76,36 +69,36 @@ impl Source for MemorySource {
 // ==================== Fixtures ====================
 
 #[fixture]
-fn hello_source() -> Arc<MemorySource> {
-    Arc::new(MemorySource::from_str("Hello, World!"))
+fn hello_source() -> MemorySource {
+    MemorySource::from_str("Hello, World!")
 }
 
 #[fixture]
-fn digits_source() -> Arc<MemorySource> {
-    Arc::new(MemorySource::from_str("0123456789"))
+fn digits_source() -> MemorySource {
+    MemorySource::from_str("0123456789")
 }
 
 #[fixture]
-fn alpha_source() -> Arc<MemorySource> {
-    Arc::new(MemorySource::from_str("ABCDEFGHIJ"))
+fn alpha_source() -> MemorySource {
+    MemorySource::from_str("ABCDEFGHIJ")
 }
 
 #[fixture]
-fn empty_source() -> Arc<MemorySource> {
-    Arc::new(MemorySource::new(vec![]))
+fn empty_source() -> MemorySource {
+    MemorySource::new(vec![])
 }
 
 #[fixture]
-fn large_source() -> Arc<MemorySource> {
+fn large_source() -> MemorySource {
     let data: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
-    Arc::new(MemorySource::new(data))
+    MemorySource::new(data)
 }
 
 // ==================== SourceReader Tests ====================
 
 #[rstest]
 #[tokio::test]
-async fn read_sequential(hello_source: Arc<MemorySource>) {
+async fn read_sequential(hello_source: MemorySource) {
     let source = hello_source;
 
     let result = tokio::task::spawn_blocking(move || {
@@ -132,7 +125,7 @@ async fn read_sequential(hello_source: Arc<MemorySource>) {
 #[rstest]
 #[tokio::test]
 async fn read_all() {
-    let source = Arc::new(MemorySource::from_str("Test data"));
+    let source = MemorySource::from_str("Test data");
 
     let result = tokio::task::spawn_blocking(move || {
         let mut reader = SourceReader::new(source);
@@ -150,7 +143,7 @@ async fn read_all() {
 #[rstest]
 #[tokio::test]
 async fn read_eof() {
-    let source = Arc::new(MemorySource::from_str("Short"));
+    let source = MemorySource::from_str("Short");
 
     let result = tokio::task::spawn_blocking(move || {
         let mut reader = SourceReader::new(source);
@@ -174,7 +167,7 @@ async fn read_eof() {
 #[case::end(SeekFrom::End(-3), 7, "789")]
 #[tokio::test]
 async fn seek_operations(
-    digits_source: Arc<MemorySource>,
+    digits_source: MemorySource,
     #[case] seek_from: SeekFrom,
     #[case] expected_pos: u64,
     #[case] expected_data: &str,
@@ -204,7 +197,7 @@ async fn seek_operations(
 
 #[rstest]
 #[tokio::test]
-async fn seek_current_negative(digits_source: Arc<MemorySource>) {
+async fn seek_current_negative(digits_source: MemorySource) {
     let source = digits_source;
 
     let result = tokio::task::spawn_blocking(move || {
@@ -228,7 +221,7 @@ async fn seek_current_negative(digits_source: Arc<MemorySource>) {
 #[rstest]
 #[tokio::test]
 async fn seek_to_zero() {
-    let source = Arc::new(MemorySource::from_str("Hello"));
+    let source = MemorySource::from_str("Hello");
 
     let result = tokio::task::spawn_blocking(move || {
         let mut reader = SourceReader::new(source);
@@ -253,7 +246,7 @@ async fn seek_to_zero() {
 #[case::negative(SeekFrom::Current(-10))]
 #[tokio::test]
 async fn seek_invalid_fails(#[case] seek_from: SeekFrom) {
-    let source = Arc::new(MemorySource::from_str("Short"));
+    let source = MemorySource::from_str("Short");
 
     let result = tokio::task::spawn_blocking(move || {
         let mut reader = SourceReader::new(source);
@@ -267,7 +260,7 @@ async fn seek_invalid_fails(#[case] seek_from: SeekFrom) {
 
 #[rstest]
 #[tokio::test]
-async fn position_tracking(digits_source: Arc<MemorySource>) {
+async fn position_tracking(digits_source: MemorySource) {
     let source = digits_source;
 
     let result = tokio::task::spawn_blocking(move || {
@@ -293,7 +286,7 @@ async fn position_tracking(digits_source: Arc<MemorySource>) {
 #[rstest]
 #[tokio::test]
 async fn empty_read() {
-    let source = Arc::new(MemorySource::from_str("Test"));
+    let source = MemorySource::from_str("Test");
 
     let result = tokio::task::spawn_blocking(move || {
         let mut reader = SourceReader::new(source);
@@ -310,7 +303,7 @@ async fn empty_read() {
 
 #[rstest]
 #[tokio::test]
-async fn empty_source_read(empty_source: Arc<MemorySource>) {
+async fn empty_source_read(empty_source: MemorySource) {
     let source = empty_source;
 
     let result = tokio::task::spawn_blocking(move || {
@@ -327,7 +320,7 @@ async fn empty_source_read(empty_source: Arc<MemorySource>) {
 
 #[rstest]
 #[tokio::test]
-async fn large_data_read(large_source: Arc<MemorySource>) {
+async fn large_data_read(large_source: MemorySource) {
     let expected: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
     let source = large_source;
 
@@ -346,7 +339,7 @@ async fn large_data_read(large_source: Arc<MemorySource>) {
 
 #[rstest]
 #[tokio::test]
-async fn multiple_seeks_and_reads(alpha_source: Arc<MemorySource>) {
+async fn multiple_seeks_and_reads(alpha_source: MemorySource) {
     let source = alpha_source;
 
     let result = tokio::task::spawn_blocking(move || {

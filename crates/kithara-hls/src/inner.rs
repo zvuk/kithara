@@ -4,10 +4,9 @@
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetStoreBuilder, asset_root_for_url, byte_pool};
+use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
 use kithara_stream::StreamType;
-use kithara_worker::Worker;
 use tokio::sync::broadcast;
 
 use crate::{
@@ -17,7 +16,8 @@ use crate::{
     fetch::FetchManager,
     options::HlsConfig,
     playlist::{PlaylistManager, variant_info_from_master},
-    worker::{HlsSourceAdapter, HlsWorkerSource, VariantMetadata},
+    source::HlsSource,
+    worker::VariantMetadata,
 };
 
 /// Marker type for HLS streaming.
@@ -93,11 +93,8 @@ impl StreamType for Hls {
             Arc::clone(&playlist_manager),
         ));
 
-        // Use provided pool or global pool
-        let pool = config.pool.clone().unwrap_or_else(|| byte_pool().clone());
-
-        // Create HlsWorkerSource
-        let worker_source = HlsWorkerSource::new(
+        // Create HlsSource (implements Source directly)
+        let source = HlsSource::new(
             fetch_loader,
             Arc::clone(&fetch_manager),
             variant_metadata,
@@ -105,25 +102,10 @@ impl StreamType for Hls {
             Some(config.abr.clone()),
             config.events_tx.clone(),
             cancel,
-            pool,
         );
 
-        // Get assets for adapter
-        let assets = worker_source.assets();
-
-        // Create channels for worker (use config values)
-        let cmd_capacity = config.command_channel_capacity.max(1);
-        let chunk_capacity = config.chunk_channel_capacity.max(1);
-        let (cmd_tx, cmd_rx) = kanal::bounded_async(cmd_capacity);
-        let (chunk_tx, chunk_rx) = kanal::bounded_async(chunk_capacity);
-
-        // Create AsyncWorker and spawn it
-        let worker = kithara_worker::AsyncWorker::new(worker_source, cmd_rx, chunk_tx);
-        tokio::spawn(worker.run());
-
-        // Create HlsSourceAdapter and backend
-        let adapter = HlsSourceAdapter::new(chunk_rx, cmd_tx, assets, events_tx);
-        let backend = kithara_stream::Backend::new(adapter);
+        // Create backend directly from source
+        let backend = kithara_stream::Backend::new(source);
 
         Ok(backend)
     }

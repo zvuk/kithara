@@ -77,7 +77,7 @@ impl Backend {
     }
 
     async fn run_worker<S: Source>(
-        source: S,
+        mut source: S,
         cmd_rx: Receiver<Command>,
         data_tx: Sender<Response>,
         len: Arc<Mutex<Option<u64>>>,

@@ -3,10 +3,7 @@
 //! Simple blocking adapter without prefetch.
 //! HLS already buffers segments ahead, so data is usually ready.
 
-use std::{
-    io::{Read, Seek, SeekFrom},
-    sync::Arc,
-};
+use std::io::{Read, Seek, SeekFrom};
 
 use kithara_stream::{MediaInfo, Source, StreamError, WaitOutcome};
 use tokio::runtime::Handle;
@@ -14,23 +11,17 @@ use tokio::runtime::Handle;
 /// Sync reader over async byte Source.
 ///
 /// Uses `block_on` to wait for data. Simple and direct.
-pub struct SourceReader<S>
-where
-    S: Source<Item = u8>,
-{
-    source: Arc<S>,
+pub struct SourceReader<S: Source> {
+    source: S,
     pos: u64,
     rt: Handle,
 }
 
-impl<S> SourceReader<S>
-where
-    S: Source<Item = u8>,
-{
+impl<S: Source> SourceReader<S> {
     /// Create a new reader.
     ///
     /// Must be called from within a Tokio runtime context.
-    pub fn new(source: Arc<S>) -> Self {
+    pub fn new(source: S) -> Self {
         Self {
             source,
             pos: 0,
@@ -51,16 +42,14 @@ where
     }
 }
 
-impl<S> Read for SourceReader<S>
-where
-    S: Source<Item = u8>,
-{
+impl<S: Source> Read for SourceReader<S> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);
         }
 
         let range = self.pos..self.pos.saturating_add(buf.len() as u64);
+        let pos = self.pos;
 
         // Block on async wait and read
         let result = self.rt.block_on(async {
@@ -74,7 +63,7 @@ where
             }
 
             // Read data
-            match self.source.read_at(self.pos, buf).await {
+            match self.source.read_at(pos, buf).await {
                 Ok(n) => Ok(n),
                 Err(e) => Err(std::io::Error::other(e.to_string())),
             }
@@ -90,10 +79,7 @@ where
     }
 }
 
-impl<S> Seek for SourceReader<S>
-where
-    S: Source<Item = u8>,
-{
+impl<S: Source> Seek for SourceReader<S> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => p as i128,

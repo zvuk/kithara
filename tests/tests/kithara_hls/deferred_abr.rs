@@ -140,9 +140,10 @@ async fn sequential_read_across_segments_maintains_variant(
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
     // Read all three segments sequentially
+    // Use 64KB buffer to avoid async lock overhead per small read
     let result = tokio::task::spawn_blocking(move || {
         let mut all_data = Vec::new();
-        let mut buf = [0u8; 100];
+        let mut buf = vec![0u8; 64 * 1024];
         let mut read_count = 0;
 
         loop {

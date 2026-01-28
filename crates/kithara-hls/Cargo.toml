@@ -10,9 +10,7 @@ kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
-kithara-worker = { workspace = true }
 bytes = { workspace = true }
-kanal = { workspace = true }
 futures = { workspace = true }
 hls_m3u8 = { workspace = true }
 hex = { workspace = true }

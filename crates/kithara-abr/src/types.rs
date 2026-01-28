@@ -36,6 +36,9 @@ pub trait VariantSource {
 pub struct AbrOptions {
     /// ABR mode: Auto (adaptive) or Manual (fixed variant).
     pub mode: AbrMode,
+    /// Available variants for ABR selection.
+    /// Set by the streaming layer after parsing playlist.
+    pub variants: Vec<Variant>,
     /// Minimum buffer level (seconds) required for up-switch.
     pub min_buffer_for_up_switch_secs: f64,
     /// Buffer level (seconds) that triggers down-switch.
@@ -56,6 +59,7 @@ impl Default for AbrOptions {
     fn default() -> Self {
         Self {
             mode: AbrMode::default(),
+            variants: Vec::new(),
             min_buffer_for_up_switch_secs: 10.0,
             down_switch_buffer_secs: 5.0,
             throughput_safety_factor: 1.5,
@@ -71,6 +75,7 @@ impl std::fmt::Debug for AbrOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AbrOptions")
             .field("mode", &self.mode)
+            .field("variants", &self.variants.len())
             .field(
                 "min_buffer_for_up_switch_secs",
                 &self.min_buffer_for_up_switch_secs,

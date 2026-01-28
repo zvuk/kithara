@@ -37,6 +37,7 @@ pub mod playlist;
 // Private modules
 mod inner;
 mod parsing;
+mod source;
 
 // ============================================================================
 // Public API re-exports
