@@ -13,15 +13,15 @@ mod audio_stream;
 mod channel_reader;
 mod error;
 mod media_info;
-mod msg;
 mod pipe;
 mod source;
 
 pub use audio_stream::{Stream, StreamConfig, StreamType};
-pub use channel_reader::{BackendCommand, BackendResponse, ChannelReader, RandomAccessBackend};
+pub use channel_reader::{
+    BackendCommand, BackendResponse, ChannelBackend, ChannelReader, RandomAccessBackend,
+};
 pub use error::{StreamError, StreamResult};
 pub use kithara_storage::WaitOutcome;
 pub use media_info::{AudioCodec, ContainerFormat, MediaInfo};
-pub use msg::StreamMsg;
 pub use pipe::{Writer, WriterError, WriterItem};
 pub use source::Source;

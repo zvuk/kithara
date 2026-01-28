@@ -218,3 +218,129 @@ impl<B: RandomAccessBackend> Drop for ChannelReader<B> {
         let _ = self.backend.cmd_tx().send(BackendCommand::Stop);
     }
 }
+
+// ============================================================================
+// ChannelBackend - generic backend for any Source<Item=u8>
+// ============================================================================
+
+use std::sync::Arc;
+
+use kithara_storage::WaitOutcome;
+use tracing::{debug, trace};
+
+use crate::Source;
+
+/// Generic backend for any `Source<Item=u8>`.
+///
+/// Spawns an async worker that handles read commands using the source.
+/// Implements `RandomAccessBackend` for use with `ChannelReader`.
+pub struct ChannelBackend<S: Source<Item = u8>> {
+    cmd_tx: Sender<BackendCommand>,
+    data_rx: Receiver<BackendResponse>,
+    source: Arc<S>,
+}
+
+impl<S: Source<Item = u8>> ChannelBackend<S> {
+    /// Create new backend from a source.
+    ///
+    /// Spawns async worker that handles read commands.
+    pub fn new(source: S) -> Self {
+        let source = Arc::new(source);
+        let (cmd_tx, cmd_rx) = kanal::bounded(4);
+        let (data_tx, data_rx) = kanal::bounded(4);
+
+        tokio::spawn(Self::run_worker(source.clone(), cmd_rx, data_tx));
+
+        Self {
+            cmd_tx,
+            data_rx,
+            source,
+        }
+    }
+
+    /// Get reference to the underlying source.
+    pub fn source(&self) -> &S {
+        &self.source
+    }
+
+    async fn run_worker(
+        source: Arc<S>,
+        cmd_rx: Receiver<BackendCommand>,
+        data_tx: Sender<BackendResponse>,
+    ) {
+        debug!("ChannelBackend worker started");
+
+        loop {
+            let cmd = match cmd_rx.as_async().recv().await {
+                Ok(cmd) => cmd,
+                Err(_) => {
+                    debug!("ChannelBackend cmd channel closed");
+                    break;
+                }
+            };
+
+            match cmd {
+                BackendCommand::Read { offset, len } => {
+                    let response = Self::handle_read(&source, offset, len).await;
+
+                    if data_tx.as_async().send(response).await.is_err() {
+                        debug!("ChannelBackend data channel closed");
+                        break;
+                    }
+                }
+                BackendCommand::Seek { offset } => {
+                    trace!(offset, "ChannelBackend seek command");
+                    // Seek is handled by read offset - no special action needed
+                }
+                BackendCommand::Stop => {
+                    debug!("ChannelBackend stop command");
+                    break;
+                }
+            }
+        }
+
+        debug!("ChannelBackend worker stopped");
+    }
+
+    async fn handle_read(source: &S, offset: u64, len: usize) -> BackendResponse {
+        trace!(offset, len, "ChannelBackend read request");
+
+        // Wait for range to be available
+        let range = offset..offset.saturating_add(len as u64);
+        match source.wait_range(range).await {
+            Ok(WaitOutcome::Ready) => {}
+            Ok(WaitOutcome::Eof) => {
+                return BackendResponse::Eof;
+            }
+            Err(e) => {
+                return BackendResponse::Error(format!("wait_range error: {}", e));
+            }
+        }
+
+        // Read data
+        let mut buf = vec![0u8; len];
+        match source.read_at(offset, &mut buf).await {
+            Ok(0) => BackendResponse::Eof,
+            Ok(n) => {
+                buf.truncate(n);
+                trace!(offset, bytes = n, "ChannelBackend read complete");
+                BackendResponse::Data(Bytes::from(buf))
+            }
+            Err(e) => BackendResponse::Error(format!("read_at error: {}", e)),
+        }
+    }
+}
+
+impl<S: Source<Item = u8>> RandomAccessBackend for ChannelBackend<S> {
+    fn data_rx(&self) -> &Receiver<BackendResponse> {
+        &self.data_rx
+    }
+
+    fn cmd_tx(&self) -> &Sender<BackendCommand> {
+        &self.cmd_tx
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.source.len()
+    }
+}

@@ -125,7 +125,7 @@ impl StreamType for Hls {
         tokio::spawn(worker.run());
 
         // Create HlsSourceAdapter and backend
-        let adapter = Arc::new(HlsSourceAdapter::new(chunk_rx, cmd_tx, assets, events_tx));
+        let adapter = HlsSourceAdapter::new(chunk_rx, cmd_tx, assets, events_tx);
         let backend = HlsBackend::new(adapter);
 
         Ok(backend)

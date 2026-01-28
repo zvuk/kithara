@@ -15,7 +15,7 @@ use crate::{
     error::SourceError,
     events::FileEvent,
     options::FileConfig,
-    session::{FileBackend, FileStreamState, Progress},
+    session::{FileBackend, FileSource, FileStreamState, Progress},
 };
 
 /// Marker type for file streaming.
@@ -59,14 +59,14 @@ impl StreamType for File {
             state.events().clone(),
         );
 
-        // Create backend
-        let backend = FileBackend::new(
+        // Create source and backend
+        let source = FileSource::new(
             state.res().clone(),
             progress,
             state.events().clone(),
             state.len(),
-            cancel,
         );
+        let backend = FileBackend::new(source);
 
         Ok(backend)
     }

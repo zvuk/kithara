@@ -2,18 +2,15 @@
 
 use std::sync::Arc;
 
-use bytes::Bytes;
-use kanal::{Receiver, Sender};
 use kithara_assets::{
     AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard, LeaseResource,
     ProcessedResource, ProcessingAssets,
 };
 use kithara_net::{HttpClient, Net};
 use kithara_storage::{StreamingResource, StreamingResourceExt, WaitOutcome};
-use kithara_stream::{BackendCommand, BackendResponse, RandomAccessBackend};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, trace};
+use tracing::trace;
 use url::Url;
 
 use crate::{error::SourceError, events::FileEvent};
@@ -118,157 +115,87 @@ impl Default for Progress {
     }
 }
 
-/// File backend implementing RandomAccessBackend.
+/// File source implementing Source trait.
 ///
-/// Spawns an async worker that reads from storage and sends data via channel.
-pub struct FileBackend {
-    cmd_tx: Sender<BackendCommand>,
-    data_rx: Receiver<BackendResponse>,
+/// Wraps storage resource with progress tracking and event emission.
+pub struct FileSource {
+    res: AssetResourceType,
+    progress: Arc<Progress>,
+    events_tx: broadcast::Sender<FileEvent>,
     len: Option<u64>,
 }
 
-impl FileBackend {
-    /// Create new file backend.
-    ///
-    /// Spawns async worker that handles read commands.
+impl FileSource {
+    /// Create new file source.
     pub fn new(
         res: AssetResourceType,
         progress: Arc<Progress>,
         events_tx: broadcast::Sender<FileEvent>,
         len: Option<u64>,
-        cancel: CancellationToken,
     ) -> Self {
-        let (cmd_tx, cmd_rx) = kanal::bounded(4);
-        let (data_tx, data_rx) = kanal::bounded(4);
-
-        // Spawn async worker
-        tokio::spawn(Self::run_worker(
-            res, progress, events_tx, len, cancel, cmd_rx, data_tx,
-        ));
-
         Self {
-            cmd_tx,
-            data_rx,
+            res,
+            progress,
+            events_tx,
             len,
-        }
-    }
-
-    async fn run_worker(
-        res: AssetResourceType,
-        progress: Arc<Progress>,
-        events_tx: broadcast::Sender<FileEvent>,
-        len: Option<u64>,
-        cancel: CancellationToken,
-        cmd_rx: Receiver<BackendCommand>,
-        data_tx: Sender<BackendResponse>,
-    ) {
-        debug!("FileBackend worker started");
-
-        loop {
-            tokio::select! {
-                biased;
-
-                () = cancel.cancelled() => {
-                    debug!("FileBackend worker cancelled");
-                    break;
-                }
-
-                cmd = cmd_rx.as_async().recv() => {
-                    let Ok(cmd) = cmd else {
-                        debug!("FileBackend cmd channel closed");
-                        break;
-                    };
-
-                    match cmd {
-                        BackendCommand::Read { offset, len: read_len } => {
-                            let response = Self::handle_read(
-                                &res, &progress, &events_tx, len, offset, read_len
-                            ).await;
-
-                            if data_tx.as_async().send(response).await.is_err() {
-                                debug!("FileBackend data channel closed");
-                                break;
-                            }
-                        }
-                        BackendCommand::Seek { offset } => {
-                            trace!(offset, "FileBackend seek command (no-op for file)");
-                            // For file backend, seek is handled by read offset
-                        }
-                        BackendCommand::Stop => {
-                            debug!("FileBackend stop command");
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        debug!("FileBackend worker stopped");
-    }
-
-    async fn handle_read(
-        res: &AssetResourceType,
-        progress: &Progress,
-        events_tx: &broadcast::Sender<FileEvent>,
-        total_len: Option<u64>,
-        offset: u64,
-        len: usize,
-    ) -> BackendResponse {
-        trace!(offset, len, "FileBackend read request");
-
-        // Wait for range to be available
-        let range = offset..offset.saturating_add(len as u64);
-        match res.wait_range(range).await {
-            Ok(WaitOutcome::Ready) => {}
-            Ok(WaitOutcome::Eof) => {
-                trace!("FileBackend EOF");
-                return BackendResponse::Eof;
-            }
-            Err(e) => {
-                return BackendResponse::Error(format!("wait_range error: {}", e));
-            }
-        }
-
-        // Read data
-        let mut buf = vec![0u8; len];
-        match res.read_at(offset, &mut buf).await {
-            Ok(n) => {
-                if n == 0 {
-                    return BackendResponse::Eof;
-                }
-
-                buf.truncate(n);
-
-                // Update progress
-                let new_pos = offset.saturating_add(n as u64);
-                progress.set_read_pos(new_pos);
-
-                // Send event
-                let percent = total_len
-                    .map(|total| ((new_pos as f64 / total as f64) * 100.0).min(100.0) as f32);
-                let _ = events_tx.send(FileEvent::PlaybackProgress {
-                    position: new_pos,
-                    percent,
-                });
-
-                trace!(offset, bytes = n, "FileBackend read complete");
-                BackendResponse::Data(Bytes::from(buf))
-            }
-            Err(e) => BackendResponse::Error(format!("read_at error: {}", e)),
         }
     }
 }
 
-impl RandomAccessBackend for FileBackend {
-    fn data_rx(&self) -> &Receiver<BackendResponse> {
-        &self.data_rx
+#[async_trait::async_trait]
+impl kithara_stream::Source for FileSource {
+    type Item = u8;
+    type Error = SourceError;
+
+    async fn wait_range(
+        &self,
+        range: std::ops::Range<u64>,
+    ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
+        use kithara_stream::StreamError;
+
+        self.res
+            .wait_range(range)
+            .await
+            .map_err(|e| StreamError::Source(SourceError::Storage(e)))
     }
 
-    fn cmd_tx(&self) -> &Sender<BackendCommand> {
-        &self.cmd_tx
+    async fn read_at(
+        &self,
+        offset: u64,
+        buf: &mut [u8],
+    ) -> kithara_stream::StreamResult<usize, SourceError> {
+        use kithara_stream::StreamError;
+
+        let n = self
+            .res
+            .read_at(offset, buf)
+            .await
+            .map_err(|e| StreamError::Source(SourceError::Storage(e)))?;
+
+        if n > 0 {
+            // Update progress
+            let new_pos = offset.saturating_add(n as u64);
+            self.progress.set_read_pos(new_pos);
+
+            // Send event
+            let percent = self
+                .len
+                .map(|total| ((new_pos as f64 / total as f64) * 100.0).min(100.0) as f32);
+            let _ = self.events_tx.send(FileEvent::PlaybackProgress {
+                position: new_pos,
+                percent,
+            });
+
+            trace!(offset, bytes = n, "FileSource read complete");
+        }
+
+        Ok(n)
     }
 
     fn len(&self) -> Option<u64> {
         self.len
     }
 }
+
+/// File backend - alias for ChannelBackend with FileSource.
+pub type FileBackend = kithara_stream::ChannelBackend<FileSource>;
