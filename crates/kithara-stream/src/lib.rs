@@ -17,13 +17,11 @@ mod source;
 mod stream;
 mod writer;
 
-pub use backend::Backend;
+pub use backend::{Backend, BackendAccess, Command, Response};
 pub use error::{StreamError, StreamResult};
 pub use kithara_storage::WaitOutcome;
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
+pub use reader::Reader;
 pub use source::Source;
 pub use stream::{Stream, StreamConfig, StreamType};
 pub use writer::{Writer, WriterError, WriterItem};
-
-// Re-export BackendAccess for implementors (hls, file crates)
-pub use backend::BackendAccess;

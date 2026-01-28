@@ -1,40 +1,64 @@
 #![forbid(unsafe_code)]
 
+//! Source trait for async random-access data.
+//!
+//! Sources provide async random-access via `wait_range()` and `read_at()`.
+//! Backend bridges this to sync `Read + Seek` via channels.
+
 use std::ops::Range;
 
 use async_trait::async_trait;
 use kithara_storage::WaitOutcome;
 
-use crate::{error::StreamResult, media::MediaInfo};
+use crate::error::StreamResult;
+use crate::media::MediaInfo;
 
-/// Async random-access source contract.
+/// Async random-access source.
 ///
-/// Generic over `Item` type:
-/// - `Source<Item=u8>` for byte sources (files, HTTP streams)
-/// - `Source<Item=f32>` for PCM audio sources (decoded audio)
+/// Provides async interface for waiting and reading data at arbitrary offsets.
+/// Backend wraps this to provide sync `Read + Seek` via channels.
 #[async_trait]
-pub trait Source: Send + Sync + 'static {
-    type Item: Send + 'static;
+pub trait Source: Send + 'static {
+    /// Item type (usually u8 for byte streams).
+    type Item;
+
+    /// Error type.
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Wait for a range to be available.
+    /// Wait for data in range to be available.
+    ///
+    /// Returns `WaitOutcome::Ready` when range is available,
+    /// `WaitOutcome::Eof` if EOF reached before range end.
     async fn wait_range(&self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>;
 
-    /// Read items at `offset` into `buf`. Returns number of items read.
-    async fn read_at(
-        &self,
-        offset: u64,
-        buf: &mut [Self::Item],
-    ) -> StreamResult<usize, Self::Error>;
+    /// Read data at offset into buffer.
+    ///
+    /// Returns number of bytes read. May return less than `buf.len()`.
+    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error>;
 
-    /// Return known total length if available.
+    /// Total length if known.
     fn len(&self) -> Option<u64>;
 
-    fn is_empty(&self) -> Option<bool> {
-        self.len().map(|len| len == 0)
+    /// Check if source is empty.
+    fn is_empty(&self) -> bool {
+        self.len() == Some(0)
     }
 
+    /// Get media info if available.
     fn media_info(&self) -> Option<MediaInfo> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Dummy test to verify trait compiles
+    #[test]
+    fn test_source_trait_object_safety() {
+        // Source is not object-safe due to associated types,
+        // but we can verify it compiles with concrete types
+        fn _accepts_source<S: Source>(_s: S) {}
     }
 }

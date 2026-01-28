@@ -7,13 +7,13 @@ use std::{
 
 use bytes::Bytes;
 use kanal::{Receiver, Sender};
-use kithara_stream::{BackendCommand, BackendResponse, ChannelReader, RandomAccessBackend};
+use kithara_stream::{BackendAccess, Command, Reader, Response};
 use rstest::{fixture, rstest};
 
-/// In-memory backend for testing ChannelReader seek.
+/// In-memory backend for testing Reader seek.
 struct MemBackend {
-    cmd_tx: Sender<BackendCommand>,
-    data_rx: Receiver<BackendResponse>,
+    cmd_tx: Sender<Command>,
+    data_rx: Receiver<Response>,
     len: Option<u64>,
 }
 
@@ -27,21 +27,21 @@ impl MemBackend {
         std::thread::spawn(move || {
             while let Ok(cmd) = cmd_rx.recv() {
                 match cmd {
-                    BackendCommand::Read { offset, len } => {
+                    Command::Read { offset, len } => {
                         let offset = offset as usize;
                         if offset >= data.len() {
-                            let _ = data_tx.send(BackendResponse::Eof);
+                            let _ = data_tx.send(Response::Eof);
                             continue;
                         }
                         let available = &data[offset..];
                         let n = len.min(available.len());
                         let bytes = Bytes::copy_from_slice(&available[..n]);
-                        let _ = data_tx.send(BackendResponse::Data(bytes));
+                        let _ = data_tx.send(Response::Data(bytes));
                     }
-                    BackendCommand::Seek { .. } => {
+                    Command::Seek { .. } => {
                         // No-op for memory backend
                     }
-                    BackendCommand::Stop => break,
+                    Command::Stop => break,
                 }
             }
         });
@@ -50,12 +50,12 @@ impl MemBackend {
     }
 }
 
-impl RandomAccessBackend for MemBackend {
-    fn data_rx(&self) -> &Receiver<BackendResponse> {
+impl BackendAccess for MemBackend {
+    fn response_rx(&self) -> &Receiver<Response> {
         &self.data_rx
     }
 
-    fn cmd_tx(&self) -> &Sender<BackendCommand> {
+    fn command_tx(&self) -> &Sender<Command> {
         &self.cmd_tx
     }
 
@@ -66,8 +66,8 @@ impl RandomAccessBackend for MemBackend {
 
 /// Backend without known length for testing SeekFrom::End error.
 struct UnknownLenBackend {
-    cmd_tx: Sender<BackendCommand>,
-    data_rx: Receiver<BackendResponse>,
+    cmd_tx: Sender<Command>,
+    data_rx: Receiver<Response>,
 }
 
 impl UnknownLenBackend {
@@ -78,19 +78,19 @@ impl UnknownLenBackend {
         std::thread::spawn(move || {
             while let Ok(cmd) = cmd_rx.recv() {
                 match cmd {
-                    BackendCommand::Read { offset, len } => {
+                    Command::Read { offset, len } => {
                         let offset = offset as usize;
                         if offset >= data.len() {
-                            let _ = data_tx.send(BackendResponse::Eof);
+                            let _ = data_tx.send(Response::Eof);
                             continue;
                         }
                         let available = &data[offset..];
                         let n = len.min(available.len());
                         let bytes = Bytes::copy_from_slice(&available[..n]);
-                        let _ = data_tx.send(BackendResponse::Data(bytes));
+                        let _ = data_tx.send(Response::Data(bytes));
                     }
-                    BackendCommand::Seek { .. } => {}
-                    BackendCommand::Stop => break,
+                    Command::Seek { .. } => {}
+                    Command::Stop => break,
                 }
             }
         });
@@ -99,12 +99,12 @@ impl UnknownLenBackend {
     }
 }
 
-impl RandomAccessBackend for UnknownLenBackend {
-    fn data_rx(&self) -> &Receiver<BackendResponse> {
+impl BackendAccess for UnknownLenBackend {
+    fn response_rx(&self) -> &Receiver<Response> {
         &self.data_rx
     }
 
-    fn cmd_tx(&self) -> &Sender<BackendCommand> {
+    fn command_tx(&self) -> &Sender<Command> {
         &self.cmd_tx
     }
 
@@ -141,7 +141,7 @@ fn seek_start_reads_correct_bytes(
     #[case] expected: &[u8],
 ) {
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     let pos = reader.seek(SeekFrom::Start(seek_pos)).unwrap();
     assert_eq!(pos, seek_pos);
@@ -158,7 +158,7 @@ fn seek_start_reads_correct_bytes(
 #[test]
 fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     // Read some bytes first
     let mut buf = [0u8; 10];
@@ -183,7 +183,7 @@ fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
 #[test]
 fn seek_current_forward(test_data: Vec<u8>) {
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     // Read 5 bytes (position = 5)
     let mut buf = [0u8; 5];
@@ -206,7 +206,7 @@ fn seek_current_forward(test_data: Vec<u8>) {
 #[test]
 fn seek_current_backward(test_data: Vec<u8>) {
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     // Read 10 bytes (position = 10)
     let mut buf = [0u8; 10];
@@ -229,7 +229,7 @@ fn seek_current_backward(test_data: Vec<u8>) {
 #[test]
 fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     // Read 10 bytes
     let mut buf = [0u8; 10];
@@ -255,7 +255,7 @@ fn seek_end_reads_correct_bytes(
 ) {
     let data_len = test_data.len();
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     let expected_pos = (data_len as i64 + offset) as u64;
 
@@ -275,7 +275,7 @@ fn seek_end_reads_correct_bytes(
 fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     let pos = reader.seek(SeekFrom::End(0)).unwrap();
     assert_eq!(pos, data_len);
@@ -291,7 +291,7 @@ fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
 #[test]
 fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
     let backend = UnknownLenBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     let result = reader.seek(SeekFrom::End(-5));
 
@@ -308,7 +308,7 @@ fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
 fn seek_past_eof_fails(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     let result = reader.seek(SeekFrom::Start(data_len + 10));
 
@@ -322,7 +322,7 @@ fn seek_past_eof_fails(test_data: Vec<u8>) {
 #[test]
 fn seek_negative_position_fails(test_data: Vec<u8>) {
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     let result = reader.seek(SeekFrom::Current(-100));
 
@@ -336,7 +336,7 @@ fn seek_negative_position_fails(test_data: Vec<u8>) {
 #[test]
 fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     let result = reader.seek(SeekFrom::End(10));
 
@@ -352,7 +352,7 @@ fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
 #[test]
 fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
     let mut results = Vec::new();
 
     // Seek to position 10
@@ -387,7 +387,7 @@ fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
 #[test]
 fn position_tracks_correctly(test_data: Vec<u8>) {
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
     let mut positions = Vec::new();
 
     positions.push(reader.position());
@@ -419,7 +419,7 @@ fn position_tracks_correctly(test_data: Vec<u8>) {
 #[test]
 fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
     let backend = MemBackend::new(test_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     reader.seek(SeekFrom::Start(10)).unwrap();
 
@@ -440,7 +440,7 @@ fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
 fn seek_exact_to_last_byte(small_data: Vec<u8>) {
     let len = small_data.len() as u64;
     let backend = MemBackend::new(small_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     // Seek to last byte
     let pos = reader.seek(SeekFrom::Start(len - 1)).unwrap();
@@ -459,7 +459,7 @@ fn seek_exact_to_last_byte(small_data: Vec<u8>) {
 fn seek_to_exact_eof_returns_zero_on_read(small_data: Vec<u8>) {
     let len = small_data.len() as u64;
     let backend = MemBackend::new(small_data);
-    let mut reader = ChannelReader::new(backend);
+    let mut reader = Reader::new(backend);
 
     // Seek to exactly EOF
     let pos = reader.seek(SeekFrom::Start(len)).unwrap();
