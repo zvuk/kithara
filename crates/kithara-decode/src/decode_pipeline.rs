@@ -1,7 +1,7 @@
 //! Generic decoder that runs in a separate thread using SyncWorker.
 
 use std::{
-    io::{Read, Seek},
+    io::{Read, Seek, SeekFrom},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -12,6 +12,7 @@ use std::{
 use kanal::Receiver;
 use kithara_stream::{MediaInfo, Stream, StreamType};
 use kithara_worker::{EpochValidator, Fetch, ItemValidator as _, SyncWorker, SyncWorkerSource};
+use parking_lot::Mutex;
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -24,6 +25,131 @@ use crate::{
 pub enum DecodeCommand {
     /// Seek to position with new epoch.
     Seek { position: Duration, epoch: u64 },
+}
+
+/// Shared stream wrapper for format change detection.
+///
+/// Wraps Stream in Arc<Mutex> to allow:
+/// - SymphoniaDecoder to read via Read + Seek
+/// - DecodeSource to check media_info() for format changes
+///
+/// Supports a read boundary: when set, reads at or past the boundary
+/// return 0 (EOF). This prevents the old decoder from reading data
+/// from a new segment after an ABR variant switch.
+struct SharedStream<T: StreamType> {
+    inner: Arc<Mutex<Stream<T>>>,
+    /// Byte offset at which reads stop (return EOF).
+    /// `u64::MAX` means no boundary (unlimited reads).
+    boundary: Arc<AtomicU64>,
+}
+
+impl<T: StreamType> SharedStream<T> {
+    fn new(stream: Stream<T>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(stream)),
+            boundary: Arc::new(AtomicU64::new(u64::MAX)),
+        }
+    }
+
+    /// Set read boundary at the given byte offset.
+    /// Reads at or past this offset will return 0 (EOF).
+    fn set_boundary(&self, offset: u64) {
+        self.boundary.store(offset, Ordering::Release);
+    }
+
+    /// Clear read boundary (allow unlimited reads).
+    fn clear_boundary(&self) {
+        self.boundary.store(u64::MAX, Ordering::Release);
+    }
+
+    fn media_info(&self) -> Option<MediaInfo> {
+        self.inner.lock().media_info()
+    }
+
+    fn current_segment_range(&self) -> std::ops::Range<u64> {
+        self.inner.lock().current_segment_range()
+    }
+
+}
+
+impl<T: StreamType> Clone for SharedStream<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+            boundary: Arc::clone(&self.boundary),
+        }
+    }
+}
+
+impl<T: StreamType> Read for SharedStream<T> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let boundary = self.boundary.load(Ordering::Acquire);
+        let mut stream = self.inner.lock();
+
+        if boundary < u64::MAX {
+            let pos = stream.position();
+            if pos >= boundary {
+                return Ok(0);
+            }
+            let remaining = (boundary - pos) as usize;
+            if remaining < buf.len() {
+                return stream.read(&mut buf[..remaining]);
+            }
+        }
+
+        stream.read(buf)
+    }
+}
+
+impl<T: StreamType> Seek for SharedStream<T> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.inner.lock().seek(pos)
+    }
+}
+
+/// Reader that offsets all positions by a base offset.
+///
+/// When Symphonia seeks to position X, the real stream position is `base_offset + X`.
+/// This is needed when recreating a decoder after ABR variant switch:
+/// the new segment starts at `base_offset` in the virtual stream, but Symphonia
+/// expects positions starting from 0.
+struct OffsetReader<T: StreamType> {
+    shared: SharedStream<T>,
+    base_offset: u64,
+}
+
+impl<T: StreamType> OffsetReader<T> {
+    fn new(shared: SharedStream<T>, base_offset: u64) -> Self {
+        Self {
+            shared,
+            base_offset,
+        }
+    }
+}
+
+impl<T: StreamType> Read for OffsetReader<T> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.shared.read(buf)
+    }
+}
+
+impl<T: StreamType> Seek for OffsetReader<T> {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        match pos {
+            SeekFrom::Start(p) => {
+                let real_pos = self.shared.seek(SeekFrom::Start(self.base_offset + p))?;
+                Ok(real_pos.saturating_sub(self.base_offset))
+            }
+            SeekFrom::Current(delta) => {
+                let real_pos = self.shared.seek(SeekFrom::Current(delta))?;
+                Ok(real_pos.saturating_sub(self.base_offset))
+            }
+            SeekFrom::End(delta) => {
+                let real_pos = self.shared.seek(SeekFrom::End(delta))?;
+                Ok(real_pos.saturating_sub(self.base_offset))
+            }
+        }
+    }
 }
 
 /// Decode source implementing SyncWorkerSource.
@@ -98,6 +224,211 @@ impl SyncWorkerSource for DecodeSource {
                 // Update epoch first
                 self.epoch.store(epoch, Ordering::Release);
                 // Then perform seek
+                if let Err(e) = self.decoder.seek(position) {
+                    warn!(?e, "seek failed");
+                }
+            }
+        }
+    }
+}
+
+/// Decode source for Stream with format change detection.
+///
+/// Monitors media_info changes and recreates decoder at segment boundaries.
+/// The old decoder naturally decodes all data from the current segment.
+/// When it encounters new segment data (different format), it errors or returns EOF.
+/// At that point, we seek to the segment boundary and recreate the decoder.
+struct StreamDecodeSource<T: StreamType> {
+    shared_stream: SharedStream<T>,
+    decoder: SymphoniaDecoder,
+    cached_media_info: Option<MediaInfo>,
+    /// Pending format change: (new MediaInfo, byte offset where new segment starts).
+    pending_format_change: Option<(MediaInfo, u64)>,
+    epoch: Arc<AtomicU64>,
+    chunks_decoded: u64,
+    total_samples: u64,
+}
+
+impl<T: StreamType> StreamDecodeSource<T> {
+    fn new(
+        shared_stream: SharedStream<T>,
+        decoder: SymphoniaDecoder,
+        initial_media_info: Option<MediaInfo>,
+        epoch: Arc<AtomicU64>,
+    ) -> Self {
+        Self {
+            shared_stream,
+            decoder,
+            cached_media_info: initial_media_info,
+            pending_format_change: None,
+            epoch,
+            chunks_decoded: 0,
+            total_samples: 0,
+        }
+    }
+
+    /// Detect media_info change: mark as pending and set read boundary.
+    ///
+    /// The boundary prevents the old decoder from reading past the new
+    /// segment start. This causes Symphonia to hit EOF naturally, after
+    /// which `fetch_next` recreates the decoder for the new format.
+    fn detect_format_change(&mut self) {
+        if self.pending_format_change.is_some() {
+            return;
+        }
+        let Some(current_info) = self.shared_stream.media_info() else {
+            return;
+        };
+        if Some(&current_info) != self.cached_media_info.as_ref() {
+            let seg_range = self.shared_stream.current_segment_range();
+            debug!(
+                old = ?self.cached_media_info,
+                new = ?current_info,
+                segment_start = seg_range.start,
+                "Format change detected, setting read boundary"
+            );
+            self.shared_stream.set_boundary(seg_range.start);
+            self.pending_format_change = Some((current_info, seg_range.start));
+        }
+    }
+
+    /// Apply pending format change: clear boundary, seek to segment start, recreate decoder.
+    /// Returns true if decoder was recreated successfully.
+    fn apply_format_change(&mut self) -> bool {
+        let Some((new_info, target_offset)) = self.pending_format_change.take() else {
+            return false;
+        };
+
+        debug!(
+            target_offset,
+            "Applying format change: clearing boundary, seeking to segment start"
+        );
+
+        // Clear boundary so the new decoder can read freely.
+        self.shared_stream.clear_boundary();
+
+        if let Err(e) = self.shared_stream.seek(SeekFrom::Start(target_offset)) {
+            warn!(?e, target_offset, "Failed to seek to segment boundary");
+            return false;
+        }
+
+        self.recreate_decoder(new_info, target_offset)
+    }
+
+    /// Recreate decoder with new MediaInfo using OffsetReader.
+    ///
+    /// OffsetReader translates Symphonia's 0-based positions to real stream
+    /// positions (base_offset + X). This is needed because Symphonia internally
+    /// tracks byte positions and may seek to them. Without the offset,
+    /// Symphonia would seek to absolute position 0 instead of base_offset.
+    fn recreate_decoder(&mut self, new_info: MediaInfo, base_offset: u64) -> bool {
+        debug!(
+            old = ?self.cached_media_info,
+            new = ?new_info,
+            base_offset,
+            "Recreating decoder for new format"
+        );
+
+        self.cached_media_info = Some(new_info.clone());
+
+        // Use OffsetReader so Symphonia's internal positions are correctly mapped
+        let offset_reader = OffsetReader::new(self.shared_stream.clone(), base_offset);
+        match SymphoniaDecoder::new_from_media_info(offset_reader, &new_info) {
+            Ok(new_decoder) => {
+                self.decoder = new_decoder;
+                debug!("Decoder recreated successfully");
+                true
+            }
+            Err(e) => {
+                warn!(?e, "Failed to recreate decoder, trying probe fallback");
+                let offset_reader = OffsetReader::new(self.shared_stream.clone(), base_offset);
+                match SymphoniaDecoder::new_with_probe(offset_reader, None) {
+                    Ok(new_decoder) => {
+                        self.decoder = new_decoder;
+                        debug!("Decoder recreated with probe");
+                        true
+                    }
+                    Err(e) => {
+                        warn!(?e, "Failed to recreate decoder with probe");
+                        false
+                    }
+                }
+            }
+        }
+    }
+}
+
+impl<T: StreamType> SyncWorkerSource for StreamDecodeSource<T> {
+    type Chunk = PcmChunk<f32>;
+    type Command = DecodeCommand;
+
+    fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
+        let current_epoch = self.epoch.load(Ordering::Acquire);
+
+        loop {
+            // Proactive detection: detect format change and set read boundary
+            // so the old decoder hits EOF naturally at the segment boundary.
+            self.detect_format_change();
+
+            match self.decoder.next_chunk() {
+                Ok(Some(chunk)) => {
+                    if chunk.pcm.is_empty() {
+                        continue;
+                    }
+
+                    self.chunks_decoded += 1;
+                    self.total_samples += chunk.pcm.len() as u64;
+
+                    // Re-check after decode (Backend may have updated media_info
+                    // while Symphonia was reading bytes from the stream).
+                    self.detect_format_change();
+
+                    if self.chunks_decoded.is_multiple_of(100) {
+                        trace!(
+                            chunks = self.chunks_decoded,
+                            samples = self.total_samples,
+                            spec = ?chunk.spec,
+                            epoch = current_epoch,
+                            "decode progress"
+                        );
+                    }
+
+                    return Fetch::new(chunk, false, current_epoch);
+                }
+                Ok(None) => {
+                    // EOF — decoder exhausted its data (read boundary caused EOF).
+                    // If format change is pending, recreate decoder for the new
+                    // segment. This is the same as old architecture's
+                    // check_boundary → reader.clear() → create_decoder().
+                    self.detect_format_change();
+                    if self.pending_format_change.is_some() {
+                        debug!("Decoder EOF at format boundary, recreating");
+                        if self.apply_format_change() {
+                            continue;
+                        }
+                    }
+
+                    debug!(
+                        chunks = self.chunks_decoded,
+                        samples = self.total_samples,
+                        epoch = current_epoch,
+                        "decode complete (EOF)"
+                    );
+                    return Fetch::new(PcmChunk::default(), true, current_epoch);
+                }
+                Err(e) => {
+                    warn!(?e, "decode error, signaling EOF");
+                    return Fetch::new(PcmChunk::default(), true, current_epoch);
+                }
+            }
+        }
+    }
+
+    fn handle_command(&mut self, cmd: Self::Command) {
+        match cmd {
+            DecodeCommand::Seek { position, epoch } => {
+                debug!(?position, epoch, "seek command received");
+                self.epoch.store(epoch, Ordering::Release);
                 if let Err(e) = self.decoder.seek(position) {
                     warn!(?e, "seek failed");
                 }
@@ -428,14 +759,15 @@ impl<S> Decoder<S> {
 /// Specialized impl for Stream-based decoders.
 ///
 /// Provides async constructor that creates Stream internally.
+/// Uses StreamDecodeSource for automatic format change detection on ABR switch.
 impl<T> Decoder<Stream<T>>
 where
     T: StreamType,
-    T::Inner: Read + Seek + Send + Sync + 'static,
 {
     /// Create decoder from DecoderConfig.
     ///
     /// This is the target API for Stream sources.
+    /// Uses StreamDecodeSource for automatic decoder recreation on format change.
     ///
     /// # Example
     ///
@@ -445,11 +777,75 @@ where
     /// sink.append(decoder);
     /// ```
     pub async fn new(config: DecoderConfig<T>) -> Result<Self, DecodeError> {
-        let stream = Stream::<T>::new(config.stream)
+        let mut stream = Stream::<T>::new(config.stream)
             .await
             .map_err(|e| DecodeError::Io(std::io::Error::other(e.to_string())))?;
 
-        Self::from_source(stream, config.decode)
+        // Trigger first segment load to get MediaInfo for proper decoder creation.
+        let mut probe_buf = [0u8; 1024];
+        let _ = stream.read(&mut probe_buf);
+
+        // Seek back to start
+        stream
+            .seek(SeekFrom::Start(0))
+            .map_err(DecodeError::Io)?;
+
+        // Get initial MediaInfo
+        let initial_media_info = stream.media_info();
+        debug!(?initial_media_info, "Initial MediaInfo from stream");
+
+        // Create shared stream for format change detection
+        let shared_stream = SharedStream::new(stream);
+
+        // Create initial decoder
+        let symphonia = if let Some(ref info) = initial_media_info {
+            SymphoniaDecoder::new_from_media_info(shared_stream.clone(), info)?
+        } else {
+            SymphoniaDecoder::new_with_probe(shared_stream.clone(), config.decode.hint.as_deref())?
+        };
+
+        let initial_spec = symphonia.spec();
+        let options = config.decode;
+
+        let cmd_capacity = options.command_channel_capacity.max(1);
+        let (cmd_tx, cmd_rx) = kanal::bounded(cmd_capacity);
+        let (data_tx, data_rx) = kanal::bounded(options.pcm_buffer_chunks.max(1));
+
+        let epoch = Arc::new(AtomicU64::new(0));
+
+        // Use StreamDecodeSource for format change detection
+        let decode_source = StreamDecodeSource::new(
+            shared_stream,
+            symphonia,
+            initial_media_info,
+            Arc::clone(&epoch),
+        );
+
+        let worker = SyncWorker::new(decode_source, cmd_rx, data_tx);
+
+        std::thread::Builder::new()
+            .name("kithara-decode".to_string())
+            .spawn(move || {
+                worker.run_blocking();
+            })
+            .map_err(|e| {
+                DecodeError::Io(std::io::Error::other(format!(
+                    "failed to spawn decode thread: {}",
+                    e
+                )))
+            })?;
+
+        Ok(Self {
+            cmd_tx,
+            pcm_rx: data_rx,
+            epoch,
+            validator: EpochValidator::new(),
+            spec: initial_spec,
+            current_chunk: None,
+            chunk_offset: 0,
+            eof: false,
+            _marker: std::marker::PhantomData,
+        })
     }
 }
 

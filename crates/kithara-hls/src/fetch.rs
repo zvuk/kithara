@@ -1,15 +1,14 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
-
 use bytes::Bytes;
-use futures::StreamExt;
 use kithara_assets::{
     AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard, LeaseResource,
     ProcessedResource, ProcessingAssets, ResourceKey,
 };
-use kithara_net::{ByteStream, Headers, HttpClient, Net};
-use kithara_storage::{Resource as _, ResourceStatus, StreamingResource, StreamingResourceExt};
+use kithara_net::{Headers, HttpClient, Net};
+use kithara_storage::{AtomicResourceExt, ResourceStatus, StreamingResource};
+use kithara_stream::Writer;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 use url::Url;
 
@@ -24,11 +23,12 @@ pub type StreamingAssetResource = LeaseResource<
 pub struct FetchManager<N> {
     assets: AssetStore,
     net: N,
+    cancel: CancellationToken,
 }
 
 impl<N: Net> FetchManager<N> {
-    pub fn with_net(assets: AssetStore, net: N) -> Self {
-        Self { assets, net }
+    pub fn with_net(assets: AssetStore, net: N, cancel: CancellationToken) -> Self {
+        Self { assets, net, cancel }
     }
 
     pub fn asset_root(&self) -> &str {
@@ -101,8 +101,8 @@ impl<N: Net> FetchManager<N> {
     }
 
     /// Start fetching a segment. Returns cached size if already cached.
-    /// Caller iterates over chunks via `ActiveFetch::next_chunk()`.
-    pub(crate) async fn start_fetch(&self, url: &Url) -> HlsResult<ActiveFetchResult> {
+    /// Caller iterates over Writer stream via `.next().await`.
+    pub(crate) async fn start_fetch(&self, url: &Url) -> HlsResult<FetchResult> {
         let key = ResourceKey::from_url(url);
         let res = self.assets.open_streaming_resource(&key).await?;
 
@@ -110,74 +110,29 @@ impl<N: Net> FetchManager<N> {
         if let ResourceStatus::Committed { final_len } = status {
             let len = final_len.unwrap_or(0);
             trace!(url = %url, len, "start_fetch: cache hit");
-            return Ok(ActiveFetchResult::Cached { bytes: len });
+            return Ok(FetchResult::Cached { bytes: len });
         }
 
         trace!(url = %url, "start_fetch: starting network fetch");
         let net_stream = self.net.stream(url.clone(), None).await?;
+        let writer = Writer::new(net_stream, res, self.cancel.clone());
 
-        Ok(ActiveFetchResult::Active(ActiveFetch {
-            net_stream,
-            resource: res,
-            offset: 0,
-        }))
+        Ok(FetchResult::Active(writer))
     }
-}
-
-/// Result of a fetch operation (data stays on disk).
-#[derive(Clone, Debug)]
-pub struct FetchResult {
-    pub bytes: u64,
-    pub duration: Duration,
-    pub from_cache: bool,
 }
 
 /// Result of starting a fetch.
-pub enum ActiveFetchResult {
+pub enum FetchResult {
     /// Already cached, no fetch needed.
     Cached { bytes: u64 },
-    /// Active fetch in progress.
-    Active(ActiveFetch),
-}
-
-/// Active fetch context for streaming chunks.
-/// Caller iterates via `next_chunk()` and must call `commit()` when done.
-pub struct ActiveFetch {
-    net_stream: ByteStream,
-    resource: StreamingAssetResource,
-    offset: u64,
-}
-
-impl ActiveFetch {
-    /// Get next chunk (writes to disk, returns bytes written).
-    /// Returns None when fetch is complete.
-    pub async fn next_chunk(&mut self) -> HlsResult<Option<u64>> {
-        match self.net_stream.next().await {
-            Some(Ok(chunk_bytes)) => {
-                let chunk_len = chunk_bytes.len() as u64;
-                self.resource.write_at(self.offset, &chunk_bytes).await?;
-                self.offset += chunk_len;
-                Ok(Some(chunk_len))
-            }
-            Some(Err(e)) => {
-                let _ = self.resource.fail(e.to_string()).await;
-                Err(e.into())
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Commit download and return total bytes.
-    pub async fn commit(self) -> u64 {
-        let _ = self.resource.commit(Some(self.offset)).await;
-        self.offset
-    }
+    /// Active fetch in progress via Writer stream.
+    Active(Writer),
 }
 
 // Backward compatibility: Specialized impl for concrete types
 impl FetchManager<HttpClient> {
-    pub fn new(assets: AssetStore, net: HttpClient) -> Self {
-        Self::with_net(assets, net)
+    pub fn new(assets: AssetStore, net: HttpClient, cancel: CancellationToken) -> Self {
+        Self::with_net(assets, net, cancel)
     }
 }
 
@@ -192,6 +147,7 @@ mod tests {
     use kithara_assets::AssetStoreBuilder;
     use kithara_net::MockNet;
     use tempfile::TempDir;
+    use tokio_util::sync::CancellationToken;
     use url::Url;
 
     use super::*;
@@ -215,7 +171,7 @@ mod tests {
             .withf(move |url, _| url == &test_url_clone)
             .returning(move |_, _| Ok(Bytes::from_static(playlist_content)));
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net);
+        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
 
         let result: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -245,7 +201,7 @@ mod tests {
             .withf(move |url, _| url == &test_url_clone)
             .returning(move |_, _| Ok(Bytes::from_static(playlist_content)));
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net);
+        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
 
         let result1: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -278,7 +234,7 @@ mod tests {
             .withf(move |url, _| url == &test_url_clone)
             .returning(move |_, _| Ok(Bytes::from(key_content.clone())));
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net);
+        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
 
         let result: HlsResult<Bytes> = fetch_manager.fetch_key(&test_url, "key.bin", None).await;
 
@@ -307,7 +263,7 @@ mod tests {
             .withf(move |url, _| url == &test_url_clone)
             .returning(|_, _| Err(NetError::Timeout));
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net);
+        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
 
         let result: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -340,7 +296,7 @@ mod tests {
             .times(1)
             .returning(move |_, _| Ok(Bytes::from_static(media_content)));
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net);
+        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
 
         let master_url = Url::parse("http://example.com/master.m3u8").unwrap();
         let master: HlsResult<Bytes> = fetch_manager
@@ -369,7 +325,7 @@ mod tests {
             .withf(|url, _| url.host_str() == Some("cdn1.example.com"))
             .returning(move |_, _| Ok(Bytes::from_static(content)));
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net);
+        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
 
         let url = Url::parse("http://cdn1.example.com/file.m3u8").unwrap();
         let result: HlsResult<Bytes> = fetch_manager.fetch_playlist(&url, "file.m3u8").await;
@@ -403,7 +359,7 @@ mod tests {
             })
             .returning(move |_, _| Ok(Bytes::from(key_content.clone())));
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net);
+        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
 
         let url = Url::parse("http://example.com/key.bin").unwrap();
         let mut headers_map = HashMap::new();

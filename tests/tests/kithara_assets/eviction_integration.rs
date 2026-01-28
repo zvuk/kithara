@@ -13,11 +13,13 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
-use kithara_storage::Resource;
+use kithara_storage::{AtomicResourceExt, Resource};
 use rstest::{fixture, rstest};
 
 #[derive(serde::Deserialize)]
+#[allow(dead_code)]
 struct PinsIndexFile {
+    version: u32,
     pinned: Vec<String>,
 }
 

@@ -88,6 +88,25 @@ impl AtomicResource {
 
 #[async_trait]
 impl Resource for AtomicResource {
+    async fn commit(&self, _final_len: Option<u64>) -> StorageResult<()> {
+        // Atomic resource commits are a no-op: each write is whole-object.
+        self.preflight().await?;
+        Ok(())
+    }
+
+    async fn fail(&self, error: impl Into<String> + Send) -> StorageResult<()> {
+        let mut state = self.inner.state.lock().await;
+        state.failed = Some(error.into());
+        Ok(())
+    }
+
+    fn path(&self) -> &Path {
+        &self.inner.path
+    }
+}
+
+#[async_trait]
+impl AtomicResourceExt for AtomicResource {
     async fn write(&self, data: &[u8]) -> StorageResult<()> {
         self.preflight().await?;
 
@@ -128,25 +147,7 @@ impl Resource for AtomicResource {
             Err(e) => Err(StorageError::Io(e)),
         }
     }
-
-    async fn commit(&self, _final_len: Option<u64>) -> StorageResult<()> {
-        // Atomic resource commits are a no-op: each write is whole-object.
-        self.preflight().await?;
-        Ok(())
-    }
-
-    async fn fail(&self, error: impl Into<String> + Send) -> StorageResult<()> {
-        let mut state = self.inner.state.lock().await;
-        state.failed = Some(error.into());
-        Ok(())
-    }
-
-    fn path(&self) -> &Path {
-        &self.inner.path
-    }
 }
-
-impl AtomicResourceExt for AtomicResource {}
 
 struct Inner {
     path: PathBuf,

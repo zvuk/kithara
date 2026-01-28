@@ -25,12 +25,6 @@ pub enum WaitOutcome {
 /// Random-access + waitable-range semantics live in [`StreamingResourceExt`].
 #[async_trait]
 pub trait Resource: Send + Sync + 'static {
-    /// Atomically replace the entire content with `data`.
-    async fn write(&self, data: &[u8]) -> StorageResult<()>;
-
-    /// Read the entire content.
-    async fn read(&self) -> StorageResult<Bytes>;
-
     /// Mark the resource as successfully completed.
     ///
     /// - For streaming resources, this seals the resource and defines EOF when `final_len` is known.
@@ -104,4 +98,11 @@ pub trait StreamingResourceExt: Resource {
 ///
 /// We keep this as a separate trait to make it explicit at the type level when a resource is
 /// intended to be used only via whole-object `read`/`write`.
-pub trait AtomicResourceExt: Resource {}
+#[async_trait]
+pub trait AtomicResourceExt: Resource {
+    /// Atomically replace the entire content with `data`.
+    async fn write(&self, data: &[u8]) -> StorageResult<()>;
+
+    /// Read the entire content.
+    async fn read(&self) -> StorageResult<Bytes>;
+}

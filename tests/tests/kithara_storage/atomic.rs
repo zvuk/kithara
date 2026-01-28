@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use kithara_storage::{AtomicOptions, AtomicResource, Resource, StorageError};
+use kithara_storage::{AtomicOptions, AtomicResource, AtomicResourceExt, Resource, StorageError};
 use rstest::*;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;

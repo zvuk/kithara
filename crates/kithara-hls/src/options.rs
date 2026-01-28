@@ -3,7 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
-use kithara_assets::StoreOptions;
+use kithara_assets::{BytePool, StoreOptions};
 use kithara_net::NetOptions;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -59,6 +59,8 @@ pub struct HlsConfig {
     pub chunk_channel_capacity: usize,
     /// Capacity of the events broadcast channel (used when events_tx is not provided).
     pub events_channel_capacity: usize,
+    /// Buffer pool (shared across all components, created if not provided).
+    pub pool: Option<BytePool>,
 }
 
 impl Default for HlsConfig {
@@ -75,6 +77,7 @@ impl Default for HlsConfig {
             command_channel_capacity: 16,
             chunk_channel_capacity: 8,
             events_channel_capacity: 32,
+            pool: None,
         }
     }
 }
@@ -94,6 +97,7 @@ impl HlsConfig {
             command_channel_capacity: 16,
             chunk_channel_capacity: 8,
             events_channel_capacity: 32,
+            pool: None,
         }
     }
 
@@ -154,6 +158,12 @@ impl HlsConfig {
     /// Set events broadcast channel capacity.
     pub fn with_events_channel_capacity(mut self, capacity: usize) -> Self {
         self.events_channel_capacity = capacity;
+        self
+    }
+
+    /// Set buffer pool (shared across all components).
+    pub fn with_pool(mut self, pool: BytePool) -> Self {
+        self.pool = Some(pool);
         self
     }
 }

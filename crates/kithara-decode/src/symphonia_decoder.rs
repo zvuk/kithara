@@ -256,7 +256,6 @@ impl SymphoniaDecoder {
                 Err(SymphoniaError::IoError(ref e))
                     if e.kind() == std::io::ErrorKind::UnexpectedEof =>
                 {
-                    // Treat UnexpectedEof as normal EOF for streaming sources
                     tracing::debug!("Treating UnexpectedEof as EOF");
                     return Ok(None);
                 }

@@ -37,6 +37,7 @@ pub mod playlist;
 // Private modules
 mod inner;
 mod parsing;
+mod source;
 
 // ============================================================================
 // Public API re-exports
@@ -45,7 +46,7 @@ mod parsing;
 pub use cache::EncryptionInfo;
 pub use error::{HlsError, HlsResult};
 pub use events::HlsEvent;
-pub use inner::{Hls, HlsInner};
+pub use inner::Hls;
 pub use kithara_abr::{
     AbrDecision, AbrMode, AbrOptions, AbrReason, ThroughputSample, Variant, VariantInfo,
 };

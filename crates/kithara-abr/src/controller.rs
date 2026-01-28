@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use super::{AbrMode, AbrOptions, Estimator, ThroughputEstimator, ThroughputSample, VariantSource};
+use super::{AbrMode, AbrOptions, Estimator, ThroughputEstimator, ThroughputSample};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AbrReason {
@@ -133,11 +133,8 @@ impl<E: Estimator> AbrController<E> {
         self.estimator.buffer_level_secs()
     }
 
-    /// Make ABR decision based on variant source.
-    ///
-    /// This method works with any type implementing `VariantSource` trait,
-    /// making it protocol-agnostic (HLS, DASH, etc.).
-    pub fn decide<S: VariantSource + ?Sized>(&self, source: &S, now: Instant) -> AbrDecision {
+    /// Make ABR decision using variants from configuration.
+    pub fn decide(&self, now: Instant) -> AbrDecision {
         let current = self.current_variant.load(Ordering::Acquire);
 
         // Handle Manual mode - always return configured variant
@@ -167,12 +164,21 @@ impl<E: Estimator> AbrController<E> {
             };
         };
 
-        // Get current variant bandwidth from source
-        let current_bw = source.variant_bandwidth(current).unwrap_or(0);
+        // Get current variant bandwidth from config
+        let current_bw = self
+            .cfg
+            .variants
+            .iter()
+            .find(|v| v.variant_index == current)
+            .map(|v| v.bandwidth_bps)
+            .unwrap_or(0);
 
         // Collect all variants as (index, bandwidth) pairs and sort by bandwidth
-        let mut variants: Vec<(usize, u64)> = (0..source.variant_count())
-            .filter_map(|idx| source.variant_bandwidth(idx).map(|bw| (idx, bw)))
+        let mut variants: Vec<(usize, u64)> = self
+            .cfg
+            .variants
+            .iter()
+            .map(|v| (v.variant_index, v.bandwidth_bps))
             .collect();
 
         if variants.is_empty() {
@@ -330,6 +336,7 @@ mod tests {
             down_switch_buffer_secs: 0.0,
             min_switch_interval: Duration::ZERO,
             mode: AbrMode::Auto(Some(initial_variant)),
+            variants: variants(),
             ..AbrOptions::default()
         };
 
@@ -347,7 +354,7 @@ mod tests {
             },
         });
 
-        let d = c.decide(&variants(), now);
+        let d = c.decide(now);
         assert_eq!(d.target_variant_index, expected_variant);
         assert_eq!(d.reason, expected_reason);
         assert_eq!(d.changed, expected_changed);
@@ -361,6 +368,7 @@ mod tests {
             up_hysteresis_ratio: 1.3,
             min_switch_interval: Duration::ZERO,
             mode: AbrMode::Auto(Some(0)),
+            variants: variants(),
             ..AbrOptions::default()
         };
 
@@ -375,7 +383,7 @@ mod tests {
             source: super::super::ThroughputSampleSource::Network,
             content_duration: Some(Duration::from_secs_f64(2.0)),
         });
-        let low_buf = c.decide(&variants(), now);
+        let low_buf = c.decide(now);
         assert_eq!(low_buf.target_variant_index, 0);
         assert_eq!(low_buf.reason, AbrReason::BufferTooLowForUpSwitch);
 
@@ -388,7 +396,7 @@ mod tests {
             source: super::super::ThroughputSampleSource::Network,
             content_duration: Some(Duration::from_secs_f64(20.0)),
         });
-        let ok_buf = c.decide(&variants(), now);
+        let ok_buf = c.decide(now);
         assert_eq!(ok_buf.target_variant_index, 2);
         assert_eq!(ok_buf.reason, AbrReason::UpSwitch);
         assert!(ok_buf.changed);
@@ -401,6 +409,7 @@ mod tests {
             min_buffer_for_up_switch_secs: 0.0,
             down_switch_buffer_secs: 0.0,
             mode: AbrMode::Auto(Some(1)),
+            variants: variants(),
             ..AbrOptions::default()
         };
 
@@ -414,11 +423,11 @@ mod tests {
             content_duration: Some(Duration::from_secs_f64(10.0)),
         });
 
-        let d1 = c.decide(&variants(), now);
+        let d1 = c.decide(now);
         assert_eq!(d1.target_variant_index, 2);
         assert!(d1.changed);
 
-        let d2 = c.decide(&variants(), now);
+        let d2 = c.decide(now);
         assert_eq!(d2.target_variant_index, 1);
         assert!(!d2.changed);
         assert_eq!(d2.reason, AbrReason::MinInterval);
@@ -428,12 +437,13 @@ mod tests {
     fn no_change_without_estimate() {
         let cfg = AbrOptions {
             mode: AbrMode::Auto(Some(1)),
+            variants: variants(),
             ..AbrOptions::default()
         };
         let c = AbrController::new(cfg);
         let now = Instant::now();
 
-        let d = c.decide(&variants(), now);
+        let d = c.decide(now);
         assert_eq!(d.target_variant_index, 1);
         assert!(!d.changed);
         assert_eq!(d.reason, AbrReason::NoEstimate);
@@ -444,6 +454,7 @@ mod tests {
         let cfg = AbrOptions {
             mode: AbrMode::Auto(Some(1)),
             min_switch_interval: Duration::ZERO,
+            variants: variants(),
             ..AbrOptions::default()
         };
 
@@ -464,10 +475,10 @@ mod tests {
         let now = Instant::now();
 
         // First decide - calls estimator once
-        c.decide(&variants(), now);
+        c.decide(now);
 
         // Second decide - calls estimator again
-        c.decide(&variants(), now);
+        c.decide(now);
 
         // Mockall automatically verifies call counts on drop - no manual assert needed!
     }
@@ -477,6 +488,7 @@ mod tests {
         let cfg = AbrOptions {
             mode: AbrMode::Auto(Some(1)),
             min_switch_interval: Duration::from_secs(30),
+            variants: variants(),
             ..AbrOptions::default()
         };
 
@@ -497,11 +509,11 @@ mod tests {
         let now = Instant::now();
 
         // First call - should call estimator and cause switch
-        let d1 = c.decide(&variants(), now);
+        let d1 = c.decide(now);
         assert!(d1.changed, "First call should switch");
 
         // Second call immediately - should NOT call estimator (min_interval not elapsed)
-        let d2 = c.decide(&variants(), now);
+        let d2 = c.decide(now);
         assert!(!d2.changed, "Second call should not switch");
         assert_eq!(d2.reason, AbrReason::MinInterval);
 
@@ -515,6 +527,7 @@ mod tests {
         let cfg = AbrOptions {
             mode: AbrMode::Auto(Some(1)),
             min_switch_interval: Duration::ZERO,
+            variants: variants(),
             ..AbrOptions::default()
         };
 
@@ -545,7 +558,7 @@ mod tests {
         let mut c = AbrController::with_estimator(cfg, mock_estimator);
         let now = Instant::now();
 
-        c.decide(&variants(), now);
+        c.decide(now);
 
         c.push_throughput_sample(ThroughputSample {
             bytes: 1_000_000 / 8,
@@ -555,7 +568,7 @@ mod tests {
             content_duration: None,
         });
 
-        c.decide(&variants(), now);
+        c.decide(now);
     }
 
     #[test]
@@ -565,6 +578,7 @@ mod tests {
         let cfg = AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             min_switch_interval: Duration::ZERO,
+            variants: variants(),
             ..AbrOptions::default()
         };
 
@@ -594,8 +608,8 @@ mod tests {
         let c = AbrController::with_estimator(cfg, mock_estimator);
         let now = Instant::now();
 
-        c.decide(&variants(), now);
-        c.decide(&variants(), now);
-        c.decide(&variants(), now);
+        c.decide(now);
+        c.decide(now);
+        c.decide(now);
     }
 }

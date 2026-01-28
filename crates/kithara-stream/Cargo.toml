@@ -18,6 +18,7 @@ kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-net = { workspace = true }
 kithara-storage = { workspace = true }
+parking_lot = { workspace = true }
 kithara-worker = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

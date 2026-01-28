@@ -50,11 +50,12 @@ fn test_variant_selection_manual_override(
 ) {
     let opts = AbrOptions {
         mode: AbrMode::Manual(2),
+        variants: variants_from_parsed_playlist,
         ..Default::default()
     };
     let controller = AbrController::new(opts);
 
-    let decision = controller.decide(&variants_from_parsed_playlist, Instant::now());
+    let decision = controller.decide(Instant::now());
 
     assert_eq!(decision.target_variant_index, 2);
     assert_eq!(decision.reason, AbrReason::ManualOverride);
@@ -71,11 +72,12 @@ fn test_manual_selector_different_indices(
 ) {
     let opts = AbrOptions {
         mode: AbrMode::Manual(selector_index),
+        variants: variants_from_parsed_playlist,
         ..Default::default()
     };
     let controller = AbrController::new(opts);
 
-    let decision = controller.decide(&variants_from_parsed_playlist, Instant::now());
+    let decision = controller.decide(Instant::now());
 
     // Manual mode always returns the configured index
     assert_eq!(decision.target_variant_index, selector_index);
@@ -84,15 +86,17 @@ fn test_manual_selector_different_indices(
 
 #[rstest]
 fn test_abr_controller_no_selector(
-    abr_config_default: AbrOptions,
+    mut abr_config_default: AbrOptions,
     variants_from_parsed_playlist: Vec<kithara_abr::Variant>,
 ) {
+    let variants_len = variants_from_parsed_playlist.len();
+    abr_config_default.variants = variants_from_parsed_playlist;
     let controller = AbrController::new(abr_config_default);
 
-    let decision = controller.decide(&variants_from_parsed_playlist, Instant::now());
+    let decision = controller.decide(Instant::now());
 
     // Without manual mode, should use default ABR logic
-    assert!(decision.target_variant_index < variants_from_parsed_playlist.len());
+    assert!(decision.target_variant_index < variants_len);
     assert_ne!(decision.reason, AbrReason::ManualOverride);
 }
 
@@ -109,11 +113,12 @@ fn test_abr_decision_with_different_conditions(
 ) {
     let opts = AbrOptions {
         mode: AbrMode::Manual(1),
+        variants: variants_from_parsed_playlist,
         ..Default::default()
     };
     let controller = AbrController::new(opts);
 
-    let decision = controller.decide(&variants_from_parsed_playlist, Instant::now());
+    let decision = controller.decide(Instant::now());
 
     // Should still respect manual override regardless of conditions
     assert_eq!(decision.target_variant_index, 1);

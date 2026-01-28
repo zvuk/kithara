@@ -2,80 +2,130 @@
 
 use std::{
     io::{Read, Seek, SeekFrom},
-    ops::Range,
     time::Duration,
 };
 
-use kithara_stream::{SyncReader, SyncSource, WaitOutcome};
+use bytes::Bytes;
+use kanal::{Receiver, Sender};
+use kithara_stream::{BackendAccess, Command, Reader, Response};
 use rstest::{fixture, rstest};
 
-/// In-memory source for testing SyncReader seek.
-struct MemSource {
-    data: Vec<u8>,
+/// In-memory backend for testing Reader seek.
+struct MemBackend {
+    cmd_tx: Sender<Command>,
+    data_rx: Receiver<Response>,
+    len: Option<u64>,
 }
 
-impl MemSource {
+impl MemBackend {
     fn new(data: Vec<u8>) -> Self {
-        Self { data }
+        let (cmd_tx, cmd_rx) = kanal::bounded(4);
+        let (data_tx, data_rx) = kanal::bounded(4);
+        let len = Some(data.len() as u64);
+
+        // Spawn worker thread
+        std::thread::spawn(move || {
+            while let Ok(cmd) = cmd_rx.recv() {
+                match cmd {
+                    Command::Read { offset, len } => {
+                        let offset = offset as usize;
+                        if offset >= data.len() {
+                            let _ = data_tx.send(Response::Eof);
+                            continue;
+                        }
+                        let available = &data[offset..];
+                        let n = len.min(available.len());
+                        let bytes = Bytes::copy_from_slice(&available[..n]);
+                        let _ = data_tx.send(Response::Data(bytes));
+                    }
+                    Command::Seek { .. } => {
+                        // No-op for memory backend
+                    }
+                    Command::Stop => break,
+                }
+            }
+        });
+
+        Self { cmd_tx, data_rx, len }
     }
 }
 
-impl SyncSource for MemSource {
-    fn wait_range(&self, range: Range<u64>) -> std::io::Result<WaitOutcome> {
-        if range.start >= self.data.len() as u64 {
-            return Ok(WaitOutcome::Eof);
-        }
-        Ok(WaitOutcome::Ready)
+impl BackendAccess for MemBackend {
+    fn response_rx(&self) -> &Receiver<Response> {
+        &self.data_rx
     }
 
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
-        let offset = offset as usize;
-        if offset >= self.data.len() {
-            return Ok(0);
-        }
-        let available = &self.data[offset..];
-        let n = buf.len().min(available.len());
-        buf[..n].copy_from_slice(&available[..n]);
-        Ok(n)
+    fn command_tx(&self) -> &Sender<Command> {
+        &self.cmd_tx
     }
 
     fn len(&self) -> Option<u64> {
-        Some(self.data.len() as u64)
+        self.len
+    }
+
+    fn media_info(&self) -> Option<kithara_stream::MediaInfo> {
+        None
+    }
+
+    fn current_segment_range(&self) -> std::ops::Range<u64> {
+        0..self.len.unwrap_or(u64::MAX)
     }
 }
 
-/// Source without known length for testing SeekFrom::End error.
-struct UnknownLenSource {
-    data: Vec<u8>,
+/// Backend without known length for testing SeekFrom::End error.
+struct UnknownLenBackend {
+    cmd_tx: Sender<Command>,
+    data_rx: Receiver<Response>,
 }
 
-impl UnknownLenSource {
+impl UnknownLenBackend {
     fn new(data: Vec<u8>) -> Self {
-        Self { data }
+        let (cmd_tx, cmd_rx) = kanal::bounded(4);
+        let (data_tx, data_rx) = kanal::bounded(4);
+
+        std::thread::spawn(move || {
+            while let Ok(cmd) = cmd_rx.recv() {
+                match cmd {
+                    Command::Read { offset, len } => {
+                        let offset = offset as usize;
+                        if offset >= data.len() {
+                            let _ = data_tx.send(Response::Eof);
+                            continue;
+                        }
+                        let available = &data[offset..];
+                        let n = len.min(available.len());
+                        let bytes = Bytes::copy_from_slice(&available[..n]);
+                        let _ = data_tx.send(Response::Data(bytes));
+                    }
+                    Command::Seek { .. } => {}
+                    Command::Stop => break,
+                }
+            }
+        });
+
+        Self { cmd_tx, data_rx }
     }
 }
 
-impl SyncSource for UnknownLenSource {
-    fn wait_range(&self, range: Range<u64>) -> std::io::Result<WaitOutcome> {
-        if range.start >= self.data.len() as u64 {
-            return Ok(WaitOutcome::Eof);
-        }
-        Ok(WaitOutcome::Ready)
+impl BackendAccess for UnknownLenBackend {
+    fn response_rx(&self) -> &Receiver<Response> {
+        &self.data_rx
     }
 
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<usize> {
-        let offset = offset as usize;
-        if offset >= self.data.len() {
-            return Ok(0);
-        }
-        let available = &self.data[offset..];
-        let n = buf.len().min(available.len());
-        buf[..n].copy_from_slice(&available[..n]);
-        Ok(n)
+    fn command_tx(&self) -> &Sender<Command> {
+        &self.cmd_tx
     }
 
     fn len(&self) -> Option<u64> {
         None
+    }
+
+    fn media_info(&self) -> Option<kithara_stream::MediaInfo> {
+        None
+    }
+
+    fn current_segment_range(&self) -> std::ops::Range<u64> {
+        0..u64::MAX
     }
 }
 
@@ -106,8 +156,8 @@ fn seek_start_reads_correct_bytes(
     #[case] seek_pos: u64,
     #[case] expected: &[u8],
 ) {
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     let pos = reader.seek(SeekFrom::Start(seek_pos)).unwrap();
     assert_eq!(pos, seek_pos);
@@ -123,8 +173,8 @@ fn seek_start_reads_correct_bytes(
 #[timeout(Duration::from_secs(3))]
 #[test]
 fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     // Read some bytes first
     let mut buf = [0u8; 10];
@@ -148,8 +198,8 @@ fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
 #[timeout(Duration::from_secs(3))]
 #[test]
 fn seek_current_forward(test_data: Vec<u8>) {
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     // Read 5 bytes (position = 5)
     let mut buf = [0u8; 5];
@@ -171,8 +221,8 @@ fn seek_current_forward(test_data: Vec<u8>) {
 #[rstest]
 #[test]
 fn seek_current_backward(test_data: Vec<u8>) {
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     // Read 10 bytes (position = 10)
     let mut buf = [0u8; 10];
@@ -194,8 +244,8 @@ fn seek_current_backward(test_data: Vec<u8>) {
 #[timeout(Duration::from_secs(3))]
 #[test]
 fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     // Read 10 bytes
     let mut buf = [0u8; 10];
@@ -220,8 +270,8 @@ fn seek_end_reads_correct_bytes(
     #[case] expected: &[u8],
 ) {
     let data_len = test_data.len();
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     let expected_pos = (data_len as i64 + offset) as u64;
 
@@ -240,8 +290,8 @@ fn seek_end_reads_correct_bytes(
 #[test]
 fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     let pos = reader.seek(SeekFrom::End(0)).unwrap();
     assert_eq!(pos, data_len);
@@ -256,8 +306,8 @@ fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
 #[timeout(Duration::from_secs(3))]
 #[test]
 fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
-    let source = UnknownLenSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = UnknownLenBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     let result = reader.seek(SeekFrom::End(-5));
 
@@ -273,8 +323,8 @@ fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
 #[test]
 fn seek_past_eof_fails(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     let result = reader.seek(SeekFrom::Start(data_len + 10));
 
@@ -287,8 +337,8 @@ fn seek_past_eof_fails(test_data: Vec<u8>) {
 #[timeout(Duration::from_secs(3))]
 #[test]
 fn seek_negative_position_fails(test_data: Vec<u8>) {
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     let result = reader.seek(SeekFrom::Current(-100));
 
@@ -301,8 +351,8 @@ fn seek_negative_position_fails(test_data: Vec<u8>) {
 #[timeout(Duration::from_secs(3))]
 #[test]
 fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     let result = reader.seek(SeekFrom::End(10));
 
@@ -317,8 +367,8 @@ fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
 #[timeout(Duration::from_secs(3))]
 #[test]
 fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
     let mut results = Vec::new();
 
     // Seek to position 10
@@ -352,8 +402,8 @@ fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
 #[timeout(Duration::from_secs(3))]
 #[test]
 fn position_tracks_correctly(test_data: Vec<u8>) {
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
     let mut positions = Vec::new();
 
     positions.push(reader.position());
@@ -384,8 +434,8 @@ fn position_tracks_correctly(test_data: Vec<u8>) {
 #[timeout(Duration::from_secs(3))]
 #[test]
 fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
-    let source = MemSource::new(test_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(test_data);
+    let mut reader = Reader::new(backend);
 
     reader.seek(SeekFrom::Start(10)).unwrap();
 
@@ -405,8 +455,8 @@ fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
 #[test]
 fn seek_exact_to_last_byte(small_data: Vec<u8>) {
     let len = small_data.len() as u64;
-    let source = MemSource::new(small_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(small_data);
+    let mut reader = Reader::new(backend);
 
     // Seek to last byte
     let pos = reader.seek(SeekFrom::Start(len - 1)).unwrap();
@@ -424,8 +474,8 @@ fn seek_exact_to_last_byte(small_data: Vec<u8>) {
 #[test]
 fn seek_to_exact_eof_returns_zero_on_read(small_data: Vec<u8>) {
     let len = small_data.len() as u64;
-    let source = MemSource::new(small_data);
-    let mut reader = SyncReader::new(source);
+    let backend = MemBackend::new(small_data);
+    let mut reader = Reader::new(backend);
 
     // Seek to exactly EOF
     let pos = reader.seek(SeekFrom::Start(len)).unwrap();

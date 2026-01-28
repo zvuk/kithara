@@ -1,13 +1,12 @@
-//! HLS inner stream implementation.
+//! HLS stream type implementation.
 //!
-//! Provides `HlsInner` - a sync `Read + Seek` adapter for HLS streams.
+//! Provides `Hls` marker type implementing `StreamType` trait.
 
-use std::{io::{Read, Seek, SeekFrom}, sync::Arc};
+use std::sync::Arc;
 
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
-use kithara_stream::{StreamType, SyncReader};
-use kithara_worker::Worker;
+use kithara_stream::StreamType;
 use tokio::sync::broadcast;
 
 use crate::{
@@ -17,19 +16,19 @@ use crate::{
     fetch::FetchManager,
     options::HlsConfig,
     playlist::{PlaylistManager, variant_info_from_master},
-    worker::{HlsSourceAdapter, HlsWorkerSource, VariantMetadata},
+    source::HlsSource,
+    worker::VariantMetadata,
 };
 
-/// HLS inner stream implementing `Read + Seek`.
-///
-/// This wraps `SyncReader<HlsSourceAdapter>` to provide sync access to HLS streams.
-pub struct HlsInner {
-    reader: SyncReader<HlsSourceAdapter>,
-}
+/// Marker type for HLS streaming.
+pub struct Hls;
 
-impl HlsInner {
-    /// Create new HLS inner stream.
-    pub async fn new(mut config: HlsConfig) -> Result<Self, HlsError> {
+impl StreamType for Hls {
+    type Config = HlsConfig;
+    type Backend = kithara_stream::Backend;
+    type Error = HlsError;
+
+    async fn create_backend(mut config: Self::Config) -> Result<Self::Backend, Self::Error> {
         let asset_root = asset_root_for_url(&config.url);
         let cancel = config.cancel.clone().unwrap_or_default();
         let net = HttpClient::new(config.net.clone());
@@ -43,7 +42,7 @@ impl HlsInner {
             .build();
 
         // Build FetchManager
-        let fetch_manager = Arc::new(FetchManager::new(base_assets.clone(), net));
+        let fetch_manager = Arc::new(FetchManager::new(base_assets.clone(), net, cancel.clone()));
 
         // Build PlaylistManager
         let playlist_manager = Arc::new(PlaylistManager::new(
@@ -94,8 +93,8 @@ impl HlsInner {
             Arc::clone(&playlist_manager),
         ));
 
-        // Create HlsWorkerSource
-        let worker_source = HlsWorkerSource::new(
+        // Create HlsSource (implements Source directly)
+        let source = HlsSource::new(
             fetch_loader,
             Arc::clone(&fetch_manager),
             variant_metadata,
@@ -105,54 +104,9 @@ impl HlsInner {
             cancel,
         );
 
-        // Get assets for adapter
-        let assets = worker_source.assets();
+        // Create backend directly from source
+        let backend = kithara_stream::Backend::new(source);
 
-        // Create channels for worker (use config values)
-        let cmd_capacity = config.command_channel_capacity.max(1);
-        let chunk_capacity = config.chunk_channel_capacity.max(1);
-        let (cmd_tx, cmd_rx) = kanal::bounded_async(cmd_capacity);
-        let (chunk_tx, chunk_rx) = kanal::bounded_async(chunk_capacity);
-
-        // Create AsyncWorker and spawn it
-        let worker = kithara_worker::AsyncWorker::new(worker_source, cmd_rx, chunk_tx);
-        tokio::spawn(worker.run());
-
-        // Create HlsSourceAdapter
-        let adapter = HlsSourceAdapter::new(chunk_rx, cmd_tx, assets, events_tx);
-
-        let reader = SyncReader::new(adapter);
-
-        Ok(Self { reader })
-    }
-
-    /// Get current read position.
-    pub fn position(&self) -> u64 {
-        self.reader.position()
-    }
-}
-
-impl Read for HlsInner {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.reader.read(buf)
-    }
-}
-
-impl Seek for HlsInner {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        self.reader.seek(pos)
-    }
-}
-
-/// Marker type for HLS streaming.
-pub struct Hls;
-
-impl StreamType for Hls {
-    type Config = HlsConfig;
-    type Inner = HlsInner;
-    type Error = HlsError;
-
-    async fn create(config: Self::Config) -> Result<Self::Inner, Self::Error> {
-        HlsInner::new(config).await
+        Ok(backend)
     }
 }

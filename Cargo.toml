@@ -97,7 +97,7 @@ rodio = "0.21.1"
 rubato = "0.15"
 
 # errors/logging/metrics
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 

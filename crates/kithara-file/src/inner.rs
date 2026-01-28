@@ -1,34 +1,32 @@
-//! File inner stream implementation.
+//! File stream type implementation.
 //!
-//! Provides `FileInner` - a sync `Read + Seek` adapter for file streams.
+//! Provides `File` marker type implementing `StreamType` trait.
 
-use std::{
-    io::{Read, Seek, SeekFrom},
-    sync::Arc,
-};
+use std::sync::Arc;
 
+use futures::StreamExt;
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
-use kithara_stream::{StreamMsg, StreamType, SyncReader, Writer};
+use kithara_storage::Resource;
+use kithara_stream::{StreamType, Writer, WriterItem};
 use tokio::sync::broadcast;
 
 use crate::{
     error::SourceError,
     events::FileEvent,
     options::FileConfig,
-    session::{FileStreamState, Progress, SessionSource},
+    session::{FileSource, FileStreamState, Progress},
 };
 
-/// File inner stream implementing `Read + Seek`.
-///
-/// This wraps `SyncReader<SessionSource>` to provide sync access to file streams.
-pub struct FileInner {
-    reader: SyncReader<SessionSource>,
-}
+/// Marker type for file streaming.
+pub struct File;
 
-impl FileInner {
-    /// Create new file inner stream.
-    pub async fn new(config: FileConfig) -> Result<Self, SourceError> {
+impl StreamType for File {
+    type Config = FileConfig;
+    type Backend = kithara_stream::Backend;
+    type Error = SourceError;
+
+    async fn create_backend(config: Self::Config) -> Result<Self::Backend, Self::Error> {
         let asset_root = asset_root_for_url(&config.url);
         let cancel = config.cancel.clone().unwrap_or_default();
 
@@ -53,6 +51,7 @@ impl FileInner {
 
         let progress = Arc::new(Progress::new());
 
+        // Spawn download writer
         spawn_download_writer(
             &net_client,
             state.clone(),
@@ -60,46 +59,16 @@ impl FileInner {
             state.events().clone(),
         );
 
-        let source = SessionSource::new(
+        // Create source and backend
+        let source = FileSource::new(
             state.res().clone(),
             progress,
             state.events().clone(),
             state.len(),
         );
+        let backend = kithara_stream::Backend::new(source);
 
-        let reader = SyncReader::new(source);
-
-        Ok(Self { reader })
-    }
-
-    /// Get current read position.
-    pub fn position(&self) -> u64 {
-        self.reader.position()
-    }
-}
-
-impl Read for FileInner {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.reader.read(buf)
-    }
-}
-
-impl Seek for FileInner {
-    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        self.reader.seek(pos)
-    }
-}
-
-/// Marker type for file streaming.
-pub struct File;
-
-impl StreamType for File {
-    type Config = FileConfig;
-    type Inner = FileInner;
-    type Error = SourceError;
-
-    async fn create(config: Self::Config) -> Result<Self::Inner, Self::Error> {
-        FileInner::new(config).await
+        Ok(backend)
     }
 }
 
@@ -116,20 +85,39 @@ fn spawn_download_writer(
     let cancel = state.cancel().clone();
 
     tokio::spawn(async move {
-        let writer = Writer::<_, _, FileEvent>::new(net, url, None, res, cancel).with_event(
-            move |offset, _len| {
-                progress.set_download_pos(offset);
-                let percent =
-                    len.map(|len| ((offset as f64 / len as f64) * 100.0).min(100.0) as f32);
-                FileEvent::DownloadProgress { offset, percent }
-            },
-            move |msg| {
-                if let StreamMsg::Event(ev) = msg {
-                    let _ = events_tx.send(ev);
-                }
-            },
-        );
+        // Open network stream first
+        let stream = match net.stream(url, None).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("failed to open stream: {}", e);
+                let _ = res.fail(e.to_string()).await;
+                return;
+            }
+        };
 
-        let _ = writer.run_with_fail().await;
+        let mut writer = Writer::new(stream, res, cancel);
+
+        while let Some(result) = writer.next().await {
+            match result {
+                Ok(WriterItem::ChunkWritten { offset, len: chunk_len }) => {
+                    let download_offset = offset + chunk_len as u64;
+                    progress.set_download_pos(download_offset);
+                    let percent = len.map(|total| {
+                        ((download_offset as f64 / total as f64) * 100.0).min(100.0) as f32
+                    });
+                    let _ = events_tx.send(FileEvent::DownloadProgress {
+                        offset: download_offset,
+                        percent,
+                    });
+                }
+                Ok(WriterItem::Completed { .. }) => {
+                    break;
+                }
+                Err(e) => {
+                    tracing::warn!("download failed: {}", e);
+                    break;
+                }
+            }
+        }
     });
 }

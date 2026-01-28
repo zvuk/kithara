@@ -5,13 +5,15 @@ use std::{hash::Hash, path::PathBuf, sync::Arc};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
+use kithara_bufpool::{BytePool, byte_pool};
+
 use crate::{
     base::DiskAssetStore,
     cache::CachedAssets,
     evict::EvictAssets,
     index::EvictConfig,
     lease::LeaseAssets,
-    processing::{ProcessFn, ProcessingAssets},
+    processing::{ProcessChunkFn, ProcessingAssets},
 };
 
 /// Simplified storage options for creating an asset store.
@@ -107,7 +109,8 @@ pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()
     asset_root: Option<String>,
     evict_config: Option<EvictConfig>,
     cancel: Option<CancellationToken>,
-    process_fn: Option<ProcessFn<Ctx>>,
+    process_fn: Option<ProcessChunkFn<Ctx>>,
+    pool: Option<BytePool>,
 }
 
 impl Default for AssetStoreBuilder<()> {
@@ -119,8 +122,11 @@ impl Default for AssetStoreBuilder<()> {
 impl AssetStoreBuilder<()> {
     /// Builder with defaults (no root_dir/asset_root/evict/cancel/process set).
     pub fn new() -> Self {
-        // Default pass-through process_fn for ()
-        let dummy_process: ProcessFn<()> = Arc::new(|data, _ctx| Box::pin(async move { Ok(data) }));
+        // Default pass-through process_fn for () - just copies input to output
+        let dummy_process: ProcessChunkFn<()> = Arc::new(|input, output, _ctx, _is_last| {
+            output[..input.len()].copy_from_slice(input);
+            Ok(input.len())
+        });
 
         Self {
             root_dir: None,
@@ -128,6 +134,7 @@ impl AssetStoreBuilder<()> {
             evict_config: None,
             cancel: None,
             process_fn: Some(dummy_process),
+            pool: None,
         }
     }
 }
@@ -158,6 +165,12 @@ where
         self
     }
 
+    /// Set the buffer pool (created at application startup and shared).
+    pub fn pool(mut self, pool: BytePool) -> Self {
+        self.pool = Some(pool);
+        self
+    }
+
     /// Build the asset store.
     ///
     /// # Panics
@@ -178,10 +191,13 @@ where
             .process_fn
             .expect("process_fn is required for AssetStoreBuilder");
 
+        // Use provided pool or global pool
+        let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
+
         // Build decorator chain: Disk -> Evict -> Processing -> Cached -> Lease
         let disk = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));
         let evict = Arc::new(EvictAssets::new(disk, evict_cfg, cancel.clone()));
-        let processing = Arc::new(ProcessingAssets::new(evict.clone(), process_fn));
+        let processing = Arc::new(ProcessingAssets::new(evict.clone(), process_fn, pool));
         let cached = Arc::new(CachedAssets::new(processing));
 
         // LeaseAssets holds evict for byte recording
@@ -197,7 +213,7 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
     /// Set the processing callback for transforming resources.
     ///
     /// This changes the builder's context type.
-    pub fn process_fn<NewCtx>(self, f: ProcessFn<NewCtx>) -> AssetStoreBuilder<NewCtx>
+    pub fn process_fn<NewCtx>(self, f: ProcessChunkFn<NewCtx>) -> AssetStoreBuilder<NewCtx>
     where
         NewCtx: Clone + Hash + Eq + Send + Sync + 'static,
     {
@@ -207,6 +223,7 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
             evict_config: self.evict_config,
             cancel: self.cancel,
             process_fn: Some(f),
+            pool: self.pool,
         }
     }
 }

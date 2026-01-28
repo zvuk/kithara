@@ -3,6 +3,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::StreamExt;
+use kithara_stream::{ContainerFormat, WriterItem};
 use parking_lot::RwLock;
 use url::Url;
 
@@ -10,11 +12,10 @@ use super::{
     Loader,
     types::{SegmentMeta, SegmentType},
 };
-use kithara_stream::ContainerFormat;
 
 use crate::{
     HlsError, HlsResult,
-    fetch::{ActiveFetchResult, DefaultFetchManager},
+    fetch::{DefaultFetchManager, FetchResult},
     playlist::{MediaPlaylist, PlaylistManager, VariantId},
 };
 
@@ -110,17 +111,27 @@ impl Loader for FetchLoader {
 
             // Determine init segment length
             let init_len = match fetch_result {
-                ActiveFetchResult::Cached { bytes } => {
+                FetchResult::Cached { bytes } => {
                     debug!(variant, bytes, "init segment already cached");
                     bytes
                 }
-                ActiveFetchResult::Active(mut active_fetch) => {
+                FetchResult::Active(mut writer) => {
                     debug!(variant, "downloading init segment chunks");
-                    while let Some(_chunk_bytes) = active_fetch.next_chunk().await? {
-                        // Download all chunks
+                    let mut total = 0u64;
+                    while let Some(result) = writer.next().await {
+                        match result {
+                            Ok(WriterItem::ChunkWritten { len, .. }) => {
+                                total += len as u64;
+                            }
+                            Ok(WriterItem::Completed { total_bytes }) => {
+                                total = total_bytes;
+                                break;
+                            }
+                            Err(e) => return Err(e.into()),
+                        }
                     }
-                    debug!(variant, "committing init segment");
-                    active_fetch.commit().await
+                    debug!(variant, total, "init segment downloaded");
+                    total
                 }
             };
 
@@ -154,14 +165,23 @@ impl Loader for FetchLoader {
 
         // Determine segment length after fetch/decryption
         let segment_len = match fetch_result {
-            ActiveFetchResult::Cached { bytes } => bytes,
-            ActiveFetchResult::Active(mut active_fetch) => {
+            FetchResult::Cached { bytes } => bytes,
+            FetchResult::Active(mut writer) => {
                 // Consume all chunks to complete the download
-                while let Some(_chunk_bytes) = active_fetch.next_chunk().await? {
-                    // Download all chunks
+                let mut total = 0u64;
+                while let Some(result) = writer.next().await {
+                    match result {
+                        Ok(WriterItem::ChunkWritten { len, .. }) => {
+                            total += len as u64;
+                        }
+                        Ok(WriterItem::Completed { total_bytes }) => {
+                            total = total_bytes;
+                            break;
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
                 }
-
-                active_fetch.commit().await
+                total
             }
         };
 

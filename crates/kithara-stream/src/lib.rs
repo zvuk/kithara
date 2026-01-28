@@ -3,25 +3,25 @@
 //! Core streaming orchestration primitives for Kithara.
 //!
 //! ## Design goals
-//! - Provide async `Source` trait for random-access byte reading.
-//! - `SyncReader` adapter for sync `Read + Seek` with any `SyncSource`.
-//! - Writer supports user-defined event mapping per chunk.
+//! - `Reader`: sync `Read + Seek` via kanal channel (no block_on)
+//! - `Writer`: async HTTP download as `Stream` trait
+//! - `Backend`: generic async backend for any `Source`
 
 #![forbid(unsafe_code)]
 
-mod audio_stream;
+mod backend;
 mod error;
-mod facade;
-mod media_info;
-mod msg;
-mod pipe;
+mod media;
+mod reader;
 mod source;
+mod stream;
+mod writer;
 
-pub use audio_stream::{Stream, StreamConfig, StreamType};
+pub use backend::{Backend, BackendAccess, Command, Response};
 pub use error::{StreamError, StreamResult};
-pub use facade::{OpenResult, OpenedSource, SourceFactory};
 pub use kithara_storage::WaitOutcome;
-pub use media_info::{AudioCodec, ContainerFormat, MediaInfo};
-pub use msg::StreamMsg;
-pub use pipe::{Reader, ReaderError, Writer, WriterError};
-pub use source::{Source, SyncReader, SyncSource};
+pub use media::{AudioCodec, ContainerFormat, MediaInfo};
+pub use reader::Reader;
+pub use source::Source;
+pub use stream::{Stream, StreamConfig, StreamType};
+pub use writer::{Writer, WriterError, WriterItem};

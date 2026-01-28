@@ -76,11 +76,12 @@ async fn debug_sequential_read(
     });
 
     // Read with detailed logging
+    // Use 64KB buffer to avoid async lock overhead per small read
     info!("Starting blocking read task...");
     let result = tokio::task::spawn_blocking(move || {
         info!("Inside blocking task, starting read");
         let mut all_data = Vec::new();
-        let mut buf = [0u8; 100];
+        let mut buf = vec![0u8; 64 * 1024];
         let mut read_count = 0;
         let mut total_bytes = 0;
 

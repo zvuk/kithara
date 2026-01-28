@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use kithara_storage::{AtomicResource, Resource};
+use kithara_storage::{AtomicResource, AtomicResourceExt};
 
 use crate::error::AssetsResult;
 

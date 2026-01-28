@@ -13,6 +13,7 @@ bincode = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 hex = { workspace = true }
+kithara-bufpool = { workspace = true }
 kithara-storage = { workspace = true }
 lru = { workspace = true }
 parking_lot = { workspace = true }

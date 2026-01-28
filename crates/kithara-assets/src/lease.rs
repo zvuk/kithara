@@ -154,14 +154,6 @@ where
     R: Resource + Send + Sync,
     L: Send + Sync + 'static,
 {
-    async fn write(&self, data: &[u8]) -> Result<(), StorageError> {
-        self.inner.write(data).await
-    }
-
-    async fn read(&self) -> Result<Bytes, StorageError> {
-        self.inner.read().await
-    }
-
     async fn commit(&self, final_len: Option<u64>) -> Result<(), StorageError> {
         // Commit inner resource first
         self.inner.commit(final_len).await?;
@@ -207,11 +199,19 @@ where
     }
 }
 
+#[async_trait]
 impl<R, L> AtomicResourceExt for LeaseResource<R, L>
 where
     R: AtomicResourceExt + Send + Sync,
     L: Send + Sync + 'static,
 {
+    async fn write(&self, data: &[u8]) -> Result<(), StorageError> {
+        self.inner.write(data).await
+    }
+
+    async fn read(&self) -> Result<Bytes, StorageError> {
+        self.inner.read().await
+    }
 }
 
 /// Add status() method for ProcessedResource<StreamingResource> inner.
@@ -316,19 +316,32 @@ where
             return;
         }
 
-        tracing::debug!(asset_root = %self.asset_root, "LeaseGuard::drop - removing pin in-memory");
+        tracing::debug!(asset_root = %self.asset_root, "LeaseGuard::drop - removing pin");
 
-        // Remove pin from in-memory set immediately (sync operation)
-        // Persistence is deferred to next eviction check or explicit save
+        // Remove pin from in-memory set and persist to disk
         // Use try_lock to avoid blocking in Drop (which might run in async context)
-        if let Ok(mut pins) = self.owner.pins.try_lock() {
+        let snapshot = if let Ok(mut pins) = self.owner.pins.try_lock() {
             pins.remove(&self.asset_root);
-            tracing::debug!(asset_root = %self.asset_root, "Pin removed from in-memory set");
+            Some(pins.clone())
         } else {
             tracing::warn!(
                 asset_root = %self.asset_root,
                 "Could not acquire pins lock in Drop; pin removal deferred"
             );
+            None
+        };
+
+        // Persist to disk if we successfully removed from in-memory set
+        if let Some(snapshot) = snapshot {
+            let owner = self.owner.clone();
+            // Spawn background task to persist pins
+            // We don't wait for it - best-effort persistence
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn(async move {
+                    let _ = owner.persist_pins_best_effort(&snapshot).await;
+                    tracing::debug!("Pins persisted after drop");
+                });
+            }
         }
     }
 }
