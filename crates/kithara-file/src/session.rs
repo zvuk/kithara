@@ -197,5 +197,5 @@ impl kithara_stream::Source for FileSource {
     }
 }
 
-/// File backend - alias for ChannelBackend with FileSource.
-pub type FileBackend = kithara_stream::ChannelBackend<FileSource>;
+/// File backend - alias for Backend with FileSource.
+pub type FileBackend = kithara_stream::Backend<FileSource>;

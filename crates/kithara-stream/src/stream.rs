@@ -12,7 +12,7 @@ use std::{
     io::{Read, Seek, SeekFrom},
 };
 
-use crate::{ChannelReader, MediaInfo, RandomAccessBackend};
+use crate::{backend::BackendAccess, reader::Reader, MediaInfo};
 
 /// Defines a stream type and how to create it.
 ///
@@ -22,15 +22,15 @@ pub trait StreamType: Send + 'static {
     /// Configuration for this stream type.
     type Config: Default + Send;
 
-    /// Backend implementing RandomAccessBackend.
-    type Backend: RandomAccessBackend;
+    /// Backend implementing BackendAccess.
+    type Backend: BackendAccess;
 
     /// Error type for stream creation.
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Create the backend from configuration.
     ///
-    /// The backend will be wrapped in `ChannelReader` by `Stream::new()`.
+    /// The backend will be wrapped in `Reader` by `Stream::new()`.
     fn create_backend(
         config: Self::Config,
     ) -> impl Future<Output = Result<Self::Backend, Self::Error>> + Send;
@@ -57,9 +57,9 @@ impl Default for StreamConfig {
 /// Generic audio stream.
 ///
 /// `T` is a marker type defining the stream source (`Hls`, `File`, etc.).
-/// Stream holds a `ChannelReader<T::Backend>` which provides sync Read + Seek.
+/// Stream holds a `Reader<T::Backend>` which provides sync Read + Seek.
 pub struct Stream<T: StreamType> {
-    reader: ChannelReader<T::Backend>,
+    reader: Reader<T::Backend>,
     media_info: Option<MediaInfo>,
     pending_format_change: Option<MediaInfo>,
 }
@@ -69,7 +69,7 @@ impl<T: StreamType> Stream<T> {
     pub async fn new(config: T::Config) -> Result<Self, T::Error> {
         let backend = T::create_backend(config).await?;
         Ok(Self {
-            reader: ChannelReader::new(backend),
+            reader: Reader::new(backend),
             media_info: None,
             pending_format_change: None,
         })
@@ -78,7 +78,7 @@ impl<T: StreamType> Stream<T> {
     /// Create a stream from an existing backend.
     pub fn from_backend(backend: T::Backend) -> Self {
         Self {
-            reader: ChannelReader::new(backend),
+            reader: Reader::new(backend),
             media_info: None,
             pending_format_change: None,
         }

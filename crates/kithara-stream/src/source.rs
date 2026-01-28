@@ -5,7 +5,7 @@ use std::ops::Range;
 use async_trait::async_trait;
 use kithara_storage::WaitOutcome;
 
-use crate::{error::StreamResult, media_info::MediaInfo};
+use crate::{error::StreamResult, media::MediaInfo};
 
 /// Async random-access source contract.
 ///
