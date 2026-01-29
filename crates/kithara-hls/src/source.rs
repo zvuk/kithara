@@ -14,16 +14,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use async_trait::async_trait;
 use kithara_abr::{
     AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant,
 };
 use kithara_assets::{AssetStore, Assets, ResourceKey};
-use kithara_storage::{StreamingResourceExt, WaitOutcome};
+use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
     AudioCodec, ContainerFormat, Downloader, MediaInfo, Source, StreamError, StreamResult,
 };
-use parking_lot::Mutex;
+use parking_lot::{Condvar, Mutex};
 use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -32,7 +31,7 @@ use url::Url;
 use crate::{
     HlsError,
     events::HlsEvent,
-    fetch::{DefaultFetchManager, Loader, StreamingAssetResource},
+    fetch::{DefaultFetchManager, Loader},
 };
 
 /// Metadata for an HLS variant.
@@ -136,8 +135,8 @@ impl SegmentIndex {
 /// Shared state between HlsDownloader and HlsSource.
 struct SharedSegments {
     segments: Mutex<SegmentIndex>,
-    /// Downloader → Source: new segment available.
-    notify: Notify,
+    /// Downloader → Source: new segment available (for sync blocking in Source).
+    condvar: Condvar,
     eof: AtomicBool,
     /// Current reader byte offset (updated by Source on every read_at).
     reader_offset: AtomicU64,
@@ -149,7 +148,7 @@ impl SharedSegments {
     fn new() -> Self {
         Self {
             segments: Mutex::new(SegmentIndex::new()),
-            notify: Notify::new(),
+            condvar: Condvar::new(),
             eof: AtomicBool::new(false),
             reader_offset: AtomicU64::new(0),
             reader_advanced: Notify::new(),
@@ -268,7 +267,7 @@ impl HlsDownloader {
 
         // Push to shared index and notify waiting readers
         self.shared.segments.lock().push(entry);
-        self.shared.notify.notify_waiters();
+        self.shared.condvar.notify_all();
 
         Ok(false)
     }
@@ -319,7 +318,6 @@ impl HlsDownloader {
     }
 }
 
-#[async_trait]
 impl Downloader for HlsDownloader {
     async fn step(&mut self) -> bool {
         // Backpressure: wait if too far ahead of reader.
@@ -347,7 +345,7 @@ impl Downloader for HlsDownloader {
             Ok(is_eof) => {
                 if is_eof {
                     self.shared.eof.store(true, Ordering::Release);
-                    self.shared.notify.notify_waiters();
+                    self.shared.condvar.notify_all();
                     return false;
                 }
                 true
@@ -358,7 +356,7 @@ impl Downloader for HlsDownloader {
                     error: e.to_string(),
                 });
                 self.shared.eof.store(true, Ordering::Release);
-                self.shared.notify.notify_waiters();
+                self.shared.condvar.notify_all();
                 false
             }
         }
@@ -385,7 +383,7 @@ impl HlsSource {
     }
 
     /// Read from a segment entry.
-    async fn read_from_entry(
+    fn read_from_entry(
         &self,
         entry: &SegmentEntry,
         offset: u64,
@@ -400,29 +398,29 @@ impl HlsSource {
             };
 
             let key = ResourceKey::from_url(init_url);
-            let resource: StreamingAssetResource = assets.open_streaming_resource(&key).await?;
+            let resource = assets.open_resource(&key)?;
 
             let read_end = (local_offset + buf.len() as u64).min(entry.init_len);
-            resource.wait_range(local_offset..read_end).await?;
+            resource.wait_range(local_offset..read_end)?;
 
             let available = (entry.init_len - local_offset) as usize;
             let to_read = buf.len().min(available);
-            let bytes_from_init = resource.read_at(local_offset, &mut buf[..to_read]).await?;
+            let bytes_from_init = resource.read_at(local_offset, &mut buf[..to_read])?;
 
             if bytes_from_init < buf.len() && entry.media_len > 0 {
                 let remaining = &mut buf[bytes_from_init..];
-                let bytes_from_media = self.read_media_segment(entry, 0, remaining).await?;
+                let bytes_from_media = self.read_media_segment(entry, 0, remaining)?;
                 Ok(bytes_from_init + bytes_from_media)
             } else {
                 Ok(bytes_from_init)
             }
         } else {
             let media_offset = local_offset - entry.init_len;
-            self.read_media_segment(entry, media_offset, buf).await
+            self.read_media_segment(entry, media_offset, buf)
         }
     }
 
-    async fn read_media_segment(
+    fn read_media_segment(
         &self,
         entry: &SegmentEntry,
         media_offset: u64,
@@ -430,22 +428,21 @@ impl HlsSource {
     ) -> Result<usize, HlsError> {
         let assets = self.assets();
         let key = ResourceKey::from_url(&entry.segment_url);
-        let resource: StreamingAssetResource = assets.open_streaming_resource(&key).await?;
+        let resource = assets.open_resource(&key)?;
 
         let read_end = (media_offset + buf.len() as u64).min(entry.media_len);
-        resource.wait_range(media_offset..read_end).await?;
+        resource.wait_range(media_offset..read_end)?;
 
-        let bytes_read = resource.read_at(media_offset, buf).await?;
+        let bytes_read = resource.read_at(media_offset, buf)?;
         Ok(bytes_read)
     }
 }
 
-#[async_trait]
 impl Source for HlsSource {
     type Item = u8;
     type Error = HlsError;
 
-    async fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
+    fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
         debug!(
             range_start = range.start,
             range_end = range.end,
@@ -453,41 +450,35 @@ impl Source for HlsSource {
         );
 
         // Wait until the range is covered by loaded segments or EOF.
-        // Register notified() BEFORE checking data to avoid race with Downloader.
         loop {
-            let notified = self.shared.notify.notified();
-            tokio::pin!(notified);
+            let mut segments = self.shared.segments.lock();
+            let eof = self.shared.eof.load(Ordering::Acquire);
+            let total = segments.total_bytes();
 
-            {
-                let segments = self.shared.segments.lock();
-                let eof = self.shared.eof.load(Ordering::Acquire);
-                let total = segments.total_bytes();
+            if segments.range_covered(&range) {
+                debug!(range_start = range.start, "wait_range: covered");
+                return Ok(WaitOutcome::Ready);
+            }
 
-                if segments.range_covered(&range) {
-                    debug!(range_start = range.start, "wait_range: covered");
-                    return Ok(WaitOutcome::Ready);
-                }
+            if segments.find_at_offset(range.start).is_some() {
+                debug!(range_start = range.start, "wait_range: partial coverage");
+                return Ok(WaitOutcome::Ready);
+            }
 
-                if segments.find_at_offset(range.start).is_some() {
-                    debug!(range_start = range.start, "wait_range: partial coverage");
-                    return Ok(WaitOutcome::Ready);
-                }
-
-                if eof && range.start >= total {
-                    debug!(range_start = range.start, total, "wait_range: EOF");
-                    return Ok(WaitOutcome::Eof);
-                }
+            if eof && range.start >= total {
+                debug!(range_start = range.start, total, "wait_range: EOF");
+                return Ok(WaitOutcome::Eof);
             }
 
             // Signal downloader that reader needs data
             self.shared.reader_advanced.notify_one();
 
-            // Wait for downloader to push more segments
-            notified.await;
+            // Block until downloader pushes more segments
+            self.shared.condvar.wait(&mut segments);
         }
     }
 
-    async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, HlsError> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, HlsError> {
         debug!(offset, len = buf.len(), "read_at called");
 
         let entry = {
@@ -502,7 +493,6 @@ impl Source for HlsSource {
 
         let bytes = self
             .read_from_entry(&entry, offset, buf)
-            .await
             .map_err(StreamError::Source)?;
 
         if bytes > 0 {

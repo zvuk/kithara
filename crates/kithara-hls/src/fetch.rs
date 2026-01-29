@@ -4,7 +4,6 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_assets::{
@@ -12,7 +11,7 @@ use kithara_assets::{
     ProcessedResource, ProcessingAssets, ResourceKey,
 };
 use kithara_net::{Headers, HttpClient, Net};
-use kithara_storage::{AtomicResourceExt, ResourceStatus, StreamingResource};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
 use kithara_stream::{ContainerFormat, Writer, WriterItem};
 use parking_lot::RwLock;
 use tokio::sync::OnceCell;
@@ -86,7 +85,7 @@ pub struct SegmentMeta {
 }
 
 pub type StreamingAssetResource = LeaseResource<
-    ProcessedResource<StreamingResource, ()>,
+    ProcessedResource<StorageResource, ()>,
     LeaseGuard<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, ()>>>,
 >;
 
@@ -103,8 +102,8 @@ pub enum FetchResult {
 // ============================================================================
 
 /// Generic segment loader.
+#[allow(async_fn_in_trait)]
 #[mockall::automock]
-#[async_trait]
 pub trait Loader: Send + Sync {
     /// Load segment and return metadata with real size (after processing).
     async fn load_segment(&self, variant: usize, segment_index: usize) -> HlsResult<SegmentMeta>;
@@ -202,9 +201,9 @@ impl<N: Net> FetchManager<N> {
         resource_kind: &str,
     ) -> HlsResult<Bytes> {
         let key = ResourceKey::from_url(url);
-        let res = self.assets.open_atomic_resource(&key).await?;
+        let res = self.assets.open_resource(&key)?;
 
-        let cached = res.read().await?;
+        let cached = res.read_all()?;
         if !cached.is_empty() {
             debug!(
                 url = %url,
@@ -226,7 +225,7 @@ impl<N: Net> FetchManager<N> {
         );
 
         let bytes = self.net.get_bytes(url.clone(), headers).await?;
-        res.write(&bytes).await?;
+        res.write_all(&bytes)?;
 
         debug!(
             url = %url,
@@ -243,9 +242,9 @@ impl<N: Net> FetchManager<N> {
     /// Start fetching a segment. Returns cached size if already cached.
     pub(crate) async fn start_fetch(&self, url: &Url) -> HlsResult<FetchResult> {
         let key = ResourceKey::from_url(url);
-        let res = self.assets.open_streaming_resource(&key).await?;
+        let res = self.assets.open_resource(&key)?;
 
-        let status = res.status().await;
+        let status = res.status();
         if let ResourceStatus::Committed { final_len } = status {
             let len = final_len.unwrap_or(0);
             trace!(url = %url, len, "start_fetch: cache hit");
@@ -361,7 +360,6 @@ pub type DefaultFetchManager = FetchManager<HttpClient>;
 // Loader impl for FetchManager
 // ============================================================================
 
-#[async_trait]
 impl<N: Net> Loader for FetchManager<N> {
     async fn load_segment(&self, variant: usize, segment_index: usize) -> HlsResult<SegmentMeta> {
         let (media_url, playlist) = self.load_media_playlist(variant).await?;

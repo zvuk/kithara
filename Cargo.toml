@@ -116,10 +116,9 @@ tempfile = "3.24.0"
 # async traits
 async-trait = "0.1.89"
 
-# storage (range maps + async random-access disk)
+# storage (range maps + mmap)
 rangemap = { version = "1.7.1", features = ["serde1"] }
-random-access-disk = { git = "https://github.com/gerasim13/random-access-disk", branch = "master", default-features = false, features = ["tokio"] }
-random-access-storage = "5.0.0"
+mmap-io = { path = "/private/tmp/mmap-io", default-features = false }
 dashmap = "5.5.3"
 lru = "0.12"
 

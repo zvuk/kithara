@@ -1,32 +1,24 @@
-//! Sync Read+Seek adapter over async Source.
+//! Sync Read+Seek adapter over sync Source.
 //!
-//! Simple blocking adapter without prefetch.
+//! Simple adapter without prefetch.
 //! HLS already buffers segments ahead, so data is usually ready.
 
 use std::io::{Read, Seek, SeekFrom};
 
 use kithara_stream::{MediaInfo, Source, StreamError, WaitOutcome};
-use tokio::runtime::Handle;
 
-/// Sync reader over async byte Source.
+/// Sync reader over sync byte Source.
 ///
-/// Uses `block_on` to wait for data. Simple and direct.
+/// Calls Source methods directly (no async, no block_on).
 pub struct SourceReader<S: Source> {
     source: S,
     pos: u64,
-    rt: Handle,
 }
 
 impl<S: Source> SourceReader<S> {
     /// Create a new reader.
-    ///
-    /// Must be called from within a Tokio runtime context.
     pub fn new(source: S) -> Self {
-        Self {
-            source,
-            pos: 0,
-            rt: Handle::current(),
-        }
+        Self { source, pos: 0 }
     }
 
     /// Get current media info from source.
@@ -49,32 +41,23 @@ impl<S: Source> Read for SourceReader<S> {
         }
 
         let range = self.pos..self.pos.saturating_add(buf.len() as u64);
-        let pos = self.pos;
 
-        // Block on async wait and read
-        let result = self.rt.block_on(async {
-            // Wait for data to be available
-            match self.source.wait_range(range).await {
-                Ok(WaitOutcome::Ready) => {}
-                Ok(WaitOutcome::Eof) => return Ok(0),
-                Err(e) => {
-                    return Err(std::io::Error::other(e.to_string()));
-                }
+        // Wait for data to be available
+        match self.source.wait_range(range) {
+            Ok(WaitOutcome::Ready) => {}
+            Ok(WaitOutcome::Eof) => return Ok(0),
+            Err(e) => {
+                return Err(std::io::Error::other(e.to_string()));
             }
+        }
 
-            // Read data
-            match self.source.read_at(pos, buf).await {
-                Ok(n) => Ok(n),
-                Err(e) => Err(std::io::Error::other(e.to_string())),
-            }
-        });
-
-        match result {
+        // Read data
+        match self.source.read_at(self.pos, buf) {
             Ok(n) => {
                 self.pos = self.pos.saturating_add(n as u64);
                 Ok(n)
             }
-            Err(e) => Err(e),
+            Err(e) => Err(std::io::Error::other(e.to_string())),
         }
     }
 }

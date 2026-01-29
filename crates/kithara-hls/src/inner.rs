@@ -23,11 +23,11 @@ pub struct Hls;
 
 impl StreamType for Hls {
     type Config = HlsConfig;
-    type Backend = kithara_stream::Backend;
+    type Source = crate::source::HlsSource;
     type Error = HlsError;
     type Event = HlsEvent;
 
-    async fn create_backend(mut config: Self::Config) -> Result<Self::Backend, Self::Error> {
+    async fn create(mut config: Self::Config) -> Result<Self::Source, Self::Error> {
         let asset_root = asset_root_for_url(&config.url);
         let cancel = config.cancel.clone().unwrap_or_default();
         let net = HttpClient::new(config.net.clone());
@@ -84,15 +84,12 @@ impl StreamType for Hls {
             .collect();
 
         // Create HlsDownloader + HlsSource pair
-        let (downloader, source) = build_pair(
-            Arc::clone(&fetch_manager),
-            variant_metadata,
-            &config,
-        );
+        let (downloader, source) =
+            build_pair(Arc::clone(&fetch_manager), variant_metadata, &config);
 
-        // Create backend with source + downloader
-        let backend = kithara_stream::Backend::new(source, downloader, cancel);
+        // Spawn downloader as background task
+        std::mem::forget(kithara_stream::Backend::new(downloader, cancel));
 
-        Ok(backend)
+        Ok(source)
     }
 }

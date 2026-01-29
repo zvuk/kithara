@@ -1,25 +1,23 @@
 #![forbid(unsafe_code)]
 
-//! Source trait for async random-access data.
+//! Source trait for sync random-access data.
 //!
-//! Sources provide async random-access via `wait_range()` and `read_at()`.
-//! Backend bridges this to sync `Read + Seek` via channels.
+//! Sources provide sync random-access via `wait_range()` and `read_at()`.
+//! Reader wraps this directly for `Read + Seek`.
 
 use std::ops::Range;
 
-use async_trait::async_trait;
 use kithara_storage::WaitOutcome;
 
 use crate::{error::StreamResult, media::MediaInfo};
 
-/// Async random-access source.
+/// Sync random-access source.
 ///
-/// Provides async interface for waiting and reading data at arbitrary offsets.
-/// Backend wraps this to provide sync `Read + Seek` via channels.
+/// Provides sync interface for waiting and reading data at arbitrary offsets.
+/// Reader wraps this directly to provide `Read + Seek`.
 ///
-/// Methods take `&mut self` to allow sources to fetch data on demand
-/// (e.g., HLS segments, progressive download chunks).
-#[async_trait]
+/// Methods take `&mut self` to allow sources to maintain internal state
+/// (e.g., progress tracking, segment index updates).
 pub trait Source: Send + 'static {
     /// Item type (bytes for raw streams, samples for decoded audio).
     type Item: Send;
@@ -29,15 +27,15 @@ pub trait Source: Send + 'static {
 
     /// Wait for data in range to be available.
     ///
-    /// May fetch data if not yet available.
+    /// Blocks until data is available or EOF is reached.
     /// Returns `WaitOutcome::Ready` when range is available,
     /// `WaitOutcome::Eof` if EOF reached before range end.
-    async fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>;
+    fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>;
 
     /// Read data at offset into buffer.
     ///
     /// Returns number of bytes read. May return less than `buf.len()`.
-    async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error>;
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error>;
 
     /// Total length if known.
     fn len(&self) -> Option<u64>;

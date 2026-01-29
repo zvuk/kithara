@@ -1,6 +1,5 @@
 #![forbid(unsafe_code)]
 
-use random_access_storage::RandomAccessError;
 use thiserror::Error;
 
 /// Result type used by `kithara-storage`.
@@ -16,8 +15,8 @@ pub enum StorageError {
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("random access error: {0}")]
-    RandomAccess(#[from] RandomAccessError),
+    #[error("mmap error: {0}")]
+    Mmap(#[from] mmap_io::MmapIoError),
 
     #[error("invalid range: start {start} >= end {end}")]
     InvalidRange { start: u64, end: u64 },

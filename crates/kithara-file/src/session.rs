@@ -7,7 +7,7 @@ use kithara_assets::{
     ProcessedResource, ProcessingAssets,
 };
 use kithara_net::{HttpClient, Net};
-use kithara_storage::{StreamingResource, StreamingResourceExt, WaitOutcome};
+use kithara_storage::{ResourceExt, StorageResource, WaitOutcome};
 use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
@@ -16,7 +16,7 @@ use url::Url;
 use crate::{error::SourceError, events::FileEvent};
 
 pub(crate) type AssetResourceType = LeaseResource<
-    ProcessedResource<StreamingResource, ()>,
+    ProcessedResource<StorageResource, ()>,
     LeaseGuard<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, ()>>>,
 >;
 
@@ -45,10 +45,7 @@ impl FileStreamState {
             .and_then(|v| v.parse::<u64>().ok());
 
         let key = (&url).into();
-        let res = assets
-            .open_streaming_resource(&key)
-            .await
-            .map_err(SourceError::Assets)?;
+        let res = assets.open_resource(&key).map_err(SourceError::Assets)?;
 
         let events =
             events_tx.unwrap_or_else(|| broadcast::channel(events_channel_capacity.max(1)).0);
@@ -87,7 +84,7 @@ impl FileStreamState {
 pub struct Progress {
     read_pos: std::sync::atomic::AtomicU64,
     download_pos: std::sync::atomic::AtomicU64,
-    /// Source → Downloader: reader advanced, may resume downloading.
+    /// Source -> Downloader: reader advanced, may resume downloading.
     reader_advanced: Notify,
 }
 
@@ -139,7 +136,7 @@ impl Default for Progress {
     }
 }
 
-/// File source implementing Source trait.
+/// File source implementing Source trait (sync).
 ///
 /// Wraps storage resource with progress tracking and event emission.
 pub struct FileSource {
@@ -166,12 +163,11 @@ impl FileSource {
     }
 }
 
-#[async_trait::async_trait]
 impl kithara_stream::Source for FileSource {
     type Item = u8;
     type Error = SourceError;
 
-    async fn wait_range(
+    fn wait_range(
         &mut self,
         range: std::ops::Range<u64>,
     ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
@@ -182,11 +178,10 @@ impl kithara_stream::Source for FileSource {
 
         self.res
             .wait_range(range)
-            .await
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))
     }
 
-    async fn read_at(
+    fn read_at(
         &mut self,
         offset: u64,
         buf: &mut [u8],
@@ -196,7 +191,6 @@ impl kithara_stream::Source for FileSource {
         let n = self
             .res
             .read_at(offset, buf)
-            .await
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))?;
 
         if n > 0 {

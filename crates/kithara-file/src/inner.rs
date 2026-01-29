@@ -5,12 +5,11 @@
 
 use std::sync::Arc;
 
-use async_trait::async_trait;
 use futures::StreamExt;
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
-use kithara_storage::Resource;
-use kithara_stream::{Downloader, StreamType, Writer, WriterItem};
+use kithara_storage::ResourceExt;
+use kithara_stream::{Backend, Downloader, StreamType, Writer, WriterItem};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -26,11 +25,11 @@ pub struct File;
 
 impl StreamType for File {
     type Config = FileConfig;
-    type Backend = kithara_stream::Backend;
+    type Source = FileSource;
     type Error = SourceError;
     type Event = FileEvent;
 
-    async fn create_backend(config: Self::Config) -> Result<Self::Backend, Self::Error> {
+    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         let asset_root = asset_root_for_url(&config.url);
         let cancel = config.cancel.clone().unwrap_or_default();
 
@@ -65,16 +64,20 @@ impl StreamType for File {
         )
         .await;
 
-        // Create source and backend
+        // Spawn downloader as background task.
+        // Backend is leaked intentionally — downloader runs until cancel or completion.
+        // The JoinHandle is detached: the tokio task continues running independently.
+        std::mem::forget(Backend::new(downloader, cancel));
+
+        // Create source
         let source = FileSource::new(
             state.res().clone(),
             progress,
             state.events().clone(),
             state.len(),
         );
-        let backend = kithara_stream::Backend::new(source, downloader, cancel);
 
-        Ok(backend)
+        Ok(source)
     }
 }
 
@@ -106,7 +109,7 @@ impl FileDownloader {
             Ok(stream) => Writer::new(stream, res, cancel),
             Err(e) => {
                 tracing::warn!("failed to open stream: {}", e);
-                let _ = res.fail(e.to_string()).await;
+                res.fail(e.to_string());
                 let _ = events_tx.send(FileEvent::DownloadError {
                     error: e.to_string(),
                 });
@@ -127,7 +130,6 @@ impl FileDownloader {
     }
 }
 
-#[async_trait]
 impl Downloader for FileDownloader {
     async fn step(&mut self) -> bool {
         // Backpressure: wait if too far ahead of reader.

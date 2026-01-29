@@ -2,37 +2,28 @@
 
 //! Sync reader with random access.
 //!
-//! `Reader<B>` implements `Read + Seek` using a backend.
-//! No `block_on` - uses kanal's native sync operations.
+//! `Reader<S>` implements `Read + Seek` by calling Source directly.
+//! No channels, no `block_on` — Source methods are sync.
 
 use std::io::{Read, Seek, SeekFrom};
 
-use bytes::Bytes;
+use kithara_storage::WaitOutcome;
 
-use crate::backend::{BackendAccess, Command, Response};
+use crate::{MediaInfo, source::Source};
 
 /// Sync reader with random access.
 ///
-/// Uses `BackendAccess` trait for actual I/O.
+/// Calls `Source` methods directly for I/O.
 /// Implements `Read + Seek` for use with symphonia.
-pub struct Reader<B: BackendAccess> {
-    backend: B,
+pub struct Reader<S: Source> {
+    source: S,
     pos: u64,
-    buffer: Bytes,
-    buffer_offset: usize,
-    eof: bool,
 }
 
-impl<B: BackendAccess> Reader<B> {
+impl<S: Source> Reader<S> {
     /// Create new reader.
-    pub fn new(backend: B) -> Self {
-        Self {
-            backend,
-            pos: 0,
-            buffer: Bytes::new(),
-            buffer_offset: 0,
-            eof: false,
-        }
+    pub fn new(source: S) -> Self {
+        Self { source, pos: 0 }
     }
 
     /// Get current position.
@@ -42,114 +33,71 @@ impl<B: BackendAccess> Reader<B> {
 
     /// Get total length if known.
     pub fn len(&self) -> Option<u64> {
-        self.backend.len()
+        self.source.len()
     }
 
     /// Check if length is zero or unknown.
     pub fn is_empty(&self) -> bool {
-        self.backend.len().map(|l| l == 0).unwrap_or(true)
+        self.source.len().map(|l| l == 0).unwrap_or(true)
     }
 
     /// Get media info if known.
-    pub fn media_info(&self) -> Option<crate::MediaInfo> {
-        self.backend.media_info()
+    pub fn media_info(&self) -> Option<MediaInfo> {
+        self.source.media_info()
     }
 
     /// Get current segment byte range.
     pub fn current_segment_range(&self) -> std::ops::Range<u64> {
-        self.backend.current_segment_range()
+        self.source.current_segment_range()
     }
 
-    /// Request data from backend and wait for response.
-    fn request_and_receive(&mut self, len: usize) -> std::io::Result<Option<Bytes>> {
-        self.backend
-            .command_tx()
-            .send(Command::Read {
-                offset: self.pos,
-                len,
-            })
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "backend stopped"))?;
+    /// Get mutable reference to inner source.
+    pub fn source_mut(&mut self) -> &mut S {
+        &mut self.source
+    }
 
-        match self.backend.response_rx().recv() {
-            Ok(Response::Data(bytes)) => Ok(Some(bytes)),
-            Ok(Response::Eof) => Ok(None),
-            Ok(Response::Error(msg)) => Err(std::io::Error::other(msg)),
-            Err(_) => Err(std::io::Error::new(
-                std::io::ErrorKind::BrokenPipe,
-                "backend channel closed",
-            )),
-        }
+    /// Get shared reference to inner source.
+    pub fn source(&self) -> &S {
+        &self.source
     }
 }
 
-impl<B: BackendAccess> Read for Reader<B> {
+impl<S: Source> Read for Reader<S> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if buf.is_empty() || self.eof {
-            tracing::debug!(
-                pos = self.pos,
-                eof = self.eof,
-                buf_empty = buf.is_empty(),
-                "Reader.read early return"
-            );
+        if buf.is_empty() {
             return Ok(0);
         }
 
-        // First, drain any buffered data
-        if self.buffer_offset < self.buffer.len() {
-            let remaining = &self.buffer[self.buffer_offset..];
-            let to_copy = remaining.len().min(buf.len());
-            buf[..to_copy].copy_from_slice(&remaining[..to_copy]);
-            self.buffer_offset += to_copy;
-            self.pos += to_copy as u64;
-            return Ok(to_copy);
+        let range = self.pos..self.pos.saturating_add(buf.len() as u64);
+
+        // Wait for data to be available (blocking)
+        match self
+            .source
+            .wait_range(range)
+            .map_err(|e| std::io::Error::other(e.to_string()))?
+        {
+            WaitOutcome::Ready => {}
+            WaitOutcome::Eof => return Ok(0),
         }
 
-        tracing::debug!(
-            pos = self.pos,
-            buf_len = buf.len(),
-            "Reader.read requesting data"
-        );
+        // Read data directly from source
+        let n = self
+            .source
+            .read_at(self.pos, buf)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-        // Buffer exhausted, request new data
-        match self.request_and_receive(buf.len())? {
-            Some(bytes) => {
-                if bytes.is_empty() {
-                    tracing::debug!(pos = self.pos, "Reader.read: empty bytes, setting eof");
-                    self.eof = true;
-                    return Ok(0);
-                }
-
-                let to_copy = bytes.len().min(buf.len());
-                buf[..to_copy].copy_from_slice(&bytes[..to_copy]);
-                self.pos += to_copy as u64;
-
-                // Buffer remaining if any
-                if to_copy < bytes.len() {
-                    self.buffer = bytes;
-                    self.buffer_offset = to_copy;
-                } else {
-                    self.buffer = Bytes::new();
-                    self.buffer_offset = 0;
-                }
-
-                Ok(to_copy)
-            }
-            None => {
-                tracing::debug!(pos = self.pos, "Reader.read: None response, setting eof");
-                self.eof = true;
-                Ok(0)
-            }
-        }
+        self.pos = self.pos.saturating_add(n as u64);
+        Ok(n)
     }
 }
 
-impl<B: BackendAccess> Seek for Reader<B> {
+impl<S: Source> Seek for Reader<S> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => p as i128,
             SeekFrom::Current(delta) => (self.pos as i128).saturating_add(delta as i128),
             SeekFrom::End(delta) => {
-                let Some(len) = self.backend.len() else {
+                let Some(len) = self.source.len() else {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::Unsupported,
                         "seek from end requires known length",
@@ -168,7 +116,7 @@ impl<B: BackendAccess> Seek for Reader<B> {
 
         let new_pos = new_pos as u64;
 
-        if let Some(len) = self.backend.len()
+        if let Some(len) = self.source.len()
             && new_pos > len
         {
             return Err(std::io::Error::new(
@@ -177,24 +125,7 @@ impl<B: BackendAccess> Seek for Reader<B> {
             ));
         }
 
-        // Send seek command to backend
-        self.backend
-            .command_tx()
-            .send(Command::Seek { offset: new_pos })
-            .map_err(|_| std::io::Error::new(std::io::ErrorKind::BrokenPipe, "backend stopped"))?;
-
-        // Clear buffer and reset state
-        self.buffer = Bytes::new();
-        self.buffer_offset = 0;
         self.pos = new_pos;
-        self.eof = false;
-
         Ok(new_pos)
-    }
-}
-
-impl<B: BackendAccess> Drop for Reader<B> {
-    fn drop(&mut self) {
-        let _ = self.backend.command_tx().send(Command::Stop);
     }
 }

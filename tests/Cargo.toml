@@ -68,6 +68,5 @@ sha2 = { workspace = true }
 async-trait = { workspace = true }
 
 # Storage
-random-access-disk = { workspace = true }
-random-access-storage = { workspace = true }
+mmap-io = { workspace = true }
 dashmap = { workspace = true }

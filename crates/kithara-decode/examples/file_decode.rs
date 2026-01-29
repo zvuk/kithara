@@ -28,7 +28,6 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
                 .add_directive("kithara_decode=info".parse()?)
                 .add_directive("kithara_file=info".parse()?)
                 .add_directive("kithara_stream=info".parse()?)
-                .add_directive("kithara_net=info".parse()?)
                 .add_directive("kithara_net=warn".parse()?)
                 .add_directive("symphonia_format_isomp4=warn".parse()?)
                 .add_directive(LevelFilter::INFO.into()),

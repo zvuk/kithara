@@ -31,7 +31,7 @@
 //!
 //! ## Global index (best-effort)
 //!
-//! `_index/*` stores small, atomic files (temp → rename) used as best-effort metadata.
+//! `_index/*` stores small files used as best-effort metadata.
 //! Filesystem remains the source of truth; indexes may be missing and can be rebuilt later.
 
 mod base;

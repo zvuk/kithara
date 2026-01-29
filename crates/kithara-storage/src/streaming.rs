@@ -1,345 +1,48 @@
 #![forbid(unsafe_code)]
 
+//! `StorageResource` — unified mmap-backed storage resource.
+//!
+//! Replaces both `StreamingResource` (random-access) and `AtomicResource` (whole-file).
+//! Uses `mmap-io` for zero-copy reads and writes, with `Condvar` for blocking waits.
+
 use std::{
-    fmt,
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use async_trait::async_trait;
-use random_access_disk::RandomAccessDisk;
-use random_access_storage::RandomAccess;
+use mmap_io::MemoryMappedFile;
+use parking_lot::{Condvar, Mutex};
 use rangemap::RangeSet;
-use tokio::sync::{Mutex, Notify, RwLock};
 use tokio_util::sync::CancellationToken;
+use tracing::trace;
 
-use crate::{Resource, StorageError, StorageResult, StreamingResourceExt, WaitOutcome};
+use crate::{ResourceStatus, StorageError, StorageResult, WaitOutcome, resource::ResourceExt};
 
-/// Options for opening a disk-backed streaming resource.
-#[derive(Clone, Debug)]
-pub struct DiskOptions {
+/// Default initial size for new mmap files (1 MB).
+const DEFAULT_INITIAL_SIZE: u64 = 1024 * 1024;
+
+/// Options for opening a `StorageResource`.
+#[derive(Debug, Clone)]
+pub struct StorageOptions {
     /// Path to the backing file.
     pub path: PathBuf,
-
-    /// Mandatory cancellation token for this resource lifecycle.
-    ///
-    /// Used by `wait_range` (and write paths) to ensure nothing can hang indefinitely if the
-    /// owning session is cancelled/dropped.
-    pub cancel: CancellationToken,
-
-    /// Optional initial length hint.
-    ///
-    /// - `Some(len)`: best-effort truncate/extend to `len` before writes.
-    /// - `None`: if the file already exists, its current length is treated as available data
-    ///   (resource remains in-progress); nothing is truncated.
+    /// Initial file size for new files. Ignored for existing files.
     pub initial_len: Option<u64>,
+    /// Cancellation token.
+    pub cancel: CancellationToken,
 }
 
-impl DiskOptions {
-    pub fn new(path: impl Into<PathBuf>, cancel: CancellationToken) -> Self {
-        Self {
-            path: path.into(),
-            cancel,
-            initial_len: None,
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ResourceStatus {
-    InProgress,
-    Committed { final_len: Option<u64> },
-    Failed,
-}
-
-/// A single logical resource that can be written in ranges and read with async waiting.
-///
-/// Clone is cheap; all clones refer to the same underlying resource.
-///
-/// # Contract (normative)
-/// - `read_at` does **not** wait; callers should use `wait_range` for blocking semantics.
-/// - `wait_range` resolves to `Eof` only after `commit(Some(final_len))` when the requested
-///   range starts at/after EOF.
-/// - `commit` publishes an optional EOF hint; writes after commit are allowed.
-/// - `fail` wakes all waiters and causes future waits/writes to fail.
-#[derive(Clone)]
-pub struct StreamingResource {
-    inner: Arc<Inner>,
-}
-
-impl fmt::Debug for StreamingResource {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("StreamingResource")
-            .field("path", &self.inner.path)
-            .finish_non_exhaustive()
-    }
-}
-
-impl StreamingResource {
-    /// Open or create a disk-backed streaming resource.
-    ///
-    /// - If `initial_len` is `Some`, the file is truncated/extended accordingly.
-    /// - If `initial_len` is `None` and the file exists, existing bytes are published as available
-    ///   (resource stays in-progress) and nothing is truncated.
-    ///
-    /// This does not imply the resource is ready. Callers should write ranges and then `commit`.
-    pub async fn open_disk(opts: DiskOptions) -> StorageResult<Self> {
-        // Storage-layer responsibility: ensure parent directories exist.
-        if let Some(parent) = opts.path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
-        let existing_len = tokio::fs::metadata(&opts.path).await.ok().map(|m| m.len());
-
-        let mut disk = RandomAccessDisk::open(opts.path.clone()).await?;
-        if let Some(len) = opts.initial_len {
-            // Best-effort sizing. Some backends may create sparse files; that's fine.
-            disk.truncate(len).await?;
-        }
-
-        let state = match (opts.initial_len, existing_len) {
-            (Some(len), _) => State::with_initial_len(Some(len)),
-            (None, Some(len)) if len > 0 => State::with_available_len(len),
-            _ => State::new(),
-        };
-
-        Ok(Self {
-            inner: Arc::new(Inner {
-                path: opts.path,
-                cancel: opts.cancel,
-                disk: Mutex::new(disk),
-                state: RwLock::new(state),
-                notify: Notify::new(),
-            }),
-        })
-    }
-
-    /// Return current status (best-effort snapshot).
-    pub async fn status(&self) -> ResourceStatus {
-        let state = self.inner.state.read().await;
-
-        if state.failed.is_some() {
-            return ResourceStatus::Failed;
-        }
-
-        if state.committed {
-            return ResourceStatus::Committed {
-                final_len: state.final_len,
-            };
-        }
-
-        ResourceStatus::InProgress
-    }
-
-    /// Clamp `len` to EOF if committed with known final length.
-    ///
-    /// Returns:
-    /// - `Ok(Some(0))` if offset is at/after EOF.
-    /// - `Ok(Some(clamped_len))` if clamped.
-    /// - `Ok(None)` if EOF is not known (not committed or committed without final_len).
-    async fn clamp_len_to_eof(&self, offset: u64, len: usize) -> StorageResult<Option<usize>> {
-        let state = self.inner.state.read().await;
-        if !state.committed {
-            return Ok(None);
-        }
-        let Some(final_len) = state.final_len else {
-            return Ok(None);
-        };
-
-        if offset >= final_len {
-            return Ok(Some(0));
-        }
-
-        let max = (final_len - offset) as usize;
-        Ok(Some(len.min(max)))
-    }
-
-    fn validate_range(range: &Range<u64>) -> StorageResult<()> {
-        if range.start >= range.end {
-            return Err(StorageError::InvalidRange {
-                start: range.start,
-                end: range.end,
-            });
-        }
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl Resource for StreamingResource {
-    async fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        {
-            let mut state = self.inner.state.write().await;
-
-            if let Some(err) = &state.failed {
-                return Err(StorageError::Failed(err.clone()));
-            }
-
-            state.committed = true;
-            state.final_len = final_len;
-        }
-
-        self.inner.notify.notify_waiters();
-        Ok(())
-    }
-
-    async fn fail(&self, error: impl Into<String> + Send) -> StorageResult<()> {
-        {
-            let mut state = self.inner.state.write().await;
-            state.failed = Some(error.into());
-        }
-        self.inner.notify.notify_waiters();
-        Ok(())
-    }
-
-    fn path(&self) -> &Path {
-        &self.inner.path
-    }
-}
-
-#[async_trait]
-impl StreamingResourceExt for StreamingResource {
-    async fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        Self::validate_range(&range)?;
-
-        // Important: do not hold `state` across `.await` points.
-        // Otherwise `wait_range` can block writers from publishing new ranges,
-        // and writers can block `wait_range` from being notified (deadlock).
-        loop {
-            let outcome = {
-                let state = self.inner.state.read().await;
-
-                if let Some(err) = &state.failed {
-                    return Err(StorageError::Failed(err.clone()));
-                }
-
-                let start = range.start;
-                let end = range.end;
-
-                match state.final_len {
-                    Some(final_len) => {
-                        if start >= final_len {
-                            Some(WaitOutcome::Eof)
-                        } else {
-                            // If the range extends beyond EOF, only the part before EOF matters.
-                            let needed_end = end.min(final_len);
-                            if state.is_covered(start..needed_end) {
-                                Some(WaitOutcome::Ready)
-                            } else {
-                                None
-                            }
-                        }
-                    }
-                    None => {
-                        // No known final len: still must be covered.
-                        if state.is_covered(start..end) {
-                            Some(WaitOutcome::Ready)
-                        } else {
-                            None
-                        }
-                    }
-                }
-            };
-
-            if let Some(outcome) = outcome {
-                return Ok(outcome);
-            }
-
-            tokio::select! {
-                _ = self.inner.cancel.cancelled() => return Err(StorageError::Cancelled),
-                _ = self.inner.notify.notified() => { /* loop */ }
-            }
-        }
-    }
-
-    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-
-        let len = buf.len();
-        let read_len = match self.clamp_len_to_eof(offset, len).await? {
-            Some(0) => return Ok(0),
-            Some(clamped) => clamped,
-            None => len,
-        };
-
-        let mut disk = self.inner.disk.lock().await;
-        let bytes_read = disk.read_to(offset, &mut buf[..read_len]).await?;
-        Ok(bytes_read)
-    }
-
-    async fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        if self.inner.cancel.is_cancelled() {
-            return Err(StorageError::Cancelled);
-        }
-
-        if data.is_empty() {
-            return Ok(());
-        }
-
-        let end = offset
-            .checked_add(data.len() as u64)
-            .ok_or(StorageError::InvalidRange {
-                start: offset,
-                end: offset,
-            })?;
-
-        // Stash range locally to only publish it after successful disk write.
-        let pending_range = offset..end;
-
-        // Check preconditions before disk write
-        {
-            let state = self.inner.state.read().await;
-
-            if let Some(err) = &state.failed {
-                return Err(StorageError::Failed(err.clone()));
-            }
-        }
-
-        // Perform disk write
-        let write_result: StorageResult<()> = {
-            let mut disk = self.inner.disk.lock().await;
-            disk.write(offset, data).await.map_err(Into::into)
-        };
-
-        write_result?;
-
-        // Add the range to available after successful disk write
-        {
-            let mut state = self.inner.state.write().await;
-            if state.committed {
-                state.committed = false;
-                state.final_len = None;
-            }
-            state.available.insert(pending_range);
-        }
-
-        self.inner.notify.notify_waiters();
-        Ok(())
-    }
-}
-
-struct Inner {
-    path: PathBuf,
-    cancel: CancellationToken,
-    disk: Mutex<RandomAccessDisk>,
-    state: RwLock<State>,
-    notify: Notify,
-}
-
-#[derive(Debug)]
+/// Internal state protected by Mutex.
 struct State {
     available: RangeSet<u64>,
     committed: bool,
     final_len: Option<u64>,
     failed: Option<String>,
-    // Temporary range published only after successful write.
 }
 
-impl State {
-    fn new() -> Self {
+impl Default for State {
+    fn default() -> Self {
         Self {
             available: RangeSet::new(),
             committed: false,
@@ -347,56 +50,552 @@ impl State {
             failed: None,
         }
     }
+}
 
-    fn with_initial_len(initial_len: Option<u64>) -> Self {
-        match initial_len {
-            Some(len) if len > 0 => {
-                let mut available = RangeSet::new();
-                available.insert(0..len);
-                Self {
-                    available,
-                    committed: true,
-                    final_len: Some(len),
-                    failed: None,
-                }
+/// Shared inner storage.
+struct Inner {
+    /// Mmap handle. `None` for zero-length committed resources.
+    mmap: Mutex<Option<MemoryMappedFile>>,
+    state: Mutex<State>,
+    condvar: Condvar,
+    cancel: CancellationToken,
+    path: PathBuf,
+}
+
+/// Unified mmap-backed storage resource.
+///
+/// Supports both streaming (incremental `write_at` -> `wait_range` + `read_at` -> `commit`)
+/// and atomic (`write_all` / `read_all`) use-cases.
+#[derive(Clone)]
+pub struct StorageResource {
+    inner: Arc<Inner>,
+}
+
+impl std::fmt::Debug for StorageResource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageResource")
+            .field("path", &self.inner.path)
+            .finish()
+    }
+}
+
+impl StorageResource {
+    /// Open or create a storage resource.
+    ///
+    /// - If the file already exists with data: opened as committed, with all data available.
+    /// - If the file does not exist or is empty: created with `initial_len` (or default 1MB).
+    pub fn open(opts: StorageOptions) -> StorageResult<Self> {
+        let (mmap, state) = if opts.path.exists() && std::fs::metadata(&opts.path)?.len() > 0 {
+            // Existing file (cache hit) -> committed, all data available
+            let mmap = MemoryMappedFile::open_rw(&opts.path)?;
+            let len = mmap.len();
+            let mut available = RangeSet::new();
+            available.insert(0..len);
+            let state = State {
+                available,
+                committed: true,
+                final_len: Some(len),
+                failed: None,
+            };
+            (Some(mmap), state)
+        } else {
+            // New file -> create with initial size
+            if let Some(parent) = opts.path.parent() {
+                std::fs::create_dir_all(parent)?;
             }
-            _ => Self::new(),
+            let size = opts.initial_len.unwrap_or(DEFAULT_INITIAL_SIZE);
+            if size == 0 {
+                // Cannot mmap a zero-length file; start without mmap, will create on first write
+                (None, State::default())
+            } else {
+                let mmap = MemoryMappedFile::create_rw(&opts.path, size)?;
+                (Some(mmap), State::default())
+            }
+        };
+
+        Ok(Self {
+            inner: Arc::new(Inner {
+                mmap: Mutex::new(mmap),
+                state: Mutex::new(state),
+                condvar: Condvar::new(),
+                cancel: opts.cancel,
+                path: opts.path,
+            }),
+        })
+    }
+
+    /// Check if the resource is cancelled or failed, returning error if so.
+    fn check_health(&self) -> StorageResult<()> {
+        if self.inner.cancel.is_cancelled() {
+            return Err(StorageError::Cancelled);
+        }
+        let state = self.inner.state.lock();
+        if let Some(ref reason) = state.failed {
+            return Err(StorageError::Failed(reason.clone()));
+        }
+        Ok(())
+    }
+}
+
+impl ResourceExt for StorageResource {
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        self.check_health()?;
+
+        let state = self.inner.state.lock();
+        let mmap_guard = self.inner.mmap.lock();
+
+        let mmap_len = mmap_guard.as_ref().map(|m| m.len()).unwrap_or(0);
+        let final_len = state.final_len.unwrap_or(mmap_len);
+
+        // Clamp to both final_len and actual mmap size
+        let effective_len = final_len.min(mmap_len);
+
+        if offset >= effective_len {
+            return Ok(0);
+        }
+
+        let available = (effective_len - offset) as usize;
+        let to_read = buf.len().min(available);
+        drop(state);
+
+        if let Some(ref mmap) = *mmap_guard {
+            mmap.read_into(offset, &mut buf[..to_read])?;
+        }
+        drop(mmap_guard);
+
+        Ok(to_read)
+    }
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
+
+        self.check_health()?;
+
+        // Validate offset+len doesn't overflow
+        let end = offset
+            .checked_add(data.len() as u64)
+            .ok_or(StorageError::InvalidRange {
+                start: offset,
+                end: u64::MAX,
+            })?;
+
+        // Single lock scope: ensure mmap exists, resize, and write — all atomically.
+        // This prevents race with commit() which may resize mmap down.
+        {
+            let mut mmap_guard = self.inner.mmap.lock();
+
+            let mmap = match *mmap_guard {
+                Some(ref m) => {
+                    if end > m.len() {
+                        let new_size = end.max(m.len() * 2);
+                        m.resize(new_size)?;
+                    }
+                    m
+                }
+                None => {
+                    // Create new mmap
+                    let size = end.max(DEFAULT_INITIAL_SIZE);
+                    let m = MemoryMappedFile::create_rw(&self.inner.path, size)?;
+                    *mmap_guard = Some(m);
+                    mmap_guard.as_ref().ok_or_else(|| {
+                        StorageError::Failed("mmap not available after create".to_string())
+                    })?
+                }
+            };
+
+            mmap.update_region(offset, data)?;
+        }
+
+        // Update available ranges and notify waiters
+        let mut state = self.inner.state.lock();
+        state.available.insert(offset..end);
+        self.inner.condvar.notify_all();
+
+        trace!(offset, len = data.len(), "StorageResource: write_at");
+        Ok(())
+    }
+
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        // Validate range
+        if range.start > range.end {
+            return Err(StorageError::InvalidRange {
+                start: range.start,
+                end: range.end,
+            });
+        }
+
+        if range.is_empty() {
+            return Ok(WaitOutcome::Ready);
+        }
+
+        let mut state = self.inner.state.lock();
+
+        loop {
+            // Check cancellation
+            if self.inner.cancel.is_cancelled() {
+                return Err(StorageError::Cancelled);
+            }
+
+            // Check failure
+            if let Some(ref reason) = state.failed {
+                return Err(StorageError::Failed(reason.clone()));
+            }
+
+            // Check if range is covered
+            if range_covered_by(&state.available, &range) {
+                return Ok(WaitOutcome::Ready);
+            }
+
+            // Check EOF
+            if state.committed {
+                let final_len = state.final_len.unwrap_or(0);
+                if range.start >= final_len {
+                    return Ok(WaitOutcome::Eof);
+                }
+                // Committed and range starts within data -> ready (partial read OK)
+                return Ok(WaitOutcome::Ready);
+            }
+
+            // Wait for notification with timeout to recheck cancellation
+            self.inner
+                .condvar
+                .wait_for(&mut state, std::time::Duration::from_millis(50));
         }
     }
 
-    fn with_available_len(len: u64) -> Self {
+    fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
+        self.check_health()?;
+
+        if let Some(len) = final_len {
+            if len > 0 {
+                // Truncate file to final length if needed
+                let mmap_guard = self.inner.mmap.lock();
+                if let Some(ref mmap) = *mmap_guard
+                    && len < mmap.len()
+                {
+                    mmap.resize(len)?;
+                }
+            } else {
+                // len == 0: drop mmap and truncate file to zero
+                let mut mmap_guard = self.inner.mmap.lock();
+                *mmap_guard = None;
+                // Truncate (or create empty) the backing file
+                let _ = std::fs::write(&self.inner.path, b"");
+            }
+        }
+
+        let mut state = self.inner.state.lock();
+        state.committed = true;
+        state.final_len = final_len;
+        if let Some(len) = final_len
+            && len > 0
+        {
+            state.available.insert(0..len);
+        }
+        self.inner.condvar.notify_all();
+        Ok(())
+    }
+
+    fn fail(&self, reason: String) {
+        let mut state = self.inner.state.lock();
+        state.failed = Some(reason);
+        self.inner.condvar.notify_all();
+    }
+
+    fn path(&self) -> &Path {
+        &self.inner.path
+    }
+
+    fn len(&self) -> Option<u64> {
+        let state = self.inner.state.lock();
+        state.final_len
+    }
+
+    fn status(&self) -> ResourceStatus {
+        let state = self.inner.state.lock();
+        if let Some(ref reason) = state.failed {
+            ResourceStatus::Failed(reason.clone())
+        } else if state.committed {
+            ResourceStatus::Committed {
+                final_len: state.final_len,
+            }
+        } else {
+            ResourceStatus::Active
+        }
+    }
+
+    fn read_all(&self) -> StorageResult<bytes::Bytes> {
+        self.check_health()?;
+
+        let len = match self.len() {
+            Some(l) => l,
+            None => return Ok(bytes::Bytes::new()),
+        };
         if len == 0 {
-            return Self::new();
+            return Ok(bytes::Bytes::new());
         }
-
-        let mut available = RangeSet::new();
-        available.insert(0..len);
-
-        Self {
-            available,
-            committed: false,
-            final_len: None,
-            failed: None,
-        }
+        let mut buf = vec![0u8; len as usize];
+        let n = self.read_at(0, &mut buf)?;
+        buf.truncate(n);
+        Ok(bytes::Bytes::from(buf))
     }
 
-    fn is_covered(&self, range: Range<u64>) -> bool {
-        // Check that there are no holes between range.start and range.end,
-        // using the set's overlapping iterator.
-        let mut cursor = range.start;
+    fn write_all(&self, data: &[u8]) -> StorageResult<()> {
+        self.check_health()?;
+        self.write_at(0, data)?;
+        self.commit(Some(data.len() as u64))
+    }
+}
 
-        for r in self.available.overlapping(&(range.start..range.end)) {
-            if r.start > cursor {
-                return false; // gap
+/// Check if the `available` range set fully covers `range`.
+fn range_covered_by(available: &RangeSet<u64>, range: &Range<u64>) -> bool {
+    if range.is_empty() {
+        return true;
+    }
+    // No gaps means full coverage
+    !available.gaps(range).any(|_| true)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use rstest::*;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    fn create_resource(dir: &TempDir) -> StorageResource {
+        create_resource_with_size(dir, None)
+    }
+
+    fn create_resource_with_size(dir: &TempDir, size: Option<u64>) -> StorageResource {
+        let path = dir.path().join("test.dat");
+        StorageResource::open(StorageOptions {
+            path,
+            initial_len: size,
+            cancel: CancellationToken::new(),
+        })
+        .unwrap()
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_create_new_resource() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource(&dir);
+        assert_eq!(res.len(), None);
+        assert_eq!(res.status(), ResourceStatus::Active);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_write_and_read() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource(&dir);
+
+        res.write_at(0, b"hello world").unwrap();
+        res.commit(Some(11)).unwrap();
+
+        let mut buf = [0u8; 11];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 11);
+        assert_eq!(&buf, b"hello world");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_write_all_read_all() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource(&dir);
+
+        res.write_all(b"atomic data").unwrap();
+
+        let data = res.read_all().unwrap();
+        assert_eq!(&data[..], b"atomic data");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_wait_range_ready() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource(&dir);
+
+        res.write_at(0, b"data").unwrap();
+
+        let outcome = res.wait_range(0..4).unwrap();
+        assert_eq!(outcome, WaitOutcome::Ready);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(2))]
+    #[test]
+    fn test_wait_range_blocks_then_ready() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource(&dir);
+        let res2 = res.clone();
+
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            res2.write_at(0, b"delayed data").unwrap();
+        });
+
+        let outcome = res.wait_range(0..12).unwrap();
+        assert_eq!(outcome, WaitOutcome::Ready);
+        handle.join().unwrap();
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_wait_range_eof() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource(&dir);
+
+        res.write_at(0, b"short").unwrap();
+        res.commit(Some(5)).unwrap();
+
+        let outcome = res.wait_range(5..10).unwrap();
+        assert_eq!(outcome, WaitOutcome::Eof);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_fail_wakes_waiters() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource(&dir);
+        let res2 = res.clone();
+
+        let handle = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            res2.fail("test error".to_string());
+        });
+
+        let result = res.wait_range(0..100);
+        assert!(result.is_err());
+        handle.join().unwrap();
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(2))]
+    #[test]
+    fn test_cancel_wakes_waiters() {
+        let dir = TempDir::new().unwrap();
+        let cancel = CancellationToken::new();
+        let path = dir.path().join("cancel_test.dat");
+
+        let res = StorageResource::open(StorageOptions {
+            path,
+            initial_len: None,
+            cancel: cancel.clone(),
+        })
+        .unwrap();
+
+        let handle = std::thread::spawn({
+            let cancel = cancel.clone();
+            move || {
+                std::thread::sleep(Duration::from_millis(50));
+                cancel.cancel();
             }
-            if r.end > cursor {
-                cursor = r.end;
-                if cursor >= range.end {
-                    return true;
-                }
-            }
+        });
+
+        let result = res.wait_range(0..100);
+        assert!(matches!(result, Err(StorageError::Cancelled)));
+        handle.join().unwrap();
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_open_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("existing.dat");
+
+        // Create and write file
+        {
+            let res = StorageResource::open(StorageOptions {
+                path: path.clone(),
+                initial_len: None,
+                cancel: CancellationToken::new(),
+            })
+            .unwrap();
+            res.write_all(b"persisted data").unwrap();
         }
 
-        cursor >= range.end
+        // Reopen
+        let res = StorageResource::open(StorageOptions {
+            path,
+            initial_len: None,
+            cancel: CancellationToken::new(),
+        })
+        .unwrap();
+
+        assert_eq!(
+            res.status(),
+            ResourceStatus::Committed {
+                final_len: Some(14)
+            }
+        );
+        let data = res.read_all().unwrap();
+        assert_eq!(&data[..], b"persisted data");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_resize_on_large_write() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource_with_size(&dir, Some(16));
+
+        // Write more than initial size
+        let big_data = vec![42u8; 1024];
+        res.write_at(0, &big_data).unwrap();
+        res.commit(Some(1024)).unwrap();
+
+        let mut buf = vec![0u8; 1024];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 1024);
+        assert!(buf.iter().all(|&b| b == 42));
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_status_transitions() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource(&dir);
+
+        assert_eq!(res.status(), ResourceStatus::Active);
+
+        res.write_at(0, b"data").unwrap();
+        assert_eq!(res.status(), ResourceStatus::Active);
+
+        res.commit(Some(4)).unwrap();
+        assert_eq!(
+            res.status(),
+            ResourceStatus::Committed { final_len: Some(4) }
+        );
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_status_failed() {
+        let dir = TempDir::new().unwrap();
+        let res = create_resource(&dir);
+
+        res.fail("boom".to_string());
+        assert_eq!(res.status(), ResourceStatus::Failed("boom".to_string()));
     }
 }

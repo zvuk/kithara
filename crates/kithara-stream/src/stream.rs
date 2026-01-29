@@ -12,18 +12,18 @@ use std::{
     io::{Read, Seek, SeekFrom},
 };
 
-use crate::{MediaInfo, backend::BackendAccess, reader::Reader};
+use crate::{MediaInfo, reader::Reader, source::Source};
 
 /// Defines a stream type and how to create it.
 ///
 /// This trait is implemented by marker types (`Hls`, `File`) in their respective crates.
-/// The implementation provides the config type and backend type.
+/// The implementation provides the config type and source type.
 pub trait StreamType: Send + 'static {
     /// Configuration for this stream type.
     type Config: Default + Send;
 
-    /// Backend implementing `BackendAccess`.
-    type Backend: BackendAccess;
+    /// Source implementing `Source`.
+    type Source: Source;
 
     /// Error type for stream creation.
     type Error: std::error::Error + Send + Sync + 'static;
@@ -31,12 +31,13 @@ pub trait StreamType: Send + 'static {
     /// Event type emitted by this stream.
     type Event: Clone + Send + 'static;
 
-    /// Create the backend from configuration.
+    /// Create the source from configuration.
     ///
-    /// The backend will be wrapped in `Reader` by `Stream::new()`.
-    fn create_backend(
+    /// The source will be wrapped in `Reader` by `Stream::new()`.
+    /// May also start background tasks (downloader) internally.
+    fn create(
         config: Self::Config,
-    ) -> impl Future<Output = Result<Self::Backend, Self::Error>> + Send;
+    ) -> impl Future<Output = Result<Self::Source, Self::Error>> + Send;
 }
 
 /// Configuration for stream behavior.
@@ -60,9 +61,9 @@ impl Default for StreamConfig {
 /// Generic audio stream.
 ///
 /// `T` is a marker type defining the stream source (`Hls`, `File`, etc.).
-/// Stream holds a `Reader<T::Backend>` which provides sync Read + Seek.
+/// Stream holds a `Reader<T::Source>` which provides sync Read + Seek.
 pub struct Stream<T: StreamType> {
-    reader: Reader<T::Backend>,
+    reader: Reader<T::Source>,
     media_info: Option<MediaInfo>,
     pending_format_change: Option<MediaInfo>,
 }
@@ -70,18 +71,18 @@ pub struct Stream<T: StreamType> {
 impl<T: StreamType> Stream<T> {
     /// Create a new stream from configuration.
     pub async fn new(config: T::Config) -> Result<Self, T::Error> {
-        let backend = T::create_backend(config).await?;
+        let source = T::create(config).await?;
         Ok(Self {
-            reader: Reader::new(backend),
+            reader: Reader::new(source),
             media_info: None,
             pending_format_change: None,
         })
     }
 
-    /// Create a stream from an existing backend.
-    pub fn from_backend(backend: T::Backend) -> Self {
+    /// Create a stream from an existing source.
+    pub fn from_source(source: T::Source) -> Self {
         Self {
-            reader: Reader::new(backend),
+            reader: Reader::new(source),
             media_info: None,
             pending_format_change: None,
         }
@@ -94,7 +95,7 @@ impl<T: StreamType> Stream<T> {
 
     /// Get current media info if known.
     ///
-    /// First checks locally stored info, then delegates to backend.
+    /// First checks locally stored info, then delegates to source.
     pub fn media_info(&self) -> Option<MediaInfo> {
         if let Some(ref info) = self.media_info {
             return Some(info.clone());

@@ -1,13 +1,18 @@
 #![forbid(unsafe_code)]
 
+//! Unified resource trait for storage.
+//!
+//! `ResourceExt` is a sync trait covering both streaming (incremental write) and
+//! atomic (whole-file) use-cases. Convenience methods `read_all` and `write_all`
+//! build on top of `read_at` / `write_at` + `commit`.
+
 use std::{ops::Range, path::Path};
 
-use async_trait::async_trait;
 use bytes::Bytes;
 
 use crate::StorageResult;
 
-/// Result of waiting for a byte range.
+/// Outcome of waiting for a byte range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WaitOutcome {
     /// The requested range is available for reading.
@@ -16,93 +21,83 @@ pub enum WaitOutcome {
     Eof,
 }
 
-/// Base contract for logical resources in Kithara.
-///
-/// This trait is intentionally small:
-/// - `read`/`write` cover the small-object path (index, playlists, keys).
-/// - Lifecycle is explicit (`commit`/`fail`) to unblock waiters deterministically.
-///
-/// Random-access + waitable-range semantics live in [`StreamingResourceExt`].
-#[async_trait]
-pub trait Resource: Send + Sync + 'static {
-    /// Mark the resource as successfully completed.
-    ///
-    /// - For streaming resources, this seals the resource and defines EOF when `final_len` is known.
-    /// - For atomic resources, this may be a no-op (writes are already whole-object).
-    async fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
+/// Status of a resource.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResourceStatus {
+    /// Resource is open for writing (streaming in progress).
+    Active,
+    /// Resource has been committed (all data written).
+    Committed { final_len: Option<u64> },
+    /// Resource encountered an error.
+    Failed(String),
+}
 
-    /// Mark the resource as failed, waking all waiters.
+/// Unified sync resource trait.
+///
+/// Covers both incremental streaming (segments, progressive downloads)
+/// and atomic whole-file (playlists, keys, indexes) use-cases.
+///
+/// For streaming: use `write_at` + `commit`.
+/// For atomic: use `write_all` / `read_all` convenience methods.
+pub trait ResourceExt: Send + Sync + Clone + 'static {
+    /// Read data at the given offset into `buf`.
     ///
-    /// Implementations should store the error message so subsequent operations fail consistently.
-    async fn fail(&self, error: impl Into<String> + Send) -> StorageResult<()>;
+    /// Returns the number of bytes read.
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
 
-    /// Return the path to the backing file.
+    /// Write data at the given offset.
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+
+    /// Wait until the given byte range is available.
     ///
-    /// For disk-backed resources, this returns the filesystem path.
-    /// For in-memory or network-backed resources, this may return a placeholder path.
+    /// Blocks the calling thread using `Condvar` until data is written
+    /// or the resource reaches EOF / error / cancellation.
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+
+    /// Mark the resource as fully written.
+    ///
+    /// If `final_len` is provided, the backing file may be truncated to that size.
+    fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
+
+    /// Mark the resource as failed.
+    fn fail(&self, reason: String);
+
+    /// Get the file path.
     fn path(&self) -> &Path;
-}
 
-/// Extension trait for streaming-like resources: random-access reads/writes + waitable ranges.
-///
-/// This is the contract used for large resources that are filled in pieces (HTTP Range) while
-/// being read by a player that may seek at any time.
-#[async_trait]
-pub trait StreamingResourceExt: Resource {
-    /// Wait until the requested `range` becomes readable, or EOF/failure/cancellation occurs.
-    ///
-    /// Normative semantics:
-    /// - If the full range is already available: returns `Ok(WaitOutcome::Ready)` immediately.
-    /// - If the resource is committed with a known EOF and `range.start >= eof`: returns `Eof`.
-    /// - If the resource fails: returns `StorageError::Failed`.
-    /// - If the resource is cancelled: returns `StorageError::Cancelled`.
-    async fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+    /// Get the committed length, if known.
+    fn len(&self) -> Option<u64>;
 
-    /// Read bytes at `offset` into `buf` **without** implicitly waiting.
-    ///
-    /// Callers that need blocking semantics must call `wait_range` first.
-    ///
-    /// Returns the number of bytes read. Returns `Ok(0)` for EOF.
-    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
-
-    /// Write bytes at the given offset (HTTP Range response writes).
-    async fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
-
-    /// Write bytes in batches with yield between chunks.
-    ///
-    /// This method writes data in fixed-size batches (default 64KB), calling
-    /// `tokio::task::yield_now()` after each batch to prevent blocking the
-    /// event loop during large writes.
-    ///
-    /// This is useful for writing large segments while maintaining responsiveness
-    /// for other async tasks.
-    async fn write_batched(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        const BATCH_SIZE: usize = 64 * 1024; // 64KB batches
-
-        if data.is_empty() {
-            return Ok(());
-        }
-
-        let mut current_offset = offset;
-        for chunk in data.chunks(BATCH_SIZE) {
-            self.write_at(current_offset, chunk).await?;
-            current_offset = current_offset.saturating_add(chunk.len() as u64);
-            tokio::task::yield_now().await;
-        }
-
-        Ok(())
+    /// Returns `true` if the resource has been committed with zero length.
+    fn is_empty(&self) -> bool {
+        self.len() == Some(0)
     }
-}
 
-/// Marker extension trait for atomic small-object resources.
-///
-/// We keep this as a separate trait to make it explicit at the type level when a resource is
-/// intended to be used only via whole-object `read`/`write`.
-#[async_trait]
-pub trait AtomicResourceExt: Resource {
-    /// Atomically replace the entire content with `data`.
-    async fn write(&self, data: &[u8]) -> StorageResult<()>;
+    /// Get resource status.
+    fn status(&self) -> ResourceStatus;
 
-    /// Read the entire content.
-    async fn read(&self) -> StorageResult<Bytes>;
+    // ---- Convenience methods (atomic-style) ----
+
+    /// Read the entire resource contents.
+    ///
+    /// Returns empty `Bytes` if resource has no data.
+    fn read_all(&self) -> StorageResult<Bytes> {
+        let len = match self.len() {
+            Some(l) => l,
+            None => return Ok(Bytes::new()),
+        };
+        if len == 0 {
+            return Ok(Bytes::new());
+        }
+        let mut buf = vec![0u8; len as usize];
+        let n = self.read_at(0, &mut buf)?;
+        buf.truncate(n);
+        Ok(Bytes::from(buf))
+    }
+
+    /// Write entire contents and commit atomically.
+    fn write_all(&self, data: &[u8]) -> StorageResult<()> {
+        self.write_at(0, data)?;
+        self.commit(Some(data.len() as u64))
+    }
 }

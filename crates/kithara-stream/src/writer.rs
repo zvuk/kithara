@@ -2,13 +2,12 @@
 
 use std::{
     pin::Pin,
-    sync::Arc,
     task::{Context, Poll},
 };
 
 use futures::{Stream, StreamExt};
 use kithara_net::{ByteStream, NetError};
-use kithara_storage::{Resource, StorageError, StreamingResourceExt};
+use kithara_storage::{ResourceExt, StorageError};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -54,19 +53,19 @@ impl Writer {
     /// This allows checking cache status before starting the download.
     pub fn new<R>(stream: ByteStream, res: R, cancel: CancellationToken) -> Self
     where
-        R: StreamingResourceExt + Resource + Clone + Send + Sync + 'static,
+        R: ResourceExt + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
-        let inner = Box::pin(Self::create_stream(stream, Arc::new(res), cancel));
+        let inner = Box::pin(Self::create_stream(stream, res, cancel));
         Self { inner }
     }
 
     fn create_stream<R>(
         mut stream: ByteStream,
-        res: Arc<R>,
+        res: R,
         cancel: CancellationToken,
     ) -> impl Stream<Item = Result<WriterItem, WriterError>> + Send
     where
-        R: StreamingResourceExt + Resource + Clone + Send + Sync + 'static,
+        R: ResourceExt + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
         async_stream::stream! {
             let mut offset: u64 = 0;
@@ -83,8 +82,8 @@ impl Writer {
 
                     next = stream.next() => {
                         let Some(next) = next else {
-                            // Stream ended, commit
-                            if let Err(e) = res.commit(Some(offset)).await {
+                            // Stream ended, commit (sync call in async context is fine — it's fast)
+                            if let Err(e) = res.commit(Some(offset)) {
                                 yield Err(WriterError::SinkWrite(e));
                                 return;
                             }
@@ -95,7 +94,7 @@ impl Writer {
                         let bytes = match next {
                             Ok(b) => b,
                             Err(e) => {
-                                let _ = res.fail(e.to_string()).await;
+                                res.fail(e.to_string());
                                 yield Err(WriterError::NetStream(e));
                                 return;
                             }
@@ -106,8 +105,8 @@ impl Writer {
                             continue;
                         }
 
-                        if let Err(e) = res.write_at(offset, &bytes).await {
-                            let _ = res.fail(e.to_string()).await;
+                        if let Err(e) = res.write_at(offset, &bytes) {
+                            res.fail(e.to_string());
                             yield Err(WriterError::SinkWrite(e));
                             return;
                         }
@@ -117,7 +116,7 @@ impl Writer {
                         match offset.checked_add(chunk_len as u64) {
                             Some(new_offset) => offset = new_offset,
                             None => {
-                                let _ = res.fail("offset overflow").await;
+                                res.fail("offset overflow".to_string());
                                 yield Err(WriterError::OffsetOverflow);
                                 return;
                             }
