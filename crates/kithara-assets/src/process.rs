@@ -278,7 +278,7 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use kithara_storage::{StorageOptions, StorageResource};
+    use kithara_storage::{OpenMode, StorageOptions, StorageResource};
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
 
@@ -289,7 +289,8 @@ mod tests {
     }
 
     /// Simple mock resource for testing.
-    fn mock_resource(content: &[u8]) -> StorageResource {
+    /// Returns both the resource and the TempDir to keep the directory alive.
+    fn mock_resource(content: &[u8]) -> (StorageResource, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test.bin");
         let cancel = CancellationToken::new();
@@ -297,12 +298,13 @@ mod tests {
         let res = StorageResource::open(StorageOptions {
             path,
             initial_len: None,
+            mode: OpenMode::Auto,
             cancel,
         })
         .unwrap();
         res.write_at(0, content).unwrap();
         // Don't commit here - let the test control when commit happens
-        res
+        (res, dir)
     }
 
     /// Create XOR chunk processor (no allocation).
@@ -321,7 +323,7 @@ mod tests {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
 
-        let resource = mock_resource(b"test content");
+        let (resource, _dir) = mock_resource(b"test content");
         let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
 
         // Before commit - no processing
@@ -348,7 +350,7 @@ mod tests {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
 
-        let resource = mock_resource(b"data");
+        let (resource, _dir) = mock_resource(b"data");
         let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
 
         // First commit
@@ -367,7 +369,7 @@ mod tests {
         let process_fn = xor_chunk_processor(0xFF, Arc::clone(&call_count));
 
         let content: Vec<u8> = (0..100).collect();
-        let resource = mock_resource(&content);
+        let (resource, _dir) = mock_resource(&content);
         let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
 
         processed.commit(Some(100)).unwrap();
@@ -387,7 +389,7 @@ mod tests {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
 
-        let resource = mock_resource(b"test content");
+        let (resource, _dir) = mock_resource(b"test content");
         // ctx = None -> no processing
         let processed: ProcessedResource<StorageResource, ()> =
             ProcessedResource::new(resource, None, process_fn, test_pool());

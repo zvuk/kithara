@@ -20,6 +20,24 @@ use tracing::trace;
 
 use crate::{StorageError, StorageResult};
 
+// ──────────────────────────────── Open mode ──────────────────────────────
+
+/// Controls how `StorageResource` opens the backing file.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OpenMode {
+    /// Auto-detect: existing files open as committed (read-only mmap),
+    /// new files open as active (read-write mmap). Default behavior.
+    #[default]
+    Auto,
+    /// Always read-write. Existing files are opened without truncation.
+    /// Writes after commit transparently reopen the file as read-write.
+    /// Use for files that are rewritten in place (e.g. index files).
+    ReadWrite,
+    /// Always read-only. Existing files are committed; missing files
+    /// are treated as empty committed resources. Writes are rejected.
+    ReadOnly,
+}
+
 // ────────────────────────────────── Trait ──────────────────────────────────
 
 /// Outcome of waiting for a byte range.
@@ -95,7 +113,12 @@ pub trait ResourceExt: Send + Sync + Clone + 'static {
     fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
         let len = match self.len() {
             Some(l) => l,
-            None => return Ok(0),
+            None => {
+                // Probe via read_at to detect error state (cancelled/failed).
+                let mut probe = [0u8; 1];
+                let _ = self.read_at(0, &mut probe)?;
+                return Ok(0);
+            }
         };
         if len == 0 {
             buf.clear();
@@ -116,8 +139,8 @@ pub trait ResourceExt: Send + Sync + Clone + 'static {
 
 // ────────────────────────────── Implementation ────────────────────────────
 
-/// Default initial size for new mmap files (1 MB).
-const DEFAULT_INITIAL_SIZE: u64 = 1024 * 1024;
+/// Default initial size for new mmap files (64 KB).
+const DEFAULT_INITIAL_SIZE: u64 = 64 * 1024;
 
 /// Options for opening a `StorageResource`.
 #[derive(Debug, Clone)]
@@ -126,6 +149,8 @@ pub struct StorageOptions {
     pub path: PathBuf,
     /// Initial file size for new files. Ignored for existing files.
     pub initial_len: Option<u64>,
+    /// Open mode controlling read/write behavior for existing files.
+    pub mode: OpenMode,
     /// Cancellation token.
     pub cancel: CancellationToken,
 }
@@ -183,6 +208,7 @@ struct Inner {
     condvar: Condvar,
     cancel: CancellationToken,
     path: PathBuf,
+    mode: OpenMode,
 }
 
 /// Unified mmap-backed storage resource.
@@ -205,14 +231,27 @@ impl std::fmt::Debug for StorageResource {
 impl StorageResource {
     /// Open or create a storage resource.
     ///
-    /// - If the file already exists with data: opened as committed (read-only mmap).
-    /// - If the file does not exist or is empty: created with `initial_len` (or default 1MB).
+    /// Behavior depends on [`OpenMode`]:
+    /// - `Auto`: existing files → committed (read-only), new files → active (read-write).
+    /// - `ReadWrite`: existing files → active (read-write, no truncation), new files → active.
+    /// - `ReadOnly`: existing files → committed (read-only), missing files → empty committed.
     pub fn open(opts: StorageOptions) -> StorageResult<Self> {
+        let mode = opts.mode;
+
         let (mmap_state, state) = if opts.path.exists() && std::fs::metadata(&opts.path)?.len() > 0
         {
-            // Existing file (cache hit) -> committed, read-only
-            let mmap = MemoryMappedFile::open_ro(&opts.path)?;
-            let len = mmap.len();
+            let len;
+            let mmap_state = if mode == OpenMode::ReadWrite {
+                // ReadWrite: open existing file as read-write (no truncation).
+                let mmap = MemoryMappedFile::open_rw(&opts.path)?;
+                len = mmap.len();
+                MmapState::Active(mmap)
+            } else {
+                // Auto / ReadOnly: open existing file as read-only.
+                let mmap = MemoryMappedFile::open_ro(&opts.path)?;
+                len = mmap.len();
+                MmapState::Committed(mmap)
+            };
             let mut available = RangeSet::new();
             available.insert(0..len);
             let state = State {
@@ -221,9 +260,20 @@ impl StorageResource {
                 final_len: Some(len),
                 failed: None,
             };
-            (MmapState::Committed(mmap), state)
+            (mmap_state, state)
+        } else if mode == OpenMode::ReadOnly {
+            // ReadOnly on missing/empty file: empty committed resource.
+            (
+                MmapState::Empty,
+                State {
+                    available: RangeSet::new(),
+                    committed: true,
+                    final_len: Some(0),
+                    failed: None,
+                },
+            )
         } else {
-            // New file -> create with initial size
+            // Auto / ReadWrite: create new file.
             if let Some(parent) = opts.path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
@@ -243,6 +293,7 @@ impl StorageResource {
                 condvar: Condvar::new(),
                 cancel: opts.cancel,
                 path: opts.path,
+                mode,
             }),
         })
     }
@@ -309,6 +360,15 @@ impl ResourceExt for StorageResource {
 
         {
             let mut mmap_guard = self.inner.mmap.lock();
+
+            // ReadWrite mode: transition Committed → Active via open_rw.
+            if self.inner.mode == OpenMode::ReadWrite
+                && matches!(&*mmap_guard, MmapState::Committed(_))
+            {
+                *mmap_guard = MmapState::Empty;
+                let rw = MemoryMappedFile::open_rw(&self.inner.path)?;
+                *mmap_guard = MmapState::Active(rw);
+            }
 
             let mmap = match &*mmap_guard {
                 MmapState::Active(m) => {
@@ -465,12 +525,6 @@ impl ResourceExt for StorageResource {
             ResourceStatus::Active
         }
     }
-
-    fn write_all(&self, data: &[u8]) -> StorageResult<()> {
-        self.check_health()?;
-        self.write_at(0, data)?;
-        self.commit(Some(data.len() as u64))
-    }
 }
 
 /// Check if the `available` range set fully covers `range`.
@@ -499,6 +553,7 @@ mod tests {
         StorageResource::open(StorageOptions {
             path,
             initial_len: size,
+            mode: OpenMode::Auto,
             cancel: CancellationToken::new(),
         })
         .unwrap()
@@ -619,6 +674,7 @@ mod tests {
         let res = StorageResource::open(StorageOptions {
             path,
             initial_len: None,
+            mode: OpenMode::Auto,
             cancel: cancel.clone(),
         })
         .unwrap();
@@ -647,6 +703,7 @@ mod tests {
             let res = StorageResource::open(StorageOptions {
                 path: path.clone(),
                 initial_len: None,
+                mode: OpenMode::Auto,
                 cancel: CancellationToken::new(),
             })
             .unwrap();
@@ -656,6 +713,7 @@ mod tests {
         let res = StorageResource::open(StorageOptions {
             path,
             initial_len: None,
+            mode: OpenMode::Auto,
             cancel: CancellationToken::new(),
         })
         .unwrap();

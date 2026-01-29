@@ -29,9 +29,7 @@ impl StreamType for File {
     type Error = SourceError;
     type Event = FileEvent;
 
-    fn ensure_events(
-        config: &mut Self::Config,
-    ) -> broadcast::Receiver<Self::Event> {
+    fn ensure_events(config: &mut Self::Config) -> broadcast::Receiver<Self::Event> {
         if config.events_tx.is_none() {
             let capacity = config.events_channel_capacity.max(1);
             config.events_tx = Some(broadcast::channel(capacity).0);

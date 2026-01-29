@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use kithara_storage::{StorageOptions, StorageResource};
+use kithara_storage::{OpenMode, StorageOptions, StorageResource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -112,6 +112,16 @@ impl DiskAssetStore {
         Ok(StorageResource::open(StorageOptions {
             path,
             initial_len: None,
+            mode: OpenMode::Auto,
+            cancel: self.cancel.clone(),
+        })?)
+    }
+
+    fn open_index_resource(&self, path: PathBuf) -> AssetsResult<StorageResource> {
+        Ok(StorageResource::open(StorageOptions {
+            path,
+            initial_len: Some(4096),
+            mode: OpenMode::ReadWrite,
             cancel: self.cancel.clone(),
         })?)
     }
@@ -140,12 +150,12 @@ impl Assets for DiskAssetStore {
 
     fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
         let path = self.pins_index_path();
-        self.open_storage_resource(path)
+        self.open_index_resource(path)
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
         let path = self.lru_index_path();
-        self.open_storage_resource(path)
+        self.open_index_resource(path)
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {

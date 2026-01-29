@@ -2,7 +2,8 @@
 use std::time::Duration;
 
 use kithara_storage::{
-    ResourceExt, ResourceStatus, StorageError, StorageOptions, StorageResource, WaitOutcome,
+    OpenMode, ResourceExt, ResourceStatus, StorageError, StorageOptions, StorageResource,
+    WaitOutcome,
 };
 use rstest::*;
 use tempfile::TempDir;
@@ -34,6 +35,7 @@ fn streaming_resource_path_method(temp_dir: TempDir, cancel_token: CancellationT
     let streaming = StorageResource::open(StorageOptions {
         path: file_path.clone(),
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .expect("open should succeed");
@@ -55,6 +57,7 @@ fn streaming_resource_open_and_status_new(temp_dir: TempDir, cancel_token: Cance
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -77,6 +80,7 @@ fn streaming_resource_open_existing_is_committed(
         let resource = StorageResource::open(StorageOptions {
             path: file_path.clone(),
             initial_len: None,
+            mode: OpenMode::Auto,
             cancel: cancel_token.clone(),
         })
         .unwrap();
@@ -88,6 +92,7 @@ fn streaming_resource_open_existing_is_committed(
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -108,6 +113,7 @@ fn streaming_resource_range_write_wait_read(temp_dir: TempDir, cancel_token: Can
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -131,6 +137,7 @@ fn streaming_resource_sparse_file_behavior() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -159,6 +166,7 @@ fn streaming_resource_overlapping_writes() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -182,6 +190,7 @@ fn streaming_resource_zero_length_commit() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -209,6 +218,7 @@ fn streaming_resource_edge_case_ranges() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -238,6 +248,7 @@ fn streaming_resource_concurrent_wait_and_write() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -265,6 +276,7 @@ fn streaming_resource_persists_across_reopen() {
         let resource = StorageResource::open(StorageOptions {
             path: file_path.clone(),
             initial_len: None,
+            mode: OpenMode::Auto,
             cancel: cancel_token.clone(),
         })
         .unwrap();
@@ -281,6 +293,7 @@ fn streaming_resource_persists_across_reopen() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: CancellationToken::new(),
     })
     .unwrap();
@@ -302,6 +315,7 @@ fn streaming_resource_wait_after_reopen() {
         let resource = StorageResource::open(StorageOptions {
             path: file_path.clone(),
             initial_len: None,
+            mode: OpenMode::Auto,
             cancel: cancel_token.clone(),
         })
         .unwrap();
@@ -315,6 +329,7 @@ fn streaming_resource_wait_after_reopen() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: CancellationToken::new(),
     })
     .unwrap();
@@ -337,6 +352,7 @@ fn streaming_resource_wait_range_partial_coverage() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token.clone(),
     })
     .unwrap();
@@ -370,6 +386,7 @@ fn streaming_resource_commit_and_eof(temp_dir: TempDir, cancel_token: Cancellati
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -399,6 +416,7 @@ fn streaming_resource_commit_without_final_len() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -427,6 +445,7 @@ fn streaming_resource_sealed_after_commit() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -453,6 +472,7 @@ fn streaming_resource_cancel_during_wait() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token.clone(),
     })
     .unwrap();
@@ -478,6 +498,7 @@ fn streaming_resource_fail_wakes_waiters() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -506,6 +527,7 @@ fn streaming_resource_concurrent_operations() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -543,6 +565,7 @@ fn streaming_resource_invalid_ranges() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -574,6 +597,7 @@ fn streaming_resource_whole_object_operations() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -605,6 +629,7 @@ fn streaming_resource_empty_operations() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -633,6 +658,7 @@ fn streaming_resource_complex_range_scenario() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -677,6 +703,7 @@ fn streaming_resource_initial_len_hint() {
     let resource = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: Some(100),
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();

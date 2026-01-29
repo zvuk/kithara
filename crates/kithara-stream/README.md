@@ -4,7 +4,7 @@
 
 # kithara-stream
 
-Byte-stream orchestration bridging async producers (network, disk) to sync consumers (decoders). Provides `Source` and `Downloader` traits, a generic `Backend` worker, and `Stream<T>` for sync `Read + Seek` access. Also defines canonical shared types: `AudioCodec`, `ContainerFormat`, `MediaInfo`.
+Byte-stream orchestration bridging async producers (network, disk) to sync consumers (decoders). Provides sync `Source` trait, async `Downloader` trait, a generic `Backend` worker, and `Stream<T>` for sync `Read + Seek` access. Also defines canonical shared types: `AudioCodec`, `ContainerFormat`, `MediaInfo`.
 
 ## Usage
 

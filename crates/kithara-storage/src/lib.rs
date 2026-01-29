@@ -13,4 +13,6 @@ mod error;
 mod resource;
 
 pub use error::{StorageError, StorageResult};
-pub use resource::{ResourceExt, ResourceStatus, StorageOptions, StorageResource, WaitOutcome};
+pub use resource::{
+    OpenMode, ResourceExt, ResourceStatus, StorageOptions, StorageResource, WaitOutcome,
+};

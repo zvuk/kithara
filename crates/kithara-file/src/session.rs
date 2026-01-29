@@ -173,8 +173,12 @@ impl kithara_stream::Source for FileSource {
     ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
         use kithara_stream::StreamError;
 
-        // Signal downloader that reader needs data (wake if paused by backpressure).
-        self.progress.signal_reader_advanced();
+        // Update read position so downloader knows where reader needs data.
+        // This prevents backpressure deadlock when symphonia seeks ahead
+        // (e.g., SeekFrom::End) while downloader is still near the beginning.
+        if range.start > self.progress.read_pos() {
+            self.progress.set_read_pos(range.start);
+        }
 
         self.res
             .wait_range(range)

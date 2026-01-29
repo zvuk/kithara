@@ -60,24 +60,25 @@ kithara-file     kithara-hls
 
 **`kithara-bufpool`** — Generic sharded buffer pool for zero-allocation hot paths
 
-**`kithara-storage`** — Storage primitives
-- `StreamingResource`: random-access with `write_at`/`read_at`/`wait_range`
-- `AtomicResource`: whole-file with crash-safe replace (temp -> rename)
+**`kithara-storage`** — Unified storage backed by `mmap-io`
+- `StorageResource`: random-access with `write_at`/`read_at`/`wait_range` + convenience `read_into`/`write_all`
+- `OpenMode`: `Auto` (default), `ReadWrite` (index files), `ReadOnly`
+- `ResourceExt` trait for generic resource access
 
 **`kithara-assets`** — Persistent disk assets store with lease/pin semantics and eviction
-- `Assets` trait (base), `LeaseAssets`, `EvictAssets`, `ProcessingAssets` decorators
+- `Assets` trait (base), `LeaseAssets`, `CachedAssets`, `EvictAssets`, `ProcessingAssets` decorators
 - Resources identified by `ResourceKey { asset_root, rel_path }`
-- `AssetStore` type alias = `LeaseAssets<EvictAssets<DiskAssetStore>>`
+- `AssetStore` type alias = `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
 - `"_index"` namespace reserved for internal metadata
 
 **`kithara-net`** — HTTP networking with retry, timeout, and streaming
 - `Net` trait + `TimeoutNet` decorator
 - `MockNet` for tests (behind `test-utils` feature)
 
-**`kithara-stream`** — Byte-stream orchestration bridging async I/O to sync `Read + Seek`
-- `Source` trait: async random-access data
+**`kithara-stream`** — Byte-stream orchestration bridging async downloads to sync `Read + Seek`
+- `Source` trait: sync random-access data (`wait_range`, `read_at`)
 - `Downloader` trait: async download feed
-- `Backend`: generic async worker for any `Source + Downloader`
+- `Backend`: spawns async downloader, holds sync `Source` for direct access
 - `Stream<T>`: sync `Read + Seek` wrapper over `Backend`
 - Canonical types: `AudioCodec`, `ContainerFormat`, `MediaInfo`
 
@@ -110,7 +111,7 @@ kithara-file     kithara-hls
 `File` and `Hls` are marker types implementing `StreamType`. Used as `Stream<File>` or `Stream<Hls>` for unified `Read + Seek` access. `Decoder<Stream<Hls>>` composes decoding on top.
 
 ### Decorator pattern (assets)
-`AssetStore = LeaseAssets<EvictAssets<DiskAssetStore>>`
+`AssetStore = LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
 
 ### Event-driven architecture
 Protocol crates emit events via broadcast channel (`FileEvent`, `HlsEvent`). `DecoderEvent<E>` wraps both stream and decode events.

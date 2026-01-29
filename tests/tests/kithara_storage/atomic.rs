@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use kithara_bufpool::byte_pool;
-use kithara_storage::{ResourceExt, StorageError, StorageOptions, StorageResource};
+use kithara_storage::{OpenMode, ResourceExt, StorageError, StorageOptions, StorageResource};
 use rstest::*;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -31,6 +31,7 @@ fn atomic_resource_path_method(temp_dir: TempDir, cancel_token: CancellationToke
     let atomic = StorageResource::open(StorageOptions {
         path: file_path.clone(),
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -59,6 +60,7 @@ fn atomic_resource_write_read_success(
     let atomic = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -78,6 +80,7 @@ fn atomic_resource_empty_write_read(temp_dir: TempDir, cancel_token: Cancellatio
     let atomic = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -106,6 +109,7 @@ fn atomic_resource_read_missing_file(
         let atomic = StorageResource::open(StorageOptions {
             path: file_path.clone(),
             initial_len: None,
+            mode: OpenMode::Auto,
             cancel: cancel_token.clone(),
         })
         .unwrap();
@@ -115,6 +119,7 @@ fn atomic_resource_read_missing_file(
     let atomic = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -140,6 +145,7 @@ fn atomic_resource_cancelled_operations(
     let atomic = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token_cancelled,
     })
     .unwrap();
@@ -173,6 +179,7 @@ fn atomic_resource_fail_propagation(temp_dir: TempDir, cancel_token: Cancellatio
     let atomic = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -204,6 +211,7 @@ fn atomic_resource_concurrent_writes(temp_dir: TempDir, cancel_token: Cancellati
     let atomic = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -232,6 +240,7 @@ fn atomic_resource_invalid_path(temp_dir: TempDir, cancel_token: CancellationTok
     let atomic = StorageResource::open(StorageOptions {
         path: invalid_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -251,6 +260,7 @@ fn atomic_resource_large_file_operations() {
     let atomic = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -280,6 +290,7 @@ fn atomic_resource_persists_across_reopen(
         let atomic = StorageResource::open(StorageOptions {
             path: file_path.clone(),
             initial_len: None,
+            mode: OpenMode::Auto,
             cancel: cancel_token.clone(),
         })
         .unwrap();
@@ -289,6 +300,7 @@ fn atomic_resource_persists_across_reopen(
     let reopened = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();
@@ -310,6 +322,7 @@ fn atomic_resource_empty_persists_across_reopen(
         let atomic = StorageResource::open(StorageOptions {
             path: file_path.clone(),
             initial_len: None,
+            mode: OpenMode::Auto,
             cancel: cancel_token.clone(),
         })
         .unwrap();
@@ -319,6 +332,7 @@ fn atomic_resource_empty_persists_across_reopen(
     let reopened = StorageResource::open(StorageOptions {
         path: file_path,
         initial_len: None,
+        mode: OpenMode::Auto,
         cancel: cancel_token,
     })
     .unwrap();

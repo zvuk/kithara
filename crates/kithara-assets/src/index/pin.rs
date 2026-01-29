@@ -79,7 +79,7 @@ impl PinsIndex {
 mod tests {
     use std::{collections::HashSet, time::Duration};
 
-    use kithara_storage::StorageOptions;
+    use kithara_storage::{OpenMode, StorageOptions};
     use rstest::*;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
@@ -91,7 +91,8 @@ mod tests {
         let path = dir.path().join("pins.json");
         StorageResource::open(StorageOptions {
             path,
-            initial_len: None,
+            initial_len: Some(4096),
+            mode: OpenMode::ReadWrite,
             cancel: CancellationToken::new(),
         })
         .unwrap()
@@ -172,7 +173,8 @@ mod tests {
         {
             let res = StorageResource::open(StorageOptions {
                 path: path.clone(),
-                initial_len: None,
+                initial_len: Some(4096),
+                mode: OpenMode::ReadWrite,
                 cancel: CancellationToken::new(),
             })
             .unwrap();
@@ -187,7 +189,8 @@ mod tests {
         {
             let res = StorageResource::open(StorageOptions {
                 path,
-                initial_len: None,
+                initial_len: Some(4096),
+                mode: OpenMode::ReadWrite,
                 cancel: CancellationToken::new(),
             })
             .unwrap();

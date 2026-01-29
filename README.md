@@ -31,7 +31,7 @@ kithara-file     kithara-hls
 | Crate | Role |
 |-------|------|
 | **kithara-bufpool** | Generic sharded buffer pool for zero-allocation hot paths |
-| **kithara-storage** | Storage primitives: `StreamingResource` and `AtomicResource` |
+| **kithara-storage** | Unified `StorageResource` backed by `mmap-io` with sync random-access I/O |
 | **kithara-assets** | Persistent disk cache with lease/pin semantics and eviction |
 | **kithara-net** | HTTP networking with retry, timeout, and streaming |
 | **kithara-stream** | Byte-stream orchestration bridging async I/O to sync `Read + Seek` |

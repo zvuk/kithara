@@ -10,6 +10,7 @@ use std::{
 };
 
 use kanal::Receiver;
+use kithara_bufpool::byte_pool;
 use kithara_stream::{EpochValidator, Fetch, MediaInfo, Stream, StreamType};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
@@ -21,7 +22,6 @@ use crate::{
     events::{DecodeEvent, DecoderEvent},
     types::{DecodeError, DecodeResult, PcmChunk, PcmSpec},
 };
-use kithara_bufpool::byte_pool;
 
 /// Command for decode worker.
 #[derive(Debug)]
@@ -187,7 +187,7 @@ fn run_decode_loop<S: DecodeWorkerSource>(
             let fetch = source.fetch_next();
             let is_eof = fetch.is_eof();
 
-            let mut item = Some(Fetch::new(fetch.data, is_eof, 0));
+            let mut item = Some(fetch);
 
             // Non-blocking send with backpressure
             loop {
@@ -697,10 +697,7 @@ impl<T: StreamType> DecoderConfig<T> {
     ///
     /// Stream events and decode events are forwarded as `DecoderEvent::Stream(e)`
     /// and `DecoderEvent::Decode(e)` respectively.
-    pub fn with_events(
-        mut self,
-        events_tx: broadcast::Sender<DecoderEvent<T::Event>>,
-    ) -> Self {
+    pub fn with_events(mut self, events_tx: broadcast::Sender<DecoderEvent<T::Event>>) -> Self {
         self.events_tx = Some(events_tx);
         self
     }
