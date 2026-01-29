@@ -7,7 +7,7 @@
 > Built with AI, tested by a human. Vibe-coded -- but with care.
 > Contributions, reviews, and fresh eyes are welcome.
 
-Rust workspace for a **networking + decoding** library (not a full player). Provides transport primitives for progressive HTTP and HLS (VOD), a decoding layer producing PCM, and a persistent disk cache for offline playback.
+Rust library for networking and decoding. Provides transport primitives for progressive HTTP and HLS (VOD), a decoding layer producing PCM, and a persistent disk cache for offline playback.
 
 Design goal: keep components modular so they can be reused independently and composed into a full engine/player.
 
