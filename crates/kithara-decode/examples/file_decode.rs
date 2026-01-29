@@ -57,14 +57,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     // Log events
     tokio::spawn(async move {
-        loop {
-            match events_rx.recv().await {
-                Ok(ev) => info!(?ev),
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    info!(skipped = n, "events receiver lagged");
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
-            }
+        while let Ok(ev) = events_rx.recv().await {
+            info!(?ev);
         }
     });
 

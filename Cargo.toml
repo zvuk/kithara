@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/kithara",
     "crates/kithara-abr",
     "crates/kithara-net",
     "crates/kithara-file",
@@ -53,6 +54,7 @@ categories = ["multimedia::audio"]
 # - In crate Cargo.toml files use `{ workspace = true }`.
 [workspace.dependencies]
 # workspace crates (path deps)
+kithara = { path = "crates/kithara", version = "0.1.0" }
 kithara-abr = { path = "crates/kithara-abr", version = "0.1.0" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.1.0" }

@@ -24,7 +24,7 @@ pub trait InnerDecoder: Send + 'static {
 
 use std::{
     io::{Read, Seek},
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
@@ -39,11 +39,11 @@ use symphonia::core::{
     errors::Error as SymphoniaError,
     formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
     io::MediaSourceStream,
-    meta::MetadataOptions,
+    meta::{MetadataOptions, StandardTag},
     units::Time,
 };
 
-use crate::{DecodeError, DecodeResult, PcmChunk, PcmSpec};
+use crate::{DecodeError, DecodeResult, PcmChunk, PcmSpec, TrackMetadata};
 
 static CODEC_REGISTRY: LazyLock<CodecRegistry> = LazyLock::new(|| {
     let mut registry = CodecRegistry::new();
@@ -226,6 +226,49 @@ impl SymphoniaDecoder {
             spec,
             pcm_pool,
         })
+    }
+
+    /// Get total duration from track metadata.
+    ///
+    /// Returns `None` if duration cannot be determined (e.g. streaming sources).
+    pub fn duration(&self) -> Option<Duration> {
+        let track = self.format_reader.default_track(TrackType::Audio)?;
+        let num_frames = track.num_frames?;
+        let time_base = track.time_base?;
+        let time = time_base.calc_time(num_frames);
+        Some(Duration::new(
+            time.seconds,
+            (time.frac * 1_000_000_000.0) as u32,
+        ))
+    }
+
+    /// Extract track metadata from format reader tags.
+    pub fn metadata(&mut self) -> TrackMetadata {
+        let mut meta = TrackMetadata::default();
+        let metadata = self.format_reader.metadata();
+        let Some(revision) = metadata.current() else {
+            return meta;
+        };
+        for tag in &revision.media.tags {
+            if let Some(ref std_tag) = tag.std {
+                match std_tag {
+                    StandardTag::TrackTitle(title) => {
+                        meta.title = Some(title.to_string());
+                    }
+                    StandardTag::Artist(artist) => {
+                        meta.artist = Some(artist.to_string());
+                    }
+                    StandardTag::Album(album) => {
+                        meta.album = Some(album.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(visual) = revision.media.visuals.first() {
+            meta.artwork = Some(Arc::new(visual.data.to_vec()));
+        }
+        meta
     }
 
     /// Get codec parameters for caching.

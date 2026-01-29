@@ -18,9 +18,10 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 
 use crate::{
+    TrackMetadata,
     decoder::SymphoniaDecoder,
     events::{DecodeEvent, DecoderEvent},
-    types::{DecodeError, DecodeResult, PcmChunk, PcmSpec},
+    types::{DecodeError, DecodeResult, PcmChunk, PcmReader, PcmSpec},
 };
 
 /// Command for decode worker.
@@ -607,6 +608,18 @@ pub struct Decoder<S> {
     /// End of stream reached.
     eof: bool,
 
+    /// Number of interleaved samples read since last seek.
+    samples_read: u64,
+
+    /// Base position after last seek.
+    seek_base: Duration,
+
+    /// Total duration from format metadata.
+    total_duration: Option<Duration>,
+
+    /// Track metadata (title, artist, album, artwork).
+    metadata: TrackMetadata,
+
     /// Decode events channel (used by `from_source`).
     decode_events_tx: broadcast::Sender<DecodeEvent>,
 
@@ -718,8 +731,10 @@ where
         let epoch = Arc::new(AtomicU64::new(0));
         let (decode_events_tx, _) = broadcast::channel(64);
 
-        let symphonia = Self::create_decoder(source, &options)?;
+        let mut symphonia = Self::create_decoder(source, &options)?;
         let initial_spec = symphonia.spec();
+        let total_duration = symphonia.duration();
+        let metadata = symphonia.metadata();
 
         let emit_tx = decode_events_tx.clone();
         let emit = Box::new(move |event: DecodeEvent| {
@@ -749,6 +764,10 @@ where
             current_chunk: None,
             chunk_offset: 0,
             eof: false,
+            samples_read: 0,
+            seek_base: Duration::ZERO,
+            total_duration,
+            metadata,
             decode_events_tx,
             unified_events: None,
             cancel: None,
@@ -796,6 +815,29 @@ impl<S> Decoder<S> {
         self.eof
     }
 
+    /// Get current playback position.
+    ///
+    /// Calculated from samples read since last seek plus the seek base.
+    pub fn position(&self) -> Duration {
+        let rate = self.spec.sample_rate as f64 * self.spec.channels.max(1) as f64;
+        if rate == 0.0 {
+            return self.seek_base;
+        }
+        self.seek_base + Duration::from_secs_f64(self.samples_read as f64 / rate)
+    }
+
+    /// Get total duration of the audio stream.
+    ///
+    /// Returns `None` for streaming sources where duration is unknown.
+    pub fn duration(&self) -> Option<Duration> {
+        self.total_duration
+    }
+
+    /// Get track metadata (title, artist, album, artwork).
+    pub fn metadata(&self) -> &TrackMetadata {
+        &self.metadata
+    }
+
     /// Read decoded PCM samples into buffer.
     ///
     /// Returns number of samples written (may be less than buffer size).
@@ -837,6 +879,7 @@ impl<S> Decoder<S> {
             }
         }
 
+        self.samples_read += written as u64;
         written
     }
 
@@ -860,6 +903,8 @@ impl<S> Decoder<S> {
         self.current_chunk = None;
         self.chunk_offset = 0;
         self.eof = false;
+        self.samples_read = 0;
+        self.seek_base = position;
 
         debug!(?position, epoch = new_epoch, "seek initiated");
         Ok(())
@@ -985,13 +1030,15 @@ where
         let shared_stream = SharedStream::new(stream);
 
         // Create initial decoder
-        let symphonia = if let Some(ref info) = initial_media_info {
+        let mut symphonia = if let Some(ref info) = initial_media_info {
             SymphoniaDecoder::new_from_media_info(shared_stream.clone(), info)?
         } else {
             SymphoniaDecoder::new_with_probe(shared_stream.clone(), config.decode.hint.as_deref())?
         };
 
         let initial_spec = symphonia.spec();
+        let total_duration = symphonia.duration();
+        let metadata = symphonia.metadata();
         let options = config.decode;
 
         let cmd_capacity = options.command_channel_capacity.max(1);
@@ -1039,6 +1086,10 @@ where
             current_chunk: None,
             chunk_offset: 0,
             eof: false,
+            samples_read: 0,
+            seek_base: Duration::ZERO,
+            total_duration,
+            metadata,
             decode_events_tx,
             unified_events: Some(Box::new(unified_tx)),
             cancel: Some(cancel),
@@ -1064,6 +1115,41 @@ impl<S> Drop for Decoder<S> {
     }
 }
 
+// PcmReader implementation for Decoder
+impl<S: Send> PcmReader for Decoder<S> {
+    fn read(&mut self, buf: &mut [f32]) -> usize {
+        Decoder::read(self, buf)
+    }
+
+    fn seek(&mut self, position: Duration) -> DecodeResult<()> {
+        Decoder::seek(self, position)
+    }
+
+    fn spec(&self) -> PcmSpec {
+        Decoder::spec(self)
+    }
+
+    fn is_eof(&self) -> bool {
+        Decoder::is_eof(self)
+    }
+
+    fn position(&self) -> Duration {
+        Decoder::position(self)
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        Decoder::duration(self)
+    }
+
+    fn metadata(&self) -> &TrackMetadata {
+        Decoder::metadata(self)
+    }
+
+    fn decode_events(&self) -> broadcast::Receiver<DecodeEvent> {
+        Decoder::decode_events(self)
+    }
+}
+
 // rodio::Source implementation for Decoder
 #[cfg(feature = "rodio")]
 impl<S> Iterator for Decoder<S> {
@@ -1080,6 +1166,7 @@ impl<S> Iterator for Decoder<S> {
         {
             let sample = chunk[self.chunk_offset];
             self.chunk_offset += 1;
+            self.samples_read += 1;
             return Some(sample);
         }
 
@@ -1090,6 +1177,7 @@ impl<S> Iterator for Decoder<S> {
         {
             let sample = chunk[self.chunk_offset];
             self.chunk_offset += 1;
+            self.samples_read += 1;
             return Some(sample);
         }
 
@@ -1117,7 +1205,7 @@ impl<S> rodio::Source for Decoder<S> {
     }
 
     fn total_duration(&self) -> Option<std::time::Duration> {
-        None
+        self.total_duration
     }
 }
 
