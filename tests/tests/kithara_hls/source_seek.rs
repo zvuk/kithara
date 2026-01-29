@@ -56,9 +56,9 @@ const SEGMENT_SIZE: u64 = 200_000;
 // ==================== Stream<Hls> Seek + Read Tests ====================
 
 #[rstest]
-#[case(0, b"V0-SEG-0:")]                    // Start of segment 0
-#[case(200_000, b"V0-SEG-1:")]               // Start of segment 1
-#[case(400_000, b"V0-SEG-2:")]               // Start of segment 2
+#[case(0, b"V0-SEG-0:")] // Start of segment 0
+#[case(200_000, b"V0-SEG-1:")] // Start of segment 1
+#[case(400_000, b"V0-SEG-2:")] // Start of segment 2
 #[timeout(Duration::from_secs(10))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hls_stream_seek_to_segment_start(
@@ -237,7 +237,10 @@ async fn hls_stream_read_all_then_seek_back(
         let mut buf = [0u8; 9];
         let n = stream.read(&mut buf).unwrap();
         assert_eq!(n, 9);
-        assert_eq!(&buf, b"V0-SEG-0:", "After seek to 0, should read segment 0 prefix");
+        assert_eq!(
+            &buf, b"V0-SEG-0:",
+            "After seek to 0, should read segment 0 prefix"
+        );
     })
     .await
     .unwrap();
@@ -322,7 +325,10 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
         stream.seek(SeekFrom::Start(0)).unwrap();
         let mut buf = [0u8; 9];
         stream.read(&mut buf).unwrap();
-        assert_eq!(&buf, b"V0-SEG-0:", "After seek back, should still be segment 0");
+        assert_eq!(
+            &buf, b"V0-SEG-0:",
+            "After seek back, should still be segment 0"
+        );
     })
     .await
     .unwrap();

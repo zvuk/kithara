@@ -32,7 +32,7 @@ fn tracing_setup() {
             tracing_subscriber::EnvFilter::default()
                 .add_directive("kithara_hls=debug".parse().unwrap())
                 .add_directive("kithara_stream=debug".parse().unwrap())
-                .add_directive("kithara_worker=debug".parse().unwrap()),
+                .add_directive("kithara_decode=debug".parse().unwrap()),
         )
         .with_test_writer()
         .try_init();

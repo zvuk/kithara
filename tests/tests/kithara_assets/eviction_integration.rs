@@ -11,9 +11,8 @@
 
 use std::time::Duration;
 
-use bytes::Bytes;
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
-use kithara_storage::{AtomicResourceExt, Resource};
+use kithara_storage::ResourceExt;
 use rstest::{fixture, rstest};
 
 #[derive(serde::Deserialize)]
@@ -52,8 +51,8 @@ fn asset_store_with_root(
 #[case(3, 4)]
 #[case(5, 6)]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn eviction_max_assets_skips_pinned_assets(
+#[test]
+fn eviction_max_assets_skips_pinned_assets(
     #[case] max_assets: usize,
     #[case] create_count: usize,
     temp_dir: tempfile::TempDir,
@@ -66,11 +65,8 @@ async fn eviction_max_assets_skips_pinned_assets(
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(max_assets));
         let key = ResourceKey::new(format!("media/{}.bin", i));
 
-        let res = store.open_atomic_resource(&key).await.unwrap();
-        res.write(&Bytes::from(format!("data-{}", i)))
-            .await
-            .unwrap();
-        res.commit(None).await.unwrap();
+        let res = store.open_resource(&key).unwrap();
+        res.write_all(format!("data-{}", i).as_bytes()).unwrap();
 
         // Keep handle for the last asset to pin it
         if i == create_count - 1 {
@@ -93,12 +89,8 @@ async fn eviction_max_assets_skips_pinned_assets(
             let trigger_root = format!("asset-trigger-{}", i);
             let trigger_store = asset_store_with_root(&temp_dir, &trigger_root, Some(max_assets));
             let key_trigger = ResourceKey::new("media/trigger.bin");
-            let res_trigger = trigger_store
-                .open_atomic_resource(&key_trigger)
-                .await
-                .unwrap();
-            res_trigger.write(&Bytes::from("trigger")).await.unwrap();
-            res_trigger.commit(None).await.unwrap();
+            let res_trigger = trigger_store.open_resource(&key_trigger).unwrap();
+            res_trigger.write_all(b"trigger").unwrap();
 
             assert!(exists_asset_dir(&dir, &format!("asset-trigger-{}", i)));
             assert!(exists_asset_dir(&dir, &format!("asset-{}", i))); // pinned asset should remain
@@ -131,8 +123,8 @@ async fn eviction_max_assets_skips_pinned_assets(
 #[case(2)]
 #[case(3)]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn eviction_ignores_missing_index(#[case] asset_count: usize, temp_dir: tempfile::TempDir) {
+#[test]
+fn eviction_ignores_missing_index(#[case] asset_count: usize, temp_dir: tempfile::TempDir) {
     let dir = temp_dir.path().to_path_buf();
 
     // Create assets without proper LRU tracking (simulate missing/corrupted index)
@@ -141,11 +133,8 @@ async fn eviction_ignores_missing_index(#[case] asset_count: usize, temp_dir: te
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(2));
         let key = ResourceKey::new(format!("data/{}.bin", i));
 
-        let res = store.open_atomic_resource(&key).await.unwrap();
-        res.write(&Bytes::from(format!("data-{}", i)))
-            .await
-            .unwrap();
-        res.commit(None).await.unwrap();
+        let res = store.open_resource(&key).unwrap();
+        res.write_all(format!("data-{}", i).as_bytes()).unwrap();
     }
 
     // Manually corrupt LRU index to simulate missing metadata
@@ -158,7 +147,7 @@ async fn eviction_ignores_missing_index(#[case] asset_count: usize, temp_dir: te
     let trigger_store = asset_store_with_root(&temp_dir, "trigger-asset", Some(2));
     let trigger_key = ResourceKey::new("data/trigger.bin");
 
-    let res = trigger_store.open_atomic_resource(&trigger_key).await;
+    let res = trigger_store.open_resource(&trigger_key);
 
     assert!(res.is_ok(), "Should handle missing LRU index gracefully");
 }
@@ -166,8 +155,8 @@ async fn eviction_ignores_missing_index(#[case] asset_count: usize, temp_dir: te
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[ignore = "Test needs redesign for new scoped AssetStore architecture"]
-#[tokio::test]
-async fn eviction_with_zero_byte_assets(temp_dir: tempfile::TempDir) {
+#[test]
+fn eviction_with_zero_byte_assets(temp_dir: tempfile::TempDir) {
     let dir = temp_dir.path().to_path_buf();
 
     // Create assets with zero bytes
@@ -176,9 +165,8 @@ async fn eviction_with_zero_byte_assets(temp_dir: tempfile::TempDir) {
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(2));
         let key = ResourceKey::new("empty.bin");
 
-        let res = store.open_atomic_resource(&key).await.unwrap();
-        res.write(&Bytes::new()).await.unwrap();
-        res.commit(None).await.unwrap();
+        let res = store.open_resource(&key).unwrap();
+        res.write_all(b"").unwrap();
     }
 
     // Should have at most 2 zero-byte assets
@@ -201,8 +189,8 @@ async fn eviction_with_zero_byte_assets(temp_dir: tempfile::TempDir) {
 #[case(2, 4, 1)] // max_assets=2, create 4 assets, keep 1 newest pinned
 #[case(3, 6, 2)] // max_assets=3, create 6 assets, keep 2 newest pinned
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn eviction_respects_max_assets_limit(
+#[test]
+fn eviction_respects_max_assets_limit(
     #[case] max_assets: usize,
     #[case] create_count: usize,
     #[case] pinned_count: usize,
@@ -216,9 +204,8 @@ async fn eviction_respects_max_assets_limit(
         let asset_root = format!("asset-{}", i);
         let store = asset_store_with_root(&temp_dir, &asset_root, Some(max_assets));
         let key = ResourceKey::new(format!("media/{}.bin", i));
-        let res = store.open_atomic_resource(&key).await.unwrap();
-        res.write(&Bytes::from_static(b"DATA")).await.unwrap();
-        res.commit(None).await.unwrap();
+        let res = store.open_resource(&key).unwrap();
+        res.write_all(b"DATA").unwrap();
 
         // Keep handle for the newest `pinned_count` assets to pin them
         // This simulates real usage where some assets are actively being used
@@ -228,7 +215,7 @@ async fn eviction_respects_max_assets_limit(
     }
 
     // Give eviction a moment to complete
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    std::thread::sleep(Duration::from_millis(100));
 
     // Count how many asset directories exist
     let mut existing_count = 0;

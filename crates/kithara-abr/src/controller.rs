@@ -36,7 +36,7 @@ pub struct AbrController<E: Estimator> {
     current_variant: Arc<AtomicUsize>,
     /// Reference instant for computing elapsed time (created at controller init).
     reference_instant: Instant,
-    /// Nanoseconds since `reference_instant` of last switch, or NO_SWITCH if none.
+    /// Nanoseconds since `reference_instant` of last switch, or `NO_SWITCH` if none.
     last_switch_at_nanos: AtomicU64,
 }
 
@@ -52,7 +52,7 @@ impl<E: Estimator> AbrController<E> {
         }
     }
 
-    /// Convert Instant to nanos since reference. Returns at least 1 to distinguish from NO_SWITCH.
+    /// Convert Instant to nanos since reference. Returns at least 1 to distinguish from `NO_SWITCH`.
     fn instant_to_nanos(&self, instant: Instant) -> u64 {
         let nanos = instant
             .saturating_duration_since(self.reference_instant)
@@ -61,7 +61,7 @@ impl<E: Estimator> AbrController<E> {
         nanos.max(1)
     }
 
-    /// Convert nanos to Instant. Returns None if value is NO_SWITCH.
+    /// Convert nanos to Instant. Returns None if value is `NO_SWITCH`.
     fn nanos_to_instant(&self, nanos: u64) -> Option<Instant> {
         if nanos == NO_SWITCH {
             None

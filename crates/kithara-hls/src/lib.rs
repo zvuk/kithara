@@ -19,14 +19,11 @@
 //! ```
 
 // Public modules
+pub mod config;
 pub mod error;
 pub mod events;
-pub mod options;
-pub mod worker;
 
 // Internal modules (exposed for testing, use with caution)
-#[doc(hidden)]
-pub mod cache;
 #[doc(hidden)]
 pub mod fetch;
 #[doc(hidden)]
@@ -43,12 +40,12 @@ mod source;
 // Public API re-exports
 // ============================================================================
 
-pub use cache::EncryptionInfo;
+pub use config::{HlsConfig, KeyContext, KeyOptions, KeyProcessor};
 pub use error::{HlsError, HlsResult};
 pub use events::HlsEvent;
+pub use fetch::EncryptionInfo;
 pub use inner::Hls;
 pub use kithara_abr::{
     AbrDecision, AbrMode, AbrOptions, AbrReason, ThroughputSample, Variant, VariantInfo,
 };
 pub use kithara_stream::ContainerFormat;
-pub use options::{HlsConfig, KeyContext, KeyOptions, KeyProcessor};

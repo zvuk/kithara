@@ -1,13 +1,12 @@
 #![forbid(unsafe_code)]
 
-//! Tests for SourceReader - sync Read+Seek adapter over async Source.
+//! Tests for SourceReader - sync Read+Seek adapter over sync Source.
 
 use std::{
     io::{Read, Seek, SeekFrom},
     ops::Range,
 };
 
-use async_trait::async_trait;
 use kithara_decode::SourceReader;
 use kithara_stream::{MediaInfo, Source, StreamResult, WaitOutcome};
 use rstest::{fixture, rstest};
@@ -33,12 +32,11 @@ impl MemorySource {
 #[error("MemorySourceError")]
 struct MemorySourceError;
 
-#[async_trait]
 impl Source for MemorySource {
     type Item = u8;
     type Error = MemorySourceError;
 
-    async fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
+    fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
         if range.start >= self.data.len() as u64 {
             Ok(WaitOutcome::Eof)
         } else {
@@ -46,7 +44,7 @@ impl Source for MemorySource {
         }
     }
 
-    async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
         let offset = offset as usize;
         if offset >= self.data.len() {
             return Ok(0);
@@ -97,264 +95,185 @@ fn large_source() -> MemorySource {
 // ==================== SourceReader Tests ====================
 
 #[rstest]
-#[tokio::test]
-async fn read_sequential(hello_source: MemorySource) {
-    let source = hello_source;
+#[test]
+fn read_sequential(hello_source: MemorySource) {
+    let mut reader = SourceReader::new(hello_source);
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
+    let mut buf = [0u8; 5];
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 5);
+    assert_eq!(&buf, b"Hello");
 
-        let mut buf = [0u8; 5];
-        let n = reader.read(&mut buf).unwrap();
-        assert_eq!(n, 5);
-        assert_eq!(&buf, b"Hello");
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 5);
+    assert_eq!(&buf, b", Wor");
 
-        let n = reader.read(&mut buf).unwrap();
-        assert_eq!(n, 5);
-        assert_eq!(&buf, b", Wor");
-
-        let n = reader.read(&mut buf).unwrap();
-        assert_eq!(n, 3);
-        assert_eq!(&buf[..3], b"ld!");
-    })
-    .await;
-
-    result.unwrap();
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 3);
+    assert_eq!(&buf[..3], b"ld!");
 }
 
 #[rstest]
-#[tokio::test]
-async fn read_all() {
+#[test]
+fn read_all() {
     let source = MemorySource::from_str("Test data");
+    let mut reader = SourceReader::new(source);
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
-
-        let mut buf = Vec::new();
-        let n = reader.read_to_end(&mut buf).unwrap();
-        assert_eq!(n, 9);
-        assert_eq!(&buf, b"Test data");
-    })
-    .await;
-
-    result.unwrap();
+    let mut buf = Vec::new();
+    let n = reader.read_to_end(&mut buf).unwrap();
+    assert_eq!(n, 9);
+    assert_eq!(&buf, b"Test data");
 }
 
 #[rstest]
-#[tokio::test]
-async fn read_eof() {
+#[test]
+fn read_eof() {
     let source = MemorySource::from_str("Short");
+    let mut reader = SourceReader::new(source);
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
+    let mut buf = [0u8; 100];
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 5);
 
-        let mut buf = [0u8; 100];
-        let n = reader.read(&mut buf).unwrap();
-        assert_eq!(n, 5);
-
-        // Next read should return 0 (EOF)
-        let n = reader.read(&mut buf).unwrap();
-        assert_eq!(n, 0);
-    })
-    .await;
-
-    result.unwrap();
+    // Next read should return 0 (EOF)
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 0);
 }
 
 #[rstest]
 #[case::start(SeekFrom::Start(5), 5, "567")]
 #[case::current_forward(SeekFrom::Current(2), 5, "567")]
 #[case::end(SeekFrom::End(-3), 7, "789")]
-#[tokio::test]
-async fn seek_operations(
+#[test]
+fn seek_operations(
     digits_source: MemorySource,
     #[case] seek_from: SeekFrom,
     #[case] expected_pos: u64,
     #[case] expected_data: &str,
 ) {
-    let source = digits_source;
+    let mut reader = SourceReader::new(digits_source);
     let expected = expected_data.as_bytes().to_vec();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
+    // Read initial 3 bytes to set position
+    let mut buf = [0u8; 3];
+    reader.read(&mut buf).unwrap();
 
-        // Read initial 3 bytes to set position
-        let mut buf = [0u8; 3];
-        reader.read(&mut buf).unwrap();
+    // Perform seek
+    let pos = reader.seek(seek_from).unwrap();
+    assert_eq!(pos, expected_pos);
 
-        // Perform seek
-        let pos = reader.seek(seek_from).unwrap();
-        assert_eq!(pos, expected_pos);
-
-        // Read and verify
-        reader.read(&mut buf).unwrap();
-        assert_eq!(&buf[..], &expected[..]);
-    })
-    .await;
-
-    result.unwrap();
+    // Read and verify
+    reader.read(&mut buf).unwrap();
+    assert_eq!(&buf[..], &expected[..]);
 }
 
 #[rstest]
-#[tokio::test]
-async fn seek_current_negative(digits_source: MemorySource) {
-    let source = digits_source;
+#[test]
+fn seek_current_negative(digits_source: MemorySource) {
+    let mut reader = SourceReader::new(digits_source);
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
+    let mut buf = [0u8; 5];
+    reader.read(&mut buf).unwrap();
+    assert_eq!(reader.position(), 5);
 
-        let mut buf = [0u8; 5];
-        reader.read(&mut buf).unwrap();
-        assert_eq!(reader.position(), 5);
+    let pos = reader.seek(SeekFrom::Current(-3)).unwrap();
+    assert_eq!(pos, 2);
 
-        let pos = reader.seek(SeekFrom::Current(-3)).unwrap();
-        assert_eq!(pos, 2);
-
-        reader.read(&mut buf).unwrap();
-        assert_eq!(&buf, b"23456");
-    })
-    .await;
-
-    result.unwrap();
+    reader.read(&mut buf).unwrap();
+    assert_eq!(&buf, b"23456");
 }
 
 #[rstest]
-#[tokio::test]
-async fn seek_to_zero() {
+#[test]
+fn seek_to_zero() {
     let source = MemorySource::from_str("Hello");
+    let mut reader = SourceReader::new(source);
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
+    let mut buf = [0u8; 5];
+    reader.read(&mut buf).unwrap();
+    assert_eq!(reader.position(), 5);
 
-        let mut buf = [0u8; 5];
-        reader.read(&mut buf).unwrap();
-        assert_eq!(reader.position(), 5);
+    let pos = reader.seek(SeekFrom::Start(0)).unwrap();
+    assert_eq!(pos, 0);
 
-        let pos = reader.seek(SeekFrom::Start(0)).unwrap();
-        assert_eq!(pos, 0);
-
-        reader.read(&mut buf).unwrap();
-        assert_eq!(&buf, b"Hello");
-    })
-    .await;
-
-    result.unwrap();
+    reader.read(&mut buf).unwrap();
+    assert_eq!(&buf, b"Hello");
 }
 
 #[rstest]
 #[case::past_eof(SeekFrom::Start(100))]
 #[case::negative(SeekFrom::Current(-10))]
-#[tokio::test]
-async fn seek_invalid_fails(#[case] seek_from: SeekFrom) {
+#[test]
+fn seek_invalid_fails(#[case] seek_from: SeekFrom) {
     let source = MemorySource::from_str("Short");
-
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
-        let result = reader.seek(seek_from);
-        assert!(result.is_err());
-    })
-    .await;
-
-    result.unwrap();
+    let mut reader = SourceReader::new(source);
+    let result = reader.seek(seek_from);
+    assert!(result.is_err());
 }
 
 #[rstest]
-#[tokio::test]
-async fn position_tracking(digits_source: MemorySource) {
-    let source = digits_source;
+#[test]
+fn position_tracking(digits_source: MemorySource) {
+    let mut reader = SourceReader::new(digits_source);
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
+    assert_eq!(reader.position(), 0);
 
-        assert_eq!(reader.position(), 0);
+    let mut buf = [0u8; 3];
+    reader.read(&mut buf).unwrap();
+    assert_eq!(reader.position(), 3);
 
-        let mut buf = [0u8; 3];
-        reader.read(&mut buf).unwrap();
-        assert_eq!(reader.position(), 3);
+    reader.seek(SeekFrom::Start(7)).unwrap();
+    assert_eq!(reader.position(), 7);
 
-        reader.seek(SeekFrom::Start(7)).unwrap();
-        assert_eq!(reader.position(), 7);
-
-        reader.read(&mut buf).unwrap();
-        assert_eq!(reader.position(), 10);
-    })
-    .await;
-
-    result.unwrap();
+    reader.read(&mut buf).unwrap();
+    assert_eq!(reader.position(), 10);
 }
 
 #[rstest]
-#[tokio::test]
-async fn empty_read() {
+#[test]
+fn empty_read() {
     let source = MemorySource::from_str("Test");
+    let mut reader = SourceReader::new(source);
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
-
-        let mut buf = [];
-        let n = reader.read(&mut buf).unwrap();
-        assert_eq!(n, 0);
-        assert_eq!(reader.position(), 0);
-    })
-    .await;
-
-    result.unwrap();
+    let mut buf = [];
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 0);
+    assert_eq!(reader.position(), 0);
 }
 
 #[rstest]
-#[tokio::test]
-async fn empty_source_read(empty_source: MemorySource) {
-    let source = empty_source;
+#[test]
+fn empty_source_read(empty_source: MemorySource) {
+    let mut reader = SourceReader::new(empty_source);
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
-
-        let mut buf = [0u8; 10];
-        let n = reader.read(&mut buf).unwrap();
-        assert_eq!(n, 0);
-    })
-    .await;
-
-    result.unwrap();
+    let mut buf = [0u8; 10];
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 0);
 }
 
 #[rstest]
-#[tokio::test]
-async fn large_data_read(large_source: MemorySource) {
+#[test]
+fn large_data_read(large_source: MemorySource) {
     let expected: Vec<u8> = (0..10000).map(|i| (i % 256) as u8).collect();
-    let source = large_source;
+    let mut reader = SourceReader::new(large_source);
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
+    let mut result = Vec::new();
+    reader.read_to_end(&mut result).unwrap();
 
-        let mut result = Vec::new();
-        reader.read_to_end(&mut result).unwrap();
-
-        assert_eq!(result, expected);
-    })
-    .await;
-
-    result.unwrap();
+    assert_eq!(result, expected);
 }
 
 #[rstest]
-#[tokio::test]
-async fn multiple_seeks_and_reads(alpha_source: MemorySource) {
-    let source = alpha_source;
+#[test]
+fn multiple_seeks_and_reads(alpha_source: MemorySource) {
+    let mut reader = SourceReader::new(alpha_source);
+    let mut buf = [0u8; 2];
 
-    let result = tokio::task::spawn_blocking(move || {
-        let mut reader = SourceReader::new(source);
-        let mut buf = [0u8; 2];
+    let test_cases = [(0u64, b"AB"), (4, b"EF"), (8, b"IJ"), (2, b"CD")];
 
-        let test_cases = [(0u64, b"AB"), (4, b"EF"), (8, b"IJ"), (2, b"CD")];
-
-        for (pos, expected) in test_cases {
-            reader.seek(SeekFrom::Start(pos)).unwrap();
-            reader.read(&mut buf).unwrap();
-            assert_eq!(&buf, expected);
-        }
-    })
-    .await;
-
-    result.unwrap();
+    for (pos, expected) in test_cases {
+        reader.seek(SeekFrom::Start(pos)).unwrap();
+        reader.read(&mut buf).unwrap();
+        assert_eq!(&buf, expected);
+    }
 }

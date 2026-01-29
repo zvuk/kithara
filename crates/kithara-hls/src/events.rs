@@ -24,6 +24,13 @@ pub enum HlsEvent {
         segment_index: usize,
         byte_offset: u64,
     },
+    /// Per-chunk progress within a segment.
+    SegmentProgress {
+        variant: usize,
+        segment_index: usize,
+        offset: u64,
+        len: usize,
+    },
     /// Segment download completed.
     SegmentComplete {
         variant: usize,
@@ -31,20 +38,16 @@ pub enum HlsEvent {
         bytes_transferred: u64,
         duration: Duration,
     },
-    /// Encryption key fetched.
-    KeyFetch {
-        key_url: String,
-        success: bool,
-        cached: bool,
-    },
-    /// Buffer level update.
-    BufferLevel { level_seconds: f32 },
     /// Throughput measurement.
     ThroughputSample { bytes_per_second: f64 },
-    /// Download progress update.
-    DownloadProgress { offset: u64, percent: Option<f32> },
+    /// Cumulative download progress.
+    DownloadProgress { offset: u64, total: Option<u64> },
+    /// Download completed successfully.
+    DownloadComplete { total_bytes: u64 },
+    /// Download failed.
+    DownloadError { error: String },
     /// Playback progress update.
-    PlaybackProgress { position: u64, percent: Option<f32> },
+    PlaybackProgress { position: u64, total: Option<u64> },
     /// Error occurred.
     Error { error: String, recoverable: bool },
     /// Stream ended.

@@ -2,9 +2,21 @@
 
 use std::time::{Duration, Instant};
 
-use kithara_abr::{AbrController, AbrMode, AbrOptions, AbrReason};
-use kithara_hls::playlist::{parse_master_playlist, variants_from_master};
+use kithara_abr::{AbrController, AbrMode, AbrOptions, AbrReason, Variant};
+use kithara_hls::playlist::{MasterPlaylist, parse_master_playlist};
 use rstest::{fixture, rstest};
+
+/// Convert HLS master playlist variants to ABR variant list (test helper).
+fn variants_from_master(master: &MasterPlaylist) -> Vec<Variant> {
+    master
+        .variants
+        .iter()
+        .map(|v| Variant {
+            variant_index: v.id.0,
+            bandwidth_bps: v.bandwidth.unwrap_or(0),
+        })
+        .collect()
+}
 
 // ==================== Fixtures ====================
 

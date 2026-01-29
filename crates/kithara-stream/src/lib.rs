@@ -3,22 +3,26 @@
 //! Core streaming orchestration primitives for Kithara.
 //!
 //! ## Design goals
-//! - `Reader`: sync `Read + Seek` via kanal channel (no block_on)
+//! - `Reader`: sync `Read + Seek` via direct Source calls
 //! - `Writer`: async HTTP download as `Stream` trait
-//! - `Backend`: generic async backend for any `Source`
+//! - `Backend`: spawns Downloader task, holds Source for direct access
 
 #![forbid(unsafe_code)]
 
 mod backend;
+mod downloader;
 mod error;
+mod fetch;
 mod media;
 mod reader;
 mod source;
 mod stream;
 mod writer;
 
-pub use backend::{Backend, BackendAccess, Command, Response};
+pub use backend::Backend;
+pub use downloader::{Downloader, NoDownload};
 pub use error::{StreamError, StreamResult};
+pub use fetch::{EpochValidator, Fetch};
 pub use kithara_storage::WaitOutcome;
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use reader::Reader;

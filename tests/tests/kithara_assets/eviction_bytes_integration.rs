@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
-use kithara_storage::{AtomicResourceExt, Resource};
+use kithara_storage::ResourceExt;
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
 
@@ -78,13 +78,11 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             cancel_token.clone(),
         );
         let key_a = ResourceKey::new("media/a.bin");
-        let res_a = store_a.open_atomic_resource(&key_a).await.unwrap();
+        let res_a = store_a.open_resource(&key_a).unwrap();
 
         res_a
-            .write(&Bytes::from(vec![0xAAu8; bytes_a]))
-            .await
+            .write_all(&Bytes::from(vec![0xAAu8; bytes_a]))
             .unwrap();
-        res_a.commit(None).await.unwrap();
     }
 
     // Wait for async unpinning to complete
@@ -99,13 +97,11 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             cancel_token.clone(),
         );
         let key_b = ResourceKey::new("media/b.bin");
-        let res_b = store_b.open_atomic_resource(&key_b).await.unwrap();
+        let res_b = store_b.open_resource(&key_b).unwrap();
 
         res_b
-            .write(&Bytes::from(vec![0xBBu8; bytes_b]))
-            .await
+            .write_all(&Bytes::from(vec![0xBBu8; bytes_b]))
             .unwrap();
-        res_b.commit(None).await.unwrap();
     }
 
     // Wait for async unpinning to complete
@@ -120,10 +116,9 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
             cancel_token.clone(),
         );
         let key_c = ResourceKey::new("media/c.bin");
-        let res_c = store_c.open_atomic_resource(&key_c).await.unwrap();
+        let res_c = store_c.open_resource(&key_c).unwrap();
 
-        res_c.write(&Bytes::from_static(b"C")).await.unwrap();
-        res_c.commit(None).await.unwrap();
+        res_c.write_all(b"C").unwrap();
     }
 
     // Wait for async eviction callback to complete
@@ -161,8 +156,8 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
 #[case(50, 120)] // Well below limit
 #[case(200, 50)] // Over limit with small new asset
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn eviction_corner_cases_different_byte_limits(
+#[test]
+fn eviction_corner_cases_different_byte_limits(
     #[case] max_bytes: usize,
     #[case] new_asset_size: usize,
     cancel_token: CancellationToken,
@@ -184,11 +179,9 @@ async fn eviction_corner_cases_different_byte_limits(
         );
         let key = ResourceKey::new(format!("data{}.bin", i));
 
-        let res = store.open_atomic_resource(&key).await.unwrap();
-        res.write(&Bytes::from(vec![0x11 * (i + 1) as u8; *size]))
-            .await
+        let res = store.open_resource(&key).unwrap();
+        res.write_all(&Bytes::from(vec![0x11 * (i + 1) as u8; *size]))
             .unwrap();
-        res.commit(None).await.unwrap();
     }
 
     // Create a new asset and account its bytes
@@ -201,11 +194,9 @@ async fn eviction_corner_cases_different_byte_limits(
         );
         let trigger_key = ResourceKey::new("trigger.bin");
 
-        let res = store.open_atomic_resource(&trigger_key).await.unwrap();
-        res.write(&Bytes::from(vec![0xFF; new_asset_size]))
-            .await
+        let res = store.open_resource(&trigger_key).unwrap();
+        res.write_all(&Bytes::from(vec![0xFF; new_asset_size]))
             .unwrap();
-        res.commit(None).await.unwrap();
     }
 
     // Trigger eviction by creating another asset_root.
@@ -217,9 +208,8 @@ async fn eviction_corner_cases_different_byte_limits(
             cancel.clone(),
         );
         let probe_key = ResourceKey::new("probe.bin");
-        let probe = store.open_atomic_resource(&probe_key).await.unwrap();
-        probe.write(&Bytes::from_static(b"P")).await.unwrap();
-        probe.commit(None).await.unwrap();
+        let probe = store.open_resource(&probe_key).unwrap();
+        probe.write_all(b"P").unwrap();
     }
 
     assert!(

@@ -13,14 +13,14 @@
 //! let inner = File::create(config).await?;
 //! ```
 
+mod config;
 mod error;
 mod events;
 mod inner;
-mod options;
 mod session;
 
+pub use config::FileConfig;
 pub use error::SourceError;
 pub use events::FileEvent;
 pub use inner::File;
-pub use options::FileConfig;
 pub use session::Progress;

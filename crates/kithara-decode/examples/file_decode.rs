@@ -20,15 +20,16 @@ use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::default()
-                .add_directive("kithara_decode=debug".parse()?)
-                .add_directive("kithara_file=debug".parse()?)
+                .add_directive("kithara_decode=info".parse()?)
+                .add_directive("kithara_file=info".parse()?)
                 .add_directive("kithara_stream=info".parse()?)
-                .add_directive("kithara_net=info".parse()?)
+                .add_directive("kithara_net=warn".parse()?)
+                .add_directive("symphonia_format_isomp4=warn".parse()?)
                 .add_directive(LevelFilter::INFO.into()),
         )
         .with_line_number(false)
@@ -44,29 +45,28 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Opening file: {}", url);
 
-    // Detect format hint from URL extension
-    let hint = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
-
-    // Create events channel
-    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
-
-    let file_config = FileConfig::new(url).with_events(events_tx);
-
-    info!("Creating decoder...");
-
-    // Log events
-    tokio::spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
-            info!(?ev);
-        }
-    });
-
     // Create decoder via target API
-    let mut config = DecoderConfig::<File>::new(file_config);
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(128);
+    let hint = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
+    let file_config = FileConfig::new(url);
+    let mut config = DecoderConfig::<File>::new(file_config).with_events(events_tx);
     if let Some(ext) = hint {
         config = config.with_hint(ext);
     }
     let decoder = Decoder::<Stream<File>>::new(config).await?;
+
+    // Log events
+    tokio::spawn(async move {
+        loop {
+            match events_rx.recv().await {
+                Ok(ev) => info!(?ev),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    info!(skipped = n, "events receiver lagged");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
 
     info!("Starting playback...");
 

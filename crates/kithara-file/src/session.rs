@@ -7,8 +7,8 @@ use kithara_assets::{
     ProcessedResource, ProcessingAssets,
 };
 use kithara_net::{HttpClient, Net};
-use kithara_storage::{StreamingResource, StreamingResourceExt, WaitOutcome};
-use tokio::sync::broadcast;
+use kithara_storage::{ResourceExt, StorageResource, WaitOutcome};
+use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 use url::Url;
@@ -16,7 +16,7 @@ use url::Url;
 use crate::{error::SourceError, events::FileEvent};
 
 pub(crate) type AssetResourceType = LeaseResource<
-    ProcessedResource<StreamingResource, ()>,
+    ProcessedResource<StorageResource, ()>,
     LeaseGuard<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, ()>>>,
 >;
 
@@ -45,10 +45,7 @@ impl FileStreamState {
             .and_then(|v| v.parse::<u64>().ok());
 
         let key = (&url).into();
-        let res = assets
-            .open_streaming_resource(&key)
-            .await
-            .map_err(SourceError::Assets)?;
+        let res = assets.open_resource(&key).map_err(SourceError::Assets)?;
 
         let events =
             events_tx.unwrap_or_else(|| broadcast::channel(events_channel_capacity.max(1)).0);
@@ -84,10 +81,11 @@ impl FileStreamState {
 }
 
 /// Progress tracker for download and playback positions.
-#[derive(Debug)]
 pub struct Progress {
     read_pos: std::sync::atomic::AtomicU64,
     download_pos: std::sync::atomic::AtomicU64,
+    /// Source -> Downloader: reader advanced, may resume downloading.
+    reader_advanced: Notify,
 }
 
 impl Progress {
@@ -95,17 +93,40 @@ impl Progress {
         Self {
             read_pos: std::sync::atomic::AtomicU64::new(0),
             download_pos: std::sync::atomic::AtomicU64::new(0),
+            reader_advanced: Notify::new(),
         }
+    }
+
+    pub fn read_pos(&self) -> u64 {
+        use std::sync::atomic::Ordering;
+        self.read_pos.load(Ordering::Acquire)
+    }
+
+    pub fn download_pos(&self) -> u64 {
+        use std::sync::atomic::Ordering;
+        self.download_pos.load(Ordering::Acquire)
     }
 
     pub fn set_read_pos(&self, v: u64) {
         use std::sync::atomic::Ordering;
-        self.read_pos.store(v, Ordering::Relaxed);
+        self.read_pos.store(v, Ordering::Release);
+        self.reader_advanced.notify_one();
     }
 
     pub fn set_download_pos(&self, v: u64) {
         use std::sync::atomic::Ordering;
-        self.download_pos.store(v, Ordering::Relaxed);
+        self.download_pos.store(v, Ordering::Release);
+    }
+
+    /// Register for reader advance notification.
+    /// Must be called BEFORE checking positions to avoid race.
+    pub fn notified_reader_advance(&self) -> tokio::sync::futures::Notified<'_> {
+        self.reader_advanced.notified()
+    }
+
+    /// Signal that the reader needs data (wake paused downloader).
+    pub fn signal_reader_advanced(&self) {
+        self.reader_advanced.notify_one();
     }
 }
 
@@ -115,7 +136,7 @@ impl Default for Progress {
     }
 }
 
-/// File source implementing Source trait.
+/// File source implementing Source trait (sync).
 ///
 /// Wraps storage resource with progress tracking and event emission.
 pub struct FileSource {
@@ -142,24 +163,29 @@ impl FileSource {
     }
 }
 
-#[async_trait::async_trait]
 impl kithara_stream::Source for FileSource {
     type Item = u8;
     type Error = SourceError;
 
-    async fn wait_range(
+    fn wait_range(
         &mut self,
         range: std::ops::Range<u64>,
     ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
         use kithara_stream::StreamError;
 
+        // Update read position so downloader knows where reader needs data.
+        // This prevents backpressure deadlock when symphonia seeks ahead
+        // (e.g., SeekFrom::End) while downloader is still near the beginning.
+        if range.start > self.progress.read_pos() {
+            self.progress.set_read_pos(range.start);
+        }
+
         self.res
             .wait_range(range)
-            .await
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))
     }
 
-    async fn read_at(
+    fn read_at(
         &mut self,
         offset: u64,
         buf: &mut [u8],
@@ -169,7 +195,6 @@ impl kithara_stream::Source for FileSource {
         let n = self
             .res
             .read_at(offset, buf)
-            .await
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))?;
 
         if n > 0 {
@@ -177,13 +202,9 @@ impl kithara_stream::Source for FileSource {
             let new_pos = offset.saturating_add(n as u64);
             self.progress.set_read_pos(new_pos);
 
-            // Send event
-            let percent = self
-                .len
-                .map(|total| ((new_pos as f64 / total as f64) * 100.0).min(100.0) as f32);
             let _ = self.events_tx.send(FileEvent::PlaybackProgress {
                 position: new_pos,
-                percent,
+                total: self.len,
             });
 
             trace!(offset, bytes = n, "FileSource read complete");
@@ -196,4 +217,3 @@ impl kithara_stream::Source for FileSource {
         self.len
     }
 }
-

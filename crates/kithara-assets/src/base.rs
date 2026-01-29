@@ -6,11 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use async_trait::async_trait;
-use kithara_storage::{
-    AtomicOptions, AtomicResource, AtomicResourceExt, DiskOptions, StreamingResource,
-    StreamingResourceExt,
-};
+use kithara_storage::{OpenMode, StorageOptions, StorageResource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -20,124 +16,55 @@ use crate::{
 
 /// Explicit public contract for the assets abstraction.
 ///
-/// ## What this crate is about (normative)
-///
 /// `kithara-assets` is about *assets* and their *resources*:
-/// - an **asset** is a logical unit that may consist of multiple files/resources
-///   (e.g. MP3 single file, or HLS playlist + many segments + keys),
-/// - a **resource** is addressed by [`ResourceKey`] and can be opened either as:
-///   - **atomic** (small files; read/write atomically),
-///   - **streaming** (large files; random access, progressive read/write).
+/// - an **asset** is a logical unit that may consist of multiple files/resources,
+/// - a **resource** is addressed by [`ResourceKey`] and is opened as a unified
+///   [`StorageResource`] supporting both streaming and atomic access patterns.
 ///
-/// ## What this crate is NOT about (normative)
-///
-/// This trait does **not** define:
-/// - path layout, directories, filename conventions,
-/// - string munging / sanitization / hashing,
-/// - direct filesystem operations.
-///
-/// All disk mapping must be encapsulated in the concrete implementation behind this trait.
-///
-/// ## Leasing / pinning (normative)
-///
-/// Leasing / pinning is implemented strictly as a decorator (`LeaseAssets`) over a base [`Assets`]
-/// implementation. The base `Assets` does not know about pins.
-///
-/// ## Associated types
-///
-/// The `StreamingRes` and `AtomicRes` associated types allow decorators to wrap resources.
-/// For example, `LeaseAssets` returns `AssetResource<R, LeaseGuard>` instead of raw `R`.
-///
-/// The `Context` associated type allows decorators to pass additional processing context
-/// (e.g. encryption info) when opening resources. Use `()` for no context.
-#[async_trait]
+/// The `Context` associated type allows decorators to pass additional processing
+/// context (e.g. encryption info) when opening resources. Use `()` for no context.
 pub trait Assets: Clone + Send + Sync + 'static {
-    /// Type returned by `open_streaming_resource`. Must be Clone for caching.
-    type StreamingRes: StreamingResourceExt + Clone + Send + Sync + Debug + 'static;
-    /// Type returned by `open_atomic_resource`. Must be Clone for caching.
-    type AtomicRes: AtomicResourceExt + Clone + Send + Sync + Debug + 'static;
+    /// Type returned by `open_resource`. Must be Clone for caching.
+    type Res: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
     /// Context type for resource processing. Use `()` for no context.
     type Context: Clone + Send + Sync + Hash + Eq + Debug + 'static;
 
-    /// Open a streaming resource with optional context (main method).
-    async fn open_streaming_resource_with_ctx(
+    /// Open a resource with optional context (main method).
+    fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::StreamingRes>;
+    ) -> AssetsResult<Self::Res>;
 
-    /// Open an atomic resource with optional context (main method).
-    async fn open_atomic_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::AtomicRes>;
-
-    /// Convenience method - open a streaming resource without context.
-    async fn open_streaming_resource(&self, key: &ResourceKey) -> AssetsResult<Self::StreamingRes> {
-        self.open_streaming_resource_with_ctx(key, None).await
+    /// Convenience method - open a resource without context.
+    fn open_resource(&self, key: &ResourceKey) -> AssetsResult<Self::Res> {
+        self.open_resource_with_ctx(key, None)
     }
 
-    /// Convenience method - open an atomic resource without context.
-    async fn open_atomic_resource(&self, key: &ResourceKey) -> AssetsResult<Self::AtomicRes> {
-        self.open_atomic_resource_with_ctx(key, None).await
-    }
+    /// Open the resource used for persisting the pins index.
+    ///
+    /// Returns bare `StorageResource` to bypass decorator wrapping.
+    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource>;
 
-    /// Open the atomic resource used for persisting the pins index.
+    /// Open the resource used for persisting the LRU index.
     ///
-    /// Normative requirements:
-    /// - must be a small atomic file-like resource,
-    /// - must be excluded from pinning (otherwise the lease decorator will recurse),
-    /// - must be stable for the lifetime of this assets instance.
-    ///
-    /// Key selection (where this lives on disk) is an implementation detail of the concrete
-    /// `Assets` implementation. Higher layers must not construct or assume a `ResourceKey` here.
-    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource>;
+    /// Returns bare `StorageResource` to bypass decorator wrapping.
+    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource>;
 
     /// Delete the entire asset (all resources under this store's `asset_root`).
-    ///
-    /// ## Normative
-    /// - This is used by eviction/GC decorators (LRU, quota enforcement).
-    /// - Base `Assets` implementations must NOT apply pin/lease semantics here.
-    /// - Higher layers must ensure pinned assets are not deleted (decorators enforce this).
-    async fn delete_asset(&self) -> AssetsResult<()>;
-
-    /// Open the atomic resource used for persisting the LRU index.
-    ///
-    /// ## Normative
-    /// - must be a small atomic file-like resource,
-    /// - must be stable for the lifetime of this assets instance.
-    ///
-    /// Key selection (where this lives on disk) is an implementation detail of the concrete
-    /// `Assets` implementation.
-    async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource>;
+    fn delete_asset(&self) -> AssetsResult<()>;
 
     /// Return the root directory for disk-backed implementations.
-    ///
-    /// For disk-backed implementations, this returns the root directory path.
-    /// For in-memory or network-backed implementations, this may return a placeholder path.
     fn root_dir(&self) -> &Path;
 
     /// Return the asset root identifier for this store.
-    ///
-    /// Each store is scoped to a single asset, identified by this string
-    /// (typically a hash of the master playlist URL).
     fn asset_root(&self) -> &str;
 }
 
 /// Concrete on-disk [`Assets`] implementation for a single asset.
 ///
-/// ## Normative
-/// - This type is responsible for mapping [`ResourceKey`] → disk paths under a root directory.
-/// - Each `DiskAssetStore` is scoped to a single `asset_root` (e.g. hash of master playlist URL).
-/// - `kithara-assets` crate does not "invent" keys; it only *maps* them.
-/// - Path mapping must be safe (no absolute paths, no `..`, no empty segments).
-/// - This is not a "cache" by name or responsibility; caching/eviction are higher-level policies.
-///
-/// Note: this type is intentionally small and dumb: it does not implement pinning or eviction.
-/// Pinning is provided by the `LeaseAssets` decorator.
-/// Eviction is provided by the `EvictAssets` decorator.
-/// Caching is provided by the `CachedAssets` decorator.
+/// Maps [`ResourceKey`] to disk paths under a root directory.
+/// Each `DiskAssetStore` is scoped to a single `asset_root`.
 #[derive(Clone, Debug)]
 pub struct DiskAssetStore {
     root_dir: PathBuf,
@@ -180,12 +107,28 @@ impl DiskAssetStore {
     fn lru_index_path(&self) -> PathBuf {
         self.root_dir.join("_index").join("lru.json")
     }
+
+    fn open_storage_resource(&self, path: PathBuf) -> AssetsResult<StorageResource> {
+        Ok(StorageResource::open(StorageOptions {
+            path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+            cancel: self.cancel.clone(),
+        })?)
+    }
+
+    fn open_index_resource(&self, path: PathBuf) -> AssetsResult<StorageResource> {
+        Ok(StorageResource::open(StorageOptions {
+            path,
+            initial_len: Some(4096),
+            mode: OpenMode::ReadWrite,
+            cancel: self.cancel.clone(),
+        })?)
+    }
 }
 
-#[async_trait]
 impl Assets for DiskAssetStore {
-    type StreamingRes = StreamingResource;
-    type AtomicRes = AtomicResource;
+    type Res = StorageResource;
     type Context = ();
 
     fn root_dir(&self) -> &Path {
@@ -196,76 +139,40 @@ impl Assets for DiskAssetStore {
         &self.asset_root
     }
 
-    async fn open_streaming_resource_with_ctx(
+    fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
         _ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::StreamingRes> {
+    ) -> AssetsResult<Self::Res> {
         let path = self.resource_path(key)?;
-
-        // Check if file exists and get its size to mark as committed.
-        let initial_len = tokio::fs::metadata(&path)
-            .await
-            .ok()
-            .and_then(|m| if m.is_file() { Some(m.len()) } else { None });
-
-        let res = StreamingResource::open_disk(DiskOptions {
-            path,
-            cancel: self.cancel.clone(),
-            initial_len,
-        })
-        .await?;
-        Ok(res)
+        self.open_storage_resource(path)
     }
 
-    async fn open_atomic_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        _ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::AtomicRes> {
-        let path = self.resource_path(key)?;
-        Ok(AtomicResource::open(AtomicOptions {
-            path,
-            cancel: self.cancel.clone(),
-        }))
-    }
-
-    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
         let path = self.pins_index_path();
-        Ok(AtomicResource::open(AtomicOptions {
-            path,
-            cancel: self.cancel.clone(),
-        }))
+        self.open_index_resource(path)
     }
 
-    async fn delete_asset(&self) -> AssetsResult<()> {
+    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
+        let path = self.lru_index_path();
+        self.open_index_resource(path)
+    }
+
+    fn delete_asset(&self) -> AssetsResult<()> {
         if self.cancel.is_cancelled() {
             return Err(kithara_storage::StorageError::Cancelled.into());
         }
-        delete_asset_dir(&self.root_dir, &self.asset_root)
-            .await
-            .map_err(|e| e.into())
-    }
-
-    async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
-        let path = self.lru_index_path();
-        Ok(AtomicResource::open(AtomicOptions {
-            path,
-            cancel: self.cancel.clone(),
-        }))
+        delete_asset_dir(&self.root_dir, &self.asset_root).map_err(|e| e.into())
     }
 }
 
 /// Delete an asset directory by `asset_root` directly via filesystem.
-///
-/// This is a low-level operation used by eviction to delete other assets.
-/// It does NOT clear any in-memory caches (the caller is responsible for that if needed).
-pub(crate) async fn delete_asset_dir(root_dir: &Path, asset_root: &str) -> std::io::Result<()> {
+pub(crate) fn delete_asset_dir(root_dir: &Path, asset_root: &str) -> std::io::Result<()> {
     let safe = sanitize_rel(asset_root).map_err(|()| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid asset_root")
     })?;
     let path = root_dir.join(safe);
-    match tokio::fs::remove_dir_all(&path).await {
+    match std::fs::remove_dir_all(&path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(e) => Err(e),

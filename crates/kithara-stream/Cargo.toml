@@ -3,26 +3,21 @@ name = "kithara-stream"
 version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
-description = "Streaming orchestration (source -> bytes stream) with command/control channel"
+description = "Streaming orchestration (source -> bytes stream) with sync Read+Seek"
 
 [lints]
 workspace = true
 
 [dependencies]
 async-stream = { workspace = true }
-async-trait = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
-kanal = { workspace = true }
 kithara-assets = { workspace = true }
-kithara-bufpool = { workspace = true }
 kithara-net = { workspace = true }
 kithara-storage = { workspace = true }
 parking_lot = { workspace = true }
-kithara-worker = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
-tokio-stream = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }

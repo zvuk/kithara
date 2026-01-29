@@ -10,14 +10,12 @@ use kithara_stream::StreamType;
 use tokio::sync::broadcast;
 
 use crate::{
-    cache::FetchLoader,
+    config::HlsConfig,
     error::HlsError,
     events::HlsEvent,
     fetch::FetchManager,
-    options::HlsConfig,
-    playlist::{PlaylistManager, variant_info_from_master},
-    source::HlsSource,
-    worker::VariantMetadata,
+    playlist::variant_info_from_master,
+    source::{VariantMetadata, build_pair},
 };
 
 /// Marker type for HLS streaming.
@@ -25,10 +23,22 @@ pub struct Hls;
 
 impl StreamType for Hls {
     type Config = HlsConfig;
-    type Backend = kithara_stream::Backend;
+    type Source = crate::source::HlsSource;
     type Error = HlsError;
+    type Event = HlsEvent;
 
-    async fn create_backend(mut config: Self::Config) -> Result<Self::Backend, Self::Error> {
+    fn ensure_events(config: &mut Self::Config) -> broadcast::Receiver<Self::Event> {
+        if config.events_tx.is_none() {
+            let capacity = config.events_channel_capacity.max(1);
+            config.events_tx = Some(broadcast::channel(capacity).0);
+        }
+        match config.events_tx {
+            Some(ref tx) => tx.subscribe(),
+            None => broadcast::channel(1).1,
+        }
+    }
+
+    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         let asset_root = asset_root_for_url(&config.url);
         let cancel = config.cancel.clone().unwrap_or_default();
         let net = HttpClient::new(config.net.clone());
@@ -41,29 +51,23 @@ impl StreamType for Hls {
             .evict_config(config.store.to_evict_config())
             .build();
 
-        // Build FetchManager
-        let fetch_manager = Arc::new(FetchManager::new(base_assets.clone(), net, cancel.clone()));
-
-        // Build PlaylistManager
-        let playlist_manager = Arc::new(PlaylistManager::new(
-            Arc::clone(&fetch_manager),
-            config.base_url.clone(),
-        ));
+        // Build FetchManager (unified: fetch + playlist cache + Loader)
+        let fetch_manager = Arc::new(
+            FetchManager::new(base_assets.clone(), net, cancel.clone())
+                .with_master_url(config.url.clone())
+                .with_base_url(config.base_url.clone()),
+        );
 
         // Load master playlist
-        let master = playlist_manager.master_playlist(&config.url).await?;
+        let master = fetch_manager.master_playlist(&config.url).await?;
 
         // Determine initial variant
         let initial_variant = config.abr.initial_variant();
 
-        // Create events channel if not provided
-        let events_tx = if let Some(tx) = config.events_tx.clone() {
-            tx
-        } else {
-            let capacity = config.events_channel_capacity.max(1);
-            let (tx, _) = broadcast::channel(capacity);
-            config.events_tx = Some(tx.clone());
-            tx
+        // events_tx is guaranteed to exist (ensure_events was called by Stream::new).
+        let events_tx = match config.events_tx {
+            Some(ref tx) => tx.clone(),
+            None => broadcast::channel(config.events_channel_capacity.max(1)).0,
         };
 
         // Emit VariantsDiscovered event
@@ -86,27 +90,13 @@ impl StreamType for Hls {
             })
             .collect();
 
-        // Create FetchLoader
-        let fetch_loader = Arc::new(FetchLoader::new(
-            config.url.clone(),
-            Arc::clone(&fetch_manager),
-            Arc::clone(&playlist_manager),
-        ));
+        // Create HlsDownloader + HlsSource pair
+        let (downloader, source) =
+            build_pair(Arc::clone(&fetch_manager), variant_metadata, &config);
 
-        // Create HlsSource (implements Source directly)
-        let source = HlsSource::new(
-            fetch_loader,
-            Arc::clone(&fetch_manager),
-            variant_metadata,
-            initial_variant,
-            Some(config.abr.clone()),
-            config.events_tx.clone(),
-            cancel,
-        );
+        // Spawn downloader as background task
+        std::mem::forget(kithara_stream::Backend::new(downloader, cancel));
 
-        // Create backend directly from source
-        let backend = kithara_stream::Backend::new(source);
-
-        Ok(backend)
+        Ok(source)
     }
 }

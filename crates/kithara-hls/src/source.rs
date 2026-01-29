@@ -1,35 +1,52 @@
-//! Unified HLS source implementing kithara_stream::Source.
+//! HLS source and downloader.
 //!
-//! Combines segment fetching and random-access reading in one component.
-//! Eliminates the double-layer architecture (worker + adapter).
+//! `HlsDownloader` implements `Downloader` — fetches segments in background.
+//! `HlsSource` implements `Source` — provides random-access reading from loaded segments.
+//! They share state via `SharedSegments`.
 
 use std::{
     collections::HashSet,
     ops::Range,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::{Duration, Instant},
 };
 
-use async_trait::async_trait;
 use kithara_abr::{
-    AbrController, AbrMode, AbrOptions, ThroughputEstimator, ThroughputSample,
-    ThroughputSampleSource, Variant,
+    AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource, Variant,
 };
 use kithara_assets::{AssetStore, Assets, ResourceKey};
-use kithara_storage::{StreamingResourceExt, WaitOutcome};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Source, StreamError, StreamResult};
-use tokio::sync::broadcast;
+use kithara_storage::{ResourceExt, WaitOutcome};
+use kithara_stream::{
+    AudioCodec, ContainerFormat, Downloader, MediaInfo, Source, StreamError, StreamResult,
+};
+use parking_lot::{Condvar, Mutex};
+use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use url::Url;
 
 use crate::{
     HlsError,
-    cache::Loader,
     events::HlsEvent,
-    fetch::{DefaultFetchManager, StreamingAssetResource},
-    worker::VariantMetadata,
+    fetch::{DefaultFetchManager, Loader},
 };
+
+/// Metadata for an HLS variant.
+#[derive(Debug, Clone)]
+pub struct VariantMetadata {
+    /// Variant index in master playlist.
+    pub index: usize,
+    /// Audio codec.
+    pub codec: Option<AudioCodec>,
+    /// Container format (fMP4, TS, etc.).
+    #[allow(dead_code)]
+    pub container: Option<ContainerFormat>,
+    /// Advertised bitrate in bits per second.
+    pub bitrate: Option<u64>,
+}
 
 /// Entry tracking a loaded segment in the virtual stream.
 #[derive(Debug, Clone)]
@@ -67,7 +84,9 @@ struct SegmentIndex {
 
 impl SegmentIndex {
     fn new() -> Self {
-        Self { entries: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
     fn push(&mut self, entry: SegmentEntry) {
@@ -113,101 +132,65 @@ impl SegmentIndex {
     }
 }
 
-/// Unified HLS source.
-///
-/// Fetches segments on demand and provides random-access reading.
-/// Implements `kithara_stream::Source` directly.
-pub struct HlsSource {
-    loader: Arc<dyn Loader>,
-    fetch_manager: Arc<DefaultFetchManager>,
+/// Shared state between HlsDownloader and HlsSource.
+struct SharedSegments {
+    segments: Mutex<SegmentIndex>,
+    /// Downloader → Source: new segment available (for sync blocking in Source).
+    condvar: Condvar,
+    eof: AtomicBool,
+    /// Current reader byte offset (updated by Source on every read_at).
+    reader_offset: AtomicU64,
+    /// Source → Downloader: reader advanced, may resume downloading.
+    reader_advanced: Notify,
+}
+
+impl SharedSegments {
+    fn new() -> Self {
+        Self {
+            segments: Mutex::new(SegmentIndex::new()),
+            condvar: Condvar::new(),
+            eof: AtomicBool::new(false),
+            reader_offset: AtomicU64::new(0),
+            reader_advanced: Notify::new(),
+        }
+    }
+}
+
+/// HLS downloader: fetches segments and maintains ABR state.
+pub struct HlsDownloader {
+    fetch: Arc<DefaultFetchManager>,
     variant_metadata: Vec<VariantMetadata>,
     current_segment_index: usize,
     sent_init_for_variant: HashSet<usize>,
     abr: AbrController<ThroughputEstimator>,
     byte_offset: u64,
-    segments: SegmentIndex,
-    eof_reached: bool,
+    shared: Arc<SharedSegments>,
     events_tx: Option<broadcast::Sender<HlsEvent>>,
     cancel: CancellationToken,
+    look_ahead_bytes: u64,
 }
 
-impl HlsSource {
-    /// Create new HLS source.
-    pub fn new(
-        loader: Arc<dyn Loader>,
-        fetch_manager: Arc<DefaultFetchManager>,
-        variant_metadata: Vec<VariantMetadata>,
-        initial_variant: usize,
-        abr_options: Option<AbrOptions>,
-        events_tx: Option<broadcast::Sender<HlsEvent>>,
-        cancel: CancellationToken,
-    ) -> Self {
-        // Build variants from metadata
-        let variants: Vec<Variant> = variant_metadata
-            .iter()
-            .map(|v| Variant {
-                variant_index: v.index,
-                bandwidth_bps: v.bitrate.unwrap_or(0),
-            })
-            .collect();
-
-        // Merge variants into ABR options
-        let mut abr_opts = abr_options.unwrap_or_else(|| AbrOptions {
-            mode: AbrMode::Manual(initial_variant),
-            ..AbrOptions::default()
-        });
-        abr_opts.variants = variants;
-
-        let abr = AbrController::new(abr_opts);
-
-        Self {
-            loader,
-            fetch_manager,
-            variant_metadata,
-            current_segment_index: 0,
-            sent_init_for_variant: HashSet::new(),
-            abr,
-            byte_offset: 0,
-            segments: SegmentIndex::new(),
-            eof_reached: false,
-            events_tx,
-            cancel,
-        }
-    }
-
-    /// Get asset store.
-    pub fn assets(&self) -> AssetStore {
-        self.fetch_manager.assets().clone()
-    }
-
-    /// Subscribe to events.
-    #[allow(dead_code)]
-    pub fn events(&self) -> Option<broadcast::Receiver<HlsEvent>> {
-        self.events_tx.as_ref().map(|tx| tx.subscribe())
-    }
-
+impl HlsDownloader {
     fn emit_event(&self, event: HlsEvent) {
         if let Some(ref tx) = self.events_tx {
             let _ = tx.send(event);
         }
     }
 
-    /// Fetch next segment and add to index. Returns true if EOF.
+    /// Fetch next segment and add to shared index. Returns true if EOF.
     async fn fetch_next_segment(&mut self) -> Result<bool, HlsError> {
         if self.cancel.is_cancelled() {
             debug!("cancelled, returning EOF");
             return Ok(true);
         }
 
-        // ABR: decide which variant to use for next segment
         let old_variant = self.abr.get_current_variant_index();
         let decision = self.make_abr_decision();
         let current_variant = self.abr.get_current_variant_index();
 
-        // Check if variant changed (for init segment handling and events)
         let is_variant_switch = !self.sent_init_for_variant.contains(&current_variant);
 
-        let num_segments = self.loader.num_segments(current_variant).await?;
+        let num_segments = self.fetch.num_segments(current_variant).await?;
 
         if self.current_segment_index >= num_segments {
             debug!("reached end of playlist");
@@ -215,27 +198,23 @@ impl HlsSource {
             return Ok(true);
         }
 
-        // Emit segment start event
         self.emit_event(HlsEvent::SegmentStart {
             variant: current_variant,
             segment_index: self.current_segment_index,
             byte_offset: self.byte_offset,
         });
 
-        // Measure download time for throughput estimation
         let fetch_start = Instant::now();
 
         let meta = self
-            .loader
+            .fetch
             .load_segment(current_variant, self.current_segment_index)
             .await?;
 
         let fetch_duration = fetch_start.elapsed();
 
-        // Record throughput sample for ABR
         self.record_throughput(meta.len, fetch_duration, meta.duration);
 
-        // Emit segment complete event
         self.emit_event(HlsEvent::SegmentComplete {
             variant: current_variant,
             segment_index: self.current_segment_index,
@@ -243,7 +222,6 @@ impl HlsSource {
             duration: fetch_duration,
         });
 
-        // Emit variant applied event if changed
         if decision.changed {
             self.emit_event(HlsEvent::VariantApplied {
                 from_variant: old_variant,
@@ -253,7 +231,7 @@ impl HlsSource {
         }
 
         // Get init segment info
-        let (init_url, init_len) = match self.loader.load_segment(current_variant, usize::MAX).await
+        let (init_url, init_len) = match self.fetch.load_segment(current_variant, usize::MAX).await
         {
             Ok(init_meta) => {
                 if is_variant_switch {
@@ -278,15 +256,22 @@ impl HlsSource {
             codec: variant_meta.codec,
         };
 
-        // Update state
         self.byte_offset += actual_init_len + meta.len;
         self.current_segment_index += 1;
-        self.segments.push(entry);
+
+        // Emit download progress
+        self.emit_event(HlsEvent::DownloadProgress {
+            offset: self.byte_offset,
+            total: None,
+        });
+
+        // Push to shared index and notify waiting readers
+        self.shared.segments.lock().push(entry);
+        self.shared.condvar.notify_all();
 
         Ok(false)
     }
 
-    /// Make ABR decision and apply if variant changed.
     fn make_abr_decision(&mut self) -> kithara_abr::AbrDecision {
         let now = Instant::now();
         let decision = self.abr.decide(now);
@@ -304,14 +289,12 @@ impl HlsSource {
         decision
     }
 
-    /// Record throughput sample for ABR.
     fn record_throughput(
         &mut self,
         bytes: u64,
         duration: Duration,
         content_duration: Option<Duration>,
     ) {
-        // Skip very short downloads (likely cached)
         if duration.as_millis() < 10 {
             return;
         }
@@ -326,7 +309,6 @@ impl HlsSource {
 
         self.abr.push_throughput_sample(sample);
 
-        // Emit throughput event
         let bytes_per_second = if duration.as_secs_f64() > 0.0 {
             bytes as f64 / duration.as_secs_f64()
         } else {
@@ -334,42 +316,74 @@ impl HlsSource {
         };
         self.emit_event(HlsEvent::ThroughputSample { bytes_per_second });
     }
+}
 
-    /// Ensure segments cover the given range.
-    async fn ensure_range(&mut self, range: Range<u64>) -> Result<(), HlsError> {
+impl Downloader for HlsDownloader {
+    async fn step(&mut self) -> bool {
+        // Backpressure: wait if too far ahead of reader.
         loop {
-            if self.eof_reached {
-                debug!(
-                    range_start = range.start,
-                    range_end = range.end,
-                    "ensure_range: eof already reached"
-                );
-                return Ok(());
-            }
+            let advanced = self.shared.reader_advanced.notified();
+            tokio::pin!(advanced);
 
-            if self.segments.range_covered(&range) {
-                return Ok(());
+            let reader_pos = self.shared.reader_offset.load(Ordering::Acquire);
+            let downloaded = self.shared.segments.lock().total_bytes();
+
+            if downloaded.saturating_sub(reader_pos) <= self.look_ahead_bytes {
+                break;
             }
 
             debug!(
-                range_start = range.start,
-                range_end = range.end,
-                current_segment_index = self.current_segment_index,
-                total_bytes = self.segments.total_bytes(),
-                "ensure_range: fetching next segment"
+                downloaded,
+                reader_pos,
+                gap = downloaded - reader_pos,
+                "downloader waiting for reader to catch up"
             );
+            advanced.await;
+        }
 
-            let is_eof = self.fetch_next_segment().await?;
-            if is_eof {
-                debug!("ensure_range: EOF reached after fetch");
-                self.eof_reached = true;
-                return Ok(());
+        match self.fetch_next_segment().await {
+            Ok(is_eof) => {
+                if is_eof {
+                    self.shared.eof.store(true, Ordering::Release);
+                    self.shared.condvar.notify_all();
+                    return false;
+                }
+                true
             }
+            Err(e) => {
+                debug!(?e, "HlsDownloader fetch error");
+                self.emit_event(HlsEvent::DownloadError {
+                    error: e.to_string(),
+                });
+                self.shared.eof.store(true, Ordering::Release);
+                self.shared.condvar.notify_all();
+                false
+            }
+        }
+    }
+}
+
+/// HLS source: provides random-access reading from loaded segments.
+pub struct HlsSource {
+    fetch: Arc<DefaultFetchManager>,
+    shared: Arc<SharedSegments>,
+    events_tx: Option<broadcast::Sender<HlsEvent>>,
+}
+
+impl HlsSource {
+    /// Get asset store.
+    pub fn assets(&self) -> AssetStore {
+        self.fetch.assets().clone()
+    }
+
+    fn emit_event(&self, event: HlsEvent) {
+        if let Some(ref tx) = self.events_tx {
+            let _ = tx.send(event);
         }
     }
 
     /// Read from a segment entry.
-    async fn read_from_entry(
+    fn read_from_entry(
         &self,
         entry: &SegmentEntry,
         offset: u64,
@@ -384,29 +398,29 @@ impl HlsSource {
             };
 
             let key = ResourceKey::from_url(init_url);
-            let resource: StreamingAssetResource = assets.open_streaming_resource(&key).await?;
+            let resource = assets.open_resource(&key)?;
 
             let read_end = (local_offset + buf.len() as u64).min(entry.init_len);
-            resource.wait_range(local_offset..read_end).await?;
+            resource.wait_range(local_offset..read_end)?;
 
             let available = (entry.init_len - local_offset) as usize;
             let to_read = buf.len().min(available);
-            let bytes_from_init = resource.read_at(local_offset, &mut buf[..to_read]).await?;
+            let bytes_from_init = resource.read_at(local_offset, &mut buf[..to_read])?;
 
             if bytes_from_init < buf.len() && entry.media_len > 0 {
                 let remaining = &mut buf[bytes_from_init..];
-                let bytes_from_media = self.read_media_segment(entry, 0, remaining).await?;
+                let bytes_from_media = self.read_media_segment(entry, 0, remaining)?;
                 Ok(bytes_from_init + bytes_from_media)
             } else {
                 Ok(bytes_from_init)
             }
         } else {
             let media_offset = local_offset - entry.init_len;
-            self.read_media_segment(entry, media_offset, buf).await
+            self.read_media_segment(entry, media_offset, buf)
         }
     }
 
-    async fn read_media_segment(
+    fn read_media_segment(
         &self,
         entry: &SegmentEntry,
         media_offset: u64,
@@ -414,101 +428,151 @@ impl HlsSource {
     ) -> Result<usize, HlsError> {
         let assets = self.assets();
         let key = ResourceKey::from_url(&entry.segment_url);
-        let resource: StreamingAssetResource = assets.open_streaming_resource(&key).await?;
+        let resource = assets.open_resource(&key)?;
 
         let read_end = (media_offset + buf.len() as u64).min(entry.media_len);
-        resource.wait_range(media_offset..read_end).await?;
+        resource.wait_range(media_offset..read_end)?;
 
-        let bytes_read = resource.read_at(media_offset, buf).await?;
+        let bytes_read = resource.read_at(media_offset, buf)?;
         Ok(bytes_read)
     }
 }
 
-#[async_trait]
 impl Source for HlsSource {
     type Item = u8;
     type Error = HlsError;
 
-    async fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
+    fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
         debug!(
             range_start = range.start,
             range_end = range.end,
             "wait_range called"
         );
 
-        self.ensure_range(range.clone())
-            .await
-            .map_err(StreamError::Source)?;
+        // Wait until the range is covered by loaded segments or EOF.
+        loop {
+            let mut segments = self.shared.segments.lock();
+            let eof = self.shared.eof.load(Ordering::Acquire);
+            let total = segments.total_bytes();
 
-        // Return Ready if ANY data is available at range.start.
-        // The caller will read what's available and request more.
-        // Only return Eof if we're past all loaded data AND stream is finished.
-        let has_segment = self.segments.find_at_offset(range.start).is_some();
-        let total = self.segments.total_bytes();
+            if segments.range_covered(&range) {
+                debug!(range_start = range.start, "wait_range: covered");
+                return Ok(WaitOutcome::Ready);
+            }
 
-        let outcome = if has_segment {
-            WaitOutcome::Ready
-        } else if self.eof_reached && range.start >= total {
-            WaitOutcome::Eof
-        } else {
-            WaitOutcome::Ready
-        };
+            if segments.find_at_offset(range.start).is_some() {
+                debug!(range_start = range.start, "wait_range: partial coverage");
+                return Ok(WaitOutcome::Ready);
+            }
 
-        debug!(
-            range_start = range.start,
-            ?outcome,
-            has_segment,
-            total,
-            eof_reached = self.eof_reached,
-            "wait_range result"
-        );
+            if eof && range.start >= total {
+                debug!(range_start = range.start, total, "wait_range: EOF");
+                return Ok(WaitOutcome::Eof);
+            }
 
-        Ok(outcome)
+            // Signal downloader that reader needs data
+            self.shared.reader_advanced.notify_one();
+
+            // Block until downloader pushes more segments
+            self.shared.condvar.wait(&mut segments);
+        }
     }
 
-    async fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, HlsError> {
-        let range = offset..offset + buf.len() as u64;
-        debug!(offset, range_end = range.end, "read_at called");
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, HlsError> {
+        debug!(offset, len = buf.len(), "read_at called");
 
-        self.ensure_range(range).await.map_err(StreamError::Source)?;
-
-        let entry = self.segments.find_at_offset(offset).cloned();
+        let entry = {
+            let segments = self.shared.segments.lock();
+            segments.find_at_offset(offset).cloned()
+        };
 
         let Some(entry) = entry else {
-            debug!(
-                offset,
-                total_bytes = self.segments.total_bytes(),
-                eof_reached = self.eof_reached,
-                "read_at: no entry found at offset, returning 0"
-            );
+            debug!(offset, "read_at: no entry at offset, returning 0");
             return Ok(0);
         };
 
         let bytes = self
             .read_from_entry(&entry, offset, buf)
-            .await
             .map_err(StreamError::Source)?;
+
+        if bytes > 0 {
+            let new_pos = offset.saturating_add(bytes as u64);
+            self.shared.reader_offset.store(new_pos, Ordering::Release);
+            self.shared.reader_advanced.notify_one();
+
+            let total = self.shared.segments.lock().total_bytes();
+            self.emit_event(HlsEvent::PlaybackProgress {
+                position: new_pos,
+                total: Some(total),
+            });
+        }
 
         debug!(offset, bytes, "read_at complete");
         Ok(bytes)
     }
 
     fn len(&self) -> Option<u64> {
-        if self.segments.is_empty() {
+        let segments = self.shared.segments.lock();
+        if segments.is_empty() {
             return None;
         }
-        Some(self.segments.total_bytes())
+        Some(segments.total_bytes())
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        let last = self.segments.last()?;
+        let segments = self.shared.segments.lock();
+        let last = segments.last()?;
         Some(MediaInfo::new(last.codec, last.container))
     }
 
-    fn current_segment_range(&self) -> Range<u64> {
-        match self.segments.last() {
-            Some(entry) => entry.byte_offset..entry.end_offset(),
-            None => 0..0,
-        }
+    fn current_segment_range(&self) -> Option<Range<u64>> {
+        let segments = self.shared.segments.lock();
+        segments
+            .last()
+            .map(|entry| entry.byte_offset..entry.end_offset())
     }
+}
+
+/// Build an HlsDownloader + HlsSource pair from config.
+pub fn build_pair(
+    fetch: Arc<DefaultFetchManager>,
+    variant_metadata: Vec<VariantMetadata>,
+    config: &crate::config::HlsConfig,
+) -> (HlsDownloader, HlsSource) {
+    let cancel = config.cancel.clone().unwrap_or_default();
+
+    let variants: Vec<Variant> = variant_metadata
+        .iter()
+        .map(|v| Variant {
+            variant_index: v.index,
+            bandwidth_bps: v.bitrate.unwrap_or(0),
+        })
+        .collect();
+
+    let mut abr_opts = config.abr.clone();
+    abr_opts.variants = variants;
+
+    let abr = AbrController::new(abr_opts);
+    let shared = Arc::new(SharedSegments::new());
+
+    let downloader = HlsDownloader {
+        fetch: Arc::clone(&fetch),
+        variant_metadata,
+        current_segment_index: 0,
+        sent_init_for_variant: HashSet::new(),
+        abr,
+        byte_offset: 0,
+        shared: Arc::clone(&shared),
+        events_tx: config.events_tx.clone(),
+        cancel,
+        look_ahead_bytes: config.look_ahead_bytes,
+    };
+
+    let source = HlsSource {
+        fetch,
+        shared,
+        events_tx: config.events_tx.clone(),
+    };
+
+    (downloader, source)
 }

@@ -31,7 +31,7 @@
 //!
 //! ## Global index (best-effort)
 //!
-//! `_index/*` stores small, atomic files (temp → rename) used as best-effort metadata.
+//! `_index/*` stores small files used as best-effort metadata.
 //! Filesystem remains the source of truth; indexes may be missing and can be rebuilt later.
 
 mod base;
@@ -41,7 +41,7 @@ mod evict;
 mod index;
 mod key;
 mod lease;
-mod processing;
+mod process;
 mod store;
 
 // Public API - used by other crates
@@ -55,7 +55,7 @@ pub use index::PinsIndex;
 #[cfg(feature = "internal")]
 pub use key::canonicalize_for_asset;
 pub use key::{ResourceKey, asset_root_for_url};
-pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
 pub use kithara_bufpool::{BytePool, byte_pool};
-pub use processing::{ProcessChunkFn, ProcessedResource, ProcessingAssets};
+pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
+pub use process::{ProcessChunkFn, ProcessedResource, ProcessingAssets};
 pub use store::{AssetStore, AssetStoreBuilder, StoreOptions};

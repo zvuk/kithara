@@ -5,20 +5,16 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-tokio = { workspace = true }
-tokio-util = { workspace = true }
-bytes = { workspace = true }
 thiserror = { workspace = true }
-async-trait = { workspace = true }
-uuid = { workspace = true }
+tokio-util = { workspace = true }
+tracing = { workspace = true }
 
-# async random-access backend + range tracking
-random-access-disk = { workspace = true }
-random-access-storage = { workspace = true }
+# mmap backend + range tracking
+mmap-io = { workspace = true }
 rangemap = { workspace = true }
+parking_lot = { workspace = true }
 
 [dev-dependencies]
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
 rstest = { workspace = true }
 tempfile = { workspace = true }
-mockall = { workspace = true }

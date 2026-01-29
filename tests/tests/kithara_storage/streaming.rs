@@ -2,18 +2,17 @@
 use std::time::Duration;
 
 use kithara_storage::{
-    DiskOptions, Resource, ResourceStatus, StorageError, StreamingResource, StreamingResourceExt,
+    OpenMode, ResourceExt, ResourceStatus, StorageError, StorageOptions, StorageResource,
     WaitOutcome,
 };
 use rstest::*;
 use tempfile::TempDir;
-use tokio::time::{sleep, timeout};
 use tokio_util::sync::CancellationToken;
 
 /// Helper to read bytes from resource into a new Vec
-async fn read_bytes<R: StreamingResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
+fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
-    let n = res.read_at(offset, &mut buf).await.unwrap_or(0);
+    let n = res.read_at(offset, &mut buf).unwrap_or(0);
     buf.truncate(n);
     buf
 }
@@ -30,493 +29,583 @@ fn cancel_token() -> CancellationToken {
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_path_method(temp_dir: TempDir, cancel_token: CancellationToken) {
+#[test]
+fn streaming_resource_path_method(temp_dir: TempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("streaming.dat");
-    let streaming = StreamingResource::open_disk(DiskOptions::new(file_path.clone(), cancel_token))
-        .await
-        .expect("open should succeed");
+    let streaming = StorageResource::open(StorageOptions {
+        path: file_path.clone(),
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .expect("open should succeed");
 
     assert_eq!(streaming.path(), file_path);
 
     streaming
         .write_at(0, b"test")
-        .await
         .expect("write should succeed");
     assert_eq!(streaming.path(), file_path);
 }
 
 #[rstest]
-#[case(0)]
-#[case(1024)]
 #[timeout(Duration::from_secs(10))]
-#[tokio::test]
-async fn streaming_resource_open_and_status(
+#[test]
+fn streaming_resource_open_and_status_new(temp_dir: TempDir, cancel_token: CancellationToken) {
+    let file_path = temp_dir.path().join("stream.dat");
+
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
+
+    // A brand new resource should be Active
+    assert_eq!(resource.status(), ResourceStatus::Active);
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+#[test]
+fn streaming_resource_open_existing_is_committed(
     temp_dir: TempDir,
     cancel_token: CancellationToken,
-    #[case] initial_len: u64,
 ) {
     let file_path = temp_dir.path().join("stream.dat");
-    let mut opts = DiskOptions::new(file_path, cancel_token);
-    if initial_len > 0 {
-        opts.initial_len = Some(initial_len);
+
+    // Create and commit a resource first
+    {
+        let resource = StorageResource::open(StorageOptions {
+            path: file_path.clone(),
+            initial_len: None,
+            mode: OpenMode::Auto,
+            cancel: cancel_token.clone(),
+        })
+        .unwrap();
+        resource.write_at(0, b"existing data").unwrap();
+        resource.commit(Some(13)).unwrap();
     }
 
-    let resource: StreamingResource = StreamingResource::open_disk(opts).await.unwrap();
-    let status = resource.status().await;
+    // Reopen — should be Committed
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    if initial_len > 0 {
-        assert_eq!(
-            status,
-            ResourceStatus::Committed {
-                final_len: Some(initial_len)
-            }
-        );
-    } else {
-        assert_eq!(status, ResourceStatus::InProgress);
-    }
+    assert_eq!(
+        resource.status(),
+        ResourceStatus::Committed {
+            final_len: Some(13)
+        }
+    );
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_range_write_wait_read(
-    temp_dir: TempDir,
-    cancel_token: CancellationToken,
-) {
+#[test]
+fn streaming_resource_range_write_wait_read(temp_dir: TempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("ranges.dat");
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    resource.write_at(0, b"Hello, ").await.unwrap();
-    resource.write_at(7, b"World!").await.unwrap();
+    resource.write_at(0, b"Hello, ").unwrap();
+    resource.write_at(7, b"World!").unwrap();
 
-    resource.wait_range(0..13).await.unwrap();
-    let data = read_bytes(&resource, 0, 13).await;
+    resource.wait_range(0..13).unwrap();
+    let data = read_bytes(&resource, 0, 13);
     assert_eq!(&data, b"Hello, World!");
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_sparse_file_behavior() {
+#[test]
+fn streaming_resource_sparse_file_behavior() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("sparse.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    resource.write_at(100, b"start").await.unwrap();
-    resource.write_at(1000, b"middle").await.unwrap();
-    resource.write_at(10000, b"end").await.unwrap();
+    resource.write_at(100, b"start").unwrap();
+    resource.write_at(1000, b"middle").unwrap();
+    resource.write_at(10000, b"end").unwrap();
 
-    resource.wait_range(100..105).await.unwrap();
-    resource.wait_range(1000..1006).await.unwrap();
-    resource.wait_range(10000..10003).await.unwrap();
+    resource.wait_range(100..105).unwrap();
+    resource.wait_range(1000..1006).unwrap();
+    resource.wait_range(10000..10003).unwrap();
 
-    assert_eq!(&*read_bytes(&resource, 100, 5).await, b"start");
-    assert_eq!(&*read_bytes(&resource, 1000, 6).await, b"middle");
-    assert_eq!(&*read_bytes(&resource, 10000, 3).await, b"end");
+    assert_eq!(&*read_bytes(&resource, 100, 5), b"start");
+    assert_eq!(&*read_bytes(&resource, 1000, 6), b"middle");
+    assert_eq!(&*read_bytes(&resource, 10000, 3), b"end");
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_overlapping_writes() {
+#[test]
+fn streaming_resource_overlapping_writes() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("overlap.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    resource.write_at(0, b"Hello World!").await.unwrap();
-    resource.write_at(6, b"Kithara!").await.unwrap();
+    resource.write_at(0, b"Hello World!").unwrap();
+    resource.write_at(6, b"Kithara!").unwrap();
 
-    resource.wait_range(0..14).await.unwrap();
-    let data = read_bytes(&resource, 0, 14).await;
+    resource.wait_range(0..14).unwrap();
+    let data = read_bytes(&resource, 0, 14);
     assert_eq!(&data, b"Hello Kithara!");
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_zero_length_commit() {
+#[test]
+fn streaming_resource_zero_length_commit() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("zero.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    resource.commit(Some(0)).await.unwrap();
+    resource.commit(Some(0)).unwrap();
 
-    let status = resource.status().await;
+    let status = resource.status();
     assert_eq!(status, ResourceStatus::Committed { final_len: Some(0) });
 
-    let outcome = resource.wait_range(0..10).await.unwrap();
+    let outcome = resource.wait_range(0..10).unwrap();
     assert_eq!(outcome, WaitOutcome::Eof);
 
-    let data = read_bytes(&resource, 0, 0).await;
+    let data = read_bytes(&resource, 0, 0);
     assert!(data.is_empty());
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_edge_case_ranges() {
+#[test]
+fn streaming_resource_edge_case_ranges() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("edges.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    resource.write_at(0, b"X").await.unwrap();
+    resource.write_at(0, b"X").unwrap();
 
-    resource.wait_range(0..1).await.unwrap();
-    let data = read_bytes(&resource, 0, 1).await;
+    resource.wait_range(0..1).unwrap();
+    let data = read_bytes(&resource, 0, 1);
     assert_eq!(&data, b"X");
 
-    let data = read_bytes(&resource, 0, 0).await;
+    let data = read_bytes(&resource, 0, 0);
     assert!(data.is_empty());
 
-    resource.commit(Some(1)).await.unwrap();
-    let data = read_bytes(&resource, 0, 10).await;
+    resource.commit(Some(1)).unwrap();
+    let data = read_bytes(&resource, 0, 10);
     assert_eq!(&data, b"X");
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_concurrent_wait_and_write() {
+#[test]
+fn streaming_resource_concurrent_wait_and_write() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("concurrent_wait.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
     let resource_clone = resource.clone();
-    let wait_handle = tokio::spawn(async move { resource_clone.wait_range(0..10).await });
+    let wait_handle = std::thread::spawn(move || resource_clone.wait_range(0..10));
 
-    sleep(Duration::from_millis(10)).await;
+    std::thread::sleep(Duration::from_millis(10));
 
-    resource.write_at(0, b"0123456789").await.unwrap();
+    resource.write_at(0, b"0123456789").unwrap();
 
-    let wait_result = wait_handle.await.unwrap().unwrap();
+    let wait_result = wait_handle.join().unwrap().unwrap();
     assert_eq!(wait_result, WaitOutcome::Ready);
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_persists_across_reopen() {
+#[test]
+fn streaming_resource_persists_across_reopen() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("reopen.dat");
     let cancel_token = CancellationToken::new();
 
     {
-        let resource: StreamingResource =
-            StreamingResource::open_disk(DiskOptions::new(file_path.clone(), cancel_token.clone()))
-                .await
-                .unwrap();
+        let resource = StorageResource::open(StorageOptions {
+            path: file_path.clone(),
+            initial_len: None,
+            mode: OpenMode::Auto,
+            cancel: cancel_token.clone(),
+        })
+        .unwrap();
 
-        resource.write_at(0, b"persisted data").await.unwrap();
-        resource.commit(Some(14)).await.unwrap();
-        resource.wait_range(0..14).await.unwrap();
+        resource.write_at(0, b"persisted data").unwrap();
+        resource.commit(Some(14)).unwrap();
+        resource.wait_range(0..14).unwrap();
 
-        let data = read_bytes(&resource, 0, 14).await;
+        let data = read_bytes(&resource, 0, 14);
         assert_eq!(&data, b"persisted data");
     }
 
-    let file_len = tokio::fs::metadata(&file_path).await.unwrap().len();
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, CancellationToken::new()))
-            .await
-            .unwrap();
+    let file_len = std::fs::metadata(&file_path).unwrap().len();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: CancellationToken::new(),
+    })
+    .unwrap();
 
-    let data = read_bytes(&resource, 0, file_len as usize).await;
+    let data = read_bytes(&resource, 0, file_len as usize);
     assert_eq!(&data, b"persisted data");
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_wait_after_reopen() {
+#[test]
+fn streaming_resource_wait_after_reopen() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("wait_reopen.dat");
     let cancel_token = CancellationToken::new();
     let payload = b"waited bytes";
 
     {
-        let resource: StreamingResource =
-            StreamingResource::open_disk(DiskOptions::new(file_path.clone(), cancel_token.clone()))
-                .await
-                .unwrap();
+        let resource = StorageResource::open(StorageOptions {
+            path: file_path.clone(),
+            initial_len: None,
+            mode: OpenMode::Auto,
+            cancel: cancel_token.clone(),
+        })
+        .unwrap();
 
-        resource.write_at(0, payload).await.unwrap();
-        resource.commit(Some(payload.len() as u64)).await.unwrap();
-        resource.wait_range(0..payload.len() as u64).await.unwrap();
+        resource.write_at(0, payload).unwrap();
+        resource.commit(Some(payload.len() as u64)).unwrap();
+        resource.wait_range(0..payload.len() as u64).unwrap();
     }
 
-    let file_len = tokio::fs::metadata(&file_path).await.unwrap().len();
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, CancellationToken::new()))
-            .await
-            .unwrap();
+    let file_len = std::fs::metadata(&file_path).unwrap().len();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: CancellationToken::new(),
+    })
+    .unwrap();
 
-    let outcome = resource.wait_range(0..file_len).await.unwrap();
+    let outcome = resource.wait_range(0..file_len).unwrap();
     assert_eq!(outcome, WaitOutcome::Ready);
 
-    let data = read_bytes(&resource, 0, file_len as usize).await;
+    let data = read_bytes(&resource, 0, file_len as usize);
     assert_eq!(&data, payload);
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_wait_range_partial_coverage() {
+#[test]
+fn streaming_resource_wait_range_partial_coverage() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("partial.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token.clone()))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token.clone(),
+    })
+    .unwrap();
 
-    resource.write_at(0, b"Hello").await.unwrap();
+    resource.write_at(0, b"Hello").unwrap();
 
     let resource_clone = resource.clone();
-    let wait_handle = tokio::spawn(async move { resource_clone.wait_range(0..10).await });
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = resource_clone.wait_range(0..10);
+        let _ = tx.send(result);
+    });
 
-    let wait_result = timeout(Duration::from_millis(100), wait_handle).await;
-    assert!(wait_result.is_err());
+    // Should not complete within 100ms (only 5 bytes written, need 10)
+    let wait_result = rx.recv_timeout(Duration::from_millis(100));
+    assert!(wait_result.is_err()); // Timeout
 
-    resource.write_at(5, b", World!").await.unwrap();
-    resource.commit(Some(13)).await.unwrap();
+    // Write remaining bytes
+    resource.write_at(5, b", World!").unwrap();
+    resource.commit(Some(13)).unwrap();
 
-    resource.wait_range(0..13).await.unwrap();
+    // Now it should complete
+    resource.wait_range(0..13).unwrap();
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_commit_and_eof(temp_dir: TempDir, cancel_token: CancellationToken) {
+#[test]
+fn streaming_resource_commit_and_eof(temp_dir: TempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("commit.dat");
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    resource.write_at(0, b"Hello").await.unwrap();
+    resource.write_at(0, b"Hello").unwrap();
 
-    let outcome = resource.wait_range(0..5).await.unwrap();
+    let outcome = resource.wait_range(0..5).unwrap();
     assert_eq!(outcome, WaitOutcome::Ready);
 
-    resource.commit(Some(5)).await.unwrap();
+    resource.commit(Some(5)).unwrap();
 
-    let outcome = resource.wait_range(5..10).await.unwrap();
+    let outcome = resource.wait_range(5..10).unwrap();
     assert_eq!(outcome, WaitOutcome::Eof);
 
-    let data = read_bytes(&resource, 10, 5).await;
+    let data = read_bytes(&resource, 10, 5);
     assert!(data.is_empty());
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_commit_without_final_len() {
+#[test]
+fn streaming_resource_commit_without_final_len() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("commit_no_len.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    resource.write_at(0, b"Hello").await.unwrap();
-    resource.commit(None).await.unwrap();
+    resource.write_at(0, b"Hello").unwrap();
+    resource.commit(None).unwrap();
 
     // Commit without final_len means we don't know the total size.
     // read_at still works, but wait_range doesn't know when EOF is reached.
-    let status = resource.status().await;
+    let status = resource.status();
     assert_eq!(status, ResourceStatus::Committed { final_len: None });
 
     // We can still read the written data
-    let data = read_bytes(&resource, 0, 5).await;
+    let data = read_bytes(&resource, 0, 5);
     assert_eq!(&data, b"Hello");
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_sealed_after_commit() {
+#[test]
+fn streaming_resource_sealed_after_commit() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("sealed.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    resource.commit(Some(0)).await.unwrap();
+    // First commit with zero — resource is committed but empty
+    resource.commit(Some(0)).unwrap();
 
-    resource.write_at(0, b"data").await.unwrap();
-    resource.commit(Some(4)).await.unwrap();
+    // We can still write after commit (mmap-backed, not sealed)
+    resource.write_at(0, b"data").unwrap();
+    resource.commit(Some(4)).unwrap();
 
-    let data = read_bytes(&resource, 0, 4).await;
+    let data = read_bytes(&resource, 0, 4);
     assert_eq!(&data, b"data");
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_cancel_during_wait() {
+#[test]
+fn streaming_resource_cancel_during_wait() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("cancel_wait.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token.clone()))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token.clone(),
+    })
+    .unwrap();
 
     let resource_clone = resource.clone();
-    let wait_handle = tokio::spawn(async move { resource_clone.wait_range(0..10).await });
+    let wait_handle = std::thread::spawn(move || resource_clone.wait_range(0..10));
 
-    tokio::spawn(async move {
-        sleep(Duration::from_millis(50)).await;
-        cancel_token.cancel();
-    });
+    std::thread::sleep(Duration::from_millis(50));
+    cancel_token.cancel();
 
-    let wait_result = wait_handle.await.unwrap();
+    let wait_result = wait_handle.join().unwrap();
     assert!(matches!(wait_result, Err(StorageError::Cancelled)));
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_fail_wakes_waiters() {
+#[test]
+fn streaming_resource_fail_wakes_waiters() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("fail_waiters.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
     let resource_clone = resource.clone();
-    let wait_handle = tokio::spawn(async move { resource_clone.wait_range(0..10).await });
+    let wait_handle = std::thread::spawn(move || resource_clone.wait_range(0..10));
 
     let resource_clone = resource.clone();
-    tokio::spawn(async move {
-        sleep(Duration::from_millis(50)).await;
-        resource_clone.fail("test failure").await.unwrap();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(50));
+        resource_clone.fail("test failure".to_string());
     });
 
-    let wait_result = wait_handle.await.unwrap();
+    let wait_result = wait_handle.join().unwrap();
     assert!(matches!(wait_result, Err(StorageError::Failed(_))));
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_concurrent_operations() {
+#[test]
+fn streaming_resource_concurrent_operations() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("concurrent_ops.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
     let resource_clone = resource.clone();
-    let handle1 = tokio::spawn(async move { resource_clone.write_at(0, b"Hello").await });
+    let handle1 = std::thread::spawn(move || resource_clone.write_at(0, b"Hello"));
 
     let resource_clone = resource.clone();
-    let handle2 = tokio::spawn(async move {
-        sleep(Duration::from_millis(10)).await;
-        resource_clone.write_at(5, b"World").await
+    let handle2 = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(10));
+        resource_clone.write_at(5, b"World")
     });
 
-    assert!(handle1.await.unwrap().is_ok());
-    assert!(handle2.await.unwrap().is_ok());
+    assert!(handle1.join().unwrap().is_ok());
+    assert!(handle2.join().unwrap().is_ok());
 
-    resource.commit(Some(10)).await.unwrap();
+    resource.commit(Some(10)).unwrap();
 
-    let outcome = resource.wait_range(0..10).await.unwrap();
+    let outcome = resource.wait_range(0..10).unwrap();
     assert_eq!(outcome, WaitOutcome::Ready);
 
-    let data = read_bytes(&resource, 0, 10).await;
+    let data = read_bytes(&resource, 0, 10);
     assert_eq!(&data[..5], b"Hello");
     assert_eq!(&data[5..], b"World");
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_invalid_ranges() {
+#[test]
+fn streaming_resource_invalid_ranges() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("invalid_ranges.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
+    // Reversed range (start > end) should return InvalidRange
     assert!(matches!(
-        resource
-            .wait_range(std::ops::Range { start: 10, end: 5 })
-            .await,
+        resource.wait_range(std::ops::Range { start: 10, end: 5 }),
         Err(StorageError::InvalidRange { start: 10, end: 5 })
     ));
-    assert!(matches!(
-        resource.wait_range(5..5).await,
-        Err(StorageError::InvalidRange { start: 5, end: 5 })
-    ));
 
+    // Empty range (start == end) is valid and returns Ready
+    let outcome = resource.wait_range(5..5).unwrap();
+    assert_eq!(outcome, WaitOutcome::Ready);
+
+    // Overflow in write_at should return error
     let large_data = vec![0u8; 1000];
-    let result = resource.write_at(u64::MAX, &large_data).await;
-    assert!(matches!(result, Err(StorageError::InvalidRange { .. })));
+    let result = resource.write_at(u64::MAX, &large_data);
+    assert!(result.is_err());
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_whole_object_operations() {
+#[test]
+fn streaming_resource_whole_object_operations() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("whole_object.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    resource.write_at(0, b"Hello, World!").await.unwrap();
-    resource.commit(Some(13)).await.unwrap();
+    resource.write_at(0, b"Hello, World!").unwrap();
+    resource.commit(Some(13)).unwrap();
 
-    let status = resource.status().await;
+    let status = resource.status();
     assert_eq!(
         status,
         ResourceStatus::Committed {
@@ -524,94 +613,108 @@ async fn streaming_resource_whole_object_operations() {
         }
     );
 
-    resource.wait_range(0..13).await.unwrap();
-    let data = read_bytes(&resource, 0, 13).await;
+    resource.wait_range(0..13).unwrap();
+    let data = read_bytes(&resource, 0, 13);
     assert_eq!(&data, b"Hello, World!");
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_empty_operations() {
+#[test]
+fn streaming_resource_empty_operations() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("empty_ops.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    resource.write_at(0, b"").await.unwrap();
+    // Empty write is a no-op
+    resource.write_at(0, b"").unwrap();
 
-    let data = read_bytes(&resource, 0, 0).await;
+    let data = read_bytes(&resource, 0, 0);
     assert!(data.is_empty());
 
-    resource.commit(Some(0)).await.unwrap();
+    // Commit with zero length
+    resource.commit(Some(0)).unwrap();
 
-    let data = read_bytes(&resource, 0, 0).await;
+    let data = read_bytes(&resource, 0, 0);
     assert!(data.is_empty());
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_complex_range_scenario() {
+#[test]
+fn streaming_resource_complex_range_scenario() {
     let temp_dir = TempDir::new().unwrap();
     let file_path = temp_dir.path().join("complex_ranges.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: None,
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    resource.write_at(0, b"0123456789").await.unwrap();
-    resource.write_at(20, b"0123456789").await.unwrap();
+    resource.write_at(0, b"0123456789").unwrap();
+    resource.write_at(20, b"0123456789").unwrap();
 
     let resource_clone = resource.clone();
-    let wait_result: Result<Result<WaitOutcome, StorageError>, _> =
-        timeout(Duration::from_millis(100), resource_clone.wait_range(0..15)).await;
-    assert!(wait_result.is_err());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = resource_clone.wait_range(0..15);
+        let _ = tx.send(result);
+    });
 
-    resource.write_at(10, b"ABCDEFGHIJ").await.unwrap();
+    let wait_result = rx.recv_timeout(Duration::from_millis(100));
+    assert!(wait_result.is_err()); // Timeout — gap at 10..15 not yet written
 
-    resource.wait_range(0..30).await.unwrap();
+    resource.write_at(10, b"ABCDEFGHIJ").unwrap();
 
-    let data = read_bytes(&resource, 0, 30).await;
+    resource.wait_range(0..30).unwrap();
+
+    let data = read_bytes(&resource, 0, 30);
     assert_eq!(&data[0..10], b"0123456789");
     assert_eq!(&data[10..20], b"ABCDEFGHIJ");
     assert_eq!(&data[20..30], b"0123456789");
 
-    resource.commit(Some(30)).await.unwrap();
+    resource.commit(Some(30)).unwrap();
 
-    let outcome = resource.wait_range(30..40).await.unwrap();
+    let outcome = resource.wait_range(30..40).unwrap();
     assert_eq!(outcome, WaitOutcome::Eof);
 }
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[tokio::test]
-async fn streaming_resource_restart_with_initial_len() {
+#[test]
+fn streaming_resource_initial_len_hint() {
     let temp_dir = TempDir::new().unwrap();
-    let file_path = temp_dir.path().join("restart.dat");
+    let file_path = temp_dir.path().join("initial_hint.dat");
     let cancel_token = CancellationToken::new();
 
-    let mut opts = DiskOptions::new(&file_path, cancel_token.clone());
-    opts.initial_len = Some(100);
-    let resource1: StreamingResource = StreamingResource::open_disk(opts).await.unwrap();
+    // initial_len is a hint for backing file size, not data availability
+    let resource = StorageResource::open(StorageOptions {
+        path: file_path,
+        initial_len: Some(100),
+        mode: OpenMode::Auto,
+        cancel: cancel_token,
+    })
+    .unwrap();
 
-    let outcome = resource1.wait_range(0..100).await.unwrap();
-    assert_eq!(outcome, WaitOutcome::Ready);
+    // Resource is Active (not committed), no data available yet
+    assert_eq!(resource.status(), ResourceStatus::Active);
 
-    let data = read_bytes(&resource1, 50, 10).await;
-    assert_eq!(data.len(), 10);
+    // Write actual data and commit
+    resource.write_at(0, b"real data").unwrap();
+    resource.commit(Some(9)).unwrap();
 
-    let resource2: StreamingResource =
-        StreamingResource::open_disk(DiskOptions::new(file_path, cancel_token))
-            .await
-            .unwrap();
-
-    let data2 = read_bytes(&resource2, 50, 10).await;
-    assert_eq!(data2.len(), 10);
+    let data = read_bytes(&resource, 0, 9);
+    assert_eq!(&data, b"real data");
 }

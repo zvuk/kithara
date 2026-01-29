@@ -6,7 +6,6 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 bytes = { workspace = true }
-kanal = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
@@ -17,7 +16,6 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
-async-trait = { workspace = true }
 dhat = { workspace = true, optional = true }
 
 [dev-dependencies]

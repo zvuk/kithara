@@ -1,28 +1,22 @@
 #![forbid(unsafe_code)]
 
-use std::{collections::HashSet, ops::Range, path::Path, sync::Arc};
+use std::{collections::HashSet, fmt::Debug, ops::Range, path::Path, sync::Arc};
 
-use async_trait::async_trait;
-use bytes::Bytes;
-use kithara_storage::{
-    AtomicResource, AtomicResourceExt, Resource, ResourceStatus, StorageError,
-    StreamingResourceExt, WaitOutcome,
-};
-use tokio::sync::Mutex;
+use kithara_storage::{ResourceExt, ResourceStatus, StorageResource, StorageResult, WaitOutcome};
+use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    ProcessedResource, base::Assets, error::AssetsResult, evict::ByteRecorder, index::PinsIndex,
-    key::ResourceKey,
+    base::Assets, error::AssetsResult, evict::ByteRecorder, index::PinsIndex, key::ResourceKey,
 };
 
 /// Decorator that adds "pin (lease) while handle lives" semantics on top of inner [`Assets`].
 ///
 /// ## Normative behavior
-/// - Every successful `open_*_resource()` pins `key.asset_root`.
+/// - Every successful `open_resource()` pins `key.asset_root`.
 /// - The pin table is stored as a `HashSet<String>` (unique roots) in memory.
 /// - Every pin/unpin operation immediately persists the full table to disk using
-///   `inner.open_pin_index_resource(...)` (best-effort).
+///   `inner.open_pins_index_resource(...)` (best-effort).
 /// - The pin index resource must be excluded from pinning to avoid recursion.
 ///
 /// This type does **not** do any filesystem/path logic; it uses the inner `Assets` abstraction.
@@ -68,54 +62,46 @@ where
         &self.inner
     }
 
-    async fn open_index(&self) -> AssetsResult<PinsIndex> {
-        PinsIndex::open(self.inner()).await
+    fn open_index(&self) -> AssetsResult<PinsIndex> {
+        PinsIndex::open(self.inner())
     }
 
-    async fn persist_pins_best_effort(&self, pins: &HashSet<String>) -> AssetsResult<()> {
-        let idx = self.open_index().await?;
-        idx.store(pins).await
+    fn persist_pins_best_effort(&self, pins: &HashSet<String>) -> AssetsResult<()> {
+        let idx = self.open_index()?;
+        idx.store(pins)
     }
 
-    async fn load_pins_best_effort(&self) -> AssetsResult<HashSet<String>> {
-        let idx = self.open_index().await?;
-        idx.load().await
+    fn load_pins_best_effort(&self) -> AssetsResult<HashSet<String>> {
+        let idx = self.open_index()?;
+        idx.load()
     }
 
-    async fn ensure_loaded_best_effort(&self) -> AssetsResult<()> {
-        // Load only once (best-effort). If already loaded, do nothing.
-        //
-        // We intentionally keep this minimal and deterministic: if the set is empty
-        // we may still be "loaded but empty", but that is acceptable for now because
-        // higher layers can repin when they open resources.
-        let should_load = { self.pins.lock().await.is_empty() };
+    fn ensure_loaded_best_effort(&self) -> AssetsResult<()> {
+        let should_load = { self.pins.lock().is_empty() };
 
         if !should_load {
             return Ok(());
         }
 
-        let loaded = self.load_pins_best_effort().await?;
-        let mut guard = self.pins.lock().await;
-        // Merge, don't replace, to be resilient to races with concurrent pin/unpin.
+        let loaded = self.load_pins_best_effort()?;
+        let mut guard = self.pins.lock();
         for p in loaded {
             guard.insert(p);
         }
         Ok(())
     }
 
-    async fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard<A>> {
-        self.ensure_loaded_best_effort().await?;
+    fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard<A>> {
+        self.ensure_loaded_best_effort()?;
 
         let (snapshot, was_new) = {
-            let mut guard = self.pins.lock().await;
+            let mut guard = self.pins.lock();
             let was_new = guard.insert(asset_root.to_string());
             (guard.clone(), was_new)
         };
 
-        // Best-effort persistence: only persist if this is a new pin to avoid repeated disk writes.
-        // If it fails, we still return a guard, but it will still unpin in-memory on drop.
         if was_new {
-            let _ = self.persist_pins_best_effort(&snapshot).await;
+            let _ = self.persist_pins_best_effort(&snapshot);
         }
 
         Ok(LeaseGuard {
@@ -124,7 +110,6 @@ where
             cancel: self.cancel.clone(),
         })
     }
-
 }
 
 /// Resource wrapper that combines lease guard with byte recording on commit.
@@ -136,9 +121,9 @@ pub struct LeaseResource<R, L> {
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
 }
 
-impl<R, L> std::fmt::Debug for LeaseResource<R, L>
+impl<R, L> Debug for LeaseResource<R, L>
 where
-    R: std::fmt::Debug,
+    R: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("LeaseResource")
@@ -148,90 +133,59 @@ where
     }
 }
 
-#[async_trait]
-impl<R, L> Resource for LeaseResource<R, L>
+impl<R, L> ResourceExt for LeaseResource<R, L>
 where
-    R: Resource + Send + Sync,
-    L: Send + Sync + 'static,
+    R: ResourceExt + Send + Sync + Clone + Debug + 'static,
+    L: Send + Sync + Clone + 'static,
 {
-    async fn commit(&self, final_len: Option<u64>) -> Result<(), StorageError> {
-        // Commit inner resource first
-        self.inner.commit(final_len).await?;
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        self.inner.read_at(offset, buf)
+    }
 
-        // Record bytes if recorder is set
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        self.inner.write_at(offset, data)
+    }
+
+    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
+        self.inner.wait_range(range)
+    }
+
+    fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
+        self.inner.commit(final_len)?;
+
+        // Record bytes if recorder is set (best-effort)
         if let Some(ref recorder) = self.byte_recorder
-            && let Ok(metadata) = tokio::fs::metadata(self.inner.path()).await
+            && let Ok(metadata) = std::fs::metadata(self.inner.path())
             && metadata.is_file()
         {
-            recorder
-                .record_bytes(&self.asset_root, metadata.len())
-                .await;
+            recorder.record_bytes(&self.asset_root, metadata.len());
         }
 
         Ok(())
     }
 
-    async fn fail(&self, error: impl Into<String> + Send) -> Result<(), StorageError> {
-        self.inner.fail(error).await
+    fn fail(&self, reason: String) {
+        self.inner.fail(reason);
     }
 
     fn path(&self) -> &Path {
         self.inner.path()
     }
-}
 
-#[async_trait]
-impl<R, L> StreamingResourceExt for LeaseResource<R, L>
-where
-    R: StreamingResourceExt + Send + Sync,
-    L: Send + Sync + 'static,
-{
-    async fn wait_range(&self, range: Range<u64>) -> Result<WaitOutcome, StorageError> {
-        self.inner.wait_range(range).await
+    fn len(&self) -> Option<u64> {
+        self.inner.len()
     }
 
-    async fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<usize, StorageError> {
-        self.inner.read_at(offset, buf).await
-    }
-
-    async fn write_at(&self, offset: u64, data: &[u8]) -> Result<(), StorageError> {
-        self.inner.write_at(offset, data).await
+    fn status(&self) -> ResourceStatus {
+        self.inner.status()
     }
 }
 
-#[async_trait]
-impl<R, L> AtomicResourceExt for LeaseResource<R, L>
-where
-    R: AtomicResourceExt + Send + Sync,
-    L: Send + Sync + 'static,
-{
-    async fn write(&self, data: &[u8]) -> Result<(), StorageError> {
-        self.inner.write(data).await
-    }
-
-    async fn read(&self) -> Result<Bytes, StorageError> {
-        self.inner.read().await
-    }
-}
-
-/// Add status() method for ProcessedResource<StreamingResource> inner.
-impl<L, Ctx> LeaseResource<ProcessedResource<kithara_storage::StreamingResource, Ctx>, L>
-where
-    Ctx: Clone + std::fmt::Debug,
-{
-    /// Get resource status.
-    pub async fn status(&self) -> ResourceStatus {
-        self.inner.status().await
-    }
-}
-
-#[async_trait]
 impl<A> Assets for LeaseAssets<A>
 where
     A: Assets,
 {
-    type StreamingRes = LeaseResource<A::StreamingRes, LeaseGuard<A>>;
-    type AtomicRes = LeaseResource<A::AtomicRes, LeaseGuard<A>>;
+    type Res = LeaseResource<A::Res, LeaseGuard<A>>;
     type Context = A::Context;
 
     fn root_dir(&self) -> &Path {
@@ -242,16 +196,13 @@ where
         self.inner.asset_root()
     }
 
-    async fn open_streaming_resource_with_ctx(
+    fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
         ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::StreamingRes> {
-        let inner = self
-            .inner
-            .open_streaming_resource_with_ctx(key, ctx)
-            .await?;
-        let lease = self.pin(self.inner.asset_root()).await?;
+    ) -> AssetsResult<Self::Res> {
+        let inner = self.inner.open_resource_with_ctx(key, ctx)?;
+        let lease = self.pin(self.inner.asset_root())?;
 
         Ok(LeaseResource {
             inner,
@@ -261,35 +212,18 @@ where
         })
     }
 
-    async fn open_atomic_resource_with_ctx(
-        &self,
-        key: &ResourceKey,
-        ctx: Option<Self::Context>,
-    ) -> AssetsResult<Self::AtomicRes> {
-        let inner = self.inner.open_atomic_resource_with_ctx(key, ctx).await?;
-        let lease = self.pin(self.inner.asset_root()).await?;
-
-        Ok(LeaseResource {
-            inner,
-            _lease: lease,
-            asset_root: self.inner.asset_root().to_string(),
-            byte_recorder: self.byte_recorder.clone(),
-        })
-    }
-
-    async fn open_pins_index_resource(&self) -> AssetsResult<AtomicResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
         // Pins index must be opened without pinning to avoid recursion
-        self.inner.open_pins_index_resource().await
+        self.inner.open_pins_index_resource()
     }
 
-    async fn delete_asset(&self) -> AssetsResult<()> {
-        // Delete asset through inner implementation
-        self.inner.delete_asset().await
-    }
-
-    async fn open_lru_index_resource(&self) -> AssetsResult<AtomicResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
         // LRU index must be opened without pinning
-        self.inner.open_lru_index_resource().await
+        self.inner.open_lru_index_resource()
+    }
+
+    fn delete_asset(&self) -> AssetsResult<()> {
+        self.inner.delete_asset()
     }
 }
 
@@ -318,30 +252,13 @@ where
 
         tracing::debug!(asset_root = %self.asset_root, "LeaseGuard::drop - removing pin");
 
-        // Remove pin from in-memory set and persist to disk
-        // Use try_lock to avoid blocking in Drop (which might run in async context)
-        let snapshot = if let Ok(mut pins) = self.owner.pins.try_lock() {
+        let snapshot = {
+            let mut pins = self.owner.pins.lock();
             pins.remove(&self.asset_root);
-            Some(pins.clone())
-        } else {
-            tracing::warn!(
-                asset_root = %self.asset_root,
-                "Could not acquire pins lock in Drop; pin removal deferred"
-            );
-            None
+            pins.clone()
         };
 
-        // Persist to disk if we successfully removed from in-memory set
-        if let Some(snapshot) = snapshot {
-            let owner = self.owner.clone();
-            // Spawn background task to persist pins
-            // We don't wait for it - best-effort persistence
-            if let Ok(handle) = tokio::runtime::Handle::try_current() {
-                handle.spawn(async move {
-                    let _ = owner.persist_pins_best_effort(&snapshot).await;
-                    tracing::debug!("Pins persisted after drop");
-                });
-            }
-        }
+        // Persist to disk (best-effort, sync)
+        let _ = self.owner.persist_pins_best_effort(&snapshot);
     }
 }

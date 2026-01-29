@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use kithara_storage::{AtomicResource, AtomicResourceExt};
+use kithara_storage::{ResourceExt, StorageResource};
 
 use crate::error::AssetsResult;
 
@@ -25,7 +25,7 @@ pub struct EvictConfig {
 
 /// A best-effort, storage-backed LRU index over `asset_root`.
 ///
-/// This index is persisted via an [`AtomicResource`] (whole-object read/write).
+/// This index is persisted via a [`StorageResource`] (whole-object read/write).
 ///
 /// ## Data model (normative)
 /// - We track per-asset metadata:
@@ -38,11 +38,11 @@ pub struct EvictConfig {
 /// - It does not delete anything.
 /// - It does not know about pinning; the eviction decorator combines this with a pins index.
 pub struct LruIndex {
-    res: AtomicResource,
+    res: StorageResource,
 }
 
 impl LruIndex {
-    pub(crate) fn new(res: AtomicResource) -> Self {
+    pub(crate) fn new(res: StorageResource) -> Self {
         Self { res }
     }
 
@@ -50,14 +50,15 @@ impl LruIndex {
     ///
     /// Missing/empty file is treated as an empty index.
     /// Invalid or corrupted data is treated as an empty index (best-effort).
-    pub async fn load(&self) -> AssetsResult<LruState> {
-        let bytes = self.res.read().await?;
+    pub fn load(&self) -> AssetsResult<LruState> {
+        let mut buf = crate::byte_pool().get();
+        let n = self.res.read_into(&mut buf)?;
 
-        if bytes.is_empty() {
+        if n == 0 {
             return Ok(LruState::default());
         }
 
-        let file: LruIndexFile = match bincode::deserialize(&bytes) {
+        let file: LruIndexFile = match bincode::deserialize(&buf) {
             Ok(file) => file,
             Err(_) => return Ok(LruState::default()),
         };
@@ -66,10 +67,10 @@ impl LruIndex {
     }
 
     /// Persist the provided state to storage atomically.
-    pub async fn store(&self, state: &LruState) -> AssetsResult<()> {
+    pub fn store(&self, state: &LruState) -> AssetsResult<()> {
         let file = state.to_file();
         let bytes = bincode::serialize(&file)?;
-        self.res.write(&bytes).await?;
+        self.res.write_all(&bytes)?;
         Ok(())
     }
 
@@ -78,18 +79,18 @@ impl LruIndex {
     /// - If the asset is new, it is inserted.
     /// - If `bytes_hint` is `Some`, the stored bytes are updated to that value.
     /// - Returns `true` if the asset was newly inserted (i.e. "created").
-    pub async fn touch(&self, asset_root: &str, bytes_hint: Option<u64>) -> AssetsResult<bool> {
-        let mut st = self.load().await?;
+    pub fn touch(&self, asset_root: &str, bytes_hint: Option<u64>) -> AssetsResult<bool> {
+        let mut st = self.load()?;
         let created = st.touch(asset_root, bytes_hint);
-        self.store(&st).await?;
+        self.store(&st)?;
         Ok(created)
     }
 
     /// Remove an asset from the index (e.g. after eviction).
-    pub async fn remove(&self, asset_root: &str) -> AssetsResult<()> {
-        let mut st = self.load().await?;
+    pub fn remove(&self, asset_root: &str) -> AssetsResult<()> {
+        let mut st = self.load()?;
         st.remove(asset_root);
-        self.store(&st).await?;
+        self.store(&st)?;
         Ok(())
     }
 
@@ -99,12 +100,12 @@ impl LruIndex {
     /// - Returns a list of candidate asset_roots to attempt eviction for.
     ///
     /// This function does not mutate storage.
-    pub async fn eviction_candidates(
+    pub fn eviction_candidates(
         &self,
         cfg: &EvictConfig,
         pinned: &HashSet<String>,
     ) -> AssetsResult<Vec<String>> {
-        let st = self.load().await?;
+        let st = self.load()?;
         Ok(st.eviction_candidates(cfg, pinned))
     }
 }

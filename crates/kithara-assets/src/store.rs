@@ -2,10 +2,9 @@
 
 use std::{hash::Hash, path::PathBuf, sync::Arc};
 
+use kithara_bufpool::{BytePool, byte_pool};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
-
-use kithara_bufpool::{BytePool, byte_pool};
 
 use crate::{
     base::DiskAssetStore,
@@ -13,7 +12,7 @@ use crate::{
     evict::EvictAssets,
     index::EvictConfig,
     lease::LeaseAssets,
-    processing::{ProcessChunkFn, ProcessingAssets},
+    process::{ProcessChunkFn, ProcessingAssets},
 };
 
 /// Simplified storage options for creating an asset store.
