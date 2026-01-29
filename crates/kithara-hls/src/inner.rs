@@ -15,7 +15,7 @@ use crate::{
     fetch::FetchManager,
     options::HlsConfig,
     playlist::variant_info_from_master,
-    source::{HlsSource, VariantMetadata},
+    source::{VariantMetadata, build_pair},
 };
 
 /// Marker type for HLS streaming.
@@ -25,6 +25,7 @@ impl StreamType for Hls {
     type Config = HlsConfig;
     type Backend = kithara_stream::Backend;
     type Error = HlsError;
+    type Event = HlsEvent;
 
     async fn create_backend(mut config: Self::Config) -> Result<Self::Backend, Self::Error> {
         let asset_root = asset_root_for_url(&config.url);
@@ -82,18 +83,15 @@ impl StreamType for Hls {
             })
             .collect();
 
-        // Create HlsSource (implements Source directly)
-        let source = HlsSource::new(
+        // Create HlsDownloader + HlsSource pair
+        let (downloader, source) = build_pair(
             Arc::clone(&fetch_manager),
             variant_metadata,
-            initial_variant,
-            Some(config.abr.clone()),
-            config.events_tx.clone(),
-            cancel,
+            &config,
         );
 
-        // Create backend directly from source
-        let backend = kithara_stream::Backend::new(source);
+        // Create backend with source + downloader
+        let backend = kithara_stream::Backend::new(source, downloader, cancel);
 
         Ok(backend)
     }

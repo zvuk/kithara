@@ -139,6 +139,32 @@ impl Writer {
     }
 }
 
+impl Writer {
+    /// Run writer to completion, calling `on_chunk` for each written chunk.
+    ///
+    /// Returns total bytes written on success.
+    pub async fn run<F>(mut self, mut on_chunk: F) -> Result<u64, WriterError>
+    where
+        F: FnMut(u64, usize),
+    {
+        use futures::StreamExt as _;
+        while let Some(result) = self.next().await {
+            match result {
+                Ok(WriterItem::ChunkWritten { offset, len }) => {
+                    on_chunk(offset, len);
+                }
+                Ok(WriterItem::Completed { total_bytes }) => {
+                    return Ok(total_bytes);
+                }
+                Err(e) => {
+                    return Err(e);
+                }
+            }
+        }
+        Ok(0)
+    }
+}
+
 impl Stream for Writer {
     type Item = Result<WriterItem, WriterError>;
 

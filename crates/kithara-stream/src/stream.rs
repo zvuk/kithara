@@ -28,6 +28,9 @@ pub trait StreamType: Send + 'static {
     /// Error type for stream creation.
     type Error: std::error::Error + Send + Sync + 'static;
 
+    /// Event type emitted by this stream.
+    type Event: Clone + Send + 'static;
+
     /// Create the backend from configuration.
     ///
     /// The backend will be wrapped in `Reader` by `Stream::new()`.

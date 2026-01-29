@@ -12,6 +12,7 @@ thiserror = { workspace = true }
 kanal = { workspace = true }
 symphonia = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
 bytes = { workspace = true }

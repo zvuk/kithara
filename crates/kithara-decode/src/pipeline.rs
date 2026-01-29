@@ -12,9 +12,12 @@ use std::{
 use kanal::Receiver;
 use kithara_stream::{EpochValidator, Fetch, MediaInfo, Stream, StreamType};
 use parking_lot::Mutex;
+use tokio::sync::broadcast;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 
 use crate::{
+    events::DecodeEvent,
     symphonia::SymphoniaDecoder,
     types::{DecodeError, DecodeResult, PcmChunk, PcmSpec},
 };
@@ -229,6 +232,7 @@ struct DecodeSource {
     epoch: Arc<AtomicU64>,
     chunks_decoded: u64,
     total_samples: u64,
+    emit: Option<Box<dyn Fn(DecodeEvent) + Send>>,
 }
 
 impl DecodeSource {
@@ -238,7 +242,13 @@ impl DecodeSource {
             epoch,
             chunks_decoded: 0,
             total_samples: 0,
+            emit: None,
         }
+    }
+
+    fn with_emit(mut self, emit: Box<dyn Fn(DecodeEvent) + Send>) -> Self {
+        self.emit = Some(emit);
+        self
     }
 }
 
@@ -259,6 +269,13 @@ impl DecodeWorkerSource for DecodeSource {
                     self.chunks_decoded += 1;
                     self.total_samples += chunk.pcm.len() as u64;
 
+                    // Emit FormatDetected on first chunk
+                    if self.chunks_decoded == 1
+                        && let Some(ref emit) = self.emit
+                    {
+                        emit(DecodeEvent::FormatDetected { spec: chunk.spec });
+                    }
+
                     if self.chunks_decoded.is_multiple_of(100) {
                         trace!(
                             chunks = self.chunks_decoded,
@@ -278,6 +295,9 @@ impl DecodeWorkerSource for DecodeSource {
                         epoch = current_epoch,
                         "decode complete (EOF)"
                     );
+                    if let Some(ref emit) = self.emit {
+                        emit(DecodeEvent::EndOfStream);
+                    }
                     return Fetch::new(PcmChunk::default(), true, current_epoch);
                 }
                 Err(e) => {
@@ -292,11 +312,11 @@ impl DecodeWorkerSource for DecodeSource {
         match cmd {
             DecodeCommand::Seek { position, epoch } => {
                 debug!(?position, epoch, "seek command received");
-                // Update epoch first
                 self.epoch.store(epoch, Ordering::Release);
-                // Then perform seek
                 if let Err(e) = self.decoder.seek(position) {
                     warn!(?e, "seek failed");
+                } else if let Some(ref emit) = self.emit {
+                    emit(DecodeEvent::SeekComplete { position });
                 }
             }
         }
@@ -318,6 +338,8 @@ struct StreamDecodeSource<T: StreamType> {
     epoch: Arc<AtomicU64>,
     chunks_decoded: u64,
     total_samples: u64,
+    last_spec: Option<PcmSpec>,
+    emit: Option<Box<dyn Fn(DecodeEvent) + Send>>,
 }
 
 impl<T: StreamType> StreamDecodeSource<T> {
@@ -335,7 +357,14 @@ impl<T: StreamType> StreamDecodeSource<T> {
             epoch,
             chunks_decoded: 0,
             total_samples: 0,
+            last_spec: None,
+            emit: None,
         }
+    }
+
+    fn with_emit(mut self, emit: Box<dyn Fn(DecodeEvent) + Send>) -> Self {
+        self.emit = Some(emit);
+        self
     }
 
     /// Detect media_info change: mark as pending and set read boundary.
@@ -437,8 +466,6 @@ impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
         let current_epoch = self.epoch.load(Ordering::Acquire);
 
         loop {
-            // Proactive detection: detect format change and set read boundary
-            // so the old decoder hits EOF naturally at the segment boundary.
             self.detect_format_change();
 
             match self.decoder.next_chunk() {
@@ -450,8 +477,27 @@ impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
                     self.chunks_decoded += 1;
                     self.total_samples += chunk.pcm.len() as u64;
 
-                    // Re-check after decode (Backend may have updated media_info
-                    // while Symphonia was reading bytes from the stream).
+                    // Emit FormatDetected on first chunk
+                    if self.chunks_decoded == 1
+                        && let Some(ref emit) = self.emit
+                    {
+                        emit(DecodeEvent::FormatDetected { spec: chunk.spec });
+                        self.last_spec = Some(chunk.spec);
+                    }
+
+                    // Detect spec change (e.g. after ABR switch)
+                    if let Some(old_spec) = self.last_spec
+                        && old_spec != chunk.spec
+                    {
+                        if let Some(ref emit) = self.emit {
+                            emit(DecodeEvent::FormatChanged {
+                                old: old_spec,
+                                new: chunk.spec,
+                            });
+                        }
+                        self.last_spec = Some(chunk.spec);
+                    }
+
                     self.detect_format_change();
 
                     if self.chunks_decoded.is_multiple_of(100) {
@@ -467,10 +513,6 @@ impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
                     return Fetch::new(chunk, false, current_epoch);
                 }
                 Ok(None) => {
-                    // EOF — decoder exhausted its data (read boundary caused EOF).
-                    // If format change is pending, recreate decoder for the new
-                    // segment. This is the same as old architecture's
-                    // check_boundary → reader.clear() → create_decoder().
                     self.detect_format_change();
                     if self.pending_format_change.is_some() {
                         debug!("Decoder EOF at format boundary, recreating");
@@ -485,6 +527,9 @@ impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
                         epoch = current_epoch,
                         "decode complete (EOF)"
                     );
+                    if let Some(ref emit) = self.emit {
+                        emit(DecodeEvent::EndOfStream);
+                    }
                     return Fetch::new(PcmChunk::default(), true, current_epoch);
                 }
                 Err(e) => {
@@ -502,6 +547,8 @@ impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
                 self.epoch.store(epoch, Ordering::Release);
                 if let Err(e) = self.decoder.seek(position) {
                     warn!(?e, "seek failed");
+                } else if let Some(ref emit) = self.emit {
+                    emit(DecodeEvent::SeekComplete { position });
                 }
             }
         }
@@ -557,6 +604,12 @@ pub struct Decoder<S> {
 
     /// End of stream reached.
     eof: bool,
+
+    /// Decode events channel.
+    decode_events_tx: broadcast::Sender<DecodeEvent>,
+
+    /// Cancellation token for graceful shutdown.
+    cancel: Option<CancellationToken>,
 
     /// Marker for source type.
     _marker: std::marker::PhantomData<S>,
@@ -644,13 +697,18 @@ where
         let (cmd_tx, cmd_rx) = kanal::bounded(cmd_capacity);
         let (data_tx, data_rx) = kanal::bounded(options.pcm_buffer_chunks.max(1));
 
-        // Create shared epoch counter
         let epoch = Arc::new(AtomicU64::new(0));
+        let (decode_events_tx, _) = broadcast::channel(64);
 
-        // Create Symphonia decoder and get initial spec
         let symphonia = Self::create_decoder(source, &options)?;
         let initial_spec = symphonia.spec();
-        let decode_source = DecodeSource::new(symphonia, Arc::clone(&epoch));
+
+        let emit_tx = decode_events_tx.clone();
+        let emit = Box::new(move |event: DecodeEvent| {
+            let _ = emit_tx.send(event);
+        });
+
+        let decode_source = DecodeSource::new(symphonia, Arc::clone(&epoch)).with_emit(emit);
 
         std::thread::Builder::new()
             .name("kithara-decode".to_string())
@@ -673,6 +731,8 @@ where
             current_chunk: None,
             chunk_offset: 0,
             eof: false,
+            decode_events_tx,
+            cancel: None,
             _marker: std::marker::PhantomData,
         })
     }
@@ -845,6 +905,8 @@ where
     /// sink.append(decoder);
     /// ```
     pub async fn new(config: DecoderConfig<T>) -> Result<Self, DecodeError> {
+        let cancel = CancellationToken::new();
+
         let mut stream = Stream::<T>::new(config.stream)
             .await
             .map_err(|e| DecodeError::Io(std::io::Error::other(e.to_string())))?;
@@ -878,6 +940,13 @@ where
         let (data_tx, data_rx) = kanal::bounded(options.pcm_buffer_chunks.max(1));
 
         let epoch = Arc::new(AtomicU64::new(0));
+        let (decode_events_tx, _) = broadcast::channel(64);
+
+        // Create emit closure for decode thread
+        let emit_tx = decode_events_tx.clone();
+        let emit = Box::new(move |event: DecodeEvent| {
+            let _ = emit_tx.send(event);
+        });
 
         // Use StreamDecodeSource for format change detection
         let decode_source = StreamDecodeSource::new(
@@ -885,7 +954,8 @@ where
             symphonia,
             initial_media_info,
             Arc::clone(&epoch),
-        );
+        )
+        .with_emit(emit);
 
         std::thread::Builder::new()
             .name("kithara-decode".to_string())
@@ -908,8 +978,23 @@ where
             current_chunk: None,
             chunk_offset: 0,
             eof: false,
+            decode_events_tx,
+            cancel: Some(cancel),
             _marker: std::marker::PhantomData,
         })
+    }
+
+    /// Subscribe to decode events.
+    pub fn decode_events(&self) -> broadcast::Receiver<DecodeEvent> {
+        self.decode_events_tx.subscribe()
+    }
+}
+
+impl<S> Drop for Decoder<S> {
+    fn drop(&mut self) {
+        if let Some(ref cancel) = self.cancel {
+            cancel.cancel();
+        }
     }
 }
 

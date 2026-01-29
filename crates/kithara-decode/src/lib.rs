@@ -24,12 +24,22 @@
 //! while let Ok(chunk) = decoder.pcm_rx().recv() {
 //!     play_audio(chunk);
 //! }
+//!
+//! // Events
+//! let mut events = decoder.events();
+//! while let Ok(event) = events.recv().await {
+//!     match event {
+//!         DecoderEvent::Stream(e) => println!("Stream: {:?}", e),
+//!         DecoderEvent::Decode(e) => println!("Decode: {:?}", e),
+//!     }
+//! }
 //! ```
 
 #![forbid(unsafe_code)]
 
 // Internal modules
 mod decoder;
+mod events;
 mod pipeline;
 mod reader;
 mod symphonia;
@@ -39,6 +49,7 @@ mod types;
 
 // Public API exports
 pub use decoder::InnerDecoder;
+pub use events::{DecodeEvent, DecoderEvent};
 // Re-export types from kithara-stream for convenience
 pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 pub use pipeline::{DecodeOptions, Decoder, DecoderConfig};

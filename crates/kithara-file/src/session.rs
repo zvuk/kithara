@@ -177,13 +177,9 @@ impl kithara_stream::Source for FileSource {
             let new_pos = offset.saturating_add(n as u64);
             self.progress.set_read_pos(new_pos);
 
-            // Send event
-            let percent = self
-                .len
-                .map(|total| ((new_pos as f64 / total as f64) * 100.0).min(100.0) as f32);
             let _ = self.events_tx.send(FileEvent::PlaybackProgress {
                 position: new_pos,
-                percent,
+                total: self.len,
             });
 
             trace!(offset, bytes = n, "FileSource read complete");

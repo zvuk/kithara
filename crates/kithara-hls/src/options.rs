@@ -61,6 +61,8 @@ pub struct HlsConfig {
     pub events_channel_capacity: usize,
     /// Buffer pool (shared across all components, created if not provided).
     pub pool: Option<BytePool>,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    pub look_ahead_bytes: u64,
 }
 
 impl Default for HlsConfig {
@@ -78,6 +80,7 @@ impl Default for HlsConfig {
             chunk_channel_capacity: 8,
             events_channel_capacity: 32,
             pool: None,
+            look_ahead_bytes: 500_000,
         }
     }
 }
@@ -98,6 +101,7 @@ impl HlsConfig {
             chunk_channel_capacity: 8,
             events_channel_capacity: 32,
             pool: None,
+            look_ahead_bytes: 500_000,
         }
     }
 
@@ -164,6 +168,12 @@ impl HlsConfig {
     /// Set buffer pool (shared across all components).
     pub fn with_pool(mut self, pool: BytePool) -> Self {
         self.pool = Some(pool);
+        self
+    }
+
+    /// Set max bytes the downloader may be ahead of the reader before it pauses.
+    pub fn with_look_ahead_bytes(mut self, bytes: u64) -> Self {
+        self.look_ahead_bytes = bytes;
         self
     }
 }

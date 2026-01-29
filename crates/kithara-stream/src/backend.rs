@@ -2,8 +2,8 @@
 
 //! Generic backend for streaming sources.
 //!
-//! Backend wraps a `Source`, runs a worker loop calling `wait_range()` and `read_at()`,
-//! and provides channel-based communication with sync `Reader`.
+//! Backend wraps a `Source` and `Downloader`, runs a worker loop, and provides
+//! channel-based communication with sync `Reader`.
 
 use std::sync::Arc;
 
@@ -12,9 +12,10 @@ use kanal::{Receiver, Sender};
 use kithara_bufpool::byte_pool;
 use kithara_storage::WaitOutcome;
 use parking_lot::Mutex;
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 
-use crate::{media::MediaInfo, source::Source};
+use crate::{downloader::Downloader, media::MediaInfo, source::Source};
 
 /// Command sent from Reader to Backend.
 #[derive(Debug, Clone)]
@@ -57,60 +58,83 @@ pub trait BackendAccess: Send + Sync + 'static {
     fn current_segment_range(&self) -> std::ops::Range<u64>;
 }
 
-/// Generic backend for any Source.
-///
-/// Spawns a worker that calls `source.wait_range()` and `source.read_at()`.
-/// Implements `BackendAccess` for use with `Reader`.
-pub struct Backend {
-    cmd_tx: Sender<Command>,
-    data_rx: Receiver<Response>,
+/// Shared mutable state between worker and Backend accessors.
+#[derive(Clone)]
+struct SharedState {
     len: Arc<Mutex<Option<u64>>>,
     media_info: Arc<Mutex<Option<MediaInfo>>>,
     segment_range: Arc<Mutex<std::ops::Range<u64>>>,
 }
 
+/// Generic backend for any Source + Downloader.
+///
+/// Spawns a worker that calls `source.wait_range()` and `source.read_at()`,
+/// driving the downloader in parallel for look-ahead fetching.
+/// Implements `BackendAccess` for use with `Reader`.
+pub struct Backend {
+    cmd_tx: Sender<Command>,
+    data_rx: Receiver<Response>,
+    shared: SharedState,
+}
+
 impl Backend {
-    /// Create new backend from a source.
-    pub fn new<S: Source>(source: S) -> Self {
+    /// Create new backend from a source, downloader, and cancellation token.
+    pub fn new<S: Source, D: Downloader>(
+        source: S,
+        downloader: D,
+        cancel: CancellationToken,
+    ) -> Self {
         let (cmd_tx, cmd_rx) = kanal::bounded(4);
         let (data_tx, data_rx) = kanal::bounded(4);
-        let len = Arc::new(Mutex::new(source.len()));
-        let media_info = Arc::new(Mutex::new(source.media_info()));
-        let segment_range = Arc::new(Mutex::new(source.current_segment_range()));
+        let shared = SharedState {
+            len: Arc::new(Mutex::new(source.len())),
+            media_info: Arc::new(Mutex::new(source.media_info())),
+            segment_range: Arc::new(Mutex::new(source.current_segment_range())),
+        };
 
         tokio::spawn(Self::run_worker(
             source,
+            downloader,
+            cancel,
             cmd_rx,
             data_tx,
-            len.clone(),
-            media_info.clone(),
-            segment_range.clone(),
+            shared.clone(),
         ));
 
         Self {
             cmd_tx,
             data_rx,
-            len,
-            media_info,
-            segment_range,
+            shared,
         }
     }
 
-    async fn run_worker<S: Source>(
+    async fn run_worker<S: Source, D: Downloader>(
         mut source: S,
+        downloader: D,
+        cancel: CancellationToken,
         cmd_rx: Receiver<Command>,
         data_tx: Sender<Response>,
-        len: Arc<Mutex<Option<u64>>>,
-        media_info: Arc<Mutex<Option<MediaInfo>>>,
-        segment_range: Arc<Mutex<std::ops::Range<u64>>>,
+        shared: SharedState,
     ) {
         debug!("Backend worker started");
+
+        // Spawn downloader in a separate task so it runs independently
+        // and is not cancelled by incoming read commands.
+        let dl_cancel = cancel.clone();
+        tokio::spawn(async move {
+            Self::run_downloader(downloader, dl_cancel).await;
+        });
 
         let pool = byte_pool();
 
         loop {
             tokio::select! {
                 biased;
+
+                () = cancel.cancelled() => {
+                    debug!("Backend cancelled");
+                    break;
+                }
 
                 cmd = cmd_rx.as_async().recv() => {
                     let cmd = match cmd {
@@ -127,8 +151,16 @@ impl Backend {
 
                             let range = offset..offset + read_len as u64;
 
-                            // Wait for data to be available
-                            let wait_result = source.wait_range(range.clone()).await;
+                            // Wait for data with cancel support
+                            let wait_result = tokio::select! {
+                                biased;
+                                () = cancel.cancelled() => {
+                                    debug!("Backend cancelled during wait_range");
+                                    break;
+                                }
+                                result = source.wait_range(range.clone()) => result,
+                            };
+
                             let outcome = match wait_result {
                                 Ok(outcome) => outcome,
                                 Err(e) => {
@@ -141,7 +173,6 @@ impl Backend {
                                 }
                             };
 
-                            // Handle EOF
                             if matches!(outcome, WaitOutcome::Eof) {
                                 if data_tx.as_async().send(Response::Eof).await.is_err() {
                                     debug!("Backend data channel closed");
@@ -162,19 +193,15 @@ impl Backend {
                                     }
                                 }
                                 Ok(n) => {
-                                    // Update len if we now know it
                                     if source.len().is_some() {
-                                        *len.lock() = source.len();
+                                        *shared.len.lock() = source.len();
                                     }
-                                    // Update media_info if we now know it
                                     if let Some(info) = source.media_info() {
-                                        *media_info.lock() = Some(info);
+                                        *shared.media_info.lock() = Some(info);
                                     }
-                                    // Update segment_range
-                                    *segment_range.lock() = source.current_segment_range();
-                                    // Copy to Bytes and return pooled buffer
+                                    *shared.segment_range.lock() = source.current_segment_range();
                                     let bytes = Bytes::copy_from_slice(&buf[..n]);
-                                    drop(buf); // Return to pool before sending
+                                    drop(buf);
                                     if data_tx.as_async().send(Response::Data(bytes)).await.is_err() {
                                         debug!("Backend data channel closed");
                                         break;
@@ -191,8 +218,6 @@ impl Backend {
                         }
                         Command::Seek { offset } => {
                             trace!(offset, "Backend seek (no-op, Reader handles position)");
-                            // Seek is handled by Reader updating its position.
-                            // Backend just serves read requests at specified offsets.
                         }
                         Command::Stop => {
                             debug!("Backend stop");
@@ -204,6 +229,25 @@ impl Backend {
         }
 
         debug!("Backend worker stopped");
+    }
+
+    async fn run_downloader<D: Downloader>(mut downloader: D, cancel: CancellationToken) {
+        debug!("Downloader task started");
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    debug!("Downloader cancelled");
+                    break;
+                }
+                has_more = downloader.step() => {
+                    if !has_more {
+                        debug!("Downloader complete");
+                        break;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -217,14 +261,14 @@ impl BackendAccess for Backend {
     }
 
     fn len(&self) -> Option<u64> {
-        *self.len.lock()
+        *self.shared.len.lock()
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        self.media_info.lock().clone()
+        self.shared.media_info.lock().clone()
     }
 
     fn current_segment_range(&self) -> std::ops::Range<u64> {
-        self.segment_range.lock().clone()
+        self.shared.segment_range.lock().clone()
     }
 }
