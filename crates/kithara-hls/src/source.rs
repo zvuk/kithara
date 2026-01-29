@@ -525,12 +525,11 @@ impl Source for HlsSource {
         Some(MediaInfo::new(last.codec, last.container))
     }
 
-    fn current_segment_range(&self) -> Range<u64> {
+    fn current_segment_range(&self) -> Option<Range<u64>> {
         let segments = self.shared.segments.lock();
-        match segments.last() {
-            Some(entry) => entry.byte_offset..entry.end_offset(),
-            None => 0..0,
-        }
+        segments
+            .last()
+            .map(|entry| entry.byte_offset..entry.end_offset())
     }
 }
 
@@ -538,7 +537,7 @@ impl Source for HlsSource {
 pub fn build_pair(
     fetch: Arc<DefaultFetchManager>,
     variant_metadata: Vec<VariantMetadata>,
-    config: &crate::options::HlsConfig,
+    config: &crate::config::HlsConfig,
 ) -> (HlsDownloader, HlsSource) {
     let cancel = config.cancel.clone().unwrap_or_default();
 

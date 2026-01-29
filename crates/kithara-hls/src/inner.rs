@@ -10,10 +10,10 @@ use kithara_stream::StreamType;
 use tokio::sync::broadcast;
 
 use crate::{
+    config::HlsConfig,
     error::HlsError,
     events::HlsEvent,
     fetch::FetchManager,
-    options::HlsConfig,
     playlist::variant_info_from_master,
     source::{VariantMetadata, build_pair},
 };
@@ -27,7 +27,20 @@ impl StreamType for Hls {
     type Error = HlsError;
     type Event = HlsEvent;
 
-    async fn create(mut config: Self::Config) -> Result<Self::Source, Self::Error> {
+    fn ensure_events(
+        config: &mut Self::Config,
+    ) -> broadcast::Receiver<Self::Event> {
+        if config.events_tx.is_none() {
+            let capacity = config.events_channel_capacity.max(1);
+            config.events_tx = Some(broadcast::channel(capacity).0);
+        }
+        match config.events_tx {
+            Some(ref tx) => tx.subscribe(),
+            None => broadcast::channel(1).1,
+        }
+    }
+
+    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         let asset_root = asset_root_for_url(&config.url);
         let cancel = config.cancel.clone().unwrap_or_default();
         let net = HttpClient::new(config.net.clone());
@@ -53,14 +66,10 @@ impl StreamType for Hls {
         // Determine initial variant
         let initial_variant = config.abr.initial_variant();
 
-        // Create events channel if not provided
-        let events_tx = if let Some(tx) = config.events_tx.clone() {
-            tx
-        } else {
-            let capacity = config.events_channel_capacity.max(1);
-            let (tx, _) = broadcast::channel(capacity);
-            config.events_tx = Some(tx.clone());
-            tx
+        // events_tx is guaranteed to exist (ensure_events was called by Stream::new).
+        let events_tx = match config.events_tx {
+            Some(ref tx) => tx.clone(),
+            None => broadcast::channel(config.events_channel_capacity.max(1)).0,
         };
 
         // Emit VariantsDiscovered event

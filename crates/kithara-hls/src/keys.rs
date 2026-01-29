@@ -13,8 +13,8 @@ use url::Url;
 
 use crate::{
     HlsError, HlsResult, KeyContext,
+    config::KeyProcessor,
     fetch::DefaultFetchManager,
-    options::KeyProcessor,
     playlist::{EncryptionMethod, SegmentKey},
 };
 

@@ -46,8 +46,8 @@ impl<S: Source> Reader<S> {
         self.source.media_info()
     }
 
-    /// Get current segment byte range.
-    pub fn current_segment_range(&self) -> std::ops::Range<u64> {
+    /// Get current segment byte range (for segmented sources like HLS).
+    pub fn current_segment_range(&self) -> Option<std::ops::Range<u64>> {
         self.source.current_segment_range()
     }
 

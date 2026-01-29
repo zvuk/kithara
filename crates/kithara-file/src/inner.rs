@@ -8,15 +8,15 @@ use std::sync::Arc;
 use futures::StreamExt;
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
-use kithara_storage::ResourceExt;
+use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{Backend, Downloader, StreamType, Writer, WriterItem};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    config::FileConfig,
     error::SourceError,
     events::FileEvent,
-    options::FileConfig,
     session::{FileSource, FileStreamState, Progress},
 };
 
@@ -28,6 +28,19 @@ impl StreamType for File {
     type Source = FileSource;
     type Error = SourceError;
     type Event = FileEvent;
+
+    fn ensure_events(
+        config: &mut Self::Config,
+    ) -> broadcast::Receiver<Self::Event> {
+        if config.events_tx.is_none() {
+            let capacity = config.events_channel_capacity.max(1);
+            config.events_tx = Some(broadcast::channel(capacity).0);
+        }
+        match config.events_tx {
+            Some(ref tx) => tx.subscribe(),
+            None => broadcast::channel(1).1,
+        }
+    }
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         let asset_root = asset_root_for_url(&config.url);
@@ -54,20 +67,30 @@ impl StreamType for File {
 
         let progress = Arc::new(Progress::new());
 
-        // Create downloader
-        let downloader = FileDownloader::new(
-            &net_client,
-            state.clone(),
-            progress.clone(),
-            state.events().clone(),
-            config.look_ahead_bytes,
-        )
-        .await;
+        // Skip download if resource is already cached (committed).
+        if matches!(state.res().status(), ResourceStatus::Committed { .. }) {
+            tracing::debug!("file already cached, skipping download");
+            let total = state.len().unwrap_or(0);
+            progress.set_download_pos(total);
+            let _ = state
+                .events()
+                .send(FileEvent::DownloadComplete { total_bytes: total });
+        } else {
+            // Create downloader
+            let downloader = FileDownloader::new(
+                &net_client,
+                state.clone(),
+                progress.clone(),
+                state.events().clone(),
+                config.look_ahead_bytes,
+            )
+            .await;
 
-        // Spawn downloader as background task.
-        // Backend is leaked intentionally — downloader runs until cancel or completion.
-        // The JoinHandle is detached: the tokio task continues running independently.
-        std::mem::forget(Backend::new(downloader, cancel));
+            // Spawn downloader as background task.
+            // Backend is leaked intentionally — downloader runs until cancel or completion.
+            // The JoinHandle is detached: the tokio task continues running independently.
+            std::mem::forget(Backend::new(downloader, cancel));
+        }
 
         // Create source
         let source = FileSource::new(

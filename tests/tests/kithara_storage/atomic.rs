@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use kithara_bufpool::byte_pool;
 use kithara_storage::{ResourceExt, StorageError, StorageOptions, StorageResource};
 use rstest::*;
 use tempfile::TempDir;
@@ -64,8 +65,9 @@ fn atomic_resource_write_read_success(
 
     atomic.write_all(test_data).expect("write should succeed");
 
-    let read_data = atomic.read_all().expect("read should succeed");
-    assert_eq!(&*read_data, test_data, "read data should match");
+    let mut buf = byte_pool().get();
+    atomic.read_into(&mut buf).expect("read should succeed");
+    assert_eq!(&*buf, test_data, "read data should match");
 }
 
 #[rstest]
@@ -83,11 +85,9 @@ fn atomic_resource_empty_write_read(temp_dir: TempDir, cancel_token: Cancellatio
     // write_all with empty data commits with final_len=0
     atomic.write_all(b"").expect("write should succeed");
 
-    let read_data = atomic.read_all().expect("read should succeed");
-    assert!(
-        read_data.is_empty(),
-        "empty write should produce empty read"
-    );
+    let mut buf = byte_pool().get();
+    let n = atomic.read_into(&mut buf).expect("read should succeed");
+    assert_eq!(n, 0, "empty write should produce empty read");
 }
 
 #[rstest]
@@ -119,12 +119,13 @@ fn atomic_resource_read_missing_file(
     })
     .unwrap();
 
+    let mut buf = byte_pool().get();
     if create_file_first {
-        let data = atomic.read_all().unwrap();
-        assert_eq!(&*data, b"initial");
+        atomic.read_into(&mut buf).unwrap();
+        assert_eq!(&*buf, b"initial");
     } else {
-        let data = atomic.read_all().expect("read should succeed");
-        assert!(data.is_empty(), "missing file should return empty bytes");
+        let n = atomic.read_into(&mut buf).expect("read should succeed");
+        assert_eq!(n, 0, "missing file should return empty bytes");
     }
 }
 
@@ -151,9 +152,10 @@ fn atomic_resource_cancelled_operations(
         "write_all should fail when cancelled"
     );
 
-    // read_all checks health
-    let read_result = atomic.read_all();
-    assert!(read_result.is_err(), "read_all should fail when cancelled");
+    // read_into checks health
+    let mut buf = byte_pool().get();
+    let read_result = atomic.read_into(&mut buf);
+    assert!(read_result.is_err(), "read_into should fail when cancelled");
 
     // commit checks health
     let commit_result = atomic.commit(None);
@@ -181,9 +183,10 @@ fn atomic_resource_fail_propagation(temp_dir: TempDir, cancel_token: Cancellatio
     let write_result = atomic.write_all(b"data");
     assert!(write_result.is_err(), "write_all should fail after fail()");
 
-    // read_all should fail
-    let read_result = atomic.read_all();
-    assert!(read_result.is_err(), "read_all should fail after fail()");
+    // read_into should fail
+    let mut buf = byte_pool().get();
+    let read_result = atomic.read_into(&mut buf);
+    assert!(read_result.is_err(), "read_into should fail after fail()");
 
     // commit should fail
     let commit_result = atomic.commit(None);
@@ -216,8 +219,9 @@ fn atomic_resource_concurrent_writes(temp_dir: TempDir, cancel_token: Cancellati
     assert!(result1.is_ok());
     assert!(result2.is_ok());
 
-    let final_data = atomic.read_all().unwrap();
-    assert!(*final_data == *b"data1" || *final_data == *b"data2");
+    let mut buf = byte_pool().get();
+    atomic.read_into(&mut buf).unwrap();
+    assert!(*buf == *b"data1" || *buf == *b"data2");
 }
 
 #[rstest]
@@ -254,9 +258,10 @@ fn atomic_resource_large_file_operations() {
     let large_data = vec![0x42; 10 * 1024 * 1024];
     atomic.write_all(&large_data).unwrap();
 
-    let read_data = atomic.read_all().unwrap();
-    assert_eq!(read_data.len(), large_data.len());
-    assert_eq!(&*read_data, large_data.as_slice());
+    let mut buf = byte_pool().get();
+    atomic.read_into(&mut buf).unwrap();
+    assert_eq!(buf.len(), large_data.len());
+    assert_eq!(&*buf, large_data.as_slice());
 }
 
 #[rstest]
@@ -287,8 +292,9 @@ fn atomic_resource_persists_across_reopen(
         cancel: cancel_token,
     })
     .unwrap();
-    let data = reopened.read_all().unwrap();
-    assert_eq!(&*data, payload);
+    let mut buf = byte_pool().get();
+    reopened.read_into(&mut buf).unwrap();
+    assert_eq!(&*buf, payload);
 }
 
 #[rstest]
@@ -316,6 +322,7 @@ fn atomic_resource_empty_persists_across_reopen(
         cancel: cancel_token,
     })
     .unwrap();
-    let data = reopened.read_all().unwrap();
-    assert!(data.is_empty());
+    let mut buf = byte_pool().get();
+    let n = reopened.read_into(&mut buf).unwrap();
+    assert_eq!(n, 0);
 }

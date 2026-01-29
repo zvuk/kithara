@@ -2,28 +2,27 @@
 
 use std::time::Duration;
 
-use bytes::Bytes;
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
+use kithara_bufpool::byte_pool;
 use kithara_storage::ResourceExt;
 use rstest::{fixture, rstest};
 
-/// Helper to read bytes from resource into a new Vec
+/// Helper to read bytes from resource into a pooled buffer
 fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
-    let mut buf = vec![0u8; len];
+    let mut buf = byte_pool().get_with(|b| b.resize(len, 0));
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
-    buf.truncate(n);
-    buf
+    buf[..n].to_vec()
 }
 
 #[allow(dead_code)]
-fn mp3_bytes() -> Bytes {
+fn mp3_bytes() -> Vec<u8> {
     // Deterministic "mp3-like" payload (we don't parse mp3 here; just bytes).
     // Big enough to exercise read/write paths.
     let mut v = Vec::with_capacity(128 * 1024);
     for i in 0..v.capacity() {
         v.push((i % 251) as u8);
     }
-    Bytes::from(v)
+    v
 }
 
 #[derive(serde::Deserialize)]
@@ -77,15 +76,16 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
 
     // MP3 scenario: single wrapped file inside an asset.
     let key = ResourceKey::new(rel_path);
-    let payload = Bytes::from((0..size).map(|i| (i % 251) as u8).collect::<Vec<_>>());
+    let payload: Vec<u8> = (0..size).map(|i| (i % 251) as u8).collect();
 
     // Keep the handle alive while we check the persisted pins file.
     let res = store.open_resource(&key).unwrap();
 
     res.write_all(&payload).unwrap();
 
-    let read_back = res.read_all().unwrap();
-    assert_eq!(read_back, payload);
+    let mut read_back = byte_pool().get();
+    res.read_into(&mut read_back).unwrap();
+    assert_eq!(&*read_back, &payload[..]);
 
     // Pins may be persisted; check if pins file exists
     if let Some(pinned) = read_pins_file(&dir) {
@@ -119,8 +119,9 @@ fn atomic_resource_persistence(
     }
 
     let res = store.open_resource(&key).unwrap();
-    let data = res.read_all().unwrap();
-    assert_eq!(&*data, payload);
+    let mut buf = byte_pool().get();
+    res.read_into(&mut buf).unwrap();
+    assert_eq!(&*buf, payload);
 }
 
 #[rstest]
@@ -158,8 +159,8 @@ fn mixed_resource_persistence_across_reopen(temp_dir: tempfile::TempDir) {
     let atomic_key = ResourceKey::new("meta/index.json");
     let streaming_key = ResourceKey::new("media/data.bin");
 
-    let atomic_payload = Bytes::from_static(b"{\"idx\":1}");
-    let streaming_payload = Bytes::from_static(b"stream-bytes-123");
+    let atomic_payload = b"{\"idx\":1}".to_vec();
+    let streaming_payload = b"stream-bytes-123".to_vec();
 
     {
         let atomic = store.open_resource(&atomic_key).unwrap();
@@ -176,15 +177,16 @@ fn mixed_resource_persistence_across_reopen(temp_dir: tempfile::TempDir) {
     }
 
     let atomic = store.open_resource(&atomic_key).unwrap();
-    let atomic_read = atomic.read_all().unwrap();
-    assert_eq!(atomic_read, atomic_payload);
+    let mut atomic_read = byte_pool().get();
+    atomic.read_into(&mut atomic_read).unwrap();
+    assert_eq!(&*atomic_read, &atomic_payload[..]);
 
     let streaming = store.open_resource(&streaming_key).unwrap();
     streaming
         .wait_range(0..streaming_payload.len() as u64)
         .unwrap();
     let streaming_read = read_bytes(&streaming, 0, streaming_payload.len());
-    assert_eq!(&streaming_read, &*streaming_payload);
+    assert_eq!(&streaming_read, &streaming_payload[..]);
 }
 
 #[rstest]
@@ -194,7 +196,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(temp_dir: tempfil
     let store = asset_store_with_root(&temp_dir, "concurrent-asset");
 
     let key = ResourceKey::new("media/concurrent.bin");
-    let payload = Bytes::from_static(b"concurrent streaming data");
+    let payload: Vec<u8> = b"concurrent streaming data".to_vec();
     let payload_len = payload.len() as u64;
 
     let store_reader = store.clone();
@@ -203,10 +205,10 @@ fn streaming_resource_concurrent_write_and_read_across_handles(temp_dir: tempfil
     let reader = std::thread::spawn(move || {
         let res = store_reader.open_resource(&key_reader).unwrap();
         res.wait_range(0..payload_len_reader).unwrap();
-        let mut buf = vec![0u8; payload_len_reader as usize];
+        let mut buf = byte_pool().get_with(|b| b.resize(payload_len_reader as usize, 0));
         let n = res.read_at(0, &mut buf).unwrap();
         buf.truncate(n);
-        buf
+        buf.to_vec()
     });
 
     let store_writer = store;
@@ -221,7 +223,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(temp_dir: tempfil
 
     let data = reader.join().unwrap();
     writer.join().unwrap();
-    assert_eq!(&data, &*payload);
+    assert_eq!(&data, &payload);
 }
 
 #[rstest]
@@ -242,11 +244,13 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
 
     // 1) playlist (atomic)
     let playlist_key = ResourceKey::new("master.m3u8");
-    let playlist_bytes = Bytes::from_static(b"#EXTM3U\n#EXT-X-VERSION:7\n");
+    let playlist_bytes = b"#EXTM3U\n#EXT-X-VERSION:7\n".to_vec();
 
     let playlist = store.open_resource(&playlist_key).unwrap();
     playlist.write_all(&playlist_bytes).unwrap();
-    assert_eq!(playlist.read_all().unwrap(), playlist_bytes);
+    let mut playlist_read = byte_pool().get();
+    playlist.read_into(&mut playlist_read).unwrap();
+    assert_eq!(&*playlist_read, &playlist_bytes[..]);
 
     // 2) segments (streaming, random access writes)
     let mut segments = Vec::new();
@@ -314,14 +318,15 @@ fn atomic_resource_roundtrip_with_different_paths(
     let store = asset_store_with_root(&temp_dir, asset_root);
 
     let key = ResourceKey::new(rel_path);
-    let payload = Bytes::from_static(b"test data for atomic resource");
+    let payload = b"test data for atomic resource".to_vec();
 
     let res = store.open_resource(&key).unwrap();
 
     res.write_all(&payload).unwrap();
 
-    let read_back = res.read_all().unwrap();
-    assert_eq!(read_back, payload);
+    let mut read_back = byte_pool().get();
+    res.read_into(&mut read_back).unwrap();
+    assert_eq!(&*read_back, &payload[..]);
 }
 
 #[rstest]
@@ -384,7 +389,7 @@ fn multiple_resources_same_asset_root_independently_accessible(
     for (i, key) in keys.iter().enumerate() {
         let res = store.open_resource(key).unwrap();
 
-        let data = Bytes::from(format!("data for file {}", i));
+        let data = format!("data for file {}", i).into_bytes();
         res.write_all(&data).unwrap();
 
         resources.push((res, data));
@@ -392,8 +397,9 @@ fn multiple_resources_same_asset_root_independently_accessible(
 
     // Verify each resource independently
     for (res, expected_data) in resources {
-        let read_back = res.read_all().unwrap();
-        assert_eq!(read_back, expected_data);
+        let mut read_back = byte_pool().get();
+        res.read_into(&mut read_back).unwrap();
+        assert_eq!(&*read_back, &expected_data[..]);
     }
 }
 
@@ -448,8 +454,9 @@ fn delete_asset_only_removes_own_directory(temp_dir: tempfile::TempDir) {
         let store = asset_store_with_root(&temp_dir, "asset-alpha");
         let key = ResourceKey::new("data.bin");
         let res = store.open_resource(&key).unwrap();
-        let data = res.read_all().unwrap();
-        assert_eq!(&*data, payloads[0], "asset-alpha data should be intact");
+        let mut buf = byte_pool().get();
+        res.read_into(&mut buf).unwrap();
+        assert_eq!(&*buf, payloads[0], "asset-alpha data should be intact");
     }
 
     // Verify asset-gamma still exists and data is intact
@@ -461,8 +468,9 @@ fn delete_asset_only_removes_own_directory(temp_dir: tempfile::TempDir) {
         let store = asset_store_with_root(&temp_dir, "asset-gamma");
         let key = ResourceKey::new("data.bin");
         let res = store.open_resource(&key).unwrap();
-        let data = res.read_all().unwrap();
-        assert_eq!(&*data, payloads[2], "asset-gamma data should be intact");
+        let mut buf = byte_pool().get();
+        res.read_into(&mut buf).unwrap();
+        assert_eq!(&*buf, payloads[2], "asset-gamma data should be intact");
     }
 }
 
@@ -561,7 +569,8 @@ fn delete_nonexistent_asset_is_idempotent(temp_dir: tempfile::TempDir) {
         let store = asset_store_with_root(&temp_dir, "existing-asset");
         let key = ResourceKey::new("data.bin");
         let res = store.open_resource(&key).unwrap();
-        let data = res.read_all().unwrap();
-        assert_eq!(&*data, b"existing data");
+        let mut buf = byte_pool().get();
+        res.read_into(&mut buf).unwrap();
+        assert_eq!(&*buf, b"existing data");
     }
 }

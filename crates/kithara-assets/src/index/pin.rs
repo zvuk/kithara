@@ -46,13 +46,14 @@ impl PinsIndex {
     ///
     /// Empty, missing, or corrupted data is treated as an empty set (best-effort).
     pub fn load(&self) -> AssetsResult<HashSet<String>> {
-        let bytes = self.res.read_all()?;
+        let mut buf = crate::byte_pool().get();
+        let n = self.res.read_into(&mut buf)?;
 
-        if bytes.is_empty() {
+        if n == 0 {
             return Ok(HashSet::new());
         }
 
-        let file: PinsIndexFile = match bincode::deserialize(&bytes) {
+        let file: PinsIndexFile = match bincode::deserialize(&buf) {
             Ok(file) => file,
             Err(_) => return Ok(HashSet::new()),
         };
@@ -211,8 +212,9 @@ mod tests {
         index.store(&pins).unwrap();
 
         // Read raw bytes and deserialize using bincode
-        let bytes = res.read_all().unwrap();
-        let file: PinsIndexFile = bincode::deserialize(&bytes).unwrap();
+        let mut buf = crate::byte_pool().get();
+        res.read_into(&mut buf).unwrap();
+        let file: PinsIndexFile = bincode::deserialize(&buf).unwrap();
 
         assert_eq!(file.version, 1);
         assert_eq!(file.pinned.len(), 1);

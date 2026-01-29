@@ -7,12 +7,10 @@
 //! Provides a unified `StorageResource` backed by `mmap-io` with:
 //! - Random-access `read_at`/`write_at` (streaming use-case)
 //! - Blocking `wait_range` via `Condvar`
-//! - Convenience `read_all`/`write_all` (atomic use-case)
+//! - Convenience `read_into`/`write_all` (atomic use-case)
 
 mod error;
 mod resource;
-mod streaming;
 
 pub use error::{StorageError, StorageResult};
-pub use resource::{ResourceExt, ResourceStatus, WaitOutcome};
-pub use streaming::{StorageOptions, StorageResource};
+pub use resource::{ResourceExt, ResourceStatus, StorageOptions, StorageResource, WaitOutcome};

@@ -203,17 +203,18 @@ impl<N: Net> FetchManager<N> {
         let key = ResourceKey::from_url(url);
         let res = self.assets.open_resource(&key)?;
 
-        let cached = res.read_all()?;
-        if !cached.is_empty() {
+        let mut buf = kithara_assets::byte_pool().get();
+        let n = res.read_into(&mut buf)?;
+        if n > 0 {
             debug!(
                 url = %url,
                 asset_root = %self.asset_root(),
                 rel_path = %rel_path,
-                bytes = cached.len(),
+                bytes = n,
                 resource_kind,
                 "kithara-hls: cache hit"
             );
-            return Ok(cached);
+            return Ok(Bytes::copy_from_slice(&buf));
         }
 
         debug!(

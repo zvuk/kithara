@@ -118,7 +118,7 @@ async-trait = "0.1.89"
 
 # storage (range maps + mmap)
 rangemap = { version = "1.7.1", features = ["serde1"] }
-mmap-io = { path = "/private/tmp/mmap-io", default-features = false }
+mmap-io = { version = "0.9", default-features = false }
 dashmap = "5.5.3"
 lru = "0.12"
 

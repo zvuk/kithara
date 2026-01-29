@@ -51,13 +51,14 @@ impl LruIndex {
     /// Missing/empty file is treated as an empty index.
     /// Invalid or corrupted data is treated as an empty index (best-effort).
     pub fn load(&self) -> AssetsResult<LruState> {
-        let bytes = self.res.read_all()?;
+        let mut buf = crate::byte_pool().get();
+        let n = self.res.read_into(&mut buf)?;
 
-        if bytes.is_empty() {
+        if n == 0 {
             return Ok(LruState::default());
         }
 
-        let file: LruIndexFile = match bincode::deserialize(&bytes) {
+        let file: LruIndexFile = match bincode::deserialize(&buf) {
             Ok(file) => file,
             Err(_) => return Ok(LruState::default()),
         };

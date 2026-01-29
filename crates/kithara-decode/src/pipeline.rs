@@ -17,10 +17,11 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 
 use crate::{
-    events::DecodeEvent,
-    symphonia::SymphoniaDecoder,
+    decoder::SymphoniaDecoder,
+    events::{DecodeEvent, DecoderEvent},
     types::{DecodeError, DecodeResult, PcmChunk, PcmSpec},
 };
+use kithara_bufpool::byte_pool;
 
 /// Command for decode worker.
 #[derive(Debug)]
@@ -68,7 +69,7 @@ impl<T: StreamType> SharedStream<T> {
         self.inner.lock().media_info()
     }
 
-    fn current_segment_range(&self) -> std::ops::Range<u64> {
+    fn current_segment_range(&self) -> Option<std::ops::Range<u64>> {
         self.inner.lock().current_segment_range()
     }
 }
@@ -379,8 +380,9 @@ impl<T: StreamType> StreamDecodeSource<T> {
         let Some(current_info) = self.shared_stream.media_info() else {
             return;
         };
-        if Some(&current_info) != self.cached_media_info.as_ref() {
-            let seg_range = self.shared_stream.current_segment_range();
+        if Some(&current_info) != self.cached_media_info.as_ref()
+            && let Some(seg_range) = self.shared_stream.current_segment_range()
+        {
             debug!(
                 old = ?self.cached_media_info,
                 new = ?current_info,
@@ -605,8 +607,13 @@ pub struct Decoder<S> {
     /// End of stream reached.
     eof: bool,
 
-    /// Decode events channel.
+    /// Decode events channel (used by `from_source`).
     decode_events_tx: broadcast::Sender<DecodeEvent>,
+
+    /// Unified events sender for `Decoder<Stream<T>>`.
+    /// Holds `broadcast::Sender<DecoderEvent<T::Event>>` type-erased.
+    /// `None` for non-stream decoders (created via `from_source`).
+    unified_events: Option<Box<dyn std::any::Any + Send + Sync>>,
 
     /// Cancellation token for graceful shutdown.
     cancel: Option<CancellationToken>,
@@ -655,12 +662,13 @@ impl DecodeOptions {
 /// Configuration for decoder with stream config.
 ///
 /// Generic over StreamType to include stream-specific configuration.
-#[derive(Debug, Clone)]
 pub struct DecoderConfig<T: StreamType> {
     /// Stream configuration (HlsConfig, FileConfig, etc.)
     pub stream: T::Config,
     /// Decode-specific options
     pub decode: DecodeOptions,
+    /// Unified events sender (optional — if not provided, one is created internally).
+    events_tx: Option<broadcast::Sender<DecoderEvent<T::Event>>>,
 }
 
 impl<T: StreamType> DecoderConfig<T> {
@@ -669,6 +677,7 @@ impl<T: StreamType> DecoderConfig<T> {
         Self {
             stream,
             decode: DecodeOptions::new(),
+            events_tx: None,
         }
     }
 
@@ -681,6 +690,18 @@ impl<T: StreamType> DecoderConfig<T> {
     /// Set format hint.
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.decode.hint = Some(hint.into());
+        self
+    }
+
+    /// Set unified events channel.
+    ///
+    /// Stream events and decode events are forwarded as `DecoderEvent::Stream(e)`
+    /// and `DecoderEvent::Decode(e)` respectively.
+    pub fn with_events(
+        mut self,
+        events_tx: broadcast::Sender<DecoderEvent<T::Event>>,
+    ) -> Self {
+        self.events_tx = Some(events_tx);
         self
     }
 }
@@ -732,6 +753,7 @@ where
             chunk_offset: 0,
             eof: false,
             decode_events_tx,
+            unified_events: None,
             cancel: None,
             _marker: std::marker::PhantomData,
         })
@@ -757,6 +779,14 @@ where
 // ============================================================================
 
 impl<S> Decoder<S> {
+    /// Subscribe to decode events.
+    ///
+    /// For `Decoder<Stream<T>>`, prefer `events()` which provides unified
+    /// stream + decode events.
+    pub fn decode_events(&self) -> broadcast::Receiver<DecodeEvent> {
+        self.decode_events_tx.subscribe()
+    }
+
     /// Get current audio specification.
     ///
     /// Returns sample rate and channel count for audio output setup.
@@ -904,15 +934,47 @@ where
     /// let decoder = Decoder::new(config).await?;
     /// sink.append(decoder);
     /// ```
-    pub async fn new(config: DecoderConfig<T>) -> Result<Self, DecodeError> {
+    pub async fn new(mut config: DecoderConfig<T>) -> Result<Self, DecodeError> {
         let cancel = CancellationToken::new();
 
+        // Create unified events channel (or use the one from config).
+        let unified_tx = config
+            .events_tx
+            .take()
+            .unwrap_or_else(|| broadcast::channel(64).0);
+
+        // Create stream (ensure_events is called internally by Stream::new).
         let mut stream = Stream::<T>::new(config.stream)
             .await
             .map_err(|e| DecodeError::Io(std::io::Error::other(e.to_string())))?;
 
+        // Forward stream events into unified channel.
+        if let Some(mut stream_events_rx) = stream.take_events_rx() {
+            let forward_tx = unified_tx.clone();
+            let forward_cancel = cancel.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = forward_cancel.cancelled() => break,
+                        result = stream_events_rx.recv() => {
+                            match result {
+                                Ok(event) => {
+                                    debug!("forwarding stream event to unified channel");
+                                    let _ = forward_tx.send(DecoderEvent::Stream(event));
+                                }
+                                Err(broadcast::error::RecvError::Lagged(n)) => {
+                                    warn!(skipped = n, "stream events receiver lagged");
+                                }
+                                Err(broadcast::error::RecvError::Closed) => break,
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
         // Trigger first segment load to get MediaInfo for proper decoder creation.
-        let mut probe_buf = [0u8; 1024];
+        let mut probe_buf = byte_pool().get_with(|b| b.resize(1024, 0));
         let _ = stream.read(&mut probe_buf);
 
         // Seek back to start
@@ -942,10 +1004,12 @@ where
         let epoch = Arc::new(AtomicU64::new(0));
         let (decode_events_tx, _) = broadcast::channel(64);
 
-        // Create emit closure for decode thread
-        let emit_tx = decode_events_tx.clone();
+        // Emit closure sends DecodeEvent to both raw and unified channels.
+        let emit_raw_tx = decode_events_tx.clone();
+        let emit_unified_tx = unified_tx.clone();
         let emit = Box::new(move |event: DecodeEvent| {
-            let _ = emit_tx.send(event);
+            let _ = emit_raw_tx.send(event.clone());
+            let _ = emit_unified_tx.send(DecoderEvent::Decode(event));
         });
 
         // Use StreamDecodeSource for format change detection
@@ -979,14 +1043,19 @@ where
             chunk_offset: 0,
             eof: false,
             decode_events_tx,
+            unified_events: Some(Box::new(unified_tx)),
             cancel: Some(cancel),
             _marker: std::marker::PhantomData,
         })
     }
 
-    /// Subscribe to decode events.
-    pub fn decode_events(&self) -> broadcast::Receiver<DecodeEvent> {
-        self.decode_events_tx.subscribe()
+    /// Subscribe to unified events (stream + decode).
+    pub fn events(&self) -> broadcast::Receiver<DecoderEvent<T::Event>> {
+        self.unified_events
+            .as_ref()
+            .and_then(|any| any.downcast_ref::<broadcast::Sender<DecoderEvent<T::Event>>>())
+            .expect("unified_events always set for Stream-based decoders")
+            .subscribe()
     }
 }
 

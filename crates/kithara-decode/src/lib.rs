@@ -42,19 +42,17 @@ mod decoder;
 mod events;
 mod pipeline;
 mod reader;
-mod symphonia;
 #[cfg(feature = "rodio")]
 mod sync;
 mod types;
 
 // Public API exports
-pub use decoder::InnerDecoder;
+pub use decoder::{CachedCodecInfo, InnerDecoder, SymphoniaDecoder};
 pub use events::{DecodeEvent, DecoderEvent};
 // Re-export types from kithara-stream for convenience
 pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 pub use pipeline::{DecodeOptions, Decoder, DecoderConfig};
 pub use reader::SourceReader;
-pub use symphonia::{CachedCodecInfo, SymphoniaDecoder};
 #[cfg(feature = "rodio")]
 pub use sync::AudioSyncReader;
 pub use types::{DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmSpec};

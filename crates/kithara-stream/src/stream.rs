@@ -12,6 +12,8 @@ use std::{
     io::{Read, Seek, SeekFrom},
 };
 
+use tokio::sync::broadcast;
+
 use crate::{MediaInfo, reader::Reader, source::Source};
 
 /// Defines a stream type and how to create it.
@@ -38,6 +40,13 @@ pub trait StreamType: Send + 'static {
     fn create(
         config: Self::Config,
     ) -> impl Future<Output = Result<Self::Source, Self::Error>> + Send;
+
+    /// Ensure an events channel exists in config and return a receiver.
+    ///
+    /// If the config already has `events_tx`, subscribes to it.
+    /// Otherwise creates a new channel and sets it on the config.
+    /// Called by `Stream::new()` before `create()`.
+    fn ensure_events(config: &mut Self::Config) -> broadcast::Receiver<Self::Event>;
 }
 
 /// Configuration for stream behavior.
@@ -66,16 +75,19 @@ pub struct Stream<T: StreamType> {
     reader: Reader<T::Source>,
     media_info: Option<MediaInfo>,
     pending_format_change: Option<MediaInfo>,
+    events_rx: Option<broadcast::Receiver<T::Event>>,
 }
 
 impl<T: StreamType> Stream<T> {
     /// Create a new stream from configuration.
-    pub async fn new(config: T::Config) -> Result<Self, T::Error> {
+    pub async fn new(mut config: T::Config) -> Result<Self, T::Error> {
+        let events_rx = T::ensure_events(&mut config);
         let source = T::create(config).await?;
         Ok(Self {
             reader: Reader::new(source),
             media_info: None,
             pending_format_change: None,
+            events_rx: Some(events_rx),
         })
     }
 
@@ -85,7 +97,16 @@ impl<T: StreamType> Stream<T> {
             reader: Reader::new(source),
             media_info: None,
             pending_format_change: None,
+            events_rx: None,
         }
+    }
+
+    /// Take the stream events receiver.
+    ///
+    /// Returns `Some` on first call, `None` on subsequent calls.
+    /// Used by `Decoder` to forward stream events into the unified channel.
+    pub fn take_events_rx(&mut self) -> Option<broadcast::Receiver<T::Event>> {
+        self.events_rx.take()
     }
 
     /// Get current read position.
@@ -120,8 +141,8 @@ impl<T: StreamType> Stream<T> {
         self.pending_format_change = Some(info);
     }
 
-    /// Get current segment byte range.
-    pub fn current_segment_range(&self) -> std::ops::Range<u64> {
+    /// Get current segment byte range (for segmented sources like HLS).
+    pub fn current_segment_range(&self) -> Option<std::ops::Range<u64>> {
         self.reader.current_segment_range()
     }
 }

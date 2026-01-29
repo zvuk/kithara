@@ -43,24 +43,25 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Opening HLS stream: {}", url);
 
-    // Create events channel
-    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
-
-    let hls_config = HlsConfig::new(url)
-        .with_abr(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            ..Default::default()
-        })
-        .with_events(events_tx);
-
     // Create decoder via target API
-    let config = DecoderConfig::<Hls>::new(hls_config);
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(128);
+    let hls_config = HlsConfig::new(url).with_abr(AbrOptions {
+        mode: AbrMode::Auto(Some(0)),
+        ..Default::default()
+    });
+    let config = DecoderConfig::<Hls>::new(hls_config).with_events(events_tx);
     let decoder = Decoder::<Stream<Hls>>::new(config).await?;
 
     // Log events
     tokio::spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
-            info!(?ev);
+        loop {
+            match events_rx.recv().await {
+                Ok(ev) => info!(?ev),
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    info!(skipped = n, "events receiver lagged");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
         }
     });
 
