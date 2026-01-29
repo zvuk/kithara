@@ -4,6 +4,7 @@
 
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
+use kithara_bufpool::SharedPool;
 use kithara_decode::{DecodeError, DecodeOptions, DecoderConfig};
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::NetOptions;
@@ -95,6 +96,15 @@ impl ResourceConfig {
     /// Set format hint (file extension like "mp3", "wav").
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.decode = self.decode.with_hint(hint);
+        self
+    }
+
+    /// Set shared PCM pool for temporary buffers.
+    ///
+    /// The pool is shared across the entire decode chain, eliminating
+    /// per-call allocations in `read_planar` and internal decode buffers.
+    pub fn with_pcm_pool(mut self, pool: SharedPool<32, Vec<f32>>) -> Self {
+        self.decode = self.decode.with_pcm_pool(pool);
         self
     }
 

@@ -10,7 +10,7 @@ use std::{
 };
 
 use kanal::Receiver;
-use kithara_bufpool::byte_pool;
+use kithara_bufpool::{SharedPool, byte_pool};
 use kithara_stream::{EpochValidator, Fetch, MediaInfo, Stream, StreamType};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
@@ -342,6 +342,7 @@ struct StreamDecodeSource<T: StreamType> {
     total_samples: u64,
     last_spec: Option<PcmSpec>,
     emit: Option<Box<dyn Fn(DecodeEvent) + Send>>,
+    pcm_pool: SharedPool<32, Vec<f32>>,
 }
 
 impl<T: StreamType> StreamDecodeSource<T> {
@@ -350,6 +351,7 @@ impl<T: StreamType> StreamDecodeSource<T> {
         decoder: SymphoniaDecoder,
         initial_media_info: Option<MediaInfo>,
         epoch: Arc<AtomicU64>,
+        pcm_pool: SharedPool<32, Vec<f32>>,
     ) -> Self {
         Self {
             shared_stream,
@@ -361,6 +363,7 @@ impl<T: StreamType> StreamDecodeSource<T> {
             total_samples: 0,
             last_spec: None,
             emit: None,
+            pcm_pool,
         }
     }
 
@@ -436,7 +439,8 @@ impl<T: StreamType> StreamDecodeSource<T> {
 
         // Use OffsetReader so Symphonia's internal positions are correctly mapped
         let offset_reader = OffsetReader::new(self.shared_stream.clone(), base_offset);
-        match SymphoniaDecoder::new_from_media_info(offset_reader, &new_info) {
+        match SymphoniaDecoder::new_from_media_info(offset_reader, &new_info, self.pcm_pool.clone())
+        {
             Ok(new_decoder) => {
                 self.decoder = new_decoder;
                 debug!("Decoder recreated successfully");
@@ -445,7 +449,7 @@ impl<T: StreamType> StreamDecodeSource<T> {
             Err(e) => {
                 warn!(?e, "Failed to recreate decoder, trying probe fallback");
                 let offset_reader = OffsetReader::new(self.shared_stream.clone(), base_offset);
-                match SymphoniaDecoder::new_with_probe(offset_reader, None) {
+                match SymphoniaDecoder::new_with_probe(offset_reader, None, self.pcm_pool.clone()) {
                     Ok(new_decoder) => {
                         self.decoder = new_decoder;
                         debug!("Decoder recreated with probe");
@@ -631,21 +635,47 @@ pub struct Decoder<S> {
     /// Cancellation token for graceful shutdown.
     cancel: Option<CancellationToken>,
 
+    /// Shared pool for temporary interleaved buffers (used in `read_planar`).
+    pcm_pool: SharedPool<32, Vec<f32>>,
+
     /// Marker for source type.
     _marker: std::marker::PhantomData<S>,
 }
 
 /// Decode-specific options.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone)]
 pub struct DecodeOptions {
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
     pub pcm_buffer_chunks: usize,
     /// Command channel capacity.
     pub command_channel_capacity: usize,
+    /// Broadcast event channel capacity.
+    pub event_channel_capacity: usize,
     /// Optional format hint (file extension like "mp3", "wav")
     pub hint: Option<String>,
     /// Media info hint for format detection
     pub media_info: Option<MediaInfo>,
+    /// Shared PCM pool for temporary buffers.
+    pub pcm_pool: Option<SharedPool<32, Vec<f32>>>,
+}
+
+impl std::fmt::Debug for DecodeOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecodeOptions")
+            .field("pcm_buffer_chunks", &self.pcm_buffer_chunks)
+            .field("command_channel_capacity", &self.command_channel_capacity)
+            .field("event_channel_capacity", &self.event_channel_capacity)
+            .field("hint", &self.hint)
+            .field("media_info", &self.media_info)
+            .field("pcm_pool", &self.pcm_pool.as_ref().map(|_| "SharedPool"))
+            .finish()
+    }
+}
+
+impl Default for DecodeOptions {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DecodeOptions {
@@ -654,9 +684,17 @@ impl DecodeOptions {
         Self {
             pcm_buffer_chunks: 10,
             command_channel_capacity: 4,
+            event_channel_capacity: 64,
             hint: None,
             media_info: None,
+            pcm_pool: None,
         }
+    }
+
+    /// Set event broadcast channel capacity.
+    pub fn with_event_channel_capacity(mut self, capacity: usize) -> Self {
+        self.event_channel_capacity = capacity;
+        self
     }
 
     /// Set format hint.
@@ -669,6 +707,19 @@ impl DecodeOptions {
     pub fn with_media_info(mut self, info: MediaInfo) -> Self {
         self.media_info = Some(info);
         self
+    }
+
+    /// Set shared PCM pool for temporary buffers.
+    pub fn with_pcm_pool(mut self, pool: SharedPool<32, Vec<f32>>) -> Self {
+        self.pcm_pool = Some(pool);
+        self
+    }
+
+    /// Resolve the PCM pool, creating a default if not set.
+    pub(crate) fn resolve_pcm_pool(&mut self) -> SharedPool<32, Vec<f32>> {
+        self.pcm_pool
+            .get_or_insert_with(|| SharedPool::<32, Vec<f32>>::new(64, 200_000))
+            .clone()
     }
 }
 
@@ -723,15 +774,17 @@ where
     /// Create a new decoder from any Read + Seek source.
     ///
     /// Spawns a blocking decode thread.
-    pub fn from_source(source: S, options: DecodeOptions) -> DecodeResult<Self> {
+    pub fn from_source(source: S, mut options: DecodeOptions) -> DecodeResult<Self> {
         let cmd_capacity = options.command_channel_capacity.max(1);
         let (cmd_tx, cmd_rx) = kanal::bounded(cmd_capacity);
         let (data_tx, data_rx) = kanal::bounded(options.pcm_buffer_chunks.max(1));
 
         let epoch = Arc::new(AtomicU64::new(0));
-        let (decode_events_tx, _) = broadcast::channel(64);
+        let event_capacity = options.event_channel_capacity.max(1);
+        let (decode_events_tx, _) = broadcast::channel(event_capacity);
+        let pcm_pool = options.resolve_pcm_pool();
 
-        let mut symphonia = Self::create_decoder(source, &options)?;
+        let mut symphonia = Self::create_decoder(source, &options, pcm_pool.clone())?;
         let initial_spec = symphonia.spec();
         let total_duration = symphonia.duration();
         let metadata = symphonia.metadata();
@@ -771,6 +824,7 @@ where
             decode_events_tx,
             unified_events: None,
             cancel: None,
+            pcm_pool,
             _marker: std::marker::PhantomData,
         })
     }
@@ -781,11 +835,15 @@ where
     }
 
     /// Create Symphonia decoder with appropriate method based on options.
-    fn create_decoder(source: S, options: &DecodeOptions) -> DecodeResult<SymphoniaDecoder> {
+    fn create_decoder(
+        source: S,
+        options: &DecodeOptions,
+        pcm_pool: SharedPool<32, Vec<f32>>,
+    ) -> DecodeResult<SymphoniaDecoder> {
         if let Some(ref media_info) = options.media_info {
-            SymphoniaDecoder::new_from_media_info(source, media_info)
+            SymphoniaDecoder::new_from_media_info(source, media_info, pcm_pool)
         } else {
-            SymphoniaDecoder::new_with_probe(source, options.hint.as_deref())
+            SymphoniaDecoder::new_with_probe(source, options.hint.as_deref(), pcm_pool)
         }
     }
 }
@@ -979,11 +1037,13 @@ where
     pub async fn new(mut config: DecoderConfig<T>) -> Result<Self, DecodeError> {
         let cancel = CancellationToken::new();
 
+        let event_capacity = config.decode.event_channel_capacity.max(1);
+
         // Create unified events channel (or use the one from config).
         let unified_tx = config
             .events_tx
             .take()
-            .unwrap_or_else(|| broadcast::channel(64).0);
+            .unwrap_or_else(|| broadcast::channel(event_capacity).0);
 
         // Create stream (ensure_events is called internally by Stream::new).
         let mut stream = Stream::<T>::new(config.stream)
@@ -1029,11 +1089,17 @@ where
         // Create shared stream for format change detection
         let shared_stream = SharedStream::new(stream);
 
+        let pcm_pool = config.decode.resolve_pcm_pool();
+
         // Create initial decoder
         let mut symphonia = if let Some(ref info) = initial_media_info {
-            SymphoniaDecoder::new_from_media_info(shared_stream.clone(), info)?
+            SymphoniaDecoder::new_from_media_info(shared_stream.clone(), info, pcm_pool.clone())?
         } else {
-            SymphoniaDecoder::new_with_probe(shared_stream.clone(), config.decode.hint.as_deref())?
+            SymphoniaDecoder::new_with_probe(
+                shared_stream.clone(),
+                config.decode.hint.as_deref(),
+                pcm_pool.clone(),
+            )?
         };
 
         let initial_spec = symphonia.spec();
@@ -1046,7 +1112,7 @@ where
         let (data_tx, data_rx) = kanal::bounded(options.pcm_buffer_chunks.max(1));
 
         let epoch = Arc::new(AtomicU64::new(0));
-        let (decode_events_tx, _) = broadcast::channel(64);
+        let (decode_events_tx, _) = broadcast::channel(event_capacity);
 
         // Emit closure sends DecodeEvent to both raw and unified channels.
         let emit_raw_tx = decode_events_tx.clone();
@@ -1062,6 +1128,7 @@ where
             symphonia,
             initial_media_info,
             Arc::clone(&epoch),
+            pcm_pool.clone(),
         )
         .with_emit(emit);
 
@@ -1093,6 +1160,7 @@ where
             decode_events_tx,
             unified_events: Some(Box::new(unified_tx)),
             cancel: Some(cancel),
+            pcm_pool,
             _marker: std::marker::PhantomData,
         })
     }
@@ -1119,6 +1187,27 @@ impl<S> Drop for Decoder<S> {
 impl<S: Send> PcmReader for Decoder<S> {
     fn read(&mut self, buf: &mut [f32]) -> usize {
         Decoder::read(self, buf)
+    }
+
+    fn read_planar(&mut self, output: &mut [&mut [f32]]) -> usize {
+        let channels = output.len();
+        if channels == 0 {
+            return 0;
+        }
+        let frames = output[0].len();
+        let total_samples = frames * channels;
+        let mut interleaved = self.pcm_pool.get_with(|b| {
+            b.clear();
+            b.resize(total_samples, 0.0);
+        });
+        let n = self.read(&mut interleaved);
+        let actual_frames = n / channels;
+        for frame in 0..actual_frames {
+            for (ch, out_ch) in output.iter_mut().enumerate() {
+                out_ch[frame] = interleaved[frame * channels + ch];
+            }
+        }
+        actual_frames
     }
 
     fn seek(&mut self, position: Duration) -> DecodeResult<()> {

@@ -55,6 +55,4 @@ pub use pipeline::{DecodeOptions, Decoder, DecoderConfig};
 pub use reader::SourceReader;
 #[cfg(feature = "rodio")]
 pub use sync::AudioSyncReader;
-pub use types::{
-    DecodeError, DecodeResult, DecoderSettings, PcmChunk, PcmReader, PcmSpec, TrackMetadata,
-};
+pub use types::{DecodeError, DecodeResult, PcmChunk, PcmReader, PcmSpec, TrackMetadata};
