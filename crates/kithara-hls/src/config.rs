@@ -30,6 +30,46 @@ pub struct KeyOptions {
     pub query_params: Option<HashMap<String, String>>,
     /// Headers to include in key requests.
     pub request_headers: Option<HashMap<String, String>>,
+    /// Callback for processing (e.g. decrypting) raw key bytes after fetch.
+    pub key_processor: Option<KeyProcessor>,
+}
+
+impl std::fmt::Debug for KeyOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyOptions")
+            .field("query_params", &self.query_params)
+            .field("request_headers", &self.request_headers)
+            .field(
+                "key_processor",
+                &self.key_processor.as_ref().map(|_| "KeyProcessor"),
+            )
+            .finish()
+    }
+}
+
+impl KeyOptions {
+    /// Create default key options.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set query parameters to append to key URLs.
+    pub fn with_query_params(mut self, params: HashMap<String, String>) -> Self {
+        self.query_params = Some(params);
+        self
+    }
+
+    /// Set headers to include in key requests.
+    pub fn with_request_headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.request_headers = Some(headers);
+        self
+    }
+
+    /// Set callback for processing raw key bytes after fetch.
+    pub fn with_key_processor(mut self, processor: KeyProcessor) -> Self {
+        self.key_processor = Some(processor);
+        self
+    }
 }
 
 /// Configuration for HLS streaming.

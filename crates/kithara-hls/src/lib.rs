@@ -43,7 +43,6 @@ mod source;
 pub use config::{HlsConfig, KeyContext, KeyOptions, KeyProcessor};
 pub use error::{HlsError, HlsResult};
 pub use events::HlsEvent;
-pub use fetch::EncryptionInfo;
 pub use inner::Hls;
 pub use kithara_abr::{
     AbrDecision, AbrMode, AbrOptions, AbrReason, ThroughputSample, Variant, VariantInfo,

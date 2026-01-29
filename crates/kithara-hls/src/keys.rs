@@ -59,6 +59,19 @@ impl KeyManager {
         }
     }
 
+    /// Create from `KeyOptions` and a shared fetch manager.
+    pub fn from_options(
+        fetch: Arc<DefaultFetchManager>,
+        options: crate::config::KeyOptions,
+    ) -> Self {
+        Self {
+            fetch,
+            key_processor: options.key_processor,
+            key_query_params: options.query_params,
+            key_request_headers: options.request_headers,
+        }
+    }
+
     pub async fn get_raw_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
         let mut fetch_url = url.clone();
         if let Some(ref params) = self.key_query_params {

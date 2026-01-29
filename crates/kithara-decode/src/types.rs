@@ -482,5 +482,4 @@ mod tests {
         let display_str = format!("{}", error);
         assert!(display_str.contains("end of stream"));
     }
-
 }
