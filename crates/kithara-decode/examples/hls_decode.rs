@@ -20,14 +20,14 @@ use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 1)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::default()
-                .add_directive("kithara_decode=debug".parse()?)
-                .add_directive("kithara_hls=debug".parse()?)
-                .add_directive("kithara_stream=debug".parse()?)
+                .add_directive("kithara_decode=info".parse()?)
+                .add_directive("kithara_hls=info".parse()?)
+                .add_directive("kithara_stream=info".parse()?)
                 .add_directive("kithara_net=warn".parse()?)
                 .add_directive("symphonia_format_isomp4=warn".parse()?)
                 .add_directive(LevelFilter::INFO.into()),
