@@ -61,6 +61,7 @@ impl StreamType for File {
             state.clone(),
             progress.clone(),
             state.events().clone(),
+            config.look_ahead_bytes,
         )
         .await;
 
@@ -85,6 +86,7 @@ pub struct FileDownloader {
     progress: Arc<Progress>,
     events_tx: broadcast::Sender<FileEvent>,
     total: Option<u64>,
+    look_ahead_bytes: u64,
 }
 
 impl FileDownloader {
@@ -93,6 +95,7 @@ impl FileDownloader {
         state: Arc<FileStreamState>,
         progress: Arc<Progress>,
         events_tx: broadcast::Sender<FileEvent>,
+        look_ahead_bytes: u64,
     ) -> Self {
         let url = state.url().clone();
         let total = state.len();
@@ -119,6 +122,7 @@ impl FileDownloader {
             progress,
             events_tx,
             total,
+            look_ahead_bytes,
         }
     }
 }
@@ -126,6 +130,21 @@ impl FileDownloader {
 #[async_trait]
 impl Downloader for FileDownloader {
     async fn step(&mut self) -> bool {
+        // Backpressure: wait if too far ahead of reader.
+        loop {
+            let advanced = self.progress.notified_reader_advance();
+            tokio::pin!(advanced);
+
+            let download_pos = self.progress.download_pos();
+            let reader_pos = self.progress.read_pos();
+
+            if download_pos.saturating_sub(reader_pos) <= self.look_ahead_bytes {
+                break;
+            }
+
+            advanced.await;
+        }
+
         let Some(result) = self.writer.next().await else {
             return false;
         };

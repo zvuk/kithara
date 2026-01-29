@@ -23,6 +23,8 @@ pub struct FileConfig {
     pub events_tx: Option<broadcast::Sender<FileEvent>>,
     /// Events broadcast channel capacity (used when events_tx is not provided).
     pub events_channel_capacity: usize,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    pub look_ahead_bytes: u64,
 }
 
 impl Default for FileConfig {
@@ -34,6 +36,7 @@ impl Default for FileConfig {
             cancel: None,
             events_tx: None,
             events_channel_capacity: 16,
+            look_ahead_bytes: 500_000,
         }
     }
 }
@@ -48,6 +51,7 @@ impl FileConfig {
             cancel: None,
             events_tx: None,
             events_channel_capacity: 16,
+            look_ahead_bytes: 500_000,
         }
     }
 
@@ -78,6 +82,12 @@ impl FileConfig {
     /// Set events broadcast channel capacity.
     pub fn with_events_channel_capacity(mut self, capacity: usize) -> Self {
         self.events_channel_capacity = capacity;
+        self
+    }
+
+    /// Set max bytes the downloader may be ahead of the reader before it pauses.
+    pub fn with_look_ahead_bytes(mut self, bytes: u64) -> Self {
+        self.look_ahead_bytes = bytes;
         self
     }
 }

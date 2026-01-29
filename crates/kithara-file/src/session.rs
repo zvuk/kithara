@@ -8,7 +8,7 @@ use kithara_assets::{
 };
 use kithara_net::{HttpClient, Net};
 use kithara_storage::{StreamingResource, StreamingResourceExt, WaitOutcome};
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 use url::Url;
@@ -84,10 +84,11 @@ impl FileStreamState {
 }
 
 /// Progress tracker for download and playback positions.
-#[derive(Debug)]
 pub struct Progress {
     read_pos: std::sync::atomic::AtomicU64,
     download_pos: std::sync::atomic::AtomicU64,
+    /// Source → Downloader: reader advanced, may resume downloading.
+    reader_advanced: Notify,
 }
 
 impl Progress {
@@ -95,17 +96,40 @@ impl Progress {
         Self {
             read_pos: std::sync::atomic::AtomicU64::new(0),
             download_pos: std::sync::atomic::AtomicU64::new(0),
+            reader_advanced: Notify::new(),
         }
+    }
+
+    pub fn read_pos(&self) -> u64 {
+        use std::sync::atomic::Ordering;
+        self.read_pos.load(Ordering::Acquire)
+    }
+
+    pub fn download_pos(&self) -> u64 {
+        use std::sync::atomic::Ordering;
+        self.download_pos.load(Ordering::Acquire)
     }
 
     pub fn set_read_pos(&self, v: u64) {
         use std::sync::atomic::Ordering;
-        self.read_pos.store(v, Ordering::Relaxed);
+        self.read_pos.store(v, Ordering::Release);
+        self.reader_advanced.notify_one();
     }
 
     pub fn set_download_pos(&self, v: u64) {
         use std::sync::atomic::Ordering;
-        self.download_pos.store(v, Ordering::Relaxed);
+        self.download_pos.store(v, Ordering::Release);
+    }
+
+    /// Register for reader advance notification.
+    /// Must be called BEFORE checking positions to avoid race.
+    pub fn notified_reader_advance(&self) -> tokio::sync::futures::Notified<'_> {
+        self.reader_advanced.notified()
+    }
+
+    /// Signal that the reader needs data (wake paused downloader).
+    pub fn signal_reader_advanced(&self) {
+        self.reader_advanced.notify_one();
     }
 }
 
@@ -152,6 +176,9 @@ impl kithara_stream::Source for FileSource {
         range: std::ops::Range<u64>,
     ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
         use kithara_stream::StreamError;
+
+        // Signal downloader that reader needs data (wake if paused by backpressure).
+        self.progress.signal_reader_advanced();
 
         self.res
             .wait_range(range)
