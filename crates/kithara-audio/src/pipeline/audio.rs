@@ -243,12 +243,13 @@ impl<S> Audio<S> {
         self.samples_read = 0;
         self.seek_base = position;
 
-        // Reset preload flag - first read after seek should be blocking
-        // to ensure we don't skip over the new data
+        // Reset preload flag - first read after seek will be blocking.
+        // This ensures fill_buffer() uses recv() instead of try_recv(),
+        // which will:
+        // 1. Block until new data arrives
+        // 2. Skip stale chunks (epoch validation)
+        // 3. Return first valid chunk with new epoch
         self.preloaded = false;
-
-        // Drain stale chunks from channel to unblock worker
-        while let Ok(Some(_)) = self.pcm_rx.try_recv() {}
 
         debug!(?position, epoch = new_epoch, "seek initiated");
         Ok(())
