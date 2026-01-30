@@ -5,6 +5,7 @@ use std::{sync::Arc, time::Duration};
 use kithara_decode::PcmChunk;
 use kithara_stream::Fetch;
 use tokio::sync::Notify;
+use tokio_util::sync::CancellationToken;
 use tracing::trace;
 
 use crate::traits::AudioEffect;
@@ -29,12 +30,15 @@ pub(super) trait AudioWorkerSource: Send + 'static {
 ///
 /// `preload_chunks` controls how many chunks must be sent before `preload_notify`
 /// fires. This ensures the channel has enough data for non-blocking reads.
+///
+/// `cancel` token signals graceful shutdown when Audio is dropped.
 pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     mut source: S,
     cmd_rx: kanal::Receiver<S::Command>,
     data_tx: kanal::Sender<Fetch<S::Chunk>>,
     preload_notify: Arc<Notify>,
     preload_chunks: usize,
+    cancel: CancellationToken,
 ) {
     trace!("audio worker started");
     let mut at_eof = false;
@@ -42,6 +46,11 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     let mut chunks_sent: usize = 0;
 
     loop {
+        // Check for cancellation (Audio dropped)
+        if cancel.is_cancelled() {
+            trace!("audio worker cancelled");
+            return;
+        }
         // Drain pending commands
         let mut cmd_received = false;
         while let Ok(Some(cmd)) = cmd_rx.try_recv() {
@@ -77,6 +86,10 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
                             break; // Discard stale chunk, refetch
                         }
                         Ok(None) => {
+                            if cancel.is_cancelled() {
+                                trace!("audio worker cancelled during backpressure");
+                                return;
+                            }
                             std::thread::sleep(std::time::Duration::from_micros(100));
                         }
                         Err(_) => return,
@@ -101,6 +114,10 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
                     at_eof = false;
                 }
                 Ok(None) => {
+                    if cancel.is_cancelled() {
+                        trace!("audio worker cancelled at EOF");
+                        return;
+                    }
                     std::thread::sleep(std::time::Duration::from_millis(100));
                 }
                 Err(_) => break,

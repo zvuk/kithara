@@ -486,6 +486,7 @@ where
         let worker_notify = preload_notify.clone();
 
         let worker_preload_chunks = preload_chunks.max(1);
+        let worker_cancel = cancel.clone();
 
         let worker_thread = std::thread::Builder::new()
             .name("kithara-audio".to_string())
@@ -496,6 +497,7 @@ where
                     data_tx,
                     worker_notify,
                     worker_preload_chunks,
+                    worker_cancel,
                 );
             })
             .map_err(|e| {
