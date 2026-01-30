@@ -2,7 +2,7 @@
 
 //! Configuration for [`Resource`](crate::Resource).
 
-use std::path::PathBuf;
+use std::{num::NonZeroU32, path::PathBuf};
 
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
@@ -166,6 +166,12 @@ impl ResourceConfig {
     /// per-call allocations in `read_planar` and internal decode buffers.
     pub fn with_pcm_pool(mut self, pool: SharedPool<32, Vec<f32>>) -> Self {
         self.decode = self.decode.with_pcm_pool(pool);
+        self
+    }
+
+    /// Set target sample rate of the audio host (for future resampling).
+    pub fn with_host_sample_rate(mut self, sample_rate: NonZeroU32) -> Self {
+        self.decode = self.decode.with_host_sample_rate(sample_rate);
         self
     }
 

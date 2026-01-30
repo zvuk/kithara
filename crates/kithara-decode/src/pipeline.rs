@@ -2,9 +2,10 @@
 
 use std::{
     io::{Read, Seek, SeekFrom},
+    num::NonZeroU32,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicU32, AtomicU64, Ordering},
     },
     time::Duration,
 };
@@ -638,6 +639,10 @@ pub struct Decoder<S> {
     /// Shared pool for temporary interleaved buffers (used in `read_planar`).
     pcm_pool: SharedPool<32, Vec<f32>>,
 
+    /// Target sample rate of the audio host (shared for dynamic updates).
+    /// 0 means "not set".
+    host_sample_rate: Arc<AtomicU32>,
+
     /// Marker for source type.
     _marker: std::marker::PhantomData<S>,
 }
@@ -657,6 +662,8 @@ pub struct DecodeOptions {
     pub media_info: Option<MediaInfo>,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<SharedPool<32, Vec<f32>>>,
+    /// Target sample rate of the audio host (for future resampling).
+    pub host_sample_rate: Option<NonZeroU32>,
 }
 
 impl std::fmt::Debug for DecodeOptions {
@@ -668,6 +675,7 @@ impl std::fmt::Debug for DecodeOptions {
             .field("hint", &self.hint)
             .field("media_info", &self.media_info)
             .field("pcm_pool", &self.pcm_pool.as_ref().map(|_| "SharedPool"))
+            .field("host_sample_rate", &self.host_sample_rate)
             .finish()
     }
 }
@@ -688,6 +696,7 @@ impl DecodeOptions {
             hint: None,
             media_info: None,
             pcm_pool: None,
+            host_sample_rate: None,
         }
     }
 
@@ -712,6 +721,12 @@ impl DecodeOptions {
     /// Set shared PCM pool for temporary buffers.
     pub fn with_pcm_pool(mut self, pool: SharedPool<32, Vec<f32>>) -> Self {
         self.pcm_pool = Some(pool);
+        self
+    }
+
+    /// Set target sample rate of the audio host.
+    pub fn with_host_sample_rate(mut self, sample_rate: NonZeroU32) -> Self {
+        self.host_sample_rate = Some(sample_rate);
         self
     }
 
@@ -783,6 +798,9 @@ where
         let event_capacity = options.event_channel_capacity.max(1);
         let (decode_events_tx, _) = broadcast::channel(event_capacity);
         let pcm_pool = options.resolve_pcm_pool();
+        let host_sample_rate = Arc::new(AtomicU32::new(
+            options.host_sample_rate.map(|v| v.get()).unwrap_or(0),
+        ));
 
         let mut symphonia = Self::create_decoder(source, &options, pcm_pool.clone())?;
         let initial_spec = symphonia.spec();
@@ -825,6 +843,7 @@ where
             unified_events: None,
             cancel: None,
             pcm_pool,
+            host_sample_rate,
             _marker: std::marker::PhantomData,
         })
     }
@@ -1113,6 +1132,9 @@ where
 
         let epoch = Arc::new(AtomicU64::new(0));
         let (decode_events_tx, _) = broadcast::channel(event_capacity);
+        let host_sample_rate = Arc::new(AtomicU32::new(
+            options.host_sample_rate.map(|v| v.get()).unwrap_or(0),
+        ));
 
         // Emit closure sends DecodeEvent to both raw and unified channels.
         let emit_raw_tx = decode_events_tx.clone();
@@ -1161,6 +1183,7 @@ where
             unified_events: Some(Box::new(unified_tx)),
             cancel: Some(cancel),
             pcm_pool,
+            host_sample_rate,
             _marker: std::marker::PhantomData,
         })
     }
@@ -1236,6 +1259,11 @@ impl<S: Send> PcmReader for Decoder<S> {
 
     fn decode_events(&self) -> broadcast::Receiver<DecodeEvent> {
         Decoder::decode_events(self)
+    }
+
+    fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
+        self.host_sample_rate
+            .store(sample_rate.get(), Ordering::Relaxed);
     }
 }
 

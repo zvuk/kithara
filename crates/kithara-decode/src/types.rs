@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc, time::Duration};
+use std::{fmt, num::NonZeroU32, sync::Arc, time::Duration};
 
 use symphonia::core::errors::Error as SymphoniaError;
 use thiserror::Error;
@@ -166,6 +166,11 @@ pub trait PcmReader: Send {
 
     /// Subscribe to decode events.
     fn decode_events(&self) -> tokio::sync::broadcast::Receiver<crate::DecodeEvent>;
+
+    /// Set the target sample rate of the audio host.
+    ///
+    /// Used for dynamic updates when the host sample rate changes at runtime.
+    fn set_host_sample_rate(&self, _sample_rate: NonZeroU32) {}
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 
 //! Type-erased resource: unified wrapper over decoded audio streams.
 
-use std::time::Duration;
+use std::{num::NonZeroU32, time::Duration};
 
 use kithara_decode::{
     DecodeEvent, DecodeResult, Decoder, DecoderConfig, DecoderEvent, PcmReader, PcmSpec,
@@ -157,6 +157,14 @@ impl Resource {
     /// Get track metadata.
     pub fn metadata(&self) -> &TrackMetadata {
         self.inner.metadata()
+    }
+
+    /// Set the target sample rate of the audio host.
+    ///
+    /// Updates the decoder's host sample rate for future resampling support.
+    /// Can be called at any time to reflect host sample rate changes.
+    pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
+        self.inner.set_host_sample_rate(sample_rate);
     }
 
     // -- Internal helpers -----------------------------------------------------
