@@ -8,16 +8,16 @@ use std::sync::Arc;
 use futures::StreamExt;
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_net::HttpClient;
-use kithara_storage::{ResourceExt, ResourceStatus};
+use kithara_storage::{OpenMode, ResourceExt, ResourceStatus, StorageOptions, StorageResource};
 use kithara_stream::{Backend, Downloader, StreamType, Writer, WriterItem};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    config::FileConfig,
+    config::{FileConfig, FileSrc},
     error::SourceError,
     events::FileEvent,
-    session::{FileSource, FileStreamState, Progress},
+    session::{FileResource, FileSource, FileStreamState, Progress},
 };
 
 /// Marker type for file streaming.
@@ -41,8 +41,64 @@ impl StreamType for File {
     }
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        let asset_root = asset_root_for_url(&config.url);
         let cancel = config.cancel.clone().unwrap_or_default();
+        let src = config.src.clone();
+
+        match src {
+            FileSrc::Local(path) => Self::create_local(path, config, cancel),
+            FileSrc::Remote(url) => Self::create_remote(url, config, cancel).await,
+        }
+    }
+}
+
+impl File {
+    /// Create a source for a local file.
+    ///
+    /// Opens the file directly via `StorageResource` in `ReadOnly` mode,
+    /// skipping network, AssetStore, and background downloader entirely.
+    fn create_local(
+        path: std::path::PathBuf,
+        config: FileConfig,
+        cancel: CancellationToken,
+    ) -> Result<FileSource, SourceError> {
+        if !path.exists() {
+            return Err(SourceError::InvalidPath(format!(
+                "file not found: {}",
+                path.display()
+            )));
+        }
+
+        let opts = StorageOptions {
+            path,
+            initial_len: None,
+            mode: OpenMode::ReadOnly,
+            cancel,
+        };
+        let resource = StorageResource::open(opts)?;
+        let len = resource.len();
+
+        let events = config
+            .events_tx
+            .unwrap_or_else(|| broadcast::channel(config.events_channel_capacity.max(1)).0);
+
+        let progress = Arc::new(Progress::new());
+        // Local file is fully available — mark download as complete.
+        let total = len.unwrap_or(0);
+        progress.set_download_pos(total);
+        let _ = events.send(FileEvent::DownloadComplete { total_bytes: total });
+
+        let source = FileSource::new(FileResource::Local(resource), progress, events, len);
+
+        Ok(source)
+    }
+
+    /// Create a source for a remote file (HTTP/HTTPS).
+    async fn create_remote(
+        url: url::Url,
+        config: FileConfig,
+        cancel: CancellationToken,
+    ) -> Result<FileSource, SourceError> {
+        let asset_root = asset_root_for_url(&url, config.name.as_deref());
 
         let store = AssetStoreBuilder::new()
             .root_dir(&config.store.cache_dir)
@@ -56,7 +112,7 @@ impl StreamType for File {
         let state = FileStreamState::create(
             Arc::new(store),
             net_client.clone(),
-            config.url,
+            url,
             cancel.clone(),
             config.events_tx.clone(),
             config.events_channel_capacity,
@@ -92,7 +148,7 @@ impl StreamType for File {
 
         // Create source
         let source = FileSource::new(
-            state.res().clone(),
+            FileResource::Asset(state.res().clone()),
             progress,
             state.events().clone(),
             state.len(),

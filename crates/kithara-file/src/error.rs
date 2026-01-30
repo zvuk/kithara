@@ -14,4 +14,7 @@ pub enum SourceError {
 
     #[error("Storage error: {0}")]
     Storage(#[from] StorageError),
+
+    #[error("Invalid path: {0}")]
+    InvalidPath(String),
 }

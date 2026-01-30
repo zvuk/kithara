@@ -39,7 +39,7 @@ impl StreamType for Hls {
     }
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        let asset_root = asset_root_for_url(&config.url);
+        let asset_root = asset_root_for_url(&config.url, config.name.as_deref());
         let cancel = config.cancel.clone().unwrap_or_default();
         let net = HttpClient::new(config.net.clone());
 

@@ -7,38 +7,50 @@
 > Built with AI, tested by a human. Vibe-coded -- but with care.
 > Contributions, reviews, and fresh eyes are welcome.
 
-Rust workspace for a **networking + decoding** library (not a full player). Provides transport primitives for progressive HTTP and HLS (VOD), a decoding layer producing PCM, and a persistent disk cache for offline playback.
+Rust library for networking and decoding. Provides transport primitives for progressive HTTP and HLS (VOD), a decoding layer producing PCM, and a persistent disk cache for offline playback.
 
 Design goal: keep components modular so they can be reused independently and composed into a full engine/player.
 
 ## Crate Architecture
 
-```
-kithara-file     kithara-hls
-     |                |
-     +----> kithara-net <----+
-                |
-          kithara-assets
-                |
-          kithara-stream -----> kithara-decode
-                |
-          kithara-storage
+```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+graph TD
+    K[kithara] --> AU[kithara-audio]
+    AU --> DEC[kithara-decode]
+    DEC --> STR[kithara-stream]
+    STR --> STOR[kithara-storage]
 
-  kithara-bufpool (shared pool, used across all crates)
-  kithara-abr     (protocol-agnostic ABR, used by kithara-hls)
+    subgraph Protocols
+        FILE[kithara-file]
+        HLS[kithara-hls]
+    end
+
+    FILE --> NET[kithara-net]
+    FILE --> ASSETS[kithara-assets]
+    FILE --> STR
+    HLS --> NET
+    HLS --> ASSETS
+    HLS --> STR
+    HLS --> ABR[kithara-abr]
+    ASSETS --> STOR
 ```
+
+`kithara-bufpool` -- cross-cutting: используется всеми крейтами для zero-allocation буферов.
 
 | Crate | Role |
 |-------|------|
-| **kithara-bufpool** | Generic sharded buffer pool for zero-allocation hot paths |
-| **kithara-storage** | Unified `StorageResource` backed by `mmap-io` with sync random-access I/O |
-| **kithara-assets** | Persistent disk cache with lease/pin semantics and eviction |
-| **kithara-net** | HTTP networking with retry, timeout, and streaming |
-| **kithara-stream** | Byte-stream orchestration bridging async I/O to sync `Read + Seek` |
+| **kithara** | Facade: unified `Resource` API with auto-detection (file / HLS) |
+| **kithara-audio** | Audio pipeline: OS thread worker, effects chain, resampling |
+| **kithara-decode** | Synchronous audio decoding via Symphonia |
+| **kithara-stream** | Async-to-sync byte-stream bridge (`Read + Seek`) |
 | **kithara-file** | Progressive file download (MP3, AAC, etc.) |
 | **kithara-hls** | HLS VOD orchestration with ABR, caching, and offline support |
 | **kithara-abr** | Adaptive bitrate algorithm (protocol-agnostic) |
-| **kithara-decode** | Audio decoding via Symphonia with format change support |
+| **kithara-net** | HTTP networking with retry, timeout, and streaming |
+| **kithara-assets** | Persistent disk cache with lease/pin semantics and eviction |
+| **kithara-storage** | Unified `StorageResource` backed by `mmap-io` |
+| **kithara-bufpool** | Sharded buffer pool for zero-allocation hot paths |
 
 ## Getting Started
 
@@ -58,15 +70,17 @@ cargo clippy --workspace -- -D warnings
 
 Each crate has its own `README.md`:
 
-- [`kithara-bufpool`](crates/kithara-bufpool/README.md)
-- [`kithara-storage`](crates/kithara-storage/README.md)
-- [`kithara-assets`](crates/kithara-assets/README.md)
-- [`kithara-net`](crates/kithara-net/README.md)
-- [`kithara-stream`](crates/kithara-stream/README.md)
-- [`kithara-file`](crates/kithara-file/README.md)
-- [`kithara-hls`](crates/kithara-hls/README.md)
-- [`kithara-abr`](crates/kithara-abr/README.md)
-- [`kithara-decode`](crates/kithara-decode/README.md)
+- [`kithara`](crates/kithara/README.md) -- facade
+- [`kithara-audio`](crates/kithara-audio/README.md) -- audio pipeline
+- [`kithara-decode`](crates/kithara-decode/README.md) -- Symphonia decoder
+- [`kithara-stream`](crates/kithara-stream/README.md) -- async-to-sync bridge
+- [`kithara-file`](crates/kithara-file/README.md) -- progressive file
+- [`kithara-hls`](crates/kithara-hls/README.md) -- HLS VOD
+- [`kithara-abr`](crates/kithara-abr/README.md) -- adaptive bitrate
+- [`kithara-net`](crates/kithara-net/README.md) -- HTTP networking
+- [`kithara-assets`](crates/kithara-assets/README.md) -- disk cache
+- [`kithara-storage`](crates/kithara-storage/README.md) -- mmap storage
+- [`kithara-bufpool`](crates/kithara-bufpool/README.md) -- buffer pool
 
 ## Rules
 

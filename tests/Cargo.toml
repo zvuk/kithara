@@ -9,8 +9,9 @@ publish = false
 [dependencies]
 # All kithara crates
 kithara-abr = { workspace = true }
-kithara-assets = { workspace = true, features = ["internal"] }
+kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
+kithara-audio = { workspace = true }
 kithara-decode = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
@@ -70,3 +71,41 @@ async-trait = { workspace = true }
 # Storage
 mmap-io = { workspace = true }
 dashmap = { workspace = true }
+
+# Performance monitoring (optional)
+hotpath = { workspace = true, optional = true }
+
+[features]
+perf = [
+    "dep:hotpath",
+    "kithara-audio/perf",
+    "kithara-decode/perf",
+    "kithara-bufpool/perf",
+    "kithara-hls/perf",
+]
+
+# Performance test binaries
+[[test]]
+name = "resampler"
+path = "perf/resampler.rs"
+required-features = ["perf"]
+
+[[test]]
+name = "decoder"
+path = "perf/decoder.rs"
+required-features = ["perf"]
+
+[[test]]
+name = "pool"
+path = "perf/pool.rs"
+required-features = ["perf"]
+
+[[test]]
+name = "abr"
+path = "perf/abr.rs"
+required-features = ["perf"]
+
+[[test]]
+name = "storage"
+path = "perf/storage.rs"
+required-features = ["perf"]

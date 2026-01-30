@@ -1,0 +1,42 @@
+[package]
+name = "kithara"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+kithara-audio = { workspace = true }
+kithara-decode = { workspace = true }
+kithara-stream = { workspace = true }
+kithara-file = { workspace = true, optional = true }
+kithara-hls = { workspace = true, optional = true }
+kithara-assets = { workspace = true, optional = true }
+kithara-storage = { workspace = true, optional = true }
+kithara-net = { workspace = true, optional = true }
+kithara-abr = { workspace = true, optional = true }
+kithara-bufpool = { workspace = true }
+rodio = { workspace = true, optional = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+url = { workspace = true }
+
+[features]
+default = ["file", "hls"]
+file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
+hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net"]
+assets = ["dep:kithara-assets", "dep:kithara-storage"]
+net = ["dep:kithara-net"]
+bufpool = []
+rodio = ["dep:rodio", "kithara-audio/rodio"]
+full = ["file", "hls", "assets", "net", "bufpool"]
+
+[dev-dependencies]
+tokio = { workspace = true }
+rstest = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rodio = { workspace = true }
+
+[[example]]
+name = "resource_play"
+required-features = ["rodio"]

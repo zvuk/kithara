@@ -1,13 +1,13 @@
 #![forbid(unsafe_code)]
 
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use kithara_assets::{
     AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard, LeaseResource,
     ProcessedResource, ProcessingAssets,
 };
 use kithara_net::{HttpClient, Net};
-use kithara_storage::{ResourceExt, StorageResource, WaitOutcome};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageResource, StorageResult, WaitOutcome};
 use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
@@ -19,6 +19,87 @@ pub(crate) type AssetResourceType = LeaseResource<
     ProcessedResource<StorageResource, ()>,
     LeaseGuard<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, ()>>>,
 >;
+
+/// Unified file resource: either a remote asset (via AssetStore) or a local file.
+#[derive(Clone, Debug)]
+pub(crate) enum FileResource {
+    /// Remote file — managed by AssetStore (caching, eviction, leases).
+    Asset(AssetResourceType),
+    /// Local file — direct StorageResource in ReadOnly mode.
+    Local(StorageResource),
+}
+
+impl ResourceExt for FileResource {
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
+        match self {
+            Self::Asset(r) => r.read_at(offset, buf),
+            Self::Local(r) => r.read_at(offset, buf),
+        }
+    }
+
+    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
+        match self {
+            Self::Asset(r) => r.write_at(offset, data),
+            Self::Local(r) => r.write_at(offset, data),
+        }
+    }
+
+    fn wait_range(&self, range: std::ops::Range<u64>) -> StorageResult<WaitOutcome> {
+        match self {
+            Self::Asset(r) => r.wait_range(range),
+            Self::Local(r) => r.wait_range(range),
+        }
+    }
+
+    fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
+        match self {
+            Self::Asset(r) => r.commit(final_len),
+            Self::Local(r) => r.commit(final_len),
+        }
+    }
+
+    fn fail(&self, reason: String) {
+        match self {
+            Self::Asset(r) => r.fail(reason),
+            Self::Local(r) => r.fail(reason),
+        }
+    }
+
+    fn path(&self) -> &Path {
+        match self {
+            Self::Asset(r) => r.path(),
+            Self::Local(r) => r.path(),
+        }
+    }
+
+    fn len(&self) -> Option<u64> {
+        match self {
+            Self::Asset(r) => r.len(),
+            Self::Local(r) => r.len(),
+        }
+    }
+
+    fn status(&self) -> ResourceStatus {
+        match self {
+            Self::Asset(r) => r.status(),
+            Self::Local(r) => r.status(),
+        }
+    }
+
+    fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
+        match self {
+            Self::Asset(r) => r.read_into(buf),
+            Self::Local(r) => r.read_into(buf),
+        }
+    }
+
+    fn write_all(&self, data: &[u8]) -> StorageResult<()> {
+        match self {
+            Self::Asset(r) => r.write_all(data),
+            Self::Local(r) => r.write_all(data),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileStreamState {
@@ -140,7 +221,7 @@ impl Default for Progress {
 ///
 /// Wraps storage resource with progress tracking and event emission.
 pub struct FileSource {
-    res: AssetResourceType,
+    res: FileResource,
     progress: Arc<Progress>,
     events_tx: broadcast::Sender<FileEvent>,
     len: Option<u64>,
@@ -148,8 +229,8 @@ pub struct FileSource {
 
 impl FileSource {
     /// Create new file source.
-    pub fn new(
-        res: AssetResourceType,
+    pub(crate) fn new(
+        res: FileResource,
         progress: Arc<Progress>,
         events_tx: broadcast::Sender<FileEvent>,
         len: Option<u64>,

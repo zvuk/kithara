@@ -7,7 +7,7 @@ use std::{
     ops::Range,
 };
 
-use kithara_decode::SourceReader;
+use kithara_audio::SourceReader;
 use kithara_stream::{MediaInfo, Source, StreamResult, WaitOutcome};
 use rstest::{fixture, rstest};
 

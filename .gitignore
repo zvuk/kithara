@@ -41,3 +41,7 @@ lcov.info
 .env
 .env.*
 dhat-heap.json
+
+# Performance monitoring outputs
+target/hotpath-*.json
+hotpath-*.json

@@ -1,14 +1,14 @@
 #![forbid(unsafe_code)]
 
-//! Decoder events for monitoring.
+//! Audio pipeline events for monitoring.
 
 use std::time::Duration;
 
-use crate::types::PcmSpec;
+use kithara_decode::PcmSpec;
 
-/// Events from the decoder.
+/// Events from the audio pipeline.
 #[derive(Debug, Clone)]
-pub enum DecodeEvent {
+pub enum AudioEvent {
     /// Audio format detected.
     FormatDetected { spec: PcmSpec },
     /// Audio format changed (ABR switch).
@@ -19,13 +19,13 @@ pub enum DecodeEvent {
     EndOfStream,
 }
 
-/// Unified decoder event stream.
+/// Unified audio pipeline event stream.
 ///
 /// `E` is the stream event type (`HlsEvent`, `FileEvent`).
 #[derive(Debug, Clone)]
-pub enum DecoderEvent<E> {
+pub enum AudioPipelineEvent<E> {
     /// Event from the underlying stream.
     Stream(E),
-    /// Event from the decoder.
-    Decode(DecodeEvent),
+    /// Event from the audio pipeline.
+    Audio(AudioEvent),
 }

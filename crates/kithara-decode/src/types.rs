@@ -1,7 +1,20 @@
-use std::fmt;
+use std::{fmt, sync::Arc};
 
 use symphonia::core::errors::Error as SymphoniaError;
 use thiserror::Error;
+
+/// Audio track metadata extracted from Symphonia tags.
+#[derive(Debug, Clone, Default)]
+pub struct TrackMetadata {
+    /// Track title.
+    pub title: Option<String>,
+    /// Artist name.
+    pub artist: Option<String>,
+    /// Album name.
+    pub album: Option<String>,
+    /// Album artwork (JPEG/PNG bytes).
+    pub artwork: Option<Arc<Vec<u8>>>,
+}
 
 /// Main decode error type
 #[derive(Debug, Error)]
@@ -99,13 +112,6 @@ impl<T> PcmChunk<T> {
     pub fn into_samples(self) -> Vec<T> {
         self.pcm
     }
-}
-
-/// Decoder settings
-#[derive(Clone, Debug, PartialEq, Default)]
-pub struct DecoderSettings {
-    /// Enable gapless playback when supported by format
-    pub enable_gapless: bool,
 }
 
 #[cfg(test)]
@@ -421,66 +427,5 @@ mod tests {
 
         let display_str = format!("{}", error);
         assert!(display_str.contains("end of stream"));
-    }
-
-    // ============================================================================
-    // DecoderSettings Tests
-    // ============================================================================
-
-    #[test]
-    fn test_decoder_settings_default() {
-        let settings = DecoderSettings::default();
-        assert!(!settings.enable_gapless);
-    }
-
-    #[test]
-    fn test_decoder_settings_clone() {
-        let settings = DecoderSettings {
-            enable_gapless: true,
-        };
-        let cloned = settings.clone();
-        assert_eq!(settings, cloned);
-    }
-
-    #[rstest]
-    #[case(true, true, true)]
-    #[case(false, false, true)]
-    #[case(true, false, false)]
-    #[case(false, true, false)]
-    fn test_decoder_settings_partial_eq(
-        #[case] gapless1: bool,
-        #[case] gapless2: bool,
-        #[case] should_equal: bool,
-    ) {
-        let settings1 = DecoderSettings {
-            enable_gapless: gapless1,
-        };
-        let settings2 = DecoderSettings {
-            enable_gapless: gapless2,
-        };
-        assert_eq!(settings1 == settings2, should_equal);
-    }
-
-    #[test]
-    fn test_decoder_settings_debug() {
-        let settings = DecoderSettings {
-            enable_gapless: true,
-        };
-        let debug_str = format!("{:?}", settings);
-        assert!(debug_str.contains("DecoderSettings"));
-        assert!(debug_str.contains("true"));
-    }
-
-    #[test]
-    fn test_decoder_settings_construction() {
-        let settings_enabled = DecoderSettings {
-            enable_gapless: true,
-        };
-        assert!(settings_enabled.enable_gapless);
-
-        let settings_disabled = DecoderSettings {
-            enable_gapless: false,
-        };
-        assert!(!settings_disabled.enable_gapless);
     }
 }

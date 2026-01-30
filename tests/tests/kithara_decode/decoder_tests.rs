@@ -5,11 +5,16 @@
 use std::io::Cursor;
 
 use fixture::EmbeddedAudio;
-use kithara_decode::SymphoniaDecoder;
+use kithara_bufpool::PcmPool;
+use kithara_decode::Decoder as SymphoniaDecoder;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use rstest::{fixture, rstest};
 
 use super::fixture;
+
+fn test_pool() -> PcmPool {
+    PcmPool::new(64, 200_000)
+}
 
 // ==================== Fixtures ====================
 
@@ -44,7 +49,7 @@ fn mp3_media_info() -> MediaInfo {
 fn decode_wav_with_probe(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 
-    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None).unwrap();
+    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None, test_pool()).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
@@ -61,7 +66,7 @@ fn decode_wav_with_probe(audio: EmbeddedAudio) {
 fn decode_mp3_with_probe(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.mp3());
 
-    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None).unwrap();
+    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None, test_pool()).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
@@ -81,7 +86,7 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool) {
     let data = if use_wav { audio.wav() } else { audio.mp3() };
     let reader = Cursor::new(data);
 
-    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None).unwrap();
+    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None, test_pool()).unwrap();
 
     let mut total_samples = 0;
     let mut chunk_count = 0;
@@ -101,7 +106,8 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool) {
 fn from_media_info_wav(audio: EmbeddedAudio, wav_media_info: MediaInfo) {
     let reader = Cursor::new(audio.wav());
 
-    let mut decoder = SymphoniaDecoder::new_from_media_info(reader, &wav_media_info).unwrap();
+    let mut decoder =
+        SymphoniaDecoder::new_from_media_info(reader, &wav_media_info, test_pool()).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
@@ -115,7 +121,8 @@ fn from_media_info_wav(audio: EmbeddedAudio, wav_media_info: MediaInfo) {
 fn from_media_info_mp3(audio: EmbeddedAudio, mp3_media_info: MediaInfo) {
     let reader = Cursor::new(audio.mp3());
 
-    let decoder = SymphoniaDecoder::new_from_media_info(reader, &mp3_media_info).unwrap();
+    let decoder =
+        SymphoniaDecoder::new_from_media_info(reader, &mp3_media_info, test_pool()).unwrap();
     let spec = decoder.spec();
 
     assert!(spec.sample_rate > 0);
@@ -128,7 +135,7 @@ fn from_media_info_mp3(audio: EmbeddedAudio, mp3_media_info: MediaInfo) {
 fn spec_wav_properties(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 
-    let decoder = SymphoniaDecoder::new_with_probe(reader, None).unwrap();
+    let decoder = SymphoniaDecoder::new_with_probe(reader, None, test_pool()).unwrap();
     let spec = decoder.spec();
 
     // Our test WAV is 44.1kHz stereo
@@ -140,7 +147,7 @@ fn spec_wav_properties(audio: EmbeddedAudio) {
 fn spec_mp3_properties(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.mp3());
 
-    let decoder = SymphoniaDecoder::new_with_probe(reader, None).unwrap();
+    let decoder = SymphoniaDecoder::new_with_probe(reader, None, test_pool()).unwrap();
     let spec = decoder.spec();
 
     // MP3 should have standard sample rate
@@ -159,7 +166,7 @@ fn spec_mp3_properties(audio: EmbeddedAudio) {
 #[case::empty(vec![])]
 fn invalid_data_fails(#[case] data: Vec<u8>) {
     let reader = Cursor::new(data);
-    let result = SymphoniaDecoder::new_with_probe(reader, None);
+    let result = SymphoniaDecoder::new_with_probe(reader, None, test_pool());
     assert!(result.is_err());
 }
 
@@ -170,7 +177,7 @@ fn truncated_data_handles_gracefully(audio: EmbeddedAudio) {
     let reader = Cursor::new(truncated);
 
     // Should be able to create decoder (header is intact)
-    let decoder_result = SymphoniaDecoder::new_with_probe(reader, None);
+    let decoder_result = SymphoniaDecoder::new_with_probe(reader, None, test_pool());
 
     // Either fails to create or decodes partial data
     if let Ok(mut decoder) = decoder_result {
@@ -184,7 +191,7 @@ fn truncated_data_handles_gracefully(audio: EmbeddedAudio) {
 fn chunk_has_valid_samples(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 
-    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None).unwrap();
+    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None, test_pool()).unwrap();
     let spec = decoder.spec();
 
     let chunk = decoder.next_chunk().unwrap().unwrap();
@@ -215,7 +222,7 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
 fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.mp3());
 
-    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None).unwrap();
+    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None, test_pool()).unwrap();
     let spec = decoder.spec();
 
     let mut prev_len = None;
@@ -254,7 +261,7 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
 fn consecutive_chunks_differ(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 
-    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None).unwrap();
+    let mut decoder = SymphoniaDecoder::new_with_probe(reader, None, test_pool()).unwrap();
 
     let first_chunk = decoder.next_chunk().unwrap().unwrap();
     let second_chunk = decoder.next_chunk().unwrap().unwrap();

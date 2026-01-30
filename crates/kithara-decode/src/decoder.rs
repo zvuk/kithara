@@ -5,7 +5,7 @@
 /// Generic audio decoder trait (internal).
 ///
 /// Implementations:
-/// - `SymphoniaDecoder` - production decoder using Symphonia (AAC/MP3/FLAC/etc)
+/// - `Decoder` - production decoder using Symphonia (AAC/MP3/FLAC/etc)
 /// - `MockDecoder` - test decoder for unit tests
 pub trait InnerDecoder: Send + 'static {
     /// Decode next chunk of audio.
@@ -24,11 +24,11 @@ pub trait InnerDecoder: Send + 'static {
 
 use std::{
     io::{Read, Seek},
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
-use kithara_bufpool::SharedPool;
+use kithara_bufpool::PcmPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use symphonia::core::{
     codecs::{
@@ -39,11 +39,11 @@ use symphonia::core::{
     errors::Error as SymphoniaError,
     formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
     io::MediaSourceStream,
-    meta::MetadataOptions,
+    meta::{MetadataOptions, StandardTag},
     units::Time,
 };
 
-use crate::{DecodeError, DecodeResult, PcmChunk, PcmSpec};
+use crate::{DecodeError, DecodeResult, PcmChunk, PcmSpec, TrackMetadata};
 
 static CODEC_REGISTRY: LazyLock<CodecRegistry> = LazyLock::new(|| {
     let mut registry = CodecRegistry::new();
@@ -63,19 +63,19 @@ pub struct CachedCodecInfo {
 /// Supports two creation modes:
 /// - `new_with_probe()` - probes format and creates decoder (initial load)
 /// - `new_direct()` - creates decoder from cached params (ABR switch)
-pub struct SymphoniaDecoder {
+pub struct Decoder {
     format_reader: Box<dyn FormatReader>,
     decoder: Box<dyn AudioDecoder>,
     track_id: u32,
     spec: PcmSpec,
-    pcm_pool: SharedPool<32, Vec<f32>>,
+    pcm_pool: PcmPool,
 }
 
-impl SymphoniaDecoder {
+impl Decoder {
     /// Create decoder by probing the media source.
     ///
     /// This is used for initial load when codec parameters are unknown.
-    pub fn new_with_probe<R>(reader: R, hint: Option<&str>) -> DecodeResult<Self>
+    pub fn new_with_probe<R>(reader: R, hint: Option<&str>, pcm_pool: PcmPool) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
@@ -107,9 +107,6 @@ impl SymphoniaDecoder {
         let spec = extract_spec(&codec_params)?;
         let decoder = create_decoder(&codec_params)?;
 
-        // Create PCM buffer pool: 32 shards, 1024 max buffers, trim to 200K samples
-        let pcm_pool = SharedPool::<32, Vec<f32>>::new(1024, 200_000);
-
         Ok(Self {
             format_reader,
             decoder,
@@ -126,7 +123,11 @@ impl SymphoniaDecoder {
     ///
     /// For fMP4 sources, uses StreamingFmp4Adapter which provides virtual
     /// byte_len() to satisfy symphonia's seek requirements.
-    pub fn new_from_media_info<R>(reader: R, media_info: &MediaInfo) -> DecodeResult<Self>
+    pub fn new_from_media_info<R>(
+        reader: R,
+        media_info: &MediaInfo,
+        pcm_pool: PcmPool,
+    ) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
@@ -174,9 +175,6 @@ impl SymphoniaDecoder {
         let spec = extract_spec(&codec_params)?;
         let decoder = create_decoder(&codec_params)?;
 
-        // Create PCM buffer pool: 32 shards, 1024 max buffers, trim to 200K samples
-        let pcm_pool = SharedPool::<32, Vec<f32>>::new(1024, 200_000);
-
         Ok(Self {
             format_reader,
             decoder,
@@ -190,7 +188,11 @@ impl SymphoniaDecoder {
     ///
     /// This is used for ABR switch when we know the codec hasn't changed.
     /// Still requires probe for FormatReader but reuses cached codec params.
-    pub fn new_direct<R>(reader: R, cached: &CachedCodecInfo) -> DecodeResult<Self>
+    pub fn new_direct<R>(
+        reader: R,
+        cached: &CachedCodecInfo,
+        pcm_pool: PcmPool,
+    ) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
@@ -216,9 +218,6 @@ impl SymphoniaDecoder {
         let spec = extract_spec(&cached.codec_params)?;
         let decoder = create_decoder(&cached.codec_params)?;
 
-        // Create PCM buffer pool: 32 shards, 1024 max buffers, trim to 200K samples
-        let pcm_pool = SharedPool::<32, Vec<f32>>::new(1024, 200_000);
-
         Ok(Self {
             format_reader,
             decoder,
@@ -226,6 +225,49 @@ impl SymphoniaDecoder {
             spec,
             pcm_pool,
         })
+    }
+
+    /// Get total duration from track metadata.
+    ///
+    /// Returns `None` if duration cannot be determined (e.g. streaming sources).
+    pub fn duration(&self) -> Option<Duration> {
+        let track = self.format_reader.default_track(TrackType::Audio)?;
+        let num_frames = track.num_frames?;
+        let time_base = track.time_base?;
+        let time = time_base.calc_time(num_frames);
+        Some(Duration::new(
+            time.seconds,
+            (time.frac * 1_000_000_000.0) as u32,
+        ))
+    }
+
+    /// Extract track metadata from format reader tags.
+    pub fn metadata(&mut self) -> TrackMetadata {
+        let mut meta = TrackMetadata::default();
+        let metadata = self.format_reader.metadata();
+        let Some(revision) = metadata.current() else {
+            return meta;
+        };
+        for tag in &revision.media.tags {
+            if let Some(ref std_tag) = tag.std {
+                match std_tag {
+                    StandardTag::TrackTitle(title) => {
+                        meta.title = Some(title.to_string());
+                    }
+                    StandardTag::Artist(artist) => {
+                        meta.artist = Some(artist.to_string());
+                    }
+                    StandardTag::Album(album) => {
+                        meta.album = Some(album.to_string());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(visual) = revision.media.visuals.first() {
+            meta.artwork = Some(Arc::new(visual.data.to_vec()));
+        }
+        meta
     }
 
     /// Get codec parameters for caching.
@@ -533,14 +575,14 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for Streamin
     }
 }
 
-// Implement generic InnerDecoder trait for SymphoniaDecoder
-impl crate::InnerDecoder for SymphoniaDecoder {
+// Implement generic InnerDecoder trait for Decoder
+impl InnerDecoder for Decoder {
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
-        self.next_chunk()
+        Decoder::next_chunk(self)
     }
 
     fn spec(&self) -> PcmSpec {
-        self.spec()
+        Decoder::spec(self)
     }
 }
 
@@ -551,6 +593,10 @@ mod tests {
     use rstest::*;
 
     use super::*;
+
+    fn test_pool() -> PcmPool {
+        PcmPool::new(64, 200_000)
+    }
 
     /// Create minimal valid WAV file (PCM 16-bit stereo, 44100Hz)
     fn create_test_wav(sample_count: usize, sample_rate: u32, channels: u16) -> Vec<u8> {
@@ -618,7 +664,7 @@ mod tests {
         let wav_data = create_test_wav(sample_count, sample_rate, channels);
         let cursor = Cursor::new(wav_data);
 
-        let decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         assert_eq!(decoder.spec().sample_rate, sample_rate);
         assert_eq!(decoder.spec().channels, channels);
@@ -629,7 +675,7 @@ mod tests {
         let wav_data = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let decoder = SymphoniaDecoder::new_with_probe(cursor, None).unwrap();
+        let decoder = Decoder::new_with_probe(cursor, None, test_pool()).unwrap();
 
         assert_eq!(decoder.spec().sample_rate, 44100);
         assert_eq!(decoder.spec().channels, 2);
@@ -640,7 +686,7 @@ mod tests {
         let corrupted = create_corrupted_wav();
         let cursor = Cursor::new(corrupted);
 
-        let result = SymphoniaDecoder::new_with_probe(cursor, Some("wav"));
+        let result = Decoder::new_with_probe(cursor, Some("wav"), test_pool());
 
         assert!(result.is_err());
         match result {
@@ -654,7 +700,7 @@ mod tests {
         let empty = Vec::new();
         let cursor = Cursor::new(empty);
 
-        let result = SymphoniaDecoder::new_with_probe(cursor, Some("wav"));
+        let result = Decoder::new_with_probe(cursor, Some("wav"), test_pool());
 
         assert!(result.is_err());
     }
@@ -669,7 +715,7 @@ mod tests {
             .with_sample_rate(44100)
             .with_channels(2);
 
-        let decoder = SymphoniaDecoder::new_from_media_info(cursor, &media_info).unwrap();
+        let decoder = Decoder::new_from_media_info(cursor, &media_info, test_pool()).unwrap();
 
         assert_eq!(decoder.spec().sample_rate, 44100);
         assert_eq!(decoder.spec().channels, 2);
@@ -691,7 +737,7 @@ mod tests {
         let wav_data = create_test_wav(sample_count, sample_rate, channels);
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         let chunk = decoder.next_chunk().unwrap();
         assert!(chunk.is_some());
@@ -707,7 +753,7 @@ mod tests {
         let wav_data = create_test_wav(10, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         // Read all chunks
         while let Some(_) = decoder.next_chunk().unwrap() {}
@@ -722,7 +768,7 @@ mod tests {
         let wav_data = create_test_wav(1000, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         let mut chunk_count = 0;
         let mut total_samples = 0;
@@ -748,7 +794,7 @@ mod tests {
         let wav_data = create_test_wav(100, sample_rate, channels);
         let cursor = Cursor::new(wav_data);
 
-        let decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         let spec = decoder.spec();
         assert_eq!(spec.sample_rate, sample_rate);
@@ -764,7 +810,7 @@ mod tests {
         let wav_data = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         let params = decoder.codec_params();
         assert!(params.is_some());
@@ -782,7 +828,7 @@ mod tests {
         let wav_data = create_test_wav(1000, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         // Read one chunk
         let _ = decoder.next_chunk().unwrap();
@@ -799,7 +845,7 @@ mod tests {
         let wav_data = create_test_wav(10000, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         // Read some chunks
         let _ = decoder.next_chunk().unwrap();
@@ -825,7 +871,7 @@ mod tests {
         let wav_data = create_test_wav(44100, 44100, 2); // 1 second of audio
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         let result = decoder.seek(pos);
         assert!(result.is_ok());
@@ -840,7 +886,7 @@ mod tests {
         let wav_data = create_test_wav(10000, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         // Read chunks
         let _ = decoder.next_chunk().unwrap();
@@ -859,7 +905,7 @@ mod tests {
         let wav_data = create_test_wav(1000, 44100, 2); // Short file
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         // Try to seek beyond file duration
         let result = decoder.seek(Duration::from_secs(100));
@@ -881,7 +927,7 @@ mod tests {
         let cursor1 = Cursor::new(wav_data.clone());
 
         // First create decoder to get codec params
-        let decoder1 = SymphoniaDecoder::new_with_probe(cursor1, Some("wav")).unwrap();
+        let decoder1 = Decoder::new_with_probe(cursor1, Some("wav"), test_pool()).unwrap();
         let codec_params = decoder1.codec_params().unwrap();
 
         // Create cached info
@@ -889,7 +935,7 @@ mod tests {
 
         // Now create new decoder with cached params
         let cursor2 = Cursor::new(wav_data);
-        let decoder2 = SymphoniaDecoder::new_direct(cursor2, &cached).unwrap();
+        let decoder2 = Decoder::new_direct(cursor2, &cached, test_pool()).unwrap();
 
         assert_eq!(decoder2.spec().sample_rate, 44100);
         assert_eq!(decoder2.spec().channels, 2);
@@ -900,12 +946,12 @@ mod tests {
         let wav_data = create_test_wav(100, 44100, 2);
         let cursor1 = Cursor::new(wav_data.clone());
 
-        let decoder1 = SymphoniaDecoder::new_with_probe(cursor1, Some("wav")).unwrap();
+        let decoder1 = Decoder::new_with_probe(cursor1, Some("wav"), test_pool()).unwrap();
         let codec_params = decoder1.codec_params().unwrap();
         let cached = CachedCodecInfo { codec_params };
 
         let cursor2 = Cursor::new(wav_data);
-        let mut decoder2 = SymphoniaDecoder::new_direct(cursor2, &cached).unwrap();
+        let mut decoder2 = Decoder::new_direct(cursor2, &cached, test_pool()).unwrap();
 
         // Should be able to decode
         let chunk = decoder2.next_chunk().unwrap();
@@ -927,7 +973,7 @@ mod tests {
         wav.extend_from_slice(&16u32.to_le_bytes());
 
         let cursor = Cursor::new(wav);
-        let result = SymphoniaDecoder::new_with_probe(cursor, Some("wav"));
+        let result = Decoder::new_with_probe(cursor, Some("wav"), test_pool());
 
         assert!(result.is_err());
     }
@@ -937,7 +983,7 @@ mod tests {
         let random_data = [0xDE, 0xAD, 0xBE, 0xEF].repeat(250);
         let cursor = Cursor::new(random_data);
 
-        let result = SymphoniaDecoder::new_with_probe(cursor, None);
+        let result = Decoder::new_with_probe(cursor, None, test_pool());
 
         assert!(result.is_err());
         match result {
@@ -954,7 +1000,7 @@ mod tests {
 
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
 
         // Try to read - should eventually fail or return None
         let mut chunk_count = 0;
@@ -978,7 +1024,7 @@ mod tests {
             .with_sample_rate(44100)
             .with_channels(2);
 
-        let result = SymphoniaDecoder::new_from_media_info(cursor, &media_info);
+        let result = Decoder::new_from_media_info(cursor, &media_info, test_pool());
 
         // Should either succeed with probe fallback or fail
         // Test just verifies it doesn't panic
@@ -996,7 +1042,7 @@ mod tests {
             .with_sample_rate(44100)
             .with_channels(2);
 
-        let result = SymphoniaDecoder::new_from_media_info(cursor, &media_info);
+        let result = Decoder::new_from_media_info(cursor, &media_info, test_pool());
 
         // Should fail because WAV data can't be read as Ogg
         assert!(result.is_err());
@@ -1011,7 +1057,7 @@ mod tests {
         let wav_data = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
         let params = decoder.codec_params().unwrap();
 
         let cached = CachedCodecInfo {
@@ -1030,7 +1076,7 @@ mod tests {
         let wav_data = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let decoder = SymphoniaDecoder::new_with_probe(cursor, Some("wav")).unwrap();
+        let decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
         let params = decoder.codec_params().unwrap();
 
         let cached = CachedCodecInfo {

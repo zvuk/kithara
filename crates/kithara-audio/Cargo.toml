@@ -1,0 +1,57 @@
+[package]
+name = "kithara-audio"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+kithara-decode = { workspace = true }
+kithara-stream = { workspace = true }
+kithara-storage = { workspace = true }
+kithara-bufpool = { workspace = true }
+rubato = { workspace = true }
+smallvec = { workspace = true }
+thiserror = { workspace = true }
+kanal = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+rodio = { workspace = true, optional = true }
+tracing = { workspace = true }
+bytes = { workspace = true }
+parking_lot = { workspace = true }
+fast-interleave = { workspace = true }
+hotpath = { workspace = true, optional = true }
+
+[features]
+default = []
+# Enable rodio::Source adapter for playback
+rodio = ["dep:rodio"]
+# Enable performance monitoring with hotpath-rs
+perf = ["dep:hotpath"]
+
+[dev-dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+axum = { workspace = true }
+bytes = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+url = { workspace = true }
+kithara-file = { workspace = true }
+kithara-hls = { workspace = true }
+kithara-assets = { workspace = true }
+kithara-net = { workspace = true }
+tempfile = { workspace = true }
+rodio = { workspace = true }
+rstest = { workspace = true }
+aes = { workspace = true }
+cbc = { workspace = true }
+
+[[example]]
+name = "file_audio"
+required-features = ["rodio"]
+
+[[example]]
+name = "hls_audio"
+required-features = ["rodio"]

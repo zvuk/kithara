@@ -21,6 +21,33 @@ resource.write_at(0, &data)?;
 let outcome = resource.wait_range(0..1024)?;
 ```
 
+## Blocking coordination
+
+```mermaid
+sequenceDiagram
+    participant Writer as Async writer (tokio task)
+    participant SR as StorageResource
+    participant CV as Condvar
+    participant Reader as Sync reader (blocking)
+
+    Writer->>SR: write_at(0, chunk_1)
+    SR->>CV: notify_all()
+
+    Reader->>SR: wait_range(0..4096)
+    SR->>CV: wait (blocks)
+    Note over CV,Reader: thread blocked until range available
+
+    Writer->>SR: write_at(1024, chunk_2)
+    SR->>CV: notify_all()
+
+    Writer->>SR: write_at(2048, chunk_3)
+    SR->>CV: notify_all()
+    CV-->>Reader: wakeup, range satisfied
+    SR-->>Reader: WaitOutcome::Satisfied
+```
+
+`wait_range` blocks the calling thread via `parking_lot::Condvar` until the requested byte range is fully written, or the resource reaches EOF/error/cancellation.
+
 ## Integration
 
 Foundation layer for `kithara-assets`. Higher-level concerns (trees of resources, eviction, leases) are handled by `kithara-assets`.

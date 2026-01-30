@@ -4,24 +4,24 @@
 
 # kithara-decode
 
-Audio decoding library built on Symphonia. Provides generic `Decoder<S>` running in a blocking thread with epoch-based format change detection, PCM output via channel, and optional rodio integration. Supports MP3, AAC, FLAC, and other Symphonia-supported formats.
+Pure audio decoding library built on Symphonia. Provides a synchronous `Decoder` that converts compressed audio (MP3, AAC, FLAC, WAV, etc.) into `PcmChunk<f32>` samples. No threading, no channels -- just a thin wrapper over Symphonia's codec pipeline.
 
 ## Usage
 
 ```rust
-use kithara_decode::{Decoder, DecoderConfig};
-use kithara_hls::{Hls, HlsConfig};
-use kithara_stream::Stream;
+use std::io::Cursor;
+use kithara_decode::Decoder;
+use kithara_bufpool::pcm_pool;
 
-let config = DecoderConfig::<Hls>::new(hls_config).streaming();
-let decoder = Decoder::<Stream<Hls>>::new(config).await?;
+let reader = Cursor::new(wav_bytes);
+let mut decoder = Decoder::new_with_probe(reader, None, pcm_pool().clone())?;
 
-// Read PCM chunks
-while let Ok(chunk) = decoder.pcm_rx().recv() {
-    play_audio(chunk);
+let spec = decoder.spec(); // sample_rate, channels
+while let Ok(Some(chunk)) = decoder.next_chunk() {
+    play(&chunk.pcm);
 }
 ```
 
 ## Integration
 
-Consumes `Stream<T>` from `kithara-stream`. Works with both `Stream<File>` and `Stream<Hls>`. Emits `DecoderEvent<E>` combining stream and decode events. With the `rodio` feature, provides `AudioSyncReader` as a `rodio::Source` adapter.
+Consumed by `kithara-audio` which wraps it in a threaded pipeline with effects and resampling. Accepts any `R: Read + Seek + Send + Sync + 'static` -- works with `Stream<File>`, `Stream<Hls>`, `Cursor<Vec<u8>>`, or plain files.

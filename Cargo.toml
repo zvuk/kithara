@@ -1,10 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/kithara",
     "crates/kithara-abr",
     "crates/kithara-net",
     "crates/kithara-file",
     "crates/kithara-hls",
+    "crates/kithara-audio",
     "crates/kithara-decode",
     "crates/kithara-stream",
     "crates/kithara-storage",
@@ -53,9 +55,11 @@ categories = ["multimedia::audio"]
 # - In crate Cargo.toml files use `{ workspace = true }`.
 [workspace.dependencies]
 # workspace crates (path deps)
+kithara = { path = "crates/kithara", version = "0.1.0" }
 kithara-abr = { path = "crates/kithara-abr", version = "0.1.0" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.1.0" }
+kithara-audio = { path = "crates/kithara-audio", version = "0.1.0" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
@@ -92,6 +96,7 @@ symphonia = { git = "https://github.com/pdeljanov/Symphonia.git", branch="dev-0.
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
 rodio = "0.21.1"
 rubato = "0.15"
+smallvec = "1"
 
 # errors/logging/metrics
 thiserror = "2.0.18"
@@ -125,5 +130,11 @@ lru = "0.12"
 # memory profiling
 dhat = "0.3"
 memory-stats = "1.2"
+
+# performance monitoring
+hotpath = "0.5"
+
+# fast interleave/deinterleave
+fast-interleave = "0.1"
 
 # Optional: unify lint settings later via workspace.metadata or deny.toml.

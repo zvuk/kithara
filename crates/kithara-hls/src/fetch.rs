@@ -55,22 +55,6 @@ impl SegmentType {
     }
 }
 
-/// Encryption info for a segment (resolved key URL and IV).
-#[derive(Debug, Clone, Hash, Eq, PartialEq)]
-pub struct EncryptionInfo {
-    pub key_url: Url,
-    pub iv: [u8; 16],
-}
-
-impl Default for EncryptionInfo {
-    fn default() -> Self {
-        Self {
-            key_url: Url::parse("http://localhost/dummy").expect("valid dummy URL"),
-            iv: [0u8; 16],
-        }
-    }
-}
-
 /// Segment metadata (data is on disk, not in memory).
 #[derive(Debug, Clone)]
 pub struct SegmentMeta {
