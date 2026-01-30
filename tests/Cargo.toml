@@ -104,3 +104,8 @@ required-features = ["perf"]
 name = "abr"
 path = "perf/abr.rs"
 required-features = ["perf"]
+
+[[test]]
+name = "storage"
+path = "perf/storage.rs"
+required-features = ["perf"]
