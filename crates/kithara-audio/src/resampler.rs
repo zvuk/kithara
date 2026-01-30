@@ -188,6 +188,7 @@ pub struct ResamplerProcessor {
     temp_input_slice: SmallVec<[Vec<f32>; 8]>,
     temp_output_bufs: SmallVec<[Vec<f32>; 8]>,
     temp_output_all: SmallVec<[Vec<f32>; 8]>,
+    temp_deinterleave: SmallVec<[Vec<f32>; 8]>,
     /// Pool for interleave output buffers.
     pool: PcmPool,
 }
@@ -217,6 +218,7 @@ impl ResamplerProcessor {
             temp_input_slice: SmallVec::with_capacity(channels),
             temp_output_bufs: SmallVec::with_capacity(channels),
             temp_output_all: smallvec_new_vecs(channels),
+            temp_deinterleave: SmallVec::with_capacity(channels),
             pool: pcm_pool().clone(),
         };
 
@@ -516,19 +518,31 @@ impl ResamplerProcessor {
 
         let frames = interleaved.len() / self.channels;
 
-        // Create temporary buffers for deinterleaved output
-        let mut temp_buffers: SmallVec<[Vec<f32>; 8]> =
-            (0..self.channels).map(|_| vec![0.0; frames]).collect();
+        // Ensure temp buffers are sized correctly
+        if self.temp_deinterleave.len() < self.channels {
+            self.temp_deinterleave
+                .resize_with(self.channels, Vec::new);
+        }
+
+        // Resize each channel buffer to needed size (reuses existing capacity)
+        for buf in &mut self.temp_deinterleave {
+            buf.resize(frames, 0.0);
+        }
 
         // Use fast_interleave (SIMD-optimized) to deinterleave
         let num_channels =
             std::num::NonZeroUsize::new(self.channels).expect("channels must be > 0");
-        deinterleave_variable(interleaved, num_channels, &mut temp_buffers[..], 0..frames);
+        deinterleave_variable(
+            interleaved,
+            num_channels,
+            &mut self.temp_deinterleave[..],
+            0..frames,
+        );
 
         // Append deinterleaved data to existing input buffers
-        for (ch, channel_data) in temp_buffers.into_iter().enumerate() {
+        for (ch, channel_data) in self.temp_deinterleave.iter().enumerate() {
             if ch < self.input_buffer.len() {
-                self.input_buffer[ch].extend_from_slice(&channel_data);
+                self.input_buffer[ch].extend_from_slice(&channel_data[..frames]);
             }
         }
     }
