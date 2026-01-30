@@ -115,6 +115,9 @@ pub struct Audio<S> {
     /// Whether preload() has been called (enables non-blocking mode).
     preloaded: bool,
 
+    /// Worker thread handle for graceful shutdown.
+    worker_thread: Option<std::thread::JoinHandle<()>>,
+
     /// Marker for source type.
     _marker: std::marker::PhantomData<S>,
 }
@@ -461,7 +464,7 @@ where
 
         let worker_preload_chunks = preload_chunks.max(1);
 
-        std::thread::Builder::new()
+        let worker_thread = std::thread::Builder::new()
             .name("kithara-audio".to_string())
             .spawn(move || {
                 run_audio_loop(
@@ -499,6 +502,7 @@ where
             host_sample_rate,
             preload_notify,
             preloaded: false,
+            worker_thread: Some(worker_thread),
             _marker: std::marker::PhantomData,
         })
     }
@@ -518,6 +522,12 @@ impl<S> Drop for Audio<S> {
         if let Some(ref cancel) = self.cancel {
             cancel.cancel();
         }
+
+        // Channels will be dropped automatically, signaling worker to exit.
+        // Worker thread will terminate when it detects closed channels.
+        // We explicitly drop the JoinHandle here to detach the thread,
+        // allowing it to complete cleanup without blocking the drop.
+        drop(self.worker_thread.take());
     }
 }
 
