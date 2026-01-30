@@ -6,6 +6,7 @@ members = [
     "crates/kithara-net",
     "crates/kithara-file",
     "crates/kithara-hls",
+    "crates/kithara-audio",
     "crates/kithara-decode",
     "crates/kithara-stream",
     "crates/kithara-storage",
@@ -58,6 +59,7 @@ kithara = { path = "crates/kithara", version = "0.1.0" }
 kithara-abr = { path = "crates/kithara-abr", version = "0.1.0" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.1.0" }
+kithara-audio = { path = "crates/kithara-audio", version = "0.1.0" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }

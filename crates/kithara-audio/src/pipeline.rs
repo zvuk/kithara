@@ -1,4 +1,4 @@
-//! Generic decoder that runs in a separate blocking thread.
+//! Generic audio pipeline that runs in a separate blocking thread.
 
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -12,6 +12,7 @@ use std::{
 
 use kanal::Receiver;
 use kithara_bufpool::{SharedPool, byte_pool};
+use kithara_decode::{Decoder, PcmChunk, PcmSpec, TrackMetadata};
 use kithara_stream::{EpochValidator, Fetch, MediaInfo, Stream, StreamType};
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
@@ -19,15 +20,15 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace, warn};
 
 use crate::{
-    TrackMetadata,
-    decoder::SymphoniaDecoder,
-    events::{DecodeEvent, DecoderEvent},
-    types::{DecodeError, DecodeResult, PcmChunk, PcmReader, PcmSpec},
+    events::{AudioEvent, AudioPipelineEvent},
+    resampler::ResamplerProcessor,
+    traits::AudioEffect,
+    types::{DecodeError, DecodeResult, PcmReader},
 };
 
-/// Command for decode worker.
+/// Command for audio worker.
 #[derive(Debug)]
-pub enum DecodeCommand {
+pub enum AudioCommand {
     /// Seek to position with new epoch.
     Seek { position: Duration, epoch: u64 },
 }
@@ -35,8 +36,8 @@ pub enum DecodeCommand {
 /// Shared stream wrapper for format change detection.
 ///
 /// Wraps Stream in Arc<Mutex> to allow:
-/// - SymphoniaDecoder to read via Read + Seek
-/// - DecodeSource to check media_info() for format changes
+/// - Decoder to read via Read + Seek
+/// - SimpleAudioSource to check media_info() for format changes
 ///
 /// Supports a read boundary: when set, reads at or past the boundary
 /// return 0 (EOF). This prevents the old decoder from reading data
@@ -156,8 +157,8 @@ impl<T: StreamType> Seek for OffsetReader<T> {
     }
 }
 
-/// Trait for decode sources processed in a blocking worker thread.
-trait DecodeWorkerSource: Send + 'static {
+/// Trait for audio sources processed in a blocking worker thread.
+trait AudioWorkerSource: Send + 'static {
     type Chunk: Send + 'static;
     type Command: Send + 'static;
 
@@ -165,13 +166,13 @@ trait DecodeWorkerSource: Send + 'static {
     fn handle_command(&mut self, cmd: Self::Command);
 }
 
-/// Run a blocking decode loop: drain commands, fetch data, send through channel.
-fn run_decode_loop<S: DecodeWorkerSource>(
+/// Run a blocking audio loop: drain commands, fetch data, send through channel.
+fn run_audio_loop<S: AudioWorkerSource>(
     mut source: S,
     cmd_rx: kanal::Receiver<S::Command>,
     data_tx: kanal::Sender<Fetch<S::Chunk>>,
 ) {
-    trace!("decode worker started");
+    trace!("audio worker started");
     let mut at_eof = false;
 
     loop {
@@ -226,38 +227,67 @@ fn run_decode_loop<S: DecodeWorkerSource>(
         }
     }
 
-    trace!("decode worker stopped");
+    trace!("audio worker stopped");
 }
 
-/// Simple decode source (non-streaming, e.g. file).
-struct DecodeSource {
-    decoder: SymphoniaDecoder,
+/// Apply effects chain to a chunk.
+fn apply_effects(
+    effects: &mut [Box<dyn AudioEffect>],
+    mut chunk: PcmChunk<f32>,
+) -> Option<PcmChunk<f32>> {
+    for effect in effects.iter_mut() {
+        chunk = effect.process(chunk)?;
+    }
+    Some(chunk)
+}
+
+/// Flush effects chain at end of stream.
+fn flush_effects(effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmChunk<f32>> {
+    let mut result: Option<PcmChunk<f32>> = None;
+    for effect in effects.iter_mut() {
+        result = effect.flush();
+    }
+    result
+}
+
+/// Reset effects chain (e.g. after seek).
+fn reset_effects(effects: &mut [Box<dyn AudioEffect>]) {
+    for effect in effects.iter_mut() {
+        effect.reset();
+    }
+}
+
+/// Simple audio source (non-streaming, e.g. file).
+struct SimpleAudioSource {
+    decoder: Decoder,
     epoch: Arc<AtomicU64>,
     chunks_decoded: u64,
     total_samples: u64,
-    emit: Option<Box<dyn Fn(DecodeEvent) + Send>>,
+    emit: Option<Box<dyn Fn(AudioEvent) + Send>>,
+    effects: Vec<Box<dyn AudioEffect>>,
 }
 
-impl DecodeSource {
-    fn new(decoder: SymphoniaDecoder, epoch: Arc<AtomicU64>) -> Self {
+impl SimpleAudioSource {
+    fn new(decoder: Decoder, epoch: Arc<AtomicU64>, effects: Vec<Box<dyn AudioEffect>>) -> Self {
         Self {
             decoder,
             epoch,
             chunks_decoded: 0,
             total_samples: 0,
             emit: None,
+            effects,
         }
     }
 
-    fn with_emit(mut self, emit: Box<dyn Fn(DecodeEvent) + Send>) -> Self {
+    fn with_emit(mut self, emit: Box<dyn Fn(AudioEvent) + Send>) -> Self {
         self.emit = Some(emit);
         self
     }
 }
 
-impl DecodeWorkerSource for DecodeSource {
+impl AudioWorkerSource for SimpleAudioSource {
     type Chunk = PcmChunk<f32>;
-    type Command = DecodeCommand;
+    type Command = AudioCommand;
 
     fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
         let current_epoch = self.epoch.load(Ordering::Acquire);
@@ -276,7 +306,7 @@ impl DecodeWorkerSource for DecodeSource {
                     if self.chunks_decoded == 1
                         && let Some(ref emit) = self.emit
                     {
-                        emit(DecodeEvent::FormatDetected { spec: chunk.spec });
+                        emit(AudioEvent::FormatDetected { spec: chunk.spec });
                     }
 
                     if self.chunks_decoded.is_multiple_of(100) {
@@ -289,7 +319,13 @@ impl DecodeWorkerSource for DecodeSource {
                         );
                     }
 
-                    return Fetch::new(chunk, false, current_epoch);
+                    // Apply effects chain
+                    match apply_effects(&mut self.effects, chunk) {
+                        Some(processed) => {
+                            return Fetch::new(processed, false, current_epoch);
+                        }
+                        None => continue,
+                    }
                 }
                 Ok(None) => {
                     debug!(
@@ -298,8 +334,17 @@ impl DecodeWorkerSource for DecodeSource {
                         epoch = current_epoch,
                         "decode complete (EOF)"
                     );
+
+                    // Flush effects at end of stream
+                    if let Some(flushed) = flush_effects(&mut self.effects) {
+                        if let Some(ref emit) = self.emit {
+                            emit(AudioEvent::EndOfStream);
+                        }
+                        return Fetch::new(flushed, false, current_epoch);
+                    }
+
                     if let Some(ref emit) = self.emit {
-                        emit(DecodeEvent::EndOfStream);
+                        emit(AudioEvent::EndOfStream);
                     }
                     return Fetch::new(PcmChunk::default(), true, current_epoch);
                 }
@@ -313,28 +358,31 @@ impl DecodeWorkerSource for DecodeSource {
 
     fn handle_command(&mut self, cmd: Self::Command) {
         match cmd {
-            DecodeCommand::Seek { position, epoch } => {
+            AudioCommand::Seek { position, epoch } => {
                 debug!(?position, epoch, "seek command received");
                 self.epoch.store(epoch, Ordering::Release);
                 if let Err(e) = self.decoder.seek(position) {
                     warn!(?e, "seek failed");
-                } else if let Some(ref emit) = self.emit {
-                    emit(DecodeEvent::SeekComplete { position });
+                } else {
+                    reset_effects(&mut self.effects);
+                    if let Some(ref emit) = self.emit {
+                        emit(AudioEvent::SeekComplete { position });
+                    }
                 }
             }
         }
     }
 }
 
-/// Decode source for Stream with format change detection.
+/// Audio source for Stream with format change detection.
 ///
 /// Monitors media_info changes and recreates decoder at segment boundaries.
 /// The old decoder naturally decodes all data from the current segment.
 /// When it encounters new segment data (different format), it errors or returns EOF.
 /// At that point, we seek to the segment boundary and recreate the decoder.
-struct StreamDecodeSource<T: StreamType> {
+struct StreamAudioSource<T: StreamType> {
     shared_stream: SharedStream<T>,
-    decoder: SymphoniaDecoder,
+    decoder: Decoder,
     cached_media_info: Option<MediaInfo>,
     /// Pending format change: (new MediaInfo, byte offset where new segment starts).
     pending_format_change: Option<(MediaInfo, u64)>,
@@ -342,17 +390,19 @@ struct StreamDecodeSource<T: StreamType> {
     chunks_decoded: u64,
     total_samples: u64,
     last_spec: Option<PcmSpec>,
-    emit: Option<Box<dyn Fn(DecodeEvent) + Send>>,
+    emit: Option<Box<dyn Fn(AudioEvent) + Send>>,
     pcm_pool: SharedPool<32, Vec<f32>>,
+    effects: Vec<Box<dyn AudioEffect>>,
 }
 
-impl<T: StreamType> StreamDecodeSource<T> {
+impl<T: StreamType> StreamAudioSource<T> {
     fn new(
         shared_stream: SharedStream<T>,
-        decoder: SymphoniaDecoder,
+        decoder: Decoder,
         initial_media_info: Option<MediaInfo>,
         epoch: Arc<AtomicU64>,
         pcm_pool: SharedPool<32, Vec<f32>>,
+        effects: Vec<Box<dyn AudioEffect>>,
     ) -> Self {
         Self {
             shared_stream,
@@ -365,10 +415,11 @@ impl<T: StreamType> StreamDecodeSource<T> {
             last_spec: None,
             emit: None,
             pcm_pool,
+            effects,
         }
     }
 
-    fn with_emit(mut self, emit: Box<dyn Fn(DecodeEvent) + Send>) -> Self {
+    fn with_emit(mut self, emit: Box<dyn Fn(AudioEvent) + Send>) -> Self {
         self.emit = Some(emit);
         self
     }
@@ -440,8 +491,7 @@ impl<T: StreamType> StreamDecodeSource<T> {
 
         // Use OffsetReader so Symphonia's internal positions are correctly mapped
         let offset_reader = OffsetReader::new(self.shared_stream.clone(), base_offset);
-        match SymphoniaDecoder::new_from_media_info(offset_reader, &new_info, self.pcm_pool.clone())
-        {
+        match Decoder::new_from_media_info(offset_reader, &new_info, self.pcm_pool.clone()) {
             Ok(new_decoder) => {
                 self.decoder = new_decoder;
                 debug!("Decoder recreated successfully");
@@ -450,7 +500,7 @@ impl<T: StreamType> StreamDecodeSource<T> {
             Err(e) => {
                 warn!(?e, "Failed to recreate decoder, trying probe fallback");
                 let offset_reader = OffsetReader::new(self.shared_stream.clone(), base_offset);
-                match SymphoniaDecoder::new_with_probe(offset_reader, None, self.pcm_pool.clone()) {
+                match Decoder::new_with_probe(offset_reader, None, self.pcm_pool.clone()) {
                     Ok(new_decoder) => {
                         self.decoder = new_decoder;
                         debug!("Decoder recreated with probe");
@@ -466,9 +516,9 @@ impl<T: StreamType> StreamDecodeSource<T> {
     }
 }
 
-impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
+impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     type Chunk = PcmChunk<f32>;
-    type Command = DecodeCommand;
+    type Command = AudioCommand;
 
     fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
         let current_epoch = self.epoch.load(Ordering::Acquire);
@@ -489,7 +539,7 @@ impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
                     if self.chunks_decoded == 1
                         && let Some(ref emit) = self.emit
                     {
-                        emit(DecodeEvent::FormatDetected { spec: chunk.spec });
+                        emit(AudioEvent::FormatDetected { spec: chunk.spec });
                         self.last_spec = Some(chunk.spec);
                     }
 
@@ -498,7 +548,7 @@ impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
                         && old_spec != chunk.spec
                     {
                         if let Some(ref emit) = self.emit {
-                            emit(DecodeEvent::FormatChanged {
+                            emit(AudioEvent::FormatChanged {
                                 old: old_spec,
                                 new: chunk.spec,
                             });
@@ -518,7 +568,13 @@ impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
                         );
                     }
 
-                    return Fetch::new(chunk, false, current_epoch);
+                    // Apply effects chain
+                    match apply_effects(&mut self.effects, chunk) {
+                        Some(processed) => {
+                            return Fetch::new(processed, false, current_epoch);
+                        }
+                        None => continue,
+                    }
                 }
                 Ok(None) => {
                     self.detect_format_change();
@@ -535,8 +591,17 @@ impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
                         epoch = current_epoch,
                         "decode complete (EOF)"
                     );
+
+                    // Flush effects at end of stream
+                    if let Some(flushed) = flush_effects(&mut self.effects) {
+                        if let Some(ref emit) = self.emit {
+                            emit(AudioEvent::EndOfStream);
+                        }
+                        return Fetch::new(flushed, false, current_epoch);
+                    }
+
                     if let Some(ref emit) = self.emit {
-                        emit(DecodeEvent::EndOfStream);
+                        emit(AudioEvent::EndOfStream);
                     }
                     return Fetch::new(PcmChunk::default(), true, current_epoch);
                 }
@@ -550,20 +615,23 @@ impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
 
     fn handle_command(&mut self, cmd: Self::Command) {
         match cmd {
-            DecodeCommand::Seek { position, epoch } => {
+            AudioCommand::Seek { position, epoch } => {
                 debug!(?position, epoch, "seek command received");
                 self.epoch.store(epoch, Ordering::Release);
                 if let Err(e) = self.decoder.seek(position) {
                     warn!(?e, "seek failed");
-                } else if let Some(ref emit) = self.emit {
-                    emit(DecodeEvent::SeekComplete { position });
+                } else {
+                    reset_effects(&mut self.effects);
+                    if let Some(ref emit) = self.emit {
+                        emit(AudioEvent::SeekComplete { position });
+                    }
                 }
             }
         }
     }
 }
 
-/// Generic audio decoder running in a separate thread.
+/// Generic audio pipeline running in a separate thread.
 ///
 /// Provides a simple interface for reading decoded PCM audio,
 /// compatible with cpal and rodio audio backends.
@@ -571,26 +639,26 @@ impl<T: StreamType> DecodeWorkerSource for StreamDecodeSource<T> {
 /// # Example
 ///
 /// ```ignore
-/// use kithara_decode::{Decoder, DecodeOptions};
+/// use kithara_audio::{Audio, AudioOptions};
 /// use std::io::Cursor;
 ///
 /// let source = Cursor::new(wav_data);
-/// let mut decoder = Decoder::from_source(source, DecodeOptions::new())?;
+/// let mut audio = Audio::from_source(source, AudioOptions::new())?;
 ///
 /// // Get audio format
-/// let spec = decoder.spec();
+/// let spec = audio.spec();
 /// println!("{}Hz, {} channels", spec.sample_rate, spec.channels);
 ///
 /// // Read PCM samples
 /// let mut buf = [0.0f32; 1024];
-/// while !decoder.is_eof() {
-///     let n = decoder.read(&mut buf);
+/// while !audio.is_eof() {
+///     let n = audio.read(&mut buf);
 ///     play_samples(&buf[..n]);
 /// }
 /// ```
-pub struct Decoder<S> {
+pub struct Audio<S> {
     /// Command sender for seek.
-    cmd_tx: kanal::Sender<DecodeCommand>,
+    cmd_tx: kanal::Sender<AudioCommand>,
 
     /// PCM chunk receiver.
     pcm_rx: Receiver<Fetch<PcmChunk<f32>>>,
@@ -602,35 +670,35 @@ pub struct Decoder<S> {
     validator: EpochValidator,
 
     /// Current audio specification (updated from chunks).
-    spec: PcmSpec,
+    pub(crate) spec: PcmSpec,
 
     /// Current chunk being read.
-    current_chunk: Option<Vec<f32>>,
+    pub(crate) current_chunk: Option<Vec<f32>>,
 
     /// Current position in chunk.
-    chunk_offset: usize,
+    pub(crate) chunk_offset: usize,
 
     /// End of stream reached.
-    eof: bool,
+    pub(crate) eof: bool,
 
     /// Number of interleaved samples read since last seek.
-    samples_read: u64,
+    pub(crate) samples_read: u64,
 
     /// Base position after last seek.
     seek_base: Duration,
 
     /// Total duration from format metadata.
-    total_duration: Option<Duration>,
+    pub(crate) total_duration: Option<Duration>,
 
     /// Track metadata (title, artist, album, artwork).
     metadata: TrackMetadata,
 
-    /// Decode events channel (used by `from_source`).
-    decode_events_tx: broadcast::Sender<DecodeEvent>,
+    /// Audio events channel (used by `from_source`).
+    audio_events_tx: broadcast::Sender<AudioEvent>,
 
-    /// Unified events sender for `Decoder<Stream<T>>`.
-    /// Holds `broadcast::Sender<DecoderEvent<T::Event>>` type-erased.
-    /// `None` for non-stream decoders (created via `from_source`).
+    /// Unified events sender for `Audio<Stream<T>>`.
+    /// Holds `broadcast::Sender<AudioPipelineEvent<T::Event>>` type-erased.
+    /// `None` for non-stream audio (created via `from_source`).
     unified_events: Option<Box<dyn std::any::Any + Send + Sync>>,
 
     /// Cancellation token for graceful shutdown.
@@ -647,9 +715,9 @@ pub struct Decoder<S> {
     _marker: std::marker::PhantomData<S>,
 }
 
-/// Decode-specific options.
+/// Audio-specific options.
 #[derive(Clone)]
-pub struct DecodeOptions {
+pub struct AudioOptions {
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
     pub pcm_buffer_chunks: usize,
     /// Command channel capacity.
@@ -662,13 +730,13 @@ pub struct DecodeOptions {
     pub media_info: Option<MediaInfo>,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<SharedPool<32, Vec<f32>>>,
-    /// Target sample rate of the audio host (for future resampling).
+    /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
 }
 
-impl std::fmt::Debug for DecodeOptions {
+impl std::fmt::Debug for AudioOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DecodeOptions")
+        f.debug_struct("AudioOptions")
             .field("pcm_buffer_chunks", &self.pcm_buffer_chunks)
             .field("command_channel_capacity", &self.command_channel_capacity)
             .field("event_channel_capacity", &self.event_channel_capacity)
@@ -680,13 +748,13 @@ impl std::fmt::Debug for DecodeOptions {
     }
 }
 
-impl Default for DecodeOptions {
+impl Default for AudioOptions {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl DecodeOptions {
+impl AudioOptions {
     /// Create default options.
     pub fn new() -> Self {
         Self {
@@ -738,30 +806,30 @@ impl DecodeOptions {
     }
 }
 
-/// Configuration for decoder with stream config.
+/// Configuration for audio pipeline with stream config.
 ///
 /// Generic over StreamType to include stream-specific configuration.
-pub struct DecoderConfig<T: StreamType> {
+pub struct AudioConfig<T: StreamType> {
     /// Stream configuration (HlsConfig, FileConfig, etc.)
     pub stream: T::Config,
-    /// Decode-specific options
-    pub decode: DecodeOptions,
+    /// Audio-specific options
+    pub decode: AudioOptions,
     /// Unified events sender (optional — if not provided, one is created internally).
-    events_tx: Option<broadcast::Sender<DecoderEvent<T::Event>>>,
+    events_tx: Option<broadcast::Sender<AudioPipelineEvent<T::Event>>>,
 }
 
-impl<T: StreamType> DecoderConfig<T> {
+impl<T: StreamType> AudioConfig<T> {
     /// Create config with stream config.
     pub fn new(stream: T::Config) -> Self {
         Self {
             stream,
-            decode: DecodeOptions::new(),
+            decode: AudioOptions::new(),
             events_tx: None,
         }
     }
 
-    /// Set decode options.
-    pub fn with_decode(mut self, decode: DecodeOptions) -> Self {
+    /// Set audio options.
+    pub fn with_decode(mut self, decode: AudioOptions) -> Self {
         self.decode = decode;
         self
     }
@@ -774,29 +842,45 @@ impl<T: StreamType> DecoderConfig<T> {
 
     /// Set unified events channel.
     ///
-    /// Stream events and decode events are forwarded as `DecoderEvent::Stream(e)`
-    /// and `DecoderEvent::Decode(e)` respectively.
-    pub fn with_events(mut self, events_tx: broadcast::Sender<DecoderEvent<T::Event>>) -> Self {
+    /// Stream events and audio events are forwarded as `AudioPipelineEvent::Stream(e)`
+    /// and `AudioPipelineEvent::Audio(e)` respectively.
+    pub fn with_events(
+        mut self,
+        events_tx: broadcast::Sender<AudioPipelineEvent<T::Event>>,
+    ) -> Self {
         self.events_tx = Some(events_tx);
         self
     }
 }
 
-impl<S> Decoder<S>
+/// Create effects chain for audio pipeline.
+fn create_effects(
+    initial_spec: PcmSpec,
+    host_sample_rate: &Arc<AtomicU32>,
+) -> Vec<Box<dyn AudioEffect>> {
+    let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResamplerProcessor::new(
+        initial_spec.sample_rate,
+        Arc::clone(host_sample_rate),
+        initial_spec.channels as usize,
+    ))];
+    effects
+}
+
+impl<S> Audio<S>
 where
     S: Read + Seek + Send + Sync + 'static,
 {
-    /// Create a new decoder from any Read + Seek source.
+    /// Create a new audio pipeline from any Read + Seek source.
     ///
-    /// Spawns a blocking decode thread.
-    pub fn from_source(source: S, mut options: DecodeOptions) -> DecodeResult<Self> {
+    /// Spawns a blocking audio thread.
+    pub fn from_source(source: S, mut options: AudioOptions) -> DecodeResult<Self> {
         let cmd_capacity = options.command_channel_capacity.max(1);
         let (cmd_tx, cmd_rx) = kanal::bounded(cmd_capacity);
         let (data_tx, data_rx) = kanal::bounded(options.pcm_buffer_chunks.max(1));
 
         let epoch = Arc::new(AtomicU64::new(0));
         let event_capacity = options.event_channel_capacity.max(1);
-        let (decode_events_tx, _) = broadcast::channel(event_capacity);
+        let (audio_events_tx, _) = broadcast::channel(event_capacity);
         let pcm_pool = options.resolve_pcm_pool();
         let host_sample_rate = Arc::new(AtomicU32::new(
             options.host_sample_rate.map(|v| v.get()).unwrap_or(0),
@@ -807,21 +891,24 @@ where
         let total_duration = symphonia.duration();
         let metadata = symphonia.metadata();
 
-        let emit_tx = decode_events_tx.clone();
-        let emit = Box::new(move |event: DecodeEvent| {
+        let effects = create_effects(initial_spec, &host_sample_rate);
+
+        let emit_tx = audio_events_tx.clone();
+        let emit = Box::new(move |event: AudioEvent| {
             let _ = emit_tx.send(event);
         });
 
-        let decode_source = DecodeSource::new(symphonia, Arc::clone(&epoch)).with_emit(emit);
+        let audio_source =
+            SimpleAudioSource::new(symphonia, Arc::clone(&epoch), effects).with_emit(emit);
 
         std::thread::Builder::new()
-            .name("kithara-decode".to_string())
+            .name("kithara-audio".to_string())
             .spawn(move || {
-                run_decode_loop(decode_source, cmd_rx, data_tx);
+                run_audio_loop(audio_source, cmd_rx, data_tx);
             })
             .map_err(|e| {
                 DecodeError::Io(std::io::Error::other(format!(
-                    "failed to spawn decode thread: {}",
+                    "failed to spawn audio thread: {}",
                     e
                 )))
             })?;
@@ -839,7 +926,7 @@ where
             seek_base: Duration::ZERO,
             total_duration,
             metadata,
-            decode_events_tx,
+            audio_events_tx,
             unified_events: None,
             cancel: None,
             pcm_pool,
@@ -856,13 +943,13 @@ where
     /// Create Symphonia decoder with appropriate method based on options.
     fn create_decoder(
         source: S,
-        options: &DecodeOptions,
+        options: &AudioOptions,
         pcm_pool: SharedPool<32, Vec<f32>>,
-    ) -> DecodeResult<SymphoniaDecoder> {
+    ) -> DecodeResult<Decoder> {
         if let Some(ref media_info) = options.media_info {
-            SymphoniaDecoder::new_from_media_info(source, media_info, pcm_pool)
+            Decoder::new_from_media_info(source, media_info, pcm_pool)
         } else {
-            SymphoniaDecoder::new_with_probe(source, options.hint.as_deref(), pcm_pool)
+            Decoder::new_with_probe(source, options.hint.as_deref(), pcm_pool)
         }
     }
 }
@@ -871,13 +958,13 @@ where
 // Public API for cpal/rodio compatibility
 // ============================================================================
 
-impl<S> Decoder<S> {
-    /// Subscribe to decode events.
+impl<S> Audio<S> {
+    /// Subscribe to audio events.
     ///
-    /// For `Decoder<Stream<T>>`, prefer `events()` which provides unified
-    /// stream + decode events.
-    pub fn decode_events(&self) -> broadcast::Receiver<DecodeEvent> {
-        self.decode_events_tx.subscribe()
+    /// For `Audio<Stream<T>>`, prefer `events()` which provides unified
+    /// stream + audio events.
+    pub fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
+        self.audio_events_tx.subscribe()
     }
 
     /// Get current audio specification.
@@ -970,7 +1057,7 @@ impl<S> Decoder<S> {
 
         // Send seek command to worker with new epoch
         self.cmd_tx
-            .send(DecodeCommand::Seek {
+            .send(AudioCommand::Seek {
                 position,
                 epoch: new_epoch,
             })
@@ -988,7 +1075,7 @@ impl<S> Decoder<S> {
     }
 
     /// Receive next chunk from channel, filtering stale chunks.
-    fn fill_buffer(&mut self) -> bool {
+    pub(crate) fn fill_buffer(&mut self) -> bool {
         if self.eof {
             return false;
         }
@@ -1007,7 +1094,7 @@ impl<S> Decoder<S> {
                     }
 
                     if fetch.is_eof() {
-                        debug!(epoch = fetch.epoch(), "Decoder: received EOF");
+                        debug!(epoch = fetch.epoch(), "Audio: received EOF");
                         self.eof = true;
                         return false;
                     }
@@ -1016,7 +1103,7 @@ impl<S> Decoder<S> {
                     trace!(
                         samples = chunk.pcm.len(),
                         spec = ?chunk.spec,
-                        "Decoder: received chunk"
+                        "Audio: received chunk"
                     );
                     self.spec = chunk.spec;
                     self.current_chunk = Some(chunk.pcm);
@@ -1024,7 +1111,7 @@ impl<S> Decoder<S> {
                     return true;
                 }
                 Err(_) => {
-                    debug!("Decoder: channel closed (EOF)");
+                    debug!("Audio: channel closed (EOF)");
                     self.eof = true;
                     return false;
                 }
@@ -1033,27 +1120,27 @@ impl<S> Decoder<S> {
     }
 }
 
-/// Specialized impl for Stream-based decoders.
+/// Specialized impl for Stream-based audio pipelines.
 ///
 /// Provides async constructor that creates Stream internally.
-/// Uses StreamDecodeSource for automatic format change detection on ABR switch.
-impl<T> Decoder<Stream<T>>
+/// Uses StreamAudioSource for automatic format change detection on ABR switch.
+impl<T> Audio<Stream<T>>
 where
     T: StreamType,
 {
-    /// Create decoder from DecoderConfig.
+    /// Create audio pipeline from AudioConfig.
     ///
     /// This is the target API for Stream sources.
-    /// Uses StreamDecodeSource for automatic decoder recreation on format change.
+    /// Uses StreamAudioSource for automatic decoder recreation on format change.
     ///
     /// # Example
     ///
     /// ```ignore
-    /// let config = DecoderConfig::<Hls>::new(hls_config);
-    /// let decoder = Decoder::new(config).await?;
-    /// sink.append(decoder);
+    /// let config = AudioConfig::<Hls>::new(hls_config);
+    /// let audio = Audio::new(config).await?;
+    /// sink.append(audio);
     /// ```
-    pub async fn new(mut config: DecoderConfig<T>) -> Result<Self, DecodeError> {
+    pub async fn new(mut config: AudioConfig<T>) -> Result<Self, DecodeError> {
         let cancel = CancellationToken::new();
 
         let event_capacity = config.decode.event_channel_capacity.max(1);
@@ -1081,7 +1168,7 @@ where
                             match result {
                                 Ok(event) => {
                                     trace!("forwarding stream event to unified channel");
-                                    let _ = forward_tx.send(DecoderEvent::Stream(event));
+                                    let _ = forward_tx.send(AudioPipelineEvent::Stream(event));
                                 }
                                 Err(broadcast::error::RecvError::Lagged(n)) => {
                                     warn!(skipped = n, "stream events receiver lagged");
@@ -1112,9 +1199,9 @@ where
 
         // Create initial decoder
         let mut symphonia = if let Some(ref info) = initial_media_info {
-            SymphoniaDecoder::new_from_media_info(shared_stream.clone(), info, pcm_pool.clone())?
+            Decoder::new_from_media_info(shared_stream.clone(), info, pcm_pool.clone())?
         } else {
-            SymphoniaDecoder::new_with_probe(
+            Decoder::new_with_probe(
                 shared_stream.clone(),
                 config.decode.hint.as_deref(),
                 pcm_pool.clone(),
@@ -1131,37 +1218,40 @@ where
         let (data_tx, data_rx) = kanal::bounded(options.pcm_buffer_chunks.max(1));
 
         let epoch = Arc::new(AtomicU64::new(0));
-        let (decode_events_tx, _) = broadcast::channel(event_capacity);
+        let (audio_events_tx, _) = broadcast::channel(event_capacity);
         let host_sample_rate = Arc::new(AtomicU32::new(
             options.host_sample_rate.map(|v| v.get()).unwrap_or(0),
         ));
 
-        // Emit closure sends DecodeEvent to both raw and unified channels.
-        let emit_raw_tx = decode_events_tx.clone();
+        let effects = create_effects(initial_spec, &host_sample_rate);
+
+        // Emit closure sends AudioEvent to both raw and unified channels.
+        let emit_raw_tx = audio_events_tx.clone();
         let emit_unified_tx = unified_tx.clone();
-        let emit = Box::new(move |event: DecodeEvent| {
+        let emit = Box::new(move |event: AudioEvent| {
             let _ = emit_raw_tx.send(event.clone());
-            let _ = emit_unified_tx.send(DecoderEvent::Decode(event));
+            let _ = emit_unified_tx.send(AudioPipelineEvent::Audio(event));
         });
 
-        // Use StreamDecodeSource for format change detection
-        let decode_source = StreamDecodeSource::new(
+        // Use StreamAudioSource for format change detection
+        let audio_source = StreamAudioSource::new(
             shared_stream,
             symphonia,
             initial_media_info,
             Arc::clone(&epoch),
             pcm_pool.clone(),
+            effects,
         )
         .with_emit(emit);
 
         std::thread::Builder::new()
-            .name("kithara-decode".to_string())
+            .name("kithara-audio".to_string())
             .spawn(move || {
-                run_decode_loop(decode_source, cmd_rx, data_tx);
+                run_audio_loop(audio_source, cmd_rx, data_tx);
             })
             .map_err(|e| {
                 DecodeError::Io(std::io::Error::other(format!(
-                    "failed to spawn decode thread: {}",
+                    "failed to spawn audio thread: {}",
                     e
                 )))
             })?;
@@ -1179,7 +1269,7 @@ where
             seek_base: Duration::ZERO,
             total_duration,
             metadata,
-            decode_events_tx,
+            audio_events_tx,
             unified_events: Some(Box::new(unified_tx)),
             cancel: Some(cancel),
             pcm_pool,
@@ -1188,17 +1278,17 @@ where
         })
     }
 
-    /// Subscribe to unified events (stream + decode).
-    pub fn events(&self) -> broadcast::Receiver<DecoderEvent<T::Event>> {
+    /// Subscribe to unified events (stream + audio).
+    pub fn events(&self) -> broadcast::Receiver<AudioPipelineEvent<T::Event>> {
         self.unified_events
             .as_ref()
-            .and_then(|any| any.downcast_ref::<broadcast::Sender<DecoderEvent<T::Event>>>())
-            .expect("unified_events always set for Stream-based decoders")
+            .and_then(|any| any.downcast_ref::<broadcast::Sender<AudioPipelineEvent<T::Event>>>())
+            .expect("unified_events always set for Stream-based audio")
             .subscribe()
     }
 }
 
-impl<S> Drop for Decoder<S> {
+impl<S> Drop for Audio<S> {
     fn drop(&mut self) {
         if let Some(ref cancel) = self.cancel {
             cancel.cancel();
@@ -1206,10 +1296,10 @@ impl<S> Drop for Decoder<S> {
     }
 }
 
-// PcmReader implementation for Decoder
-impl<S: Send> PcmReader for Decoder<S> {
+// PcmReader implementation for Audio
+impl<S: Send> PcmReader for Audio<S> {
     fn read(&mut self, buf: &mut [f32]) -> usize {
-        Decoder::read(self, buf)
+        Audio::read(self, buf)
     }
 
     fn read_planar(&mut self, output: &mut [&mut [f32]]) -> usize {
@@ -1234,95 +1324,36 @@ impl<S: Send> PcmReader for Decoder<S> {
     }
 
     fn seek(&mut self, position: Duration) -> DecodeResult<()> {
-        Decoder::seek(self, position)
+        Audio::seek(self, position)
     }
 
     fn spec(&self) -> PcmSpec {
-        Decoder::spec(self)
+        Audio::spec(self)
     }
 
     fn is_eof(&self) -> bool {
-        Decoder::is_eof(self)
+        Audio::is_eof(self)
     }
 
     fn position(&self) -> Duration {
-        Decoder::position(self)
+        Audio::position(self)
     }
 
     fn duration(&self) -> Option<Duration> {
-        Decoder::duration(self)
+        Audio::duration(self)
     }
 
     fn metadata(&self) -> &TrackMetadata {
-        Decoder::metadata(self)
+        Audio::metadata(self)
     }
 
-    fn decode_events(&self) -> broadcast::Receiver<DecodeEvent> {
-        Decoder::decode_events(self)
+    fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
+        Audio::decode_events(self)
     }
 
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
         self.host_sample_rate
             .store(sample_rate.get(), Ordering::Relaxed);
-    }
-}
-
-// rodio::Source implementation for Decoder
-#[cfg(feature = "rodio")]
-impl<S> Iterator for Decoder<S> {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.eof {
-            return None;
-        }
-
-        // Try to get sample from current chunk
-        if let Some(ref chunk) = self.current_chunk
-            && self.chunk_offset < chunk.len()
-        {
-            let sample = chunk[self.chunk_offset];
-            self.chunk_offset += 1;
-            self.samples_read += 1;
-            return Some(sample);
-        }
-
-        // Chunk exhausted or no chunk - need more data
-        if self.fill_buffer()
-            && let Some(ref chunk) = self.current_chunk
-            && self.chunk_offset < chunk.len()
-        {
-            let sample = chunk[self.chunk_offset];
-            self.chunk_offset += 1;
-            self.samples_read += 1;
-            return Some(sample);
-        }
-
-        None
-    }
-}
-
-#[cfg(feature = "rodio")]
-impl<S> rodio::Source for Decoder<S> {
-    fn current_span_len(&self) -> Option<usize> {
-        if let Some(ref chunk) = self.current_chunk
-            && self.chunk_offset < chunk.len()
-        {
-            return Some(chunk.len() - self.chunk_offset);
-        }
-        None
-    }
-
-    fn channels(&self) -> u16 {
-        self.spec.channels
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.spec.sample_rate
-    }
-
-    fn total_duration(&self) -> Option<std::time::Duration> {
-        self.total_duration
     }
 }
 
@@ -1375,24 +1406,24 @@ mod tests {
     }
 
     #[test]
-    fn test_decoder_from_source() {
+    fn test_audio_from_source() {
         let wav_data = create_test_wav(1000);
         let cursor = Cursor::new(wav_data);
 
-        let options = DecodeOptions::new().with_hint("wav");
-        let _decoder = Decoder::from_source(cursor, options).unwrap();
+        let options = AudioOptions::new().with_hint("wav");
+        let _audio = Audio::from_source(cursor, options).unwrap();
     }
 
     #[test]
-    fn test_decoder_receive_chunks() {
+    fn test_audio_receive_chunks() {
         let wav_data = create_test_wav(1000);
         let cursor = Cursor::new(wav_data);
 
-        let options = DecodeOptions::new().with_hint("wav");
-        let decoder = Decoder::from_source(cursor, options).unwrap();
+        let options = AudioOptions::new().with_hint("wav");
+        let audio = Audio::from_source(cursor, options).unwrap();
 
         let mut chunk_count = 0;
-        while let Ok(fetch) = decoder.pcm_rx().recv() {
+        while let Ok(fetch) = audio.pcm_rx().recv() {
             if fetch.is_eof() {
                 break;
             }
@@ -1407,12 +1438,12 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_options_with_media_info() {
+    fn test_audio_options_with_media_info() {
         let info = MediaInfo::default()
             .with_container(kithara_stream::ContainerFormat::Wav)
             .with_sample_rate(44100);
 
-        let options = DecodeOptions::new().with_media_info(info.clone());
+        let options = AudioOptions::new().with_media_info(info.clone());
 
         assert!(options.media_info.is_some());
         assert_eq!(
@@ -1422,31 +1453,31 @@ mod tests {
     }
 
     #[test]
-    fn test_decoder_spec() {
+    fn test_audio_spec() {
         let wav_data = create_test_wav(1000);
         let cursor = Cursor::new(wav_data);
 
-        let options = DecodeOptions::new().with_hint("wav");
-        let decoder = Decoder::from_source(cursor, options).unwrap();
+        let options = AudioOptions::new().with_hint("wav");
+        let audio = Audio::from_source(cursor, options).unwrap();
 
-        let spec = decoder.spec();
+        let spec = audio.spec();
         assert_eq!(spec.sample_rate, 44100);
         assert_eq!(spec.channels, 2);
     }
 
     #[test]
-    fn test_decoder_read() {
+    fn test_audio_read() {
         let wav_data = create_test_wav(1000);
         let cursor = Cursor::new(wav_data);
 
-        let options = DecodeOptions::new().with_hint("wav");
-        let mut decoder = Decoder::from_source(cursor, options).unwrap();
+        let options = AudioOptions::new().with_hint("wav");
+        let mut audio = Audio::from_source(cursor, options).unwrap();
 
         let mut buf = [0.0f32; 256];
         let mut total_read = 0;
 
-        while !decoder.is_eof() {
-            let n = decoder.read(&mut buf);
+        while !audio.is_eof() {
+            let n = audio.read(&mut buf);
             if n == 0 {
                 break;
             }
@@ -1454,58 +1485,58 @@ mod tests {
         }
 
         assert!(total_read > 0);
-        assert!(decoder.is_eof());
+        assert!(audio.is_eof());
     }
 
     #[test]
-    fn test_decoder_read_small_buffer() {
+    fn test_audio_read_small_buffer() {
         let wav_data = create_test_wav(100);
         let cursor = Cursor::new(wav_data);
 
-        let options = DecodeOptions::new().with_hint("wav");
-        let mut decoder = Decoder::from_source(cursor, options).unwrap();
+        let options = AudioOptions::new().with_hint("wav");
+        let mut audio = Audio::from_source(cursor, options).unwrap();
 
         // Read with very small buffer
         let mut buf = [0.0f32; 4];
-        let n = decoder.read(&mut buf);
+        let n = audio.read(&mut buf);
 
         assert_eq!(n, 4);
     }
 
     #[test]
-    fn test_decoder_is_eof() {
+    fn test_audio_is_eof() {
         let wav_data = create_test_wav(10);
         let cursor = Cursor::new(wav_data);
 
-        let options = DecodeOptions::new().with_hint("wav");
-        let mut decoder = Decoder::from_source(cursor, options).unwrap();
+        let options = AudioOptions::new().with_hint("wav");
+        let mut audio = Audio::from_source(cursor, options).unwrap();
 
-        assert!(!decoder.is_eof());
+        assert!(!audio.is_eof());
 
         // Read all data
         let mut buf = [0.0f32; 1024];
-        while decoder.read(&mut buf) > 0 {}
+        while audio.read(&mut buf) > 0 {}
 
-        assert!(decoder.is_eof());
+        assert!(audio.is_eof());
     }
 
     #[test]
-    fn test_decoder_seek() {
+    fn test_audio_seek() {
         let wav_data = create_test_wav(44100); // 1 second
         let cursor = Cursor::new(wav_data);
 
-        let options = DecodeOptions::new().with_hint("wav");
-        let mut decoder = Decoder::from_source(cursor, options).unwrap();
+        let options = AudioOptions::new().with_hint("wav");
+        let mut audio = Audio::from_source(cursor, options).unwrap();
 
         // Read some data
         let mut buf = [0.0f32; 256];
-        decoder.read(&mut buf);
+        audio.read(&mut buf);
 
         // Seek to beginning
-        let result = decoder.seek(Duration::from_secs(0));
+        let result = audio.seek(Duration::from_secs(0));
         assert!(result.is_ok());
 
         // Should be able to read again
-        assert!(!decoder.is_eof());
+        assert!(!audio.is_eof());
     }
 }

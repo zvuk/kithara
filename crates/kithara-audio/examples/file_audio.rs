@@ -1,20 +1,20 @@
-//! Example: Play audio from an HLS stream using Decoder.
+//! Example: Play audio from a progressive HTTP file using Audio pipeline.
 //!
-//! This demonstrates the decode architecture:
-//! - DecoderConfig::<Hls>::new(hls_config) creates config with stream settings
-//! - Decoder::new(config) creates stream and decoder
-//! - Decoder runs symphonia in separate thread with PCM buffer
-//! - Decoder impl rodio::Source for direct playback
+//! This demonstrates the audio architecture:
+//! - AudioConfig::<File>::new(file_config) creates config with stream settings
+//! - Audio::new(config) creates stream and audio pipeline
+//! - Audio runs symphonia in separate thread with PCM buffer
+//! - Audio impl rodio::Source for direct playback
 //!
 //! Run with:
 //! ```
-//! cargo run -p kithara-decode --example hls_decode --features rodio [URL]
+//! cargo run -p kithara-audio --example file_audio --features rodio [URL]
 //! ```
 
 use std::{env::args, error::Error};
 
-use kithara_decode::{Decoder, DecoderConfig};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
+use kithara_audio::{Audio, AudioConfig};
+use kithara_file::{File, FileConfig};
 use kithara_stream::Stream;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
@@ -25,8 +25,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::default()
-                .add_directive("kithara_decode=info".parse()?)
-                .add_directive("kithara_hls=info".parse()?)
+                .add_directive("kithara_audio=info".parse()?)
+                .add_directive("kithara_file=info".parse()?)
                 .add_directive("kithara_stream=info".parse()?)
                 .add_directive("kithara_net=warn".parse()?)
                 .add_directive("symphonia_format_isomp4=warn".parse()?)
@@ -36,21 +36,24 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .with_file(false)
         .init();
 
-    let url = args()
-        .nth(1)
-        .unwrap_or_else(|| "https://stream.silvercomet.top/hls/master.m3u8".to_string());
+    let url = args().nth(1).unwrap_or_else(|| {
+        "http://www.hyperion-records.co.uk/audiotest/14 Clementi Piano Sonata in D major, Op 25 No \
+         6 - Movement 2 Un poco andante.MP3"
+            .to_string()
+    });
     let url: Url = url.parse()?;
 
-    info!("Opening HLS stream: {}", url);
+    info!("Opening file: {}", url);
 
-    // Create decoder via target API
+    // Create audio pipeline
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(128);
-    let hls_config = HlsConfig::new(url).with_abr(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        ..Default::default()
-    });
-    let config = DecoderConfig::<Hls>::new(hls_config).with_events(events_tx);
-    let decoder = Decoder::<Stream<Hls>>::new(config).await?;
+    let hint = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
+    let file_config = FileConfig::new(url.into());
+    let mut config = AudioConfig::<File>::new(file_config).with_events(events_tx);
+    if let Some(ext) = hint {
+        config = config.with_hint(ext);
+    }
+    let audio = Audio::<Stream<File>>::new(config).await?;
 
     // Log events
     tokio::spawn(async move {
@@ -65,7 +68,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
         sink.set_volume(1.0);
-        sink.append(decoder);
+        sink.append(audio);
 
         info!("Playing...");
         sink.sleep_until_end();

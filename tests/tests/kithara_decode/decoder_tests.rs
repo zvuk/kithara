@@ -6,7 +6,7 @@ use std::io::Cursor;
 
 use fixture::EmbeddedAudio;
 use kithara_bufpool::SharedPool;
-use kithara_decode::SymphoniaDecoder;
+use kithara_decode::Decoder as SymphoniaDecoder;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use rstest::{fixture, rstest};
 

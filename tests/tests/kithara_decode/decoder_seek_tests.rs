@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use kithara_assets::StoreOptions;
-use kithara_decode::{DecodeEvent, Decoder, DecoderConfig, DecoderEvent};
+use kithara_audio::{Audio, AudioConfig, AudioEvent, AudioPipelineEvent};
 use kithara_file::{File, FileConfig};
 use kithara_stream::Stream;
 use rstest::{fixture, rstest};
@@ -36,9 +36,9 @@ async fn decoder_file_creates_successfully(#[future] server: AudioTestServer, te
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
-    let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
+    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
 
-    let decoder = Decoder::<Stream<File>>::new(config).await.unwrap();
+    let decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
     let spec = decoder.spec();
     assert!(spec.sample_rate > 0);
@@ -56,8 +56,8 @@ async fn decoder_file_reads_samples(#[future] server: AudioTestServer, temp_dir:
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
-    let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
-    let mut decoder = Decoder::<Stream<File>>::new(config).await.unwrap();
+    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {
         let mut buf = [0.0f32; 1024];
@@ -79,8 +79,8 @@ async fn decoder_file_seek_to_zero(#[future] server: AudioTestServer, temp_dir: 
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
-    let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
-    let mut decoder = Decoder::<Stream<File>>::new(config).await.unwrap();
+    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {
         let mut buf = [0.0f32; 1024];
@@ -108,8 +108,8 @@ async fn decoder_file_seek_forward(#[future] server: AudioTestServer, temp_dir: 
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
-    let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
-    let mut decoder = Decoder::<Stream<File>>::new(config).await.unwrap();
+    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
     let spec = decoder.spec();
     assert!(spec.sample_rate > 0);
@@ -150,8 +150,8 @@ async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir:
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
-    let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
-    let mut decoder = Decoder::<Stream<File>>::new(config).await.unwrap();
+    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {
         // Read some data to advance position.
@@ -195,8 +195,8 @@ async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir:
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
-    let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
-    let mut decoder = Decoder::<Stream<File>>::new(config).await.unwrap();
+    let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
+    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {
         let mut buf = [0.0f32; 512];
@@ -238,15 +238,15 @@ async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_
     let url = server.mp3_url();
 
     let (events_tx, mut events_rx) =
-        tokio::sync::broadcast::channel::<DecoderEvent<kithara_file::FileEvent>>(64);
+        tokio::sync::broadcast::channel::<AudioPipelineEvent<kithara_file::FileEvent>>(64);
 
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
-    let config = DecoderConfig::<File>::new(file_config)
+    let config = AudioConfig::<File>::new(file_config)
         .with_hint("mp3")
         .with_events(events_tx);
-    let mut decoder = Decoder::<Stream<File>>::new(config).await.unwrap();
+    let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
     // Read + seek in blocking thread.
     tokio::task::spawn_blocking(move || {
@@ -269,8 +269,8 @@ async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_
     let mut got_seek = false;
     while let Ok(ev) = events_rx.try_recv() {
         match ev {
-            DecoderEvent::Decode(DecodeEvent::FormatDetected { .. }) => got_format = true,
-            DecoderEvent::Decode(DecodeEvent::SeekComplete { .. }) => got_seek = true,
+            AudioPipelineEvent::Audio(AudioEvent::FormatDetected { .. }) => got_format = true,
+            AudioPipelineEvent::Audio(AudioEvent::SeekComplete { .. }) => got_seek = true,
             _ => {}
         }
     }

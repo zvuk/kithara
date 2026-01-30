@@ -310,10 +310,8 @@ mod tests {
     #[test]
     fn test_asset_root_query_differs_but_name_distinguishes() {
         // URLs that differ only in query params — canonicalization strips them.
-        let url1 =
-            Url::parse("https://cdn.example.com/stream?track_id=123&token=abc").unwrap();
-        let url2 =
-            Url::parse("https://cdn.example.com/stream?track_id=456&token=def").unwrap();
+        let url1 = Url::parse("https://cdn.example.com/stream?track_id=123&token=abc").unwrap();
+        let url2 = Url::parse("https://cdn.example.com/stream?track_id=456&token=def").unwrap();
 
         // Without name: same root (the bug scenario).
         let root1_no_name = asset_root_for_url(&url1, None);

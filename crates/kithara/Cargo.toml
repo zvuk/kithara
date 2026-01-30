@@ -5,6 +5,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+kithara-audio = { workspace = true }
 kithara-decode = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-file = { workspace = true, optional = true }
@@ -26,7 +27,7 @@ hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-
 assets = ["dep:kithara-assets", "dep:kithara-storage"]
 net = ["dep:kithara-net"]
 bufpool = []
-rodio = ["dep:rodio", "kithara-decode/rodio"]
+rodio = ["dep:rodio", "kithara-audio/rodio"]
 full = ["file", "hls", "assets", "net", "bufpool"]
 
 [dev-dependencies]

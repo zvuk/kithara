@@ -20,6 +20,10 @@
 
 // ── Re-export sub-crates ────────────────────────────────────────────────
 
+pub mod audio {
+    pub use kithara_audio::*;
+}
+
 pub mod decode {
     pub use kithara_decode::*;
 }
@@ -63,6 +67,8 @@ pub mod bufpool {
 mod config;
 mod events;
 mod resource;
+#[cfg(feature = "rodio")]
+mod rodio_impl;
 mod source_type;
 
 pub use config::{ResourceConfig, ResourceSrc};
@@ -73,10 +79,8 @@ pub use source_type::SourceType;
 // ── Prelude ─────────────────────────────────────────────────────────────
 
 pub mod prelude {
-    pub use kithara_decode::{
-        DecodeError, DecodeOptions, DecodeResult, Decoder, DecoderConfig, PcmReader, PcmSpec,
-        TrackMetadata,
-    };
+    pub use kithara_audio::{Audio, AudioConfig, AudioOptions, PcmReader};
+    pub use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
     #[cfg(feature = "file")]
     pub use kithara_file::{File, FileConfig};
     #[cfg(feature = "hls")]

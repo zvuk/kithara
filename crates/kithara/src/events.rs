@@ -1,17 +1,18 @@
 #![forbid(unsafe_code)]
 
-//! Unified events for the full decode chain.
+//! Unified events for the full audio chain.
 
 use std::time::Duration;
 
-use kithara_decode::{DecodeEvent, DecoderEvent, PcmSpec};
+use kithara_audio::{AudioEvent, AudioPipelineEvent};
+use kithara_decode::PcmSpec;
 
-/// Unified events for the full decode chain.
+/// Unified events for the full audio chain.
 ///
-/// Maps events from all layers (decode, file, HLS) into a single enum.
+/// Maps events from all layers (audio, file, HLS) into a single enum.
 #[derive(Debug, Clone)]
 pub enum ResourceEvent {
-    // -- Decode events --------------------------------------------------------
+    // -- Audio events ---------------------------------------------------------
     /// Audio format detected on first decoded chunk.
     FormatDetected { spec: PcmSpec },
     /// Audio format changed (e.g. after ABR switch).
@@ -69,13 +70,13 @@ pub enum ResourceEvent {
 
 // -- From conversions ---------------------------------------------------------
 
-impl From<DecodeEvent> for ResourceEvent {
-    fn from(e: DecodeEvent) -> Self {
+impl From<AudioEvent> for ResourceEvent {
+    fn from(e: AudioEvent) -> Self {
         match e {
-            DecodeEvent::FormatDetected { spec } => Self::FormatDetected { spec },
-            DecodeEvent::FormatChanged { old, new } => Self::FormatChanged { old, new },
-            DecodeEvent::SeekComplete { position } => Self::SeekComplete { position },
-            DecodeEvent::EndOfStream => Self::EndOfStream,
+            AudioEvent::FormatDetected { spec } => Self::FormatDetected { spec },
+            AudioEvent::FormatChanged { old, new } => Self::FormatChanged { old, new },
+            AudioEvent::SeekComplete { position } => Self::SeekComplete { position },
+            AudioEvent::EndOfStream => Self::EndOfStream,
         }
     }
 }
@@ -103,11 +104,11 @@ impl From<kithara_file::FileEvent> for ResourceEvent {
 }
 
 #[cfg(feature = "file")]
-impl From<DecoderEvent<kithara_file::FileEvent>> for ResourceEvent {
-    fn from(e: DecoderEvent<kithara_file::FileEvent>) -> Self {
+impl From<AudioPipelineEvent<kithara_file::FileEvent>> for ResourceEvent {
+    fn from(e: AudioPipelineEvent<kithara_file::FileEvent>) -> Self {
         match e {
-            DecoderEvent::Stream(se) => se.into(),
-            DecoderEvent::Decode(de) => de.into(),
+            AudioPipelineEvent::Stream(se) => se.into(),
+            AudioPipelineEvent::Audio(de) => de.into(),
         }
     }
 }
@@ -178,11 +179,11 @@ impl From<kithara_hls::HlsEvent> for ResourceEvent {
 }
 
 #[cfg(feature = "hls")]
-impl From<DecoderEvent<kithara_hls::HlsEvent>> for ResourceEvent {
-    fn from(e: DecoderEvent<kithara_hls::HlsEvent>) -> Self {
+impl From<AudioPipelineEvent<kithara_hls::HlsEvent>> for ResourceEvent {
+    fn from(e: AudioPipelineEvent<kithara_hls::HlsEvent>) -> Self {
         match e {
-            DecoderEvent::Stream(se) => se.into(),
-            DecoderEvent::Decode(de) => de.into(),
+            AudioPipelineEvent::Stream(se) => se.into(),
+            AudioPipelineEvent::Audio(de) => de.into(),
         }
     }
 }

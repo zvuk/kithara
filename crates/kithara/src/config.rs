@@ -6,8 +6,9 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
+use kithara_audio::{AudioConfig, AudioOptions};
 use kithara_bufpool::SharedPool;
-use kithara_decode::{DecodeError, DecodeOptions, DecoderConfig};
+use kithara_decode::DecodeError;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::NetOptions;
 use tokio_util::sync::CancellationToken;
@@ -36,7 +37,7 @@ impl From<PathBuf> for ResourceSrc {
 
 /// Unified configuration for creating a [`Resource`](crate::Resource).
 ///
-/// Wraps source, decode options, and protocol-specific settings into a single
+/// Wraps source, audio options, and protocol-specific settings into a single
 /// builder. `Resource::new(config)` auto-detects the stream type from the input.
 ///
 /// # Example
@@ -52,7 +53,7 @@ impl From<PathBuf> for ResourceSrc {
 ///
 /// // With options
 /// let config = ResourceConfig::new("https://example.com/playlist.m3u8")?
-///     .with_decode(DecodeOptions::new().with_hint("mp3"))
+///     .with_decode(AudioOptions::new().with_hint("mp3"))
 ///     .with_look_ahead_bytes(1_000_000);
 /// ```
 pub struct ResourceConfig {
@@ -66,8 +67,8 @@ pub struct ResourceConfig {
     pub name: Option<String>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// Decode-specific options (buffer sizes, format hints, etc.)
-    pub decode: DecodeOptions,
+    /// Audio-specific options (buffer sizes, format hints, etc.)
+    pub decode: AudioOptions,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub look_ahead_bytes: u64,
     /// Storage configuration (cache directory, eviction limits).
@@ -118,7 +119,7 @@ impl ResourceConfig {
             src,
             name: None,
             cancel: None,
-            decode: DecodeOptions::new(),
+            decode: AudioOptions::new(),
             look_ahead_bytes: 500_000,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
@@ -148,8 +149,8 @@ impl ResourceConfig {
         self
     }
 
-    /// Set decode options.
-    pub fn with_decode(mut self, decode: DecodeOptions) -> Self {
+    /// Set audio options.
+    pub fn with_decode(mut self, decode: AudioOptions) -> Self {
         self.decode = decode;
         self
     }
@@ -162,14 +163,14 @@ impl ResourceConfig {
 
     /// Set shared PCM pool for temporary buffers.
     ///
-    /// The pool is shared across the entire decode chain, eliminating
+    /// The pool is shared across the entire audio chain, eliminating
     /// per-call allocations in `read_planar` and internal decode buffers.
     pub fn with_pcm_pool(mut self, pool: SharedPool<32, Vec<f32>>) -> Self {
         self.decode = self.decode.with_pcm_pool(pool);
         self
     }
 
-    /// Set target sample rate of the audio host (for future resampling).
+    /// Set target sample rate of the audio host (for resampling).
     pub fn with_host_sample_rate(mut self, sample_rate: NonZeroU32) -> Self {
         self.decode = self.decode.with_host_sample_rate(sample_rate);
         self
@@ -218,9 +219,9 @@ impl ResourceConfig {
 
     // -- Internal conversions -------------------------------------------------
 
-    /// Convert into a `DecoderConfig<File>`.
+    /// Convert into an `AudioConfig<File>`.
     #[cfg(feature = "file")]
-    pub(crate) fn into_file_config(self) -> DecoderConfig<kithara_file::File> {
+    pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {
         let (file_src, hint) = match self.src {
             ResourceSrc::Url(url) => {
                 let h = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
@@ -249,7 +250,7 @@ impl ResourceConfig {
         }
 
         let mut config =
-            DecoderConfig::<kithara_file::File>::new(file_config).with_decode(self.decode);
+            AudioConfig::<kithara_file::File>::new(file_config).with_decode(self.decode);
 
         if let Some(ext) = hint
             && config.decode.hint.is_none()
@@ -260,9 +261,9 @@ impl ResourceConfig {
         config
     }
 
-    /// Convert into a `DecoderConfig<Hls>`.
+    /// Convert into an `AudioConfig<Hls>`.
     #[cfg(feature = "hls")]
-    pub(crate) fn into_hls_config(self) -> Result<DecoderConfig<kithara_hls::Hls>, DecodeError> {
+    pub(crate) fn into_hls_config(self) -> Result<AudioConfig<kithara_hls::Hls>, DecodeError> {
         let url = match self.src {
             ResourceSrc::Url(url) => url,
             ResourceSrc::Path(p) => {
@@ -291,7 +292,7 @@ impl ResourceConfig {
             hls_config = hls_config.with_cancel(cancel);
         }
 
-        Ok(DecoderConfig::<kithara_hls::Hls>::new(hls_config).with_decode(self.decode))
+        Ok(AudioConfig::<kithara_hls::Hls>::new(hls_config).with_decode(self.decode))
     }
 }
 

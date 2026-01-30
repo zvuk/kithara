@@ -4,10 +4,8 @@
 
 use std::{num::NonZeroU32, time::Duration};
 
-use kithara_decode::{
-    DecodeEvent, DecodeResult, Decoder, DecoderConfig, DecoderEvent, PcmReader, PcmSpec,
-    TrackMetadata,
-};
+use kithara_audio::{Audio, AudioConfig, AudioEvent, AudioPipelineEvent, PcmReader};
+use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
 use tokio::sync::broadcast;
 
 use crate::{config::ResourceConfig, events::ResourceEvent, source_type::SourceType};
@@ -35,7 +33,7 @@ use crate::{config::ResourceConfig, events::ResourceEvent, source_type::SourceTy
 /// resource.read(&mut buf);
 /// ```
 pub struct Resource {
-    inner: Box<dyn PcmReader>,
+    pub(crate) inner: Box<dyn PcmReader>,
     events_tx: broadcast::Sender<ResourceEvent>,
 }
 
@@ -50,26 +48,26 @@ impl Resource {
         match source_type {
             #[cfg(feature = "file")]
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
-                let decoder_config = config.into_file_config();
-                Self::from_file(decoder_config).await
+                let audio_config = config.into_file_config();
+                Self::from_file(audio_config).await
             }
             #[cfg(feature = "hls")]
             SourceType::HlsStream(_) => {
-                let decoder_config = config.into_hls_config()?;
-                Self::from_hls(decoder_config).await
+                let audio_config = config.into_hls_config()?;
+                Self::from_hls(audio_config).await
             }
         }
     }
 
     /// Create a resource from any `PcmReader`.
     ///
-    /// Only decode events are forwarded. Use this for custom sources.
+    /// Only audio events are forwarded. Use this for custom sources.
     pub fn from_reader(reader: impl PcmReader + 'static) -> Self {
         let (events_tx, _) = broadcast::channel(64);
 
         let forward_tx = events_tx.clone();
         let decode_rx = reader.decode_events();
-        Self::spawn_decode_forward(decode_rx, forward_tx);
+        Self::spawn_audio_forward(decode_rx, forward_tx);
 
         Self {
             inner: Box::new(reader),
@@ -77,39 +75,39 @@ impl Resource {
         }
     }
 
-    /// Create a resource from a file decoder config.
+    /// Create a resource from a file audio config.
     ///
-    /// Use this when you need to customize `FileConfig` or `DecodeOptions`
+    /// Use this when you need to customize `FileConfig` or `AudioOptions`
     /// beyond what `Resource::new()` provides.
     #[cfg(feature = "file")]
-    pub async fn from_file(config: DecoderConfig<kithara_file::File>) -> DecodeResult<Self> {
+    pub async fn from_file(config: AudioConfig<kithara_file::File>) -> DecodeResult<Self> {
         use kithara_stream::Stream;
 
-        let decoder = Decoder::<Stream<kithara_file::File>>::new(config).await?;
+        let audio = Audio::<Stream<kithara_file::File>>::new(config).await?;
 
         let (events_tx, _) = broadcast::channel(64);
-        Self::spawn_typed_forward(decoder.events(), events_tx.clone());
+        Self::spawn_typed_forward(audio.events(), events_tx.clone());
 
         Ok(Self {
-            inner: Box::new(decoder),
+            inner: Box::new(audio),
             events_tx,
         })
     }
 
-    /// Create a resource from an HLS decoder config.
+    /// Create a resource from an HLS audio config.
     ///
     /// Use this when you need to customize `HlsConfig`, ABR, keys, etc.
     #[cfg(feature = "hls")]
-    pub async fn from_hls(config: DecoderConfig<kithara_hls::Hls>) -> DecodeResult<Self> {
+    pub async fn from_hls(config: AudioConfig<kithara_hls::Hls>) -> DecodeResult<Self> {
         use kithara_stream::Stream;
 
-        let decoder = Decoder::<Stream<kithara_hls::Hls>>::new(config).await?;
+        let audio = Audio::<Stream<kithara_hls::Hls>>::new(config).await?;
 
         let (events_tx, _) = broadcast::channel(64);
-        Self::spawn_typed_forward(decoder.events(), events_tx.clone());
+        Self::spawn_typed_forward(audio.events(), events_tx.clone());
 
         Ok(Self {
-            inner: Box::new(decoder),
+            inner: Box::new(audio),
             events_tx,
         })
     }
@@ -161,7 +159,7 @@ impl Resource {
 
     /// Set the target sample rate of the audio host.
     ///
-    /// Updates the decoder's host sample rate for future resampling support.
+    /// Updates the audio pipeline's host sample rate for resampling.
     /// Can be called at any time to reflect host sample rate changes.
     pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
         self.inner.set_host_sample_rate(sample_rate);
@@ -169,13 +167,13 @@ impl Resource {
 
     // -- Internal helpers -----------------------------------------------------
 
-    fn spawn_decode_forward(
-        mut decode_rx: broadcast::Receiver<DecodeEvent>,
+    fn spawn_audio_forward(
+        mut audio_rx: broadcast::Receiver<AudioEvent>,
         forward_tx: broadcast::Sender<ResourceEvent>,
     ) {
         tokio::spawn(async move {
             loop {
-                match decode_rx.recv().await {
+                match audio_rx.recv().await {
                     Ok(event) => {
                         let _ = forward_tx.send(event.into());
                     }
@@ -187,11 +185,11 @@ impl Resource {
     }
 
     fn spawn_typed_forward<E>(
-        mut typed_rx: broadcast::Receiver<DecoderEvent<E>>,
+        mut typed_rx: broadcast::Receiver<AudioPipelineEvent<E>>,
         forward_tx: broadcast::Sender<ResourceEvent>,
     ) where
         E: Clone + Send + 'static,
-        ResourceEvent: From<DecoderEvent<E>>,
+        ResourceEvent: From<AudioPipelineEvent<E>>,
     {
         tokio::spawn(async move {
             loop {
@@ -204,43 +202,5 @@ impl Resource {
                 }
             }
         });
-    }
-}
-
-// -- rodio::Source implementation ----------------------------------------------
-
-#[cfg(feature = "rodio")]
-impl Iterator for Resource {
-    type Item = f32;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.inner.is_eof() {
-            return None;
-        }
-        let mut sample = [0.0f32; 1];
-        if self.inner.read(&mut sample) == 1 {
-            Some(sample[0])
-        } else {
-            None
-        }
-    }
-}
-
-#[cfg(feature = "rodio")]
-impl rodio::Source for Resource {
-    fn current_span_len(&self) -> Option<usize> {
-        None
-    }
-
-    fn channels(&self) -> u16 {
-        self.inner.spec().channels
-    }
-
-    fn sample_rate(&self) -> u32 {
-        self.inner.spec().sample_rate
-    }
-
-    fn total_duration(&self) -> Option<Duration> {
-        self.inner.duration()
     }
 }
