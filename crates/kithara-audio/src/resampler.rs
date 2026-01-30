@@ -215,10 +215,10 @@ impl ResamplerProcessor {
             chunk_size: params.chunk_size,
             input_buffer: smallvec_new_vecs(channels),
             output_spec,
-            temp_input_slice: SmallVec::with_capacity(channels),
-            temp_output_bufs: SmallVec::with_capacity(channels),
+            temp_input_slice: smallvec_new_vecs(channels),
+            temp_output_bufs: smallvec_new_vecs(channels),
             temp_output_all: smallvec_new_vecs(channels),
-            temp_deinterleave: SmallVec::with_capacity(channels),
+            temp_deinterleave: smallvec_new_vecs(channels),
             pool: pcm_pool().clone(),
         };
 
@@ -430,12 +430,9 @@ impl ResamplerProcessor {
     }
 
     fn ensure_temp_buffers(&mut self, channels: usize) {
-        if self.temp_input_slice.len() < channels {
-            self.temp_input_slice.resize_with(channels, Vec::new);
-        }
-        if self.temp_output_bufs.len() < channels {
-            self.temp_output_bufs.resize_with(channels, Vec::new);
-        }
+        // Vec's already exist from initialization, just resize if channels changed
+        debug_assert!(self.temp_input_slice.len() >= channels);
+        debug_assert!(self.temp_output_bufs.len() >= channels);
     }
 
     fn resample(&mut self, chunk: &PcmChunk<f32>) -> Option<PcmChunk<f32>> {
@@ -518,14 +515,11 @@ impl ResamplerProcessor {
 
         let frames = interleaved.len() / self.channels;
 
-        // Ensure temp buffers are sized correctly
-        if self.temp_deinterleave.len() < self.channels {
-            self.temp_deinterleave
-                .resize_with(self.channels, Vec::new);
-        }
+        // Vec's already exist from initialization, just resize to needed frames
+        debug_assert!(self.temp_deinterleave.len() >= self.channels);
 
         // Resize each channel buffer to needed size (reuses existing capacity)
-        for buf in &mut self.temp_deinterleave {
+        for buf in &mut self.temp_deinterleave[..self.channels] {
             buf.resize(frames, 0.0);
         }
 
@@ -535,15 +529,13 @@ impl ResamplerProcessor {
         deinterleave_variable(
             interleaved,
             num_channels,
-            &mut self.temp_deinterleave[..],
+            &mut self.temp_deinterleave[..self.channels],
             0..frames,
         );
 
         // Append deinterleaved data to existing input buffers
-        for (ch, channel_data) in self.temp_deinterleave.iter().enumerate() {
-            if ch < self.input_buffer.len() {
-                self.input_buffer[ch].extend_from_slice(&channel_data[..frames]);
-            }
+        for ch in 0..self.channels {
+            self.input_buffer[ch].extend_from_slice(&self.temp_deinterleave[ch][..frames]);
         }
     }
 
