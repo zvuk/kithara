@@ -46,16 +46,16 @@ impl Resource {
     /// - URLs ending with `.m3u8` -> HLS stream
     /// - All other URLs -> progressive file download
     pub async fn new(config: ResourceConfig) -> DecodeResult<Self> {
-        let source_type = SourceType::detect(config.url.as_str())?;
+        let source_type = SourceType::detect(&config.src)?;
         match source_type {
             #[cfg(feature = "file")]
-            SourceType::RemoteFile(_) => {
+            SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let decoder_config = config.into_file_config();
                 Self::from_file(decoder_config).await
             }
             #[cfg(feature = "hls")]
             SourceType::HlsStream(_) => {
-                let decoder_config = config.into_hls_config();
+                let decoder_config = config.into_hls_config()?;
                 Self::from_hls(decoder_config).await
             }
         }

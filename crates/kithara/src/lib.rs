@@ -65,7 +65,7 @@ mod events;
 mod resource;
 mod source_type;
 
-pub use config::ResourceConfig;
+pub use config::{ResourceConfig, ResourceSrc};
 pub use events::ResourceEvent;
 pub use resource::Resource;
 pub use source_type::SourceType;

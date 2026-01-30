@@ -2,6 +2,8 @@
 
 //! Configuration for [`Resource`](crate::Resource).
 
+use std::path::PathBuf;
+
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
 use kithara_bufpool::SharedPool;
@@ -11,18 +13,42 @@ use kithara_net::NetOptions;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
+/// Source of an audio resource: either a URL or a local file path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResourceSrc {
+    /// Remote resource accessed via URL (HTTP/HTTPS, or other schemes).
+    Url(Url),
+    /// Local file accessed directly from disk.
+    Path(PathBuf),
+}
+
+impl From<Url> for ResourceSrc {
+    fn from(url: Url) -> Self {
+        Self::Url(url)
+    }
+}
+
+impl From<PathBuf> for ResourceSrc {
+    fn from(path: PathBuf) -> Self {
+        Self::Path(path)
+    }
+}
+
 /// Unified configuration for creating a [`Resource`](crate::Resource).
 ///
-/// Wraps URL, decode options, and protocol-specific settings into a single
-/// builder. `Resource::new(config)` auto-detects the stream type from the URL.
+/// Wraps source, decode options, and protocol-specific settings into a single
+/// builder. `Resource::new(config)` auto-detects the stream type from the input.
 ///
 /// # Example
 ///
 /// ```ignore
 /// use kithara::ResourceConfig;
 ///
-/// // Minimal
+/// // From URL
 /// let config = ResourceConfig::new("https://example.com/song.mp3")?;
+///
+/// // From local path
+/// let config = ResourceConfig::new("/path/to/song.mp3")?;
 ///
 /// // With options
 /// let config = ResourceConfig::new("https://example.com/playlist.m3u8")?
@@ -30,8 +56,8 @@ use url::Url;
 ///     .with_look_ahead_bytes(1_000_000);
 /// ```
 pub struct ResourceConfig {
-    /// Parsed URL of the audio resource.
-    pub url: Url,
+    /// Audio resource source (URL or local path).
+    pub src: ResourceSrc,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Decode-specific options (buffer sizes, format hints, etc.)
@@ -56,15 +82,34 @@ pub struct ResourceConfig {
 }
 
 impl ResourceConfig {
-    /// Create a new config from a URL string.
+    /// Create a new config from a URL string or local file path.
     ///
-    /// Parses the URL and applies default settings for all options.
-    pub fn new(url: impl AsRef<str>) -> Result<Self, DecodeError> {
-        let parsed = Url::parse(url.as_ref().trim())
-            .map_err(|e| DecodeError::DecodeError(format!("invalid URL: {e}")))?;
+    /// Parses the input as a URL first. If parsing fails, treats it as a local
+    /// file path (must be absolute). A `file://` URL is normalized to a `Path`.
+    pub fn new(input: impl AsRef<str>) -> Result<Self, DecodeError> {
+        let trimmed = input.as_ref().trim();
+
+        let src = match Url::parse(trimmed) {
+            Ok(url) if url.scheme() == "file" => {
+                let path = url.to_file_path().map_err(|()| {
+                    DecodeError::DecodeError(format!("invalid file URL: {trimmed}"))
+                })?;
+                ResourceSrc::Path(path)
+            }
+            Ok(url) => ResourceSrc::Url(url),
+            Err(_) => {
+                let path = PathBuf::from(trimmed);
+                if !path.is_absolute() {
+                    return Err(DecodeError::DecodeError(format!(
+                        "invalid URL or file path (must be absolute): {trimmed}"
+                    )));
+                }
+                ResourceSrc::Path(path)
+            }
+        };
 
         Ok(Self {
-            url: parsed,
+            src,
             cancel: None,
             decode: DecodeOptions::new(),
             look_ahead_bytes: 500_000,
@@ -154,14 +199,21 @@ impl ResourceConfig {
     /// Convert into a `DecoderConfig<File>`.
     #[cfg(feature = "file")]
     pub(crate) fn into_file_config(self) -> DecoderConfig<kithara_file::File> {
-        let hint = self
-            .url
-            .path()
-            .rsplit('.')
-            .next()
-            .map(|ext| ext.to_lowercase());
+        let (file_src, hint) = match self.src {
+            ResourceSrc::Url(url) => {
+                let h = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
+                (kithara_file::FileSrc::Remote(url), h)
+            }
+            ResourceSrc::Path(path) => {
+                let h = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.to_lowercase());
+                (kithara_file::FileSrc::Local(path), h)
+            }
+        };
 
-        let mut file_config = kithara_file::FileConfig::new(self.url)
+        let mut file_config = kithara_file::FileConfig::new(file_src)
             .with_store(self.store)
             .with_net(self.net)
             .with_look_ahead_bytes(self.look_ahead_bytes);
@@ -184,8 +236,18 @@ impl ResourceConfig {
 
     /// Convert into a `DecoderConfig<Hls>`.
     #[cfg(feature = "hls")]
-    pub(crate) fn into_hls_config(self) -> DecoderConfig<kithara_hls::Hls> {
-        let mut hls_config = kithara_hls::HlsConfig::new(self.url)
+    pub(crate) fn into_hls_config(self) -> Result<DecoderConfig<kithara_hls::Hls>, DecodeError> {
+        let url = match self.src {
+            ResourceSrc::Url(url) => url,
+            ResourceSrc::Path(p) => {
+                return Err(DecodeError::DecodeError(format!(
+                    "HLS requires a URL, got local path: {}",
+                    p.display()
+                )));
+            }
+        };
+
+        let mut hls_config = kithara_hls::HlsConfig::new(url)
             .with_store(self.store)
             .with_net(self.net)
             .with_abr(self.abr)
@@ -199,6 +261,39 @@ impl ResourceConfig {
             hls_config = hls_config.with_cancel(cancel);
         }
 
-        DecoderConfig::<kithara_hls::Hls>::new(hls_config).with_decode(self.decode)
+        Ok(DecoderConfig::<kithara_hls::Hls>::new(hls_config).with_decode(self.decode))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn config_from_http_url() {
+        let config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        assert!(matches!(&config.src, ResourceSrc::Url(url) if url.scheme() == "https"));
+    }
+
+    #[test]
+    fn config_from_absolute_path() {
+        let config = ResourceConfig::new("/tmp/song.mp3").unwrap();
+        assert!(
+            matches!(&config.src, ResourceSrc::Path(p) if p == std::path::Path::new("/tmp/song.mp3"))
+        );
+    }
+
+    #[test]
+    fn config_from_file_url_normalizes_to_path() {
+        let config = ResourceConfig::new("file:///tmp/song.mp3").unwrap();
+        assert!(
+            matches!(&config.src, ResourceSrc::Path(p) if p == std::path::Path::new("/tmp/song.mp3"))
+        );
+    }
+
+    #[test]
+    fn config_relative_path_fails() {
+        let config = ResourceConfig::new("relative/path.mp3");
+        assert!(config.is_err());
     }
 }

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use kithara_assets::StoreOptions;
 use kithara_net::NetOptions;
 use tokio::sync::broadcast;
@@ -6,13 +8,34 @@ use url::Url;
 
 use crate::FileEvent;
 
+/// Source of a file stream: either a remote URL or a local path.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileSrc {
+    /// Remote file accessed via HTTP(S).
+    Remote(Url),
+    /// Local file accessed directly from disk.
+    Local(PathBuf),
+}
+
+impl From<Url> for FileSrc {
+    fn from(url: Url) -> Self {
+        Self::Remote(url)
+    }
+}
+
+impl From<PathBuf> for FileSrc {
+    fn from(path: PathBuf) -> Self {
+        Self::Local(path)
+    }
+}
+
 /// Configuration for file streaming.
 ///
 /// Used with `Stream::<File>::new(config)`.
 #[derive(Clone, Debug)]
 pub struct FileConfig {
-    /// File URL.
-    pub url: Url,
+    /// File source (remote URL or local path).
+    pub src: FileSrc,
     /// Storage configuration.
     pub store: StoreOptions,
     /// Network configuration.
@@ -30,7 +53,9 @@ pub struct FileConfig {
 impl Default for FileConfig {
     fn default() -> Self {
         Self {
-            url: Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
+            src: FileSrc::Remote(
+                Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
+            ),
             store: StoreOptions::default(),
             net: NetOptions::default(),
             cancel: None,
@@ -42,10 +67,10 @@ impl Default for FileConfig {
 }
 
 impl FileConfig {
-    /// Create new file config with URL.
-    pub fn new(url: Url) -> Self {
+    /// Create new file config with source.
+    pub fn new(src: FileSrc) -> Self {
         Self {
-            url,
+            src,
             store: StoreOptions::default(),
             net: NetOptions::default(),
             cancel: None,
@@ -94,25 +119,36 @@ impl FileConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
 
-    fn test_url() -> Url {
-        Url::parse("http://example.com/audio.mp3").unwrap()
+    fn test_src() -> FileSrc {
+        FileSrc::Remote(Url::parse("http://example.com/audio.mp3").unwrap())
     }
 
     #[test]
     fn test_file_config_new() {
-        let config = FileConfig::new(test_url());
+        let config = FileConfig::new(test_src());
 
-        assert_eq!(config.url.as_str(), "http://example.com/audio.mp3");
+        assert!(
+            matches!(&config.src, FileSrc::Remote(url) if url.as_str() == "http://example.com/audio.mp3")
+        );
         assert!(config.events_tx.is_none());
         assert!(config.cancel.is_none());
     }
 
     #[test]
+    fn test_local_src() {
+        let config = FileConfig::new(FileSrc::Local(PathBuf::from("/tmp/song.mp3")));
+
+        assert!(matches!(&config.src, FileSrc::Local(p) if p == Path::new("/tmp/song.mp3")));
+    }
+
+    #[test]
     fn test_with_store() {
         let store = StoreOptions::default();
-        let config = FileConfig::new(test_url()).with_store(store);
+        let config = FileConfig::new(test_src()).with_store(store);
 
         assert!(config.events_tx.is_none());
     }
@@ -120,7 +156,7 @@ mod tests {
     #[test]
     fn test_with_net() {
         let net = NetOptions::default();
-        let config = FileConfig::new(test_url()).with_net(net);
+        let config = FileConfig::new(test_src()).with_net(net);
 
         assert!(config.events_tx.is_none());
     }
@@ -128,7 +164,7 @@ mod tests {
     #[test]
     fn test_with_cancel() {
         let cancel = CancellationToken::new();
-        let config = FileConfig::new(test_url()).with_cancel(cancel.clone());
+        let config = FileConfig::new(test_src()).with_cancel(cancel.clone());
 
         assert!(config.cancel.is_some());
     }
@@ -136,7 +172,7 @@ mod tests {
     #[test]
     fn test_with_events() {
         let (events_tx, _events_rx) = broadcast::channel(32);
-        let config = FileConfig::new(test_url()).with_events(events_tx);
+        let config = FileConfig::new(test_src()).with_events(events_tx);
 
         assert!(config.events_tx.is_some());
     }
@@ -148,7 +184,7 @@ mod tests {
         let cancel = CancellationToken::new();
         let (events_tx, _) = broadcast::channel(32);
 
-        let config = FileConfig::new(test_url())
+        let config = FileConfig::new(test_src())
             .with_store(store)
             .with_net(net)
             .with_cancel(cancel.clone())
@@ -160,7 +196,7 @@ mod tests {
 
     #[test]
     fn test_debug_impl() {
-        let config = FileConfig::new(test_url());
+        let config = FileConfig::new(test_src());
         let debug_str = format!("{:?}", config);
 
         assert!(debug_str.contains("FileConfig"));
@@ -169,7 +205,7 @@ mod tests {
     #[test]
     fn test_clone() {
         let (events_tx, _) = broadcast::channel(32);
-        let config = FileConfig::new(test_url()).with_events(events_tx);
+        let config = FileConfig::new(test_src()).with_events(events_tx);
 
         let cloned = config.clone();
 

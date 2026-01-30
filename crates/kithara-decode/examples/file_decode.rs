@@ -48,7 +48,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Create decoder via target API
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(128);
     let hint = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
-    let file_config = FileConfig::new(url);
+    let file_config = FileConfig::new(url.into());
     let mut config = DecoderConfig::<File>::new(file_config).with_events(events_tx);
     if let Some(ext) = hint {
         config = config.with_hint(ext);

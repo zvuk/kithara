@@ -82,7 +82,7 @@ async fn stream_file_seek_start_reads_correct_bytes(
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-    let config = FileConfig::new(url).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     let expected_len = expected.len();
@@ -110,7 +110,7 @@ async fn stream_file_seek_current_works(#[future] test_server: String, temp_dir:
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-    let config = FileConfig::new(url).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {
@@ -140,7 +140,7 @@ async fn stream_file_seek_end_works(#[future] test_server: String, temp_dir: Tem
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-    let config = FileConfig::new(url).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {
@@ -166,7 +166,7 @@ async fn stream_file_seek_past_eof_fails(#[future] test_server: String, temp_dir
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-    let config = FileConfig::new(url).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {
@@ -186,7 +186,7 @@ async fn stream_file_multiple_seeks_work(#[future] test_server: String, temp_dir
     let server_url = test_server.await;
     let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
 
-    let config = FileConfig::new(url).with_store(StoreOptions::new(temp_dir.path()));
+    let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
     tokio::task::spawn_blocking(move || {

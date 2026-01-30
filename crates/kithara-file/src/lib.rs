@@ -19,7 +19,7 @@ mod events;
 mod inner;
 mod session;
 
-pub use config::FileConfig;
+pub use config::{FileConfig, FileSrc};
 pub use error::SourceError;
 pub use events::FileEvent;
 pub use inner::File;

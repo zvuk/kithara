@@ -44,7 +44,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Create events channel
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
 
-    let config = FileConfig::new(url).with_events(events_tx);
+    let config = FileConfig::new(url.into()).with_events(events_tx);
     let stream = Stream::<File>::new(config).await?;
 
     // Log events

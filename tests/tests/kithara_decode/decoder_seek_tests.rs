@@ -33,7 +33,7 @@ async fn decoder_file_creates_successfully(#[future] server: AudioTestServer, te
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url)
+    let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
     let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
@@ -53,7 +53,7 @@ async fn decoder_file_reads_samples(#[future] server: AudioTestServer, temp_dir:
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url)
+    let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
     let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
@@ -76,7 +76,7 @@ async fn decoder_file_seek_to_zero(#[future] server: AudioTestServer, temp_dir: 
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url)
+    let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
     let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
@@ -105,7 +105,7 @@ async fn decoder_file_seek_forward(#[future] server: AudioTestServer, temp_dir: 
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url)
+    let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
     let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
@@ -147,7 +147,7 @@ async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir:
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url)
+    let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
     let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
@@ -192,7 +192,7 @@ async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir:
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url)
+    let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
     let config = DecoderConfig::<File>::new(file_config).with_hint("mp3");
@@ -240,7 +240,7 @@ async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_
     let (events_tx, mut events_rx) =
         tokio::sync::broadcast::channel::<DecoderEvent<kithara_file::FileEvent>>(64);
 
-    let file_config = FileConfig::new(url)
+    let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(u64::MAX);
     let config = DecoderConfig::<File>::new(file_config)
