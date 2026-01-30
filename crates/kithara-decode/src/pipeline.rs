@@ -1061,7 +1061,7 @@ where
                         result = stream_events_rx.recv() => {
                             match result {
                                 Ok(event) => {
-                                    debug!("forwarding stream event to unified channel");
+                                    trace!("forwarding stream event to unified channel");
                                     let _ = forward_tx.send(DecoderEvent::Stream(event));
                                 }
                                 Err(broadcast::error::RecvError::Lagged(n)) => {

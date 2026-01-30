@@ -58,6 +58,12 @@ impl From<PathBuf> for ResourceSrc {
 pub struct ResourceConfig {
     /// Audio resource source (URL or local path).
     pub src: ResourceSrc,
+    /// Optional name for cache disambiguation.
+    ///
+    /// When multiple URLs share the same canonical form (e.g. differ only in
+    /// query parameters), setting a unique `name` ensures each gets its own
+    /// cache directory.
+    pub name: Option<String>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Decode-specific options (buffer sizes, format hints, etc.)
@@ -110,6 +116,7 @@ impl ResourceConfig {
 
         Ok(Self {
             src,
+            name: None,
             cancel: None,
             decode: DecodeOptions::new(),
             look_ahead_bytes: 500_000,
@@ -124,6 +131,15 @@ impl ResourceConfig {
             #[cfg(feature = "hls")]
             hls_base_url: None,
         })
+    }
+
+    /// Set name for cache disambiguation.
+    ///
+    /// When multiple URLs share the same canonical form (differ only in query
+    /// parameters), a unique name ensures each gets its own cache directory.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 
     /// Set cancellation token.
@@ -218,6 +234,10 @@ impl ResourceConfig {
             .with_net(self.net)
             .with_look_ahead_bytes(self.look_ahead_bytes);
 
+        if let Some(name) = self.name {
+            file_config = file_config.with_name(name);
+        }
+
         if let Some(cancel) = self.cancel {
             file_config = file_config.with_cancel(cancel);
         }
@@ -253,6 +273,10 @@ impl ResourceConfig {
             .with_abr(self.abr)
             .with_keys(self.keys)
             .with_look_ahead_bytes(self.look_ahead_bytes);
+
+        if let Some(name) = self.name {
+            hls_config = hls_config.with_name(name);
+        }
 
         if let Some(base_url) = self.hls_base_url {
             hls_config = hls_config.with_base_url(base_url);

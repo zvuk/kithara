@@ -61,7 +61,7 @@ impl From<String> for ResourceKey {
     }
 }
 
-/// Generates an asset root identifier from a URL.
+/// Generates an asset root identifier from a URL and an optional name.
 ///
 /// This is typically used with the master playlist URL to create a unique
 /// directory name for all resources of an HLS stream.
@@ -69,13 +69,22 @@ impl From<String> for ResourceKey {
 /// Uses canonicalization to ensure consistency:
 /// URLs that differ only in case, default ports, or query/fragment
 /// will produce the same asset root.
-pub fn asset_root_for_url(url: &Url) -> String {
+///
+/// When `name` is provided, it is included in the hash so that resources
+/// with the same canonical URL but different names produce distinct roots.
+/// This is useful when URLs differ only in query parameters (which are
+/// stripped during canonicalization).
+pub fn asset_root_for_url(url: &Url, name: Option<&str>) -> String {
     // Use canonical form for consistent hashing.
     // Fall back to raw URL if canonicalization fails (e.g., file:// URLs).
     let canonical = canonicalize_for_asset(url).unwrap_or_else(|_| url.as_str().to_string());
 
     let mut hasher = Sha256::new();
     hasher.update(canonical.as_bytes());
+    if let Some(name) = name {
+        hasher.update(b":");
+        hasher.update(name.as_bytes());
+    }
     let hash_result = hasher.finalize();
     hex::encode(&hash_result[..16])
 }
@@ -183,8 +192,8 @@ mod tests {
         let url1 = Url::parse(url1).unwrap();
         let url2 = Url::parse(url2).unwrap();
 
-        let root1 = asset_root_for_url(&url1);
-        let root2 = asset_root_for_url(&url2);
+        let root1 = asset_root_for_url(&url1, None);
+        let root2 = asset_root_for_url(&url2, None);
 
         if should_be_equal {
             assert_eq!(root1, root2, "{}", description);
@@ -197,8 +206,8 @@ mod tests {
     fn test_asset_root_stable_across_calls() {
         let url = Url::parse("https://example.com/path/to/audio.mp3?version=1.2").unwrap();
 
-        let root1 = asset_root_for_url(&url);
-        let root2 = asset_root_for_url(&url);
+        let root1 = asset_root_for_url(&url, None);
+        let root2 = asset_root_for_url(&url, None);
 
         assert_eq!(
             root1, root2,
@@ -215,7 +224,7 @@ mod tests {
     #[case("HTTPS://EXAMPLE.COM/PATH/TO/FILE.MP3", "URL with uppercase")]
     fn test_asset_root_creation_success(#[case] url_str: &str, #[case] _description: &str) {
         let url = Url::parse(url_str).unwrap();
-        let root = asset_root_for_url(&url);
+        let root = asset_root_for_url(&url, None);
 
         // Should return a non-empty hex string
         assert!(!root.is_empty());
@@ -257,6 +266,70 @@ mod tests {
         let result = canonicalize_for_asset(&url).unwrap();
 
         assert_eq!(result, expected_canonical, "{}", description);
+    }
+
+    #[test]
+    fn test_asset_root_with_name_differs_from_without() {
+        let url = Url::parse("https://example.com/stream").unwrap();
+
+        let root_no_name = asset_root_for_url(&url, None);
+        let root_with_name = asset_root_for_url(&url, Some("track_123"));
+
+        assert_ne!(
+            root_no_name, root_with_name,
+            "asset_root with name should differ from without"
+        );
+    }
+
+    #[test]
+    fn test_asset_root_same_url_different_names_differ() {
+        let url = Url::parse("https://cdn.example.com/stream").unwrap();
+
+        let root_a = asset_root_for_url(&url, Some("track_123"));
+        let root_b = asset_root_for_url(&url, Some("track_456"));
+
+        assert_ne!(
+            root_a, root_b,
+            "same URL with different names should produce different asset roots"
+        );
+    }
+
+    #[test]
+    fn test_asset_root_same_url_same_name_equal() {
+        let url = Url::parse("https://cdn.example.com/stream").unwrap();
+
+        let root_a = asset_root_for_url(&url, Some("track_123"));
+        let root_b = asset_root_for_url(&url, Some("track_123"));
+
+        assert_eq!(
+            root_a, root_b,
+            "same URL with same name should produce identical asset roots"
+        );
+    }
+
+    #[test]
+    fn test_asset_root_query_differs_but_name_distinguishes() {
+        // URLs that differ only in query params — canonicalization strips them.
+        let url1 =
+            Url::parse("https://cdn.example.com/stream?track_id=123&token=abc").unwrap();
+        let url2 =
+            Url::parse("https://cdn.example.com/stream?track_id=456&token=def").unwrap();
+
+        // Without name: same root (the bug scenario).
+        let root1_no_name = asset_root_for_url(&url1, None);
+        let root2_no_name = asset_root_for_url(&url2, None);
+        assert_eq!(
+            root1_no_name, root2_no_name,
+            "without name, query-only differences produce same root"
+        );
+
+        // With distinct names: different roots (the fix).
+        let root1_named = asset_root_for_url(&url1, Some("track_123"));
+        let root2_named = asset_root_for_url(&url2, Some("track_456"));
+        assert_ne!(
+            root1_named, root2_named,
+            "with different names, same canonical URL produces different roots"
+        );
     }
 
     #[rstest]

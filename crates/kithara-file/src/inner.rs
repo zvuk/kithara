@@ -98,7 +98,7 @@ impl File {
         config: FileConfig,
         cancel: CancellationToken,
     ) -> Result<FileSource, SourceError> {
-        let asset_root = asset_root_for_url(&url);
+        let asset_root = asset_root_for_url(&url, config.name.as_deref());
 
         let store = AssetStoreBuilder::new()
             .root_dir(&config.store.cache_dir)

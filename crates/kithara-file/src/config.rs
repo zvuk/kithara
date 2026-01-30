@@ -36,6 +36,12 @@ impl From<PathBuf> for FileSrc {
 pub struct FileConfig {
     /// File source (remote URL or local path).
     pub src: FileSrc,
+    /// Optional name for cache disambiguation.
+    ///
+    /// When multiple URLs share the same canonical form (e.g. differ only in
+    /// query parameters), setting a unique `name` ensures each gets its own
+    /// cache directory.
+    pub name: Option<String>,
     /// Storage configuration.
     pub store: StoreOptions,
     /// Network configuration.
@@ -56,6 +62,7 @@ impl Default for FileConfig {
             src: FileSrc::Remote(
                 Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
             ),
+            name: None,
             store: StoreOptions::default(),
             net: NetOptions::default(),
             cancel: None,
@@ -71,6 +78,7 @@ impl FileConfig {
     pub fn new(src: FileSrc) -> Self {
         Self {
             src,
+            name: None,
             store: StoreOptions::default(),
             net: NetOptions::default(),
             cancel: None,
@@ -78,6 +86,15 @@ impl FileConfig {
             events_channel_capacity: 16,
             look_ahead_bytes: 500_000,
         }
+    }
+
+    /// Set name for cache disambiguation.
+    ///
+    /// When multiple URLs share the same canonical form (differ only in query
+    /// parameters), a unique name ensures each gets its own cache directory.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 
     /// Set storage options.

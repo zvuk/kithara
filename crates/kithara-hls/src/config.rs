@@ -79,6 +79,12 @@ impl KeyOptions {
 pub struct HlsConfig {
     /// Master playlist URL.
     pub url: Url,
+    /// Optional name for cache disambiguation.
+    ///
+    /// When multiple URLs share the same canonical form (e.g. differ only in
+    /// query parameters), setting a unique `name` ensures each gets its own
+    /// cache directory.
+    pub name: Option<String>,
     /// Storage configuration.
     pub store: StoreOptions,
     /// Network configuration.
@@ -109,6 +115,7 @@ impl Default for HlsConfig {
     fn default() -> Self {
         Self {
             url: Url::parse("http://localhost/stream.m3u8").expect("valid default URL"),
+            name: None,
             store: StoreOptions::default(),
             net: NetOptions::default(),
             abr: AbrOptions::default(),
@@ -130,6 +137,7 @@ impl HlsConfig {
     pub fn new(url: Url) -> Self {
         Self {
             url,
+            name: None,
             store: StoreOptions::default(),
             net: NetOptions::default(),
             abr: AbrOptions::default(),
@@ -143,6 +151,15 @@ impl HlsConfig {
             pool: None,
             look_ahead_bytes: 500_000,
         }
+    }
+
+    /// Set name for cache disambiguation.
+    ///
+    /// When multiple URLs share the same canonical form (differ only in query
+    /// parameters), a unique name ensures each gets its own cache directory.
+    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
     }
 
     /// Set storage options.
