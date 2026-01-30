@@ -26,6 +26,7 @@ while !resource.is_eof() {
 ## Architecture
 
 ```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
 graph TD
     RC[ResourceConfig] -->|auto-detect| R[Resource]
     R -->|".m3u8"| AH["Audio‹Stream‹Hls››"]

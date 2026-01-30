@@ -14,30 +14,29 @@ Design goal: keep components modular so they can be reused independently and com
 ## Crate Architecture
 
 ```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
 graph TD
-    K[kithara<br/><i>facade</i>] --> AU[kithara-audio]
+    K[kithara] --> AU[kithara-audio]
     AU --> DEC[kithara-decode]
-    AU --> STR[kithara-stream]
-    AU --> BP[kithara-bufpool]
-
-    DEC --> STR
-    DEC --> BP
-
+    DEC --> STR[kithara-stream]
     STR --> STOR[kithara-storage]
 
-    FILE[kithara-file] --> NET[kithara-net]
+    subgraph Protocols
+        FILE[kithara-file]
+        HLS[kithara-hls]
+    end
+
+    FILE --> NET[kithara-net]
     FILE --> ASSETS[kithara-assets]
     FILE --> STR
-
-    HLS[kithara-hls] --> NET
+    HLS --> NET
     HLS --> ASSETS
     HLS --> STR
     HLS --> ABR[kithara-abr]
-
     ASSETS --> STOR
-    NET -.-> BP
-    ASSETS -.-> BP
 ```
+
+`kithara-bufpool` -- cross-cutting: используется всеми крейтами для zero-allocation буферов.
 
 | Crate | Role |
 |-------|------|
