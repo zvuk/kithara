@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 # All kithara crates
 kithara-abr = { workspace = true }
-kithara-assets = { workspace = true, features = ["internal"] }
+kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-audio = { workspace = true }
 kithara-decode = { workspace = true }
@@ -98,4 +98,9 @@ required-features = ["perf"]
 [[test]]
 name = "pool"
 path = "perf/pool.rs"
+required-features = ["perf"]
+
+[[test]]
+name = "abr"
+path = "perf/abr.rs"
 required-features = ["perf"]
