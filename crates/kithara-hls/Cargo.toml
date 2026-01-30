@@ -25,9 +25,11 @@ cbc = { workspace = true }
 dashmap = { workspace = true }
 parking_lot = { workspace = true }
 mockall = { workspace = true }
+hotpath = { workspace = true, optional = true }
 
 [features]
 default = []
+perf = ["dep:hotpath"]
 
 [dev-dependencies]
 kithara-net = { workspace = true, features = ["test-utils"] }

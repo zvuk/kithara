@@ -10,6 +10,10 @@ kithara-bufpool = { workspace = true }
 symphonia = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+hotpath = { workspace = true, optional = true }
+
+[features]
+perf = ["dep:hotpath"]
 
 [dev-dependencies]
 rstest = { workspace = true }

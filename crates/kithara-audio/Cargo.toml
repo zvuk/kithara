@@ -19,11 +19,14 @@ rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
 parking_lot = { workspace = true }
+hotpath = { workspace = true, optional = true }
 
 [features]
 default = []
 # Enable rodio::Source adapter for playback
 rodio = ["dep:rodio"]
+# Enable performance monitoring with hotpath-rs
+perf = ["dep:hotpath"]
 
 [dev-dependencies]
 tokio = { workspace = true }
