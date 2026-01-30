@@ -509,9 +509,24 @@ impl ResamplerProcessor {
     }
 
     fn append_to_buffer(&mut self, interleaved: &[f32]) {
-        for (i, sample) in interleaved.iter().enumerate() {
-            let ch = i % self.channels;
-            self.input_buffer[ch].push(*sample);
+        // Optimized deinterleave for common stereo case
+        if self.channels == 2 {
+            // Process in chunks of 2 for better cache locality
+            for chunk in interleaved.chunks_exact(2) {
+                self.input_buffer[0].push(chunk[0]);
+                self.input_buffer[1].push(chunk[1]);
+            }
+            // Handle remainder if any (shouldn't happen for valid stereo data)
+            let remainder = interleaved.chunks_exact(2).remainder();
+            for (i, &sample) in remainder.iter().enumerate() {
+                self.input_buffer[i].push(sample);
+            }
+        } else {
+            // Generic path for other channel counts
+            for (i, sample) in interleaved.iter().enumerate() {
+                let ch = i % self.channels;
+                self.input_buffer[ch].push(*sample);
+            }
         }
     }
 
@@ -522,18 +537,40 @@ impl ResamplerProcessor {
 
         let frames = planar[0].len();
         let total = frames * self.channels;
-        let mut result = self.pool.get_with(|b| {
-            b.clear();
-            b.reserve(total);
-        });
 
-        for frame_idx in 0..frames {
-            for channel in planar.iter().take(self.channels) {
-                result.push(channel[frame_idx]);
+        // Optimized interleave for stereo
+        if self.channels == 2 && planar.len() >= 2 {
+            let mut result = self.pool.get_with(|b| {
+                b.clear();
+                b.resize(total, 0.0);
+            });
+
+            let left = &planar[0];
+            let right = &planar[1];
+
+            // Direct indexing instead of push for better performance
+            for (frame_idx, (l, r)) in left.iter().zip(right.iter()).enumerate() {
+                let base = frame_idx * 2;
+                result[base] = *l;
+                result[base + 1] = *r;
             }
-        }
 
-        result.into_inner()
+            result.into_inner()
+        } else {
+            // Generic path for other channel counts
+            let mut result = self.pool.get_with(|b| {
+                b.clear();
+                b.resize(total, 0.0);
+            });
+
+            for frame_idx in 0..frames {
+                for (ch_idx, channel) in planar.iter().take(self.channels).enumerate() {
+                    result[frame_idx * self.channels + ch_idx] = channel[frame_idx];
+                }
+            }
+
+            result.into_inner()
+        }
     }
 }
 
