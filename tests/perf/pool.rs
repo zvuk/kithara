@@ -104,3 +104,51 @@ fn perf_pool_allocation_rate() {
     println!("Allocations: 1000");
     println!("{:=<60}\n", "");
 }
+
+/// Measure pool scalability with increasing thread count.
+#[test]
+#[ignore]
+fn perf_pool_scalability() {
+    let thread_counts = [1, 2, 4, 8, 16];
+    let iterations_per_thread = 1000;
+
+    for &num_threads in &thread_counts {
+        let label = Box::leak(format!("pool_scalability_{}", num_threads).into_boxed_str());
+        let _guard = hotpath::GuardBuilder::new(label).build();
+        let pool = Arc::new(pcm_pool().clone());
+
+        let start = std::time::Instant::now();
+
+        let handles: Vec<_> = (0..num_threads)
+            .map(|thread_id| {
+                let pool_clone = Arc::clone(&pool);
+                thread::spawn(move || {
+                    for i in 0..iterations_per_thread {
+                        let buf = pool_clone.get_with(|b| {
+                            b.clear();
+                            b.resize(2048, 0.0);
+                            for j in 0..2048 {
+                                b[j] = (thread_id * iterations_per_thread + i + j) as f32 * 0.001;
+                            }
+                        });
+                        drop(buf);
+                    }
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let elapsed = start.elapsed();
+        let total_ops = num_threads * iterations_per_thread;
+        let ops_per_sec = total_ops as f64 / elapsed.as_secs_f64();
+
+        println!("\n{:=<60}", "");
+        println!("Threads: {}, Ops/thread: {}", num_threads, iterations_per_thread);
+        println!("Total ops: {}, Elapsed: {:.2?}", total_ops, elapsed);
+        println!("Ops/sec: {:.0}", ops_per_sec);
+        println!("{:=<60}\n", "");
+    }
+}

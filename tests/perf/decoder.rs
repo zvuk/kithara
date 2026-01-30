@@ -128,3 +128,37 @@ fn perf_decoder_f32_conversion() {
     println!("Chunks processed: {}", chunk_count);
     println!("{:=<60}\n", "");
 }
+
+/// Measure decoder throughput: how many samples per second can be decoded.
+#[test]
+#[ignore]
+fn perf_decoder_throughput() {
+    let _guard = hotpath::GuardBuilder::new("decoder_throughput").build();
+
+    // Create 5 seconds of audio
+    let wav_data = create_test_wav(44100 * 5);
+    let cursor = Cursor::new(wav_data);
+    let mut decoder =
+        Decoder::new_with_probe(cursor, Some("wav"), pcm_pool().clone()).unwrap();
+
+    let start = std::time::Instant::now();
+    let mut total_samples = 0;
+
+    hotpath::measure_block!("decode_all_chunks", {
+        while let Ok(Some(chunk)) = decoder.next_chunk() {
+            total_samples += chunk.pcm.len();
+        }
+    });
+
+    let elapsed = start.elapsed();
+    let samples_per_sec = total_samples as f64 / elapsed.as_secs_f64();
+    let realtime_factor = samples_per_sec / (44100.0 * 2.0); // stereo
+
+    println!("\n{:=<60}", "");
+    println!("Decoder Throughput");
+    println!("Total samples: {}", total_samples);
+    println!("Elapsed: {:.2?}", elapsed);
+    println!("Samples/sec: {:.0}", samples_per_sec);
+    println!("Realtime factor: {:.2}x", realtime_factor);
+    println!("{:=<60}\n", "");
+}

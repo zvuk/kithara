@@ -160,3 +160,52 @@ fn perf_resampler_deinterleave_overhead() {
     println!("Iterations: 1000");
     println!("{:=<60}\n", "");
 }
+
+/// Detailed breakdown of resampling operations for a single quality preset.
+/// Measures: process overhead, actual resampling work, buffer management.
+#[hotpath::measure]
+fn resampler_full_process_cycle(
+    resampler: &mut kithara_audio::ResamplerProcessor,
+    chunk: &PcmChunk<f32>,
+) -> Option<PcmChunk<f32>> {
+    resampler.process(chunk.clone())
+}
+
+#[test]
+#[ignore]
+fn perf_resampler_detailed_breakdown() {
+    let _guard = hotpath::GuardBuilder::new("resampler_breakdown").build();
+
+    let input_spec = PcmSpec {
+        sample_rate: 48000,
+        channels: 2,
+    };
+    let output_rate = 44100;
+
+    // Test with High quality (significant CPU load)
+    let host_rate = Arc::new(AtomicU32::new(output_rate));
+    let params = ResamplerParams::new(host_rate, input_spec.sample_rate, input_spec.channels as usize)
+        .with_quality(ResamplerQuality::High);
+    let mut resampler = kithara_audio::ResamplerProcessor::new(params);
+
+    // Different chunk sizes to see buffer management overhead
+    let chunk_sizes = [512, 1024, 2048, 4096];
+
+    for &size in &chunk_sizes {
+        let chunk = create_test_chunk(size, input_spec);
+
+        // Warm-up
+        for _ in 0..10 {
+            let _ = resampler.process(chunk.clone());
+        }
+
+        // Measure 1000 iterations per chunk size
+        for _ in 0..1000 {
+            let _ = resampler_full_process_cycle(&mut resampler, &chunk);
+        }
+
+        println!("\n{:=<60}", "");
+        println!("Chunk size: {} frames", size);
+        println!("{:=<60}\n", "");
+    }
+}
