@@ -1,0 +1,96 @@
+name: Performance Tests
+
+on:
+  pull_request:
+    paths:
+      - 'crates/**'
+      - 'tests/perf/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  push:
+    branches:
+      - main
+    paths:
+      - 'crates/**'
+      - 'tests/perf/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  perf-tests:
+    name: Run Performance Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for baseline comparison
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Setup Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev
+
+      - name: Run performance tests
+        run: |
+          cargo test -p kithara-integration-tests --features perf --release -- --ignored --test-threads=1 --nocapture 2>&1 | tee perf-results.txt
+
+      - name: Upload performance results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-results
+          path: perf-results.txt
+          retention-days: 30
+
+      - name: Check for baseline (main branch only)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          echo "Running on main branch - results will be used as baseline"
+
+      - name: Compare with baseline (PR only)
+        if: github.event_name == 'pull_request'
+        run: |
+          echo "TODO: Implement baseline comparison"
+          echo "For now, just showing perf results:"
+          cat perf-results.txt | grep -A 5 "hotpath"
+
+      - name: Comment PR with results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const results = fs.readFileSync('perf-results.txt', 'utf8');
+
+            // Extract hotpath summaries
+            const summaries = results.match(/\[hotpath\] timing[\s\S]*?(?=\n\n|\ntest |$)/g) || [];
+
+            const body = `## Performance Test Results\n\n` +
+              `Perf tests completed. See full results in artifacts.\n\n` +
+              `<details>\n<summary>Hotpath Summaries</summary>\n\n\`\`\`\n` +
+              summaries.slice(0, 5).join('\n\n') +
+              `\n\`\`\`\n</details>`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: body
+            });

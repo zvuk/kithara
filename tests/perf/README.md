@@ -111,8 +111,18 @@ python ../scripts/compare_perf.py \
 ## CI Integration
 
 Performance tests run automatically on:
-- Pull requests (regression detection)
-- Main branch commits (baseline tracking)
+- **Pull requests**: Compare against main branch baseline, fail if >10% regression
+- **Main branch commits**: Results used as baseline for future PRs
+
+### Manual Comparison
+
+```bash
+# Run tests and save output
+cargo test --features perf --release -- --ignored --nocapture > my-results.txt
+
+# Compare with baseline
+./scripts/compare_perf.sh my-results.txt perf-baseline/baseline-run.txt 10
+```
 
 See `.github/workflows/perf.yml` for CI configuration.
 

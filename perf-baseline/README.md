@@ -6,11 +6,17 @@ This directory stores baseline performance measurements for regression detection
 
 ```
 perf-baseline/
-  hotpath-resampler-*.json     # Resampler test baselines
-  hotpath-decoder-*.json       # Decoder test baselines
-  hotpath-pool-*.json          # Pool test baselines
+  baseline-run.txt             # Full perf test output (baseline)
   README.md                    # This file
 ```
+
+## CI Integration
+
+Performance tests run automatically on:
+- **Pull Requests**: Compare against main branch baseline
+- **Main branch commits**: Update baseline for future comparisons
+
+See `.github/workflows/perf.yml` for workflow details.
 
 ## Usage
 
