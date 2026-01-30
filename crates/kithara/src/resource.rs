@@ -77,7 +77,7 @@ impl Resource {
 
     /// Create a resource from a file audio config.
     ///
-    /// Use this when you need to customize `FileConfig` or `AudioOptions`
+    /// Use this when you need to customize `FileConfig` or `AudioConfig`
     /// beyond what `Resource::new()` provides.
     #[cfg(feature = "file")]
     pub async fn from_file(config: AudioConfig<kithara_file::File>) -> DecodeResult<Self> {

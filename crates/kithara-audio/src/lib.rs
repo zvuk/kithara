@@ -58,7 +58,7 @@ pub use kithara_decode::{
     AudioCodec, CachedCodecInfo, ContainerFormat, Decoder, InnerDecoder, MediaInfo, PcmChunk,
     PcmSpec, TrackMetadata,
 };
-pub use pipeline::{Audio, AudioConfig, AudioOptions};
+pub use pipeline::{Audio, AudioConfig};
 pub use reader::SourceReader;
 pub use resampler::ResamplerProcessor;
 #[cfg(feature = "rodio")]

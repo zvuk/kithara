@@ -79,7 +79,7 @@ pub use source_type::SourceType;
 // ── Prelude ─────────────────────────────────────────────────────────────
 
 pub mod prelude {
-    pub use kithara_audio::{Audio, AudioConfig, AudioOptions, PcmReader};
+    pub use kithara_audio::{Audio, AudioConfig, PcmReader};
     pub use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
     #[cfg(feature = "file")]
     pub use kithara_file::{File, FileConfig};

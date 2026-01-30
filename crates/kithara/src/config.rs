@@ -6,7 +6,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
-use kithara_audio::{AudioConfig, AudioOptions};
+use kithara_audio::AudioConfig;
 use kithara_bufpool::SharedPool;
 use kithara_decode::DecodeError;
 #[cfg(any(feature = "file", feature = "hls"))]
@@ -53,7 +53,7 @@ impl From<PathBuf> for ResourceSrc {
 ///
 /// // With options
 /// let config = ResourceConfig::new("https://example.com/playlist.m3u8")?
-///     .with_decode(AudioOptions::new().with_hint("mp3"))
+///     .with_hint("mp3")
 ///     .with_look_ahead_bytes(1_000_000);
 /// ```
 pub struct ResourceConfig {
@@ -67,8 +67,12 @@ pub struct ResourceConfig {
     pub name: Option<String>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// Audio-specific options (buffer sizes, format hints, etc.)
-    pub decode: AudioOptions,
+    /// Optional format hint (file extension like "mp3", "wav").
+    pub hint: Option<String>,
+    /// Shared PCM pool for temporary buffers.
+    pub pcm_pool: Option<SharedPool<32, Vec<f32>>>,
+    /// Target sample rate of the audio host (for resampling).
+    pub host_sample_rate: Option<NonZeroU32>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub look_ahead_bytes: u64,
     /// Storage configuration (cache directory, eviction limits).
@@ -119,7 +123,9 @@ impl ResourceConfig {
             src,
             name: None,
             cancel: None,
-            decode: AudioOptions::new(),
+            hint: None,
+            pcm_pool: None,
+            host_sample_rate: None,
             look_ahead_bytes: 500_000,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
@@ -149,15 +155,9 @@ impl ResourceConfig {
         self
     }
 
-    /// Set audio options.
-    pub fn with_decode(mut self, decode: AudioOptions) -> Self {
-        self.decode = decode;
-        self
-    }
-
     /// Set format hint (file extension like "mp3", "wav").
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
-        self.decode = self.decode.with_hint(hint);
+        self.hint = Some(hint.into());
         self
     }
 
@@ -166,13 +166,13 @@ impl ResourceConfig {
     /// The pool is shared across the entire audio chain, eliminating
     /// per-call allocations in `read_planar` and internal decode buffers.
     pub fn with_pcm_pool(mut self, pool: SharedPool<32, Vec<f32>>) -> Self {
-        self.decode = self.decode.with_pcm_pool(pool);
+        self.pcm_pool = Some(pool);
         self
     }
 
     /// Set target sample rate of the audio host (for resampling).
     pub fn with_host_sample_rate(mut self, sample_rate: NonZeroU32) -> Self {
-        self.decode = self.decode.with_host_sample_rate(sample_rate);
+        self.host_sample_rate = Some(sample_rate);
         self
     }
 
@@ -249,13 +249,19 @@ impl ResourceConfig {
             file_config = file_config.with_cancel(cancel);
         }
 
-        let mut config =
-            AudioConfig::<kithara_file::File>::new(file_config).with_decode(self.decode);
+        let mut config = AudioConfig::<kithara_file::File>::new(file_config);
 
-        if let Some(ext) = hint
-            && config.decode.hint.is_none()
-        {
+        // Apply audio settings from ResourceConfig.
+        if let Some(h) = self.hint {
+            config = config.with_hint(h);
+        } else if let Some(ext) = hint {
             config = config.with_hint(ext);
+        }
+        if let Some(pool) = self.pcm_pool {
+            config = config.with_pcm_pool(pool);
+        }
+        if let Some(sr) = self.host_sample_rate {
+            config = config.with_host_sample_rate(sr);
         }
 
         config
@@ -292,7 +298,20 @@ impl ResourceConfig {
             hls_config = hls_config.with_cancel(cancel);
         }
 
-        Ok(AudioConfig::<kithara_hls::Hls>::new(hls_config).with_decode(self.decode))
+        let mut config = AudioConfig::<kithara_hls::Hls>::new(hls_config);
+
+        // Apply audio settings from ResourceConfig.
+        if let Some(h) = self.hint {
+            config = config.with_hint(h);
+        }
+        if let Some(pool) = self.pcm_pool {
+            config = config.with_pcm_pool(pool);
+        }
+        if let Some(sr) = self.host_sample_rate {
+            config = config.with_host_sample_rate(sr);
+        }
+
+        Ok(config)
     }
 }
 
