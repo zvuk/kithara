@@ -240,6 +240,13 @@ impl<S> Audio<S> {
         self.samples_read = 0;
         self.seek_base = position;
 
+        // Reset preload flag - first read after seek should be blocking
+        // to ensure we don't skip over the new data
+        self.preloaded = false;
+
+        // Drain stale chunks from channel to unblock worker
+        while let Ok(Some(_)) = self.pcm_rx.try_recv() {}
+
         debug!(?position, epoch = new_epoch, "seek initiated");
         Ok(())
     }
