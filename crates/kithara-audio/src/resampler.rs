@@ -12,11 +12,94 @@ use rubato::{
     Resampler as RubatoResampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType,
     WindowFunction,
 };
-use tracing::{debug, trace};
+use tracing::{debug, info, trace};
 
 use crate::traits::AudioEffect;
 
-const DEFAULT_CHUNK_SIZE: usize = 1024;
+/// Quality preset for the audio resampler.
+///
+/// Controls the sinc interpolation parameters used by rubato.
+/// Higher quality uses more CPU but produces better audio fidelity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ResamplerQuality {
+    /// Fast resampling with acceptable quality.
+    /// Suitable for previews or low-power devices.
+    Fast,
+    /// Balanced quality and performance.
+    Normal,
+    /// High quality resampling, recommended for music playback.
+    #[default]
+    High,
+}
+
+impl ResamplerQuality {
+    fn sinc_params(self) -> SincInterpolationParameters {
+        match self {
+            Self::Fast => SincInterpolationParameters {
+                sinc_len: 64,
+                f_cutoff: 0.95,
+                interpolation: SincInterpolationType::Linear,
+                oversampling_factor: 128,
+                window: WindowFunction::BlackmanHarris2,
+            },
+            Self::Normal => SincInterpolationParameters {
+                sinc_len: 128,
+                f_cutoff: 0.95,
+                interpolation: SincInterpolationType::Linear,
+                oversampling_factor: 256,
+                window: WindowFunction::BlackmanHarris2,
+            },
+            Self::High => SincInterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: SincInterpolationType::Cubic,
+                oversampling_factor: 256,
+                window: WindowFunction::BlackmanHarris2,
+            },
+        }
+    }
+}
+
+/// Configuration parameters for the resampler effect.
+///
+/// Contains all values needed to construct a [`ResamplerProcessor`].
+pub struct ResamplerParams {
+    /// Quality preset controlling sinc interpolation parameters.
+    pub quality: ResamplerQuality,
+    /// Number of input frames per resampler processing block.
+    pub chunk_size: usize,
+    /// Shared atomic for dynamic host sample rate tracking.
+    pub host_sample_rate: Arc<AtomicU32>,
+    /// Initial source sample rate.
+    pub source_sample_rate: u32,
+    /// Number of audio channels.
+    pub channels: usize,
+}
+
+impl ResamplerParams {
+    /// Create resampler params with required runtime values and default settings.
+    pub fn new(host_sample_rate: Arc<AtomicU32>, source_sample_rate: u32, channels: usize) -> Self {
+        Self {
+            quality: ResamplerQuality::default(),
+            chunk_size: 4096,
+            host_sample_rate,
+            source_sample_rate,
+            channels,
+        }
+    }
+
+    /// Set resampling quality preset.
+    pub fn with_quality(mut self, quality: ResamplerQuality) -> Self {
+        self.quality = quality;
+        self
+    }
+
+    /// Set the number of input frames per resampler processing block.
+    pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
+        self.chunk_size = chunk_size;
+        self
+    }
+}
 
 /// Audio resampler that converts between source and host sample rates.
 ///
@@ -28,6 +111,9 @@ pub struct ResamplerProcessor {
     channels: usize,
     resampler: Option<SincFixedIn<f32>>,
     current_ratio: f64,
+    /// Quality and chunk_size for resampler (re-)creation.
+    quality: ResamplerQuality,
+    chunk_size: usize,
     /// Accumulated input buffer (planar format)
     input_buffer: Vec<Vec<f32>>,
     output_spec: PcmSpec,
@@ -38,13 +124,11 @@ pub struct ResamplerProcessor {
 }
 
 impl ResamplerProcessor {
-    /// Create a new resampler.
-    ///
-    /// - `source_rate`: initial source sample rate
-    /// - `host_sample_rate`: shared atomic for dynamic host sample rate tracking
-    /// - `channels`: number of audio channels
-    pub fn new(source_rate: u32, host_sample_rate: Arc<AtomicU32>, channels: usize) -> Self {
-        let host_sr = host_sample_rate.load(Ordering::Relaxed);
+    /// Create a new resampler from configuration parameters.
+    pub fn new(params: ResamplerParams) -> Self {
+        let source_rate = params.source_sample_rate;
+        let channels = params.channels;
+        let host_sr = params.host_sample_rate.load(Ordering::Relaxed);
         let target_rate = if host_sr == 0 { source_rate } else { host_sr };
         let output_spec = PcmSpec {
             sample_rate: target_rate,
@@ -53,10 +137,12 @@ impl ResamplerProcessor {
 
         let mut processor = Self {
             source_rate,
-            host_sample_rate,
+            host_sample_rate: params.host_sample_rate,
             channels,
             resampler: None,
             current_ratio: 1.0,
+            quality: params.quality,
+            chunk_size: params.chunk_size,
             input_buffer: vec![Vec::new(); channels],
             output_spec,
             temp_input_slice: Vec::with_capacity(channels),
@@ -65,6 +151,16 @@ impl ResamplerProcessor {
         };
 
         processor.update_resampler_if_needed();
+
+        info!(
+            source_rate,
+            host_sr = host_sr,
+            target_rate,
+            channels,
+            active = !processor.is_passthrough(),
+            "Resampler initialized"
+        );
+
         processor
     }
 
@@ -74,25 +170,33 @@ impl ResamplerProcessor {
         let chunk_channels = chunk.spec.channels as usize;
 
         // Handle source spec changes (ABR switch)
-        if chunk_rate != self.source_rate || chunk_channels != self.channels {
+        if chunk_channels != self.channels {
+            // Channel count changed — must recreate resampler.
+            debug!(
+                old_channels = self.channels,
+                new_channels = chunk_channels,
+                old_rate = self.source_rate,
+                new_rate = chunk_rate,
+                "Channel count changed, recreating resampler"
+            );
+            self.channels = chunk_channels;
+            self.source_rate = chunk_rate;
+            self.input_buffer = vec![Vec::new(); chunk_channels];
+            self.temp_output_all = vec![Vec::new(); chunk_channels];
+            self.output_spec.channels = chunk_channels as u16;
+            self.resampler = None;
+        } else if chunk_rate != self.source_rate {
+            // Only sample rate changed — clear buffers and let
+            // update_resampler_if_needed() adjust the ratio dynamically.
             debug!(
                 old_rate = self.source_rate,
                 new_rate = chunk_rate,
-                old_channels = self.channels,
-                new_channels = chunk_channels,
-                "Source spec changed, recreating resampler"
+                "Source sample rate changed, updating ratio dynamically"
             );
             self.source_rate = chunk_rate;
-            if chunk_channels != self.channels {
-                self.channels = chunk_channels;
-                self.input_buffer = vec![Vec::new(); chunk_channels];
-                self.output_spec.channels = chunk_channels as u16;
-            } else {
-                for buf in &mut self.input_buffer {
-                    buf.clear();
-                }
+            for buf in &mut self.input_buffer {
+                buf.clear();
             }
-            self.resampler = None;
         }
 
         self.update_resampler_if_needed();
@@ -219,7 +323,10 @@ impl ResamplerProcessor {
         let ratio_changed = (new_ratio - self.current_ratio).abs() > 0.0001;
 
         if should_pt && !currently_pt {
-            debug!("Switching to passthrough mode");
+            debug!(
+                source_rate = self.source_rate,
+                target_rate, "Resampler switching to passthrough"
+            );
             self.resampler = None;
             self.current_ratio = 1.0;
             for buf in &mut self.input_buffer {
@@ -233,7 +340,12 @@ impl ResamplerProcessor {
                         debug!(err = %e, "Failed to update ratio dynamically, recreating");
                         self.resampler = None;
                     } else {
-                        debug!(new_ratio, "Updated resample ratio dynamically");
+                        debug!(
+                            new_ratio,
+                            source_rate = self.source_rate,
+                            target_rate,
+                            "Resampler ratio updated dynamically"
+                        );
                         self.current_ratio = new_ratio;
                         return;
                     }
@@ -244,19 +356,16 @@ impl ResamplerProcessor {
                 new_ratio,
                 source_rate = self.source_rate,
                 target_rate,
-                "Creating resampler"
+                "Resampler activated"
             );
 
-            let params = SincInterpolationParameters {
-                sinc_len: 64,
-                f_cutoff: 0.95,
-                interpolation: SincInterpolationType::Linear,
-                oversampling_factor: 128,
-                window: WindowFunction::BlackmanHarris2,
-            };
-
-            match SincFixedIn::<f32>::new(new_ratio, 2.0, params, DEFAULT_CHUNK_SIZE, self.channels)
-            {
+            match SincFixedIn::<f32>::new(
+                new_ratio,
+                2.0,
+                self.quality.sinc_params(),
+                self.chunk_size,
+                self.channels,
+            ) {
                 Ok(resampler) => {
                     self.resampler = Some(resampler);
                     self.current_ratio = new_ratio;
@@ -399,31 +508,31 @@ mod tests {
         Arc::new(AtomicU32::new(rate))
     }
 
+    fn params(host_sr: Arc<AtomicU32>, source_rate: u32, channels: usize) -> ResamplerParams {
+        ResamplerParams::new(host_sr, source_rate, channels)
+    }
+
     #[test]
     fn test_passthrough_same_rate() {
-        let host_sr = make_host_rate(44100);
-        let processor = ResamplerProcessor::new(44100, host_sr, 2);
+        let processor = ResamplerProcessor::new(params(make_host_rate(44100), 44100, 2));
         assert!(processor.is_passthrough());
     }
 
     #[test]
     fn test_passthrough_host_zero() {
-        let host_sr = make_host_rate(0);
-        let processor = ResamplerProcessor::new(44100, host_sr, 2);
+        let processor = ResamplerProcessor::new(params(make_host_rate(0), 44100, 2));
         assert!(processor.is_passthrough());
     }
 
     #[test]
     fn test_no_passthrough_different_rate() {
-        let host_sr = make_host_rate(44100);
-        let processor = ResamplerProcessor::new(48000, host_sr, 2);
+        let processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
         assert!(!processor.is_passthrough());
     }
 
     #[test]
     fn test_passthrough_processing() {
-        let host_sr = make_host_rate(44100);
-        let mut processor = ResamplerProcessor::new(44100, host_sr, 2);
+        let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 44100, 2));
 
         let chunk = PcmChunk::new(
             PcmSpec {
@@ -442,8 +551,7 @@ mod tests {
 
     #[test]
     fn test_output_spec() {
-        let host_sr = make_host_rate(44100);
-        let processor = ResamplerProcessor::new(48000, host_sr, 2);
+        let processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
         assert_eq!(processor.output_spec.sample_rate, 44100);
         assert_eq!(processor.output_spec.channels, 2);
     }
@@ -451,7 +559,7 @@ mod tests {
     #[test]
     fn test_dynamic_host_rate_change() {
         let host_sr = make_host_rate(44100);
-        let mut processor = ResamplerProcessor::new(44100, host_sr.clone(), 2);
+        let mut processor = ResamplerProcessor::new(params(host_sr.clone(), 44100, 2));
         assert!(processor.is_passthrough());
 
         // Change host sample rate dynamically
@@ -471,8 +579,7 @@ mod tests {
 
     #[test]
     fn test_accumulates_small_chunks() {
-        let host_sr = make_host_rate(44100);
-        let mut processor = ResamplerProcessor::new(48000, host_sr, 2);
+        let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
         let small_chunk = PcmChunk::new(
             PcmSpec {
@@ -489,15 +596,14 @@ mod tests {
 
     #[test]
     fn test_processes_large_chunks() {
-        let host_sr = make_host_rate(44100);
-        let mut processor = ResamplerProcessor::new(48000, host_sr, 2);
+        let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
         let large_chunk = PcmChunk::new(
             PcmSpec {
                 sample_rate: 48000,
                 channels: 2,
             },
-            vec![0.1; 4096],
+            vec![0.1; 16384],
         );
 
         let result = processor.process_chunk(&large_chunk);
@@ -506,9 +612,8 @@ mod tests {
     }
 
     #[test]
-    fn test_source_rate_change_resets_resampler() {
-        let host_sr = make_host_rate(44100);
-        let mut processor = ResamplerProcessor::new(48000, host_sr, 2);
+    fn test_source_rate_change_updates_dynamically() {
+        let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
         let chunk1 = PcmChunk::new(
             PcmSpec {
@@ -520,6 +625,7 @@ mod tests {
         let _ = processor.process_chunk(&chunk1);
         assert_eq!(processor.source_rate, 48000);
 
+        // Source rate changed (e.g. ABR switch) — resampler should update dynamically
         let chunk2 = PcmChunk::new(
             PcmSpec {
                 sample_rate: 44100,
@@ -529,12 +635,13 @@ mod tests {
         );
         let _ = processor.process_chunk(&chunk2);
         assert_eq!(processor.source_rate, 44100);
+        // Resampler should now be in passthrough (44100 → 44100)
+        assert!(processor.is_passthrough());
     }
 
     #[test]
     fn test_no_data_loss_across_chunks() {
-        let host_sr = make_host_rate(44100);
-        let mut processor = ResamplerProcessor::new(48000, host_sr, 2);
+        let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
         let mut total_input_frames = 0;
         let mut total_output_frames = 0;
@@ -555,7 +662,7 @@ mod tests {
         }
 
         let expected = (total_input_frames as f64 * 44100.0 / 48000.0) as usize;
-        let tolerance = DEFAULT_CHUNK_SIZE * 2;
+        let tolerance = 1024 * 2;
         assert!(
             total_output_frames + tolerance >= expected,
             "Output {} + tolerance {} should be >= expected {}",
@@ -567,8 +674,7 @@ mod tests {
 
     #[test]
     fn test_audio_effect_trait() {
-        let host_sr = make_host_rate(44100);
-        let mut processor = ResamplerProcessor::new(44100, host_sr, 2);
+        let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 44100, 2));
 
         let chunk = PcmChunk::new(
             PcmSpec {

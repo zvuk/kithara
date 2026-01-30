@@ -60,7 +60,7 @@ pub use kithara_decode::{
 };
 pub use pipeline::{Audio, AudioConfig};
 pub use reader::SourceReader;
-pub use resampler::ResamplerProcessor;
+pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
 #[cfg(feature = "rodio")]
 pub use sync::AudioSyncReader;
 pub use traits::{AudioEffect, AudioGenerator};

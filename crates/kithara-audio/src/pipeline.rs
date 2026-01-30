@@ -21,7 +21,7 @@ use tracing::{debug, info, trace, warn};
 
 use crate::{
     events::{AudioEvent, AudioPipelineEvent},
-    resampler::ResamplerProcessor,
+    resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
     traits::AudioEffect,
     types::{DecodeError, DecodeResult, PcmReader},
 };
@@ -620,6 +620,8 @@ pub struct AudioConfig<T: StreamType> {
     pub pcm_pool: Option<SharedPool<32, Vec<f32>>>,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
+    /// Resampling quality preset.
+    pub resampler_quality: ResamplerQuality,
     /// Unified events sender (optional — if not provided, one is created internally).
     events_tx: Option<broadcast::Sender<AudioPipelineEvent<T::Event>>>,
 }
@@ -636,6 +638,7 @@ impl<T: StreamType> AudioConfig<T> {
             media_info: None,
             pcm_pool: None,
             host_sample_rate: None,
+            resampler_quality: ResamplerQuality::default(),
             events_tx: None,
         }
     }
@@ -670,6 +673,12 @@ impl<T: StreamType> AudioConfig<T> {
         self
     }
 
+    /// Set resampling quality preset.
+    pub fn with_resampler_quality(mut self, quality: ResamplerQuality) -> Self {
+        self.resampler_quality = quality;
+        self
+    }
+
     /// Set unified events channel.
     ///
     /// Stream events and audio events are forwarded as `AudioPipelineEvent::Stream(e)`
@@ -700,13 +709,16 @@ fn expected_output_spec(initial_spec: PcmSpec, host_sample_rate: &Arc<AtomicU32>
 fn create_effects(
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
+    quality: ResamplerQuality,
 ) -> Vec<Box<dyn AudioEffect>> {
-    let effects: Vec<Box<dyn AudioEffect>> = vec![Box::new(ResamplerProcessor::new(
-        initial_spec.sample_rate,
+    let params = ResamplerParams::new(
         Arc::clone(host_sample_rate),
+        initial_spec.sample_rate,
         initial_spec.channels as usize,
-    ))];
-    effects
+    )
+    .with_quality(quality);
+
+    vec![Box::new(ResamplerProcessor::new(params))]
 }
 
 // ============================================================================
@@ -913,6 +925,7 @@ where
             media_info: _media_info,
             mut pcm_pool,
             host_sample_rate: config_host_sr,
+            resampler_quality,
             events_tx,
         } = config;
 
@@ -990,7 +1003,7 @@ where
             Arc::new(AtomicU32::new(config_host_sr.map(|v| v.get()).unwrap_or(0)));
 
         let output_spec = expected_output_spec(initial_spec, &host_sample_rate);
-        let effects = create_effects(initial_spec, &host_sample_rate);
+        let effects = create_effects(initial_spec, &host_sample_rate, resampler_quality);
 
         info!(
             ?initial_spec,

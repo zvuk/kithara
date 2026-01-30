@@ -6,7 +6,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
-use kithara_audio::AudioConfig;
+use kithara_audio::{AudioConfig, ResamplerQuality};
 use kithara_bufpool::SharedPool;
 use kithara_decode::DecodeError;
 #[cfg(any(feature = "file", feature = "hls"))]
@@ -73,6 +73,8 @@ pub struct ResourceConfig {
     pub pcm_pool: Option<SharedPool<32, Vec<f32>>>,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
+    /// Resampling quality preset.
+    pub resampler_quality: ResamplerQuality,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub look_ahead_bytes: u64,
     /// Storage configuration (cache directory, eviction limits).
@@ -126,6 +128,7 @@ impl ResourceConfig {
             hint: None,
             pcm_pool: None,
             host_sample_rate: None,
+            resampler_quality: ResamplerQuality::default(),
             look_ahead_bytes: 500_000,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
@@ -173,6 +176,12 @@ impl ResourceConfig {
     /// Set target sample rate of the audio host (for resampling).
     pub fn with_host_sample_rate(mut self, sample_rate: NonZeroU32) -> Self {
         self.host_sample_rate = Some(sample_rate);
+        self
+    }
+
+    /// Set resampling quality preset.
+    pub fn with_resampler_quality(mut self, quality: ResamplerQuality) -> Self {
+        self.resampler_quality = quality;
         self
     }
 
@@ -263,6 +272,7 @@ impl ResourceConfig {
         if let Some(sr) = self.host_sample_rate {
             config = config.with_host_sample_rate(sr);
         }
+        config = config.with_resampler_quality(self.resampler_quality);
 
         config
     }
@@ -310,6 +320,7 @@ impl ResourceConfig {
         if let Some(sr) = self.host_sample_rate {
             config = config.with_host_sample_rate(sr);
         }
+        config = config.with_resampler_quality(self.resampler_quality);
 
         Ok(config)
     }
