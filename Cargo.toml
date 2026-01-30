@@ -134,4 +134,7 @@ memory-stats = "1.2"
 # performance monitoring
 hotpath = "0.5"
 
+# fast interleave/deinterleave
+fast-interleave = "0.1"
+
 # Optional: unify lint settings later via workspace.metadata or deny.toml.

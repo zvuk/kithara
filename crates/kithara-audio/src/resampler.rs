@@ -7,6 +7,7 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
+use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmSpec};
 use rubato::{
@@ -509,23 +510,25 @@ impl ResamplerProcessor {
     }
 
     fn append_to_buffer(&mut self, interleaved: &[f32]) {
-        // Optimized deinterleave for common stereo case
-        if self.channels == 2 {
-            // Process in chunks of 2 for better cache locality
-            for chunk in interleaved.chunks_exact(2) {
-                self.input_buffer[0].push(chunk[0]);
-                self.input_buffer[1].push(chunk[1]);
-            }
-            // Handle remainder if any (shouldn't happen for valid stereo data)
-            let remainder = interleaved.chunks_exact(2).remainder();
-            for (i, &sample) in remainder.iter().enumerate() {
-                self.input_buffer[i].push(sample);
-            }
-        } else {
-            // Generic path for other channel counts
-            for (i, sample) in interleaved.iter().enumerate() {
-                let ch = i % self.channels;
-                self.input_buffer[ch].push(*sample);
+        if interleaved.is_empty() {
+            return;
+        }
+
+        let frames = interleaved.len() / self.channels;
+
+        // Create temporary buffers for deinterleaved output
+        let mut temp_buffers: SmallVec<[Vec<f32>; 8]> =
+            (0..self.channels).map(|_| vec![0.0; frames]).collect();
+
+        // Use fast_interleave (SIMD-optimized) to deinterleave
+        let num_channels =
+            std::num::NonZeroUsize::new(self.channels).expect("channels must be > 0");
+        deinterleave_variable(interleaved, num_channels, &mut temp_buffers[..], 0..frames);
+
+        // Append deinterleaved data to existing input buffers
+        for (ch, channel_data) in temp_buffers.into_iter().enumerate() {
+            if ch < self.input_buffer.len() {
+                self.input_buffer[ch].extend_from_slice(&channel_data);
             }
         }
     }
@@ -538,39 +541,18 @@ impl ResamplerProcessor {
         let frames = planar[0].len();
         let total = frames * self.channels;
 
-        // Optimized interleave for stereo
-        if self.channels == 2 && planar.len() >= 2 {
-            let mut result = self.pool.get_with(|b| {
-                b.clear();
-                b.resize(total, 0.0);
-            });
+        // Get buffer from pool
+        let mut result = self.pool.get_with(|b| {
+            b.clear();
+            b.resize(total, 0.0);
+        });
 
-            let left = &planar[0];
-            let right = &planar[1];
+        // Use fast_interleave (SIMD-optimized)
+        let num_channels =
+            std::num::NonZeroUsize::new(self.channels).expect("channels must be > 0");
+        interleave_variable(planar, 0..frames, &mut result[..], num_channels);
 
-            // Direct indexing instead of push for better performance
-            for (frame_idx, (l, r)) in left.iter().zip(right.iter()).enumerate() {
-                let base = frame_idx * 2;
-                result[base] = *l;
-                result[base + 1] = *r;
-            }
-
-            result.into_inner()
-        } else {
-            // Generic path for other channel counts
-            let mut result = self.pool.get_with(|b| {
-                b.clear();
-                b.resize(total, 0.0);
-            });
-
-            for frame_idx in 0..frames {
-                for (ch_idx, channel) in planar.iter().take(self.channels).enumerate() {
-                    result[frame_idx * self.channels + ch_idx] = channel[frame_idx];
-                }
-            }
-
-            result.into_inner()
-        }
+        result.into_inner()
     }
 }
 

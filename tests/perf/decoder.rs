@@ -4,9 +4,10 @@
 
 #![cfg(feature = "perf")]
 
+use std::io::Cursor;
+
 use kithara_bufpool::pcm_pool;
 use kithara_decode::Decoder;
-use std::io::Cursor;
 
 /// Create a minimal valid WAV file for testing.
 fn create_test_wav(sample_count: usize) -> Vec<u8> {
@@ -63,8 +64,7 @@ fn perf_decoder_wav_decode_loop() {
     let wav_data = create_test_wav(44100);
     let cursor = Cursor::new(wav_data);
 
-    let mut decoder =
-        Decoder::new_with_probe(cursor, Some("wav"), pcm_pool().clone()).unwrap();
+    let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), pcm_pool().clone()).unwrap();
 
     let mut chunk_count = 0;
 
@@ -115,8 +115,7 @@ fn perf_decoder_f32_conversion() {
     let _guard = hotpath::GuardBuilder::new("decoder_f32_conversion").build();
     let wav_data = create_test_wav(44100);
     let cursor = Cursor::new(wav_data);
-    let mut decoder =
-        Decoder::new_with_probe(cursor, Some("wav"), pcm_pool().clone()).unwrap();
+    let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), pcm_pool().clone()).unwrap();
 
     let mut chunk_count = 0;
     while decoder_chunk_process(&mut decoder).is_some() {
@@ -138,8 +137,7 @@ fn perf_decoder_throughput() {
     // Create 5 seconds of audio
     let wav_data = create_test_wav(44100 * 5);
     let cursor = Cursor::new(wav_data);
-    let mut decoder =
-        Decoder::new_with_probe(cursor, Some("wav"), pcm_pool().clone()).unwrap();
+    let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), pcm_pool().clone()).unwrap();
 
     let start = std::time::Instant::now();
     let mut total_samples = 0;

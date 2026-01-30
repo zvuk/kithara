@@ -4,9 +4,9 @@
 
 #![cfg(feature = "perf")]
 
-use kithara_bufpool::{pcm_pool, PcmPool};
-use std::sync::Arc;
-use std::thread;
+use std::{sync::Arc, thread};
+
+use kithara_bufpool::{PcmPool, pcm_pool};
 
 #[hotpath::measure]
 fn pool_get_put_cycle(pool: &PcmPool) {
@@ -146,7 +146,10 @@ fn perf_pool_scalability() {
         let ops_per_sec = total_ops as f64 / elapsed.as_secs_f64();
 
         println!("\n{:=<60}", "");
-        println!("Threads: {}, Ops/thread: {}", num_threads, iterations_per_thread);
+        println!(
+            "Threads: {}, Ops/thread: {}",
+            num_threads, iterations_per_thread
+        );
         println!("Total ops: {}, Elapsed: {:.2?}", total_ops, elapsed);
         println!("Ops/sec: {:.0}", ops_per_sec);
         println!("{:=<60}\n", "");

@@ -19,6 +19,7 @@ rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
 parking_lot = { workspace = true }
+fast-interleave = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]

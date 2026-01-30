@@ -4,11 +4,12 @@
 
 #![cfg(feature = "perf")]
 
+use std::time::{Duration, Instant};
+
 use kithara_abr::{
     AbrDecision, AbrMode, AbrOptions, DefaultAbrController as AbrController, ThroughputSample,
     ThroughputSampleSource, Variant,
 };
-use std::time::{Duration, Instant};
 
 /// Helper to create variants from bitrates.
 fn create_variants(bitrates: &[u64]) -> Vec<Variant> {

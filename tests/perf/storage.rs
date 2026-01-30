@@ -4,8 +4,9 @@
 
 #![cfg(feature = "perf")]
 
-use kithara_storage::{OpenMode, ResourceExt, StorageOptions, StorageResource};
 use std::io::Write;
+
+use kithara_storage::{OpenMode, ResourceExt, StorageOptions, StorageResource};
 use tempfile::NamedTempFile;
 use tokio_util::sync::CancellationToken;
 

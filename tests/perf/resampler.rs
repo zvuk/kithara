@@ -4,10 +4,11 @@
 
 #![cfg(feature = "perf")]
 
+use std::sync::{Arc, atomic::AtomicU32};
+
 use kithara_audio::{AudioEffect, ResamplerParams, ResamplerQuality};
 use kithara_bufpool::pcm_pool;
 use kithara_decode::{PcmChunk, PcmSpec};
-use std::sync::{atomic::AtomicU32, Arc};
 
 /// Create a test PCM chunk with specified sample count.
 fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk<f32> {
@@ -55,8 +56,12 @@ fn perf_resampler_quality_comparison() {
     for quality in qualities {
         // Create resampler (not included in measurement)
         let host_rate = Arc::new(AtomicU32::new(output_rate));
-        let params = ResamplerParams::new(host_rate, input_spec.sample_rate, input_spec.channels as usize)
-            .with_quality(quality);
+        let params = ResamplerParams::new(
+            host_rate,
+            input_spec.sample_rate,
+            input_spec.channels as usize,
+        )
+        .with_quality(quality);
         let mut resampler = kithara_audio::ResamplerProcessor::new(params);
 
         let chunk = create_test_chunk(test_frames, input_spec);
@@ -184,8 +189,12 @@ fn perf_resampler_detailed_breakdown() {
 
     // Test with High quality (significant CPU load)
     let host_rate = Arc::new(AtomicU32::new(output_rate));
-    let params = ResamplerParams::new(host_rate, input_spec.sample_rate, input_spec.channels as usize)
-        .with_quality(ResamplerQuality::High);
+    let params = ResamplerParams::new(
+        host_rate,
+        input_spec.sample_rate,
+        input_spec.channels as usize,
+    )
+    .with_quality(ResamplerQuality::High);
     let mut resampler = kithara_audio::ResamplerProcessor::new(params);
 
     // Different chunk sizes to see buffer management overhead
