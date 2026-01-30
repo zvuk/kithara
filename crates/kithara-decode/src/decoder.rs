@@ -28,7 +28,7 @@ use std::{
     time::Duration,
 };
 
-use kithara_bufpool::SharedPool;
+use kithara_bufpool::PcmPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use symphonia::core::{
     codecs::{
@@ -68,18 +68,14 @@ pub struct Decoder {
     decoder: Box<dyn AudioDecoder>,
     track_id: u32,
     spec: PcmSpec,
-    pcm_pool: SharedPool<32, Vec<f32>>,
+    pcm_pool: PcmPool,
 }
 
 impl Decoder {
     /// Create decoder by probing the media source.
     ///
     /// This is used for initial load when codec parameters are unknown.
-    pub fn new_with_probe<R>(
-        reader: R,
-        hint: Option<&str>,
-        pcm_pool: SharedPool<32, Vec<f32>>,
-    ) -> DecodeResult<Self>
+    pub fn new_with_probe<R>(reader: R, hint: Option<&str>, pcm_pool: PcmPool) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
@@ -130,7 +126,7 @@ impl Decoder {
     pub fn new_from_media_info<R>(
         reader: R,
         media_info: &MediaInfo,
-        pcm_pool: SharedPool<32, Vec<f32>>,
+        pcm_pool: PcmPool,
     ) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
@@ -195,7 +191,7 @@ impl Decoder {
     pub fn new_direct<R>(
         reader: R,
         cached: &CachedCodecInfo,
-        pcm_pool: SharedPool<32, Vec<f32>>,
+        pcm_pool: PcmPool,
     ) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
@@ -598,8 +594,8 @@ mod tests {
 
     use super::*;
 
-    fn test_pool() -> SharedPool<32, Vec<f32>> {
-        SharedPool::<32, Vec<f32>>::new(64, 200_000)
+    fn test_pool() -> PcmPool {
+        PcmPool::new(64, 200_000)
     }
 
     /// Create minimal valid WAV file (PCM 16-bit stereo, 44100Hz)

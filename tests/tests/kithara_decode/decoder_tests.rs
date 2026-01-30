@@ -5,15 +5,15 @@
 use std::io::Cursor;
 
 use fixture::EmbeddedAudio;
-use kithara_bufpool::SharedPool;
+use kithara_bufpool::PcmPool;
 use kithara_decode::Decoder as SymphoniaDecoder;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 use rstest::{fixture, rstest};
 
 use super::fixture;
 
-fn test_pool() -> SharedPool<32, Vec<f32>> {
-    SharedPool::<32, Vec<f32>>::new(64, 200_000)
+fn test_pool() -> PcmPool {
+    PcmPool::new(64, 200_000)
 }
 
 // ==================== Fixtures ====================

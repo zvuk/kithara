@@ -7,7 +7,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
 use kithara_audio::{AudioConfig, ResamplerQuality};
-use kithara_bufpool::SharedPool;
+use kithara_bufpool::PcmPool;
 use kithara_decode::DecodeError;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::NetOptions;
@@ -70,7 +70,7 @@ pub struct ResourceConfig {
     /// Optional format hint (file extension like "mp3", "wav").
     pub hint: Option<String>,
     /// Shared PCM pool for temporary buffers.
-    pub pcm_pool: Option<SharedPool<32, Vec<f32>>>,
+    pub pcm_pool: Option<PcmPool>,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
     /// Resampling quality preset.
@@ -168,7 +168,7 @@ impl ResourceConfig {
     ///
     /// The pool is shared across the entire audio chain, eliminating
     /// per-call allocations in `read_planar` and internal decode buffers.
-    pub fn with_pcm_pool(mut self, pool: SharedPool<32, Vec<f32>>) -> Self {
+    pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
         self.pcm_pool = Some(pool);
         self
     }
