@@ -14,7 +14,7 @@ use kanal::Receiver;
 use kithara_bufpool::{PcmPool, byte_pool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_stream::{EpochValidator, Fetch, Stream, StreamType};
-use tokio::sync::broadcast;
+use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
@@ -108,6 +108,12 @@ pub struct Audio<S> {
     /// Target sample rate of the audio host (shared for dynamic updates).
     /// 0 means "not set".
     host_sample_rate: Arc<AtomicU32>,
+
+    /// Notify for async preload (first chunk available).
+    preload_notify: Arc<Notify>,
+
+    /// Whether preload() has been called (enables non-blocking mode).
+    preloaded: bool,
 
     /// Marker for source type.
     _marker: std::marker::PhantomData<S>,
@@ -239,13 +245,30 @@ impl<S> Audio<S> {
     }
 
     /// Receive next chunk from channel, filtering stale chunks.
+    /// After preload(), non-blocking. Before preload(), blocks on first call.
     pub(crate) fn fill_buffer(&mut self) -> bool {
         if self.eof {
             return false;
         }
 
         loop {
-            match self.pcm_rx.recv() {
+            let result = if self.preloaded {
+                // Non-blocking mode after preload
+                match self.pcm_rx.try_recv() {
+                    Ok(Some(fetch)) => Ok(fetch),
+                    Ok(None) => return false, // No data available
+                    Err(_) => {
+                        debug!("Audio: channel closed (EOF)");
+                        self.eof = true;
+                        return false;
+                    }
+                }
+            } else {
+                // Blocking mode before preload (for tests/backward compat)
+                self.pcm_rx.recv().map_err(|_| ())
+            };
+
+            match result {
                 Ok(fetch) => {
                     // Skip stale chunks (from before seek)
                     if !self.validator.is_valid(&fetch) {
@@ -274,7 +297,7 @@ impl<S> Audio<S> {
                     self.chunk_offset = 0;
                     return true;
                 }
-                Err(_) => {
+                Err(()) => {
                     debug!("Audio: channel closed (EOF)");
                     self.eof = true;
                     return false;
@@ -319,6 +342,7 @@ where
             host_sample_rate: config_host_sr,
             resampler_quality,
             events_tx,
+            preload_chunks,
         } = config;
 
         let event_capacity = event_channel_capacity.max(1);
@@ -425,10 +449,21 @@ where
         )
         .with_emit(emit);
 
+        let preload_notify = Arc::new(Notify::new());
+        let worker_notify = preload_notify.clone();
+
+        let worker_preload_chunks = preload_chunks.max(1);
+
         std::thread::Builder::new()
             .name("kithara-audio".to_string())
             .spawn(move || {
-                run_audio_loop(audio_source, cmd_rx, data_tx);
+                run_audio_loop(
+                    audio_source,
+                    cmd_rx,
+                    data_tx,
+                    worker_notify,
+                    worker_preload_chunks,
+                );
             })
             .map_err(|e| {
                 DecodeError::Io(std::io::Error::other(format!(
@@ -455,6 +490,8 @@ where
             cancel: Some(cancel),
             pcm_pool: pool.clone(),
             host_sample_rate,
+            preload_notify,
+            preloaded: false,
             _marker: std::marker::PhantomData,
         })
     }
@@ -535,6 +572,17 @@ impl<S: Send> PcmReader for Audio<S> {
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
         self.host_sample_rate
             .store(sample_rate.get(), Ordering::Relaxed);
+    }
+
+    fn preload_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+        Some(self.preload_notify.clone())
+    }
+
+    fn preload(&mut self) {
+        self.preloaded = true;
+        if self.current_chunk.is_none() && !self.eof {
+            self.fill_buffer();
+        }
     }
 }
 
@@ -727,5 +775,52 @@ mod tests {
 
         // Should be able to read again
         assert!(!audio.is_eof());
+    }
+
+    #[tokio::test]
+    async fn test_audio_preload() {
+        let (_tmp, config) = test_wav_config(1000);
+        let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
+            .await
+            .unwrap();
+
+        // Before preload, current_chunk should be None
+        assert!(audio.current_chunk.is_none());
+
+        // Get notify and await it
+        let notify = audio.preload_notify.clone();
+        notify.notified().await;
+        audio.preload();
+
+        // After preload, current_chunk should have data
+        assert!(audio.current_chunk.is_some());
+
+        // First read should return data immediately
+        let mut buf = [0.0f32; 64];
+        let n = audio.read(&mut buf);
+        assert!(n > 0);
+    }
+
+    #[tokio::test]
+    async fn test_audio_preload_idempotent() {
+        let (_tmp, config) = test_wav_config(1000);
+        let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
+            .await
+            .unwrap();
+
+        // Preload first time
+        let notify = audio.preload_notify.clone();
+        notify.notified().await;
+        audio.preload();
+        assert!(audio.current_chunk.is_some());
+
+        // Preload again — should be no-op since chunk is already loaded
+        audio.preload();
+        assert!(audio.current_chunk.is_some());
+
+        // Reading should still work normally
+        let mut buf = [0.0f32; 64];
+        let n = audio.read(&mut buf);
+        assert!(n > 0);
     }
 }

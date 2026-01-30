@@ -75,6 +75,11 @@ pub struct ResourceConfig {
     pub host_sample_rate: Option<NonZeroU32>,
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
+    /// Number of chunks to buffer before signaling preload readiness.
+    ///
+    /// Higher values reduce the chance of the audio thread blocking on `recv()`
+    /// after preload, but increase initial latency. Default: 3.
+    pub preload_chunks: usize,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     pub look_ahead_bytes: u64,
     /// Storage configuration (cache directory, eviction limits).
@@ -129,6 +134,7 @@ impl ResourceConfig {
             pcm_pool: None,
             host_sample_rate: None,
             resampler_quality: ResamplerQuality::default(),
+            preload_chunks: 3,
             look_ahead_bytes: 500_000,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
@@ -182,6 +188,12 @@ impl ResourceConfig {
     /// Set resampling quality preset.
     pub fn with_resampler_quality(mut self, quality: ResamplerQuality) -> Self {
         self.resampler_quality = quality;
+        self
+    }
+
+    /// Set number of chunks to buffer before signaling preload readiness.
+    pub fn with_preload_chunks(mut self, chunks: usize) -> Self {
+        self.preload_chunks = chunks.max(1);
         self
     }
 
@@ -273,6 +285,7 @@ impl ResourceConfig {
             config = config.with_host_sample_rate(sr);
         }
         config = config.with_resampler_quality(self.resampler_quality);
+        config = config.with_preload_chunks(self.preload_chunks);
 
         config
     }
@@ -321,6 +334,7 @@ impl ResourceConfig {
             config = config.with_host_sample_rate(sr);
         }
         config = config.with_resampler_quality(self.resampler_quality);
+        config = config.with_preload_chunks(self.preload_chunks);
 
         Ok(config)
     }

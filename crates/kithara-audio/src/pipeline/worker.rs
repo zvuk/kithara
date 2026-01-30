@@ -1,9 +1,10 @@
 //! Audio worker loop and command processing.
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use kithara_decode::PcmChunk;
 use kithara_stream::Fetch;
+use tokio::sync::Notify;
 use tracing::trace;
 
 use crate::traits::AudioEffect;
@@ -25,13 +26,20 @@ pub(super) trait AudioWorkerSource: Send + 'static {
 }
 
 /// Run a blocking audio loop: drain commands, fetch data, send through channel.
+///
+/// `preload_chunks` controls how many chunks must be sent before `preload_notify`
+/// fires. This ensures the channel has enough data for non-blocking reads.
 pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     mut source: S,
     cmd_rx: kanal::Receiver<S::Command>,
     data_tx: kanal::Sender<Fetch<S::Chunk>>,
+    preload_notify: Arc<Notify>,
+    preload_chunks: usize,
 ) {
     trace!("audio worker started");
     let mut at_eof = false;
+    let mut preloaded = false;
+    let mut chunks_sent: usize = 0;
 
     loop {
         // Drain pending commands
@@ -53,7 +61,16 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
             // Non-blocking send with backpressure
             loop {
                 match data_tx.try_send_option(&mut item) {
-                    Ok(true) => break,
+                    Ok(true) => {
+                        if !preloaded {
+                            chunks_sent += 1;
+                            if chunks_sent >= preload_chunks {
+                                preload_notify.notify_one();
+                                preloaded = true;
+                            }
+                        }
+                        break;
+                    }
                     Ok(false) => match cmd_rx.try_recv() {
                         Ok(Some(cmd)) => {
                             source.handle_command(cmd);
@@ -69,6 +86,12 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
             }
 
             if is_eof {
+                // Signal preload even if we haven't reached preload_chunks
+                // (short stream scenario).
+                if !preloaded {
+                    preload_notify.notify_one();
+                    preloaded = true;
+                }
                 at_eof = true;
             }
         } else {

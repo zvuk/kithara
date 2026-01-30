@@ -39,6 +39,11 @@ pub struct AudioConfig<T: StreamType> {
     pub host_sample_rate: Option<NonZeroU32>,
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
+    /// Number of chunks to buffer before signaling preload readiness.
+    ///
+    /// Higher values reduce the chance of the audio thread blocking on `recv()`
+    /// after preload, but increase initial latency. Default: 3.
+    pub preload_chunks: usize,
     /// Unified events sender (optional — if not provided, one is created internally).
     pub(super) events_tx: Option<broadcast::Sender<AudioPipelineEvent<T::Event>>>,
 }
@@ -56,6 +61,7 @@ impl<T: StreamType> AudioConfig<T> {
             pcm_pool: None,
             host_sample_rate: None,
             resampler_quality: ResamplerQuality::default(),
+            preload_chunks: 3,
             events_tx: None,
         }
     }
@@ -93,6 +99,12 @@ impl<T: StreamType> AudioConfig<T> {
     /// Set resampling quality preset.
     pub fn with_resampler_quality(mut self, quality: ResamplerQuality) -> Self {
         self.resampler_quality = quality;
+        self
+    }
+
+    /// Set number of chunks to buffer before signaling preload readiness.
+    pub fn with_preload_chunks(mut self, chunks: usize) -> Self {
+        self.preload_chunks = chunks.max(1);
         self
     }
 

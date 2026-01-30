@@ -62,7 +62,7 @@ impl Resource {
     /// Create a resource from any `PcmReader`.
     ///
     /// Only audio events are forwarded. Use this for custom sources.
-    pub fn from_reader(reader: impl PcmReader + 'static) -> Self {
+    pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
         let (events_tx, _) = broadcast::channel(64);
 
         let forward_tx = events_tx.clone();
@@ -80,7 +80,7 @@ impl Resource {
     /// Use this when you need to customize `FileConfig` or `AudioConfig`
     /// beyond what `Resource::new()` provides.
     #[cfg(feature = "file")]
-    pub async fn from_file(config: AudioConfig<kithara_file::File>) -> DecodeResult<Self> {
+    pub(crate) async fn from_file(config: AudioConfig<kithara_file::File>) -> DecodeResult<Self> {
         use kithara_stream::Stream;
 
         let audio = Audio::<Stream<kithara_file::File>>::new(config).await?;
@@ -98,7 +98,7 @@ impl Resource {
     ///
     /// Use this when you need to customize `HlsConfig`, ABR, keys, etc.
     #[cfg(feature = "hls")]
-    pub async fn from_hls(config: AudioConfig<kithara_hls::Hls>) -> DecodeResult<Self> {
+    pub(crate) async fn from_hls(config: AudioConfig<kithara_hls::Hls>) -> DecodeResult<Self> {
         use kithara_stream::Stream;
 
         let audio = Audio::<Stream<kithara_hls::Hls>>::new(config).await?;
@@ -163,6 +163,17 @@ impl Resource {
     /// Can be called at any time to reflect host sample rate changes.
     pub fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
         self.inner.set_host_sample_rate(sample_rate);
+    }
+
+    /// Wait for first decoded chunk to be available, then move it to internal buffer.
+    ///
+    /// After preload completes, the first `read()` returns data without blocking.
+    /// Safe to call multiple times (no-op if already preloaded).
+    pub async fn preload(&mut self) {
+        if let Some(notify) = self.inner.preload_notify() {
+            notify.notified().await;
+        }
+        self.inner.preload();
     }
 
     // -- Internal helpers -----------------------------------------------------
