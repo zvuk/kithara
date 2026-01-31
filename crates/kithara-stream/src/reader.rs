@@ -63,6 +63,7 @@ impl<S: Source> Reader<S> {
 }
 
 impl<S: Source> Read for Reader<S> {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         if buf.is_empty() {
             return Ok(0);

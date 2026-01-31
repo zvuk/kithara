@@ -312,6 +312,7 @@ impl Decoder {
     /// Decode next chunk of audio as f32 samples.
     ///
     /// Returns `None` on EOF.
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
         loop {
             let packet = match self.format_reader.next_packet() {

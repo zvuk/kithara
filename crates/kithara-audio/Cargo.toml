@@ -28,7 +28,7 @@ default = []
 # Enable rodio::Source adapter for playback
 rodio = ["dep:rodio"]
 # Enable performance monitoring with hotpath-rs
-perf = ["dep:hotpath"]
+perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dev-dependencies]
 tokio = { workspace = true }

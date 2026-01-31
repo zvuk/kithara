@@ -13,7 +13,7 @@ tracing = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]
-perf = ["dep:hotpath"]
+perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dev-dependencies]
 rstest = { workspace = true }

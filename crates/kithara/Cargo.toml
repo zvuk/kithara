@@ -28,6 +28,13 @@ assets = ["dep:kithara-assets", "dep:kithara-storage"]
 net = ["dep:kithara-net"]
 bufpool = []
 rodio = ["dep:rodio", "kithara-audio/rodio"]
+perf = [
+    "kithara-audio/perf",
+    "kithara-decode/perf",
+    "kithara-stream/perf",
+    "kithara-bufpool/perf",
+    "kithara-hls/perf",
+]
 full = ["file", "hls", "assets", "net", "bufpool"]
 
 [dev-dependencies]

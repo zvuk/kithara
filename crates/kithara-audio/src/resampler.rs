@@ -494,6 +494,7 @@ impl ResamplerProcessor {
         Ok(out_len)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn resample(&mut self, chunk: &PcmChunk<f32>) -> Option<PcmChunk<f32>> {
         self.resampler.as_ref()?;
 
@@ -567,6 +568,7 @@ impl ResamplerProcessor {
         Some(PcmChunk::new(self.output_spec, interleaved))
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn append_to_buffer(&mut self, interleaved: &[f32]) {
         if interleaved.is_empty() {
             return;
@@ -599,6 +601,7 @@ impl ResamplerProcessor {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn interleave(&self, planar: &[Vec<f32>]) -> Vec<f32> {
         if planar.is_empty() || planar[0].is_empty() {
             return Vec::new();
@@ -623,11 +626,13 @@ impl ResamplerProcessor {
 }
 
 /// Create a SmallVec of empty Vecs for each channel.
+#[cfg_attr(feature = "perf", hotpath::measure)]
 fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
     (0..channels).map(|_| Vec::new()).collect()
 }
 
 impl AudioEffect for ResamplerProcessor {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn process(&mut self, chunk: PcmChunk<f32>) -> Option<PcmChunk<f32>> {
         let chunk_rate = chunk.spec.sample_rate;
         let chunk_channels = chunk.spec.channels as usize;
