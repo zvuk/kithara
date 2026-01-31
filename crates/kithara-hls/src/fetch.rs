@@ -362,7 +362,7 @@ impl<N: Net> Loader for FetchManager<N> {
         };
 
         if segment_type.is_init() {
-            debug!(variant, "looking for init segment in playlist");
+            trace!(variant, "looking for init segment in playlist");
             let init_segment = playlist.init_segment.as_ref().ok_or_else(|| {
                 HlsError::SegmentNotFound(format!(
                     "init segment not found in variant {} playlist",
@@ -374,17 +374,15 @@ impl<N: Net> Loader for FetchManager<N> {
                 HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {}", e))
             })?;
 
-            debug!(variant, url = %init_url, "starting init segment fetch");
             let fetch_result = self.start_fetch(&init_url).await?;
-            debug!(variant, "init segment fetch started");
 
             let init_len = match fetch_result {
                 FetchResult::Cached { bytes } => {
-                    debug!(variant, bytes, "init segment already cached");
+                    trace!(variant, bytes, "init segment already cached");
                     bytes
                 }
                 FetchResult::Active(mut writer) => {
-                    debug!(variant, "downloading init segment chunks");
+                    debug!(variant, url = %init_url, "downloading init segment");
                     let mut total = 0u64;
                     while let Some(result) = writer.next().await {
                         match result {

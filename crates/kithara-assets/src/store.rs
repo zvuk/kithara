@@ -72,13 +72,13 @@ impl StoreOptions {
 /// - DiskAssetStore (base disk I/O)
 /// - EvictAssets (LRU eviction)
 /// - ProcessingAssets (transformation with context, uses Default if no context)
-/// - CachedAssets (caches resources by (ResourceKey, Context))
-/// - LeaseAssets (RAII pinning, outermost)
+/// - LeaseAssets (RAII pinning)
+/// - CachedAssets (caches LeaseResource with guards, outermost)
 ///
 /// Generic parameter `Ctx` is the context type for processing.
 /// Use `()` (default) for no processing (ProcessingAssets will pass through unchanged).
 pub type AssetStore<Ctx = ()> =
-    LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
+    CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
 /// Constructor for the ready-to-use [`AssetStore`].
 ///
@@ -193,18 +193,20 @@ where
         // Use provided pool or global pool
         let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
-        // Build decorator chain: Disk -> Evict -> Processing -> Cached -> Lease
+        // Build decorator chain: Disk -> Evict -> Processing -> Lease -> Cached
         let disk = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));
         let evict = Arc::new(EvictAssets::new(disk, evict_cfg, cancel.clone()));
         let processing = Arc::new(ProcessingAssets::new(evict.clone(), process_fn, pool));
-        let cached = Arc::new(CachedAssets::new(processing));
 
         // LeaseAssets holds evict for byte recording
-        LeaseAssets::with_byte_recorder(
-            cached,
+        let lease = LeaseAssets::with_byte_recorder(
+            processing,
             cancel,
             evict as Arc<dyn crate::evict::ByteRecorder>,
-        )
+        );
+
+        // CachedAssets on top to cache LeaseResource with guards
+        CachedAssets::new(Arc::new(lease))
     }
 }
 
