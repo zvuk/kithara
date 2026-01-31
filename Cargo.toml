@@ -95,7 +95,8 @@ hls_m3u8 = "0.5.1"
 symphonia = { git = "https://github.com/pdeljanov/Symphonia.git", branch="dev-0.6", features = ["all", "opt-simd"] }
 dasp = { version = "0.11", features = ["interpolate", "interpolate-linear", "signal"] }
 rodio = "0.21.1"
-rubato = "0.15"
+rubato = "1.0"
+audioadapter-buffers = "2.0"
 smallvec = "1"
 
 # errors/logging/metrics

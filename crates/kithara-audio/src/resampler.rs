@@ -11,7 +11,7 @@ use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmSpec};
 use rubato::{
-    FastFixedIn, FftFixedIn, PolynomialDegree, Resampler as RubatoResampler, SincFixedIn,
+    Async, Fft, FixedAsync, FixedSync, PolynomialDegree, Resampler as RubatoResampler,
     SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use smallvec::SmallVec;
@@ -81,21 +81,39 @@ impl ResamplerQuality {
 
 /// Enum wrapper for rubato resamplers (trait is not object-safe).
 enum ResamplerKind {
-    Poly(FastFixedIn<f32>),
-    Sinc(SincFixedIn<f32>),
-    Fft(FftFixedIn<f32>),
+    Poly(Async<f32>),
+    Sinc(Async<f32>),
+    Fft(Box<Fft<f32>>),
 }
 
 impl ResamplerKind {
     fn process_into_buffer(
         &mut self,
-        input: &[&[f32]],
-        output: &mut [&mut [f32]],
+        input: &[Vec<f32>],
+        output: &mut [Vec<f32>],
     ) -> Result<(usize, usize), rubato::ResampleError> {
+        use audioadapter_buffers::direct::SequentialSliceOfVecs;
+
+        let channels = input.len();
+        let input_frames = input[0].len();
+        let output_frames = output[0].len();
+
+        let input_adapter = SequentialSliceOfVecs::new(input, channels, input_frames)
+            .map_err(|_| rubato::ResampleError::InsufficientInputBufferSize {
+                expected: input_frames,
+                actual: 0,
+            })?;
+        let mut output_adapter =
+            SequentialSliceOfVecs::new_mut(output, channels, output_frames)
+                .map_err(|_| rubato::ResampleError::InsufficientOutputBufferSize {
+                    expected: output_frames,
+                    actual: 0,
+                })?;
+
         match self {
-            Self::Poly(r) => r.process_into_buffer(input, output, None),
-            Self::Sinc(r) => r.process_into_buffer(input, output, None),
-            Self::Fft(r) => r.process_into_buffer(input, output, None),
+            Self::Poly(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
+            Self::Sinc(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
+            Self::Fft(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
         }
     }
 
@@ -319,24 +337,37 @@ impl ResamplerProcessor {
     ) -> Result<ResamplerKind, rubato::ResamplerConstructionError> {
         match quality {
             ResamplerQuality::Fast => {
-                let poly =
-                    FastFixedIn::new(ratio, 2.0, PolynomialDegree::Cubic, chunk_size, channels)?;
+                let poly = Async::new_poly(
+                    ratio,
+                    2.0,
+                    PolynomialDegree::Cubic,
+                    chunk_size,
+                    channels,
+                    FixedAsync::Input,
+                )?;
                 Ok(ResamplerKind::Poly(poly))
             }
             ResamplerQuality::Normal | ResamplerQuality::Good | ResamplerQuality::High => {
-                let sinc =
-                    SincFixedIn::new(ratio, 2.0, quality.sinc_params(), chunk_size, channels)?;
+                let sinc = Async::new_sinc(
+                    ratio,
+                    2.0,
+                    &quality.sinc_params(),
+                    chunk_size,
+                    channels,
+                    FixedAsync::Input,
+                )?;
                 Ok(ResamplerKind::Sinc(sinc))
             }
             ResamplerQuality::Maximum => {
-                let fft = FftFixedIn::new(
+                let fft = Fft::new(
                     source_rate as usize,
                     target_rate as usize,
                     chunk_size,
                     2,
                     channels,
+                    FixedSync::Input,
                 )?;
-                Ok(ResamplerKind::Fft(fft))
+                Ok(ResamplerKind::Fft(Box::new(fft)))
             }
         }
     }
@@ -456,14 +487,10 @@ impl ResamplerProcessor {
             self.temp_output_bufs[ch].resize(output_frames, 0.0);
         }
 
-        let input_refs: SmallVec<[&[f32]; 8]> =
-            self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
-        let mut output_refs: SmallVec<[&mut [f32]; 8]> = self
-            .temp_output_bufs
-            .iter_mut()
-            .map(|v| v.as_mut_slice())
-            .collect();
-        let (_, out_len) = resampler.process_into_buffer(&input_refs, &mut output_refs)?;
+        let (_, out_len) = resampler.process_into_buffer(
+            &self.temp_input_slice[..channels],
+            &mut self.temp_output_bufs[..channels],
+        )?;
         Ok(out_len)
     }
 
