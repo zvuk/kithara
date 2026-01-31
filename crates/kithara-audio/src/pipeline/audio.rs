@@ -181,6 +181,7 @@ impl<S> Audio<S> {
     /// Returns 0 when EOF is reached.
     ///
     /// Samples are interleaved f32 (e.g., LRLRLR for stereo).
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn read(&mut self, buf: &mut [f32]) -> usize {
         if self.eof || buf.is_empty() {
             return 0;
@@ -557,6 +558,7 @@ impl<S: Send> PcmReader for Audio<S> {
         Audio::read(self, buf)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_planar(&mut self, output: &mut [&mut [f32]]) -> usize {
         let channels = output.len();
         if channels == 0 {
