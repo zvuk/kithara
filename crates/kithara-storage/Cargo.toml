@@ -13,6 +13,7 @@ tracing = { workspace = true }
 mmap-io = { workspace = true }
 rangemap = { workspace = true }
 parking_lot = { workspace = true }
+crossbeam-queue = { workspace = true }
 
 [dev-dependencies]
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].

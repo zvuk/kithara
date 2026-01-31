@@ -4,7 +4,16 @@
 //!
 //! `ResourceExt` is a sync trait covering both streaming (incremental write) and
 //! atomic (whole-file) use-cases. `StorageResource` is the sole implementation,
-//! backed by `mmap-io` with `Condvar` for blocking waits.
+//! backed by `mmap-io` with lock-free queues for fast-path notifications and
+//! `Condvar` for blocking waits.
+//!
+//! ## Performance optimizations
+//!
+//! - **Lock-free fast path**: Writer publishes ready ranges to `SegQueue`.
+//!   Reader checks queue before blocking on mutex, reducing contention.
+//! - **Fallback slow path**: If queue is empty, falls back to `Mutex + Condvar`
+//!   for full synchronization.
+//! - **Hybrid approach**: Combines lock-free performance with mutex correctness.
 
 use std::{
     ops::Range,
@@ -12,6 +21,7 @@ use std::{
     sync::Arc,
 };
 
+use crossbeam_queue::SegQueue;
 use mmap_io::MemoryMappedFile;
 use parking_lot::{Condvar, Mutex};
 use rangemap::RangeSet;
@@ -206,6 +216,9 @@ struct Inner {
     mmap: Mutex<MmapState>,
     state: Mutex<State>,
     condvar: Condvar,
+    /// Lock-free queue for fast-path range notifications.
+    /// Writer pushes ready ranges here; Reader checks queue before blocking.
+    ready_ranges: SegQueue<Range<u64>>,
     cancel: CancellationToken,
     path: PathBuf,
     mode: OpenMode,
@@ -291,6 +304,7 @@ impl StorageResource {
                 mmap: Mutex::new(mmap_state),
                 state: Mutex::new(state),
                 condvar: Condvar::new(),
+                ready_ranges: SegQueue::new(),
                 cancel: opts.cancel,
                 path: opts.path,
                 mode,
@@ -401,8 +415,14 @@ impl ResourceExt for StorageResource {
             mmap.update_region(offset, data)?;
         }
 
+        // Lock-free fast path: publish ready range to queue.
+        // Readers check this queue before blocking on condvar.
+        let range = offset..end;
+        self.inner.ready_ranges.push(range.clone());
+
+        // Slow path: update shared state and notify waiters.
         let mut state = self.inner.state.lock();
-        state.available.insert(offset..end);
+        state.available.insert(range);
         self.inner.condvar.notify_all();
 
         trace!(offset, len = data.len(), "StorageResource: write_at");
@@ -421,9 +441,29 @@ impl ResourceExt for StorageResource {
             return Ok(WaitOutcome::Ready);
         }
 
-        let mut state = self.inner.state.lock();
-
+        // Fast path: consume lock-free queue and check coverage without blocking.
+        // This avoids mutex contention when writer is actively publishing ranges.
         loop {
+            // Drain all ready ranges from queue and check if our range is covered.
+            let mut found_match = false;
+            while let Some(ready) = self.inner.ready_ranges.pop() {
+                // Check if this ready range overlaps or covers our requested range.
+                if ready.start <= range.start && ready.end >= range.end {
+                    found_match = true;
+                    break;
+                }
+                // Even if not a match, the range was already inserted into state.available
+                // by write_at, so we don't need to re-insert it here.
+            }
+
+            if found_match {
+                return Ok(WaitOutcome::Ready);
+            }
+
+            // Slow path: lock state and check coverage, wait if needed.
+            let mut state = self.inner.state.lock();
+
+            // Check cancellation and failure.
             if self.inner.cancel.is_cancelled() {
                 return Err(StorageError::Cancelled);
             }
@@ -432,10 +472,12 @@ impl ResourceExt for StorageResource {
                 return Err(StorageError::Failed(reason.clone()));
             }
 
+            // Check if range is now available (might have been added between queue check and lock).
             if range_covered_by(&state.available, &range) {
                 return Ok(WaitOutcome::Ready);
             }
 
+            // Check if committed and EOF.
             if state.committed {
                 let final_len = state.final_len.unwrap_or(0);
                 if range.start >= final_len {
@@ -444,9 +486,12 @@ impl ResourceExt for StorageResource {
                 return Ok(WaitOutcome::Ready);
             }
 
+            // Wait for notification (with timeout to periodically re-check queue).
             self.inner
                 .condvar
                 .wait_for(&mut state, std::time::Duration::from_millis(50));
+
+            // Drop lock and re-check queue in next iteration.
         }
     }
 
