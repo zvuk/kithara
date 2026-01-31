@@ -206,15 +206,15 @@ impl ResamplerProcessor {
         };
 
         let mut processor = Self {
-            source_rate,
-            host_sample_rate: params.host_sample_rate,
             channels,
+            source_rate,
+            output_spec,
+            host_sample_rate: params.host_sample_rate,
             resampler: None,
             current_ratio: 1.0,
             quality: params.quality,
             chunk_size: params.chunk_size,
             input_buffer: smallvec_new_vecs(channels),
-            output_spec,
             temp_input_slice: smallvec_new_vecs(channels),
             temp_output_bufs: smallvec_new_vecs(channels),
             temp_output_all: smallvec_new_vecs(channels),
@@ -258,31 +258,21 @@ impl ResamplerProcessor {
         debug!(buffered, padding_needed, "Flushing resampler buffer");
 
         self.ensure_temp_buffers(channels);
-        for ch in 0..channels {
-            self.temp_input_slice[ch].clear();
-            self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
-        }
 
-        let output_frames = self.resampler.as_ref()?.output_frames_next();
-
-        for ch in 0..channels {
-            self.temp_output_bufs[ch].resize(output_frames, 0.0);
-        }
+        let output_frames = {
+            let resampler = self.resampler.as_ref()?;
+            resampler.output_frames_next()
+        };
 
         let result = {
-            let input_refs: SmallVec<[&[f32]; 8]> =
-                self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
-            let mut output_refs: SmallVec<[&mut [f32]; 8]> = self
-                .temp_output_bufs
-                .iter_mut()
-                .map(|v| v.as_mut_slice())
-                .collect();
-            let resampler = self.resampler.as_mut()?;
-            resampler.process_into_buffer(&input_refs, &mut output_refs)
+            let mut resampler = self.resampler.take()?;
+            let res = self.process_block(&mut resampler, input_frames, output_frames);
+            self.resampler = Some(resampler);
+            res
         };
 
         match result {
-            Ok((_, out_len)) => {
+            Ok(out_len) => {
                 for buf in &mut self.input_buffer {
                     buf.clear();
                 }
@@ -372,36 +362,44 @@ impl ResamplerProcessor {
         };
         let ratio_changed = (new_ratio - self.current_ratio).abs() > 0.0001;
 
-        if should_pt && !currently_pt {
-            debug!(
-                source_rate = self.source_rate,
-                target_rate, "Resampler switching to passthrough"
-            );
-            self.resampler = None;
+        if should_pt {
+            if !currently_pt {
+                debug!(
+                    source_rate = self.source_rate,
+                    target_rate, "Resampler switching to passthrough"
+                );
+                self.resampler = None;
+            }
             self.current_ratio = 1.0;
             for buf in &mut self.input_buffer {
                 buf.clear();
             }
-        } else if !should_pt && (currently_pt || ratio_changed) {
-            if !currently_pt && ratio_changed {
-                // Try dynamic ratio update first
-                if let Some(ref mut resampler) = self.resampler {
-                    if let Err(e) = resampler.set_resample_ratio(new_ratio, false) {
-                        debug!(err = %e, "Failed to update ratio dynamically, recreating");
-                        self.resampler = None;
-                    } else {
-                        debug!(
-                            new_ratio,
-                            source_rate = self.source_rate,
-                            target_rate,
-                            "Resampler ratio updated dynamically"
-                        );
-                        self.current_ratio = new_ratio;
-                        return;
-                    }
+            return;
+        }
+
+        // Need an active resampler with the latest ratio
+        if !currently_pt && ratio_changed
+            && let Some(ref mut resampler) = self.resampler
+        {
+            match resampler.set_resample_ratio(new_ratio, false) {
+                Ok(()) => {
+                    debug!(
+                        new_ratio,
+                        source_rate = self.source_rate,
+                        target_rate,
+                        "Resampler ratio updated dynamically"
+                    );
+                    self.current_ratio = new_ratio;
+                    return;
+                }
+                Err(e) => {
+                    debug!(err = %e, "Failed to update ratio dynamically, recreating");
+                    self.resampler = None;
                 }
             }
+        }
 
+        if currently_pt || self.resampler.is_none() || ratio_changed {
             debug!(
                 new_ratio,
                 source_rate = self.source_rate,
@@ -421,6 +419,9 @@ impl ResamplerProcessor {
                 Ok(resampler) => {
                     self.resampler = Some(resampler);
                     self.current_ratio = new_ratio;
+                    for buf in &mut self.input_buffer {
+                        buf.clear();
+                    }
                 }
                 Err(e) => {
                     debug!(err = %e, "Failed to create resampler, staying in current mode");
@@ -430,9 +431,40 @@ impl ResamplerProcessor {
     }
 
     fn ensure_temp_buffers(&mut self, channels: usize) {
-        // Vec's already exist from initialization, just resize if channels changed
-        debug_assert!(self.temp_input_slice.len() >= channels);
-        debug_assert!(self.temp_output_bufs.len() >= channels);
+        if self.temp_input_slice.len() < channels {
+            self.temp_input_slice.resize_with(channels, Vec::new);
+        }
+        if self.temp_output_bufs.len() < channels {
+            self.temp_output_bufs.resize_with(channels, Vec::new);
+        }
+    }
+
+    fn process_block(
+        &mut self,
+        resampler: &mut ResamplerKind,
+        input_frames: usize,
+        output_frames: usize,
+    ) -> Result<usize, rubato::ResampleError> {
+        let channels = self.channels;
+
+        for ch in 0..channels {
+            self.temp_input_slice[ch].clear();
+            self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
+        }
+
+        for ch in 0..channels {
+            self.temp_output_bufs[ch].resize(output_frames, 0.0);
+        }
+
+        let input_refs: SmallVec<[&[f32]; 8]> =
+            self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
+        let mut output_refs: SmallVec<[&mut [f32]; 8]> = self
+            .temp_output_bufs
+            .iter_mut()
+            .map(|v| v.as_mut_slice())
+            .collect();
+        let (_, out_len) = resampler.process_into_buffer(&input_refs, &mut output_refs)?;
+        Ok(out_len)
     }
 
     fn resample(&mut self, chunk: &PcmChunk<f32>) -> Option<PcmChunk<f32>> {
@@ -443,49 +475,49 @@ impl ResamplerProcessor {
         let input_frames = self.resampler.as_ref()?.input_frames_next();
         let channels = self.channels;
 
-        // Ensure temp buffers are sized correctly before the loop
+        if self.input_buffer[0].len() < input_frames {
+            trace!(
+                buffered = self.input_buffer[0].len(),
+                needed = input_frames,
+                "Accumulating data"
+            );
+            return None;
+        }
+
         self.ensure_temp_buffers(channels);
 
+        if self.temp_output_all.len() < channels {
+            self.temp_output_all.resize_with(channels, Vec::new);
+        }
         for buf in &mut self.temp_output_all {
             buf.clear();
         }
 
         while self.input_buffer[0].len() >= input_frames {
-            // 1. Copy input data into temp_input_slice
-            for ch in 0..channels {
-                self.temp_input_slice[ch].clear();
-                self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
-            }
+            let output_frames = {
+                let resampler = self.resampler.as_ref()?;
+                resampler.output_frames_next()
+            };
 
-            // 2. Get output_frames from resampler (brief borrow)
-            let output_frames = self.resampler.as_ref()?.output_frames_next();
-
-            // 3. Prepare output buffers
-            for ch in 0..channels {
-                self.temp_output_bufs[ch].resize(output_frames, 0.0);
-            }
-
-            // 4. Build refs and process — all borrows in one block
             let result = {
-                let input_refs: SmallVec<[&[f32]; 8]> =
-                    self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
-                let mut output_refs: SmallVec<[&mut [f32]; 8]> = self
-                    .temp_output_bufs
-                    .iter_mut()
-                    .map(|v| v.as_mut_slice())
-                    .collect();
-                let resampler = self.resampler.as_mut()?;
-                resampler.process_into_buffer(&input_refs, &mut output_refs)
+                let mut resampler = self.resampler.take()?;
+                let res = self.process_block(&mut resampler, input_frames, output_frames);
+                self.resampler = Some(resampler);
+                res
             };
 
             match result {
-                Ok((_, out_len)) => {
+                Ok(out_len) => {
                     for ch in 0..channels {
                         let src = &self.temp_output_bufs[ch][..out_len];
                         self.temp_output_all[ch].extend_from_slice(src);
                     }
                     for buf in &mut self.input_buffer {
                         buf.drain(..input_frames);
+                    }
+
+                    if self.input_buffer[0].len() < input_frames {
+                        break;
                     }
                 }
                 Err(e) => {
@@ -515,8 +547,9 @@ impl ResamplerProcessor {
 
         let frames = interleaved.len() / self.channels;
 
-        // Vec's already exist from initialization, just resize to needed frames
-        debug_assert!(self.temp_deinterleave.len() >= self.channels);
+        if self.temp_deinterleave.len() < self.channels {
+            self.temp_deinterleave.resize_with(self.channels, Vec::new);
+        }
 
         // Resize each channel buffer to needed size (reuses existing capacity)
         for buf in &mut self.temp_deinterleave[..self.channels] {
@@ -584,7 +617,10 @@ impl AudioEffect for ResamplerProcessor {
             self.channels = chunk_channels;
             self.source_rate = chunk_rate;
             self.input_buffer = smallvec_new_vecs(chunk_channels);
+            self.temp_input_slice = smallvec_new_vecs(chunk_channels);
+            self.temp_output_bufs = smallvec_new_vecs(chunk_channels);
             self.temp_output_all = smallvec_new_vecs(chunk_channels);
+            self.temp_deinterleave = smallvec_new_vecs(chunk_channels);
             self.output_spec.channels = chunk_channels as u16;
             self.resampler = None;
         } else if chunk_rate != self.source_rate {

@@ -62,6 +62,7 @@ impl Resource {
     /// Create a resource from any `PcmReader`.
     ///
     /// Only audio events are forwarded. Use this for custom sources.
+    #[allow(dead_code)]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
         let (events_tx, _) = broadcast::channel(64);
 
@@ -178,6 +179,7 @@ impl Resource {
 
     // -- Internal helpers -----------------------------------------------------
 
+    #[allow(dead_code)]
     fn spawn_audio_forward(
         mut audio_rx: broadcast::Receiver<AudioEvent>,
         forward_tx: broadcast::Sender<ResourceEvent>,

@@ -13,7 +13,10 @@ pub enum AssetsError {
     Io(#[from] std::io::Error),
 
     #[error("bincode error: {0}")]
-    Bincode(#[from] Box<bincode::ErrorKind>),
+    Bincode(#[from] bincode::error::EncodeError),
+
+    #[error("bincode decode error: {0}")]
+    BincodeDecode(#[from] bincode::error::DecodeError),
 
     #[error("storage error: {0}")]
     Storage(#[from] StorageError),

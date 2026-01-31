@@ -245,29 +245,24 @@ impl<S> Audio<S> {
 
         // Drain stale chunks from channel to unblock worker.
         // Stop if we encounter a valid chunk (save it for next read).
-        loop {
-            match self.pcm_rx.try_recv() {
-                Ok(Some(fetch)) => {
-                    if self.validator.is_valid(&fetch) {
-                        // Found new valid chunk - save it and stop draining
-                        if !fetch.is_eof() {
-                            let chunk = fetch.into_inner();
-                            self.spec = chunk.spec;
-                            self.current_chunk = Some(chunk.pcm);
-                            self.chunk_offset = 0;
-                            trace!("seek: saved first valid chunk after drain");
-                        }
-                        break;
-                    }
-                    // Stale chunk (old epoch) - discard and continue draining
-                    trace!(
-                        chunk_epoch = fetch.epoch(),
-                        current_epoch = new_epoch,
-                        "seek: discarding stale chunk"
-                    );
+        while let Ok(Some(fetch)) = self.pcm_rx.try_recv() {
+            if self.validator.is_valid(&fetch) {
+                // Found new valid chunk - save it and stop draining
+                if !fetch.is_eof() {
+                    let chunk = fetch.into_inner();
+                    self.spec = chunk.spec;
+                    self.current_chunk = Some(chunk.pcm);
+                    self.chunk_offset = 0;
+                    trace!("seek: saved first valid chunk after drain");
                 }
-                _ => break, // Channel empty or closed
+                break;
             }
+            // Stale chunk (old epoch) - discard and continue draining
+            trace!(
+                chunk_epoch = fetch.epoch(),
+                current_epoch = new_epoch,
+                "seek: discarding stale chunk"
+            );
         }
 
         // Reset preload flag - first read after seek will be blocking if needed

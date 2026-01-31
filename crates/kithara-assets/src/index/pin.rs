@@ -53,8 +53,11 @@ impl PinsIndex {
             return Ok(HashSet::new());
         }
 
-        let file: PinsIndexFile = match bincode::deserialize(&buf) {
-            Ok(file) => file,
+        let file: PinsIndexFile = match bincode::serde::decode_from_slice(
+            &buf,
+            bincode::config::legacy(),
+        ) {
+            Ok((file, _)) => file,
             Err(_) => return Ok(HashSet::new()),
         };
 
@@ -69,7 +72,7 @@ impl PinsIndex {
             pinned: pins.iter().cloned().collect(),
         };
 
-        let bytes = bincode::serialize(&file)?;
+        let bytes = bincode::serde::encode_to_vec(&file, bincode::config::legacy())?;
         self.res.write_all(&bytes)?;
         Ok(())
     }
@@ -217,7 +220,8 @@ mod tests {
         // Read raw bytes and deserialize using bincode
         let mut buf = crate::byte_pool().get();
         res.read_into(&mut buf).unwrap();
-        let file: PinsIndexFile = bincode::deserialize(&buf).unwrap();
+        let (file, _): (PinsIndexFile, _) =
+            bincode::serde::decode_from_slice(&buf, bincode::config::legacy()).unwrap();
 
         assert_eq!(file.version, 1);
         assert_eq!(file.pinned.len(), 1);
