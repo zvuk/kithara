@@ -148,6 +148,7 @@ impl<T: StreamType> Stream<T> {
 }
 
 impl<T: StreamType> Read for Stream<T> {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         self.reader.read(buf)
     }

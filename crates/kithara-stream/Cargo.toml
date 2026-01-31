@@ -21,6 +21,10 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+hotpath = { workspace = true, optional = true }
+
+[features]
+perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dev-dependencies]
 tokio = { workspace = true }

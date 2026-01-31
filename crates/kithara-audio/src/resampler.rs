@@ -11,7 +11,7 @@ use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmSpec};
 use rubato::{
-    FastFixedIn, FftFixedIn, PolynomialDegree, Resampler as RubatoResampler, SincFixedIn,
+    Async, Fft, FixedAsync, FixedSync, PolynomialDegree, Resampler as RubatoResampler,
     SincInterpolationParameters, SincInterpolationType, WindowFunction,
 };
 use smallvec::SmallVec;
@@ -81,21 +81,40 @@ impl ResamplerQuality {
 
 /// Enum wrapper for rubato resamplers (trait is not object-safe).
 enum ResamplerKind {
-    Poly(FastFixedIn<f32>),
-    Sinc(SincFixedIn<f32>),
-    Fft(FftFixedIn<f32>),
+    Poly(Async<f32>),
+    Sinc(Async<f32>),
+    Fft(Box<Fft<f32>>),
 }
 
 impl ResamplerKind {
     fn process_into_buffer(
         &mut self,
-        input: &[&[f32]],
-        output: &mut [&mut [f32]],
+        input: &[Vec<f32>],
+        output: &mut [Vec<f32>],
     ) -> Result<(usize, usize), rubato::ResampleError> {
+        use audioadapter_buffers::direct::SequentialSliceOfVecs;
+
+        let channels = input.len();
+        let input_frames = input[0].len();
+        let output_frames = output[0].len();
+
+        let input_adapter =
+            SequentialSliceOfVecs::new(input, channels, input_frames).map_err(|_| {
+                rubato::ResampleError::InsufficientInputBufferSize {
+                    expected: input_frames,
+                    actual: 0,
+                }
+            })?;
+        let mut output_adapter = SequentialSliceOfVecs::new_mut(output, channels, output_frames)
+            .map_err(|_| rubato::ResampleError::InsufficientOutputBufferSize {
+                expected: output_frames,
+                actual: 0,
+            })?;
+
         match self {
-            Self::Poly(r) => r.process_into_buffer(input, output, None),
-            Self::Sinc(r) => r.process_into_buffer(input, output, None),
-            Self::Fft(r) => r.process_into_buffer(input, output, None),
+            Self::Poly(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
+            Self::Sinc(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
+            Self::Fft(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
         }
     }
 
@@ -206,15 +225,15 @@ impl ResamplerProcessor {
         };
 
         let mut processor = Self {
-            source_rate,
-            host_sample_rate: params.host_sample_rate,
             channels,
+            source_rate,
+            output_spec,
+            host_sample_rate: params.host_sample_rate,
             resampler: None,
             current_ratio: 1.0,
             quality: params.quality,
             chunk_size: params.chunk_size,
             input_buffer: smallvec_new_vecs(channels),
-            output_spec,
             temp_input_slice: smallvec_new_vecs(channels),
             temp_output_bufs: smallvec_new_vecs(channels),
             temp_output_all: smallvec_new_vecs(channels),
@@ -258,31 +277,21 @@ impl ResamplerProcessor {
         debug!(buffered, padding_needed, "Flushing resampler buffer");
 
         self.ensure_temp_buffers(channels);
-        for ch in 0..channels {
-            self.temp_input_slice[ch].clear();
-            self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
-        }
 
-        let output_frames = self.resampler.as_ref()?.output_frames_next();
-
-        for ch in 0..channels {
-            self.temp_output_bufs[ch].resize(output_frames, 0.0);
-        }
+        let output_frames = {
+            let resampler = self.resampler.as_ref()?;
+            resampler.output_frames_next()
+        };
 
         let result = {
-            let input_refs: SmallVec<[&[f32]; 8]> =
-                self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
-            let mut output_refs: SmallVec<[&mut [f32]; 8]> = self
-                .temp_output_bufs
-                .iter_mut()
-                .map(|v| v.as_mut_slice())
-                .collect();
-            let resampler = self.resampler.as_mut()?;
-            resampler.process_into_buffer(&input_refs, &mut output_refs)
+            let mut resampler = self.resampler.take()?;
+            let res = self.process_block(&mut resampler, input_frames, output_frames);
+            self.resampler = Some(resampler);
+            res
         };
 
         match result {
-            Ok((_, out_len)) => {
+            Ok(out_len) => {
                 for buf in &mut self.input_buffer {
                     buf.clear();
                 }
@@ -329,24 +338,37 @@ impl ResamplerProcessor {
     ) -> Result<ResamplerKind, rubato::ResamplerConstructionError> {
         match quality {
             ResamplerQuality::Fast => {
-                let poly =
-                    FastFixedIn::new(ratio, 2.0, PolynomialDegree::Cubic, chunk_size, channels)?;
+                let poly = Async::new_poly(
+                    ratio,
+                    2.0,
+                    PolynomialDegree::Cubic,
+                    chunk_size,
+                    channels,
+                    FixedAsync::Input,
+                )?;
                 Ok(ResamplerKind::Poly(poly))
             }
             ResamplerQuality::Normal | ResamplerQuality::Good | ResamplerQuality::High => {
-                let sinc =
-                    SincFixedIn::new(ratio, 2.0, quality.sinc_params(), chunk_size, channels)?;
+                let sinc = Async::new_sinc(
+                    ratio,
+                    2.0,
+                    &quality.sinc_params(),
+                    chunk_size,
+                    channels,
+                    FixedAsync::Input,
+                )?;
                 Ok(ResamplerKind::Sinc(sinc))
             }
             ResamplerQuality::Maximum => {
-                let fft = FftFixedIn::new(
+                let fft = Fft::new(
                     source_rate as usize,
                     target_rate as usize,
                     chunk_size,
                     2,
                     channels,
+                    FixedSync::Input,
                 )?;
-                Ok(ResamplerKind::Fft(fft))
+                Ok(ResamplerKind::Fft(Box::new(fft)))
             }
         }
     }
@@ -372,36 +394,45 @@ impl ResamplerProcessor {
         };
         let ratio_changed = (new_ratio - self.current_ratio).abs() > 0.0001;
 
-        if should_pt && !currently_pt {
-            debug!(
-                source_rate = self.source_rate,
-                target_rate, "Resampler switching to passthrough"
-            );
-            self.resampler = None;
+        if should_pt {
+            if !currently_pt {
+                debug!(
+                    source_rate = self.source_rate,
+                    target_rate, "Resampler switching to passthrough"
+                );
+                self.resampler = None;
+            }
             self.current_ratio = 1.0;
             for buf in &mut self.input_buffer {
                 buf.clear();
             }
-        } else if !should_pt && (currently_pt || ratio_changed) {
-            if !currently_pt && ratio_changed {
-                // Try dynamic ratio update first
-                if let Some(ref mut resampler) = self.resampler {
-                    if let Err(e) = resampler.set_resample_ratio(new_ratio, false) {
-                        debug!(err = %e, "Failed to update ratio dynamically, recreating");
-                        self.resampler = None;
-                    } else {
-                        debug!(
-                            new_ratio,
-                            source_rate = self.source_rate,
-                            target_rate,
-                            "Resampler ratio updated dynamically"
-                        );
-                        self.current_ratio = new_ratio;
-                        return;
-                    }
+            return;
+        }
+
+        // Need an active resampler with the latest ratio
+        if !currently_pt
+            && ratio_changed
+            && let Some(ref mut resampler) = self.resampler
+        {
+            match resampler.set_resample_ratio(new_ratio, false) {
+                Ok(()) => {
+                    debug!(
+                        new_ratio,
+                        source_rate = self.source_rate,
+                        target_rate,
+                        "Resampler ratio updated dynamically"
+                    );
+                    self.current_ratio = new_ratio;
+                    return;
+                }
+                Err(e) => {
+                    debug!(err = %e, "Failed to update ratio dynamically, recreating");
+                    self.resampler = None;
                 }
             }
+        }
 
+        if currently_pt || self.resampler.is_none() || ratio_changed {
             debug!(
                 new_ratio,
                 source_rate = self.source_rate,
@@ -421,6 +452,9 @@ impl ResamplerProcessor {
                 Ok(resampler) => {
                     self.resampler = Some(resampler);
                     self.current_ratio = new_ratio;
+                    for buf in &mut self.input_buffer {
+                        buf.clear();
+                    }
                 }
                 Err(e) => {
                     debug!(err = %e, "Failed to create resampler, staying in current mode");
@@ -430,11 +464,39 @@ impl ResamplerProcessor {
     }
 
     fn ensure_temp_buffers(&mut self, channels: usize) {
-        // Vec's already exist from initialization, just resize if channels changed
-        debug_assert!(self.temp_input_slice.len() >= channels);
-        debug_assert!(self.temp_output_bufs.len() >= channels);
+        if self.temp_input_slice.len() < channels {
+            self.temp_input_slice.resize_with(channels, Vec::new);
+        }
+        if self.temp_output_bufs.len() < channels {
+            self.temp_output_bufs.resize_with(channels, Vec::new);
+        }
     }
 
+    fn process_block(
+        &mut self,
+        resampler: &mut ResamplerKind,
+        input_frames: usize,
+        output_frames: usize,
+    ) -> Result<usize, rubato::ResampleError> {
+        let channels = self.channels;
+
+        for ch in 0..channels {
+            self.temp_input_slice[ch].clear();
+            self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
+        }
+
+        for ch in 0..channels {
+            self.temp_output_bufs[ch].resize(output_frames, 0.0);
+        }
+
+        let (_, out_len) = resampler.process_into_buffer(
+            &self.temp_input_slice[..channels],
+            &mut self.temp_output_bufs[..channels],
+        )?;
+        Ok(out_len)
+    }
+
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn resample(&mut self, chunk: &PcmChunk<f32>) -> Option<PcmChunk<f32>> {
         self.resampler.as_ref()?;
 
@@ -443,49 +505,49 @@ impl ResamplerProcessor {
         let input_frames = self.resampler.as_ref()?.input_frames_next();
         let channels = self.channels;
 
-        // Ensure temp buffers are sized correctly before the loop
+        if self.input_buffer[0].len() < input_frames {
+            trace!(
+                buffered = self.input_buffer[0].len(),
+                needed = input_frames,
+                "Accumulating data"
+            );
+            return None;
+        }
+
         self.ensure_temp_buffers(channels);
 
+        if self.temp_output_all.len() < channels {
+            self.temp_output_all.resize_with(channels, Vec::new);
+        }
         for buf in &mut self.temp_output_all {
             buf.clear();
         }
 
         while self.input_buffer[0].len() >= input_frames {
-            // 1. Copy input data into temp_input_slice
-            for ch in 0..channels {
-                self.temp_input_slice[ch].clear();
-                self.temp_input_slice[ch].extend_from_slice(&self.input_buffer[ch][..input_frames]);
-            }
+            let output_frames = {
+                let resampler = self.resampler.as_ref()?;
+                resampler.output_frames_next()
+            };
 
-            // 2. Get output_frames from resampler (brief borrow)
-            let output_frames = self.resampler.as_ref()?.output_frames_next();
-
-            // 3. Prepare output buffers
-            for ch in 0..channels {
-                self.temp_output_bufs[ch].resize(output_frames, 0.0);
-            }
-
-            // 4. Build refs and process — all borrows in one block
             let result = {
-                let input_refs: SmallVec<[&[f32]; 8]> =
-                    self.temp_input_slice.iter().map(|v| v.as_slice()).collect();
-                let mut output_refs: SmallVec<[&mut [f32]; 8]> = self
-                    .temp_output_bufs
-                    .iter_mut()
-                    .map(|v| v.as_mut_slice())
-                    .collect();
-                let resampler = self.resampler.as_mut()?;
-                resampler.process_into_buffer(&input_refs, &mut output_refs)
+                let mut resampler = self.resampler.take()?;
+                let res = self.process_block(&mut resampler, input_frames, output_frames);
+                self.resampler = Some(resampler);
+                res
             };
 
             match result {
-                Ok((_, out_len)) => {
+                Ok(out_len) => {
                     for ch in 0..channels {
                         let src = &self.temp_output_bufs[ch][..out_len];
                         self.temp_output_all[ch].extend_from_slice(src);
                     }
                     for buf in &mut self.input_buffer {
                         buf.drain(..input_frames);
+                    }
+
+                    if self.input_buffer[0].len() < input_frames {
+                        break;
                     }
                 }
                 Err(e) => {
@@ -508,6 +570,7 @@ impl ResamplerProcessor {
         Some(PcmChunk::new(self.output_spec, interleaved))
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn append_to_buffer(&mut self, interleaved: &[f32]) {
         if interleaved.is_empty() {
             return;
@@ -515,8 +578,9 @@ impl ResamplerProcessor {
 
         let frames = interleaved.len() / self.channels;
 
-        // Vec's already exist from initialization, just resize to needed frames
-        debug_assert!(self.temp_deinterleave.len() >= self.channels);
+        if self.temp_deinterleave.len() < self.channels {
+            self.temp_deinterleave.resize_with(self.channels, Vec::new);
+        }
 
         // Resize each channel buffer to needed size (reuses existing capacity)
         for buf in &mut self.temp_deinterleave[..self.channels] {
@@ -539,6 +603,7 @@ impl ResamplerProcessor {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn interleave(&self, planar: &[Vec<f32>]) -> Vec<f32> {
         if planar.is_empty() || planar[0].is_empty() {
             return Vec::new();
@@ -563,11 +628,13 @@ impl ResamplerProcessor {
 }
 
 /// Create a SmallVec of empty Vecs for each channel.
+#[cfg_attr(feature = "perf", hotpath::measure)]
 fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
     (0..channels).map(|_| Vec::new()).collect()
 }
 
 impl AudioEffect for ResamplerProcessor {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn process(&mut self, chunk: PcmChunk<f32>) -> Option<PcmChunk<f32>> {
         let chunk_rate = chunk.spec.sample_rate;
         let chunk_channels = chunk.spec.channels as usize;
@@ -584,7 +651,10 @@ impl AudioEffect for ResamplerProcessor {
             self.channels = chunk_channels;
             self.source_rate = chunk_rate;
             self.input_buffer = smallvec_new_vecs(chunk_channels);
+            self.temp_input_slice = smallvec_new_vecs(chunk_channels);
+            self.temp_output_bufs = smallvec_new_vecs(chunk_channels);
             self.temp_output_all = smallvec_new_vecs(chunk_channels);
+            self.temp_deinterleave = smallvec_new_vecs(chunk_channels);
             self.output_spec.channels = chunk_channels as u16;
             self.resampler = None;
         } else if chunk_rate != self.source_rate {

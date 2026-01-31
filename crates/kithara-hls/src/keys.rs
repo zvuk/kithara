@@ -91,6 +91,7 @@ impl KeyManager {
         Ok(processed_key)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub async fn decrypt(
         &self,
         url: &Url,
@@ -139,6 +140,7 @@ impl KeyManager {
 
     /// Decrypt segment if encryption key is present.
     /// Returns bytes unchanged if no encryption or unsupported method.
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub async fn decrypt_segment(
         &self,
         key: Option<&SegmentKey>,

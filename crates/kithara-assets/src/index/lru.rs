@@ -58,10 +58,11 @@ impl LruIndex {
             return Ok(LruState::default());
         }
 
-        let file: LruIndexFile = match bincode::deserialize(&buf) {
-            Ok(file) => file,
-            Err(_) => return Ok(LruState::default()),
-        };
+        let file: LruIndexFile =
+            match bincode::serde::decode_from_slice(&buf, bincode::config::legacy()) {
+                Ok((file, _)) => file,
+                Err(_) => return Ok(LruState::default()),
+            };
 
         Ok(LruState::from_file(file))
     }
@@ -69,7 +70,7 @@ impl LruIndex {
     /// Persist the provided state to storage atomically.
     pub fn store(&self, state: &LruState) -> AssetsResult<()> {
         let file = state.to_file();
-        let bytes = bincode::serialize(&file)?;
+        let bytes = bincode::serde::encode_to_vec(&file, bincode::config::legacy())?;
         self.res.write_all(&bytes)?;
         Ok(())
     }

@@ -170,7 +170,7 @@ fn pins_index_concurrent_updates_handled_correctly(
 #[timeout(Duration::from_secs(5))]
 #[test]
 fn pins_index_empty_set_stores_and_loads_correctly(
-    temp_dir: tempfile::TempDir,
+    _temp_dir: tempfile::TempDir,
     disk_asset_store: DiskAssetStore,
 ) {
     let base = disk_asset_store;

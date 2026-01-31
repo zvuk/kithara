@@ -10,7 +10,7 @@ parking_lot = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]
-perf = ["dep:hotpath"]
+perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dev-dependencies]
 mockall = { workspace = true }

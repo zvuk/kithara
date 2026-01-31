@@ -10,6 +10,7 @@ kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-bufpool = { workspace = true }
 rubato = { workspace = true }
+audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
 thiserror = { workspace = true }
 kanal = { workspace = true }
@@ -27,7 +28,7 @@ default = []
 # Enable rodio::Source adapter for playback
 rodio = ["dep:rodio"]
 # Enable performance monitoring with hotpath-rs
-perf = ["dep:hotpath"]
+perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dev-dependencies]
 tokio = { workspace = true }
@@ -47,6 +48,7 @@ rodio = { workspace = true }
 rstest = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
+hotpath = { workspace = true, features = ["hotpath", "hotpath-alloc"] }
 
 [[example]]
 name = "file_audio"

@@ -3,8 +3,8 @@
 use std::{path::Path, sync::Arc};
 
 use kithara_assets::{
-    AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard, LeaseResource,
-    ProcessedResource, ProcessingAssets,
+    AssetStore, Assets, DiskAssetStore, EvictAssets, LeaseGuard, LeaseResource, ProcessedResource,
+    ProcessingAssets,
 };
 use kithara_net::{HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource, StorageResult, WaitOutcome};
@@ -17,7 +17,7 @@ use crate::{error::SourceError, events::FileEvent};
 
 pub(crate) type AssetResourceType = LeaseResource<
     ProcessedResource<StorageResource, ()>,
-    LeaseGuard<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, ()>>>,
+    LeaseGuard<ProcessingAssets<EvictAssets<DiskAssetStore>, ()>>,
 >;
 
 /// Unified file resource: either a remote asset (via AssetStore) or a local file.

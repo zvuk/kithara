@@ -9,7 +9,7 @@ publish = false
 [dependencies]
 # All kithara crates
 kithara-abr = { workspace = true }
-kithara-assets = { workspace = true }
+kithara-assets = { workspace = true, features = ["internal"] }
 kithara-bufpool = { workspace = true }
 kithara-audio = { workspace = true }
 kithara-decode = { workspace = true }

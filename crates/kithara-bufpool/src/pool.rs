@@ -178,6 +178,7 @@ where
     /// let buf = pool.get_with(|b| b.resize(1024, 0));
     /// assert_eq!(buf.len(), 1024);
     /// ```
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn get_with<F>(&self, init: F) -> Pooled<'_, SHARDS, T>
     where
         F: FnOnce(&mut T),

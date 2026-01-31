@@ -5,25 +5,34 @@ use std::{
     task::{Context, Poll},
 };
 
+use bytes::Bytes;
 use futures::{Stream, StreamExt};
-use kithara_net::{ByteStream, NetError};
+use kithara_net::NetError;
 use kithara_storage::{ResourceExt, StorageError};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
 
 /// Error type for the generic writer (fetch loop).
+///
+/// Generic over the source error type `E` (defaults to `NetError` for network streams).
 #[derive(Debug, Error)]
-pub enum WriterError {
-    #[error("net stream error: {0}")]
-    NetStream(NetError),
+pub enum WriterError<E = NetError>
+where
+    E: std::error::Error + 'static,
+{
+    #[error("source stream error: {0}")]
+    SourceStream(#[source] E),
 
     #[error("storage write error: {0}")]
-    SinkWrite(StorageError),
+    SinkWrite(#[source] StorageError),
 
     #[error("offset overflowed u64")]
     OffsetOverflow,
 }
+
+/// Type alias for network-based writer (most common case).
+pub type NetWriter = Writer<NetError>;
 
 /// Item yielded by Writer stream.
 #[derive(Debug, Clone)]
@@ -34,37 +43,86 @@ pub enum WriterItem {
     Completed { total_bytes: u64 },
 }
 
-/// Generic writer: `ByteStream` -> `write_at` -> commit/fail.
+/// Generic writer: any byte stream -> `write_at` -> commit/fail.
 ///
 /// Implements `Stream` trait. Each poll writes a chunk and yields `WriterItem`.
 ///
-/// Behavior:
+/// Type parameter `E` is the error type from the source stream (defaults to `NetError`).
+///
+/// ## Behavior
+///
 /// - On any error, calls `res.fail(...)` to unblock readers, then yields error.
 /// - On cancellation, stream ends without failing resource (partial data may remain readable).
 /// - On success, commits with final length and yields `Completed`.
-pub struct Writer {
-    inner: Pin<Box<dyn Stream<Item = Result<WriterItem, WriterError>> + Send>>,
+///
+/// ## Examples
+///
+/// ### Network download (default)
+/// ```no_run
+/// # use kithara_stream::{Writer, NetWriter};
+/// # use kithara_net::Net;
+/// # use kithara_storage::StorageResource;
+/// # use tokio_util::sync::CancellationToken;
+/// # async fn example(net: impl Net, res: StorageResource, cancel: CancellationToken) {
+/// let stream = net.stream("https://example.com/file.mp3").await.unwrap();
+/// let writer: NetWriter = Writer::new(stream, res, cancel);
+/// // NetWriter is alias for Writer<NetError>
+/// # }
+/// ```
+///
+/// ### Custom source (microphone, file, etc.)
+/// ```no_run
+/// # use kithara_stream::Writer;
+/// # use bytes::Bytes;
+/// # use futures::stream;
+/// # use kithara_storage::StorageResource;
+/// # use tokio_util::sync::CancellationToken;
+/// # #[derive(Debug, thiserror::Error)]
+/// # #[error("mic error")]
+/// # struct MicError;
+/// # async fn example(res: StorageResource, cancel: CancellationToken) {
+/// // Custom stream from any source
+/// let mic_stream = stream::iter(vec![
+///     Ok::<Bytes, MicError>(Bytes::from("audio data")),
+/// ]);
+///
+/// let writer: Writer<MicError> = Writer::new(mic_stream, res, cancel);
+/// # }
+/// ```
+pub struct Writer<E = NetError>
+where
+    E: std::error::Error + 'static,
+{
+    inner: Pin<Box<dyn Stream<Item = Result<WriterItem, WriterError<E>>> + Send>>,
 }
 
-impl Writer {
-    /// Create a new writer from an already-opened byte stream.
+impl<E> Writer<E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    /// Create a new writer from any byte stream source.
     ///
-    /// The caller is responsible for opening the network stream first.
-    /// This allows checking cache status before starting the download.
-    pub fn new<R>(stream: ByteStream, res: R, cancel: CancellationToken) -> Self
+    /// Accepts any `Stream<Item = Result<Bytes, E>>` where `E` is the error type.
+    /// This allows writing from network, file, microphone, or any other byte source.
+    ///
+    /// The caller is responsible for opening the source stream first.
+    /// This allows checking cache status before starting the write.
+    pub fn new<S, R>(stream: S, res: R, cancel: CancellationToken) -> Self
     where
+        S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
         R: ResourceExt + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
         let inner = Box::pin(Self::create_stream(stream, res, cancel));
         Self { inner }
     }
 
-    fn create_stream<R>(
-        mut stream: ByteStream,
+    fn create_stream<S, R>(
+        mut stream: S,
         res: R,
         cancel: CancellationToken,
-    ) -> impl Stream<Item = Result<WriterItem, WriterError>> + Send
+    ) -> impl Stream<Item = Result<WriterItem, WriterError<E>>> + Send
     where
+        S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
         R: ResourceExt + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
         async_stream::stream! {
@@ -95,7 +153,7 @@ impl Writer {
                             Ok(b) => b,
                             Err(e) => {
                                 res.fail(e.to_string());
-                                yield Err(WriterError::NetStream(e));
+                                yield Err(WriterError::SourceStream(e));
                                 return;
                             }
                         };
@@ -138,11 +196,14 @@ impl Writer {
     }
 }
 
-impl Writer {
+impl<E> Writer<E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
     /// Run writer to completion, calling `on_chunk` for each written chunk.
     ///
     /// Returns total bytes written on success.
-    pub async fn run<F>(mut self, mut on_chunk: F) -> Result<u64, WriterError>
+    pub async fn run<F>(mut self, mut on_chunk: F) -> Result<u64, WriterError<E>>
     where
         F: FnMut(u64, usize),
     {
@@ -164,8 +225,11 @@ impl Writer {
     }
 }
 
-impl Stream for Writer {
-    type Item = Result<WriterItem, WriterError>;
+impl<E> Stream for Writer<E>
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    type Item = Result<WriterItem, WriterError<E>>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.inner.as_mut().poll_next(cx)

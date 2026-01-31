@@ -95,9 +95,9 @@ where
         self.ensure_loaded_best_effort()?;
 
         let (snapshot, was_new) = {
-            let mut guard = self.pins.lock();
-            let was_new = guard.insert(asset_root.to_string());
-            (guard.clone(), was_new)
+            let mut pins = self.pins.lock();
+            let was_new = pins.insert(asset_root.to_string());
+            (pins.clone(), was_new)
         };
 
         if was_new {
@@ -105,9 +105,11 @@ where
         }
 
         Ok(LeaseGuard {
-            owner: self.clone(),
-            asset_root: asset_root.to_string(),
-            cancel: self.cancel.clone(),
+            inner: Arc::new(LeaseGuardInner {
+                owner: self.clone(),
+                asset_root: asset_root.to_string(),
+                cancel: self.cancel.clone(),
+            }),
         })
     }
 }
@@ -231,8 +233,18 @@ where
 ///
 /// Dropping this guard unpins the corresponding `asset_root` and persists the new pin set
 /// to disk (best-effort) via the decorator.
+///
+/// Uses `Arc` internally for reference counting - unpin happens only when the last clone is dropped.
 #[derive(Clone)]
 pub struct LeaseGuard<A>
+where
+    A: Assets,
+{
+    #[allow(dead_code)]
+    inner: Arc<LeaseGuardInner<A>>,
+}
+
+struct LeaseGuardInner<A>
 where
     A: Assets,
 {
@@ -241,7 +253,7 @@ where
     cancel: CancellationToken,
 }
 
-impl<A> Drop for LeaseGuard<A>
+impl<A> Drop for LeaseGuardInner<A>
 where
     A: Assets,
 {
@@ -250,7 +262,7 @@ where
             return;
         }
 
-        tracing::debug!(asset_root = %self.asset_root, "LeaseGuard::drop - removing pin");
+        tracing::trace!(asset_root = %self.asset_root, "LeaseGuard::drop - removing pin");
 
         let snapshot = {
             let mut pins = self.owner.pins.lock();

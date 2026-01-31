@@ -96,15 +96,6 @@ impl TestServer {
             .parse()
             .map_err(|e| HlsError::InvalidUrl(format!("Invalid test URL: {}", e)))
     }
-
-    pub fn get_request_count(&self, path: &str) -> usize {
-        self.request_counts
-            .lock()
-            .unwrap()
-            .get(path)
-            .copied()
-            .unwrap_or(0)
-    }
 }
 
 /// Master playlist with standard bitrates

@@ -29,7 +29,7 @@ hotpath = { workspace = true, optional = true }
 
 [features]
 default = []
-perf = ["dep:hotpath"]
+perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dev-dependencies]
 kithara-net = { workspace = true, features = ["test-utils"] }

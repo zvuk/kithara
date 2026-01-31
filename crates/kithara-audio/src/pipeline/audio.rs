@@ -115,6 +115,9 @@ pub struct Audio<S> {
     /// Whether preload() has been called (enables non-blocking mode).
     preloaded: bool,
 
+    /// Worker thread handle for graceful shutdown.
+    worker_thread: Option<std::thread::JoinHandle<()>>,
+
     /// Marker for source type.
     _marker: std::marker::PhantomData<S>,
 }
@@ -178,6 +181,7 @@ impl<S> Audio<S> {
     /// Returns 0 when EOF is reached.
     ///
     /// Samples are interleaved f32 (e.g., LRLRLR for stereo).
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub fn read(&mut self, buf: &mut [f32]) -> usize {
         if self.eof || buf.is_empty() {
             return 0;
@@ -240,12 +244,30 @@ impl<S> Audio<S> {
         self.samples_read = 0;
         self.seek_base = position;
 
-        // Reset preload flag - first read after seek should be blocking
-        // to ensure we don't skip over the new data
-        self.preloaded = false;
+        // Drain stale chunks from channel to unblock worker.
+        // Stop if we encounter a valid chunk (save it for next read).
+        while let Ok(Some(fetch)) = self.pcm_rx.try_recv() {
+            if self.validator.is_valid(&fetch) {
+                // Found new valid chunk - save it and stop draining
+                if !fetch.is_eof() {
+                    let chunk = fetch.into_inner();
+                    self.spec = chunk.spec;
+                    self.current_chunk = Some(chunk.pcm);
+                    self.chunk_offset = 0;
+                    trace!("seek: saved first valid chunk after drain");
+                }
+                break;
+            }
+            // Stale chunk (old epoch) - discard and continue draining
+            trace!(
+                chunk_epoch = fetch.epoch(),
+                current_epoch = new_epoch,
+                "seek: discarding stale chunk"
+            );
+        }
 
-        // Drain stale chunks from channel to unblock worker
-        while let Ok(Some(_)) = self.pcm_rx.try_recv() {}
+        // Reset preload flag - first read after seek will be blocking if needed
+        self.preloaded = false;
 
         debug!(?position, epoch = new_epoch, "seek initiated");
         Ok(())
@@ -460,8 +482,9 @@ where
         let worker_notify = preload_notify.clone();
 
         let worker_preload_chunks = preload_chunks.max(1);
+        let worker_cancel = cancel.clone();
 
-        std::thread::Builder::new()
+        let worker_thread = std::thread::Builder::new()
             .name("kithara-audio".to_string())
             .spawn(move || {
                 run_audio_loop(
@@ -470,6 +493,7 @@ where
                     data_tx,
                     worker_notify,
                     worker_preload_chunks,
+                    worker_cancel,
                 );
             })
             .map_err(|e| {
@@ -499,6 +523,7 @@ where
             host_sample_rate,
             preload_notify,
             preloaded: false,
+            worker_thread: Some(worker_thread),
             _marker: std::marker::PhantomData,
         })
     }
@@ -518,6 +543,12 @@ impl<S> Drop for Audio<S> {
         if let Some(ref cancel) = self.cancel {
             cancel.cancel();
         }
+
+        // Channels will be dropped automatically, signaling worker to exit.
+        // Worker thread will terminate when it detects closed channels.
+        // We explicitly drop the JoinHandle here to detach the thread,
+        // allowing it to complete cleanup without blocking the drop.
+        drop(self.worker_thread.take());
     }
 }
 
@@ -527,6 +558,7 @@ impl<S: Send> PcmReader for Audio<S> {
         Audio::read(self, buf)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_planar(&mut self, output: &mut [&mut [f32]]) -> usize {
         let channels = output.len();
         if channels == 0 {

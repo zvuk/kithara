@@ -6,6 +6,7 @@ license = "MIT OR Apache-2.0"
 
 [features]
 test-utils = ["mockall"]
+perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
 kithara-assets = { workspace = true }
@@ -17,6 +18,7 @@ tokio = { workspace = true }
 url = { workspace = true }
 async-trait = { workspace = true }
 mockall = { workspace = true, optional = true }
+hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
