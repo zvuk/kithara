@@ -57,6 +57,7 @@ impl HttpClient {
 
 #[async_trait]
 impl Net for HttpClient {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let req = self.inner.get(url.clone());
         let req = Self::apply_headers(req, headers);

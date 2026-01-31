@@ -34,6 +34,7 @@ perf = [
     "kithara-stream/perf",
     "kithara-bufpool/perf",
     "kithara-hls/perf",
+    "kithara-net/perf",
 ]
 full = ["file", "hls", "assets", "net", "bufpool"]
 
