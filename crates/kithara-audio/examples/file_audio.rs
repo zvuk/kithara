@@ -21,6 +21,7 @@ use tracing_subscriber::EnvFilter;
 use url::Url;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 1)]
+#[hotpath::main]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -62,22 +63,51 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         }
     });
 
-    info!("Starting playback...");
+    info!("Starting playback... (Press Ctrl+C to stop)");
 
-    let handle = tokio::task::spawn_blocking(move || {
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+
+    let playback_handle = tokio::task::spawn_blocking(move || {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
         sink.set_volume(1.0);
         sink.append(audio);
 
         info!("Playing...");
-        sink.sleep_until_end();
 
-        info!("Playback complete");
+        // Wait for stop signal or until track ends
+        loop {
+            if stop_rx.try_recv().is_ok() {
+                break;
+            }
+            if sink.empty() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+
+        sink.stop();
+        info!("Playback stopped");
         Ok::<_, Box<dyn Error + Send + Sync>>(())
     });
 
-    handle.await??;
+    // Wait for Ctrl+C or playback completion
+    let mut playback_done = false;
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            info!("Received Ctrl+C, stopping playback...");
+            let _ = stop_tx.send(());
+        }
+        result = playback_handle => {
+            result??;
+            playback_done = true;
+        }
+    }
+
+    // If we sent stop signal, wait for playback to finish
+    if !playback_done {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 
     Ok(())
 }

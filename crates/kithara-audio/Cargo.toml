@@ -48,6 +48,7 @@ rodio = { workspace = true }
 rstest = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
+hotpath = { workspace = true, features = ["hotpath", "hotpath-alloc"] }
 
 [[example]]
 name = "file_audio"
