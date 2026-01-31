@@ -98,17 +98,18 @@ impl ResamplerKind {
         let input_frames = input[0].len();
         let output_frames = output[0].len();
 
-        let input_adapter = SequentialSliceOfVecs::new(input, channels, input_frames)
-            .map_err(|_| rubato::ResampleError::InsufficientInputBufferSize {
-                expected: input_frames,
+        let input_adapter =
+            SequentialSliceOfVecs::new(input, channels, input_frames).map_err(|_| {
+                rubato::ResampleError::InsufficientInputBufferSize {
+                    expected: input_frames,
+                    actual: 0,
+                }
+            })?;
+        let mut output_adapter = SequentialSliceOfVecs::new_mut(output, channels, output_frames)
+            .map_err(|_| rubato::ResampleError::InsufficientOutputBufferSize {
+                expected: output_frames,
                 actual: 0,
             })?;
-        let mut output_adapter =
-            SequentialSliceOfVecs::new_mut(output, channels, output_frames)
-                .map_err(|_| rubato::ResampleError::InsufficientOutputBufferSize {
-                    expected: output_frames,
-                    actual: 0,
-                })?;
 
         match self {
             Self::Poly(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
@@ -409,7 +410,8 @@ impl ResamplerProcessor {
         }
 
         // Need an active resampler with the latest ratio
-        if !currently_pt && ratio_changed
+        if !currently_pt
+            && ratio_changed
             && let Some(ref mut resampler) = self.resampler
         {
             match resampler.set_resample_ratio(new_ratio, false) {

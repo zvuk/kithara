@@ -28,4 +28,4 @@ pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use reader::Reader;
 pub use source::Source;
 pub use stream::{Stream, StreamConfig, StreamType};
-pub use writer::{Writer, WriterError, WriterItem};
+pub use writer::{NetWriter, Writer, WriterError, WriterItem};

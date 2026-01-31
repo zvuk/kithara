@@ -58,13 +58,11 @@ impl LruIndex {
             return Ok(LruState::default());
         }
 
-        let file: LruIndexFile = match bincode::serde::decode_from_slice(
-            &buf,
-            bincode::config::legacy(),
-        ) {
-            Ok((file, _)) => file,
-            Err(_) => return Ok(LruState::default()),
-        };
+        let file: LruIndexFile =
+            match bincode::serde::decode_from_slice(&buf, bincode::config::legacy()) {
+                Ok((file, _)) => file,
+                Err(_) => return Ok(LruState::default()),
+            };
 
         Ok(LruState::from_file(file))
     }

@@ -78,6 +78,7 @@ kithara-file     kithara-hls
 **`kithara-stream`** — Byte-stream orchestration bridging async downloads to sync `Read + Seek`
 - `Source` trait: sync random-access data (`wait_range`, `read_at`)
 - `Downloader` trait: async download feed
+- `Writer<E>`: generic async byte pump (network, file, PCM, etc.) → `StorageResource`
 - `Backend`: spawns async downloader, holds sync `Source` for direct access
 - `Stream<T>`: sync `Read + Seek` wrapper over `Backend`
 - Canonical types: `AudioCodec`, `ContainerFormat`, `MediaInfo`

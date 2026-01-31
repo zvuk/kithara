@@ -53,13 +53,11 @@ impl PinsIndex {
             return Ok(HashSet::new());
         }
 
-        let file: PinsIndexFile = match bincode::serde::decode_from_slice(
-            &buf,
-            bincode::config::legacy(),
-        ) {
-            Ok((file, _)) => file,
-            Err(_) => return Ok(HashSet::new()),
-        };
+        let file: PinsIndexFile =
+            match bincode::serde::decode_from_slice(&buf, bincode::config::legacy()) {
+                Ok((file, _)) => file,
+                Err(_) => return Ok(HashSet::new()),
+            };
 
         Ok(file.pinned.into_iter().collect())
     }

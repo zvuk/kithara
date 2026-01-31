@@ -5,7 +5,6 @@ use std::{
 
 use parking_lot::Mutex;
 
-
 /// Trait for types that can be reused in a pool.
 ///
 /// Implementors must provide logic to clear/reset the value

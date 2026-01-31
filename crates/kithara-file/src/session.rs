@@ -3,8 +3,8 @@
 use std::{path::Path, sync::Arc};
 
 use kithara_assets::{
-    AssetStore, Assets, DiskAssetStore, EvictAssets, LeaseGuard, LeaseResource,
-    ProcessedResource, ProcessingAssets,
+    AssetStore, Assets, DiskAssetStore, EvictAssets, LeaseGuard, LeaseResource, ProcessedResource,
+    ProcessingAssets,
 };
 use kithara_net::{HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource, StorageResult, WaitOutcome};
