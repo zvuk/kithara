@@ -6,13 +6,15 @@ use kithara_bufpool::{BytePool, byte_pool};
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
+use kithara_storage::StorageResource;
+
 use crate::{
     base::DiskAssetStore,
     cache::CachedAssets,
     evict::EvictAssets,
     index::EvictConfig,
-    lease::LeaseAssets,
-    process::{ProcessChunkFn, ProcessingAssets},
+    lease::{LeaseAssets, LeaseGuard, LeaseResource},
+    process::{ProcessChunkFn, ProcessedResource, ProcessingAssets},
 };
 
 /// Simplified storage options for creating an asset store.
@@ -79,6 +81,15 @@ impl StoreOptions {
 /// Use `()` (default) for no processing (ProcessingAssets will pass through unchanged).
 pub type AssetStore<Ctx = ()> =
     CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
+
+/// Resource handle returned by [`AssetStore::open_resource`].
+///
+/// Wraps `StorageResource` with processing and lease semantics.
+/// Implements `ResourceExt` for read/write/commit operations.
+pub type AssetResource<Ctx = ()> = LeaseResource<
+    ProcessedResource<StorageResource, Ctx>,
+    LeaseGuard<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>,
+>;
 
 /// Constructor for the ready-to-use [`AssetStore`].
 ///

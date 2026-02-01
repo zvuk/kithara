@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
-use kithara_net::HttpClient;
+use kithara_net::{Headers, HttpClient};
 use kithara_storage::{OpenMode, ResourceExt, ResourceStatus, StorageOptions, StorageResource};
 use kithara_stream::{Backend, Downloader, StreamType, Writer, WriterItem};
 use tokio::sync::broadcast;
@@ -17,7 +17,9 @@ use crate::{
     config::{FileConfig, FileSrc},
     error::SourceError,
     events::FileEvent,
-    session::{FileResource, FileSource, FileStreamState, Progress},
+    session::{
+        AssetResourceType, FileResource, FileSource, FileStreamState, Progress, SharedFileState,
+    },
 };
 
 /// Marker type for file streaming.
@@ -111,7 +113,7 @@ impl File {
 
         let state = FileStreamState::create(
             Arc::new(store),
-            net_client.clone(),
+            &net_client,
             url,
             cancel.clone(),
             config.events_tx.clone(),
@@ -120,9 +122,22 @@ impl File {
         .await?;
 
         let progress = Arc::new(Progress::new());
+        let shared = Arc::new(SharedFileState::new());
 
-        // Skip download if resource is already cached (committed).
-        if matches!(state.res().status(), ResourceStatus::Committed { .. }) {
+        // Determine if the resource is a complete cache or needs downloading.
+        let is_partial = match state.res().status() {
+            ResourceStatus::Committed { final_len } => {
+                // File on disk might be smaller than HEAD Content-Length → partial.
+                state
+                    .len()
+                    .zip(final_len)
+                    .is_some_and(|(expected, actual)| actual < expected)
+            }
+            _ => false,
+        };
+
+        if matches!(state.res().status(), ResourceStatus::Committed { .. }) && !is_partial {
+            // Fully cached — no download needed.
             tracing::debug!("file already cached, skipping download");
             let total = state.len().unwrap_or(0);
             progress.set_download_pos(total);
@@ -130,13 +145,22 @@ impl File {
                 .events()
                 .send(FileEvent::DownloadComplete { total_bytes: total });
         } else {
-            // Create downloader
+            if is_partial {
+                // Partial cache: reactivate resource for continued writing.
+                tracing::debug!("partial cache detected, reactivating for on-demand download");
+                state.res().reactivate().map_err(SourceError::Storage)?;
+            }
+
+            // Create downloader with shared state for on-demand loading.
+            // For partial cache, downloader starts in on-demand-only mode
+            // (sequential stream from scratch, but partial data already on disk).
             let downloader = FileDownloader::new(
                 &net_client,
                 state.clone(),
                 progress.clone(),
                 state.events().clone(),
                 config.look_ahead_bytes,
+                shared.clone(),
             )
             .await;
 
@@ -146,12 +170,13 @@ impl File {
             std::mem::forget(Backend::new(downloader, cancel));
         }
 
-        // Create source
-        let source = FileSource::new(
+        // Create source with shared state for on-demand loading
+        let source = FileSource::with_shared(
             FileResource::Asset(state.res().clone()),
             progress,
             state.events().clone(),
             state.len(),
+            shared,
         );
 
         Ok(source)
@@ -161,12 +186,22 @@ impl File {
 /// Background file downloader implementing `Downloader`.
 ///
 /// Wraps a `Writer`, converting chunk events to `FileEvent`.
+/// Supports two modes:
+/// - Sequential: initial download from start
+/// - On-demand: HTTP Range requests when reader seeks beyond downloaded data
 pub struct FileDownloader {
     writer: Writer,
+    res: AssetResourceType,
     progress: Arc<Progress>,
     events_tx: broadcast::Sender<FileEvent>,
     total: Option<u64>,
     look_ahead_bytes: u64,
+    shared: Arc<SharedFileState>,
+    net_client: HttpClient,
+    url: url::Url,
+    cancel: CancellationToken,
+    /// True if sequential stream has ended (partial or complete).
+    sequential_ended: bool,
 }
 
 impl FileDownloader {
@@ -176,14 +211,15 @@ impl FileDownloader {
         progress: Arc<Progress>,
         events_tx: broadcast::Sender<FileEvent>,
         look_ahead_bytes: u64,
+        shared: Arc<SharedFileState>,
     ) -> Self {
         let url = state.url().clone();
         let total = state.len();
         let res = state.res().clone();
         let cancel = state.cancel().clone();
 
-        let writer = match net_client.stream(url, None).await {
-            Ok(stream) => Writer::new(stream, res, cancel),
+        let writer = match net_client.stream(url.clone(), None).await {
+            Ok(stream) => Writer::new(stream, res.clone(), cancel.clone()),
             Err(e) => {
                 tracing::warn!("failed to open stream: {}", e);
                 res.fail(e.to_string());
@@ -199,16 +235,76 @@ impl FileDownloader {
 
         Self {
             writer,
+            res,
             progress,
             events_tx,
             total,
             look_ahead_bytes,
+            shared,
+            net_client: net_client.clone(),
+            url,
+            cancel,
+            sequential_ended: false,
         }
+    }
+
+    /// Fetch a range on-demand via HTTP Range request.
+    async fn fetch_range(&mut self, range: std::ops::Range<u64>) {
+        let range_header = format!("bytes={}-{}", range.start, range.end.saturating_sub(1));
+        let mut headers = Headers::new();
+        headers.insert("Range", range_header);
+
+        match self
+            .net_client
+            .stream(self.url.clone(), Some(headers))
+            .await
+        {
+            Ok(stream) => {
+                let mut on_demand_writer =
+                    Writer::with_offset(stream, self.res.clone(), self.cancel.clone(), range.start);
+
+                while let Some(result) = on_demand_writer.next().await {
+                    match result {
+                        Ok(WriterItem::ChunkWritten { .. }) => {}
+                        Ok(WriterItem::StreamEnded { .. }) => break,
+                        Err(e) => {
+                            tracing::warn!(?e, "on-demand range download failed");
+                            break;
+                        }
+                    }
+                }
+                tracing::debug!(start = range.start, end = range.end, "on-demand range fetched");
+            }
+            Err(e) => {
+                tracing::warn!(?e, "failed to start on-demand range request");
+            }
+        }
+        // No explicit notification needed: Writer::write_at() notifies
+        // the resource's internal condvar, which unblocks FileSource::wait_range().
     }
 }
 
 impl Downloader for FileDownloader {
     async fn step(&mut self) -> bool {
+        // Check for on-demand range requests first (higher priority)
+        if let Some(range) = self.shared.pop_range_request() {
+            tracing::debug!(start = range.start, end = range.end, "processing on-demand range request");
+            self.fetch_range(range).await;
+            return true;
+        }
+
+        // If sequential stream ended, wait for on-demand requests or cancel
+        if self.sequential_ended {
+            tokio::select! {
+                _ = self.shared.reader_needs_data.notified() => {
+                    return true; // Loop will check pop_range_request
+                }
+                _ = self.cancel.cancelled() => {
+                    return false;
+                }
+            }
+        }
+
         // Backpressure: wait if too far ahead of reader.
         loop {
             let advanced = self.progress.notified_reader_advance();
@@ -221,9 +317,16 @@ impl Downloader for FileDownloader {
                 break;
             }
 
-            advanced.await;
+            // Also break on on-demand requests while waiting
+            tokio::select! {
+                _ = advanced => {}
+                _ = self.shared.reader_needs_data.notified() => {
+                    break;
+                }
+            }
         }
 
+        // Sequential download continues
         let Some(result) = self.writer.next().await else {
             return false;
         };
@@ -241,11 +344,43 @@ impl Downloader for FileDownloader {
                 });
                 true
             }
-            Ok(WriterItem::Completed { total_bytes }) => {
-                let _ = self
-                    .events_tx
-                    .send(FileEvent::DownloadComplete { total_bytes });
-                false
+            Ok(WriterItem::StreamEnded { total_bytes }) => {
+                // Check if download is complete
+                let is_complete = self
+                    .total
+                    .map(|expected| total_bytes >= expected)
+                    .unwrap_or(true); // No Content-Length → assume complete
+
+                self.sequential_ended = true;
+
+                if is_complete {
+                    // Complete download — commit resource explicitly
+                    if let Err(e) = self.res.commit(Some(total_bytes)) {
+                        tracing::error!(?e, "failed to commit resource");
+                        self.res.fail(format!("commit failed: {}", e));
+                        let _ = self.events_tx.send(FileEvent::DownloadError {
+                            error: format!("commit failed: {}", e),
+                        });
+                        return false;
+                    }
+                    let _ = self
+                        .events_tx
+                        .send(FileEvent::DownloadComplete { total_bytes });
+                    false
+                } else {
+                    // Partial download — do NOT commit, leave resource Active.
+                    // Continue running to handle on-demand Range requests.
+                    tracing::warn!(
+                        total_bytes,
+                        expected = ?self.total,
+                        "stream ended early — partial download, switching to on-demand mode"
+                    );
+                    let _ = self.events_tx.send(FileEvent::DownloadProgress {
+                        offset: total_bytes,
+                        total: self.total,
+                    });
+                    true // Continue for on-demand requests
+                }
             }
             Err(e) => {
                 tracing::warn!("download failed: {}", e);

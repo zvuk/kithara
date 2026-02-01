@@ -114,6 +114,18 @@ pub trait ResourceExt: Send + Sync + Clone + 'static {
     /// Get resource status.
     fn status(&self) -> ResourceStatus;
 
+    /// Reactivate a committed resource for continued writing.
+    ///
+    /// Transitions Committed → Active: reopens the backing file as read-write,
+    /// resets committed flag, and clears `final_len`. Existing data remains
+    /// available for reading. New data can be written at any offset.
+    ///
+    /// Use for resuming partial downloads where the file on disk is smaller
+    /// than the expected total.
+    ///
+    /// No-op if the resource is already Active.
+    fn reactivate(&self) -> StorageResult<()>;
+
     // ---- Convenience methods (atomic-style) ----
 
     /// Read the entire resource contents into a caller-provided buffer.
@@ -556,6 +568,39 @@ impl ResourceExt for StorageResource {
     fn len(&self) -> Option<u64> {
         let state = self.inner.state.lock();
         state.final_len
+    }
+
+    fn reactivate(&self) -> StorageResult<()> {
+        self.check_health()?;
+
+        {
+            let mut mmap_guard = self.inner.mmap.lock();
+
+            match &*mmap_guard {
+                MmapState::Active(_) => {
+                    // Already active, nothing to do for mmap.
+                }
+                MmapState::Committed(_) | MmapState::Empty => {
+                    // Reopen as read-write.
+                    *mmap_guard = MmapState::Empty;
+                    if self.inner.path.exists()
+                        && std::fs::metadata(&self.inner.path)
+                            .map(|m| m.len() > 0)
+                            .unwrap_or(false)
+                    {
+                        let rw = MemoryMappedFile::open_rw(&self.inner.path)?;
+                        *mmap_guard = MmapState::Active(rw);
+                    }
+                }
+            }
+        }
+
+        let mut state = self.inner.state.lock();
+        state.committed = false;
+        state.final_len = None;
+        // Keep available data as-is — existing bytes remain readable.
+        self.inner.condvar.notify_all();
+        Ok(())
     }
 
     fn status(&self) -> ResourceStatus {

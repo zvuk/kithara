@@ -6,12 +6,9 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::{
-    AssetStore, Assets, CachedAssets, DiskAssetStore, EvictAssets, LeaseGuard, LeaseResource,
-    ProcessedResource, ProcessingAssets, ResourceKey,
-};
+use kithara_assets::{AssetResource, AssetStore, Assets, ResourceKey};
 use kithara_net::{Headers, HttpClient, Net};
-use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
+use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{ContainerFormat, Writer, WriterItem};
 use parking_lot::RwLock;
 use tokio::sync::OnceCell;
@@ -68,17 +65,13 @@ pub struct SegmentMeta {
     pub container: Option<ContainerFormat>,
 }
 
-pub type StreamingAssetResource = LeaseResource<
-    ProcessedResource<StorageResource, ()>,
-    LeaseGuard<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, ()>>>,
->;
-
 /// Result of starting a fetch.
 pub enum FetchResult {
     /// Already cached, no fetch needed.
     Cached { bytes: u64 },
     /// Active fetch in progress via Writer stream.
-    Active(Writer),
+    /// Includes the resource so the caller can commit after download completes.
+    Active(Writer, AssetResource),
 }
 
 // ============================================================================
@@ -238,9 +231,9 @@ impl<N: Net> FetchManager<N> {
 
         trace!(url = %url, "start_fetch: starting network fetch");
         let net_stream = self.net.stream(url.clone(), None).await?;
-        let writer = Writer::new(net_stream, res, self.cancel.clone());
+        let writer = Writer::new(net_stream, res.clone(), self.cancel.clone());
 
-        Ok(FetchResult::Active(writer))
+        Ok(FetchResult::Active(writer, res))
     }
 
     // ---- Playlist management ----
@@ -381,7 +374,7 @@ impl<N: Net> Loader for FetchManager<N> {
                     trace!(variant, bytes, "init segment already cached");
                     bytes
                 }
-                FetchResult::Active(mut writer) => {
+                FetchResult::Active(mut writer, res) => {
                     debug!(variant, url = %init_url, "downloading init segment");
                     let mut total = 0u64;
                     while let Some(result) = writer.next().await {
@@ -389,13 +382,21 @@ impl<N: Net> Loader for FetchManager<N> {
                             Ok(WriterItem::ChunkWritten { len, .. }) => {
                                 total += len as u64;
                             }
-                            Ok(WriterItem::Completed { total_bytes }) => {
+                            Ok(WriterItem::StreamEnded { total_bytes }) => {
                                 total = total_bytes;
                                 break;
                             }
                             Err(e) => return Err(e.into()),
                         }
                     }
+                    if total == 0 {
+                        res.fail("init segment: 0 bytes downloaded".to_string());
+                        return Err(HlsError::SegmentNotFound(
+                            "init segment download yielded 0 bytes".to_string(),
+                        ));
+                    }
+                    // Commit resource explicitly after successful download
+                    res.commit(Some(total)).map_err(HlsError::from)?;
                     debug!(variant, total, "init segment downloaded");
                     total
                 }
@@ -428,20 +429,29 @@ impl<N: Net> Loader for FetchManager<N> {
 
         let segment_len = match fetch_result {
             FetchResult::Cached { bytes } => bytes,
-            FetchResult::Active(mut writer) => {
+            FetchResult::Active(mut writer, res) => {
                 let mut total = 0u64;
                 while let Some(result) = writer.next().await {
                     match result {
                         Ok(WriterItem::ChunkWritten { len, .. }) => {
                             total += len as u64;
                         }
-                        Ok(WriterItem::Completed { total_bytes }) => {
+                        Ok(WriterItem::StreamEnded { total_bytes }) => {
                             total = total_bytes;
                             break;
                         }
                         Err(e) => return Err(e.into()),
                     }
                 }
+                if total == 0 {
+                    res.fail("segment: 0 bytes downloaded".to_string());
+                    return Err(HlsError::SegmentNotFound(format!(
+                        "segment {} download yielded 0 bytes",
+                        segment_index
+                    )));
+                }
+                // Commit resource explicitly after successful download
+                res.commit(Some(total)).map_err(HlsError::from)?;
                 total
             }
         };
@@ -777,5 +787,103 @@ mod tests {
         assert_eq!(meta0.len, 200_000);
         assert_eq!(meta1.len, 250_000);
         assert_eq!(meta2.len, 300_000);
+    }
+
+    // ---- Partial segment tests ----
+
+    /// Helper: create a FetchManager<MockNet> with master + media playlists mocked.
+    /// `stream_setup` configures the mock for segment stream calls.
+    fn setup_loader_with_mock_stream(
+        temp_dir: &TempDir,
+        stream_setup: impl FnOnce(&mut MockNet),
+    ) -> FetchManager<MockNet> {
+        let assets = AssetStoreBuilder::new()
+            .asset_root("partial-test")
+            .root_dir(temp_dir.path())
+            .build();
+
+        let mut mock = MockNet::new();
+
+        // Master playlist: single variant
+        mock.expect_get_bytes()
+            .withf(|url, _| url.path().ends_with("/master.m3u8"))
+            .times(1)
+            .returning(|_, _| {
+                Ok(Bytes::from(
+                    "#EXTM3U\n\
+                     #EXT-X-STREAM-INF:BANDWIDTH=128000\n\
+                     v0.m3u8\n",
+                ))
+            });
+
+        // Media playlist: single segment, no init (MPEG-TS)
+        mock.expect_get_bytes()
+            .withf(|url, _| url.path().ends_with("/v0.m3u8"))
+            .times(1)
+            .returning(|_, _| {
+                Ok(Bytes::from(
+                    "#EXTM3U\n\
+                     #EXT-X-TARGETDURATION:4\n\
+                     #EXT-X-MEDIA-SEQUENCE:0\n\
+                     #EXT-X-PLAYLIST-TYPE:VOD\n\
+                     #EXTINF:4.0,\n\
+                     seg0.ts\n\
+                     #EXT-X-ENDLIST\n",
+                ))
+            });
+
+        // Custom stream setup
+        stream_setup(&mut mock);
+
+        let master_url = Url::parse("http://test.com/master.m3u8").unwrap();
+        FetchManager::with_net(assets, mock, CancellationToken::new())
+            .with_master_url(master_url)
+    }
+
+    #[tokio::test]
+    async fn test_load_segment_stream_error_returns_err() {
+        use kithara_net::{ByteStream, NetError};
+
+        let temp_dir = TempDir::new().unwrap();
+        let fetch = setup_loader_with_mock_stream(&temp_dir, |mock| {
+            mock.expect_stream()
+                .withf(|url, _| url.path().contains("seg0"))
+                .times(1)
+                .returning(|_, _| {
+                    let stream = futures::stream::iter(vec![
+                        Ok(Bytes::from(vec![0xFF; 1000])),
+                        Err(NetError::Timeout),
+                    ]);
+                    Ok(Box::pin(stream) as ByteStream)
+                });
+        });
+
+        let result = fetch.load_segment(0, 0).await;
+        assert!(
+            result.is_err(),
+            "stream error should propagate as load_segment error"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_load_segment_empty_stream_returns_err() {
+        use kithara_net::{ByteStream, NetError};
+
+        let temp_dir = TempDir::new().unwrap();
+        let fetch = setup_loader_with_mock_stream(&temp_dir, |mock| {
+            mock.expect_stream()
+                .withf(|url, _| url.path().contains("seg0"))
+                .times(1)
+                .returning(|_, _| {
+                    let stream = futures::stream::empty::<Result<Bytes, NetError>>();
+                    Ok(Box::pin(stream) as ByteStream)
+                });
+        });
+
+        let result = fetch.load_segment(0, 0).await;
+        assert!(
+            result.is_err(),
+            "empty segment (0 bytes) should be treated as error"
+        );
     }
 }

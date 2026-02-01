@@ -1,24 +1,19 @@
 #![forbid(unsafe_code)]
 
-use std::{path::Path, sync::Arc};
+use std::{ops::Range, path::Path, sync::Arc};
 
-use kithara_assets::{
-    AssetStore, Assets, DiskAssetStore, EvictAssets, LeaseGuard, LeaseResource, ProcessedResource,
-    ProcessingAssets,
-};
+use crossbeam_queue::SegQueue;
+use kithara_assets::{AssetResource, AssetStore, Assets};
 use kithara_net::{HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource, StorageResult, WaitOutcome};
 use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
-use tracing::trace;
+use tracing::{debug, trace};
 use url::Url;
 
 use crate::{error::SourceError, events::FileEvent};
 
-pub(crate) type AssetResourceType = LeaseResource<
-    ProcessedResource<StorageResource, ()>,
-    LeaseGuard<ProcessingAssets<EvictAssets<DiskAssetStore>, ()>>,
->;
+pub(crate) type AssetResourceType = AssetResource;
 
 /// Unified file resource: either a remote asset (via AssetStore) or a local file.
 #[derive(Clone, Debug)]
@@ -79,6 +74,13 @@ impl ResourceExt for FileResource {
         }
     }
 
+    fn reactivate(&self) -> StorageResult<()> {
+        match self {
+            Self::Asset(r) => r.reactivate(),
+            Self::Local(r) => r.reactivate(),
+        }
+    }
+
     fn status(&self) -> ResourceStatus {
         match self {
             Self::Asset(r) => r.status(),
@@ -113,7 +115,7 @@ pub(crate) struct FileStreamState {
 impl FileStreamState {
     pub(crate) async fn create(
         assets: Arc<AssetStore>,
-        net_client: HttpClient,
+        net_client: &HttpClient,
         url: Url,
         cancel: CancellationToken,
         events_tx: Option<broadcast::Sender<FileEvent>>,
@@ -217,6 +219,43 @@ impl Default for Progress {
     }
 }
 
+/// Shared state between FileSource (sync reader) and FileDownloader (async).
+///
+/// Enables on-demand Range requests: when the reader needs data beyond what
+/// the sequential download has fetched, it pushes a range request here.
+/// The downloader picks it up and fetches via HTTP Range.
+///
+/// Data availability signaling relies on `StorageResource`'s internal condvar:
+/// when the downloader writes data via `write_at`, the resource notifies waiters,
+/// so `FileSource::wait_range()` unblocks automatically.
+#[derive(Debug)]
+pub(crate) struct SharedFileState {
+    /// Queue of on-demand range requests from Source to Downloader.
+    range_requests: SegQueue<Range<u64>>,
+    /// Notify from Source → Downloader when reader needs data.
+    pub(crate) reader_needs_data: Notify,
+}
+
+impl SharedFileState {
+    pub(crate) fn new() -> Self {
+        Self {
+            range_requests: SegQueue::new(),
+            reader_needs_data: Notify::new(),
+        }
+    }
+
+    /// Request on-demand download of a range.
+    pub(crate) fn request_range(&self, range: Range<u64>) {
+        self.range_requests.push(range);
+        self.reader_needs_data.notify_one();
+    }
+
+    /// Pop next on-demand range request (for Downloader).
+    pub(crate) fn pop_range_request(&self) -> Option<Range<u64>> {
+        self.range_requests.pop()
+    }
+}
+
 /// File source implementing Source trait (sync).
 ///
 /// Wraps storage resource with progress tracking and event emission.
@@ -225,10 +264,11 @@ pub struct FileSource {
     progress: Arc<Progress>,
     events_tx: broadcast::Sender<FileEvent>,
     len: Option<u64>,
+    shared: Option<Arc<SharedFileState>>,
 }
 
 impl FileSource {
-    /// Create new file source.
+    /// Create new file source (no on-demand support — for local files).
     pub(crate) fn new(
         res: FileResource,
         progress: Arc<Progress>,
@@ -240,6 +280,24 @@ impl FileSource {
             progress,
             events_tx,
             len,
+            shared: None,
+        }
+    }
+
+    /// Create new file source with shared state (for on-demand loading).
+    pub(crate) fn with_shared(
+        res: FileResource,
+        progress: Arc<Progress>,
+        events_tx: broadcast::Sender<FileEvent>,
+        len: Option<u64>,
+        shared: Arc<SharedFileState>,
+    ) -> Self {
+        Self {
+            res,
+            progress,
+            events_tx,
+            len,
+            shared: Some(shared),
         }
     }
 }
@@ -261,6 +319,27 @@ impl kithara_stream::Source for FileSource {
             self.progress.set_read_pos(range.start);
         }
 
+        // If shared state exists, check if on-demand download is needed
+        // BEFORE calling res.wait_range() — the resource blocks indefinitely
+        // for Active resources when data is not available.
+        if let Some(ref shared) = self.shared {
+            let download_pos = self.progress.download_pos();
+            if range.start >= download_pos
+                && !matches!(self.res.status(), ResourceStatus::Committed { .. })
+            {
+                debug!(
+                    range_start = range.start,
+                    range_end = range.end,
+                    download_pos,
+                    "requesting on-demand download for range beyond download_pos"
+                );
+                shared.request_range(range.clone());
+            }
+        }
+
+        // Wait on the resource. If on-demand was requested, the downloader
+        // will write data via write_at, which notifies the resource's condvar
+        // and unblocks this call.
         self.res
             .wait_range(range)
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))
@@ -295,6 +374,9 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn len(&self) -> Option<u64> {
-        self.len
+        // For partial downloads, return expected total (from Content-Length HEAD)
+        // so decoder can calculate correct duration and seek bounds.
+        // For committed files, resource.len() == expected total anyway.
+        self.len.or_else(|| self.res.len())
     }
 }

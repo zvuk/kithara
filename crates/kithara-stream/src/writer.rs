@@ -39,8 +39,12 @@ pub type NetWriter = Writer<NetError>;
 pub enum WriterItem {
     /// A chunk was written successfully.
     ChunkWritten { offset: u64, len: usize },
-    /// Download completed, resource committed.
-    Completed { total_bytes: u64 },
+    /// Stream ended at this byte offset.
+    ///
+    /// Resource is NOT automatically committed.
+    /// The caller (Downloader) must decide whether to commit based on context
+    /// (e.g., comparing `total_bytes` with expected `Content-Length`).
+    StreamEnded { total_bytes: u64 },
 }
 
 /// Generic writer: any byte stream -> `write_at` -> commit/fail.
@@ -53,7 +57,7 @@ pub enum WriterItem {
 ///
 /// - On any error, calls `res.fail(...)` to unblock readers, then yields error.
 /// - On cancellation, stream ends without failing resource (partial data may remain readable).
-/// - On success, commits with final length and yields `Completed`.
+/// - On success, yields `StreamEnded` with final offset. Does NOT commit.
 ///
 /// ## Examples
 ///
@@ -63,8 +67,10 @@ pub enum WriterItem {
 /// # use kithara_net::Net;
 /// # use kithara_storage::StorageResource;
 /// # use tokio_util::sync::CancellationToken;
+/// # use url::Url;
 /// # async fn example(net: impl Net, res: StorageResource, cancel: CancellationToken) {
-/// let stream = net.stream("https://example.com/file.mp3").await.unwrap();
+/// let url = Url::parse("https://example.com/file.mp3").unwrap();
+/// let stream = net.stream(url, None).await.unwrap();
 /// let writer: NetWriter = Writer::new(stream, res, cancel);
 /// // NetWriter is alias for Writer<NetError>
 /// # }
@@ -112,7 +118,23 @@ where
         S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
         R: ResourceExt + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
-        let inner = Box::pin(Self::create_stream(stream, res, cancel));
+        Self::with_offset(stream, res, cancel, 0)
+    }
+
+    /// Create a writer starting at a specific byte offset.
+    ///
+    /// Use this for HTTP Range requests where the stream starts at a non-zero offset.
+    pub fn with_offset<S, R>(
+        stream: S,
+        res: R,
+        cancel: CancellationToken,
+        start_offset: u64,
+    ) -> Self
+    where
+        S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
+        R: ResourceExt + Clone + Send + Sync + std::fmt::Debug + 'static,
+    {
+        let inner = Box::pin(Self::create_stream(stream, res, cancel, start_offset));
         Self { inner }
     }
 
@@ -120,13 +142,14 @@ where
         mut stream: S,
         res: R,
         cancel: CancellationToken,
+        start_offset: u64,
     ) -> impl Stream<Item = Result<WriterItem, WriterError<E>>> + Send
     where
         S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
         R: ResourceExt + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
         async_stream::stream! {
-            let mut offset: u64 = 0;
+            let mut offset: u64 = start_offset;
             let mut first_chunk = true;
 
             loop {
@@ -140,12 +163,10 @@ where
 
                     next = stream.next() => {
                         let Some(next) = next else {
-                            // Stream ended, commit (sync call in async context is fine — it's fast)
-                            if let Err(e) = res.commit(Some(offset)) {
-                                yield Err(WriterError::SinkWrite(e));
-                                return;
-                            }
-                            yield Ok(WriterItem::Completed { total_bytes: offset });
+                            // Stream ended — do NOT commit.
+                            // Caller decides whether to commit based on context.
+                            debug!(offset, "writer stream ended");
+                            yield Ok(WriterItem::StreamEnded { total_bytes: offset });
                             return;
                         };
 
@@ -213,7 +234,7 @@ where
                 Ok(WriterItem::ChunkWritten { offset, len }) => {
                     on_chunk(offset, len);
                 }
-                Ok(WriterItem::Completed { total_bytes }) => {
+                Ok(WriterItem::StreamEnded { total_bytes }) => {
                     return Ok(total_bytes);
                 }
                 Err(e) => {
