@@ -58,4 +58,4 @@ pub use key::{ResourceKey, asset_root_for_url};
 pub use kithara_bufpool::{BytePool, byte_pool};
 pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
 pub use process::{ProcessChunkFn, ProcessedResource, ProcessingAssets};
-pub use store::{AssetStore, AssetStoreBuilder, StoreOptions};
+pub use store::{AssetResource, AssetStore, AssetStoreBuilder, StoreOptions};

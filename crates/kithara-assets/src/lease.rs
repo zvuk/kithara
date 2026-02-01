@@ -178,6 +178,10 @@ where
         self.inner.len()
     }
 
+    fn reactivate(&self) -> StorageResult<()> {
+        self.inner.reactivate()
+    }
+
     fn status(&self) -> ResourceStatus {
         self.inner.status()
     }

@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="../../logo.png" alt="kithara" width="300">
+  <img src="../../logo.svg" alt="kithara" width="300">
 </div>
 
 # kithara
