@@ -9,19 +9,19 @@
 use std::{
     io::{Read, Seek, SeekFrom},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::Duration,
 };
 
 use axum::{
+    Router,
     body::Body,
     extract::{Request, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
-    Router,
 };
 use bytes::Bytes;
 use kithara_assets::StoreOptions;
@@ -135,9 +135,7 @@ async fn handle_request(
 }
 
 /// Shared server setup for tests.
-async fn setup_server(
-    file_data: Vec<u8>,
-) -> (url::Url, Arc<AtomicUsize>, oneshot::Sender<()>) {
+async fn setup_server(file_data: Vec<u8>) -> (url::Url, Arc<AtomicUsize>, oneshot::Sender<()>) {
     let state = ServerState {
         file_data,
         call_count: Arc::new(AtomicUsize::new(0)),
@@ -210,7 +208,11 @@ async fn file_stream_closes_early_seek_still_works() {
 
         // Seek beyond initial 512KB stream → triggers on-demand Range request
         let seek_offset = 700_000u64;
-        tracing::info!("Seeking to {}KB (beyond {}KB stream)", seek_offset / 1024, STREAM_CLOSES_AT / 1024);
+        tracing::info!(
+            "Seeking to {}KB (beyond {}KB stream)",
+            seek_offset / 1024,
+            STREAM_CLOSES_AT / 1024
+        );
 
         match stream.seek(SeekFrom::Start(seek_offset)) {
             Ok(pos) => {
@@ -221,7 +223,11 @@ async fn file_stream_closes_early_seek_still_works() {
                 assert!(n > 0, "Should read data after seek");
 
                 let expected = (seek_offset % 256) as u8;
-                assert_eq!(buf[0], expected, "Data should match: expected {}, got {}", expected, buf[0]);
+                assert_eq!(
+                    buf[0], expected,
+                    "Data should match: expected {}, got {}",
+                    expected, buf[0]
+                );
 
                 tracing::info!("Read {} bytes after seek, data verified", n);
                 Ok(())
@@ -311,7 +317,10 @@ async fn partial_cache_resume_works() {
 
         let mut buf = [0u8; 10_000];
         let n = stream2.read(&mut buf).unwrap();
-        assert!(n > 0, "Phase 2: should read data after seek on resumed partial");
+        assert!(
+            n > 0,
+            "Phase 2: should read data after seek on resumed partial"
+        );
 
         let expected = (seek_offset % 256) as u8;
         assert_eq!(
@@ -325,9 +334,7 @@ async fn partial_cache_resume_works() {
     let result = match tokio::time::timeout(Duration::from_secs(5), phase2).await {
         Ok(Ok(())) => Ok(()),
         Ok(Err(e)) => Err(format!("Phase 2 panicked: {:?}", e)),
-        Err(_) => Err(
-            "DEADLOCK: resume seek hung. Partial cache resume not working.".to_string(),
-        ),
+        Err(_) => Err("DEADLOCK: resume seek hung. Partial cache resume not working.".to_string()),
     };
 
     let _ = shutdown_tx.send(());
