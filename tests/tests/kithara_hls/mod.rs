@@ -18,4 +18,5 @@ mod keys_integration;
 mod playlist_integration;
 mod smoke_test;
 mod source_seek;
+mod stress_seek_abr;
 mod sync_reader_hls_test;
