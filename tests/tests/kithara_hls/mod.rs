@@ -16,6 +16,7 @@ mod deferred_abr_debug;
 // mod driver_test;  // uses old API
 mod keys_integration;
 mod playlist_integration;
+mod seek_past_eof;
 mod smoke_test;
 mod source_seek;
 mod stress_seek_abr;
