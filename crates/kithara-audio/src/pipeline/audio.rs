@@ -375,6 +375,7 @@ where
             resampler_quality,
             events_tx,
             preload_chunks,
+            prefer_hardware,
         } = config;
 
         let event_capacity = event_channel_capacity.max(1);
@@ -435,8 +436,11 @@ where
 
         // Create initial decoder in spawn_blocking to avoid blocking tokio runtime.
         // Symphonia probe() does blocking IO which would deadlock the async downloader.
-        debug!("Creating initial decoder...");
-        let decoder_config = kithara_decode::DecoderConfig::default();
+        debug!(prefer_hardware, "Creating initial decoder...");
+        let decoder_config = kithara_decode::DecoderConfig {
+            prefer_hardware,
+            ..Default::default()
+        };
         let shared_stream_for_decoder = shared_stream.clone();
         let hint_for_decoder = hint.clone();
         let initial_media_info_for_decoder = initial_media_info.clone();
@@ -496,7 +500,10 @@ where
         let decoder_factory: super::stream_source::DecoderFactory<T> =
             Box::new(move |stream, info, base_offset| {
                 let reader = OffsetReader::new(stream.clone(), base_offset);
-                let config = kithara_decode::DecoderConfig::default();
+                let config = kithara_decode::DecoderConfig {
+                    prefer_hardware,
+                    ..Default::default()
+                };
                 match kithara_decode::DecoderFactory::create_from_media_info(reader, info, config) {
                     Ok(d) => {
                         d.update_byte_len(0);
@@ -505,7 +512,10 @@ where
                     Err(e) => {
                         warn!(?e, "Failed to recreate decoder, trying probe fallback");
                         let reader = OffsetReader::new(stream, base_offset);
-                        let config = kithara_decode::DecoderConfig::default();
+                        let config = kithara_decode::DecoderConfig {
+                            prefer_hardware,
+                            ..Default::default()
+                        };
                         match kithara_decode::DecoderFactory::create_with_probe(
                             reader, None, config,
                         ) {

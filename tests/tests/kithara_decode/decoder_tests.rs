@@ -29,6 +29,7 @@ fn wav_media_info() -> MediaInfo {
         codec: None,
         sample_rate: None,
         channels: None,
+        variant_index: None,
     }
 }
 
@@ -39,6 +40,7 @@ fn mp3_media_info() -> MediaInfo {
         codec: Some(AudioCodec::Mp3),
         sample_rate: None,
         channels: None,
+        variant_index: None,
     }
 }
 

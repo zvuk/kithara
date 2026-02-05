@@ -37,6 +37,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .with_env_filter(
             EnvFilter::default()
                 .add_directive("kithara_audio=debug".parse()?)
+                .add_directive("kithara_decode=debug".parse()?)
                 .add_directive("kithara_hls=debug".parse()?)
                 .add_directive("kithara_stream=debug".parse()?)
                 .add_directive("kithara_net=warn".parse()?)
@@ -65,7 +66,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         throughput_safety_factor: 1.2,      // default: 1.5
         ..Default::default()
     });
-    let config = AudioConfig::<Hls>::new(hls_config).with_events(events_tx);
+    let config = AudioConfig::<Hls>::new(hls_config)
+        .with_prefer_hardware(true)
+        .with_events(events_tx);
     let audio = Audio::<Stream<Hls>>::new(config).await?;
 
     info!("Starting playback... (Press Ctrl+C to stop)");

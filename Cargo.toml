@@ -139,4 +139,8 @@ hotpath = "0.9"
 # fast interleave/deinterleave
 fast-interleave = "0.1"
 
+# Apple platform support
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+
 # Optional: unify lint settings later via workspace.metadata or deny.toml.

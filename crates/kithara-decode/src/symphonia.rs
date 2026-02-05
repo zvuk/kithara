@@ -35,18 +35,18 @@ use std::{
 };
 
 use kithara_stream::ContainerFormat;
-use symphonia::core::{
-    codecs::{
-        CodecParameters,
-        audio::{AudioDecoder as SymphoniaAudioDecoder, AudioDecoderOptions},
+use symphonia::{
+    core::{
+        codecs::{
+            CodecParameters,
+            audio::{AudioDecoder as SymphoniaAudioDecoder, AudioDecoderOptions},
+        },
+        errors::Error as SymphoniaError,
+        formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType},
+        io::MediaSourceStream,
+        units::Time,
     },
-    errors::Error as SymphoniaError,
-    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType},
-    io::MediaSourceStream,
-    units::Time,
-};
-use symphonia::default::formats::{
-    AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader,
+    default::formats::{AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader},
 };
 
 use crate::{

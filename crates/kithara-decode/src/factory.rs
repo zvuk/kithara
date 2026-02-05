@@ -124,19 +124,27 @@ impl DecoderFactory {
             CodecSelector::Auto => return Err(DecodeError::ProbeFailed),
         };
 
-        tracing::debug!(?codec, ?container, "DecoderFactory::create called");
+        tracing::debug!(
+            ?codec,
+            ?container,
+            prefer_hardware = config.prefer_hardware,
+            "DecoderFactory::create called"
+        );
 
-        // Try hardware decoder first if preferred
+        // Use hardware decoder if preferred
         #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-        if config.prefer_hardware
-            && let Ok(decoder) = Self::create_apple_decoder(&config, codec)
-        {
-            return Ok(decoder);
+        if config.prefer_hardware {
+            tracing::info!(
+                ?codec,
+                ?container,
+                "Using Apple AudioToolbox hardware decoder"
+            );
+            return Self::create_apple_decoder(source, &config, codec, container);
         }
 
         // Build Symphonia config from DecoderConfig
         // Pass container directly - Symphonia will create reader without probe
-        tracing::debug!(?container, "Using direct container format (no probe)");
+        tracing::debug!(?container, "Using Symphonia decoder");
 
         let symphonia_config = SymphoniaConfig {
             verify: false,
@@ -145,42 +153,42 @@ impl DecoderFactory {
             container,
         };
 
-        // Create appropriate decoder based on codec
-        tracing::debug!("Creating Symphonia decoder...");
         Self::create_symphonia_decoder(source, codec, symphonia_config)
     }
 
     /// Create an Apple AudioToolbox decoder.
     #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-    fn create_apple_decoder(
+    fn create_apple_decoder<R>(
+        source: R,
         config: &DecoderConfig,
         codec: AudioCodec,
-    ) -> DecodeResult<Box<dyn InnerDecoder>> {
-        use std::io::Cursor;
-
+        container: Option<ContainerFormat>,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
         let apple_config = AppleConfig {
             byte_len_handle: config.byte_len_handle.clone(),
+            container,
         };
 
-        // Note: Apple decoder uses Cursor<Vec<u8>> as placeholder
-        // Real implementation will use the actual source
-        let dummy: Box<dyn crate::traits::DecoderInput> = Box::new(Cursor::new(Vec::new()));
+        let source: Box<dyn crate::traits::DecoderInput> = Box::new(source);
 
         match codec {
             AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-                let decoder = AppleAac::create(dummy, apple_config)?;
+                let decoder = AppleAac::create(source, apple_config)?;
                 Ok(Box::new(decoder))
             }
             AudioCodec::Mp3 => {
-                let decoder = AppleMp3::create(dummy, apple_config)?;
+                let decoder = AppleMp3::create(source, apple_config)?;
                 Ok(Box::new(decoder))
             }
             AudioCodec::Flac => {
-                let decoder = AppleFlac::create(dummy, apple_config)?;
+                let decoder = AppleFlac::create(source, apple_config)?;
                 Ok(Box::new(decoder))
             }
             AudioCodec::Alac => {
-                let decoder = AppleAlac::create(dummy, apple_config)?;
+                let decoder = AppleAlac::create(source, apple_config)?;
                 Ok(Box::new(decoder))
             }
             _ => Err(DecodeError::UnsupportedCodec(codec)),
