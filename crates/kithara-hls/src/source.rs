@@ -166,18 +166,14 @@ impl SegmentIndex {
         self.entries.values().find(|e| e.contains(offset))
     }
 
-    /// Find the first segment with the given codec and container (by lowest byte_offset).
+    /// Find the first segment of the given variant (by lowest byte_offset).
     ///
-    /// Used to find the start of a new format after ABR switch — this is where
-    /// init data (ftyp/moov) lives.
-    fn first_segment_with_format(
-        &self,
-        codec: Option<AudioCodec>,
-        container: Option<ContainerFormat>,
-    ) -> Option<&SegmentEntry> {
+    /// Used to find the start of a new variant after ABR switch — this is where
+    /// init data (ftyp/moov) lives for the new variant.
+    fn first_segment_of_variant(&self, variant: usize) -> Option<&SegmentEntry> {
         self.entries
             .values()
-            .filter(|e| e.codec == codec && e.container == container)
+            .filter(|e| e.variant == variant)
             .min_by_key(|e| e.byte_offset)
     }
 
@@ -1040,7 +1036,10 @@ impl Source for HlsSource {
     fn media_info(&self) -> Option<MediaInfo> {
         let segments = self.shared.segments.lock();
         let last = segments.last()?;
-        Some(MediaInfo::new(last.codec, last.container))
+        Some(
+            MediaInfo::new(last.codec, last.container)
+                .with_variant_index(last.variant as u32),
+        )
     }
 
     fn current_segment_range(&self) -> Option<Range<u64>> {
@@ -1053,10 +1052,10 @@ impl Source for HlsSource {
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         let segments = self.shared.segments.lock();
         let last = segments.last()?;
-        // Find the first segment with the same codec/container as the last one.
+        // Find the first segment of the current variant.
         // This is where init data (ftyp/moov) lives after an ABR switch.
         segments
-            .first_segment_with_format(last.codec, last.container)
+            .first_segment_of_variant(last.variant)
             .map(|entry| entry.byte_offset..entry.end_offset())
     }
 }

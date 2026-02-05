@@ -236,10 +236,15 @@ impl<T: StreamType> StreamAudioSource<T> {
                 .or_else(|| self.shared_stream.current_segment_range());
 
             if let Some(seg_range) = seg_range {
+                let current_pos = self.shared_stream.position();
+                let remaining_bytes = seg_range.start.saturating_sub(current_pos);
+
                 debug!(
                     old = ?self.cached_media_info,
                     new = ?current_info,
-                    segment_start = seg_range.start,
+                    current_pos,
+                    boundary = seg_range.start,
+                    remaining_bytes,
                     "Format change detected, setting read boundary"
                 );
                 self.shared_stream.set_boundary(seg_range.start);
@@ -255,9 +260,13 @@ impl<T: StreamType> StreamAudioSource<T> {
             return false;
         };
 
+        let current_pos = self.shared_stream.position();
         debug!(
+            current_pos,
             target_offset,
-            "Applying format change: clearing boundary, seeking to segment start"
+            chunks_decoded = self.chunks_decoded,
+            total_samples = self.total_samples,
+            "Applying format change: old decoder finished, seeking to new segment start"
         );
 
         // Clear boundary so the new decoder can read freely.
@@ -374,9 +383,15 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     }
                 }
                 Ok(None) => {
+                    let pos_at_eof = self.shared_stream.position();
                     self.detect_format_change();
                     if self.pending_format_change.is_some() {
-                        debug!("Decoder EOF at format boundary, recreating");
+                        debug!(
+                            pos_at_eof,
+                            chunks = self.chunks_decoded,
+                            samples = self.total_samples,
+                            "Decoder EOF at format boundary, recreating decoder"
+                        );
                         if self.apply_format_change() {
                             continue;
                         }
@@ -385,8 +400,9 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     debug!(
                         chunks = self.chunks_decoded,
                         samples = self.total_samples,
+                        pos_at_eof,
                         epoch = current_epoch,
-                        "decode complete (EOF)"
+                        "decode complete (true EOF)"
                     );
 
                     // Flush effects at end of stream
