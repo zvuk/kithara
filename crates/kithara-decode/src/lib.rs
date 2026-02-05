@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 mod decoder;
+mod error;
 mod types;
 
 pub use decoder::{CachedCodecInfo, Decoder, InnerDecoder};
