@@ -434,19 +434,25 @@ where
         let pool = pool.get_or_insert_with(|| pcm_pool().clone());
 
         // Create initial decoder
-        let mut symphonia = if let Some(ref info) = initial_media_info {
-            kithara_decode::Decoder::new_from_media_info(shared_stream.clone(), info, pool.clone())?
-        } else {
-            kithara_decode::Decoder::new_with_probe(
-                shared_stream.clone(),
-                hint.as_deref(),
-                pool.clone(),
-            )?
-        };
+        let decoder_config = kithara_decode::DecoderConfig::default();
+        let decoder: Box<dyn kithara_decode::InnerDecoder> =
+            if let Some(ref info) = initial_media_info {
+                kithara_decode::DecoderFactory::create_from_media_info(
+                    shared_stream.clone(),
+                    info,
+                    decoder_config.clone(),
+                )?
+            } else {
+                kithara_decode::DecoderFactory::create_with_probe(
+                    shared_stream.clone(),
+                    hint.as_deref(),
+                    decoder_config.clone(),
+                )?
+            };
 
-        let initial_spec = symphonia.spec();
-        let total_duration = symphonia.duration();
-        let metadata = symphonia.metadata();
+        let initial_spec = decoder.spec();
+        let total_duration = decoder.duration();
+        let metadata = decoder.metadata();
 
         let cmd_capacity = command_channel_capacity.max(1);
         let (cmd_tx, cmd_rx) = kanal::bounded(cmd_capacity);
@@ -476,31 +482,25 @@ where
         });
 
         // Factory for creating decoders after ABR switch.
-        // Captures PcmPool for decoder instantiation.
-        let factory_pool = pool.clone();
         let decoder_factory: super::stream_source::DecoderFactory<T> =
             Box::new(move |stream, info, base_offset| {
                 let reader = OffsetReader::new(stream.clone(), base_offset);
-                match kithara_decode::Decoder::new_from_media_info(
-                    reader,
-                    info,
-                    factory_pool.clone(),
-                ) {
+                let config = kithara_decode::DecoderConfig::default();
+                match kithara_decode::DecoderFactory::create_from_media_info(reader, info, config) {
                     Ok(d) => {
                         d.update_byte_len(0);
-                        Some(Box::new(d))
+                        Some(d)
                     }
                     Err(e) => {
                         warn!(?e, "Failed to recreate decoder, trying probe fallback");
                         let reader = OffsetReader::new(stream, base_offset);
-                        match kithara_decode::Decoder::new_with_probe(
-                            reader,
-                            None,
-                            factory_pool.clone(),
+                        let config = kithara_decode::DecoderConfig::default();
+                        match kithara_decode::DecoderFactory::create_with_probe(
+                            reader, None, config,
                         ) {
                             Ok(d) => {
                                 d.update_byte_len(0);
-                                Some(Box::new(d))
+                                Some(d)
                             }
                             Err(e) => {
                                 warn!(?e, "Probe fallback also failed");
@@ -514,7 +514,7 @@ where
         // Use StreamAudioSource for format change detection
         let audio_source = StreamAudioSource::new(
             shared_stream,
-            Box::new(symphonia),
+            decoder,
             decoder_factory,
             initial_media_info,
             Arc::clone(&epoch),

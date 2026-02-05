@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use kithara_decode::{DecodeResult, Decoder, PcmChunk, PcmSpec};
+use kithara_decode::{DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
 
 /// Source of PCM audio in the processing chain.
 pub trait AudioGenerator: Send + 'static {
@@ -33,20 +33,20 @@ pub trait AudioEffect: Send + 'static {
     fn reset(&mut self);
 }
 
-impl AudioGenerator for Decoder {
+impl AudioGenerator for Box<dyn InnerDecoder> {
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
-        Decoder::next_chunk(self)
+        InnerDecoder::next_chunk(self.as_mut())
     }
 
     fn spec(&self) -> PcmSpec {
-        Decoder::spec(self)
+        InnerDecoder::spec(self.as_ref())
     }
 
     fn seek(&mut self, position: Duration) -> DecodeResult<()> {
-        Decoder::seek(self, position)
+        InnerDecoder::seek(self.as_mut(), position)
     }
 
     fn reset(&mut self) {
-        Decoder::reset(self);
+        InnerDecoder::reset(self.as_mut());
     }
 }
