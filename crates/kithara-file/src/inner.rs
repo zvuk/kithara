@@ -160,6 +160,7 @@ impl File {
                 progress.clone(),
                 state.events().clone(),
                 config.look_ahead_bytes,
+                config.download_yield_interval,
                 shared.clone(),
             )
             .await;
@@ -195,7 +196,12 @@ pub struct FileDownloader {
     progress: Arc<Progress>,
     events_tx: broadcast::Sender<FileEvent>,
     total: Option<u64>,
-    look_ahead_bytes: u64,
+    /// Backpressure threshold. None = no backpressure.
+    look_ahead_bytes: Option<u64>,
+    /// How often to yield to async runtime (every N chunks).
+    yield_interval: usize,
+    /// Counter for yield interval.
+    chunks_since_yield: usize,
     shared: Arc<SharedFileState>,
     net_client: HttpClient,
     url: url::Url,
@@ -210,7 +216,8 @@ impl FileDownloader {
         state: Arc<FileStreamState>,
         progress: Arc<Progress>,
         events_tx: broadcast::Sender<FileEvent>,
-        look_ahead_bytes: u64,
+        look_ahead_bytes: Option<u64>,
+        yield_interval: usize,
         shared: Arc<SharedFileState>,
     ) -> Self {
         let url = state.url().clone();
@@ -240,6 +247,8 @@ impl FileDownloader {
             events_tx,
             total,
             look_ahead_bytes,
+            yield_interval,
+            chunks_since_yield: 0,
             shared,
             net_client: net_client.clone(),
             url,
@@ -313,23 +322,25 @@ impl Downloader for FileDownloader {
             }
         }
 
-        // Backpressure: wait if too far ahead of reader.
-        loop {
-            let advanced = self.progress.notified_reader_advance();
-            tokio::pin!(advanced);
+        // Backpressure: wait if too far ahead of reader (only when limit is set).
+        if let Some(limit) = self.look_ahead_bytes {
+            loop {
+                let advanced = self.progress.notified_reader_advance();
+                tokio::pin!(advanced);
 
-            let download_pos = self.progress.download_pos();
-            let reader_pos = self.progress.read_pos();
+                let download_pos = self.progress.download_pos();
+                let reader_pos = self.progress.read_pos();
 
-            if download_pos.saturating_sub(reader_pos) <= self.look_ahead_bytes {
-                break;
-            }
-
-            // Also break on on-demand requests while waiting
-            tokio::select! {
-                _ = advanced => {}
-                _ = self.shared.reader_needs_data.notified() => {
+                if download_pos.saturating_sub(reader_pos) <= limit {
                     break;
+                }
+
+                // Also break on on-demand requests while waiting
+                tokio::select! {
+                    _ = advanced => {}
+                    _ = self.shared.reader_needs_data.notified() => {
+                        break;
+                    }
                 }
             }
         }
@@ -350,6 +361,17 @@ impl Downloader for FileDownloader {
                     offset: download_offset,
                     total: self.total,
                 });
+
+                // Yield periodically to let other tasks run (e.g., playback).
+                // Only needed when no backpressure (look_ahead_bytes is None).
+                if self.look_ahead_bytes.is_none() {
+                    self.chunks_since_yield += 1;
+                    if self.chunks_since_yield >= self.yield_interval {
+                        self.chunks_since_yield = 0;
+                        tokio::task::yield_now().await;
+                    }
+                }
+
                 true
             }
             Ok(WriterItem::StreamEnded { total_bytes }) => {
