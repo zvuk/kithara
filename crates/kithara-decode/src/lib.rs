@@ -12,6 +12,7 @@
 
 mod decoder;
 mod error;
+mod traits;
 mod types;
 
 pub use decoder::{CachedCodecInfo, Decoder, InnerDecoder};
