@@ -356,6 +356,32 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
     }
 }
 
+// ────────────────────────────────── InnerDecoder ──────────────────────────────────
+
+use crate::traits::InnerDecoder;
+
+impl<C: CodecType> InnerDecoder for Symphonia<C> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+        AudioDecoder::next_chunk(self)
+    }
+
+    fn spec(&self) -> PcmSpec {
+        AudioDecoder::spec(self)
+    }
+
+    fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
+        AudioDecoder::seek(self, pos)
+    }
+
+    fn update_byte_len(&self, len: u64) {
+        self.inner.update_byte_len(len);
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        AudioDecoder::duration(self)
+    }
+}
+
 // ────────────────────────────────── Type Aliases ──────────────────────────────────
 
 /// Symphonia-based AAC decoder.
@@ -437,7 +463,7 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
-    use crate::traits::Alac;
+    use crate::traits::{Alac, AudioDecoder};
 
     #[test]
     fn test_symphonia_config_default() {
@@ -526,8 +552,8 @@ mod tests {
         assert!(decoder.is_ok());
 
         let decoder = decoder.unwrap();
-        assert_eq!(decoder.spec().sample_rate, 44100);
-        assert_eq!(decoder.spec().channels, 2);
+        assert_eq!(AudioDecoder::spec(&decoder).sample_rate, 44100);
+        assert_eq!(AudioDecoder::spec(&decoder).channels, 2);
     }
 
     #[test]
@@ -537,7 +563,7 @@ mod tests {
 
         let mut decoder = SymphoniaPcm::create(cursor, SymphoniaConfig::default()).unwrap();
 
-        let chunk = decoder.next_chunk().unwrap();
+        let chunk = AudioDecoder::next_chunk(&mut decoder).unwrap();
         assert!(chunk.is_some());
 
         let chunk = chunk.unwrap();
@@ -554,10 +580,10 @@ mod tests {
         let mut decoder = SymphoniaPcm::create(cursor, SymphoniaConfig::default()).unwrap();
 
         // Read all chunks
-        while decoder.next_chunk().unwrap().is_some() {}
+        while AudioDecoder::next_chunk(&mut decoder).unwrap().is_some() {}
 
         // Next call should return None (EOF)
-        let result = decoder.next_chunk().unwrap();
+        let result = AudioDecoder::next_chunk(&mut decoder).unwrap();
         assert!(result.is_none());
     }
 
@@ -569,14 +595,14 @@ mod tests {
         let mut decoder = SymphoniaPcm::create(cursor, SymphoniaConfig::default()).unwrap();
 
         // Read some chunks
-        let _ = decoder.next_chunk().unwrap();
-        let _ = decoder.next_chunk().unwrap();
+        let _ = AudioDecoder::next_chunk(&mut decoder).unwrap();
+        let _ = AudioDecoder::next_chunk(&mut decoder).unwrap();
 
         // Seek to beginning
-        decoder.seek(Duration::from_secs(0)).unwrap();
+        AudioDecoder::seek(&mut decoder, Duration::from_secs(0)).unwrap();
 
         // Should be able to read again
-        let chunk = decoder.next_chunk().unwrap();
+        let chunk = AudioDecoder::next_chunk(&mut decoder).unwrap();
         assert!(chunk.is_some());
     }
 
@@ -587,13 +613,13 @@ mod tests {
 
         let mut decoder = SymphoniaPcm::create(cursor, SymphoniaConfig::default()).unwrap();
 
-        assert_eq!(decoder.position(), Duration::ZERO);
+        assert_eq!(AudioDecoder::position(&decoder), Duration::ZERO);
 
         // Read a chunk
-        let _ = decoder.next_chunk().unwrap();
+        let _ = AudioDecoder::next_chunk(&mut decoder).unwrap();
 
         // Position should have advanced
-        assert!(decoder.position() > Duration::ZERO);
+        assert!(AudioDecoder::position(&decoder) > Duration::ZERO);
     }
 
     #[test]
@@ -603,7 +629,7 @@ mod tests {
 
         let decoder = SymphoniaPcm::create(cursor, SymphoniaConfig::default()).unwrap();
 
-        let duration = decoder.duration();
+        let duration = AudioDecoder::duration(&decoder);
         assert!(duration.is_some());
 
         // Should be approximately 1 second

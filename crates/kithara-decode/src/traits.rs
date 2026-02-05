@@ -108,6 +108,38 @@ pub trait AudioDecoder: Send + 'static {
     }
 }
 
+/// Trait for runtime-polymorphic audio decoders.
+///
+/// This trait is used by kithara-audio for dynamic dispatch when the
+/// decoder type is determined at runtime (e.g., based on media info).
+///
+/// Unlike [`AudioDecoder`], this trait does not have an associated
+/// `Config` type, making it object-safe for `Box<dyn InnerDecoder>`.
+pub trait InnerDecoder: Send + 'static {
+    /// Decode the next chunk of PCM data.
+    ///
+    /// Returns `Ok(Some(chunk))` with PCM data, or `Ok(None)` at end of stream.
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>>;
+
+    /// Get the PCM output specification.
+    fn spec(&self) -> PcmSpec;
+
+    /// Seek to a time position.
+    fn seek(&mut self, pos: Duration) -> DecodeResult<()>;
+
+    /// Update the byte length reported to the underlying media source.
+    ///
+    /// For HLS streams, the total length becomes known after metadata
+    /// calculation. Call this before seeking so the decoder can compute
+    /// correct seek deltas.
+    fn update_byte_len(&self, len: u64);
+
+    /// Get total duration from track metadata.
+    ///
+    /// Returns `None` if duration cannot be determined.
+    fn duration(&self) -> Option<Duration>;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

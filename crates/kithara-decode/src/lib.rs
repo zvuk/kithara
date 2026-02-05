@@ -37,7 +37,7 @@ pub use error::{DecodeError, DecodeResult};
 pub use types::{PcmChunk, PcmSpec, TrackMetadata};
 
 // Traits and codec markers
-pub use traits::{Aac, Alac, AudioDecoder, CodecType, Flac, Mp3, Vorbis};
+pub use traits::{Aac, Alac, AudioDecoder, CodecType, Flac, InnerDecoder, Mp3, Vorbis};
 
 // Generic wrapper
 pub use decoder::Decoder;
