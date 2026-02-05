@@ -8,7 +8,7 @@
 //!
 //! Run with:
 //! ```
-//! cargo run -p kithara-audio --example file_audio --features rodio [URL]
+//! cargo run -p kithara-audio --example file_audio --features rodio,apple [URL]
 //! ```
 
 use std::{env::args, error::Error};
@@ -50,7 +50,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(128);
     let hint = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
     let file_config = FileConfig::new(url.into());
-    let mut config = AudioConfig::<File>::new(file_config).with_events(events_tx);
+    let mut config = AudioConfig::<File>::new(file_config)
+        .with_prefer_hardware(true)
+        .with_events(events_tx);
     if let Some(ext) = hint {
         config = config.with_hint(ext);
     }
@@ -70,7 +72,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let playback_handle = tokio::task::spawn_blocking(move || {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
-        sink.set_volume(1.0);
+        sink.set_volume(0.02);
         sink.append(audio);
 
         info!("Playing...");
