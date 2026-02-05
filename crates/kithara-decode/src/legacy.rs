@@ -1,4 +1,8 @@
-//! Audio decoder: trait + Symphonia implementation.
+//! Legacy decoder implementation.
+//!
+//! This module is deprecated. Use the new generic decoders:
+//! - `SymphoniaAac`, `SymphoniaMp3`, `SymphoniaFlac` for direct use
+//! - `DecoderFactory::create()` for runtime selection
 
 // ────────────────────────────────── Trait ──────────────────────────────────
 

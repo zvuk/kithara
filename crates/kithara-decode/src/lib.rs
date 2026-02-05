@@ -10,14 +10,18 @@
 
 #![forbid(unsafe_code)]
 
-mod decoder;
 mod error;
 mod factory;
+// Legacy decoder (deprecated, use Symphonia<C> or DecoderFactory instead)
+#[allow(deprecated)]
+mod legacy;
 mod symphonia;
 mod traits;
 mod types;
 
-pub use decoder::{CachedCodecInfo, Decoder, InnerDecoder};
+// Legacy exports (deprecated, kept for backward compatibility)
+#[allow(deprecated)]
+pub use legacy::{CachedCodecInfo, Decoder, InnerDecoder};
 // Re-export types from kithara-stream for convenience
 pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 pub use types::{DecodeError, DecodeResult, PcmChunk, PcmSpec, TrackMetadata};
