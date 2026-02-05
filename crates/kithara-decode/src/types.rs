@@ -1,8 +1,5 @@
 use std::{fmt, sync::Arc};
 
-use symphonia::core::errors::Error as SymphoniaError;
-use thiserror::Error;
-
 /// Audio track metadata extracted from Symphonia tags.
 #[derive(Debug, Clone, Default)]
 pub struct TrackMetadata {
@@ -15,33 +12,6 @@ pub struct TrackMetadata {
     /// Album artwork (JPEG/PNG bytes).
     pub artwork: Option<Arc<Vec<u8>>>,
 }
-
-/// Main decode error type
-#[derive(Debug, Error)]
-pub enum DecodeError {
-    #[error("io error: {0}")]
-    Io(#[from] std::io::Error),
-
-    #[error("symphonia error: {0}")]
-    Symphonia(#[from] SymphoniaError),
-
-    #[error("no supported audio track found")]
-    NoAudioTrack,
-
-    #[error("decode error: {0}")]
-    DecodeError(String),
-
-    #[error("unsupported codec: {0}")]
-    UnsupportedCodec(String),
-
-    #[error("seek error: {0}")]
-    SeekError(String),
-
-    #[error("end of stream")]
-    EndOfStream,
-}
-
-pub type DecodeResult<T> = Result<T, DecodeError>;
 
 /// PCM specification - core audio format information
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -357,75 +327,5 @@ mod tests {
         let debug_str = format!("{:?}", chunk);
 
         assert!(debug_str.contains("PcmChunk"));
-    }
-
-    // ============================================================================
-    // DecodeError Tests
-    // ============================================================================
-
-    #[test]
-    fn test_decode_error_from_io() {
-        let io_error = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
-        let decode_error: DecodeError = io_error.into();
-
-        match decode_error {
-            DecodeError::Io(e) => {
-                assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
-            }
-            _ => panic!("Expected DecodeError::Io"),
-        }
-    }
-
-    #[test]
-    fn test_decode_error_no_audio_track() {
-        let error = DecodeError::NoAudioTrack;
-        let debug_str = format!("{:?}", error);
-        assert!(debug_str.contains("NoAudioTrack"));
-
-        let display_str = format!("{}", error);
-        assert!(display_str.contains("no supported audio track"));
-    }
-
-    #[test]
-    fn test_decode_error_decode_error() {
-        let error = DecodeError::DecodeError("test error".to_string());
-        let debug_str = format!("{:?}", error);
-        assert!(debug_str.contains("DecodeError"));
-        assert!(debug_str.contains("test error"));
-
-        let display_str = format!("{}", error);
-        assert!(display_str.contains("decode error"));
-    }
-
-    #[test]
-    fn test_decode_error_unsupported_codec() {
-        let error = DecodeError::UnsupportedCodec("VP9".to_string());
-        let debug_str = format!("{:?}", error);
-        assert!(debug_str.contains("UnsupportedCodec"));
-        assert!(debug_str.contains("VP9"));
-
-        let display_str = format!("{}", error);
-        assert!(display_str.contains("unsupported codec"));
-    }
-
-    #[test]
-    fn test_decode_error_seek_error() {
-        let error = DecodeError::SeekError("invalid position".to_string());
-        let debug_str = format!("{:?}", error);
-        assert!(debug_str.contains("SeekError"));
-        assert!(debug_str.contains("invalid position"));
-
-        let display_str = format!("{}", error);
-        assert!(display_str.contains("seek error"));
-    }
-
-    #[test]
-    fn test_decode_error_end_of_stream() {
-        let error = DecodeError::EndOfStream;
-        let debug_str = format!("{:?}", error);
-        assert!(debug_str.contains("EndOfStream"));
-
-        let display_str = format!("{}", error);
-        assert!(display_str.contains("end of stream"));
     }
 }
