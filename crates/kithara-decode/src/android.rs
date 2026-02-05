@@ -18,7 +18,7 @@ use std::{
 use crate::{
     error::{DecodeError, DecodeResult},
     traits::{Aac, Alac, AudioDecoder, CodecType, Flac, InnerDecoder, Mp3},
-    types::{PcmChunk, PcmSpec},
+    types::{PcmChunk, PcmSpec, TrackMetadata},
 };
 
 /// Configuration for Android MediaCodec decoder.
@@ -31,6 +31,7 @@ pub struct AndroidConfig {
 /// Android MediaCodec decoder inner state (placeholder).
 struct AndroidInner {
     spec: PcmSpec,
+    metadata: TrackMetadata,
     byte_len_handle: Arc<AtomicU64>,
 }
 
@@ -109,6 +110,10 @@ impl<C: CodecType> InnerDecoder for Android<C> {
 
     fn duration(&self) -> Option<Duration> {
         AudioDecoder::duration(self)
+    }
+
+    fn metadata(&self) -> TrackMetadata {
+        self.inner.metadata.clone()
     }
 }
 

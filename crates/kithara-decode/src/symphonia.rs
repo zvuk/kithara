@@ -38,7 +38,7 @@ use symphonia::core::{
 use crate::{
     error::{DecodeError, DecodeResult},
     traits::{Aac, AudioDecoder, CodecType, Flac, Mp3, Vorbis},
-    types::{PcmChunk, PcmSpec},
+    types::{PcmChunk, PcmSpec, TrackMetadata},
 };
 
 /// Configuration for Symphonia-based decoders.
@@ -75,6 +75,7 @@ struct SymphoniaInner {
     spec: PcmSpec,
     position: Duration,
     duration: Option<Duration>,
+    metadata: TrackMetadata,
     /// Handle for dynamic byte length updates.
     byte_len_handle: Arc<AtomicU64>,
 }
@@ -152,6 +153,9 @@ impl SymphoniaInner {
         // Calculate duration if available
         let duration = Self::calculate_duration(&track);
 
+        // Extract metadata (will be populated from format_reader later if available)
+        let metadata = TrackMetadata::default();
+
         Ok(Self {
             format_reader,
             decoder,
@@ -159,6 +163,7 @@ impl SymphoniaInner {
             spec,
             position: Duration::ZERO,
             duration,
+            metadata,
             byte_len_handle,
         })
     }
@@ -379,6 +384,14 @@ impl<C: CodecType> InnerDecoder for Symphonia<C> {
 
     fn duration(&self) -> Option<Duration> {
         AudioDecoder::duration(self)
+    }
+
+    fn metadata(&self) -> TrackMetadata {
+        self.inner.metadata.clone()
+    }
+
+    fn reset(&mut self) {
+        self.inner.decoder.reset();
     }
 }
 

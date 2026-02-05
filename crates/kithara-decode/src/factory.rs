@@ -22,7 +22,7 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
-use kithara_stream::{AudioCodec, ContainerFormat};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
 use crate::{
     error::{DecodeError, DecodeResult},
@@ -325,6 +325,68 @@ impl DecoderFactory {
             }
             AudioCodec::Adpcm => Err(DecodeError::UnsupportedCodec(codec)),
         }
+    }
+
+    /// Create decoder from MediaInfo (for kithara-audio compatibility).
+    ///
+    /// This is a convenience method that extracts codec from MediaInfo
+    /// and creates the appropriate decoder.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The audio data source
+    /// * `media_info` - Media information containing codec/container hints
+    /// * `config` - Decoder configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns error if no codec can be determined or decoder creation fails.
+    pub fn create_from_media_info<R>(
+        source: R,
+        media_info: &MediaInfo,
+        config: DecoderConfig,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        let hint = ProbeHint {
+            codec: media_info.codec,
+            container: media_info.container,
+            extension: None,
+            mime: None,
+        };
+
+        Self::create(source, CodecSelector::Probe(hint), config)
+    }
+
+    /// Create decoder with probing (for kithara-audio compatibility).
+    ///
+    /// This is a convenience method that creates a decoder by probing
+    /// the source with optional file extension hint.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The audio data source
+    /// * `hint` - Optional file extension hint (e.g., "mp3", "aac")
+    /// * `config` - Decoder configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns error if codec cannot be probed or decoder creation fails.
+    pub fn create_with_probe<R>(
+        source: R,
+        hint: Option<&str>,
+        config: DecoderConfig,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        let probe_hint = ProbeHint {
+            extension: hint.map(String::from),
+            ..Default::default()
+        };
+
+        Self::create(source, CodecSelector::Probe(probe_hint), config)
     }
 }
 

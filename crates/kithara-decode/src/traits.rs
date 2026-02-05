@@ -12,7 +12,7 @@ use kithara_stream::AudioCodec;
 
 use crate::{
     error::DecodeResult,
-    types::{PcmChunk, PcmSpec},
+    types::{PcmChunk, PcmSpec, TrackMetadata},
 };
 
 /// Marker trait for codec types.
@@ -138,6 +138,16 @@ pub trait InnerDecoder: Send + 'static {
     ///
     /// Returns `None` if duration cannot be determined.
     fn duration(&self) -> Option<Duration>;
+
+    /// Get track metadata (title, artist, album, artwork).
+    ///
+    /// Returns default metadata if not available.
+    fn metadata(&self) -> TrackMetadata {
+        TrackMetadata::default()
+    }
+
+    /// Reset decoder state (called after seek).
+    fn reset(&mut self) {}
 }
 
 #[cfg(test)]
