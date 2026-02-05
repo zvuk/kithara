@@ -14,13 +14,16 @@ use kanal::Receiver;
 use kithara_bufpool::{PcmPool, byte_pool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_stream::{EpochValidator, Fetch, Stream, StreamType};
-use tokio::sync::{Notify, broadcast};
+use tokio::{
+    sync::{Notify, broadcast},
+    task::spawn_blocking,
+};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
 use super::{
     config::{AudioConfig, create_effects, expected_output_spec},
-    stream_source::{SharedStream, StreamAudioSource},
+    stream_source::{OffsetReader, SharedStream, StreamAudioSource},
     worker::{AudioCommand, run_audio_loop},
 };
 use crate::{
@@ -410,11 +413,16 @@ where
         }
 
         // Trigger first segment load to get MediaInfo for proper decoder creation.
-        let mut probe_buf = byte_pool().get_with(|b| b.resize(1024, 0));
-        let _ = stream.read(&mut probe_buf);
-
-        // Seek back to start
-        stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
+        let stream_join = spawn_blocking(move || {
+            let mut stream = stream;
+            let mut probe_buf = byte_pool().get_with(|b| b.resize(1024, 0));
+            let _ = stream.read(&mut probe_buf);
+            stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
+            Ok::<_, DecodeError>(stream)
+        })
+        .await
+        .map_err(|e| DecodeError::Io(std::io::Error::other(format!("probe task panicked: {e}"))))?;
+        let stream = stream_join?;
 
         // Get initial MediaInfo
         let initial_media_info = stream.media_info();
@@ -467,13 +475,49 @@ where
             let _ = emit_unified_tx.send(AudioPipelineEvent::Audio(event));
         });
 
+        // Factory for creating decoders after ABR switch.
+        // Captures PcmPool for decoder instantiation.
+        let factory_pool = pool.clone();
+        let decoder_factory: super::stream_source::DecoderFactory<T> =
+            Box::new(move |stream, info, base_offset| {
+                let reader = OffsetReader::new(stream.clone(), base_offset);
+                match kithara_decode::Decoder::new_from_media_info(
+                    reader,
+                    info,
+                    factory_pool.clone(),
+                ) {
+                    Ok(d) => {
+                        d.update_byte_len(0);
+                        Some(Box::new(d))
+                    }
+                    Err(e) => {
+                        warn!(?e, "Failed to recreate decoder, trying probe fallback");
+                        let reader = OffsetReader::new(stream, base_offset);
+                        match kithara_decode::Decoder::new_with_probe(
+                            reader,
+                            None,
+                            factory_pool.clone(),
+                        ) {
+                            Ok(d) => {
+                                d.update_byte_len(0);
+                                Some(Box::new(d))
+                            }
+                            Err(e) => {
+                                warn!(?e, "Probe fallback also failed");
+                                None
+                            }
+                        }
+                    }
+                }
+            });
+
         // Use StreamAudioSource for format change detection
         let audio_source = StreamAudioSource::new(
             shared_stream,
-            symphonia,
+            Box::new(symphonia),
+            decoder_factory,
             initial_media_info,
             Arc::clone(&epoch),
-            pool.clone(),
             effects,
         )
         .with_emit(emit);

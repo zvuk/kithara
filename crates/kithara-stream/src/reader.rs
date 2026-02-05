@@ -122,7 +122,10 @@ impl<S: Source> Seek for Reader<S> {
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "seek past EOF",
+                format!(
+                    "seek past EOF: new_pos={new_pos} len={len} current_pos={} seek_from={pos:?}",
+                    self.pos
+                ),
             ));
         }
 

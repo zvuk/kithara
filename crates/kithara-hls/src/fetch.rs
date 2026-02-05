@@ -324,6 +324,57 @@ impl<N: Net> FetchManager<N> {
 
         Ok((media_url, playlist))
     }
+
+    /// Get Content-Length for a URL using HEAD request.
+    ///
+    /// Returns the size in bytes if Content-Length header is present and parseable.
+    pub async fn get_content_length(&self, url: &Url) -> HlsResult<u64> {
+        let headers = self.net.head(url.clone(), None).await?;
+        let content_length = headers
+            .get("content-length")
+            .or_else(|| headers.get("Content-Length"))
+            .ok_or_else(|| {
+                HlsError::InvalidUrl(format!(
+                    "No Content-Length header in HEAD response for {}",
+                    url
+                ))
+            })?;
+
+        content_length.parse::<u64>().map_err(|e| {
+            HlsError::InvalidUrl(format!(
+                "Invalid Content-Length '{}' for {}: {}",
+                content_length, url, e
+            ))
+        })
+    }
+
+    /// Get URLs for all segments in a variant (init + media segments).
+    ///
+    /// Returns (init_url, media_urls) where init_url is None for TS streams.
+    /// Does NOT download segments — only resolves URLs from playlist.
+    pub async fn get_segment_urls(&self, variant: usize) -> HlsResult<(Option<Url>, Vec<Url>)> {
+        let (media_url, playlist) = self.load_media_playlist(variant).await?;
+
+        let init_url = if let Some(ref init_segment) = playlist.init_segment {
+            Some(media_url.join(&init_segment.uri).map_err(|e| {
+                HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {}", e))
+            })?)
+        } else {
+            None
+        };
+
+        let media_urls: Result<Vec<Url>, HlsError> = playlist
+            .segments
+            .iter()
+            .map(|segment| {
+                media_url.join(&segment.uri).map_err(|e| {
+                    HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e))
+                })
+            })
+            .collect();
+
+        Ok((init_url, media_urls?))
+    }
 }
 
 impl FetchManager<HttpClient> {
@@ -836,8 +887,7 @@ mod tests {
         stream_setup(&mut mock);
 
         let master_url = Url::parse("http://test.com/master.m3u8").unwrap();
-        FetchManager::with_net(assets, mock, CancellationToken::new())
-            .with_master_url(master_url)
+        FetchManager::with_net(assets, mock, CancellationToken::new()).with_master_url(master_url)
     }
 
     #[tokio::test]

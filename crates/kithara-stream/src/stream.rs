@@ -141,6 +141,16 @@ impl<T: StreamType> Stream<T> {
         self.pending_format_change = Some(info);
     }
 
+    /// Get total length if known.
+    pub fn len(&self) -> Option<u64> {
+        self.reader.len()
+    }
+
+    /// Check if length is zero or unknown.
+    pub fn is_empty(&self) -> bool {
+        self.reader.is_empty()
+    }
+
     /// Get current segment byte range (for segmented sources like HLS).
     pub fn current_segment_range(&self) -> Option<std::ops::Range<u64>> {
         self.reader.current_segment_range()

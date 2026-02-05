@@ -2,11 +2,11 @@
 
 // ────────────────────────────────── Trait ──────────────────────────────────
 
-/// Generic audio decoder trait (internal).
+/// Generic audio decoder trait.
 ///
 /// Implementations:
 /// - `Decoder` - production decoder using Symphonia (AAC/MP3/FLAC/etc)
-/// - `MockDecoder` - test decoder for unit tests
+/// - Mock implementations for unit tests
 pub trait InnerDecoder: Send + 'static {
     /// Decode next chunk of audio.
     ///
@@ -18,13 +18,31 @@ pub trait InnerDecoder: Send + 'static {
 
     /// Get PCM specification (sample rate, channels).
     fn spec(&self) -> PcmSpec;
+
+    /// Seek to absolute time position.
+    fn seek(&mut self, pos: Duration) -> DecodeResult<()>;
+
+    /// Update the byte length reported to the underlying media source.
+    ///
+    /// For HLS streams, the total length becomes known after metadata
+    /// calculation. Call this before seeking so the decoder can compute
+    /// correct seek deltas.
+    fn update_byte_len(&self, len: u64);
+
+    /// Get total duration from track metadata.
+    ///
+    /// Returns `None` if duration cannot be determined (e.g. streaming sources).
+    fn duration(&self) -> Option<Duration>;
 }
 
 // ─────────────────────────── Symphonia Implementation ─────────────────────
 
 use std::{
     io::{Read, Seek},
-    sync::{Arc, LazyLock},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -69,6 +87,9 @@ pub struct Decoder {
     track_id: u32,
     spec: PcmSpec,
     pcm_pool: PcmPool,
+    /// Handle to update MediaSource byte_len dynamically.
+    /// For HLS streams, the total length becomes known after metadata calculation.
+    byte_len_handle: Option<Arc<AtomicU64>>,
 }
 
 impl Decoder {
@@ -79,8 +100,9 @@ impl Decoder {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        let mss =
-            MediaSourceStream::new(Box::new(ReadSeekAdapter::new(reader)), Default::default());
+        let adapter = ReadSeekAdapter::new(reader);
+        let byte_len_handle = adapter.byte_len_handle();
+        let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
 
         let mut probe_hint = Hint::new();
         if let Some(ext) = hint {
@@ -113,6 +135,7 @@ impl Decoder {
             track_id,
             spec,
             pcm_pool,
+            byte_len_handle: Some(byte_len_handle),
         })
     }
 
@@ -141,29 +164,38 @@ impl Decoder {
         let needs_fmp4_adapter = media_info.container == Some(ContainerFormat::Fmp4)
             || media_info.codec == Some(AudioCodec::Flac);
 
-        let format_reader: Box<dyn FormatReader> = if needs_fmp4_adapter {
-            // Create adapter and save seekable flag before passing to MSS
-            let adapter = StreamingFmp4Adapter::new(reader);
-            let seekable_flag = adapter.seekable_flag();
+        let (format_reader, byte_len_handle): (Box<dyn FormatReader>, Arc<AtomicU64>) =
+            if needs_fmp4_adapter {
+                // Create adapter and save seekable/byte_len flags before passing to MSS
+                let adapter = StreamingFmp4Adapter::new(reader);
+                let seekable_flag = adapter.seekable_flag();
+                let blh = adapter.byte_len_handle();
 
-            let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
-            let reader = create_format_reader_direct(
-                mss,
-                media_info.container,
-                media_info.codec,
-                format_opts,
-            )?;
+                let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
+                let reader = create_format_reader_direct(
+                    mss,
+                    media_info.container,
+                    media_info.codec,
+                    format_opts,
+                )?;
 
-            // Probe complete - enable seeking for playback
-            seekable_flag.store(true, std::sync::atomic::Ordering::Release);
-            tracing::debug!("fMP4 probe complete, seek enabled");
+                // Probe complete - enable seeking for playback
+                seekable_flag.store(true, std::sync::atomic::Ordering::Release);
+                tracing::debug!("fMP4 probe complete, seek enabled");
 
-            reader
-        } else {
-            let mss =
-                MediaSourceStream::new(Box::new(ReadSeekAdapter::new(reader)), Default::default());
-            create_format_reader_direct(mss, media_info.container, media_info.codec, format_opts)?
-        };
+                (reader, blh)
+            } else {
+                let adapter = ReadSeekAdapter::new(reader);
+                let blh = adapter.byte_len_handle();
+                let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
+                let reader = create_format_reader_direct(
+                    mss,
+                    media_info.container,
+                    media_info.codec,
+                    format_opts,
+                )?;
+                (reader, blh)
+            };
 
         let track = format_reader
             .default_track(TrackType::Audio)
@@ -181,6 +213,7 @@ impl Decoder {
             track_id,
             spec,
             pcm_pool,
+            byte_len_handle: Some(byte_len_handle),
         })
     }
 
@@ -196,8 +229,9 @@ impl Decoder {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        let mss =
-            MediaSourceStream::new(Box::new(ReadSeekAdapter::new(reader)), Default::default());
+        let adapter = ReadSeekAdapter::new(reader);
+        let byte_len_handle = adapter.byte_len_handle();
+        let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
 
         let format_opts = FormatOptions {
             enable_gapless: true,
@@ -224,6 +258,7 @@ impl Decoder {
             track_id,
             spec,
             pcm_pool,
+            byte_len_handle: Some(byte_len_handle),
         })
     }
 
@@ -292,6 +327,17 @@ impl Decoder {
         self.decoder.reset();
     }
 
+    /// Update the byte length reported to symphonia's MediaSource.
+    ///
+    /// For HLS streams, the total length becomes known after metadata
+    /// calculation (which happens asynchronously). Call this before seeking
+    /// so symphonia can compute correct seek deltas.
+    pub fn update_byte_len(&self, len: u64) {
+        if let Some(ref handle) = self.byte_len_handle {
+            handle.store(len, Ordering::Release);
+        }
+    }
+
     /// Seek to absolute time position.
     ///
     /// This is best-effort and may not be frame-accurate.
@@ -300,6 +346,12 @@ impl Decoder {
             time: Time::new(pos.as_secs(), pos.subsec_nanos() as f64 / 1_000_000_000.0),
             track_id: Some(self.track_id),
         };
+
+        tracing::debug!(
+            position_secs = pos.as_secs_f64(),
+            track_id = self.track_id,
+            "sending seek to symphonia"
+        );
 
         self.format_reader
             .seek(SeekMode::Accurate, seek_to)
@@ -497,13 +549,36 @@ fn probe_fallback<'a>(
         .map_err(DecodeError::Symphonia)
 }
 
-struct ReadSeekAdapter<R> {
-    inner: R,
+/// Probe stream length via `Seek::seek(End(0))` + restore position.
+///
+/// Returns `Some(len)` if the stream supports `SeekFrom::End`.
+/// Returns `None` for streams without known length (e.g. live HLS).
+fn probe_byte_len<R: Seek>(reader: &mut R) -> Option<u64> {
+    let current = reader.stream_position().ok()?;
+    let end = reader.seek(std::io::SeekFrom::End(0)).ok()?;
+    reader.seek(std::io::SeekFrom::Start(current)).ok()?;
+    Some(end)
 }
 
-impl<R> ReadSeekAdapter<R> {
-    fn new(inner: R) -> Self {
-        Self { inner }
+struct ReadSeekAdapter<R> {
+    inner: R,
+    /// Dynamic byte length. Updated externally via `Arc<AtomicU64>`.
+    /// 0 means unknown (returns None from byte_len()).
+    byte_len: Arc<AtomicU64>,
+}
+
+impl<R: Seek> ReadSeekAdapter<R> {
+    fn new(mut inner: R) -> Self {
+        let byte_len = Arc::new(AtomicU64::new(0));
+        // Try static probe (works for Cursor, File, etc.)
+        if let Some(len) = probe_byte_len(&mut inner) {
+            byte_len.store(len, Ordering::Release);
+        }
+        Self { inner, byte_len }
+    }
+
+    fn byte_len_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.byte_len)
     }
 }
 
@@ -525,7 +600,8 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for ReadSeek
     }
 
     fn byte_len(&self) -> Option<u64> {
-        None
+        let len = self.byte_len.load(Ordering::Acquire);
+        if len > 0 { Some(len) } else { None }
     }
 }
 
@@ -537,20 +613,31 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for ReadSeek
 struct StreamingFmp4Adapter<R> {
     inner: R,
     seekable: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Dynamic byte length — updated externally via `Arc<AtomicU64>`.
+    byte_len: Arc<AtomicU64>,
 }
 
-impl<R> StreamingFmp4Adapter<R> {
-    fn new(inner: R) -> Self {
+impl<R: Seek> StreamingFmp4Adapter<R> {
+    fn new(mut inner: R) -> Self {
+        let byte_len = Arc::new(AtomicU64::new(0));
+        if let Some(len) = probe_byte_len(&mut inner) {
+            byte_len.store(len, Ordering::Release);
+        }
         Self {
             inner,
-            // Start with seekable=false during probe
             seekable: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            byte_len,
         }
     }
 
     /// Get a clone of the seekable flag for external control.
     fn seekable_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
         std::sync::Arc::clone(&self.seekable)
+    }
+
+    /// Get a clone of the byte_len handle for external updates.
+    fn byte_len_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.byte_len)
     }
 }
 
@@ -572,7 +659,8 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for Streamin
     }
 
     fn byte_len(&self) -> Option<u64> {
-        None
+        let len = self.byte_len.load(Ordering::Acquire);
+        if len > 0 { Some(len) } else { None }
     }
 }
 
@@ -584,6 +672,18 @@ impl InnerDecoder for Decoder {
 
     fn spec(&self) -> PcmSpec {
         Decoder::spec(self)
+    }
+
+    fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
+        Decoder::seek(self, pos)
+    }
+
+    fn update_byte_len(&self, len: u64) {
+        Decoder::update_byte_len(self, len)
+    }
+
+    fn duration(&self) -> Option<Duration> {
+        Decoder::duration(self)
     }
 }
 
@@ -1086,5 +1186,96 @@ mod tests {
         let debug_str = format!("{:?}", cached);
 
         assert!(debug_str.contains("CachedCodecInfo"));
+    }
+
+    // ========================================================================
+    // byte_len propagation tests (fix for seek overflow bug)
+    // ========================================================================
+
+    #[test]
+    fn read_seek_adapter_reports_byte_len() {
+        use symphonia::core::io::MediaSource;
+
+        let wav_data = create_test_wav(1000, 44100, 2);
+        let expected_len = wav_data.len() as u64;
+        let cursor = Cursor::new(wav_data);
+        let adapter = ReadSeekAdapter::new(cursor);
+
+        assert_eq!(
+            adapter.byte_len(),
+            Some(expected_len),
+            "ReadSeekAdapter must report byte_len for correct symphonia seeking"
+        );
+    }
+
+    #[test]
+    fn streaming_fmp4_adapter_reports_byte_len() {
+        use symphonia::core::io::MediaSource;
+
+        let wav_data = create_test_wav(1000, 44100, 2);
+        let expected_len = wav_data.len() as u64;
+        let cursor = Cursor::new(wav_data);
+        let adapter = StreamingFmp4Adapter::new(cursor);
+
+        assert_eq!(
+            adapter.byte_len(),
+            Some(expected_len),
+            "StreamingFmp4Adapter must report byte_len for correct symphonia seeking"
+        );
+    }
+
+    #[test]
+    fn probe_byte_len_restores_position() {
+        let data = vec![0u8; 5000];
+        let mut cursor = Cursor::new(data);
+
+        // Move to middle
+        cursor.set_position(2500);
+
+        let len = probe_byte_len(&mut cursor);
+        assert_eq!(len, Some(5000));
+
+        // Position must be restored
+        assert_eq!(cursor.position(), 2500);
+    }
+
+    /// Dynamic byte_len update via handle — the core fix for HLS seek bug.
+    ///
+    /// At construction time, HLS streams may not know their total length.
+    /// The byte_len handle allows updating the value later, before seeking.
+    #[test]
+    fn byte_len_handle_dynamic_update() {
+        use symphonia::core::io::MediaSource;
+
+        // Simulate HLS: a reader that fails seek(End(0)) at construction time.
+        // We use a Cursor but manually override the probed value via handle.
+        let wav_data = create_test_wav(1000, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+        let adapter = ReadSeekAdapter::new(cursor);
+        let handle = adapter.byte_len_handle();
+
+        // Static probe succeeded for Cursor — override to 0 to simulate HLS case
+        handle.store(0, Ordering::Release);
+        assert_eq!(adapter.byte_len(), None, "0 should mean unknown");
+
+        // Simulate metadata calculation completing: update byte_len
+        handle.store(1_890_485, Ordering::Release);
+        assert_eq!(
+            adapter.byte_len(),
+            Some(1_890_485),
+            "byte_len should reflect the updated value"
+        );
+    }
+
+    /// Decoder::update_byte_len() propagates to the adapter.
+    #[test]
+    fn decoder_update_byte_len() {
+        let wav_data = create_test_wav(1000, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        let decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
+
+        // update_byte_len should not panic (handle exists)
+        decoder.update_byte_len(1_000_000);
     }
 }

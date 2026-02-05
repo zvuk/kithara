@@ -273,7 +273,11 @@ impl FileDownloader {
                         }
                     }
                 }
-                tracing::debug!(start = range.start, end = range.end, "on-demand range fetched");
+                tracing::debug!(
+                    start = range.start,
+                    end = range.end,
+                    "on-demand range fetched"
+                );
             }
             Err(e) => {
                 tracing::warn!(?e, "failed to start on-demand range request");
@@ -288,7 +292,11 @@ impl Downloader for FileDownloader {
     async fn step(&mut self) -> bool {
         // Check for on-demand range requests first (higher priority)
         if let Some(range) = self.shared.pop_range_request() {
-            tracing::debug!(start = range.start, end = range.end, "processing on-demand range request");
+            tracing::debug!(
+                start = range.start,
+                end = range.end,
+                "processing on-demand range request"
+            );
             self.fetch_range(range).await;
             return true;
         }

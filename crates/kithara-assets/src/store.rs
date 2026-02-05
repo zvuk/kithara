@@ -3,10 +3,9 @@
 use std::{hash::Hash, path::PathBuf, sync::Arc};
 
 use kithara_bufpool::{BytePool, byte_pool};
+use kithara_storage::StorageResource;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
-
-use kithara_storage::StorageResource;
 
 use crate::{
     base::DiskAssetStore,
