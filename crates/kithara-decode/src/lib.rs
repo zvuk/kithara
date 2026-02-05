@@ -12,6 +12,7 @@
 
 mod decoder;
 mod error;
+mod symphonia;
 mod traits;
 mod types;
 

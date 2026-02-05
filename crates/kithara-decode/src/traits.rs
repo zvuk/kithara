@@ -6,13 +6,17 @@
 // Types are not yet exported but will be used in later tasks
 #![allow(dead_code)]
 
-use std::io::{Read, Seek};
-use std::time::Duration;
+use std::{
+    io::{Read, Seek},
+    time::Duration,
+};
 
 use kithara_stream::AudioCodec;
 
-use crate::error::DecodeResult;
-use crate::types::{PcmChunk, PcmSpec};
+use crate::{
+    error::DecodeResult,
+    types::{PcmChunk, PcmSpec},
+};
 
 /// Marker trait for codec types.
 ///
