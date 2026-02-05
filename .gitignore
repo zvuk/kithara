@@ -45,3 +45,4 @@ dhat-heap.json
 # Performance monitoring outputs
 target/hotpath-*.json
 hotpath-*.json
+.worktrees/
