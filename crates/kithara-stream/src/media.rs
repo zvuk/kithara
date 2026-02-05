@@ -12,6 +12,10 @@ pub enum ContainerFormat {
     MpegTs,
     /// MPEG Audio (MP3 without container)
     MpegAudio,
+    /// AAC ADTS (raw AAC with ADTS framing)
+    Adts,
+    /// FLAC (native FLAC stream)
+    Flac,
     /// RIFF WAVE
     Wav,
     /// Ogg container
@@ -193,6 +197,8 @@ mod tests {
     #[case(ContainerFormat::Fmp4)]
     #[case(ContainerFormat::MpegTs)]
     #[case(ContainerFormat::MpegAudio)]
+    #[case(ContainerFormat::Adts)]
+    #[case(ContainerFormat::Flac)]
     #[case(ContainerFormat::Wav)]
     #[case(ContainerFormat::Ogg)]
     #[case(ContainerFormat::Caf)]

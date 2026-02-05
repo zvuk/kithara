@@ -24,7 +24,7 @@ use crate::{
 /// ```ignore
 /// use kithara_decode::{Decoder, SymphoniaAac, SymphoniaConfig};
 ///
-/// let decoder = Decoder::<SymphoniaAac>::new(file, SymphoniaConfig::default())?;
+/// let decoder = Decoder::<SymphoniaAac>::new(file, wav_config())?;
 /// while let Some(chunk) = decoder.next_chunk()? {
 ///     // Process PCM
 /// }
@@ -107,7 +107,7 @@ impl<D: AudioDecoder> Decoder<D> {
 mod tests {
     use std::io::Cursor;
 
-    use kithara_stream::AudioCodec;
+    use kithara_stream::{AudioCodec, ContainerFormat};
 
     use super::*;
     use crate::{symphonia::SymphoniaConfig, traits::CodecType};
@@ -119,6 +119,13 @@ mod tests {
     }
 
     type TestDecoder = Decoder<crate::symphonia::Symphonia<Pcm>>;
+
+    fn wav_config() -> SymphoniaConfig {
+        SymphoniaConfig {
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        }
+    }
 
     /// Create minimal valid WAV file (PCM 16-bit stereo, 44100Hz)
     fn create_test_wav(sample_count: usize, sample_rate: u32, channels: u16) -> Vec<u8> {
@@ -165,7 +172,7 @@ mod tests {
         let wav = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav);
 
-        let decoder = TestDecoder::new(cursor, SymphoniaConfig::default());
+        let decoder = TestDecoder::new(cursor, wav_config());
         assert!(decoder.is_ok());
 
         let decoder = decoder.unwrap();
@@ -178,7 +185,7 @@ mod tests {
         let wav = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav);
 
-        let mut decoder = TestDecoder::new(cursor, SymphoniaConfig::default()).unwrap();
+        let mut decoder = TestDecoder::new(cursor, wav_config()).unwrap();
 
         let chunk = decoder.next_chunk().unwrap();
         assert!(chunk.is_some());
@@ -193,7 +200,7 @@ mod tests {
         let wav = create_test_wav(44100, 44100, 2); // 1 second
         let cursor = Cursor::new(wav);
 
-        let mut decoder = TestDecoder::new(cursor, SymphoniaConfig::default()).unwrap();
+        let mut decoder = TestDecoder::new(cursor, wav_config()).unwrap();
 
         // Read a chunk
         let _ = decoder.next_chunk().unwrap();
@@ -211,7 +218,7 @@ mod tests {
         let wav = create_test_wav(44100, 44100, 2);
         let cursor = Cursor::new(wav);
 
-        let mut decoder = TestDecoder::new(cursor, SymphoniaConfig::default()).unwrap();
+        let mut decoder = TestDecoder::new(cursor, wav_config()).unwrap();
 
         assert_eq!(decoder.position(), Duration::ZERO);
 
@@ -227,7 +234,7 @@ mod tests {
         let wav = create_test_wav(44100, 44100, 2); // 1 second
         let cursor = Cursor::new(wav);
 
-        let decoder = TestDecoder::new(cursor, SymphoniaConfig::default()).unwrap();
+        let decoder = TestDecoder::new(cursor, wav_config()).unwrap();
 
         let duration = decoder.duration();
         assert!(duration.is_some());
@@ -241,7 +248,7 @@ mod tests {
         let wav = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav);
 
-        let decoder = TestDecoder::new(cursor, SymphoniaConfig::default()).unwrap();
+        let decoder = TestDecoder::new(cursor, wav_config()).unwrap();
 
         // Test inner() returns reference
         let _inner = decoder.inner();
@@ -252,7 +259,7 @@ mod tests {
         let wav = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav);
 
-        let decoder = TestDecoder::new(cursor, SymphoniaConfig::default()).unwrap();
+        let decoder = TestDecoder::new(cursor, wav_config()).unwrap();
 
         // Consume and get inner
         let inner = decoder.into_inner();

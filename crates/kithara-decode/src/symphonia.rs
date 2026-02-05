@@ -3,14 +3,25 @@
 //! This module provides the generic [`Symphonia<C>`] decoder that implements
 //! [`AudioDecoder`] for any codec type implementing [`CodecType`].
 //!
+//! # Direct Reader Creation (No Probe)
+//!
+//! When `ContainerFormat` is provided in config, the decoder creates the
+//! appropriate format reader directly without probing. This is critical
+//! for HLS streams where format is known from playlist metadata.
+//!
 //! # Example
 //!
 //! ```ignore
 //! use kithara_decode::{Symphonia, SymphoniaConfig, SymphoniaMp3};
 //! use kithara_decode::AudioDecoder;
+//! use kithara_stream::ContainerFormat;
 //!
 //! let file = std::fs::File::open("audio.mp3")?;
-//! let decoder = SymphoniaMp3::create(file, SymphoniaConfig::default())?;
+//! let config = SymphoniaConfig {
+//!     container: Some(ContainerFormat::MpegAudio),
+//!     ..Default::default()
+//! };
+//! let decoder = SymphoniaMp3::create(file, config)?;
 //! ```
 
 use std::{
@@ -18,21 +29,24 @@ use std::{
     marker::PhantomData,
     sync::{
         Arc,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
 };
 
+use kithara_stream::ContainerFormat;
 use symphonia::core::{
     codecs::{
         CodecParameters,
         audio::{AudioDecoder as SymphoniaAudioDecoder, AudioDecoderOptions},
     },
     errors::Error as SymphoniaError,
-    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
+    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType},
     io::MediaSourceStream,
-    meta::MetadataOptions,
     units::Time,
+};
+use symphonia::default::formats::{
+    AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader,
 };
 
 use crate::{
@@ -42,7 +56,7 @@ use crate::{
 };
 
 /// Configuration for Symphonia-based decoders.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SymphoniaConfig {
     /// Enable data verification (slower but safer).
     pub verify: bool,
@@ -50,22 +64,12 @@ pub struct SymphoniaConfig {
     pub gapless: bool,
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
-    /// File extension hint for Symphonia probe (e.g., "mp4", "mp3").
+    /// Container format for direct reader creation (no probe).
     ///
-    /// When set, overrides the codec-based hint. Use this when container
-    /// format is known (e.g., "mp4" for HLS fMP4 streams).
-    pub hint: Option<String>,
-}
-
-impl Default for SymphoniaConfig {
-    fn default() -> Self {
-        Self {
-            verify: false,
-            gapless: true,
-            byte_len_handle: None,
-            hint: None,
-        }
-    }
+    /// When set, bypasses Symphonia's probe mechanism and creates
+    /// the appropriate format reader directly. This is critical for
+    /// HLS streams where the container format is known from playlist.
+    pub container: Option<ContainerFormat>,
 }
 
 // ────────────────────────────────── Inner ──────────────────────────────────
@@ -88,38 +92,110 @@ struct SymphoniaInner {
 
 impl SymphoniaInner {
     /// Create a new inner decoder from a Read + Seek source.
-    fn new<R>(source: R, config: &SymphoniaConfig, hint: Option<&str>) -> DecodeResult<Self>
+    ///
+    /// When `container` is specified in config, creates the format reader
+    /// directly without probing. Otherwise falls back to probe.
+    fn new<R>(source: R, config: &SymphoniaConfig) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        // Wrap source in our adapter that tracks byte length
-        let adapter = ReadSeekAdapter::new(source);
+        // Create format reader directly - container MUST be specified
+        let container = config
+            .container
+            .ok_or(DecodeError::InvalidData("Container format must be specified".to_string()))?;
+
+        // Disable seek during initialization for ALL containers.
+        // Some format readers (IsoMp4Reader) try to seek to end looking for atoms,
+        // which breaks streaming scenarios. After initialization, seek is enabled.
+        let adapter = ReadSeekAdapter::new_seek_disabled(source);
+
         let byte_len_handle = if let Some(ref handle) = config.byte_len_handle {
             Arc::clone(handle)
         } else {
             adapter.byte_len_handle()
         };
 
+        // Keep handle to re-enable seek after initialization
+        let seek_enabled_handle = adapter.seek_enabled_handle();
+
         let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
 
-        // Build probe hint
-        let mut probe_hint = Hint::new();
-        if let Some(ext) = hint {
-            probe_hint.with_extension(ext);
-        }
-
-        // Format and metadata options
+        // Format options
         let format_opts = FormatOptions {
             enable_gapless: config.gapless,
             ..Default::default()
         };
-        let meta_opts = MetadataOptions::default();
 
-        // Probe the format
-        let format_reader = symphonia::default::get_probe()
-            .probe(&probe_hint, mss, format_opts, meta_opts)
-            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        tracing::debug!(?container, "Creating format reader directly (no probe)");
+        let format_reader = Self::create_reader_for_container(mss, container, format_opts)?;
 
+        // Re-enable seek after successful initialization
+        seek_enabled_handle.store(true, Ordering::Release);
+        tracing::debug!("Re-enabled seek after decoder initialization");
+
+        Self::init_from_reader(format_reader, config, byte_len_handle)
+    }
+
+    /// Create format reader directly based on container format (no probe).
+    fn create_reader_for_container(
+        mss: MediaSourceStream<'static>,
+        container: ContainerFormat,
+        format_opts: FormatOptions,
+    ) -> DecodeResult<Box<dyn FormatReader>> {
+        match container {
+            ContainerFormat::Fmp4 => {
+                let reader = IsoMp4Reader::try_new(mss, format_opts)
+                    .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+                Ok(Box::new(reader))
+            }
+            ContainerFormat::MpegAudio => {
+                let reader = MpaReader::try_new(mss, format_opts)
+                    .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+                Ok(Box::new(reader))
+            }
+            ContainerFormat::Adts => {
+                let reader = AdtsReader::try_new(mss, format_opts)
+                    .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+                Ok(Box::new(reader))
+            }
+            ContainerFormat::Flac => {
+                let reader = FlacReader::try_new(mss, format_opts)
+                    .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+                Ok(Box::new(reader))
+            }
+            ContainerFormat::Wav => {
+                let reader = WavReader::try_new(mss, format_opts)
+                    .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+                Ok(Box::new(reader))
+            }
+            ContainerFormat::Ogg => {
+                let reader = OggReader::try_new(mss, format_opts)
+                    .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+                Ok(Box::new(reader))
+            }
+            ContainerFormat::MpegTs => {
+                // MPEG-TS not directly supported by Symphonia
+                Err(DecodeError::UnsupportedContainer(container))
+            }
+            ContainerFormat::Caf => {
+                // CAF requires separate feature, fall back to probe
+                tracing::warn!("CAF container - falling back to probe");
+                Err(DecodeError::UnsupportedContainer(container))
+            }
+            ContainerFormat::Mkv => {
+                // MKV requires separate feature, fall back to probe
+                tracing::warn!("MKV container - falling back to probe");
+                Err(DecodeError::UnsupportedContainer(container))
+            }
+        }
+    }
+
+    /// Initialize decoder from an already-created format reader.
+    fn init_from_reader(
+        format_reader: Box<dyn FormatReader>,
+        config: &SymphoniaConfig,
+        byte_len_handle: Arc<AtomicU64>,
+    ) -> DecodeResult<Self> {
         // Find audio track
         let track = format_reader
             .default_track(TrackType::Audio)
@@ -311,24 +387,6 @@ pub struct Symphonia<C: CodecType> {
     _codec: PhantomData<C>,
 }
 
-impl<C: CodecType> Symphonia<C> {
-    /// Get the file extension hint for this codec.
-    fn codec_hint() -> Option<&'static str> {
-        use kithara_stream::AudioCodec;
-
-        match C::CODEC {
-            AudioCodec::Mp3 => Some("mp3"),
-            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => Some("aac"),
-            AudioCodec::Flac => Some("flac"),
-            AudioCodec::Vorbis => Some("ogg"),
-            AudioCodec::Alac => Some("m4a"),
-            AudioCodec::Opus => Some("opus"),
-            AudioCodec::Pcm => Some("wav"),
-            AudioCodec::Adpcm => Some("wav"),
-        }
-    }
-}
-
 impl<C: CodecType> AudioDecoder for Symphonia<C> {
     type Config = SymphoniaConfig;
 
@@ -337,12 +395,7 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
         R: Read + Seek + Send + Sync + 'static,
         Self: Sized,
     {
-        // Use config.hint if provided, otherwise fall back to codec-based hint
-        let hint: Option<&str> = match &config.hint {
-            Some(h) => Some(h.as_str()),
-            None => Self::codec_hint(),
-        };
-        let inner = SymphoniaInner::new(source, &config, hint)?;
+        let inner = SymphoniaInner::new(source, &config)?;
 
         Ok(Self {
             inner,
@@ -431,20 +484,38 @@ struct ReadSeekAdapter<R> {
     /// Dynamic byte length. Updated externally via `Arc<AtomicU64>`.
     /// 0 means unknown (returns None from byte_len()).
     byte_len: Arc<AtomicU64>,
+    /// Controls whether seek operations are allowed.
+    /// Used to temporarily disable seeking during fMP4 reader initialization
+    /// (prevents IsoMp4Reader from seeking to end looking for moov atom).
+    seek_enabled: Arc<AtomicBool>,
 }
 
 impl<R: Seek> ReadSeekAdapter<R> {
-    fn new(mut inner: R) -> Self {
+    /// Create adapter with seek initially disabled.
+    ///
+    /// Seek is disabled during decoder initialization to prevent format readers
+    /// from seeking to end of stream looking for metadata atoms.
+    /// Call `seek_enabled_handle().store(true, ...)` after initialization.
+    fn new_seek_disabled(mut inner: R) -> Self {
         let byte_len = Arc::new(AtomicU64::new(0));
+        let seek_enabled = Arc::new(AtomicBool::new(false));
         // Try to probe the byte length statically (works for Cursor, File, etc.)
         if let Some(len) = Self::probe_byte_len(&mut inner) {
             byte_len.store(len, Ordering::Release);
         }
-        Self { inner, byte_len }
+        Self {
+            inner,
+            byte_len,
+            seek_enabled,
+        }
     }
 
     fn byte_len_handle(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.byte_len)
+    }
+
+    fn seek_enabled_handle(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.seek_enabled)
     }
 
     /// Probe stream length via `Seek::seek(End(0))` + restore position.
@@ -470,7 +541,7 @@ impl<R: Seek> Seek for ReadSeekAdapter<R> {
 
 impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for ReadSeekAdapter<R> {
     fn is_seekable(&self) -> bool {
-        true
+        self.seek_enabled.load(Ordering::Acquire)
     }
 
     fn byte_len(&self) -> Option<u64> {
@@ -486,14 +557,24 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
-    use crate::traits::{Alac, AudioDecoder};
+    use crate::traits::AudioDecoder;
 
     #[test]
     fn test_symphonia_config_default() {
         let config = SymphoniaConfig::default();
         assert!(!config.verify);
-        assert!(config.gapless);
+        assert!(!config.gapless);
         assert!(config.byte_len_handle.is_none());
+        assert!(config.container.is_none());
+    }
+
+    #[test]
+    fn test_symphonia_config_with_container() {
+        let config = SymphoniaConfig {
+            container: Some(ContainerFormat::Fmp4),
+            ..Default::default()
+        };
+        assert_eq!(config.container, Some(ContainerFormat::Fmp4));
     }
 
     #[test]
@@ -502,15 +583,6 @@ mod tests {
         fn _check_mp3(_: SymphoniaMp3) {}
         fn _check_flac(_: SymphoniaFlac) {}
         fn _check_vorbis(_: SymphoniaVorbis) {}
-    }
-
-    #[test]
-    fn test_codec_hints() {
-        assert_eq!(SymphoniaMp3::codec_hint(), Some("mp3"));
-        assert_eq!(SymphoniaAac::codec_hint(), Some("aac"));
-        assert_eq!(SymphoniaFlac::codec_hint(), Some("flac"));
-        assert_eq!(SymphoniaVorbis::codec_hint(), Some("ogg"));
-        assert_eq!(Symphonia::<Alac>::codec_hint(), Some("m4a"));
     }
 
     /// Create minimal valid WAV file (PCM 16-bit stereo, 44100Hz)
@@ -567,11 +639,16 @@ mod tests {
     type SymphoniaPcm = Symphonia<Pcm>;
 
     #[test]
-    fn test_create_decoder_wav() {
+    fn test_create_decoder_wav_with_container() {
         let wav_data = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let decoder = SymphoniaPcm::create(cursor, SymphoniaConfig::default());
+        // Create with explicit container format (no probe)
+        let config = SymphoniaConfig {
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        };
+        let decoder = SymphoniaPcm::create(cursor, config);
         assert!(decoder.is_ok());
 
         let decoder = decoder.unwrap();
@@ -580,11 +657,26 @@ mod tests {
     }
 
     #[test]
+    fn test_create_decoder_without_container_fails() {
+        let wav_data = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav_data);
+
+        // Create without container - should fail (container is required)
+        let result = SymphoniaPcm::create(cursor, SymphoniaConfig::default());
+        assert!(result.is_err());
+        assert!(matches!(result, Err(DecodeError::InvalidData(_))));
+    }
+
+    #[test]
     fn test_next_chunk_returns_data() {
         let wav_data = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaPcm::create(cursor, SymphoniaConfig::default()).unwrap();
+        let config = SymphoniaConfig {
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        };
+        let mut decoder = SymphoniaPcm::create(cursor, config).unwrap();
 
         let chunk = AudioDecoder::next_chunk(&mut decoder).unwrap();
         assert!(chunk.is_some());
@@ -600,7 +692,11 @@ mod tests {
         let wav_data = create_test_wav(10, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaPcm::create(cursor, SymphoniaConfig::default()).unwrap();
+        let config = SymphoniaConfig {
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        };
+        let mut decoder = SymphoniaPcm::create(cursor, config).unwrap();
 
         // Read all chunks
         while AudioDecoder::next_chunk(&mut decoder).unwrap().is_some() {}
@@ -615,7 +711,11 @@ mod tests {
         let wav_data = create_test_wav(10000, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaPcm::create(cursor, SymphoniaConfig::default()).unwrap();
+        let config = SymphoniaConfig {
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        };
+        let mut decoder = SymphoniaPcm::create(cursor, config).unwrap();
 
         // Read some chunks
         let _ = AudioDecoder::next_chunk(&mut decoder).unwrap();
@@ -634,7 +734,11 @@ mod tests {
         let wav_data = create_test_wav(44100, 44100, 2); // 1 second of audio
         let cursor = Cursor::new(wav_data);
 
-        let mut decoder = SymphoniaPcm::create(cursor, SymphoniaConfig::default()).unwrap();
+        let config = SymphoniaConfig {
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        };
+        let mut decoder = SymphoniaPcm::create(cursor, config).unwrap();
 
         assert_eq!(AudioDecoder::position(&decoder), Duration::ZERO);
 
@@ -650,7 +754,11 @@ mod tests {
         let wav_data = create_test_wav(44100, 44100, 2); // 1 second of audio
         let cursor = Cursor::new(wav_data);
 
-        let decoder = SymphoniaPcm::create(cursor, SymphoniaConfig::default()).unwrap();
+        let config = SymphoniaConfig {
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        };
+        let decoder = SymphoniaPcm::create(cursor, config).unwrap();
 
         let duration = AudioDecoder::duration(&decoder);
         assert!(duration.is_some());
@@ -666,9 +774,14 @@ mod tests {
 
         let data = vec![0u8; 5000];
         let cursor = Cursor::new(data);
-        let adapter = ReadSeekAdapter::new(cursor);
+        let adapter = ReadSeekAdapter::new_seek_disabled(cursor);
 
         assert_eq!(adapter.byte_len(), Some(5000));
+        // Seek is initially disabled
+        assert!(!adapter.is_seekable());
+
+        // Enable seek
+        adapter.seek_enabled_handle().store(true, Ordering::Release);
         assert!(adapter.is_seekable());
     }
 
@@ -678,7 +791,7 @@ mod tests {
 
         let data = vec![0u8; 1000];
         let cursor = Cursor::new(data);
-        let adapter = ReadSeekAdapter::new(cursor);
+        let adapter = ReadSeekAdapter::new_seek_disabled(cursor);
         let handle = adapter.byte_len_handle();
 
         // Override to simulate HLS case
@@ -697,13 +810,13 @@ mod tests {
             verify: true,
             gapless: false,
             byte_len_handle: Some(Arc::clone(&handle)),
-            hint: Some("mp4".to_string()),
+            container: Some(ContainerFormat::Fmp4),
         };
 
         assert!(config.verify);
         assert!(!config.gapless);
         assert!(config.byte_len_handle.is_some());
-        assert_eq!(config.hint, Some("mp4".to_string()));
+        assert_eq!(config.container, Some(ContainerFormat::Fmp4));
     }
 
     #[test]
@@ -711,7 +824,11 @@ mod tests {
         let empty = Vec::new();
         let cursor = Cursor::new(empty);
 
-        let result = SymphoniaPcm::create(cursor, SymphoniaConfig::default());
+        let config = SymphoniaConfig {
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        };
+        let result = SymphoniaPcm::create(cursor, config);
         assert!(result.is_err());
     }
 
@@ -720,7 +837,24 @@ mod tests {
         let corrupted = [0xDE, 0xAD, 0xBE, 0xEF].repeat(100);
         let cursor = Cursor::new(corrupted);
 
-        let result = SymphoniaPcm::create(cursor, SymphoniaConfig::default());
+        let config = SymphoniaConfig {
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        };
+        let result = SymphoniaPcm::create(cursor, config);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unsupported_container_returns_error() {
+        let data = vec![0u8; 100];
+        let cursor = Cursor::new(data);
+
+        let config = SymphoniaConfig {
+            container: Some(ContainerFormat::MpegTs),
+            ..Default::default()
+        };
+        let result = SymphoniaPcm::create(cursor, config);
+        assert!(matches!(result, Err(DecodeError::UnsupportedContainer(_))));
     }
 }

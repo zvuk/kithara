@@ -135,17 +135,14 @@ impl DecoderFactory {
         }
 
         // Build Symphonia config from DecoderConfig
-        // Use container hint for probe if available (critical for HLS fMP4)
-        let hint = container
-            .and_then(Self::container_to_hint)
-            .map(String::from);
-        tracing::debug!(?hint, "Using Symphonia hint");
+        // Pass container directly - Symphonia will create reader without probe
+        tracing::debug!(?container, "Using direct container format (no probe)");
 
         let symphonia_config = SymphoniaConfig {
             verify: false,
             gapless: config.gapless,
             byte_len_handle: config.byte_len_handle,
-            hint,
+            container,
         };
 
         // Create appropriate decoder based on codec
@@ -283,27 +280,13 @@ impl DecoderFactory {
     fn codec_from_container(container: ContainerFormat) -> Option<AudioCodec> {
         match container {
             ContainerFormat::MpegAudio => Some(AudioCodec::Mp3),
+            ContainerFormat::Adts => Some(AudioCodec::AacLc),
+            ContainerFormat::Flac => Some(AudioCodec::Flac),
             ContainerFormat::Ogg => Some(AudioCodec::Vorbis),
             ContainerFormat::Wav => Some(AudioCodec::Pcm),
             ContainerFormat::Fmp4 | ContainerFormat::MpegTs => Some(AudioCodec::AacLc),
             ContainerFormat::Caf => Some(AudioCodec::Alac),
             ContainerFormat::Mkv => None, // Could be anything
-        }
-    }
-
-    /// Map container format to Symphonia probe hint.
-    ///
-    /// This is critical for HLS fMP4 streams where codec hint ("aac")
-    /// doesn't work but container hint ("mp4") does.
-    fn container_to_hint(container: ContainerFormat) -> Option<&'static str> {
-        match container {
-            ContainerFormat::Fmp4 => Some("mp4"),
-            ContainerFormat::MpegAudio => Some("mp3"),
-            ContainerFormat::Ogg => Some("ogg"),
-            ContainerFormat::Wav => Some("wav"),
-            ContainerFormat::Caf => Some("caf"),
-            ContainerFormat::Mkv => Some("mkv"),
-            ContainerFormat::MpegTs => None, // MPEG-TS needs special handling
         }
     }
 
@@ -386,20 +369,20 @@ impl DecoderFactory {
         Self::create(source, CodecSelector::Probe(hint), config)
     }
 
-    /// Create decoder with probing (for kithara-audio compatibility).
+    /// Create decoder from file extension hint.
     ///
-    /// This is a convenience method that creates a decoder by probing
-    /// the source with optional file extension hint.
+    /// This maps the extension to codec and container, then creates
+    /// the appropriate decoder without probing.
     ///
     /// # Arguments
     ///
     /// * `source` - The audio data source
-    /// * `hint` - Optional file extension hint (e.g., "mp3", "aac")
+    /// * `hint` - Optional file extension hint (e.g., "mp3", "wav", "aac")
     /// * `config` - Decoder configuration
     ///
     /// # Errors
     ///
-    /// Returns error if codec cannot be probed or decoder creation fails.
+    /// Returns error if codec cannot be determined or decoder creation fails.
     pub fn create_with_probe<R>(
         source: R,
         hint: Option<&str>,
@@ -410,10 +393,26 @@ impl DecoderFactory {
     {
         let probe_hint = ProbeHint {
             extension: hint.map(String::from),
+            container: hint.and_then(Self::container_from_extension),
             ..Default::default()
         };
 
         Self::create(source, CodecSelector::Probe(probe_hint), config)
+    }
+
+    /// Map file extension to container format.
+    fn container_from_extension(ext: &str) -> Option<ContainerFormat> {
+        match ext.to_lowercase().as_str() {
+            "mp3" => Some(ContainerFormat::MpegAudio),
+            "aac" => Some(ContainerFormat::Adts),
+            "m4a" | "mp4" => Some(ContainerFormat::Fmp4),
+            "flac" => Some(ContainerFormat::Flac),
+            "ogg" | "oga" => Some(ContainerFormat::Ogg),
+            "wav" | "wave" => Some(ContainerFormat::Wav),
+            "mkv" | "webm" => Some(ContainerFormat::Mkv),
+            "caf" => Some(ContainerFormat::Caf),
+            _ => None,
+        }
     }
 }
 
