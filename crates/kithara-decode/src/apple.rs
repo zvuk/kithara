@@ -18,7 +18,7 @@
 use std::{
     collections::VecDeque,
     ffi::c_void,
-    io::{Read, Seek},
+    io::{Read, Seek, SeekFrom},
     marker::PhantomData,
     ptr,
     sync::{
@@ -27,6 +27,12 @@ use std::{
     },
     time::Duration,
 };
+
+// ────────────────────────────────── ReadSeek Trait ──────────────────────────────────
+
+/// Trait combining Read and Seek for use as trait object.
+trait ReadSeek: Read + Seek + Send {}
+impl<T: Read + Seek + Send> ReadSeek for T {}
 
 use kithara_stream::ContainerFormat;
 use tracing::{debug, trace, warn};
@@ -357,8 +363,8 @@ struct AppleInner {
     parser_state: Box<StreamParserState>,
     /// Converter input state.
     converter_input: Box<ConverterInputState>,
-    /// Source reader.
-    source: Box<dyn Read + Send>,
+    /// Source reader (supports both Read and Seek).
+    source: Box<dyn ReadSeek>,
     /// Read buffer for feeding parser.
     read_buffer: Vec<u8>,
     /// Audio spec.
@@ -377,6 +383,12 @@ struct AppleInner {
     source_eof: bool,
     /// Total frames decoded for position tracking.
     frames_decoded: u64,
+    /// Total source length in bytes (for seek calculations).
+    source_len: Option<u64>,
+    /// Current byte position in source.
+    source_byte_pos: u64,
+    /// Data offset where audio data starts (from parser).
+    data_offset: u64,
 }
 
 impl AppleInner {
@@ -391,9 +403,19 @@ impl AppleInner {
         let file_type = container_to_file_type(container)
             .ok_or_else(|| DecodeError::UnsupportedContainer(container))?;
 
+        // Get source length for seek calculations
+        let source_len = source.seek(SeekFrom::End(0)).ok();
+        if source_len.is_some() {
+            source
+                .seek(SeekFrom::Start(0))
+                .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+        }
+
         debug!(
             ?container,
-            file_type, "Apple decoder: creating streaming decoder"
+            file_type,
+            ?source_len,
+            "Apple decoder: creating streaming decoder"
         );
 
         // Create parser state
@@ -585,6 +607,9 @@ impl AppleInner {
             "Apple decoder: initialized successfully"
         );
 
+        // Get data offset from parser state
+        let data_offset = parser_state.data_offset as u64;
+
         Ok(Self {
             stream_parser,
             converter,
@@ -600,6 +625,9 @@ impl AppleInner {
             pcm_buffer,
             source_eof: false,
             frames_decoded: 0,
+            source_len,
+            source_byte_pos: total_parsed as u64,
+            data_offset,
         })
     }
 
@@ -705,6 +733,10 @@ impl AppleInner {
     }
 
     fn feed_parser(&mut self) -> DecodeResult<()> {
+        self.feed_parser_with_flags(0)
+    }
+
+    fn feed_parser_with_flags(&mut self, flags: UInt32) -> DecodeResult<()> {
         let n = self
             .source
             .read(&mut self.read_buffer)
@@ -715,12 +747,14 @@ impl AppleInner {
             return Ok(());
         }
 
+        self.source_byte_pos += n as u64;
+
         let status = unsafe {
             AudioFileStreamParseBytes(
                 self.stream_parser,
                 n as UInt32,
                 self.read_buffer.as_ptr() as *const c_void,
-                0,
+                flags,
             )
         };
 
@@ -735,6 +769,7 @@ impl AppleInner {
 
         trace!(
             bytes = n,
+            byte_pos = self.source_byte_pos,
             packets = self.parser_state.packet_buffer.len(),
             "Apple decoder: fed parser"
         );
@@ -742,36 +777,116 @@ impl AppleInner {
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
-        // Seeking in streaming mode is complex - we'd need to:
-        // 1. Seek in the source
-        // 2. Reset the parser with discontinuity flag
-        // 3. Reset the converter
-        // 4. Re-parse until we reach the target position
+        let target_frame = (pos.as_secs_f64() * self.spec.sample_rate as f64) as u64;
 
-        // For now, just reset and seek source if possible
         debug!(
             position_secs = pos.as_secs_f64(),
+            target_frame,
+            current_frame = self.frames_decoded,
             "Apple decoder: seek requested"
         );
+
+        // Calculate approximate byte offset using bitrate estimation
+        let byte_offset = self.estimate_byte_offset(pos);
+
+        debug!(
+            estimated_byte_offset = byte_offset,
+            data_offset = self.data_offset,
+            "Apple decoder: seeking to byte offset"
+        );
+
+        // Seek in source
+        self.source
+            .seek(SeekFrom::Start(byte_offset))
+            .map_err(|e| DecodeError::SeekFailed(format!("Source seek failed: {}", e)))?;
+
+        self.source_byte_pos = byte_offset;
 
         // Reset converter
         let status = unsafe { AudioConverterReset(self.converter) };
         if status != noErr {
-            warn!(status, err = %os_status_to_string(status), "Apple decoder: converter reset failed");
+            warn!(
+                status,
+                err = %os_status_to_string(status),
+                "Apple decoder: converter reset failed"
+            );
         }
 
         // Clear packet buffer
         while self.parser_state.packet_buffer.pop().is_some() {}
 
-        // Try to cast source to Seek (this won't work with Box<dyn Read>)
-        // For full seek support, we'd need to restructure to keep Seek capability
+        // Clear converter input state
+        self.converter_input.current_packet = None;
+        self.converter_input.held_packet_data = None;
 
-        self.position = pos;
-        self.frames_decoded = (pos.as_secs_f64() * self.spec.sample_rate as f64) as u64;
+        // Reset EOF flag
         self.source_eof = false;
 
-        warn!("Apple decoder: seek in streaming mode has limited support");
+        // Parse with discontinuity flag to signal decoder reset
+        self.feed_parser_with_flags(kAudioFileStreamParseFlag_Discontinuity)?;
+
+        // Update position tracking
+        self.position = pos;
+        self.frames_decoded = target_frame;
+
+        debug!(
+            new_position = ?self.position,
+            frames_decoded = self.frames_decoded,
+            packets_buffered = self.parser_state.packet_buffer.len(),
+            "Apple decoder: seek complete"
+        );
+
         Ok(())
+    }
+
+    /// Estimate byte offset from time position using bitrate calculation.
+    fn estimate_byte_offset(&self, pos: Duration) -> u64 {
+        let Some(source_len) = self.source_len else {
+            // No source length known, start from data offset
+            return self.data_offset;
+        };
+
+        // Get audio data size (total - header)
+        let audio_data_size = source_len.saturating_sub(self.data_offset);
+        if audio_data_size == 0 {
+            return self.data_offset;
+        }
+
+        // Estimate total duration from format info
+        let total_duration = self.estimate_total_duration();
+        if total_duration.as_secs_f64() <= 0.0 {
+            // Can't estimate, use linear interpolation
+            let ratio = pos.as_secs_f64() / 300.0; // Assume 5 min default
+            let offset = (audio_data_size as f64 * ratio.min(1.0)) as u64;
+            return self.data_offset + offset;
+        }
+
+        // Calculate byte offset proportionally
+        let ratio = pos.as_secs_f64() / total_duration.as_secs_f64();
+        let offset = (audio_data_size as f64 * ratio.clamp(0.0, 1.0)) as u64;
+
+        self.data_offset + offset
+    }
+
+    /// Estimate total duration from decoded frames and bytes processed.
+    fn estimate_total_duration(&self) -> Duration {
+        if self.frames_decoded == 0 || self.source_byte_pos <= self.data_offset {
+            return Duration::ZERO;
+        }
+
+        let Some(source_len) = self.source_len else {
+            return Duration::ZERO;
+        };
+
+        // Calculate frames per byte ratio
+        let bytes_processed = self.source_byte_pos - self.data_offset;
+        let frames_per_byte = self.frames_decoded as f64 / bytes_processed as f64;
+
+        // Estimate total frames
+        let audio_data_size = source_len.saturating_sub(self.data_offset);
+        let estimated_total_frames = (audio_data_size as f64 * frames_per_byte) as u64;
+
+        Duration::from_secs_f64(estimated_total_frames as f64 / self.spec.sample_rate as f64)
     }
 }
 
