@@ -1,7 +1,4 @@
-//! New error types for the generic decoder architecture.
-//!
-//! This module will replace the existing `DecodeError` in `types.rs` once the
-//! refactor is complete.
+//! Error types for audio decoding.
 
 use std::io;
 
@@ -13,7 +10,6 @@ use thiserror::Error;
 /// This error type is backend-agnostic, wrapping decoder-specific errors
 /// in the `Backend` variant.
 #[derive(Debug, Error)]
-#[allow(dead_code)] // Will be used once integrated with new decoder traits
 pub enum DecodeError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
@@ -38,7 +34,6 @@ pub enum DecodeError {
 }
 
 /// Result type for decode operations.
-#[allow(dead_code)] // Will be used once integrated with new decoder traits
 pub type DecodeResult<T> = Result<T, DecodeError>;
 
 #[cfg(test)]

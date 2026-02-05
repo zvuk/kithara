@@ -6,15 +6,12 @@
 //! # Example
 //!
 //! ```ignore
-//! use kithara_decode::symphonia::{Symphonia, SymphoniaConfig, SymphoniaMp3};
-//! use kithara_decode::traits::AudioDecoder;
+//! use kithara_decode::{Symphonia, SymphoniaConfig, SymphoniaMp3};
+//! use kithara_decode::AudioDecoder;
 //!
 //! let file = std::fs::File::open("audio.mp3")?;
 //! let decoder = SymphoniaMp3::create(file, SymphoniaConfig::default())?;
 //! ```
-
-// Types are not yet exported but will be used in later tasks
-#![allow(dead_code)]
 
 use std::{
     io::{Read, Seek},

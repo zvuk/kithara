@@ -1,10 +1,7 @@
-//! Codec type markers for type-safe decoder construction.
+//! Codec type markers and traits for type-safe decoder construction.
 //!
 //! Each codec has a marker type implementing [`CodecType`], which maps
 //! to the runtime [`AudioCodec`] enum from kithara-stream.
-
-// Types are not yet exported but will be used in later tasks
-#![allow(dead_code)]
 
 use std::{
     io::{Read, Seek},

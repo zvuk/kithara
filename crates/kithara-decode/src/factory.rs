@@ -1,12 +1,12 @@
 //! Factory for creating decoders with runtime codec selection.
 //!
-//! This module provides [`DecoderFactory`] which creates [`AudioDecoder`] instances
+//! This module provides [`DecoderFactory`] which creates decoders
 //! based on runtime codec information, handling probing and backend selection.
 //!
 //! # Example
 //!
 //! ```ignore
-//! use kithara_decode::factory::{DecoderFactory, CodecSelector, DecoderConfig};
+//! use kithara_decode::{DecoderFactory, CodecSelector, DecoderConfig};
 //! use kithara_stream::AudioCodec;
 //!
 //! let file = std::fs::File::open("audio.mp3")?;
@@ -16,9 +16,6 @@
 //!     DecoderConfig::default(),
 //! )?;
 //! ```
-
-// Types are not yet exported but will be used in later tasks
-#![allow(dead_code)]
 
 use std::{
     io::{Read, Seek},
