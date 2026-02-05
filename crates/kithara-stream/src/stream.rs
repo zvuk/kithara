@@ -155,6 +155,14 @@ impl<T: StreamType> Stream<T> {
     pub fn current_segment_range(&self) -> Option<std::ops::Range<u64>> {
         self.reader.current_segment_range()
     }
+
+    /// Get byte range of first segment with current format after ABR switch.
+    ///
+    /// For HLS: returns the first segment of the new variant which contains
+    /// init data (ftyp/moov). This is where the decoder should be recreated.
+    pub fn format_change_segment_range(&self) -> Option<std::ops::Range<u64>> {
+        self.reader.format_change_segment_range()
+    }
 }
 
 impl<T: StreamType> Read for Stream<T> {

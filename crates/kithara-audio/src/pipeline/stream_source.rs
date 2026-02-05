@@ -66,6 +66,10 @@ impl<T: StreamType> SharedStream<T> {
     fn current_segment_range(&self) -> Option<std::ops::Range<u64>> {
         self.inner.lock().current_segment_range()
     }
+
+    fn format_change_segment_range(&self) -> Option<std::ops::Range<u64>> {
+        self.inner.lock().format_change_segment_range()
+    }
 }
 
 impl<T: StreamType> Clone for SharedStream<T> {
@@ -222,17 +226,25 @@ impl<T: StreamType> StreamAudioSource<T> {
         let Some(current_info) = self.shared_stream.media_info() else {
             return;
         };
-        if Some(&current_info) != self.cached_media_info.as_ref()
-            && let Some(seg_range) = self.shared_stream.current_segment_range()
-        {
-            debug!(
-                old = ?self.cached_media_info,
-                new = ?current_info,
-                segment_start = seg_range.start,
-                "Format change detected, setting read boundary"
-            );
-            self.shared_stream.set_boundary(seg_range.start);
-            self.pending_format_change = Some((current_info, seg_range.start));
+        if Some(&current_info) != self.cached_media_info.as_ref() {
+            // Prefer format_change_segment_range() which returns the FIRST segment
+            // of the new format (where init data lives). Fall back to current_segment_range()
+            // if the source doesn't support format_change_segment_range().
+            let seg_range = self
+                .shared_stream
+                .format_change_segment_range()
+                .or_else(|| self.shared_stream.current_segment_range());
+
+            if let Some(seg_range) = seg_range {
+                debug!(
+                    old = ?self.cached_media_info,
+                    new = ?current_info,
+                    segment_start = seg_range.start,
+                    "Format change detected, setting read boundary"
+                );
+                self.shared_stream.set_boundary(seg_range.start);
+                self.pending_format_change = Some((current_info, seg_range.start));
+            }
         }
     }
 
@@ -614,6 +626,9 @@ mod tests {
         len: Option<u64>,
         media_info: Option<MediaInfo>,
         segment_range: Option<Range<u64>>,
+        /// Range of the first segment with current format (for ABR switch).
+        /// Used by `format_change_segment_range()` to return where init data lives.
+        format_change_range: Option<Range<u64>>,
     }
 
     struct TestSource {
@@ -628,6 +643,7 @@ mod tests {
                     len,
                     media_info: None,
                     segment_range: None,
+                    format_change_range: None,
                 })),
             }
         }
@@ -667,6 +683,10 @@ mod tests {
 
         fn current_segment_range(&self) -> Option<Range<u64>> {
             self.state.lock().segment_range.clone()
+        }
+
+        fn format_change_segment_range(&self) -> Option<Range<u64>> {
+            self.state.lock().format_change_range.clone()
         }
     }
 
@@ -790,29 +810,19 @@ mod tests {
     // Tests
     // ========================================================================
 
-    /// **BASELINE TEST** — reproduces the exact production bug from log.
+    /// Test that ABR switch uses `format_change_segment_range()` to find init data.
     ///
     /// Production scenario (HLS ABR switch V0 AAC → V3 FLAC):
     ///
-    /// Byte layout in production:
+    /// Byte layout:
     ///   0..964431:        V0 segments 0-18 (AAC)
     ///   964431..1732515:  V3 segment 19 (FLAC, has ftyp + moov init data)
     ///   1732515..2476302: V3 segment 20 (FLAC, media only, NO ftyp)
     ///
-    /// Timeline from log:
-    ///   1. V0 decoder reads normally (segments 0-18)
-    ///   2. ABR switches to V3, segment 19 downloaded (964431..1732515)
-    ///   3. Reader continues past segment 19 into segment 20 before
-    ///      detect_format_change runs — no boundary was set yet
-    ///   4. detect_format_change sees current_segment_range = 1732515..2476302
-    ///      (segment 20), stores target_offset = 1732515
-    ///   5. V0 decoder hits EOF → apply_format_change(target_offset=1732515)
-    ///   6. Factory creates decoder at 1732515 → "missing ftyp atom" error
-    ///      because ftyp/moov is at 964431 (segment 19 start)
-    ///   7. Decoder creation fails → playback hangs
-    ///
-    /// Expected: decoder must be recreated at 964431 (first V3 segment
-    /// with init data), not at 1732515 (continuation segment without ftyp).
+    /// The reader may pass segment 19 before `detect_format_change` runs,
+    /// so `current_segment_range()` would return segment 20 (no init data).
+    /// Using `format_change_segment_range()` returns segment 19 where
+    /// ftyp/moov lives, allowing decoder to be recreated correctly.
     #[test]
     fn apply_format_change_must_use_first_new_format_segment_offset() {
         // Use production-like offsets from the log
@@ -849,6 +859,8 @@ mod tests {
             s.media_info = Some(v3_info());
             // current_segment_range returns segment 20 — reader already past segment 19
             s.segment_range = Some(V3_SEGMENT_20_START..V3_SEGMENT_20_END);
+            // format_change_segment_range returns the FIRST V3 segment where init data lives
+            s.format_change_range = Some(V3_SEGMENT_19_START..V3_SEGMENT_20_START);
         }
 
         // Decode remaining V0 chunks + trigger EOF → apply_format_change
@@ -859,12 +871,12 @@ mod tests {
             }
         }
 
-        // Verify factory was called
+        // Verify factory was called at the correct offset
         let offsets = factory_offsets.lock();
         assert_eq!(offsets.len(), 1, "Factory should have been called once");
 
-        // BUG: code passes 1732515 (current segment) instead of 964431 (first V3 segment).
-        // At 1732515 there is no ftyp atom → decoder creation fails in production.
+        // FIX: code now uses format_change_segment_range() which returns the FIRST segment
+        // of the new format (964431), not current_segment_range() (1732515).
         assert_eq!(
             offsets[0], V3_SEGMENT_19_START,
             "Decoder must be recreated at first V3 segment ({V3_SEGMENT_19_START}) \
@@ -1190,6 +1202,8 @@ mod tests {
                     let mut s = state.lock();
                     s.media_info = Some(v3_info());
                     s.segment_range = Some(V3_SEGMENT_20_START..V3_SEGMENT_20_END);
+                    // format_change_segment_range returns the FIRST V3 segment where init data lives
+                    s.format_change_range = Some(V3_SEGMENT_19_START..V3_SEGMENT_20_START);
                     drop(s);
                     format_changed = true;
                 }
@@ -1201,20 +1215,16 @@ mod tests {
                 }
             }
 
-            // After 20 seconds of rapid seeking:
+            // After 20 seconds of rapid seeking with format_change_segment_range():
             //
-            // If code used correct offset (964431), factory would succeed,
+            // Code uses correct offset (964431), factory succeeds,
             // V3 decoder installed, chunks_after_v0_stop > 0.
-            //
-            // BUG: code uses 1732515 → factory returns None → old exhausted
-            // decoder stays → all fetches after v0_stop return EOF.
             assert!(
                 chunks_after_v0_stop > 0,
                 "Audio dead after ABR switch: {eof_after_v0_stop} EOFs, \
                  0 chunks produced after V0 decoder stopped. \
                  {epoch} seeks performed over 20s. \
-                 Decoder recreated at wrong offset (1732515 instead of 964431) → \
-                 'missing ftyp atom' → no working decoder."
+                 Expected format_change_segment_range() to return 964431."
             );
         });
 

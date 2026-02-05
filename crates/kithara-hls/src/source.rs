@@ -166,6 +166,21 @@ impl SegmentIndex {
         self.entries.values().find(|e| e.contains(offset))
     }
 
+    /// Find the first segment with the given codec and container (by lowest byte_offset).
+    ///
+    /// Used to find the start of a new format after ABR switch — this is where
+    /// init data (ftyp/moov) lives.
+    fn first_segment_with_format(
+        &self,
+        codec: Option<AudioCodec>,
+        container: Option<ContainerFormat>,
+    ) -> Option<&SegmentEntry> {
+        self.entries
+            .values()
+            .filter(|e| e.codec == codec && e.container == container)
+            .min_by_key(|e| e.byte_offset)
+    }
+
     fn total_bytes(&self) -> u64 {
         self.entries
             .values()
@@ -1032,6 +1047,16 @@ impl Source for HlsSource {
         let segments = self.shared.segments.lock();
         segments
             .last()
+            .map(|entry| entry.byte_offset..entry.end_offset())
+    }
+
+    fn format_change_segment_range(&self) -> Option<Range<u64>> {
+        let segments = self.shared.segments.lock();
+        let last = segments.last()?;
+        // Find the first segment with the same codec/container as the last one.
+        // This is where init data (ftyp/moov) lives after an ABR switch.
+        segments
+            .first_segment_with_format(last.codec, last.container)
             .map(|entry| entry.byte_offset..entry.end_offset())
     }
 }
