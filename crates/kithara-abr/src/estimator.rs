@@ -67,9 +67,14 @@ impl ThroughputEstimator {
             self.buffered_content_secs += content_duration.as_secs_f64();
         }
 
-        if !matches!(sample.source, ThroughputSampleSource::Network) {
+        // Cache hits indicate data is available instantly — set high initial_bps
+        // to allow ABR to switch to higher variants immediately.
+        if matches!(sample.source, ThroughputSampleSource::Cache) {
+            // 100 Mbps — effectively unlimited for audio streaming
+            self.initial_bps = 100_000_000.0;
             return;
         }
+
         if sample.bytes < Self::MIN_CHUNK_BYTES {
             return;
         }
@@ -152,9 +157,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cache_hit_does_not_affect_throughput() {
+    fn cache_hit_sets_high_initial_bps() {
         let cfg = AbrOptions::default();
         let mut est = ThroughputEstimator::new(&cfg);
+
+        // Before cache hit, no estimate available
+        assert_eq!(est.estimate_bps(), None);
 
         est.push_sample(ThroughputSample {
             bytes: 1000,
@@ -164,7 +172,8 @@ mod tests {
             content_duration: None,
         });
 
-        assert_eq!(est.estimate_bps(), None);
+        // Cache hit sets high initial_bps (100 Mbps) for immediate ABR upswitch
+        assert_eq!(est.estimate_bps(), Some(100_000_000));
     }
 
     #[rstest]

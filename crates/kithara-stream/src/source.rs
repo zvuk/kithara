@@ -58,6 +58,16 @@ pub trait Source: Send + 'static {
     fn current_segment_range(&self) -> Option<Range<u64>> {
         None
     }
+
+    /// Get byte range of the first segment with current format after a format change.
+    ///
+    /// For HLS ABR switch: returns the first segment of the new variant which contains
+    /// init data (ftyp/moov). This is where the decoder should be recreated.
+    ///
+    /// Returns `None` if no format change occurred or for non-segmented sources.
+    fn format_change_segment_range(&self) -> Option<Range<u64>> {
+        None
+    }
 }
 
 #[cfg(test)]

@@ -149,6 +149,11 @@ impl<E: Estimator> AbrController<E> {
         let buffer_level_secs = self.buffer_level_secs();
 
         if !self.can_switch_now(now) {
+            tracing::debug!(
+                current,
+                buffer_level_secs,
+                "ABR decide: MinInterval not elapsed"
+            );
             return AbrDecision {
                 target_variant_index: current,
                 reason: AbrReason::MinInterval,
@@ -157,6 +162,7 @@ impl<E: Estimator> AbrController<E> {
         }
 
         let Some(estimate_bps) = self.estimator.estimate_bps() else {
+            tracing::debug!(current, buffer_level_secs, "ABR decide: NoEstimate");
             return AbrDecision {
                 target_variant_index: current,
                 reason: AbrReason::NoEstimate,
@@ -191,8 +197,21 @@ impl<E: Estimator> AbrController<E> {
 
         variants.sort_by_key(|(_, bw)| *bw);
 
-        // Adjust throughput by safety factor
-        let adjusted_bps = (estimate_bps as f64 * self.cfg.throughput_safety_factor).max(0.0);
+        // Adjust throughput by safety factor (divide, not multiply!)
+        let adjusted_bps = (estimate_bps as f64 / self.cfg.throughput_safety_factor).max(0.0);
+
+        tracing::debug!(
+            current,
+            current_bw,
+            estimate_bps,
+            adjusted_bps,
+            buffer_level_secs,
+            safety_factor = self.cfg.throughput_safety_factor,
+            min_buffer_for_up = self.cfg.min_buffer_for_up_switch_secs,
+            up_hysteresis = self.cfg.up_hysteresis_ratio,
+            variants_count = variants.len(),
+            "ABR decide: evaluating"
+        );
 
         // Best candidate not exceeding adjusted throughput, otherwise lowest
         let best_under = variants
@@ -209,11 +228,28 @@ impl<E: Estimator> AbrController<E> {
             };
         };
 
+        tracing::debug!(
+            candidate_idx,
+            candidate_bw,
+            current,
+            current_bw,
+            "ABR decide: candidate selected"
+        );
+
         // Up-switch path
         if candidate_bw > current_bw {
             let buffer_ok = self.cfg.min_buffer_for_up_switch_secs <= 0.0
                 || buffer_level_secs >= self.cfg.min_buffer_for_up_switch_secs;
             let headroom_ok = adjusted_bps >= (candidate_bw as f64) * self.cfg.up_hysteresis_ratio;
+            tracing::debug!(
+                buffer_ok,
+                headroom_ok,
+                buffer_level_secs,
+                min_buffer = self.cfg.min_buffer_for_up_switch_secs,
+                adjusted_bps,
+                required_bps = (candidate_bw as f64) * self.cfg.up_hysteresis_ratio,
+                "ABR decide: up-switch check"
+            );
             if buffer_ok && headroom_ok {
                 self.record_switch(now);
                 return AbrDecision {

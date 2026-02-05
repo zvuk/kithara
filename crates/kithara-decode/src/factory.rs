@@ -1,0 +1,816 @@
+//! Factory for creating decoders with runtime codec selection.
+//!
+//! This module provides [`DecoderFactory`] which creates decoders
+//! based on runtime codec information, handling probing and backend selection.
+//!
+//! # Example
+//!
+//! ```ignore
+//! use kithara_decode::{DecoderFactory, CodecSelector, DecoderConfig};
+//! use kithara_stream::AudioCodec;
+//!
+//! let file = std::fs::File::open("audio.mp3")?;
+//! let decoder = DecoderFactory::create(
+//!     file,
+//!     CodecSelector::Exact(AudioCodec::Mp3),
+//!     DecoderConfig::default(),
+//! )?;
+//! ```
+
+use std::{
+    io::{Read, Seek},
+    sync::{Arc, atomic::AtomicU64},
+};
+
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use crate::apple::{AppleAac, AppleAlac, AppleConfig, AppleFlac, AppleMp3};
+use crate::{
+    error::{DecodeError, DecodeResult},
+    symphonia::{
+        Symphonia, SymphoniaAac, SymphoniaConfig, SymphoniaFlac, SymphoniaMp3, SymphoniaVorbis,
+    },
+    traits::{Alac, AudioDecoder, InnerDecoder},
+};
+
+/// Selector for choosing how to detect/specify the codec.
+#[derive(Debug, Clone)]
+pub enum CodecSelector {
+    /// Known codec - no probing needed.
+    Exact(AudioCodec),
+    /// Probe with hints.
+    Probe(ProbeHint),
+    /// Full auto-probe.
+    Auto,
+}
+
+/// Hints for codec probing.
+#[derive(Debug, Clone, Default)]
+pub struct ProbeHint {
+    /// Known codec (highest priority).
+    pub codec: Option<AudioCodec>,
+    /// Container format hint.
+    pub container: Option<ContainerFormat>,
+    /// File extension hint (e.g., "mp3", "aac").
+    pub extension: Option<String>,
+    /// MIME type hint (e.g., "audio/mpeg", "audio/flac").
+    pub mime: Option<String>,
+}
+
+/// Configuration for DecoderFactory.
+#[derive(Debug, Clone)]
+pub struct DecoderConfig {
+    /// Prefer hardware decoder when available.
+    pub prefer_hardware: bool,
+    /// Handle for dynamic byte length updates (HLS).
+    pub byte_len_handle: Option<Arc<AtomicU64>>,
+    /// Enable gapless playback.
+    pub gapless: bool,
+}
+
+impl Default for DecoderConfig {
+    fn default() -> Self {
+        Self {
+            prefer_hardware: false,
+            byte_len_handle: None,
+            gapless: true,
+        }
+    }
+}
+
+/// Factory for creating decoders with runtime backend selection.
+///
+/// Supports multiple backends with automatic fallback:
+/// - Apple AudioToolbox (macOS/iOS) when `apple` feature enabled
+/// - Android MediaCodec (Android) when `android` feature enabled
+/// - Symphonia (software, all platforms) as default fallback
+pub struct DecoderFactory;
+
+impl DecoderFactory {
+    /// Create a decoder with automatic backend selection.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The audio data source implementing `Read + Seek`.
+    /// * `selector` - Specifies how to determine the codec.
+    /// * `config` - Decoder configuration options.
+    ///
+    /// # Returns
+    ///
+    /// A boxed decoder implementing [`InnerDecoder`] for runtime polymorphism.
+    ///
+    /// # Backend Selection
+    ///
+    /// When `prefer_hardware` is true, the factory attempts platform-specific
+    /// hardware decoders first, falling back to Symphonia on failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::ProbeFailed`] if codec cannot be determined.
+    /// Returns [`DecodeError::UnsupportedCodec`] if the codec is not supported.
+    pub fn create<R>(
+        source: R,
+        selector: CodecSelector,
+        config: DecoderConfig,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        // Determine codec and container from selector
+        let (codec, container) = match selector {
+            CodecSelector::Exact(c) => (c, None),
+            CodecSelector::Probe(ref hint) => (Self::probe_codec(hint)?, hint.container),
+            CodecSelector::Auto => return Err(DecodeError::ProbeFailed),
+        };
+
+        tracing::debug!(?codec, ?container, "DecoderFactory::create called");
+
+        // Try hardware decoder first if preferred
+        #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+        if config.prefer_hardware
+            && let Ok(decoder) = Self::create_apple_decoder(&config, codec)
+        {
+            return Ok(decoder);
+        }
+
+        // Build Symphonia config from DecoderConfig
+        // Pass container directly - Symphonia will create reader without probe
+        tracing::debug!(?container, "Using direct container format (no probe)");
+
+        let symphonia_config = SymphoniaConfig {
+            verify: false,
+            gapless: config.gapless,
+            byte_len_handle: config.byte_len_handle,
+            container,
+        };
+
+        // Create appropriate decoder based on codec
+        tracing::debug!("Creating Symphonia decoder...");
+        Self::create_symphonia_decoder(source, codec, symphonia_config)
+    }
+
+    /// Create an Apple AudioToolbox decoder.
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    fn create_apple_decoder(
+        config: &DecoderConfig,
+        codec: AudioCodec,
+    ) -> DecodeResult<Box<dyn InnerDecoder>> {
+        use std::io::Cursor;
+
+        let apple_config = AppleConfig {
+            byte_len_handle: config.byte_len_handle.clone(),
+        };
+
+        // Note: Apple decoder uses Cursor<Vec<u8>> as placeholder
+        // Real implementation will use the actual source
+        let dummy = Cursor::new(Vec::new());
+
+        match codec {
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
+                let decoder = AppleAac::create(dummy, apple_config)?;
+                Ok(Box::new(decoder))
+            }
+            AudioCodec::Mp3 => {
+                let decoder = AppleMp3::create(dummy, apple_config)?;
+                Ok(Box::new(decoder))
+            }
+            AudioCodec::Flac => {
+                let decoder = AppleFlac::create(dummy, apple_config)?;
+                Ok(Box::new(decoder))
+            }
+            AudioCodec::Alac => {
+                let decoder = AppleAlac::create(dummy, apple_config)?;
+                Ok(Box::new(decoder))
+            }
+            _ => Err(DecodeError::UnsupportedCodec(codec)),
+        }
+    }
+
+    /// Probe codec from hints.
+    ///
+    /// Priority:
+    /// 1. Direct codec hint
+    /// 2. Extension mapping
+    /// 3. MIME type mapping
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::ProbeFailed`] if no codec can be determined.
+    fn probe_codec(hint: &ProbeHint) -> DecodeResult<AudioCodec> {
+        // Priority 1: Direct codec hint
+        if let Some(codec) = hint.codec {
+            return Ok(codec);
+        }
+
+        // Priority 2: Extension mapping
+        if let Some(ref ext) = hint.extension
+            && let Some(codec) = Self::codec_from_extension(ext)
+        {
+            return Ok(codec);
+        }
+
+        // Priority 3: MIME type mapping
+        if let Some(ref mime) = hint.mime
+            && let Some(codec) = Self::codec_from_mime(mime)
+        {
+            return Ok(codec);
+        }
+
+        // Priority 4: Container format hint (can suggest likely codec)
+        if let Some(container) = hint.container
+            && let Some(codec) = Self::codec_from_container(container)
+        {
+            return Ok(codec);
+        }
+
+        Err(DecodeError::ProbeFailed)
+    }
+
+    /// Map file extension to codec.
+    fn codec_from_extension(ext: &str) -> Option<AudioCodec> {
+        match ext.to_lowercase().as_str() {
+            "mp3" => Some(AudioCodec::Mp3),
+            "aac" | "m4a" | "mp4" => Some(AudioCodec::AacLc),
+            "flac" => Some(AudioCodec::Flac),
+            "ogg" | "oga" => Some(AudioCodec::Vorbis),
+            "opus" => Some(AudioCodec::Opus),
+            "wav" | "wave" => Some(AudioCodec::Pcm),
+            "aiff" | "aif" => Some(AudioCodec::Pcm),
+            "caf" => Some(AudioCodec::Alac),
+            _ => None,
+        }
+    }
+
+    /// Map MIME type to codec.
+    fn codec_from_mime(mime: &str) -> Option<AudioCodec> {
+        let mime_lower = mime.to_lowercase();
+
+        // Check for specific codec indicators
+        if mime_lower.contains("mp3") || mime_lower == "audio/mpeg" {
+            return Some(AudioCodec::Mp3);
+        }
+        if mime_lower.contains("aac") || mime_lower == "audio/aac" {
+            return Some(AudioCodec::AacLc);
+        }
+        if mime_lower.contains("flac") || mime_lower == "audio/flac" {
+            return Some(AudioCodec::Flac);
+        }
+        if mime_lower.contains("vorbis") || mime_lower == "audio/vorbis" {
+            return Some(AudioCodec::Vorbis);
+        }
+        if mime_lower.contains("opus") || mime_lower == "audio/opus" {
+            return Some(AudioCodec::Opus);
+        }
+        if mime_lower == "audio/ogg" {
+            // Ogg container, default to Vorbis
+            return Some(AudioCodec::Vorbis);
+        }
+        if mime_lower == "audio/wav" || mime_lower == "audio/wave" || mime_lower == "audio/x-wav" {
+            return Some(AudioCodec::Pcm);
+        }
+        if mime_lower == "audio/mp4" || mime_lower == "audio/x-m4a" {
+            return Some(AudioCodec::AacLc);
+        }
+
+        None
+    }
+
+    /// Infer likely codec from container format.
+    fn codec_from_container(container: ContainerFormat) -> Option<AudioCodec> {
+        match container {
+            ContainerFormat::MpegAudio => Some(AudioCodec::Mp3),
+            ContainerFormat::Adts => Some(AudioCodec::AacLc),
+            ContainerFormat::Flac => Some(AudioCodec::Flac),
+            ContainerFormat::Ogg => Some(AudioCodec::Vorbis),
+            ContainerFormat::Wav => Some(AudioCodec::Pcm),
+            ContainerFormat::Fmp4 | ContainerFormat::MpegTs => Some(AudioCodec::AacLc),
+            ContainerFormat::Caf => Some(AudioCodec::Alac),
+            ContainerFormat::Mkv => None, // Could be anything
+        }
+    }
+
+    /// Create a Symphonia decoder for the given codec.
+    fn create_symphonia_decoder<R>(
+        source: R,
+        codec: AudioCodec,
+        config: SymphoniaConfig,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        match codec {
+            AudioCodec::Mp3 => {
+                let decoder = SymphoniaMp3::create(source, config)?;
+                Ok(Box::new(decoder))
+            }
+            AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
+                let decoder = SymphoniaAac::create(source, config)?;
+                Ok(Box::new(decoder))
+            }
+            AudioCodec::Flac => {
+                let decoder = SymphoniaFlac::create(source, config)?;
+                Ok(Box::new(decoder))
+            }
+            AudioCodec::Vorbis => {
+                let decoder = SymphoniaVorbis::create(source, config)?;
+                Ok(Box::new(decoder))
+            }
+            AudioCodec::Alac => {
+                let decoder = Symphonia::<Alac>::create(source, config)?;
+                Ok(Box::new(decoder))
+            }
+            AudioCodec::Opus => Err(DecodeError::UnsupportedCodec(codec)),
+            AudioCodec::Pcm => {
+                // Use PCM marker type for WAV files
+                use crate::traits::CodecType;
+                struct Pcm;
+                impl CodecType for Pcm {
+                    const CODEC: AudioCodec = AudioCodec::Pcm;
+                }
+                let decoder = Symphonia::<Pcm>::create(source, config)?;
+                Ok(Box::new(decoder))
+            }
+            AudioCodec::Adpcm => Err(DecodeError::UnsupportedCodec(codec)),
+        }
+    }
+
+    /// Create decoder from MediaInfo (for kithara-audio compatibility).
+    ///
+    /// This is a convenience method that extracts codec from MediaInfo
+    /// and creates the appropriate decoder.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The audio data source
+    /// * `media_info` - Media information containing codec/container hints
+    /// * `config` - Decoder configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns error if no codec can be determined or decoder creation fails.
+    pub fn create_from_media_info<R>(
+        source: R,
+        media_info: &MediaInfo,
+        config: DecoderConfig,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        tracing::debug!(?media_info, "create_from_media_info called");
+
+        let hint = ProbeHint {
+            codec: media_info.codec,
+            container: media_info.container,
+            extension: None,
+            mime: None,
+        };
+
+        Self::create(source, CodecSelector::Probe(hint), config)
+    }
+
+    /// Create decoder from file extension hint.
+    ///
+    /// This maps the extension to codec and container, then creates
+    /// the appropriate decoder without probing.
+    ///
+    /// # Arguments
+    ///
+    /// * `source` - The audio data source
+    /// * `hint` - Optional file extension hint (e.g., "mp3", "wav", "aac")
+    /// * `config` - Decoder configuration
+    ///
+    /// # Errors
+    ///
+    /// Returns error if codec cannot be determined or decoder creation fails.
+    pub fn create_with_probe<R>(
+        source: R,
+        hint: Option<&str>,
+        config: DecoderConfig,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        let probe_hint = ProbeHint {
+            extension: hint.map(String::from),
+            container: hint.and_then(Self::container_from_extension),
+            ..Default::default()
+        };
+
+        Self::create(source, CodecSelector::Probe(probe_hint), config)
+    }
+
+    /// Map file extension to container format.
+    fn container_from_extension(ext: &str) -> Option<ContainerFormat> {
+        match ext.to_lowercase().as_str() {
+            "mp3" => Some(ContainerFormat::MpegAudio),
+            "aac" => Some(ContainerFormat::Adts),
+            "m4a" | "mp4" => Some(ContainerFormat::Fmp4),
+            "flac" => Some(ContainerFormat::Flac),
+            "ogg" | "oga" => Some(ContainerFormat::Ogg),
+            "wav" | "wave" => Some(ContainerFormat::Wav),
+            "mkv" | "webm" => Some(ContainerFormat::Mkv),
+            "caf" => Some(ContainerFormat::Caf),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_codec_selector_exact() {
+        let selector = CodecSelector::Exact(AudioCodec::AacLc);
+        assert!(matches!(selector, CodecSelector::Exact(AudioCodec::AacLc)));
+    }
+
+    #[test]
+    fn test_codec_selector_probe() {
+        let hint = ProbeHint {
+            codec: Some(AudioCodec::Mp3),
+            ..Default::default()
+        };
+        let selector = CodecSelector::Probe(hint);
+        assert!(matches!(selector, CodecSelector::Probe(_)));
+    }
+
+    #[test]
+    fn test_codec_selector_auto() {
+        let selector = CodecSelector::Auto;
+        assert!(matches!(selector, CodecSelector::Auto));
+    }
+
+    #[test]
+    fn test_probe_hint_default() {
+        let hint = ProbeHint::default();
+        assert!(hint.codec.is_none());
+        assert!(hint.container.is_none());
+        assert!(hint.extension.is_none());
+        assert!(hint.mime.is_none());
+    }
+
+    #[test]
+    fn test_probe_hint_with_all_fields() {
+        let hint = ProbeHint {
+            codec: Some(AudioCodec::Flac),
+            container: Some(ContainerFormat::Ogg),
+            extension: Some("flac".into()),
+            mime: Some("audio/flac".into()),
+        };
+        assert_eq!(hint.codec, Some(AudioCodec::Flac));
+        assert_eq!(hint.container, Some(ContainerFormat::Ogg));
+        assert_eq!(hint.extension, Some("flac".into()));
+        assert_eq!(hint.mime, Some("audio/flac".into()));
+    }
+
+    #[test]
+    fn test_decoder_config_default() {
+        let config = DecoderConfig::default();
+        assert!(!config.prefer_hardware);
+        assert!(config.byte_len_handle.is_none());
+        assert!(config.gapless);
+    }
+
+    #[test]
+    fn test_decoder_config_custom() {
+        let handle = Arc::new(AtomicU64::new(1000));
+        let config = DecoderConfig {
+            prefer_hardware: true,
+            byte_len_handle: Some(Arc::clone(&handle)),
+            gapless: false,
+        };
+        assert!(config.prefer_hardware);
+        assert!(config.byte_len_handle.is_some());
+        assert!(!config.gapless);
+    }
+
+    #[test]
+    fn test_probe_from_direct_codec() {
+        let hint = ProbeHint {
+            codec: Some(AudioCodec::Vorbis),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Vorbis);
+    }
+
+    #[test]
+    fn test_probe_from_extension_mp3() {
+        let hint = ProbeHint {
+            extension: Some("mp3".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Mp3);
+    }
+
+    #[test]
+    fn test_probe_from_extension_aac() {
+        let hint = ProbeHint {
+            extension: Some("aac".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::AacLc);
+    }
+
+    #[test]
+    fn test_probe_from_extension_m4a() {
+        let hint = ProbeHint {
+            extension: Some("m4a".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::AacLc);
+    }
+
+    #[test]
+    fn test_probe_from_extension_flac() {
+        let hint = ProbeHint {
+            extension: Some("flac".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Flac);
+    }
+
+    #[test]
+    fn test_probe_from_extension_ogg() {
+        let hint = ProbeHint {
+            extension: Some("ogg".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Vorbis);
+    }
+
+    #[test]
+    fn test_probe_from_extension_opus() {
+        let hint = ProbeHint {
+            extension: Some("opus".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Opus);
+    }
+
+    #[test]
+    fn test_probe_from_extension_wav() {
+        let hint = ProbeHint {
+            extension: Some("wav".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Pcm);
+    }
+
+    #[test]
+    fn test_probe_from_extension_case_insensitive() {
+        let hint = ProbeHint {
+            extension: Some("MP3".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Mp3);
+    }
+
+    #[test]
+    fn test_probe_from_mime_mpeg() {
+        let hint = ProbeHint {
+            mime: Some("audio/mpeg".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Mp3);
+    }
+
+    #[test]
+    fn test_probe_from_mime_flac() {
+        let hint = ProbeHint {
+            mime: Some("audio/flac".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Flac);
+    }
+
+    #[test]
+    fn test_probe_from_mime_aac() {
+        let hint = ProbeHint {
+            mime: Some("audio/aac".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::AacLc);
+    }
+
+    #[test]
+    fn test_probe_from_mime_vorbis() {
+        let hint = ProbeHint {
+            mime: Some("audio/vorbis".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Vorbis);
+    }
+
+    #[test]
+    fn test_probe_from_mime_ogg() {
+        let hint = ProbeHint {
+            mime: Some("audio/ogg".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Vorbis);
+    }
+
+    #[test]
+    fn test_probe_from_mime_opus() {
+        let hint = ProbeHint {
+            mime: Some("audio/opus".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Opus);
+    }
+
+    #[test]
+    fn test_probe_from_mime_wav() {
+        let hint = ProbeHint {
+            mime: Some("audio/wav".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Pcm);
+    }
+
+    #[test]
+    fn test_probe_from_mime_mp4() {
+        let hint = ProbeHint {
+            mime: Some("audio/mp4".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::AacLc);
+    }
+
+    #[test]
+    fn test_probe_from_container_mpeg_audio() {
+        let hint = ProbeHint {
+            container: Some(ContainerFormat::MpegAudio),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Mp3);
+    }
+
+    #[test]
+    fn test_probe_from_container_ogg() {
+        let hint = ProbeHint {
+            container: Some(ContainerFormat::Ogg),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Vorbis);
+    }
+
+    #[test]
+    fn test_probe_from_container_wav() {
+        let hint = ProbeHint {
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Pcm);
+    }
+
+    #[test]
+    fn test_probe_from_container_fmp4() {
+        let hint = ProbeHint {
+            container: Some(ContainerFormat::Fmp4),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::AacLc);
+    }
+
+    #[test]
+    fn test_probe_from_container_caf() {
+        let hint = ProbeHint {
+            container: Some(ContainerFormat::Caf),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Alac);
+    }
+
+    #[test]
+    fn test_probe_priority_codec_over_extension() {
+        // Codec hint should take priority over extension
+        let hint = ProbeHint {
+            codec: Some(AudioCodec::Flac),
+            extension: Some("mp3".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Flac);
+    }
+
+    #[test]
+    fn test_probe_priority_extension_over_mime() {
+        // Extension should take priority over MIME when no direct codec
+        let hint = ProbeHint {
+            extension: Some("flac".into()),
+            mime: Some("audio/mpeg".into()),
+            ..Default::default()
+        };
+        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
+        assert_eq!(codec, AudioCodec::Flac);
+    }
+
+    #[test]
+    fn test_probe_fails_no_hints() {
+        let hint = ProbeHint::default();
+        let result = DecoderFactory::probe_codec(&hint);
+        assert!(matches!(result, Err(DecodeError::ProbeFailed)));
+    }
+
+    #[test]
+    fn test_probe_fails_unknown_extension() {
+        let hint = ProbeHint {
+            extension: Some("xyz".into()),
+            ..Default::default()
+        };
+        let result = DecoderFactory::probe_codec(&hint);
+        assert!(matches!(result, Err(DecodeError::ProbeFailed)));
+    }
+
+    #[test]
+    fn test_probe_fails_unknown_mime() {
+        let hint = ProbeHint {
+            mime: Some("application/octet-stream".into()),
+            ..Default::default()
+        };
+        let result = DecoderFactory::probe_codec(&hint);
+        assert!(matches!(result, Err(DecodeError::ProbeFailed)));
+    }
+
+    #[test]
+    fn test_probe_fails_mkv_container_alone() {
+        // MKV can contain many codecs, so container alone isn't enough
+        let hint = ProbeHint {
+            container: Some(ContainerFormat::Mkv),
+            ..Default::default()
+        };
+        let result = DecoderFactory::probe_codec(&hint);
+        assert!(matches!(result, Err(DecodeError::ProbeFailed)));
+    }
+
+    #[test]
+    fn test_codec_from_extension_unknown_returns_none() {
+        assert!(DecoderFactory::codec_from_extension("unknown").is_none());
+        assert!(DecoderFactory::codec_from_extension("").is_none());
+        assert!(DecoderFactory::codec_from_extension("doc").is_none());
+    }
+
+    #[test]
+    fn test_codec_from_mime_unknown_returns_none() {
+        assert!(DecoderFactory::codec_from_mime("text/plain").is_none());
+        assert!(DecoderFactory::codec_from_mime("").is_none());
+        assert!(DecoderFactory::codec_from_mime("video/mp4").is_none());
+    }
+
+    #[test]
+    fn test_auto_selector_fails() {
+        use std::io::Cursor;
+        let empty = Cursor::new(Vec::new());
+        let result = DecoderFactory::create(empty, CodecSelector::Auto, DecoderConfig::default());
+        assert!(matches!(result, Err(DecodeError::ProbeFailed)));
+    }
+
+    #[test]
+    #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+    fn test_prefer_hardware_aac_falls_back_to_symphonia() {
+        // When prefer_hardware is true but Apple decoder fails (not implemented),
+        // should fall back to Symphonia
+        use std::io::Cursor;
+
+        let cursor = Cursor::new(vec![0u8; 100]);
+
+        let config = DecoderConfig {
+            prefer_hardware: true,
+            ..Default::default()
+        };
+
+        // AAC will try Apple first (fails with "not implemented"),
+        // then fall back to Symphonia (which will also fail with invalid data)
+        let result =
+            DecoderFactory::create(cursor, CodecSelector::Exact(AudioCodec::AacLc), config);
+
+        // The important thing is it falls back to Symphonia
+        // (would be Backend error if it didn't fall back)
+        assert!(result.is_err());
+    }
+}

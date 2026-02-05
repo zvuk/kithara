@@ -110,7 +110,7 @@ impl ResourceConfig {
         let src = match Url::parse(trimmed) {
             Ok(url) if url.scheme() == "file" => {
                 let path = url.to_file_path().map_err(|()| {
-                    DecodeError::DecodeError(format!("invalid file URL: {trimmed}"))
+                    DecodeError::InvalidData(format!("invalid file URL: {trimmed}"))
                 })?;
                 ResourceSrc::Path(path)
             }
@@ -118,7 +118,7 @@ impl ResourceConfig {
             Err(_) => {
                 let path = PathBuf::from(trimmed);
                 if !path.is_absolute() {
-                    return Err(DecodeError::DecodeError(format!(
+                    return Err(DecodeError::InvalidData(format!(
                         "invalid URL or file path (must be absolute): {trimmed}"
                     )));
                 }
@@ -296,7 +296,7 @@ impl ResourceConfig {
         let url = match self.src {
             ResourceSrc::Url(url) => url,
             ResourceSrc::Path(p) => {
-                return Err(DecodeError::DecodeError(format!(
+                return Err(DecodeError::InvalidData(format!(
                     "HLS requires a URL, got local path: {}",
                     p.display()
                 )));

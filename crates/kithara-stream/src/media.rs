@@ -12,6 +12,10 @@ pub enum ContainerFormat {
     MpegTs,
     /// MPEG Audio (MP3 without container)
     MpegAudio,
+    /// AAC ADTS (raw AAC with ADTS framing)
+    Adts,
+    /// FLAC (native FLAC stream)
+    Flac,
     /// RIFF WAVE
     Wav,
     /// Ogg container
@@ -64,6 +68,10 @@ pub struct MediaInfo {
     pub sample_rate: Option<u32>,
     /// Number of audio channels
     pub channels: Option<u16>,
+    /// Variant index (for ABR streams).
+    /// Different variants have different init segments (ftyp/moov),
+    /// so decoder must be recreated when variant changes.
+    pub variant_index: Option<u32>,
 }
 
 impl MediaInfo {
@@ -74,6 +82,7 @@ impl MediaInfo {
             codec,
             sample_rate: None,
             channels: None,
+            variant_index: None,
         }
     }
 
@@ -98,6 +107,12 @@ impl MediaInfo {
     /// Set channel count.
     pub fn with_channels(mut self, channels: u16) -> Self {
         self.channels = Some(channels);
+        self
+    }
+
+    /// Set variant index (for ABR streams).
+    pub fn with_variant_index(mut self, variant_index: u32) -> Self {
+        self.variant_index = Some(variant_index);
         self
     }
 }
@@ -193,6 +208,8 @@ mod tests {
     #[case(ContainerFormat::Fmp4)]
     #[case(ContainerFormat::MpegTs)]
     #[case(ContainerFormat::MpegAudio)]
+    #[case(ContainerFormat::Adts)]
+    #[case(ContainerFormat::Flac)]
     #[case(ContainerFormat::Wav)]
     #[case(ContainerFormat::Ogg)]
     #[case(ContainerFormat::Caf)]

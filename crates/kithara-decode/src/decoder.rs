@@ -1,589 +1,105 @@
-//! Audio decoder: trait + Symphonia implementation.
-
-// ────────────────────────────────── Trait ──────────────────────────────────
-
-/// Generic audio decoder trait (internal).
-///
-/// Implementations:
-/// - `Decoder` - production decoder using Symphonia (AAC/MP3/FLAC/etc)
-/// - `MockDecoder` - test decoder for unit tests
-pub trait InnerDecoder: Send + 'static {
-    /// Decode next chunk of audio.
-    ///
-    /// Returns:
-    /// - `Ok(Some(chunk))` - successfully decoded chunk
-    /// - `Ok(None)` - end of stream
-    /// - `Err(e)` - decode error
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>>;
-
-    /// Get PCM specification (sample rate, channels).
-    fn spec(&self) -> PcmSpec;
-}
-
-// ─────────────────────────── Symphonia Implementation ─────────────────────
+//! Generic decoder wrapper.
+//!
+//! Provides [`Decoder<D>`] which wraps any [`AudioDecoder`] implementation,
+//! providing a unified API for audio decoding.
 
 use std::{
     io::{Read, Seek},
-    sync::{Arc, LazyLock},
     time::Duration,
 };
 
-use kithara_bufpool::PcmPool;
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
-use symphonia::core::{
-    codecs::{
-        CodecParameters,
-        audio::{AudioCodecParameters, AudioDecoder, AudioDecoderOptions},
-        registry::CodecRegistry,
-    },
-    errors::Error as SymphoniaError,
-    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
-    io::MediaSourceStream,
-    meta::{MetadataOptions, StandardTag},
-    units::Time,
+use crate::{
+    error::DecodeResult,
+    traits::AudioDecoder,
+    types::{PcmChunk, PcmSpec},
 };
 
-use crate::{DecodeError, DecodeResult, PcmChunk, PcmSpec, TrackMetadata};
-
-static CODEC_REGISTRY: LazyLock<CodecRegistry> = LazyLock::new(|| {
-    let mut registry = CodecRegistry::new();
-    // Register all default codecs
-    symphonia::default::register_enabled_codecs(&mut registry);
-    registry
-});
-
-/// Cached codec information for ABR switch optimization.
-#[derive(Clone, Debug)]
-pub struct CachedCodecInfo {
-    pub codec_params: AudioCodecParameters,
-}
-
-/// Symphonia-based audio decoder outputting f32 samples.
+/// Generic decoder wrapper providing unified API.
 ///
-/// Supports two creation modes:
-/// - `new_with_probe()` - probes format and creates decoder (initial load)
-/// - `new_direct()` - creates decoder from cached params (ABR switch)
-pub struct Decoder {
-    format_reader: Box<dyn FormatReader>,
-    decoder: Box<dyn AudioDecoder>,
-    track_id: u32,
-    spec: PcmSpec,
-    pcm_pool: PcmPool,
+/// Wraps any [`AudioDecoder`] implementation, delegating all operations
+/// to the inner decoder.
+///
+/// # Example
+///
+/// ```ignore
+/// use kithara_decode::{Decoder, SymphoniaAac, SymphoniaConfig};
+///
+/// let decoder = Decoder::<SymphoniaAac>::new(file, wav_config())?;
+/// while let Some(chunk) = decoder.next_chunk()? {
+///     // Process PCM
+/// }
+/// ```
+pub struct Decoder<D: AudioDecoder> {
+    inner: D,
 }
 
-impl Decoder {
-    /// Create decoder by probing the media source.
+impl<D: AudioDecoder> Decoder<D> {
+    /// Create a new decoder from a Read + Seek source.
     ///
-    /// This is used for initial load when codec parameters are unknown.
-    pub fn new_with_probe<R>(reader: R, hint: Option<&str>, pcm_pool: PcmPool) -> DecodeResult<Self>
+    /// # Errors
+    ///
+    /// Returns an error if the decoder cannot be created (unsupported format,
+    /// invalid data, etc.).
+    pub fn new<R>(source: R, config: D::Config) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        let mss =
-            MediaSourceStream::new(Box::new(ReadSeekAdapter::new(reader)), Default::default());
-
-        let mut probe_hint = Hint::new();
-        if let Some(ext) = hint {
-            probe_hint.with_extension(ext);
-        }
-
-        let format_opts = FormatOptions {
-            enable_gapless: true,
-            ..Default::default()
-        };
-        let meta_opts = MetadataOptions::default();
-
-        let format_reader = symphonia::default::get_probe()
-            .probe(&probe_hint, mss, format_opts, meta_opts)
-            .map_err(DecodeError::Symphonia)?;
-
-        let track = format_reader
-            .default_track(TrackType::Audio)
-            .ok_or(DecodeError::NoAudioTrack)?
-            .clone();
-
-        let track_id = track.id;
-        let codec_params = extract_audio_params(&track)?;
-        let spec = extract_spec(&codec_params)?;
-        let decoder = create_decoder(&codec_params)?;
-
         Ok(Self {
-            format_reader,
-            decoder,
-            track_id,
-            spec,
-            pcm_pool,
+            inner: D::create(source, config)?,
         })
     }
 
-    /// Create decoder directly from MediaInfo without full probe.
+    /// Decode the next chunk of PCM data.
     ///
-    /// This is used for ABR switch when we know the container/codec from HLS playlist.
-    /// Creates FormatReader and AudioDecoder directly based on MediaInfo.
+    /// Returns `Ok(Some(chunk))` with decoded PCM data, or `Ok(None)` at
+    /// end of stream.
     ///
-    /// For fMP4 sources, uses StreamingFmp4Adapter which provides virtual
-    /// byte_len() to satisfy symphonia's seek requirements.
-    pub fn new_from_media_info<R>(
-        reader: R,
-        media_info: &MediaInfo,
-        pcm_pool: PcmPool,
-    ) -> DecodeResult<Self>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
-        let format_opts = FormatOptions {
-            enable_gapless: true,
-            ..Default::default()
-        };
-
-        // fMP4 and FLAC (typically in fMP4 for HLS) need StreamingFmp4Adapter
-        // with dynamic seekable control
-        let needs_fmp4_adapter = media_info.container == Some(ContainerFormat::Fmp4)
-            || media_info.codec == Some(AudioCodec::Flac);
-
-        let format_reader: Box<dyn FormatReader> = if needs_fmp4_adapter {
-            // Create adapter and save seekable flag before passing to MSS
-            let adapter = StreamingFmp4Adapter::new(reader);
-            let seekable_flag = adapter.seekable_flag();
-
-            let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
-            let reader = create_format_reader_direct(
-                mss,
-                media_info.container,
-                media_info.codec,
-                format_opts,
-            )?;
-
-            // Probe complete - enable seeking for playback
-            seekable_flag.store(true, std::sync::atomic::Ordering::Release);
-            tracing::debug!("fMP4 probe complete, seek enabled");
-
-            reader
-        } else {
-            let mss =
-                MediaSourceStream::new(Box::new(ReadSeekAdapter::new(reader)), Default::default());
-            create_format_reader_direct(mss, media_info.container, media_info.codec, format_opts)?
-        };
-
-        let track = format_reader
-            .default_track(TrackType::Audio)
-            .ok_or(DecodeError::NoAudioTrack)?
-            .clone();
-
-        let track_id = track.id;
-        let codec_params = extract_audio_params(&track)?;
-        let spec = extract_spec(&codec_params)?;
-        let decoder = create_decoder(&codec_params)?;
-
-        Ok(Self {
-            format_reader,
-            decoder,
-            track_id,
-            spec,
-            pcm_pool,
-        })
-    }
-
-    /// Create decoder directly from cached codec parameters.
+    /// # Errors
     ///
-    /// This is used for ABR switch when we know the codec hasn't changed.
-    /// Still requires probe for FormatReader but reuses cached codec params.
-    pub fn new_direct<R>(
-        reader: R,
-        cached: &CachedCodecInfo,
-        pcm_pool: PcmPool,
-    ) -> DecodeResult<Self>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
-        let mss =
-            MediaSourceStream::new(Box::new(ReadSeekAdapter::new(reader)), Default::default());
-
-        let format_opts = FormatOptions {
-            enable_gapless: true,
-            ..Default::default()
-        };
-        let meta_opts = MetadataOptions::default();
-
-        let format_reader = symphonia::default::get_probe()
-            .probe(&Hint::new(), mss, format_opts, meta_opts)
-            .map_err(DecodeError::Symphonia)?;
-
-        let track = format_reader
-            .default_track(TrackType::Audio)
-            .ok_or(DecodeError::NoAudioTrack)?
-            .clone();
-
-        let track_id = track.id;
-        let spec = extract_spec(&cached.codec_params)?;
-        let decoder = create_decoder(&cached.codec_params)?;
-
-        Ok(Self {
-            format_reader,
-            decoder,
-            track_id,
-            spec,
-            pcm_pool,
-        })
-    }
-
-    /// Get total duration from track metadata.
-    ///
-    /// Returns `None` if duration cannot be determined (e.g. streaming sources).
-    pub fn duration(&self) -> Option<Duration> {
-        let track = self.format_reader.default_track(TrackType::Audio)?;
-        let num_frames = track.num_frames?;
-        let time_base = track.time_base?;
-        let time = time_base.calc_time(num_frames);
-        Some(Duration::new(
-            time.seconds,
-            (time.frac * 1_000_000_000.0) as u32,
-        ))
-    }
-
-    /// Extract track metadata from format reader tags.
-    pub fn metadata(&mut self) -> TrackMetadata {
-        let mut meta = TrackMetadata::default();
-        let metadata = self.format_reader.metadata();
-        let Some(revision) = metadata.current() else {
-            return meta;
-        };
-        for tag in &revision.media.tags {
-            if let Some(ref std_tag) = tag.std {
-                match std_tag {
-                    StandardTag::TrackTitle(title) => {
-                        meta.title = Some(title.to_string());
-                    }
-                    StandardTag::Artist(artist) => {
-                        meta.artist = Some(artist.to_string());
-                    }
-                    StandardTag::Album(album) => {
-                        meta.album = Some(album.to_string());
-                    }
-                    _ => {}
-                }
-            }
-        }
-        if let Some(visual) = revision.media.visuals.first() {
-            meta.artwork = Some(Arc::new(visual.data.to_vec()));
-        }
-        meta
-    }
-
-    /// Get codec parameters for caching.
-    pub fn codec_params(&self) -> Option<AudioCodecParameters> {
-        self.format_reader
-            .default_track(TrackType::Audio)
-            .and_then(|t| match &t.codec_params {
-                Some(CodecParameters::Audio(params)) => Some(params.clone()),
-                _ => None,
-            })
-    }
-
-    /// Get current PCM specification.
-    pub fn spec(&self) -> PcmSpec {
-        self.spec
-    }
-
-    /// Reset decoder state.
-    ///
-    /// Called after seek or ABR switch to clear any buffered data.
-    pub fn reset(&mut self) {
-        self.decoder.reset();
-    }
-
-    /// Seek to absolute time position.
-    ///
-    /// This is best-effort and may not be frame-accurate.
-    pub fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
-        let seek_to = SeekTo::Time {
-            time: Time::new(pos.as_secs(), pos.subsec_nanos() as f64 / 1_000_000_000.0),
-            track_id: Some(self.track_id),
-        };
-
-        self.format_reader
-            .seek(SeekMode::Accurate, seek_to)
-            .map_err(|e| DecodeError::SeekError(e.to_string()))?;
-
-        self.decoder.reset();
-        Ok(())
-    }
-
-    /// Decode next chunk of audio as f32 samples.
-    ///
-    /// Returns `None` on EOF.
-    #[cfg_attr(feature = "perf", hotpath::measure)]
+    /// Returns an error if decoding fails.
     pub fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
-        loop {
-            let packet = match self.format_reader.next_packet() {
-                Ok(Some(p)) => p,
-                Ok(None) => return Ok(None),
-                Err(SymphoniaError::ResetRequired) => {
-                    self.decoder.reset();
-                    continue;
-                }
-                Err(SymphoniaError::IoError(ref e))
-                    if e.kind() == std::io::ErrorKind::UnexpectedEof =>
-                {
-                    tracing::debug!("Treating UnexpectedEof as EOF");
-                    return Ok(None);
-                }
-                Err(e) => return Err(DecodeError::Symphonia(e)),
-            };
-
-            if packet.track_id() != self.track_id {
-                continue;
-            }
-
-            let decoded = match self.decoder.decode(&packet) {
-                Ok(d) => d,
-                Err(SymphoniaError::DecodeError(_)) => {
-                    continue;
-                }
-                Err(SymphoniaError::ResetRequired) => {
-                    self.decoder.reset();
-                    continue;
-                }
-                Err(e) => return Err(DecodeError::Symphonia(e)),
-            };
-
-            let spec = decoded.spec();
-            let channels = spec.channels().count();
-            let num_samples = decoded.samples_interleaved();
-
-            if num_samples == 0 {
-                continue;
-            }
-
-            // Convert to f32 interleaved using pooled buffer
-            let mut pcm = self.pcm_pool.get_with(|b| {
-                b.clear();
-                b.resize(num_samples, 0.0);
-            });
-            decoded.copy_to_slice_interleaved(&mut **pcm);
-
-            let pcm_spec = PcmSpec {
-                sample_rate: spec.rate(),
-                channels: channels as u16,
-            };
-
-            return Ok(Some(PcmChunk::new(pcm_spec, pcm.into_inner())));
-        }
+        self.inner.next_chunk()
     }
-}
 
-fn extract_audio_params(
-    track: &symphonia::core::formats::Track,
-) -> DecodeResult<AudioCodecParameters> {
-    match &track.codec_params {
-        Some(CodecParameters::Audio(params)) => Ok(params.clone()),
-        _ => Err(DecodeError::NoAudioTrack),
+    /// Get PCM output specification.
+    pub fn spec(&self) -> PcmSpec {
+        self.inner.spec()
     }
-}
 
-fn extract_spec(params: &AudioCodecParameters) -> DecodeResult<PcmSpec> {
-    let sample_rate = params
-        .sample_rate
-        .ok_or_else(|| DecodeError::DecodeError("No sample rate".to_string()))?;
-
-    let channels = params
-        .channels
-        .as_ref()
-        .map(|c| c.count() as u16)
-        .unwrap_or(2);
-
-    Ok(PcmSpec {
-        sample_rate,
-        channels,
-    })
-}
-
-fn create_decoder(params: &AudioCodecParameters) -> DecodeResult<Box<dyn AudioDecoder>> {
-    let opts = AudioDecoderOptions { verify: false };
-    CODEC_REGISTRY
-        .make_audio_decoder(params, &opts)
-        .map_err(DecodeError::Symphonia)
-}
-
-/// Create FormatReader directly based on container type without probe.
-fn create_format_reader_direct<'a>(
-    mss: MediaSourceStream<'a>,
-    container: Option<ContainerFormat>,
-    codec: Option<AudioCodec>,
-    opts: FormatOptions,
-) -> DecodeResult<Box<dyn FormatReader + 'a>> {
-    use symphonia::default::formats;
-
-    match container {
-        Some(ContainerFormat::Fmp4) => {
-            // For fMP4 (fragmented MP4), moov is at the beginning (in init segment),
-            // so IsoMp4Reader should work without seeking to end.
-            tracing::debug!("Creating IsoMp4Reader for fMP4");
-            match formats::IsoMp4Reader::try_new(mss, opts) {
-                Ok(reader) => Ok(Box::new(reader)),
-                Err(e) => {
-                    tracing::warn!(?e, "IsoMp4Reader failed for fMP4");
-                    Err(DecodeError::Symphonia(e))
-                }
-            }
-        }
-        Some(ContainerFormat::MpegTs) => {
-            // MPEG-TS reader might not be available in default features
-            probe_fallback(mss, opts)
-        }
-        Some(ContainerFormat::MpegAudio) => {
-            let reader = formats::MpaReader::try_new(mss, opts).map_err(DecodeError::Symphonia)?;
-            Ok(Box::new(reader))
-        }
-        Some(ContainerFormat::Wav) => {
-            let reader = formats::WavReader::try_new(mss, opts).map_err(DecodeError::Symphonia)?;
-            Ok(Box::new(reader))
-        }
-        Some(ContainerFormat::Ogg) => {
-            let reader = formats::OggReader::try_new(mss, opts).map_err(DecodeError::Symphonia)?;
-            Ok(Box::new(reader))
-        }
-        Some(ContainerFormat::Caf) => {
-            let reader = formats::CafReader::try_new(mss, opts).map_err(DecodeError::Symphonia)?;
-            Ok(Box::new(reader))
-        }
-        Some(ContainerFormat::Mkv) => {
-            let reader = formats::MkvReader::try_new(mss, opts).map_err(DecodeError::Symphonia)?;
-            Ok(Box::new(reader))
-        }
-        None => {
-            // No container hint - try to use codec hint
-            if let Some(codec) = codec {
-                match codec {
-                    AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
-                        // Try AdtsReader for AAC (streaming-friendly, no seek required)
-                        tracing::debug!("Trying AdtsReader for AAC");
-                        match formats::AdtsReader::try_new(mss, opts) {
-                            Ok(reader) => return Ok(Box::new(reader)),
-                            Err(e) => {
-                                tracing::debug!(?e, "AdtsReader failed, data might not be ADTS");
-                                return Err(DecodeError::Symphonia(e));
-                            }
-                        }
-                    }
-                    AudioCodec::Flac => {
-                        // FLAC in HLS is typically in fMP4 container
-                        tracing::debug!("Trying IsoMp4Reader for FLAC (likely fMP4)");
-                        match formats::IsoMp4Reader::try_new(mss, opts) {
-                            Ok(reader) => return Ok(Box::new(reader)),
-                            Err(e) => {
-                                tracing::debug!(?e, "IsoMp4Reader failed for FLAC");
-                                return Err(DecodeError::Symphonia(e));
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            // Fall back to probe
-            probe_fallback(mss, opts)
-        }
-    }
-}
-
-/// Fallback to probe when direct creation is not possible.
-fn probe_fallback<'a>(
-    mss: MediaSourceStream<'a>,
-    opts: FormatOptions,
-) -> DecodeResult<Box<dyn FormatReader + 'a>> {
-    let meta_opts = MetadataOptions::default();
-    symphonia::default::get_probe()
-        .probe(&Hint::new(), mss, opts, meta_opts)
-        .map_err(DecodeError::Symphonia)
-}
-
-struct ReadSeekAdapter<R> {
-    inner: R,
-}
-
-impl<R> ReadSeekAdapter<R> {
-    fn new(inner: R) -> Self {
-        Self { inner }
-    }
-}
-
-impl<R: Read> Read for ReadSeekAdapter<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.inner.read(buf)
-    }
-}
-
-impl<R: Seek> Seek for ReadSeekAdapter<R> {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+    /// Seek to a time position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if seeking fails or is not supported.
+    pub fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
         self.inner.seek(pos)
     }
-}
 
-impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for ReadSeekAdapter<R> {
-    fn is_seekable(&self) -> bool {
-        true
+    /// Get current playback position.
+    pub fn position(&self) -> Duration {
+        self.inner.position()
     }
 
-    fn byte_len(&self) -> Option<u64> {
-        None
-    }
-}
-
-/// MediaSource adapter for fMP4 streaming.
-///
-/// fMP4 (fragmented MP4) has moov at the beginning (in init segment).
-/// During probe/initialization, is_seekable=false to prevent IsoMp4Reader
-/// from scanning the entire stream. After probe, is_seekable=true for seek.
-struct StreamingFmp4Adapter<R> {
-    inner: R,
-    seekable: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl<R> StreamingFmp4Adapter<R> {
-    fn new(inner: R) -> Self {
-        Self {
-            inner,
-            // Start with seekable=false during probe
-            seekable: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        }
+    /// Get total duration if known.
+    ///
+    /// Returns `None` if duration cannot be determined (e.g., streaming).
+    pub fn duration(&self) -> Option<Duration> {
+        self.inner.duration()
     }
 
-    /// Get a clone of the seekable flag for external control.
-    fn seekable_flag(&self) -> std::sync::Arc<std::sync::atomic::AtomicBool> {
-        std::sync::Arc::clone(&self.seekable)
-    }
-}
-
-impl<R: Read> Read for StreamingFmp4Adapter<R> {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.inner.read(buf)
-    }
-}
-
-impl<R: Seek> Seek for StreamingFmp4Adapter<R> {
-    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.inner.seek(pos)
-    }
-}
-
-impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for StreamingFmp4Adapter<R> {
-    fn is_seekable(&self) -> bool {
-        self.seekable.load(std::sync::atomic::Ordering::Acquire)
+    /// Get reference to inner decoder.
+    pub fn inner(&self) -> &D {
+        &self.inner
     }
 
-    fn byte_len(&self) -> Option<u64> {
-        None
-    }
-}
-
-// Implement generic InnerDecoder trait for Decoder
-impl InnerDecoder for Decoder {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
-        Decoder::next_chunk(self)
+    /// Get mutable reference to inner decoder.
+    pub fn inner_mut(&mut self) -> &mut D {
+        &mut self.inner
     }
 
-    fn spec(&self) -> PcmSpec {
-        Decoder::spec(self)
+    /// Consume wrapper and return inner decoder.
+    pub fn into_inner(self) -> D {
+        self.inner
     }
 }
 
@@ -591,12 +107,24 @@ impl InnerDecoder for Decoder {
 mod tests {
     use std::io::Cursor;
 
-    use rstest::*;
+    use kithara_stream::{AudioCodec, ContainerFormat};
 
     use super::*;
+    use crate::{symphonia::SymphoniaConfig, traits::CodecType};
 
-    fn test_pool() -> PcmPool {
-        PcmPool::new(64, 200_000)
+    // PCM codec marker for testing with WAV files
+    struct Pcm;
+    impl CodecType for Pcm {
+        const CODEC: AudioCodec = AudioCodec::Pcm;
+    }
+
+    type TestDecoder = Decoder<crate::symphonia::Symphonia<Pcm>>;
+
+    fn wav_config() -> SymphoniaConfig {
+        SymphoniaConfig {
+            container: Some(ContainerFormat::Wav),
+            ..Default::default()
+        }
     }
 
     /// Create minimal valid WAV file (PCM 16-bit stereo, 44100Hz)
@@ -639,452 +167,102 @@ mod tests {
         wav
     }
 
-    /// Create minimal corrupted WAV (invalid header)
-    fn create_corrupted_wav() -> Vec<u8> {
-        let mut wav = Vec::new();
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&100u32.to_le_bytes());
-        wav.extend_from_slice(b"CORR"); // Invalid WAVE signature
-        wav
-    }
-
-    // ========================================================================
-    // Constructor Tests
-    // ========================================================================
-
-    #[rstest]
-    #[case(100, 44100, 2, "44100Hz stereo")]
-    #[case(100, 48000, 2, "48000Hz stereo")]
-    #[case(100, 44100, 1, "44100Hz mono")]
-    fn test_new_with_probe_wav(
-        #[case] sample_count: usize,
-        #[case] sample_rate: u32,
-        #[case] channels: u16,
-        #[case] _desc: &str,
-    ) {
-        let wav_data = create_test_wav(sample_count, sample_rate, channels);
-        let cursor = Cursor::new(wav_data);
-
-        let decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-
-        assert_eq!(decoder.spec().sample_rate, sample_rate);
-        assert_eq!(decoder.spec().channels, channels);
-    }
-
     #[test]
-    fn test_new_with_probe_no_hint() {
-        let wav_data = create_test_wav(100, 44100, 2);
-        let cursor = Cursor::new(wav_data);
+    fn test_decoder_wrapper_create() {
+        let wav = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav);
 
-        let decoder = Decoder::new_with_probe(cursor, None, test_pool()).unwrap();
+        let decoder = TestDecoder::new(cursor, wav_config());
+        assert!(decoder.is_ok());
 
+        let decoder = decoder.unwrap();
         assert_eq!(decoder.spec().sample_rate, 44100);
         assert_eq!(decoder.spec().channels, 2);
     }
 
     #[test]
-    fn test_new_with_probe_corrupted() {
-        let corrupted = create_corrupted_wav();
-        let cursor = Cursor::new(corrupted);
+    fn test_decoder_wrapper_next_chunk() {
+        let wav = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav);
 
-        let result = Decoder::new_with_probe(cursor, Some("wav"), test_pool());
-
-        assert!(result.is_err());
-        match result {
-            Err(DecodeError::Symphonia(_)) => {}
-            _ => panic!("Expected Symphonia error"),
-        }
-    }
-
-    #[test]
-    fn test_new_with_probe_empty() {
-        let empty = Vec::new();
-        let cursor = Cursor::new(empty);
-
-        let result = Decoder::new_with_probe(cursor, Some("wav"), test_pool());
-
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_new_from_media_info_wav() {
-        let wav_data = create_test_wav(100, 44100, 2);
-        let cursor = Cursor::new(wav_data);
-
-        let media_info = MediaInfo::default()
-            .with_container(ContainerFormat::Wav)
-            .with_sample_rate(44100)
-            .with_channels(2);
-
-        let decoder = Decoder::new_from_media_info(cursor, &media_info, test_pool()).unwrap();
-
-        assert_eq!(decoder.spec().sample_rate, 44100);
-        assert_eq!(decoder.spec().channels, 2);
-    }
-
-    // ========================================================================
-    // Decode Tests
-    // ========================================================================
-
-    #[rstest]
-    #[case(100, 44100, 2)]
-    #[case(200, 48000, 1)]
-    #[case(50, 96000, 2)]
-    fn test_next_chunk_basic(
-        #[case] sample_count: usize,
-        #[case] sample_rate: u32,
-        #[case] channels: u16,
-    ) {
-        let wav_data = create_test_wav(sample_count, sample_rate, channels);
-        let cursor = Cursor::new(wav_data);
-
-        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
+        let mut decoder = TestDecoder::new(cursor, wav_config()).unwrap();
 
         let chunk = decoder.next_chunk().unwrap();
         assert!(chunk.is_some());
 
         let chunk = chunk.unwrap();
-        assert_eq!(chunk.spec.sample_rate, sample_rate);
-        assert_eq!(chunk.spec.channels, channels);
+        assert_eq!(chunk.spec.sample_rate, 44100);
         assert!(!chunk.pcm.is_empty());
     }
 
     #[test]
-    fn test_next_chunk_eof() {
-        let wav_data = create_test_wav(10, 44100, 2);
-        let cursor = Cursor::new(wav_data);
+    fn test_decoder_wrapper_seek() {
+        let wav = create_test_wav(44100, 44100, 2); // 1 second
+        let cursor = Cursor::new(wav);
 
-        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
+        let mut decoder = TestDecoder::new(cursor, wav_config()).unwrap();
 
-        // Read all chunks
-        while let Some(_) = decoder.next_chunk().unwrap() {}
-
-        // Next call should return None (EOF)
-        let result = decoder.next_chunk().unwrap();
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_next_chunk_multiple() {
-        let wav_data = create_test_wav(1000, 44100, 2);
-        let cursor = Cursor::new(wav_data);
-
-        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-
-        let mut chunk_count = 0;
-        let mut total_samples = 0;
-
-        while let Some(chunk) = decoder.next_chunk().unwrap() {
-            chunk_count += 1;
-            total_samples += chunk.pcm.len();
-        }
-
-        assert!(chunk_count > 0);
-        assert!(total_samples > 0);
-    }
-
-    // ========================================================================
-    // Spec Tests
-    // ========================================================================
-
-    #[rstest]
-    #[case(44100, 2)]
-    #[case(48000, 1)]
-    #[case(96000, 6)]
-    fn test_spec(#[case] sample_rate: u32, #[case] channels: u16) {
-        let wav_data = create_test_wav(100, sample_rate, channels);
-        let cursor = Cursor::new(wav_data);
-
-        let decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-
-        let spec = decoder.spec();
-        assert_eq!(spec.sample_rate, sample_rate);
-        assert_eq!(spec.channels, channels);
-    }
-
-    // ========================================================================
-    // Codec Params Tests
-    // ========================================================================
-
-    #[test]
-    fn test_codec_params() {
-        let wav_data = create_test_wav(100, 44100, 2);
-        let cursor = Cursor::new(wav_data);
-
-        let decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-
-        let params = decoder.codec_params();
-        assert!(params.is_some());
-
-        let params = params.unwrap();
-        assert_eq!(params.sample_rate, Some(44100));
-    }
-
-    // ========================================================================
-    // Reset Tests
-    // ========================================================================
-
-    #[test]
-    fn test_reset() {
-        let wav_data = create_test_wav(1000, 44100, 2);
-        let cursor = Cursor::new(wav_data);
-
-        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-
-        // Read one chunk
-        let _ = decoder.next_chunk().unwrap();
-
-        // Reset should not fail (clears decoder state, but doesn't seek)
-        decoder.reset();
-
-        // After reset without seek, can still decode remaining data
-        // (reset is typically used after seek, not standalone)
-    }
-
-    #[test]
-    fn test_seek_and_reset() {
-        let wav_data = create_test_wav(10000, 44100, 2);
-        let cursor = Cursor::new(wav_data);
-
-        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-
-        // Read some chunks
-        let _ = decoder.next_chunk().unwrap();
+        // Read a chunk
         let _ = decoder.next_chunk().unwrap();
 
         // Seek to beginning
         decoder.seek(Duration::from_secs(0)).unwrap();
 
-        // After seek, should be able to read from start again
-        let chunk = decoder.next_chunk().unwrap();
-        assert!(chunk.is_some());
-    }
-
-    // ========================================================================
-    // Seek Tests
-    // ========================================================================
-
-    #[rstest]
-    #[case(Duration::from_secs(0))]
-    #[case(Duration::from_millis(100))]
-    #[case(Duration::from_millis(500))]
-    fn test_seek_positions(#[case] pos: Duration) {
-        let wav_data = create_test_wav(44100, 44100, 2); // 1 second of audio
-        let cursor = Cursor::new(wav_data);
-
-        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-
-        let result = decoder.seek(pos);
-        assert!(result.is_ok());
-
-        // Should be able to decode after seek
+        // Should be able to read again
         let chunk = decoder.next_chunk().unwrap();
         assert!(chunk.is_some());
     }
 
     #[test]
-    fn test_seek_to_zero() {
-        let wav_data = create_test_wav(10000, 44100, 2);
-        let cursor = Cursor::new(wav_data);
-
-        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-
-        // Read chunks
-        let _ = decoder.next_chunk().unwrap();
-        let _ = decoder.next_chunk().unwrap();
-
-        // Seek back to start
-        decoder.seek(Duration::from_secs(0)).unwrap();
-
-        // Should read from beginning again
-        let chunk = decoder.next_chunk().unwrap();
-        assert!(chunk.is_some());
-    }
-
-    #[test]
-    fn test_seek_beyond_duration() {
-        let wav_data = create_test_wav(1000, 44100, 2); // Short file
-        let cursor = Cursor::new(wav_data);
-
-        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-
-        // Try to seek beyond file duration
-        let result = decoder.seek(Duration::from_secs(100));
-
-        // Seek might succeed but next_chunk will return None (EOF)
-        if result.is_ok() {
-            let chunk = decoder.next_chunk().unwrap();
-            assert!(chunk.is_none());
-        }
-    }
-
-    // ========================================================================
-    // new_direct() Tests
-    // ========================================================================
-
-    #[test]
-    fn test_new_direct_with_cached_params() {
-        let wav_data = create_test_wav(100, 44100, 2);
-        let cursor1 = Cursor::new(wav_data.clone());
-
-        // First create decoder to get codec params
-        let decoder1 = Decoder::new_with_probe(cursor1, Some("wav"), test_pool()).unwrap();
-        let codec_params = decoder1.codec_params().unwrap();
-
-        // Create cached info
-        let cached = CachedCodecInfo { codec_params };
-
-        // Now create new decoder with cached params
-        let cursor2 = Cursor::new(wav_data);
-        let decoder2 = Decoder::new_direct(cursor2, &cached, test_pool()).unwrap();
-
-        assert_eq!(decoder2.spec().sample_rate, 44100);
-        assert_eq!(decoder2.spec().channels, 2);
-    }
-
-    #[test]
-    fn test_new_direct_decode() {
-        let wav_data = create_test_wav(100, 44100, 2);
-        let cursor1 = Cursor::new(wav_data.clone());
-
-        let decoder1 = Decoder::new_with_probe(cursor1, Some("wav"), test_pool()).unwrap();
-        let codec_params = decoder1.codec_params().unwrap();
-        let cached = CachedCodecInfo { codec_params };
-
-        let cursor2 = Cursor::new(wav_data);
-        let mut decoder2 = Decoder::new_direct(cursor2, &cached, test_pool()).unwrap();
-
-        // Should be able to decode
-        let chunk = decoder2.next_chunk().unwrap();
-        assert!(chunk.is_some());
-    }
-
-    // ========================================================================
-    // Error Path Tests
-    // ========================================================================
-
-    #[test]
-    fn test_no_audio_track() {
-        // Create WAV with minimal header but no actual audio data
-        let mut wav = Vec::new();
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&36u32.to_le_bytes());
-        wav.extend_from_slice(b"WAVE");
-        wav.extend_from_slice(b"fmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-
+    fn test_decoder_wrapper_position() {
+        let wav = create_test_wav(44100, 44100, 2);
         let cursor = Cursor::new(wav);
-        let result = Decoder::new_with_probe(cursor, Some("wav"), test_pool());
 
-        assert!(result.is_err());
+        let mut decoder = TestDecoder::new(cursor, wav_config()).unwrap();
+
+        assert_eq!(decoder.position(), Duration::ZERO);
+
+        // Read a chunk
+        let _ = decoder.next_chunk().unwrap();
+
+        // Position should advance
+        assert!(decoder.position() > Duration::ZERO);
     }
 
     #[test]
-    fn test_invalid_format() {
-        let random_data = [0xDE, 0xAD, 0xBE, 0xEF].repeat(250);
-        let cursor = Cursor::new(random_data);
+    fn test_decoder_wrapper_duration() {
+        let wav = create_test_wav(44100, 44100, 2); // 1 second
+        let cursor = Cursor::new(wav);
 
-        let result = Decoder::new_with_probe(cursor, None, test_pool());
+        let decoder = TestDecoder::new(cursor, wav_config()).unwrap();
 
-        assert!(result.is_err());
-        match result {
-            Err(DecodeError::Symphonia(_)) => {}
-            _ => panic!("Expected Symphonia error"),
-        }
+        let duration = decoder.duration();
+        assert!(duration.is_some());
+
+        let dur = duration.unwrap();
+        assert!(dur.as_secs_f64() > 0.9 && dur.as_secs_f64() < 1.1);
     }
 
     #[test]
-    fn test_truncated_file() {
-        let mut wav_data = create_test_wav(100, 44100, 2);
-        // Truncate the data
-        wav_data.truncate(wav_data.len() / 2);
+    fn test_decoder_wrapper_inner_access() {
+        let wav = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav);
 
-        let cursor = Cursor::new(wav_data);
+        let decoder = TestDecoder::new(cursor, wav_config()).unwrap();
 
-        let mut decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-
-        // Try to read - should eventually fail or return None
-        let mut chunk_count = 0;
-        while let Ok(Some(_)) = decoder.next_chunk() {
-            chunk_count += 1;
-            if chunk_count > 100 {
-                break; // Prevent infinite loop
-            }
-        }
-        // Test passes if we don't panic
+        // Test inner() returns reference
+        let _inner = decoder.inner();
     }
 
     #[test]
-    fn test_new_from_media_info_unsupported_container() {
-        let wav_data = create_test_wav(100, 44100, 2);
-        let cursor = Cursor::new(wav_data);
+    fn test_decoder_wrapper_into_inner() {
+        let wav = create_test_wav(100, 44100, 2);
+        let cursor = Cursor::new(wav);
 
-        // Try to create with MpegTs container (likely not in default features)
-        let media_info = MediaInfo::default()
-            .with_container(ContainerFormat::MpegTs)
-            .with_sample_rate(44100)
-            .with_channels(2);
+        let decoder = TestDecoder::new(cursor, wav_config()).unwrap();
 
-        let result = Decoder::new_from_media_info(cursor, &media_info, test_pool());
-
-        // Should either succeed with probe fallback or fail
-        // Test just verifies it doesn't panic
-        let _ = result;
-    }
-
-    #[test]
-    fn test_new_from_media_info_mismatch() {
-        let wav_data = create_test_wav(100, 44100, 2);
-        let cursor = Cursor::new(wav_data);
-
-        // Provide wrong container type (Ogg instead of WAV)
-        let media_info = MediaInfo::default()
-            .with_container(ContainerFormat::Ogg)
-            .with_sample_rate(44100)
-            .with_channels(2);
-
-        let result = Decoder::new_from_media_info(cursor, &media_info, test_pool());
-
-        // Should fail because WAV data can't be read as Ogg
-        assert!(result.is_err());
-    }
-
-    // ========================================================================
-    // CachedCodecInfo Tests
-    // ========================================================================
-
-    #[test]
-    fn test_cached_codec_info_clone() {
-        let wav_data = create_test_wav(100, 44100, 2);
-        let cursor = Cursor::new(wav_data);
-
-        let decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-        let params = decoder.codec_params().unwrap();
-
-        let cached = CachedCodecInfo {
-            codec_params: params.clone(),
-        };
-        let cloned = cached.clone();
-
-        assert_eq!(
-            cached.codec_params.sample_rate,
-            cloned.codec_params.sample_rate
-        );
-    }
-
-    #[test]
-    fn test_cached_codec_info_debug() {
-        let wav_data = create_test_wav(100, 44100, 2);
-        let cursor = Cursor::new(wav_data);
-
-        let decoder = Decoder::new_with_probe(cursor, Some("wav"), test_pool()).unwrap();
-        let params = decoder.codec_params().unwrap();
-
-        let cached = CachedCodecInfo {
-            codec_params: params,
-        };
-        let debug_str = format!("{:?}", cached);
-
-        assert!(debug_str.contains("CachedCodecInfo"));
+        // Consume and get inner
+        let inner = decoder.into_inner();
+        assert_eq!(inner.spec().sample_rate, 44100);
     }
 }

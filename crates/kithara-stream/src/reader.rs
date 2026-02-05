@@ -51,6 +51,11 @@ impl<S: Source> Reader<S> {
         self.source.current_segment_range()
     }
 
+    /// Get byte range of first segment with current format after ABR switch.
+    pub fn format_change_segment_range(&self) -> Option<std::ops::Range<u64>> {
+        self.source.format_change_segment_range()
+    }
+
     /// Get mutable reference to inner source.
     pub fn source_mut(&mut self) -> &mut S {
         &mut self.source
@@ -122,7 +127,10 @@ impl<S: Source> Seek for Reader<S> {
         {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "seek past EOF",
+                format!(
+                    "seek past EOF: new_pos={new_pos} len={len} current_pos={} seek_from={pos:?}",
+                    self.pos
+                ),
             ));
         }
 

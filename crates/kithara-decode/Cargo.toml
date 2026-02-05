@@ -13,7 +13,10 @@ tracing = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]
+default = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
+apple = []
+android = []
 
 [dev-dependencies]
 rstest = { workspace = true }

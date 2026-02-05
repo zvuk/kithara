@@ -141,9 +141,27 @@ impl<T: StreamType> Stream<T> {
         self.pending_format_change = Some(info);
     }
 
+    /// Get total length if known.
+    pub fn len(&self) -> Option<u64> {
+        self.reader.len()
+    }
+
+    /// Check if length is zero or unknown.
+    pub fn is_empty(&self) -> bool {
+        self.reader.is_empty()
+    }
+
     /// Get current segment byte range (for segmented sources like HLS).
     pub fn current_segment_range(&self) -> Option<std::ops::Range<u64>> {
         self.reader.current_segment_range()
+    }
+
+    /// Get byte range of first segment with current format after ABR switch.
+    ///
+    /// For HLS: returns the first segment of the new variant which contains
+    /// init data (ftyp/moov). This is where the decoder should be recreated.
+    pub fn format_change_segment_range(&self) -> Option<std::ops::Range<u64>> {
+        self.reader.format_change_segment_range()
     }
 }
 
