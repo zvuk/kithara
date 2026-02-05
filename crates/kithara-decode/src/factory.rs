@@ -24,6 +24,8 @@ use std::{
 
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+use crate::apple::{AppleAac, AppleAlac, AppleConfig, AppleFlac, AppleMp3};
 use crate::{
     error::{DecodeError, DecodeResult},
     symphonia::{
@@ -31,9 +33,6 @@ use crate::{
     },
     traits::{Alac, AudioDecoder, InnerDecoder},
 };
-
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-use crate::apple::{AppleAac, AppleAlac, AppleConfig, AppleFlac, AppleMp3};
 
 /// Selector for choosing how to detect/specify the codec.
 #[derive(Debug, Clone)]
@@ -118,12 +117,14 @@ impl DecoderFactory {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        // Determine codec from selector
-        let codec = match selector {
-            CodecSelector::Exact(c) => c,
-            CodecSelector::Probe(hint) => Self::probe_codec(&hint)?,
+        // Determine codec and container from selector
+        let (codec, container) = match selector {
+            CodecSelector::Exact(c) => (c, None),
+            CodecSelector::Probe(ref hint) => (Self::probe_codec(hint)?, hint.container),
             CodecSelector::Auto => return Err(DecodeError::ProbeFailed),
         };
+
+        tracing::debug!(?codec, ?container, "DecoderFactory::create called");
 
         // Try hardware decoder first if preferred
         #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -134,13 +135,21 @@ impl DecoderFactory {
         }
 
         // Build Symphonia config from DecoderConfig
+        // Use container hint for probe if available (critical for HLS fMP4)
+        let hint = container
+            .and_then(Self::container_to_hint)
+            .map(String::from);
+        tracing::debug!(?hint, "Using Symphonia hint");
+
         let symphonia_config = SymphoniaConfig {
             verify: false,
             gapless: config.gapless,
             byte_len_handle: config.byte_len_handle,
+            hint,
         };
 
         // Create appropriate decoder based on codec
+        tracing::debug!("Creating Symphonia decoder...");
         Self::create_symphonia_decoder(source, codec, symphonia_config)
     }
 
@@ -282,6 +291,22 @@ impl DecoderFactory {
         }
     }
 
+    /// Map container format to Symphonia probe hint.
+    ///
+    /// This is critical for HLS fMP4 streams where codec hint ("aac")
+    /// doesn't work but container hint ("mp4") does.
+    fn container_to_hint(container: ContainerFormat) -> Option<&'static str> {
+        match container {
+            ContainerFormat::Fmp4 => Some("mp4"),
+            ContainerFormat::MpegAudio => Some("mp3"),
+            ContainerFormat::Ogg => Some("ogg"),
+            ContainerFormat::Wav => Some("wav"),
+            ContainerFormat::Caf => Some("caf"),
+            ContainerFormat::Mkv => Some("mkv"),
+            ContainerFormat::MpegTs => None, // MPEG-TS needs special handling
+        }
+    }
+
     /// Create a Symphonia decoder for the given codec.
     fn create_symphonia_decoder<R>(
         source: R,
@@ -349,6 +374,8 @@ impl DecoderFactory {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
+        tracing::debug!(?media_info, "create_from_media_info called");
+
         let hint = ProbeHint {
             codec: media_info.codec,
             container: media_info.container,
@@ -780,11 +807,8 @@ mod tests {
 
         // AAC will try Apple first (fails with "not implemented"),
         // then fall back to Symphonia (which will also fail with invalid data)
-        let result = DecoderFactory::create(
-            cursor,
-            CodecSelector::Exact(AudioCodec::AacLc),
-            config,
-        );
+        let result =
+            DecoderFactory::create(cursor, CodecSelector::Exact(AudioCodec::AacLc), config);
 
         // The important thing is it falls back to Symphonia
         // (would be Backend error if it didn't fall back)

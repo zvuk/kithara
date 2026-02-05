@@ -433,22 +433,33 @@ where
 
         let pool = pool.get_or_insert_with(|| pcm_pool().clone());
 
-        // Create initial decoder
+        // Create initial decoder in spawn_blocking to avoid blocking tokio runtime.
+        // Symphonia probe() does blocking IO which would deadlock the async downloader.
+        debug!("Creating initial decoder...");
         let decoder_config = kithara_decode::DecoderConfig::default();
-        let decoder: Box<dyn kithara_decode::InnerDecoder> =
-            if let Some(ref info) = initial_media_info {
+        let shared_stream_for_decoder = shared_stream.clone();
+        let hint_for_decoder = hint.clone();
+        let initial_media_info_for_decoder = initial_media_info.clone();
+        let decoder: Box<dyn kithara_decode::InnerDecoder> = spawn_blocking(move || {
+            if let Some(ref info) = initial_media_info_for_decoder {
+                debug!(?info, "Calling create_from_media_info");
                 kithara_decode::DecoderFactory::create_from_media_info(
-                    shared_stream.clone(),
+                    shared_stream_for_decoder,
                     info,
-                    decoder_config.clone(),
-                )?
+                    decoder_config,
+                )
             } else {
                 kithara_decode::DecoderFactory::create_with_probe(
-                    shared_stream.clone(),
-                    hint.as_deref(),
-                    decoder_config.clone(),
-                )?
-            };
+                    shared_stream_for_decoder,
+                    hint_for_decoder.as_deref(),
+                    decoder_config,
+                )
+            }
+        })
+        .await
+        .map_err(|e| {
+            DecodeError::Io(std::io::Error::other(format!("decoder task panicked: {e}")))
+        })??;
 
         let initial_spec = decoder.spec();
         let total_duration = decoder.duration();

@@ -50,6 +50,11 @@ pub struct SymphoniaConfig {
     pub gapless: bool,
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
+    /// File extension hint for Symphonia probe (e.g., "mp4", "mp3").
+    ///
+    /// When set, overrides the codec-based hint. Use this when container
+    /// format is known (e.g., "mp4" for HLS fMP4 streams).
+    pub hint: Option<String>,
 }
 
 impl Default for SymphoniaConfig {
@@ -58,6 +63,7 @@ impl Default for SymphoniaConfig {
             verify: false,
             gapless: true,
             byte_len_handle: None,
+            hint: None,
         }
     }
 }
@@ -331,7 +337,11 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
         R: Read + Seek + Send + Sync + 'static,
         Self: Sized,
     {
-        let hint = Self::codec_hint();
+        // Use config.hint if provided, otherwise fall back to codec-based hint
+        let hint: Option<&str> = match &config.hint {
+            Some(h) => Some(h.as_str()),
+            None => Self::codec_hint(),
+        };
         let inner = SymphoniaInner::new(source, &config, hint)?;
 
         Ok(Self {
@@ -687,11 +697,13 @@ mod tests {
             verify: true,
             gapless: false,
             byte_len_handle: Some(Arc::clone(&handle)),
+            hint: Some("mp4".to_string()),
         };
 
         assert!(config.verify);
         assert!(!config.gapless);
         assert!(config.byte_len_handle.is_some());
+        assert_eq!(config.hint, Some("mp4".to_string()));
     }
 
     #[test]

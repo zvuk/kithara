@@ -110,10 +110,7 @@ mod tests {
     use kithara_stream::AudioCodec;
 
     use super::*;
-    use crate::{
-        symphonia::SymphoniaConfig,
-        traits::CodecType,
-    };
+    use crate::{symphonia::SymphoniaConfig, traits::CodecType};
 
     // PCM codec marker for testing with WAV files
     struct Pcm;
