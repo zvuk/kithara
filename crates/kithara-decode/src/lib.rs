@@ -30,6 +30,10 @@ mod symphonia;
 mod traits;
 mod types;
 
+// Platform-specific backends
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+mod apple;
+
 // Error types
 pub use error::{DecodeError, DecodeResult};
 
@@ -49,6 +53,10 @@ pub use symphonia::{
 
 // Factory for runtime selection
 pub use factory::{CodecSelector, DecoderConfig, DecoderFactory, ProbeHint};
+
+// Apple AudioToolbox backend (macOS/iOS only)
+#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
+pub use apple::{Apple, AppleAac, AppleAlac, AppleConfig, AppleFlac, AppleMp3};
 
 // Re-export types from kithara-stream for convenience
 pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
