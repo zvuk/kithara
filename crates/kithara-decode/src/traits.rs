@@ -6,7 +6,13 @@
 // Types are not yet exported but will be used in later tasks
 #![allow(dead_code)]
 
+use std::io::{Read, Seek};
+use std::time::Duration;
+
 use kithara_stream::AudioCodec;
+
+use crate::error::DecodeResult;
+use crate::types::{PcmChunk, PcmSpec};
 
 /// Marker trait for codec types.
 ///
@@ -47,6 +53,60 @@ impl CodecType for Vorbis {
     const CODEC: AudioCodec = AudioCodec::Vorbis;
 }
 
+/// Trait for all audio decoders (Symphonia, Apple, Android).
+///
+/// This trait abstracts over different decoder backends, allowing unified
+/// access to audio decoding functionality regardless of the underlying
+/// implementation.
+pub trait AudioDecoder: Send + 'static {
+    /// Configuration type specific to this decoder implementation.
+    type Config: Default + Send;
+
+    /// Create a new decoder from a Read + Seek source.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError`] if:
+    /// - The source cannot be read
+    /// - The codec is not supported
+    /// - The container format is invalid
+    fn create<R>(source: R, config: Self::Config) -> DecodeResult<Self>
+    where
+        R: Read + Seek + Send + 'static,
+        Self: Sized;
+
+    /// Decode the next chunk of PCM data.
+    ///
+    /// Returns `Ok(Some(chunk))` with PCM data, or `Ok(None)` at end of stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError`] if decoding fails.
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>>;
+
+    /// Get the PCM output specification.
+    fn spec(&self) -> PcmSpec;
+
+    /// Seek to a time position.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::SeekFailed`] if seeking is not supported
+    /// or the position is invalid.
+    fn seek(&mut self, pos: Duration) -> DecodeResult<()>;
+
+    /// Get current playback position.
+    fn position(&self) -> Duration;
+
+    /// Get total duration if known.
+    ///
+    /// Returns `None` if the duration cannot be determined (e.g., for
+    /// streams without a known length).
+    fn duration(&self) -> Option<Duration> {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,5 +134,11 @@ mod tests {
     #[test]
     fn test_vorbis_codec_type() {
         assert_eq!(Vorbis::CODEC, AudioCodec::Vorbis);
+    }
+
+    #[test]
+    fn test_audio_decoder_trait_is_object_safe() {
+        // This test verifies the trait can be used as dyn AudioDecoder
+        fn _accepts_boxed(_: Box<dyn AudioDecoder<Config = ()>>) {}
     }
 }
