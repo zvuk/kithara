@@ -76,7 +76,7 @@ pub trait AudioDecoder: Send + 'static {
     /// - The container format is invalid
     fn create<R>(source: R, config: Self::Config) -> DecodeResult<Self>
     where
-        R: Read + Seek + Send + 'static,
+        R: Read + Seek + Send + Sync + 'static,
         Self: Sized;
 
     /// Decode the next chunk of PCM data.
