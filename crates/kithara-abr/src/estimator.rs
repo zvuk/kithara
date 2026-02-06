@@ -1,12 +1,12 @@
 #[cfg(test)]
-use mockall::automock;
+use unimock::unimock;
 
 use super::{AbrOptions, ThroughputSample, ThroughputSampleSource};
 
 /// Trait for throughput estimation strategies.
 ///
 /// Allows testing `AbrController` with mock estimators.
-#[cfg_attr(test, automock)]
+#[cfg_attr(test, unimock(api = EstimatorMock))]
 pub trait Estimator {
     /// Get estimated throughput in bits per second.
     fn estimate_bps(&self) -> Option<u64>;

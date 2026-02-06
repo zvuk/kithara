@@ -3,8 +3,11 @@
 use std::time::Duration;
 
 use kithara_decode::{DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
+#[cfg(test)]
+use unimock::unimock;
 
 /// Source of PCM audio in the processing chain.
+#[cfg_attr(test, unimock(api = AudioGeneratorMock))]
 pub trait AudioGenerator: Send + 'static {
     /// Decode/generate next chunk of audio.
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>>;
@@ -20,6 +23,7 @@ pub trait AudioGenerator: Send + 'static {
 }
 
 /// Audio processing effect in the chain (transforms PCM chunks).
+#[cfg_attr(test, unimock(api = AudioEffectMock))]
 pub trait AudioEffect: Send + 'static {
     /// Process a PCM chunk, returning transformed output.
     ///

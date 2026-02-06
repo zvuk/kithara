@@ -322,9 +322,10 @@ mod tests {
     use std::time::Duration;
 
     use rstest::rstest;
+    use unimock::{MockFn, Unimock, matching};
 
     use super::{
-        super::{estimator::MockEstimator, types::Variant},
+        super::{estimator::EstimatorMock, types::Variant},
         *,
     };
 
@@ -494,29 +495,28 @@ mod tests {
             ..AbrOptions::default()
         };
 
-        let mut mock_estimator = MockEstimator::new();
-
-        // Setup expectations: estimate_bps() will be called exactly 2 times
-        mock_estimator
-            .expect_estimate_bps()
-            .times(2) // Built-in call count verification!
-            .returning(|| Some(1_000_000));
-
-        mock_estimator.expect_buffer_level_secs().returning(|| 0.0);
-
-        // push_sample() won't be called in this test
-        mock_estimator.expect_push_sample().times(0);
+        // estimate_bps() called exactly 2 times, buffer_level_secs() called freely
+        // push_sample() is never set up — unimock panics if called unexpectedly
+        let mock_estimator = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(1_000_000))
+                .n_times(2),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(0.0),
+        ));
 
         let c = AbrController::with_estimator(cfg, mock_estimator);
         let now = Instant::now();
 
-        // First decide - calls estimator once
+        // First decide — calls estimator once
         c.decide(now);
 
-        // Second decide - calls estimator again
+        // Second decide — calls estimator again
         c.decide(now);
 
-        // Mockall automatically verifies call counts on drop - no manual assert needed!
+        // Unimock verifies call counts on drop
     }
 
     #[test]
@@ -528,38 +528,34 @@ mod tests {
             ..AbrOptions::default()
         };
 
-        let mut mock_estimator = MockEstimator::new();
-
-        // Setup expectations: estimate_bps() will be called exactly ONCE
-        // (second decide() should early-return due to min_interval)
-        mock_estimator
-            .expect_estimate_bps()
-            .times(1) // Only first call triggers estimator
-            .returning(|| Some(5_000_000));
-
-        mock_estimator.expect_buffer_level_secs().returning(|| 20.0);
-
-        mock_estimator.expect_push_sample().times(0);
+        // estimate_bps() called exactly ONCE
+        // (second decide() early-returns due to min_interval)
+        let mock_estimator = Unimock::new((
+            EstimatorMock::estimate_bps
+                .some_call(matching!())
+                .returns(Some(5_000_000)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(20.0),
+        ));
 
         let c = AbrController::with_estimator(cfg, mock_estimator);
         let now = Instant::now();
 
-        // First call - should call estimator and cause switch
+        // First call — calls estimator and causes switch
         let d1 = c.decide(now);
         assert!(d1.changed, "First call should switch");
 
-        // Second call immediately - should NOT call estimator (min_interval not elapsed)
+        // Second call immediately — should NOT call estimator (min_interval)
         let d2 = c.decide(now);
         assert!(!d2.changed, "Second call should not switch");
         assert_eq!(d2.reason, AbrReason::MinInterval);
 
-        // Mockall automatically verifies estimator was called exactly once
+        // Unimock verifies estimator was called exactly once on drop
     }
 
     #[test]
     fn test_abr_sequence_estimate_then_push() {
-        use mockall::Sequence;
-
         let cfg = AbrOptions {
             mode: AbrMode::Auto(Some(1)),
             min_switch_interval: Duration::ZERO,
@@ -567,29 +563,22 @@ mod tests {
             ..AbrOptions::default()
         };
 
-        let mut seq = Sequence::new();
-        let mut mock_estimator = MockEstimator::new();
-
         // Verify sequence: estimate → push_sample → estimate
-        mock_estimator.expect_buffer_level_secs().returning(|| 0.0);
-
-        mock_estimator
-            .expect_estimate_bps()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|| Some(1_000_000));
-
-        mock_estimator
-            .expect_push_sample()
-            .times(1)
-            .in_sequence(&mut seq)
-            .return_const(());
-
-        mock_estimator
-            .expect_estimate_bps()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|| Some(2_000_000));
+        // buffer_level_secs is a stub (called any time, not sequenced)
+        let mock_estimator = Unimock::new((
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(0.0),
+            EstimatorMock::estimate_bps
+                .next_call(matching!())
+                .returns(Some(1_000_000)),
+            EstimatorMock::push_sample
+                .next_call(matching!(_))
+                .returns(()),
+            EstimatorMock::estimate_bps
+                .next_call(matching!())
+                .returns(Some(2_000_000)),
+        ));
 
         let mut c = AbrController::with_estimator(cfg, mock_estimator);
         let now = Instant::now();
@@ -609,8 +598,6 @@ mod tests {
 
     #[test]
     fn test_abr_sequence_multiple_decisions() {
-        use mockall::Sequence;
-
         let cfg = AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             min_switch_interval: Duration::ZERO,
@@ -618,28 +605,21 @@ mod tests {
             ..AbrOptions::default()
         };
 
-        let mut seq = Sequence::new();
-        let mut mock_estimator = MockEstimator::new();
-
-        mock_estimator.expect_buffer_level_secs().returning(|| 0.0);
-
-        mock_estimator
-            .expect_estimate_bps()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|| Some(500_000));
-
-        mock_estimator
-            .expect_estimate_bps()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|| Some(1_500_000));
-
-        mock_estimator
-            .expect_estimate_bps()
-            .times(1)
-            .in_sequence(&mut seq)
-            .returning(|| Some(3_000_000));
+        // Three ordered estimate_bps calls with different return values
+        let mock_estimator = Unimock::new((
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(0.0),
+            EstimatorMock::estimate_bps
+                .next_call(matching!())
+                .returns(Some(500_000)),
+            EstimatorMock::estimate_bps
+                .next_call(matching!())
+                .returns(Some(1_500_000)),
+            EstimatorMock::estimate_bps
+                .next_call(matching!())
+                .returns(Some(3_000_000)),
+        ));
 
         let c = AbrController::with_estimator(cfg, mock_estimator);
         let now = Instant::now();

@@ -1036,10 +1036,7 @@ impl Source for HlsSource {
     fn media_info(&self) -> Option<MediaInfo> {
         let segments = self.shared.segments.lock();
         let last = segments.last()?;
-        Some(
-            MediaInfo::new(last.codec, last.container)
-                .with_variant_index(last.variant as u32),
-        )
+        Some(MediaInfo::new(last.codec, last.container).with_variant_index(last.variant as u32))
     }
 
     fn current_segment_range(&self) -> Option<Range<u64>> {

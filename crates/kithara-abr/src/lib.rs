@@ -37,6 +37,8 @@
 //! ```
 
 #![forbid(unsafe_code)]
+// unimock macro generates `_` patterns for unit args; suppress the clippy lint in test builds
+#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 mod controller;
 mod estimator;

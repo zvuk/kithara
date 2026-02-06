@@ -164,7 +164,7 @@ impl DecoderFactory {
 
         // Note: Apple decoder uses Cursor<Vec<u8>> as placeholder
         // Real implementation will use the actual source
-        let dummy = Cursor::new(Vec::new());
+        let dummy: Box<dyn crate::traits::DecoderInput> = Box::new(Cursor::new(Vec::new()));
 
         match codec {
             AudioCodec::AacLc | AudioCodec::AacHe | AudioCodec::AacHeV2 => {
@@ -299,6 +299,7 @@ impl DecoderFactory {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
+        let source: Box<dyn crate::traits::DecoderInput> = Box::new(source);
         match codec {
             AudioCodec::Mp3 => {
                 let decoder = SymphoniaMp3::create(source, config)?;
