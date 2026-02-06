@@ -6,7 +6,6 @@
 //! Currently a placeholder — actual FFI implementation pending.
 
 use std::{
-    io::{Read, Seek},
     marker::PhantomData,
     sync::{
         Arc,
@@ -17,7 +16,7 @@ use std::{
 
 use crate::{
     error::{DecodeError, DecodeResult},
-    traits::{Aac, Alac, AudioDecoder, CodecType, Flac, InnerDecoder, Mp3},
+    traits::{Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, InnerDecoder, Mp3},
     types::{PcmChunk, PcmSpec, TrackMetadata},
 };
 
@@ -56,10 +55,10 @@ impl<C: CodecType> std::fmt::Debug for Android<C> {
 
 impl<C: CodecType> AudioDecoder for Android<C> {
     type Config = AndroidConfig;
+    type Source = Box<dyn DecoderInput>;
 
-    fn create<R>(_source: R, _config: Self::Config) -> DecodeResult<Self>
+    fn create(_source: Self::Source, _config: Self::Config) -> DecodeResult<Self>
     where
-        R: Read + Seek + Send + Sync + 'static,
         Self: Sized,
     {
         // TODO: Implement actual MediaCodec initialization
@@ -157,7 +156,7 @@ mod tests {
     #[test]
     fn test_android_decoder_not_implemented() {
         let cursor = Cursor::new(vec![0u8; 100]);
-        let result = AndroidAac::create(cursor, AndroidConfig::default());
+        let result = AndroidAac::create(Box::new(cursor), AndroidConfig::default());
         assert!(result.is_err());
 
         match result {

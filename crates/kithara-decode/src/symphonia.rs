@@ -51,7 +51,7 @@ use symphonia::default::formats::{
 
 use crate::{
     error::{DecodeError, DecodeResult},
-    traits::{Aac, AudioDecoder, CodecType, Flac, Mp3, Vorbis},
+    traits::{Aac, AudioDecoder, CodecType, DecoderInput, Flac, Mp3, Vorbis},
     types::{PcmChunk, PcmSpec, TrackMetadata},
 };
 
@@ -389,10 +389,10 @@ pub struct Symphonia<C: CodecType> {
 
 impl<C: CodecType> AudioDecoder for Symphonia<C> {
     type Config = SymphoniaConfig;
+    type Source = Box<dyn DecoderInput>;
 
-    fn create<R>(source: R, config: Self::Config) -> DecodeResult<Self>
+    fn create(source: Self::Source, config: Self::Config) -> DecodeResult<Self>
     where
-        R: Read + Seek + Send + Sync + 'static,
         Self: Sized,
     {
         let inner = SymphoniaInner::new(source, &config)?;
@@ -648,7 +648,7 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let decoder = SymphoniaPcm::create(cursor, config);
+        let decoder = SymphoniaPcm::create(Box::new(cursor), config);
         assert!(decoder.is_ok());
 
         let decoder = decoder.unwrap();
@@ -662,7 +662,7 @@ mod tests {
         let cursor = Cursor::new(wav_data);
 
         // Create without container - should fail (container is required)
-        let result = SymphoniaPcm::create(cursor, SymphoniaConfig::default());
+        let result = SymphoniaPcm::create(Box::new(cursor), SymphoniaConfig::default());
         assert!(result.is_err());
         assert!(matches!(result, Err(DecodeError::InvalidData(_))));
     }
@@ -676,7 +676,7 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let mut decoder = SymphoniaPcm::create(cursor, config).unwrap();
+        let mut decoder = SymphoniaPcm::create(Box::new(cursor), config).unwrap();
 
         let chunk = AudioDecoder::next_chunk(&mut decoder).unwrap();
         assert!(chunk.is_some());
@@ -696,7 +696,7 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let mut decoder = SymphoniaPcm::create(cursor, config).unwrap();
+        let mut decoder = SymphoniaPcm::create(Box::new(cursor), config).unwrap();
 
         // Read all chunks
         while AudioDecoder::next_chunk(&mut decoder).unwrap().is_some() {}
@@ -715,7 +715,7 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let mut decoder = SymphoniaPcm::create(cursor, config).unwrap();
+        let mut decoder = SymphoniaPcm::create(Box::new(cursor), config).unwrap();
 
         // Read some chunks
         let _ = AudioDecoder::next_chunk(&mut decoder).unwrap();
@@ -738,7 +738,7 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let mut decoder = SymphoniaPcm::create(cursor, config).unwrap();
+        let mut decoder = SymphoniaPcm::create(Box::new(cursor), config).unwrap();
 
         assert_eq!(AudioDecoder::position(&decoder), Duration::ZERO);
 
@@ -758,7 +758,7 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let decoder = SymphoniaPcm::create(cursor, config).unwrap();
+        let decoder = SymphoniaPcm::create(Box::new(cursor), config).unwrap();
 
         let duration = AudioDecoder::duration(&decoder);
         assert!(duration.is_some());
@@ -828,7 +828,7 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let result = SymphoniaPcm::create(cursor, config);
+        let result = SymphoniaPcm::create(Box::new(cursor), config);
         assert!(result.is_err());
     }
 
@@ -841,7 +841,7 @@ mod tests {
             container: Some(ContainerFormat::Wav),
             ..Default::default()
         };
-        let result = SymphoniaPcm::create(cursor, config);
+        let result = SymphoniaPcm::create(Box::new(cursor), config);
         assert!(result.is_err());
     }
 
@@ -854,7 +854,7 @@ mod tests {
             container: Some(ContainerFormat::MpegTs),
             ..Default::default()
         };
-        let result = SymphoniaPcm::create(cursor, config);
+        let result = SymphoniaPcm::create(Box::new(cursor), config);
         assert!(matches!(result, Err(DecodeError::UnsupportedContainer(_))));
     }
 }

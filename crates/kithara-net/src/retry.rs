@@ -461,14 +461,12 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn test_retry_net_get_range_success() {
-        let mock = Unimock::new(
-            NetMock::get_range
-                .some_call(matching!(_, _, _))
-                .answers(&|_, _, _, _| {
-                    use futures::stream;
-                    Ok(Box::pin(stream::empty()) as ByteStream)
-                }),
-        );
+        let mock = Unimock::new(NetMock::get_range.some_call(matching!(_, _, _)).answers(
+            &|_, _, _, _| {
+                use futures::stream;
+                Ok(Box::pin(stream::empty()) as ByteStream)
+            },
+        ));
         let policy = RetryPolicy::default();
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
 
