@@ -38,6 +38,7 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 // Internal modules
 mod events;
@@ -55,8 +56,8 @@ mod types;
 // Public API exports
 pub use events::{AudioEvent, AudioPipelineEvent};
 pub use kithara_decode::{
-    AudioCodec, ContainerFormat, DecoderConfig, DecoderFactory, InnerDecoder, MediaInfo, PcmChunk,
-    PcmSpec, TrackMetadata,
+    AudioCodec, ContainerFormat, DecoderConfig, DecoderFactory, DecoderInput, InnerDecoder,
+    MediaInfo, PcmChunk, PcmSpec, TrackMetadata,
 };
 pub use pipeline::{Audio, AudioConfig};
 pub use reader::SourceReader;

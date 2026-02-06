@@ -22,6 +22,7 @@
 //! ```
 
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 mod decoder;
 mod error;
@@ -55,6 +56,15 @@ pub use symphonia::{
     Symphonia, SymphoniaAac, SymphoniaConfig, SymphoniaFlac, SymphoniaMp3, SymphoniaVorbis,
 };
 // Traits and codec markers
-pub use traits::{Aac, Alac, AudioDecoder, CodecType, Flac, InnerDecoder, Mp3, Vorbis};
+pub use traits::{
+    Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, InnerDecoder, Mp3, Vorbis,
+};
 // Core types
 pub use types::{PcmChunk, PcmSpec, TrackMetadata};
+// Test utilities
+#[cfg(any(test, feature = "test-utils"))]
+pub use traits::AudioDecoderMock;
+#[cfg(any(test, feature = "test-utils"))]
+pub use traits::InnerDecoderMock;
+#[cfg(any(test, feature = "test-utils"))]
+pub use unimock;

@@ -5,7 +5,7 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [features]
-test-utils = ["mockall"]
+test-utils = ["unimock"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
@@ -17,7 +17,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true }
 url = { workspace = true }
 async-trait = { workspace = true }
-mockall = { workspace = true, optional = true }
+unimock = { workspace = true, optional = true }
 hotpath = { workspace = true, optional = true }
 
 [dev-dependencies]
@@ -27,4 +27,4 @@ tower = { workspace = true }
 futures = { workspace = true }
 rstest = { workspace = true }
 memory-stats = { workspace = true }
-mockall = { workspace = true }
+unimock = { workspace = true }

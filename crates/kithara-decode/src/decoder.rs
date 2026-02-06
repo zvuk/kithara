@@ -3,10 +3,7 @@
 //! Provides [`Decoder<D>`] which wraps any [`AudioDecoder`] implementation,
 //! providing a unified API for audio decoding.
 
-use std::{
-    io::{Read, Seek},
-    time::Duration,
-};
+use std::time::Duration;
 
 use crate::{
     error::DecodeResult,
@@ -34,16 +31,16 @@ pub struct Decoder<D: AudioDecoder> {
 }
 
 impl<D: AudioDecoder> Decoder<D> {
-    /// Create a new decoder from a Read + Seek source.
+    /// Create a new decoder from a source.
+    ///
+    /// The source type is determined by the decoder's associated `Source` type,
+    /// typically `Box<dyn DecoderInput>`.
     ///
     /// # Errors
     ///
     /// Returns an error if the decoder cannot be created (unsupported format,
     /// invalid data, etc.).
-    pub fn new<R>(source: R, config: D::Config) -> DecodeResult<Self>
-    where
-        R: Read + Seek + Send + Sync + 'static,
-    {
+    pub fn new(source: D::Source, config: D::Config) -> DecodeResult<Self> {
         Ok(Self {
             inner: D::create(source, config)?,
         })
@@ -172,7 +169,7 @@ mod tests {
         let wav = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav);
 
-        let decoder = TestDecoder::new(cursor, wav_config());
+        let decoder = TestDecoder::new(Box::new(cursor), wav_config());
         assert!(decoder.is_ok());
 
         let decoder = decoder.unwrap();
@@ -185,7 +182,7 @@ mod tests {
         let wav = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav);
 
-        let mut decoder = TestDecoder::new(cursor, wav_config()).unwrap();
+        let mut decoder = TestDecoder::new(Box::new(cursor), wav_config()).unwrap();
 
         let chunk = decoder.next_chunk().unwrap();
         assert!(chunk.is_some());
@@ -200,7 +197,7 @@ mod tests {
         let wav = create_test_wav(44100, 44100, 2); // 1 second
         let cursor = Cursor::new(wav);
 
-        let mut decoder = TestDecoder::new(cursor, wav_config()).unwrap();
+        let mut decoder = TestDecoder::new(Box::new(cursor), wav_config()).unwrap();
 
         // Read a chunk
         let _ = decoder.next_chunk().unwrap();
@@ -218,7 +215,7 @@ mod tests {
         let wav = create_test_wav(44100, 44100, 2);
         let cursor = Cursor::new(wav);
 
-        let mut decoder = TestDecoder::new(cursor, wav_config()).unwrap();
+        let mut decoder = TestDecoder::new(Box::new(cursor), wav_config()).unwrap();
 
         assert_eq!(decoder.position(), Duration::ZERO);
 
@@ -234,7 +231,7 @@ mod tests {
         let wav = create_test_wav(44100, 44100, 2); // 1 second
         let cursor = Cursor::new(wav);
 
-        let decoder = TestDecoder::new(cursor, wav_config()).unwrap();
+        let decoder = TestDecoder::new(Box::new(cursor), wav_config()).unwrap();
 
         let duration = decoder.duration();
         assert!(duration.is_some());
@@ -248,7 +245,7 @@ mod tests {
         let wav = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav);
 
-        let decoder = TestDecoder::new(cursor, wav_config()).unwrap();
+        let decoder = TestDecoder::new(Box::new(cursor), wav_config()).unwrap();
 
         // Test inner() returns reference
         let _inner = decoder.inner();
@@ -259,7 +256,7 @@ mod tests {
         let wav = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav);
 
-        let decoder = TestDecoder::new(cursor, wav_config()).unwrap();
+        let decoder = TestDecoder::new(Box::new(cursor), wav_config()).unwrap();
 
         // Consume and get inner
         let inner = decoder.into_inner();

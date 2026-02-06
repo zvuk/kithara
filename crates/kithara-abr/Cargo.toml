@@ -9,7 +9,7 @@ license.workspace = true
 tracing = { workspace = true }
 
 [dev-dependencies]
-mockall = { workspace = true }
+unimock = { workspace = true }
 rstest = { workspace = true }
 
 [lints]

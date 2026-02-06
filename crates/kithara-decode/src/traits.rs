@@ -10,10 +10,23 @@ use std::{
 
 use kithara_stream::AudioCodec;
 
+#[cfg(any(test, feature = "test-utils"))]
+use unimock::unimock;
+
 use crate::{
     error::DecodeResult,
     types::{PcmChunk, PcmSpec, TrackMetadata},
 };
+
+/// Combined trait for decoder input sources.
+///
+/// This supertrait combines `Read + Seek + Send + Sync` into a single trait
+/// that can be used as a trait object (`Box<dyn DecoderInput>`).
+///
+/// A blanket implementation is provided for all types satisfying the bounds.
+pub trait DecoderInput: Read + Seek + Send + Sync {}
+
+impl<T: Read + Seek + Send + Sync> DecoderInput for T {}
 
 /// Marker trait for codec types.
 ///
@@ -59,11 +72,23 @@ impl CodecType for Vorbis {
 /// This trait abstracts over different decoder backends, allowing unified
 /// access to audio decoding functionality regardless of the underlying
 /// implementation.
+///
+/// The `Source` associated type replaces a generic parameter on `create`,
+/// enabling the trait to be used with unimock for testing.
+#[cfg_attr(
+    any(test, feature = "test-utils"),
+    unimock(api = AudioDecoderMock, type Config = (); type Source = Box<dyn DecoderInput>;)
+)]
 pub trait AudioDecoder: Send + 'static {
     /// Configuration type specific to this decoder implementation.
     type Config: Default + Send;
 
-    /// Create a new decoder from a Read + Seek source.
+    /// Input source type for decoder construction.
+    ///
+    /// Typically `Box<dyn DecoderInput>` for concrete implementations.
+    type Source: Read + Seek + Send + Sync + 'static;
+
+    /// Create a new decoder from a source.
     ///
     /// # Errors
     ///
@@ -71,10 +96,16 @@ pub trait AudioDecoder: Send + 'static {
     /// - The source cannot be read
     /// - The codec is not supported
     /// - The container format is invalid
-    fn create<R>(source: R, config: Self::Config) -> DecodeResult<Self>
+    ///
+    /// The default implementation returns [`DecodeError::ProbeFailed`].
+    /// All concrete backends override this.
+    fn create(source: Self::Source, config: Self::Config) -> DecodeResult<Self>
     where
-        R: Read + Seek + Send + Sync + 'static,
-        Self: Sized;
+        Self: Sized,
+    {
+        let _ = (source, config);
+        Err(crate::error::DecodeError::ProbeFailed)
+    }
 
     /// Decode the next chunk of PCM data.
     ///
@@ -115,6 +146,7 @@ pub trait AudioDecoder: Send + 'static {
 ///
 /// Unlike [`AudioDecoder`], this trait does not have an associated
 /// `Config` type, making it object-safe for `Box<dyn InnerDecoder>`.
+#[cfg_attr(any(test, feature = "test-utils"), unimock(api = InnerDecoderMock))]
 pub trait InnerDecoder: Send + 'static {
     /// Decode the next chunk of PCM data.
     ///
@@ -182,6 +214,6 @@ mod tests {
     #[test]
     fn test_audio_decoder_trait_is_object_safe() {
         // This test verifies the trait can be used as dyn AudioDecoder
-        fn _accepts_boxed(_: Box<dyn AudioDecoder<Config = ()>>) {}
+        fn _accepts_boxed(_: Box<dyn AudioDecoder<Config = (), Source = Box<dyn DecoderInput>>>) {}
     }
 }

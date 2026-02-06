@@ -49,6 +49,7 @@ rstest = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
 hotpath = { workspace = true, features = ["hotpath", "hotpath-alloc"] }
+unimock = { workspace = true }
 
 [[example]]
 name = "file_audio"

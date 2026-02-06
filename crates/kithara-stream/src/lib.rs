@@ -8,6 +8,7 @@
 //! - `Backend`: spawns Downloader task, holds Source for direct access
 
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 mod backend;
 mod downloader;
@@ -29,3 +30,8 @@ pub use reader::Reader;
 pub use source::Source;
 pub use stream::{Stream, StreamConfig, StreamType};
 pub use writer::{NetWriter, Writer, WriterError, WriterItem};
+// Test utilities
+#[cfg(any(test, feature = "test-utils"))]
+pub use source::SourceMock;
+#[cfg(any(test, feature = "test-utils"))]
+pub use unimock;
