@@ -10,6 +10,9 @@ use std::{
 
 use kithara_stream::AudioCodec;
 
+#[cfg(any(test, feature = "test-utils"))]
+use unimock::unimock;
+
 use crate::{
     error::DecodeResult,
     types::{PcmChunk, PcmSpec, TrackMetadata},
@@ -115,6 +118,7 @@ pub trait AudioDecoder: Send + 'static {
 ///
 /// Unlike [`AudioDecoder`], this trait does not have an associated
 /// `Config` type, making it object-safe for `Box<dyn InnerDecoder>`.
+#[cfg_attr(any(test, feature = "test-utils"), unimock(api = InnerDecoderMock))]
 pub trait InnerDecoder: Send + 'static {
     /// Decode the next chunk of PCM data.
     ///

@@ -8,6 +8,8 @@
 use std::ops::Range;
 
 use kithara_storage::WaitOutcome;
+#[cfg(any(test, feature = "test-utils"))]
+use unimock::unimock;
 
 use crate::{error::StreamResult, media::MediaInfo};
 
@@ -18,6 +20,7 @@ use crate::{error::StreamResult, media::MediaInfo};
 ///
 /// Methods take `&mut self` to allow sources to maintain internal state
 /// (e.g., progress tracking, segment index updates).
+#[cfg_attr(any(test, feature = "test-utils"), unimock(api = SourceMock, type Item = u8; type Error = std::io::Error;))]
 pub trait Source: Send + 'static {
     /// Item type (bytes for raw streams, samples for decoded audio).
     type Item: Send;

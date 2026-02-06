@@ -11,12 +11,15 @@ symphonia = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 hotpath = { workspace = true, optional = true }
+unimock = { workspace = true, optional = true }
 
 [features]
 default = []
 perf = ["dep:hotpath", "hotpath/hotpath"]
 apple = []
 android = []
+test-utils = ["unimock"]
 
 [dev-dependencies]
 rstest = { workspace = true }
+unimock = { workspace = true }
