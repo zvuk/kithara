@@ -12,8 +12,6 @@ hotpath = { workspace = true, optional = true }
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
-[dev-dependencies]
-mockall = { workspace = true }
 
 [lints]
 workspace = true

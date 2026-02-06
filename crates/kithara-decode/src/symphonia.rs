@@ -100,9 +100,9 @@ impl SymphoniaInner {
         R: Read + Seek + Send + Sync + 'static,
     {
         // Create format reader directly - container MUST be specified
-        let container = config
-            .container
-            .ok_or(DecodeError::InvalidData("Container format must be specified".to_string()))?;
+        let container = config.container.ok_or(DecodeError::InvalidData(
+            "Container format must be specified".to_string(),
+        ))?;
 
         // Disable seek during initialization for ALL containers.
         // Some format readers (IsoMp4Reader) try to seek to end looking for atoms,

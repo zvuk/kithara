@@ -68,7 +68,7 @@ kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.3.1"
-mockall = "0.14"
+unimock = { version = "0.6", features = ["std"] }
 
 # async/runtime
 tokio = { version = "1.49.0", features = ["full"] }
