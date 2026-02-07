@@ -1,5 +1,6 @@
 //! All integration tests for kithara
 
+mod common;
 mod kithara_assets;
 mod kithara_decode;
 mod kithara_file;

@@ -3,10 +3,15 @@
 //! This demonstrates the audio architecture:
 //! - AudioConfig::<File>::new(file_config) creates config with stream settings
 //! - Audio::new(config) creates stream and audio pipeline
-//! - Audio runs symphonia in separate thread with PCM buffer
+//! - Audio runs decoder in separate thread with PCM buffer
 //! - Audio impl rodio::Source for direct playback
 //!
-//! Run with:
+//! Run with Symphonia decoder (software):
+//! ```
+//! cargo run -p kithara-audio --example file_audio --features rodio [URL]
+//! ```
+//!
+//! Run with Apple AudioToolbox (hardware, macOS only):
 //! ```
 //! cargo run -p kithara-audio --example file_audio --features rodio,apple [URL]
 //! ```
@@ -72,7 +77,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let playback_handle = tokio::task::spawn_blocking(move || {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
-        sink.set_volume(0.02);
+        sink.set_volume(1.0);
         sink.append(audio);
 
         info!("Playing...");

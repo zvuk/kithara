@@ -67,6 +67,10 @@ pub struct DecoderConfig {
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Enable gapless playback.
     pub gapless: bool,
+    /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
+    ///
+    /// Used when container format is not specified, as a hint for auto-detection.
+    pub hint: Option<String>,
 }
 
 impl Default for DecoderConfig {
@@ -75,6 +79,7 @@ impl Default for DecoderConfig {
             prefer_hardware: false,
             byte_len_handle: None,
             gapless: true,
+            hint: None,
         }
     }
 }
@@ -143,14 +148,17 @@ impl DecoderFactory {
         }
 
         // Build Symphonia config from DecoderConfig
-        // Pass container directly - Symphonia will create reader without probe
-        tracing::debug!(?container, "Using Symphonia decoder");
+        // If container is specified, Symphonia creates reader directly (no probe).
+        // If container is None, Symphonia falls back to probe with hint.
+        tracing::debug!(?container, hint = ?config.hint, "Using Symphonia decoder");
 
         let symphonia_config = SymphoniaConfig {
             verify: false,
             gapless: config.gapless,
             byte_len_handle: config.byte_len_handle,
             container,
+            hint: config.hint.clone(),
+            ..Default::default()
         };
 
         Self::create_symphonia_decoder(source, codec, symphonia_config)
@@ -400,29 +408,61 @@ impl DecoderFactory {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
+        // Only pass extension hint, don't derive container format.
+        // This ensures Symphonia uses its probe mechanism which can handle
+        // files with junk data or unusual metadata.
         let probe_hint = ProbeHint {
             extension: hint.map(String::from),
-            container: hint.and_then(Self::container_from_extension),
             ..Default::default()
         };
 
-        Self::create(source, CodecSelector::Probe(probe_hint), config)
-    }
-
-    /// Map file extension to container format.
-    fn container_from_extension(ext: &str) -> Option<ContainerFormat> {
-        match ext.to_lowercase().as_str() {
-            "mp3" => Some(ContainerFormat::MpegAudio),
-            "aac" => Some(ContainerFormat::Adts),
-            "m4a" | "mp4" => Some(ContainerFormat::Fmp4),
-            "flac" => Some(ContainerFormat::Flac),
-            "ogg" | "oga" => Some(ContainerFormat::Ogg),
-            "wav" | "wave" => Some(ContainerFormat::Wav),
-            "mkv" | "webm" => Some(ContainerFormat::Mkv),
-            "caf" => Some(ContainerFormat::Caf),
-            _ => None,
+        match Self::create(source, CodecSelector::Probe(probe_hint), config) {
+            Ok(decoder) => Ok(decoder),
+            Err(DecodeError::ProbeFailed) => {
+                // Hints alone couldn't determine the codec.
+                // This should not happen: the source is already consumed.
+                Err(DecodeError::ProbeFailed)
+            }
+            Err(e) => Err(e),
         }
     }
+
+    /// Create decoder by letting Symphonia probe the data directly.
+    ///
+    /// Unlike [`create_with_probe`] which requires codec hints, this method
+    /// delegates entirely to Symphonia's format detection. Useful after ABR
+    /// variant switches when the container format reported by HLS metadata
+    /// doesn't match the actual data (e.g., WAV served via HLS).
+    pub fn create_with_symphonia_probe<R>(
+        source: R,
+        config: DecoderConfig,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        tracing::debug!("Attempting Symphonia native probe (no codec hints)");
+
+        let symphonia_config = SymphoniaConfig {
+            verify: false,
+            gapless: config.gapless,
+            byte_len_handle: config.byte_len_handle,
+            container: None,
+            hint: config.hint,
+            probe_no_seek: true,
+        };
+
+        // Use Pcm as a dummy codec marker — the actual codec is determined
+        // by Symphonia's probe from the data itself.
+        use crate::traits::CodecType;
+        struct ProbeAny;
+        impl CodecType for ProbeAny {
+            const CODEC: AudioCodec = AudioCodec::Pcm;
+        }
+        let source: Box<dyn crate::traits::DecoderInput> = Box::new(source);
+        let decoder = Symphonia::<ProbeAny>::create(source, symphonia_config)?;
+        Ok(Box::new(decoder))
+    }
+
 }
 
 #[cfg(test)]
@@ -489,10 +529,12 @@ mod tests {
             prefer_hardware: true,
             byte_len_handle: Some(Arc::clone(&handle)),
             gapless: false,
+            hint: Some("mp3".to_string()),
         };
         assert!(config.prefer_hardware);
         assert!(config.byte_len_handle.is_some());
         assert!(!config.gapless);
+        assert_eq!(config.hint, Some("mp3".to_string()));
     }
 
     #[test]

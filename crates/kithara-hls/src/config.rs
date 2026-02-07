@@ -137,7 +137,7 @@ impl Default for HlsConfig {
             events_channel_capacity: 32,
             pool: None,
             look_ahead_bytes: None,
-            download_yield_interval: 8,
+            download_yield_interval: 1,
         }
     }
 }
