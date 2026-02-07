@@ -119,7 +119,12 @@ pub(super) struct OffsetReader<T: StreamType> {
 }
 
 impl<T: StreamType> OffsetReader<T> {
-    pub(super) fn new(shared: SharedStream<T>, base_offset: u64) -> Self {
+    pub(super) fn new(mut shared: SharedStream<T>, base_offset: u64) -> Self {
+        // Ensure the stream is positioned at base_offset so reads start from
+        // the correct location. This is critical when multiple fallback attempts
+        // share the same underlying stream — each one may leave the position
+        // in an arbitrary state.
+        let _ = shared.seek(std::io::SeekFrom::Start(base_offset));
         Self {
             shared,
             base_offset,

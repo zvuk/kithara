@@ -53,7 +53,16 @@ pub struct FileConfig {
     /// Events broadcast channel capacity (used when events_tx is not provided).
     pub events_channel_capacity: usize,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
-    pub look_ahead_bytes: u64,
+    ///
+    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
+    /// - `None` — no backpressure, download as fast as possible
+    pub look_ahead_bytes: Option<u64>,
+    /// How often to yield to the async runtime during fast downloads.
+    ///
+    /// When `look_ahead_bytes` is `None`, the downloader yields after this many
+    /// chunks to allow other tasks (like playback progress) to run.
+    /// Default: 8 chunks.
+    pub download_yield_interval: usize,
 }
 
 impl Default for FileConfig {
@@ -68,7 +77,8 @@ impl Default for FileConfig {
             cancel: None,
             events_tx: None,
             events_channel_capacity: 16,
-            look_ahead_bytes: 500_000,
+            look_ahead_bytes: None,
+            download_yield_interval: 8,
         }
     }
 }
@@ -84,7 +94,8 @@ impl FileConfig {
             cancel: None,
             events_tx: None,
             events_channel_capacity: 16,
-            look_ahead_bytes: 500_000,
+            look_ahead_bytes: None,
+            download_yield_interval: 8,
         }
     }
 
@@ -128,8 +139,20 @@ impl FileConfig {
     }
 
     /// Set max bytes the downloader may be ahead of the reader before it pauses.
-    pub fn with_look_ahead_bytes(mut self, bytes: u64) -> Self {
+    ///
+    /// - `Some(n)` — enable backpressure, pause when ahead by n bytes
+    /// - `None` — disable backpressure, download as fast as possible
+    pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
         self.look_ahead_bytes = bytes;
+        self
+    }
+
+    /// Set how often to yield to the async runtime during fast downloads.
+    ///
+    /// When downloading without backpressure, the downloader yields after this
+    /// many chunks to allow other tasks to run. Default: 8.
+    pub fn with_download_yield_interval(mut self, interval: usize) -> Self {
+        self.download_yield_interval = interval;
         self
     }
 }

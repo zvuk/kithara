@@ -3,12 +3,17 @@
 //! This demonstrates the audio architecture:
 //! - AudioConfig::<File>::new(file_config) creates config with stream settings
 //! - Audio::new(config) creates stream and audio pipeline
-//! - Audio runs symphonia in separate thread with PCM buffer
+//! - Audio runs decoder in separate thread with PCM buffer
 //! - Audio impl rodio::Source for direct playback
 //!
-//! Run with:
+//! Run with Symphonia decoder (software):
 //! ```
 //! cargo run -p kithara-audio --example file_audio --features rodio [URL]
+//! ```
+//!
+//! Run with Apple AudioToolbox (hardware, macOS only):
+//! ```
+//! cargo run -p kithara-audio --example file_audio --features rodio,apple [URL]
 //! ```
 
 use std::{env::args, error::Error};
@@ -50,7 +55,9 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(128);
     let hint = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
     let file_config = FileConfig::new(url.into());
-    let mut config = AudioConfig::<File>::new(file_config).with_events(events_tx);
+    let mut config = AudioConfig::<File>::new(file_config)
+        .with_prefer_hardware(true)
+        .with_events(events_tx);
     if let Some(ext) = hint {
         config = config.with_hint(ext);
     }

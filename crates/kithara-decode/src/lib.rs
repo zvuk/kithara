@@ -21,7 +21,8 @@
 //! let decoder = DecoderFactory::create(file, CodecSelector::Auto, DecoderConfig::default())?;
 //! ```
 
-#![forbid(unsafe_code)]
+// NOTE: deny instead of forbid to allow unsafe in platform-specific FFI modules (apple, android)
+#![deny(unsafe_code)]
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 mod decoder;

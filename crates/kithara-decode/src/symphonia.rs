@@ -35,18 +35,19 @@ use std::{
 };
 
 use kithara_stream::ContainerFormat;
-use symphonia::core::{
-    codecs::{
-        CodecParameters,
-        audio::{AudioDecoder as SymphoniaAudioDecoder, AudioDecoderOptions},
+use symphonia::{
+    core::{
+        codecs::{
+            CodecParameters,
+            audio::{AudioDecoder as SymphoniaAudioDecoder, AudioDecoderOptions},
+        },
+        errors::Error as SymphoniaError,
+        formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
+        io::MediaSourceStream,
+        meta::MetadataOptions,
+        units::Time,
     },
-    errors::Error as SymphoniaError,
-    formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType},
-    io::MediaSourceStream,
-    units::Time,
-};
-use symphonia::default::formats::{
-    AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader,
+    default::formats::{AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader},
 };
 
 use crate::{
@@ -69,7 +70,22 @@ pub struct SymphoniaConfig {
     /// When set, bypasses Symphonia's probe mechanism and creates
     /// the appropriate format reader directly. This is critical for
     /// HLS streams where the container format is known from playlist.
+    ///
+    /// When not set, falls back to Symphonia's probe mechanism which
+    /// can automatically detect format and skip junk data.
     pub container: Option<ContainerFormat>,
+    /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
+    ///
+    /// Used only when `container` is not set, as a hint for the probe.
+    pub hint: Option<String>,
+    /// Disable seek during probe-based initialization.
+    ///
+    /// When true, seek is disabled during Symphonia probe, preventing format
+    /// readers from seeking to end to validate file/chunk sizes. Useful after
+    /// ABR variant switches where the byte length seen by the adapter may not
+    /// match container header expectations (e.g., WAV `data_size` vs actual
+    /// available data). Seek is re-enabled after successful initialization.
+    pub probe_no_seek: bool,
 }
 
 // ────────────────────────────────── Inner ──────────────────────────────────
@@ -94,16 +110,44 @@ impl SymphoniaInner {
     /// Create a new inner decoder from a Read + Seek source.
     ///
     /// When `container` is specified in config, creates the format reader
-    /// directly without probing. Otherwise falls back to probe.
+    /// directly without probing. Otherwise falls back to probe which can
+    /// automatically detect format and skip junk data.
     fn new<R>(source: R, config: &SymphoniaConfig) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
-        // Create format reader directly - container MUST be specified
-        let container = config.container.ok_or(DecodeError::InvalidData(
-            "Container format must be specified".to_string(),
-        ))?;
+        // Format options
+        let format_opts = FormatOptions {
+            enable_gapless: config.gapless,
+            ..Default::default()
+        };
 
+        if let Some(container) = config.container {
+            // Direct reader creation (no probe) - needed for HLS fMP4
+            // where we know the container and need to avoid seek-to-end behavior
+            Self::new_direct(source, config, container, format_opts)
+        } else if config.probe_no_seek {
+            // Probe with seek disabled — prevents format readers from seeking
+            // to end to validate file/chunk sizes (ABR switch scenario)
+            Self::new_with_probe_no_seek(source, config, format_opts)
+        } else {
+            // Fallback to probe - handles files with junk data, auto-detects format
+            Self::new_with_probe(source, config, format_opts)
+        }
+    }
+
+    /// Create decoder using direct format reader (no probe).
+    ///
+    /// Used when container format is known (e.g., HLS with explicit format).
+    fn new_direct<R>(
+        source: R,
+        config: &SymphoniaConfig,
+        container: ContainerFormat,
+        format_opts: FormatOptions,
+    ) -> DecodeResult<Self>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
         // Disable seek during initialization for ALL containers.
         // Some format readers (IsoMp4Reader) try to seek to end looking for atoms,
         // which breaks streaming scenarios. After initialization, seek is enabled.
@@ -120,18 +164,92 @@ impl SymphoniaInner {
 
         let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
 
-        // Format options
-        let format_opts = FormatOptions {
-            enable_gapless: config.gapless,
-            ..Default::default()
-        };
-
         tracing::debug!(?container, "Creating format reader directly (no probe)");
         let format_reader = Self::create_reader_for_container(mss, container, format_opts)?;
 
         // Re-enable seek after successful initialization
         seek_enabled_handle.store(true, Ordering::Release);
         tracing::debug!("Re-enabled seek after decoder initialization");
+
+        Self::init_from_reader(format_reader, config, byte_len_handle)
+    }
+
+    /// Create decoder using Symphonia's probe mechanism.
+    ///
+    /// Used when container format is not known. Probe can automatically
+    /// detect format and skip junk data at the beginning of files.
+    fn new_with_probe<R>(
+        source: R,
+        config: &SymphoniaConfig,
+        format_opts: FormatOptions,
+    ) -> DecodeResult<Self>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        Self::probe_with_seek(source, config, format_opts, true)
+    }
+
+    /// Create decoder using Symphonia's probe with seek disabled.
+    ///
+    /// Used after ABR variant switches where the reported byte length
+    /// may not match the actual container header (e.g., WAV over HLS).
+    /// Disabling seek prevents format readers from seeking to end to
+    /// validate file size, which would fail with mismatched lengths.
+    fn new_with_probe_no_seek<R>(
+        source: R,
+        config: &SymphoniaConfig,
+        format_opts: FormatOptions,
+    ) -> DecodeResult<Self>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        Self::probe_with_seek(source, config, format_opts, false)
+    }
+
+    /// Shared implementation for probe-based decoder creation.
+    fn probe_with_seek<R>(
+        source: R,
+        config: &SymphoniaConfig,
+        format_opts: FormatOptions,
+        seek_enabled: bool,
+    ) -> DecodeResult<Self>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+    {
+        let adapter = if seek_enabled {
+            ReadSeekAdapter::new_seek_enabled(source)
+        } else {
+            ReadSeekAdapter::new_seek_disabled(source)
+        };
+
+        let byte_len_handle = if let Some(ref handle) = config.byte_len_handle {
+            Arc::clone(handle)
+        } else {
+            adapter.byte_len_handle()
+        };
+
+        let seek_enabled_handle = adapter.seek_enabled_handle();
+
+        let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
+
+        // Build probe hint from config
+        let mut probe_hint = Hint::new();
+        if let Some(ref ext) = config.hint {
+            probe_hint.with_extension(ext);
+        }
+
+        let meta_opts = MetadataOptions::default();
+
+        tracing::debug!(hint = ?config.hint, seek_enabled, "Probing format");
+        let format_reader = symphonia::default::get_probe()
+            .probe(&probe_hint, mss, format_opts, meta_opts)
+            .map_err(|e| DecodeError::Backend(Box::new(e)))?;
+
+        // Re-enable seek after successful probe (if it was disabled)
+        if !seek_enabled {
+            seek_enabled_handle.store(true, Ordering::Release);
+            tracing::debug!("Re-enabled seek after probe");
+        }
 
         Self::init_from_reader(format_reader, config, byte_len_handle)
     }
@@ -510,6 +628,23 @@ impl<R: Seek> ReadSeekAdapter<R> {
         }
     }
 
+    /// Create adapter with seek enabled from the start.
+    ///
+    /// Used for probe-based initialization where seek is needed for format detection.
+    fn new_seek_enabled(mut inner: R) -> Self {
+        let byte_len = Arc::new(AtomicU64::new(0));
+        let seek_enabled = Arc::new(AtomicBool::new(true));
+        // Try to probe the byte length statically (works for Cursor, File, etc.)
+        if let Some(len) = Self::probe_byte_len(&mut inner) {
+            byte_len.store(len, Ordering::Release);
+        }
+        Self {
+            inner,
+            byte_len,
+            seek_enabled,
+        }
+    }
+
     fn byte_len_handle(&self) -> Arc<AtomicU64> {
         Arc::clone(&self.byte_len)
     }
@@ -566,6 +701,7 @@ mod tests {
         assert!(!config.gapless);
         assert!(config.byte_len_handle.is_none());
         assert!(config.container.is_none());
+        assert!(config.hint.is_none());
     }
 
     #[test]
@@ -657,14 +793,17 @@ mod tests {
     }
 
     #[test]
-    fn test_create_decoder_without_container_fails() {
+    fn test_create_decoder_without_container_uses_probe() {
         let wav_data = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        // Create without container - should fail (container is required)
+        // Create without container - should succeed using probe fallback
         let result = SymphoniaPcm::create(Box::new(cursor), SymphoniaConfig::default());
-        assert!(result.is_err());
-        assert!(matches!(result, Err(DecodeError::InvalidData(_))));
+        assert!(result.is_ok(), "probe fallback should detect WAV format");
+
+        let decoder = result.unwrap();
+        assert_eq!(AudioDecoder::spec(&decoder).sample_rate, 44100);
+        assert_eq!(AudioDecoder::spec(&decoder).channels, 2);
     }
 
     #[test]
@@ -811,12 +950,15 @@ mod tests {
             gapless: false,
             byte_len_handle: Some(Arc::clone(&handle)),
             container: Some(ContainerFormat::Fmp4),
+            hint: Some("mp4".to_string()),
+            probe_no_seek: false,
         };
 
         assert!(config.verify);
         assert!(!config.gapless);
         assert!(config.byte_len_handle.is_some());
         assert_eq!(config.container, Some(ContainerFormat::Fmp4));
+        assert_eq!(config.hint, Some("mp4".to_string()));
     }
 
     #[test]

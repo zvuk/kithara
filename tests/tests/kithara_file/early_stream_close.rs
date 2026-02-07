@@ -195,7 +195,7 @@ async fn file_stream_closes_early_seek_still_works() {
     let config = FileConfig::new(FileSrc::Remote(url))
         .with_store(StoreOptions::new(clean_temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_look_ahead_bytes(256_000);
+        .with_look_ahead_bytes(Some(256_000));
 
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
@@ -269,7 +269,7 @@ async fn partial_cache_resume_works() {
     let config1 = FileConfig::new(FileSrc::Remote(url.clone()))
         .with_store(StoreOptions::new(cache_dir.path()))
         .with_cancel(cancel1.clone())
-        .with_look_ahead_bytes(256_000);
+        .with_look_ahead_bytes(Some(256_000));
 
     let stream1 = Stream::<File>::new(config1).await.unwrap();
 
@@ -299,7 +299,7 @@ async fn partial_cache_resume_works() {
     let config2 = FileConfig::new(FileSrc::Remote(url))
         .with_store(StoreOptions::new(cache_dir.path()))
         .with_cancel(cancel2.clone())
-        .with_look_ahead_bytes(256_000);
+        .with_look_ahead_bytes(Some(256_000));
 
     let stream2 = Stream::<File>::new(config2).await.unwrap();
 

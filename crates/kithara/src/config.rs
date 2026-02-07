@@ -54,7 +54,7 @@ impl From<PathBuf> for ResourceSrc {
 /// // With options
 /// let config = ResourceConfig::new("https://example.com/playlist.m3u8")?
 ///     .with_hint("mp3")
-///     .with_look_ahead_bytes(1_000_000);
+///     .with_look_ahead_bytes(Some(1_000_000));
 /// ```
 pub struct ResourceConfig {
     /// Audio resource source (URL or local path).
@@ -81,7 +81,10 @@ pub struct ResourceConfig {
     /// after preload, but increase initial latency. Default: 3.
     pub preload_chunks: usize,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
-    pub look_ahead_bytes: u64,
+    ///
+    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
+    /// - `None` — no backpressure, download as fast as possible
+    pub look_ahead_bytes: Option<u64>,
     /// Storage configuration (cache directory, eviction limits).
     #[cfg(any(feature = "file", feature = "hls"))]
     pub store: StoreOptions,
@@ -135,7 +138,7 @@ impl ResourceConfig {
             host_sample_rate: None,
             resampler_quality: ResamplerQuality::default(),
             preload_chunks: 3,
-            look_ahead_bytes: 500_000,
+            look_ahead_bytes: None,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
             #[cfg(any(feature = "file", feature = "hls"))]
@@ -198,7 +201,10 @@ impl ResourceConfig {
     }
 
     /// Set max bytes the downloader may be ahead of the reader before it pauses.
-    pub fn with_look_ahead_bytes(mut self, bytes: u64) -> Self {
+    ///
+    /// - `Some(n)` — enable backpressure, pause when ahead by n bytes
+    /// - `None` — disable backpressure, download as fast as possible
+    pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
         self.look_ahead_bytes = bytes;
         self
     }

@@ -35,7 +35,7 @@ async fn decoder_file_creates_successfully(#[future] server: AudioTestServer, te
 
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(u64::MAX);
+        .with_look_ahead_bytes(None);
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
 
     let decoder = Audio::<Stream<File>>::new(config).await.unwrap();
@@ -55,7 +55,7 @@ async fn decoder_file_reads_samples(#[future] server: AudioTestServer, temp_dir:
 
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(u64::MAX);
+        .with_look_ahead_bytes(None);
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
@@ -78,7 +78,7 @@ async fn decoder_file_seek_to_zero(#[future] server: AudioTestServer, temp_dir: 
 
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(u64::MAX);
+        .with_look_ahead_bytes(None);
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
@@ -107,7 +107,7 @@ async fn decoder_file_seek_forward(#[future] server: AudioTestServer, temp_dir: 
 
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(u64::MAX);
+        .with_look_ahead_bytes(None);
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
@@ -149,7 +149,7 @@ async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir:
 
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(u64::MAX);
+        .with_look_ahead_bytes(None);
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
@@ -194,7 +194,7 @@ async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir:
 
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(u64::MAX);
+        .with_look_ahead_bytes(None);
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
@@ -242,7 +242,7 @@ async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_
 
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(u64::MAX);
+        .with_look_ahead_bytes(None);
     let config = AudioConfig::<File>::new(file_config)
         .with_hint("mp3")
         .with_events(events_tx);

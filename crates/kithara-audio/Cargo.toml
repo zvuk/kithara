@@ -29,6 +29,8 @@ default = []
 rodio = ["dep:rodio"]
 # Enable performance monitoring with hotpath-rs
 perf = ["dep:hotpath", "hotpath/hotpath"]
+# Enable Apple AudioToolbox hardware decoder (macOS/iOS)
+apple = ["kithara-decode/apple"]
 
 [dev-dependencies]
 tokio = { workspace = true }

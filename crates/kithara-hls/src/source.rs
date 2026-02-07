@@ -248,7 +248,12 @@ pub struct HlsDownloader {
     shared: Arc<SharedSegments>,
     events_tx: Option<broadcast::Sender<HlsEvent>>,
     cancel: CancellationToken,
-    look_ahead_bytes: u64,
+    /// Backpressure threshold. None = no backpressure.
+    look_ahead_bytes: Option<u64>,
+    /// How often to yield to async runtime (every N segments).
+    yield_interval: usize,
+    /// Counter for yield interval.
+    segments_since_yield: usize,
     /// Cache of expected_total_length per variant (variant_index → total_bytes).
     variant_lengths: HashMap<usize, u64>,
     /// True after a mid-stream variant switch. Subsequent segments use cumulative offsets.
@@ -723,32 +728,34 @@ impl HlsDownloader {
 
 impl Downloader for HlsDownloader {
     async fn step(&mut self) -> bool {
-        // Backpressure: wait if too far ahead of reader.
+        // Backpressure: wait if too far ahead of reader (only when limit is set).
         // On-demand requests (from wait_range during seek/atom scan) bypass
         // backpressure to prevent deadlock: reader blocked in condvar.wait()
         // can't advance reader_pos, so the gap never shrinks.
-        loop {
-            if !self.shared.segment_requests.is_empty() {
-                break;
+        if let Some(limit) = self.look_ahead_bytes {
+            loop {
+                if !self.shared.segment_requests.is_empty() {
+                    break;
+                }
+
+                let advanced = self.shared.reader_advanced.notified();
+                tokio::pin!(advanced);
+
+                let reader_pos = self.shared.reader_offset.load(Ordering::Acquire);
+                let downloaded = self.shared.segments.lock().total_bytes();
+
+                if downloaded.saturating_sub(reader_pos) <= limit {
+                    break;
+                }
+
+                debug!(
+                    downloaded,
+                    reader_pos,
+                    gap = downloaded - reader_pos,
+                    "downloader waiting for reader to catch up"
+                );
+                advanced.await;
             }
-
-            let advanced = self.shared.reader_advanced.notified();
-            tokio::pin!(advanced);
-
-            let reader_pos = self.shared.reader_offset.load(Ordering::Acquire);
-            let downloaded = self.shared.segments.lock().total_bytes();
-
-            if downloaded.saturating_sub(reader_pos) <= self.look_ahead_bytes {
-                break;
-            }
-
-            debug!(
-                downloaded,
-                reader_pos,
-                gap = downloaded - reader_pos,
-                "downloader waiting for reader to catch up"
-            );
-            advanced.await;
         }
 
         // Unified queue: check for on-demand requests first, otherwise add sequential
@@ -805,6 +812,17 @@ impl Downloader for HlsDownloader {
                     if req.segment_index == self.current_segment_index {
                         self.current_segment_index += 1;
                     }
+
+                    // Yield periodically to let other tasks run (e.g., playback).
+                    // Only needed when no backpressure (look_ahead_bytes is None).
+                    if self.look_ahead_bytes.is_none() {
+                        self.segments_since_yield += 1;
+                        if self.segments_since_yield >= self.yield_interval {
+                            self.segments_since_yield = 0;
+                            tokio::task::yield_now().await;
+                        }
+                    }
+
                     true
                 }
                 Err(e) => {
@@ -1090,6 +1108,8 @@ pub fn build_pair(
         events_tx: config.events_tx.clone(),
         cancel,
         look_ahead_bytes: config.look_ahead_bytes,
+        yield_interval: config.download_yield_interval,
+        segments_since_yield: 0,
         variant_lengths: HashMap::new(),
         had_midstream_switch: false,
     };

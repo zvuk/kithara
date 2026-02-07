@@ -369,12 +369,13 @@ where
             command_channel_capacity,
             event_channel_capacity,
             hint,
-            media_info: _media_info,
+            media_info: user_media_info,
             pcm_pool: mut pool,
             host_sample_rate: config_host_sr,
             resampler_quality,
             events_tx,
             preload_chunks,
+            prefer_hardware,
         } = config;
 
         let event_capacity = event_channel_capacity.max(1);
@@ -424,8 +425,12 @@ where
         .map_err(|e| DecodeError::Io(std::io::Error::other(format!("probe task panicked: {e}"))))?;
         let stream = stream_join?;
 
-        // Get initial MediaInfo
-        let initial_media_info = stream.media_info();
+        // Get initial MediaInfo.
+        // For decoder creation: user-provided overrides stream-detected.
+        // For format change tracking: always use stream-detected (so ABR switches
+        // are detected correctly even when user overrides the format).
+        let stream_media_info = stream.media_info();
+        let initial_media_info = user_media_info.or(stream_media_info.clone());
         debug!(?initial_media_info, "Initial MediaInfo from stream");
 
         // Create shared stream for format change detection
@@ -435,8 +440,12 @@ where
 
         // Create initial decoder in spawn_blocking to avoid blocking tokio runtime.
         // Symphonia probe() does blocking IO which would deadlock the async downloader.
-        debug!("Creating initial decoder...");
-        let decoder_config = kithara_decode::DecoderConfig::default();
+        debug!(prefer_hardware, "Creating initial decoder...");
+        let decoder_config = kithara_decode::DecoderConfig {
+            prefer_hardware,
+            hint: hint.clone(),
+            ..Default::default()
+        };
         let shared_stream_for_decoder = shared_stream.clone();
         let hint_for_decoder = hint.clone();
         let initial_media_info_for_decoder = initial_media_info.clone();
@@ -493,10 +502,18 @@ where
         });
 
         // Factory for creating decoders after ABR switch.
+        //
+        // Three-level fallback:
+        // 1. create_from_media_info — uses codec/container from HLS metadata
+        // 2. create_with_probe — uses extension hint for codec detection
+        // 3. create_with_symphonia_probe — lets Symphonia detect format from data
         let decoder_factory: super::stream_source::DecoderFactory<T> =
             Box::new(move |stream, info, base_offset| {
                 let reader = OffsetReader::new(stream.clone(), base_offset);
-                let config = kithara_decode::DecoderConfig::default();
+                let config = kithara_decode::DecoderConfig {
+                    prefer_hardware,
+                    ..Default::default()
+                };
                 match kithara_decode::DecoderFactory::create_from_media_info(reader, info, config) {
                     Ok(d) => {
                         d.update_byte_len(0);
@@ -504,8 +521,11 @@ where
                     }
                     Err(e) => {
                         warn!(?e, "Failed to recreate decoder, trying probe fallback");
-                        let reader = OffsetReader::new(stream, base_offset);
-                        let config = kithara_decode::DecoderConfig::default();
+                        let reader = OffsetReader::new(stream.clone(), base_offset);
+                        let config = kithara_decode::DecoderConfig {
+                            prefer_hardware,
+                            ..Default::default()
+                        };
                         match kithara_decode::DecoderFactory::create_with_probe(
                             reader, None, config,
                         ) {
@@ -514,20 +534,42 @@ where
                                 Some(d)
                             }
                             Err(e) => {
-                                warn!(?e, "Probe fallback also failed");
-                                None
+                                warn!(
+                                    ?e,
+                                    "Probe fallback failed, trying Symphonia native probe"
+                                );
+                                let reader = OffsetReader::new(stream, base_offset);
+                                let config = kithara_decode::DecoderConfig {
+                                    prefer_hardware,
+                                    ..Default::default()
+                                };
+                                match kithara_decode::DecoderFactory::create_with_symphonia_probe(
+                                    reader, config,
+                                ) {
+                                    Ok(d) => {
+                                        d.update_byte_len(0);
+                                        Some(d)
+                                    }
+                                    Err(e) => {
+                                        warn!(?e, "Symphonia native probe also failed");
+                                        None
+                                    }
+                                }
                             }
                         }
                     }
                 }
             });
 
-        // Use StreamAudioSource for format change detection
+        // Use StreamAudioSource for format change detection.
+        // Pass stream_media_info (not initial_media_info) so format change detection
+        // compares against what the stream actually reports, avoiding false positives
+        // when the user overrides media_info (e.g., WAV over HLS).
         let audio_source = StreamAudioSource::new(
             shared_stream,
             decoder,
             decoder_factory,
-            initial_media_info,
+            stream_media_info,
             Arc::clone(&epoch),
             effects,
         )

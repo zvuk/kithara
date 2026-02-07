@@ -44,6 +44,8 @@ pub struct AudioConfig<T: StreamType> {
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
     pub preload_chunks: usize,
+    /// Prefer hardware decoder when available (Apple AudioToolbox, Android MediaCodec).
+    pub prefer_hardware: bool,
     /// Unified events sender (optional — if not provided, one is created internally).
     pub(super) events_tx: Option<broadcast::Sender<AudioPipelineEvent<T::Event>>>,
 }
@@ -62,6 +64,7 @@ impl<T: StreamType> AudioConfig<T> {
             host_sample_rate: None,
             resampler_quality: ResamplerQuality::default(),
             preload_chunks: 3,
+            prefer_hardware: false,
             events_tx: None,
         }
     }
@@ -105,6 +108,15 @@ impl<T: StreamType> AudioConfig<T> {
     /// Set number of chunks to buffer before signaling preload readiness.
     pub fn with_preload_chunks(mut self, chunks: usize) -> Self {
         self.preload_chunks = chunks.max(1);
+        self
+    }
+
+    /// Prefer hardware decoder when available (Apple AudioToolbox, Android MediaCodec).
+    ///
+    /// When enabled, attempts to use platform-native hardware decoders first,
+    /// falling back to Symphonia software decoder on failure.
+    pub fn with_prefer_hardware(mut self, prefer: bool) -> Self {
+        self.prefer_hardware = prefer;
         self
     }
 
