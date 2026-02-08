@@ -628,4 +628,383 @@ mod tests {
         c.decide(now);
         c.decide(now);
     }
+
+    // ---------------------------------------------------------------
+    // apply() tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn apply_no_change_leaves_variant_and_timestamp_unchanged() {
+        let cfg = AbrOptions {
+            mode: AbrMode::Auto(Some(1)),
+            min_switch_interval: Duration::ZERO,
+            variants: variants(),
+            ..AbrOptions::default()
+        };
+
+        // adjusted_bps = 768_000 / 1.5 = 512_000 → variant 1 (512k) is best-under
+        // candidate == current → AlreadyOptimal, no switch
+        let mock = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(768_000)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(0.0),
+        ));
+
+        let mut c = AbrController::with_estimator(cfg, mock);
+        let now = Instant::now();
+
+        let d = c.decide(now);
+        assert!(!d.changed);
+        assert_eq!(d.target_variant_index, 1);
+
+        c.apply(&d, now);
+
+        // Variant stays at 1
+        assert_eq!(c.get_current_variant_index(), 1);
+        // No switch recorded → can_switch_now should remain true
+        assert!(c.can_switch_now(now));
+    }
+
+    #[test]
+    fn apply_with_change_updates_variant_and_records_switch() {
+        let cfg = AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            min_switch_interval: Duration::from_secs(30),
+            min_buffer_for_up_switch_secs: 0.0,
+            variants: variants(),
+            ..AbrOptions::default()
+        };
+
+        // High throughput to trigger up-switch from variant 0
+        let mock = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(5_000_000)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(0.0),
+        ));
+
+        let mut c = AbrController::with_estimator(cfg, mock);
+        let now = Instant::now();
+
+        let d = c.decide(now);
+        assert!(d.changed);
+
+        c.apply(&d, now);
+
+        // Variant updated
+        assert_eq!(c.get_current_variant_index(), d.target_variant_index);
+        // Switch timestamp recorded → can_switch_now returns false immediately
+        assert!(!c.can_switch_now(now));
+    }
+
+    #[test]
+    fn apply_round_trip_decide_reflects_new_state() {
+        let cfg = AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            min_switch_interval: Duration::ZERO,
+            min_buffer_for_up_switch_secs: 0.0,
+            variants: variants(),
+            ..AbrOptions::default()
+        };
+
+        // First call: high throughput → up-switch to variant 2
+        // Second call: same throughput → variant 2 is now current, AlreadyOptimal
+        let mock = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(5_000_000)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(0.0),
+        ));
+
+        let mut c = AbrController::with_estimator(cfg, mock);
+        let now = Instant::now();
+
+        let d1 = c.decide(now);
+        assert!(d1.changed);
+        assert_eq!(d1.target_variant_index, 2);
+
+        c.apply(&d1, now);
+
+        let d2 = c.decide(now);
+        // Already on best variant — no change
+        assert!(!d2.changed);
+        assert_eq!(d2.target_variant_index, 2);
+        assert_eq!(d2.reason, AbrReason::AlreadyOptimal);
+    }
+
+    // ---------------------------------------------------------------
+    // Hysteresis boundary tests
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn up_switch_hysteresis_boundary() {
+        // variants: 0 → 256k, 1 → 512k, 2 → 1024k
+        // Current: variant 0 (256k bps)
+        // Candidate for up-switch: variant 2 (1024k bps)
+        //
+        // Up-switch condition: adjusted_bps >= candidate_bw * up_hysteresis_ratio
+        // adjusted_bps = estimate_bps / safety_factor
+        //
+        // Threshold estimate = candidate_bw * up_hysteresis * safety_factor
+        //                    = 1_024_000 * 1.3 * 1.5 = 1_996_800 bps
+        let safety = 1.5;
+        let up_hysteresis = 1.3;
+        let candidate_bw: u64 = 1_024_000;
+        let threshold_bps: u64 = (candidate_bw as f64 * up_hysteresis * safety) as u64;
+
+        let base_cfg = AbrOptions {
+            throughput_safety_factor: safety,
+            up_hysteresis_ratio: up_hysteresis,
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(0)),
+            variants: variants(),
+            ..AbrOptions::default()
+        };
+
+        // At exact threshold → adjusted_bps == candidate_bw * up_hysteresis → switch
+        // But due to integer truncation, threshold_bps / safety_factor may lose precision.
+        // Use threshold - 1 to guarantee NO switch.
+        let mock_below = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(threshold_bps - 1)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(0.0),
+        ));
+        let c = AbrController::with_estimator(base_cfg.clone(), mock_below);
+        let d = c.decide(Instant::now());
+        assert_ne!(
+            d.reason,
+            AbrReason::UpSwitch,
+            "Should NOT up-switch at threshold - 1 bps"
+        );
+
+        // threshold + 1 → guaranteed switch
+        let mock_above = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(threshold_bps + 1)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(0.0),
+        ));
+        let c = AbrController::with_estimator(base_cfg, mock_above);
+        let d = c.decide(Instant::now());
+        assert_eq!(
+            d.reason,
+            AbrReason::UpSwitch,
+            "Should up-switch at threshold + 1 bps"
+        );
+        assert!(d.changed);
+        assert_eq!(d.target_variant_index, 2);
+    }
+
+    #[test]
+    fn down_switch_hysteresis_boundary() {
+        // Current: variant 2 (1_024_000 bps)
+        // Down-switch margin condition: adjusted_bps <= current_bw * down_hysteresis_ratio
+        // adjusted_bps = estimate_bps / safety_factor
+        //
+        // Threshold estimate = current_bw * down_hysteresis * safety_factor
+        //                    = 1_024_000 * 0.8 * 1.5 = 1_228_800 bps
+        let safety = 1.5;
+        let down_hysteresis = 0.8;
+        let current_bw: u64 = 1_024_000;
+        let threshold_bps: u64 = (current_bw as f64 * down_hysteresis * safety) as u64;
+
+        let base_cfg = AbrOptions {
+            throughput_safety_factor: safety,
+            down_hysteresis_ratio: down_hysteresis,
+            down_switch_buffer_secs: 0.0, // disable urgent-down path
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(2)),
+            variants: variants(),
+            ..AbrOptions::default()
+        };
+
+        // At threshold → adjusted = threshold / safety = current_bw * down_hysteresis → switch
+        let mock_at = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(threshold_bps)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(10.0), // high buffer, no urgent-down
+        ));
+        let c = AbrController::with_estimator(base_cfg.clone(), mock_at);
+        let d = c.decide(Instant::now());
+        assert_eq!(
+            d.reason,
+            AbrReason::DownSwitch,
+            "Should down-switch at threshold bps"
+        );
+        assert!(d.changed);
+
+        // threshold + 1 → adjusted just above margin → no switch
+        let mock_above = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(threshold_bps + 1)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(10.0),
+        ));
+        let c = AbrController::with_estimator(base_cfg, mock_above);
+        let d = c.decide(Instant::now());
+        assert_ne!(
+            d.reason,
+            AbrReason::DownSwitch,
+            "Should NOT down-switch at threshold + 1 bps"
+        );
+    }
+
+    // ---------------------------------------------------------------
+    // Buffer threshold for up-switch
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn buffer_level_threshold_for_up_switch() {
+        let min_buffer = 10.0;
+
+        let base_cfg = AbrOptions {
+            min_buffer_for_up_switch_secs: min_buffer,
+            throughput_safety_factor: 1.5,
+            up_hysteresis_ratio: 1.3,
+            min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(0)),
+            variants: variants(),
+            ..AbrOptions::default()
+        };
+
+        // Buffer exactly at threshold → allowed
+        let mock_ok = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(5_000_000)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(min_buffer),
+        ));
+        let c = AbrController::with_estimator(base_cfg.clone(), mock_ok);
+        let d = c.decide(Instant::now());
+        assert_eq!(
+            d.reason,
+            AbrReason::UpSwitch,
+            "Should allow at exact threshold"
+        );
+        assert!(d.changed);
+
+        // Buffer slightly below threshold → rejected
+        let mock_low = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(5_000_000)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(min_buffer - 0.001),
+        ));
+        let c = AbrController::with_estimator(base_cfg, mock_low);
+        let d = c.decide(Instant::now());
+        assert_eq!(
+            d.reason,
+            AbrReason::BufferTooLowForUpSwitch,
+            "Should reject when buffer slightly below threshold"
+        );
+        assert!(!d.changed);
+    }
+
+    // ---------------------------------------------------------------
+    // Single variant
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn single_variant_returns_already_optimal() {
+        let cfg = AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            min_switch_interval: Duration::ZERO,
+            variants: vec![Variant {
+                variant_index: 0,
+                bandwidth_bps: 256_000,
+            }],
+            ..AbrOptions::default()
+        };
+
+        let mock = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(5_000_000)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(20.0),
+        ));
+
+        let c = AbrController::with_estimator(cfg, mock);
+        let d = c.decide(Instant::now());
+        assert_eq!(d.target_variant_index, 0);
+        assert_eq!(d.reason, AbrReason::AlreadyOptimal);
+        assert!(!d.changed);
+    }
+
+    // ---------------------------------------------------------------
+    // Min-interval enforcement
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn min_interval_enforcement_precise() {
+        let interval = Duration::from_secs(30);
+        let cfg = AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            min_switch_interval: interval,
+            min_buffer_for_up_switch_secs: 0.0,
+            variants: variants(),
+            ..AbrOptions::default()
+        };
+
+        let mock = Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(Some(5_000_000)),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(0.0),
+        ));
+
+        let mut c = AbrController::with_estimator(cfg, mock);
+        // Use an instant well after reference_instant to avoid nanos edge cases
+        let t0 = Instant::now() + Duration::from_secs(1);
+
+        // First decide → triggers up-switch (decide records switch timestamp)
+        let d1 = c.decide(t0);
+        assert!(d1.changed);
+        c.apply(&d1, t0);
+
+        // At interval - 1ms → too soon
+        let t1 = t0 + interval - Duration::from_millis(1);
+        let d2 = c.decide(t1);
+        assert_eq!(
+            d2.reason,
+            AbrReason::MinInterval,
+            "Should block before interval elapses"
+        );
+        assert!(!d2.changed);
+
+        // At interval + 1ms → guaranteed allowed (avoids nanos rounding)
+        let t2 = t0 + interval + Duration::from_millis(1);
+        let d3 = c.decide(t2);
+        assert_ne!(
+            d3.reason,
+            AbrReason::MinInterval,
+            "Should allow after interval elapses"
+        );
+    }
 }

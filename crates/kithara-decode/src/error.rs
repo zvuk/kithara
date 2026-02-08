@@ -65,4 +65,40 @@ mod tests {
         let err = DecodeError::Backend(Box::new(inner));
         assert!(err.to_string().contains("Decoder error"));
     }
+
+    #[test]
+    fn test_unsupported_codec_display() {
+        let err = DecodeError::UnsupportedCodec(AudioCodec::AacLc);
+        assert_eq!(err.to_string(), "Unsupported codec: AacLc");
+    }
+
+    #[test]
+    fn test_unsupported_container_display() {
+        let err = DecodeError::UnsupportedContainer(ContainerFormat::Fmp4);
+        assert_eq!(err.to_string(), "Unsupported container: Fmp4");
+    }
+
+    #[test]
+    fn test_seek_failed_display() {
+        let err = DecodeError::SeekFailed("timestamp out of range".into());
+        assert_eq!(err.to_string(), "Seek failed: timestamp out of range");
+    }
+
+    #[test]
+    fn test_seek_error_display() {
+        let err = DecodeError::SeekError("invalid position".into());
+        assert_eq!(err.to_string(), "Seek error: invalid position");
+    }
+
+    #[test]
+    fn test_probe_failed_display() {
+        let err = DecodeError::ProbeFailed;
+        assert_eq!(err.to_string(), "Probe failed: could not detect codec");
+    }
+
+    #[test]
+    fn test_decode_error_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<DecodeError>();
+    }
 }

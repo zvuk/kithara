@@ -26,26 +26,11 @@ pub enum HlsError {
     #[error("Segment not found: {0}")]
     SegmentNotFound(String),
 
-    #[error("No suitable variant found")]
-    NoSuitableVariant,
-
     #[error("Key processing failed: {0}")]
     KeyProcessing(String),
 
-    #[error("ABR error: {0}")]
-    Abr(String),
-
-    #[error("Offline mode: resource not cached")]
-    OfflineMiss,
-
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
-
-    #[error("not implemented")]
-    Unimplemented,
-
-    #[error("Driver error: {0}")]
-    Driver(String),
 }
 
 pub type HlsResult<T> = Result<T, HlsError>;
