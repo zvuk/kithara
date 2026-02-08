@@ -133,14 +133,11 @@ pub trait ResourceExt: Send + Sync + Clone + 'static {
     /// The buffer is resized to fit the data. Returns the number of bytes read.
     /// Returns `0` if resource has no data.
     fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
-        let len = match self.len() {
-            Some(l) => l,
-            None => {
-                // Probe via read_at to detect error state (cancelled/failed).
-                let mut probe = [0u8; 1];
-                let _ = self.read_at(0, &mut probe)?;
-                return Ok(0);
-            }
+        let Some(len) = self.len() else {
+            // Probe via read_at to detect error state (cancelled/failed).
+            let mut probe = [0u8; 1];
+            let _ = self.read_at(0, &mut probe)?;
+            return Ok(0);
         };
         if len == 0 {
             buf.clear();

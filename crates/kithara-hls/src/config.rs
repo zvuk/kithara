@@ -103,7 +103,7 @@ pub struct HlsConfig {
     pub command_channel_capacity: usize,
     /// Capacity of the chunk/data channel.
     pub chunk_channel_capacity: usize,
-    /// Capacity of the events broadcast channel (used when events_tx is not provided).
+    /// Capacity of the events broadcast channel (used when `events_tx` is not provided).
     pub events_channel_capacity: usize,
     /// Buffer pool (shared across all components, created if not provided).
     pub pool: Option<BytePool>,
@@ -168,7 +168,7 @@ impl HlsConfig {
     ///
     /// When multiple URLs share the same canonical form (differ only in query
     /// parameters), a unique name ensures each gets its own cache directory.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
         self
     }

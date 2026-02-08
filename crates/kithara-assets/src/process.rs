@@ -79,7 +79,7 @@ where
             .field("inner", &self.inner)
             .field("ctx", &self.ctx)
             .field("is_processed", &*self.processed.lock())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -98,7 +98,7 @@ where
         }
     }
 
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) fn inner(&self) -> &R {
         &self.inner
     }
@@ -111,9 +111,8 @@ where
 {
     /// Process content chunk-by-chunk and write back to disk.
     fn process_and_write(&self, final_len: u64) -> StorageResult<()> {
-        let ctx = match &self.ctx {
-            Some(c) => c,
-            None => return Ok(()),
+        let Some(ctx) = &self.ctx else {
+            return Ok(());
         };
 
         let mut input_buf = self.pool.get_with(|b| b.resize(PROCESS_CHUNK_SIZE, 0));
@@ -201,7 +200,7 @@ where
 
 /// Decorator that applies processing to resources based on context.
 ///
-/// When opening a resource with context (Some), wraps it in ProcessedResource
+/// When opening a resource with context (Some), wraps it in `ProcessedResource`
 /// that will process on commit. Without context (None), the resource passes through
 /// unprocessed.
 #[derive(Clone)]

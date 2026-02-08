@@ -43,7 +43,7 @@ use symphonia::{
         },
         errors::Error as SymphoniaError,
         formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
-        io::MediaSourceStream,
+        io::{MediaSourceStream, MediaSourceStreamOptions},
         meta::MetadataOptions,
         units::Time,
     },
@@ -162,7 +162,7 @@ impl SymphoniaInner {
         // Keep handle to re-enable seek after initialization
         let seek_enabled_handle = adapter.seek_enabled_handle();
 
-        let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
+        let mss = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
 
         tracing::debug!(?container, "Creating format reader directly (no probe)");
         let format_reader = Self::create_reader_for_container(mss, container, format_opts)?;
@@ -230,7 +230,7 @@ impl SymphoniaInner {
 
         let seek_enabled_handle = adapter.seek_enabled_handle();
 
-        let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
+        let mss = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
 
         // Build probe hint from config
         let mut probe_hint = Hint::new();
@@ -335,8 +335,7 @@ impl SymphoniaInner {
         let channels = codec_params
             .channels
             .as_ref()
-            .map(|c| c.count() as u16)
-            .unwrap_or(2);
+            .map_or(2, |c| c.count() as u16);
         let spec = PcmSpec {
             sample_rate,
             channels,
@@ -472,7 +471,7 @@ impl SymphoniaInner {
         Ok(())
     }
 
-    /// Update the byte length reported to symphonia's MediaSource.
+    /// Update the byte length reported to symphonia's `MediaSource`.
     fn update_byte_len(&self, len: u64) {
         self.byte_len_handle.store(len, Ordering::Release);
     }
@@ -592,7 +591,7 @@ pub type SymphoniaVorbis = Symphonia<Vorbis>;
 
 // ────────────────────────────────── ReadSeekAdapter ──────────────────────────────────
 
-/// Adapter that wraps a Read + Seek source as a Symphonia MediaSource.
+/// Adapter that wraps a Read + Seek source as a Symphonia `MediaSource`.
 ///
 /// This adapter tracks the byte length dynamically, allowing it to be
 /// updated after construction (useful for HLS streams where the total
@@ -600,11 +599,11 @@ pub type SymphoniaVorbis = Symphonia<Vorbis>;
 struct ReadSeekAdapter<R> {
     inner: R,
     /// Dynamic byte length. Updated externally via `Arc<AtomicU64>`.
-    /// 0 means unknown (returns None from byte_len()).
+    /// 0 means unknown (returns None from `byte_len()`).
     byte_len: Arc<AtomicU64>,
     /// Controls whether seek operations are allowed.
     /// Used to temporarily disable seeking during fMP4 reader initialization
-    /// (prevents IsoMp4Reader from seeking to end looking for moov atom).
+    /// (prevents `IsoMp4Reader` from seeking to end looking for moov atom).
     seek_enabled: Arc<AtomicBool>,
 }
 

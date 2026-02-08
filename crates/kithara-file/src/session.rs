@@ -15,12 +15,12 @@ use crate::{error::SourceError, events::FileEvent};
 
 pub(crate) type AssetResourceType = AssetResource;
 
-/// Unified file resource: either a remote asset (via AssetStore) or a local file.
+/// Unified file resource: either a remote asset (via `AssetStore`) or a local file.
 #[derive(Clone, Debug)]
 pub(crate) enum FileResource {
-    /// Remote file — managed by AssetStore (caching, eviction, leases).
+    /// Remote file — managed by `AssetStore` (caching, eviction, leases).
     Asset(AssetResourceType),
-    /// Local file — direct StorageResource in ReadOnly mode.
+    /// Local file — direct `StorageResource` in `ReadOnly` mode.
     Local(StorageResource),
 }
 
@@ -133,7 +133,7 @@ impl FileStreamState {
         let events =
             events_tx.unwrap_or_else(|| broadcast::channel(events_channel_capacity.max(1)).0);
 
-        Ok(Arc::new(FileStreamState {
+        Ok(Arc::new(Self {
             url,
             cancel,
             res,
@@ -219,7 +219,7 @@ impl Default for Progress {
     }
 }
 
-/// Shared state between FileSource (sync reader) and FileDownloader (async).
+/// Shared state between `FileSource` (sync reader) and `FileDownloader` (async).
 ///
 /// Enables on-demand Range requests: when the reader needs data beyond what
 /// the sequential download has fetched, it pushes a range request here.

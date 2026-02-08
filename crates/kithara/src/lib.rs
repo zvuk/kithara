@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 //! # Kithara
 //!

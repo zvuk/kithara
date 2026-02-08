@@ -77,7 +77,7 @@ pub(crate) struct SegmentIndex {
     /// Expected total length of current variant's theoretical stream.
     /// Used for seek bounds checking by Symphonia.
     pub(crate) expected_total_length: u64,
-    /// Key of the most recently pushed entry (for last(), media_info, segment_range).
+    /// Key of the most recently pushed entry (for `last()`, `media_info`, `segment_range`).
     last_entry_key: Option<(usize, usize)>,
     /// True after a mid-stream variant switch. On-demand loading should
     /// just wake the sequential downloader instead of using metadata lookups.
@@ -136,7 +136,7 @@ impl SegmentIndex {
         self.entries.values().find(|e| e.contains(offset))
     }
 
-    /// Find the first segment of the given variant (by lowest byte_offset).
+    /// Find the first segment of the given variant (by lowest `byte_offset`).
     ///
     /// Used to find the start of a new variant after ABR switch — this is where
     /// init data (ftyp/moov) lives for the new variant.
@@ -150,7 +150,7 @@ impl SegmentIndex {
     pub(crate) fn total_bytes(&self) -> u64 {
         self.entries
             .values()
-            .map(|e| e.end_offset())
+            .map(SegmentEntry::end_offset)
             .max()
             .unwrap_or(0)
     }
@@ -177,19 +177,19 @@ impl SegmentIndex {
     }
 }
 
-/// Shared state between HlsDownloader and HlsSource.
+/// Shared state between `HlsDownloader` and `HlsSource`.
 pub(crate) struct SharedSegments {
     pub(crate) segments: Mutex<SegmentIndex>,
     /// Downloader → Source: new segment available (for sync blocking in Source).
     pub(crate) condvar: Condvar,
     pub(crate) eof: AtomicBool,
-    /// Current reader byte offset (updated by Source on every read_at).
+    /// Current reader byte offset (updated by Source on every `read_at`).
     pub(crate) reader_offset: AtomicU64,
     /// Source → Downloader: reader advanced, may resume downloading.
     pub(crate) reader_advanced: Notify,
     /// Segment load requests (on-demand from seek or sequential).
     pub(crate) segment_requests: SegQueue<SegmentRequest>,
-    /// Per-variant segment metadata for byte_offset → segment_index mapping.
+    /// Per-variant segment metadata for `byte_offset` → `segment_index` mapping.
     pub(crate) variant_metadata: Mutex<HashMap<usize, Vec<SegmentMetadata>>>,
 }
 
@@ -229,7 +229,7 @@ impl HlsSource {
     }
 
     /// Find segment index for a given byte offset using variant metadata.
-    /// Returns segment_index for the segment containing the offset.
+    /// Returns `segment_index` for the segment containing the offset.
     fn find_segment_for_offset(&self, variant: usize, offset: u64) -> Option<usize> {
         let metadata_map = self.shared.variant_metadata.lock();
         let metadata = metadata_map.get(&variant)?;
@@ -341,7 +341,7 @@ impl Source for HlsSource {
                     on_demand_requested = true;
                     segments = self.shared.segments.lock();
                 } else {
-                    let current_variant = segments.last().map(|e| e.meta.variant).unwrap_or(0);
+                    let current_variant = segments.last().map_or(0, |e| e.meta.variant);
 
                     drop(segments);
                     if let Some(segment_index) =
@@ -459,7 +459,7 @@ impl Source for HlsSource {
     }
 }
 
-/// Build an HlsDownloader + HlsSource pair from config.
+/// Build an `HlsDownloader` + `HlsSource` pair from config.
 pub fn build_pair(
     fetch: Arc<DefaultFetchManager>,
     variants: Vec<VariantStream>,

@@ -1,4 +1,4 @@
-//! ResamplerProcessor: wraps rubato for sample rate conversion.
+//! `ResamplerProcessor`: wraps rubato for sample rate conversion.
 //!
 //! Reacts to dynamic `host_sample_rate` changes via `Arc<AtomicU32>`.
 
@@ -627,7 +627,7 @@ impl ResamplerProcessor {
     }
 }
 
-/// Create a SmallVec of empty Vecs for each channel.
+/// Create a `SmallVec` of empty Vecs for each channel.
 #[cfg_attr(feature = "perf", hotpath::measure)]
 fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
     (0..channels).map(|_| Vec::new()).collect()

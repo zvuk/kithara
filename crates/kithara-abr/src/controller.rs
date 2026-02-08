@@ -176,8 +176,7 @@ impl<E: Estimator> AbrController<E> {
             .variants
             .iter()
             .find(|v| v.variant_index == current)
-            .map(|v| v.bandwidth_bps)
-            .unwrap_or(0);
+            .map_or(0, |v| v.bandwidth_bps);
 
         // Collect all variants as (index, bandwidth) pairs and sort by bandwidth
         let mut variants: Vec<(usize, u64)> = self
@@ -299,8 +298,7 @@ impl<E: Estimator> AbrController<E> {
     fn can_switch_now(&self, now: Instant) -> bool {
         let nanos = self.last_switch_at_nanos.load(Ordering::Acquire);
         self.nanos_to_instant(nanos)
-            .map(|t| now.duration_since(t) >= self.cfg.min_switch_interval)
-            .unwrap_or(true)
+            .is_none_or(|t| now.duration_since(t) >= self.cfg.min_switch_interval)
     }
 }
 

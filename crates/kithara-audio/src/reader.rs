@@ -9,7 +9,7 @@ use kithara_stream::{MediaInfo, Source, StreamError, WaitOutcome};
 
 /// Sync reader over sync byte Source.
 ///
-/// Calls Source methods directly (no async, no block_on).
+/// Calls Source methods directly (no async, no `block_on`).
 pub struct SourceReader<S: Source> {
     source: S,
     pos: u64,

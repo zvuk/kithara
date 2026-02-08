@@ -115,7 +115,7 @@ pub struct Audio<S> {
     /// Notify for async preload (first chunk available).
     preload_notify: Arc<Notify>,
 
-    /// Whether preload() has been called (enables non-blocking mode).
+    /// Whether `preload()` has been called (enables non-blocking mode).
     preloaded: bool,
 
     /// Worker thread handle for graceful shutdown.
@@ -277,7 +277,7 @@ impl<S> Audio<S> {
     }
 
     /// Receive next chunk from channel, filtering stale chunks.
-    /// After preload(), non-blocking. Before preload(), blocks on first call.
+    /// After `preload()`, non-blocking. Before `preload()`, blocks on first call.
     pub(crate) fn fill_buffer(&mut self) -> bool {
         if self.eof {
             return false;
@@ -342,15 +342,15 @@ impl<S> Audio<S> {
 /// Specialized impl for Stream-based audio pipelines.
 ///
 /// Provides async constructor that creates Stream internally.
-/// Uses StreamAudioSource for automatic format change detection on ABR switch.
+/// Uses `StreamAudioSource` for automatic format change detection on ABR switch.
 impl<T> Audio<Stream<T>>
 where
     T: StreamType,
 {
-    /// Create audio pipeline from AudioConfig.
+    /// Create audio pipeline from `AudioConfig`.
     ///
     /// This is the target API for Stream sources.
-    /// Uses StreamAudioSource for automatic decoder recreation on format change.
+    /// Uses `StreamAudioSource` for automatic decoder recreation on format change.
     ///
     /// # Example
     ///
@@ -395,7 +395,7 @@ where
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
-                        _ = forward_cancel.cancelled() => break,
+                        () = forward_cancel.cancelled() => break,
                         result = stream_events_rx.recv() => {
                             match result {
                                 Ok(event) => {
@@ -480,8 +480,7 @@ where
 
         let epoch = Arc::new(AtomicU64::new(0));
         let (audio_events_tx, _) = broadcast::channel(event_capacity);
-        let host_sample_rate =
-            Arc::new(AtomicU32::new(config_host_sr.map(|v| v.get()).unwrap_or(0)));
+        let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
 
         let output_spec = expected_output_spec(initial_spec, &host_sample_rate);
         let effects = create_effects(initial_spec, &host_sample_rate, resampler_quality);
@@ -583,11 +582,11 @@ where
             .spawn(move || {
                 run_audio_loop(
                     audio_source,
-                    cmd_rx,
-                    data_tx,
-                    worker_notify,
+                    &cmd_rx,
+                    &data_tx,
+                    &worker_notify,
                     worker_preload_chunks,
-                    worker_cancel,
+                    &worker_cancel,
                 );
             })
             .map_err(|e| {
@@ -623,6 +622,11 @@ where
     }
 
     /// Subscribe to unified events (stream + audio).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal unified events channel is not set (should never
+    /// happen for `Audio<Stream<T>>` created via `new`).
     pub fn events(&self) -> broadcast::Receiver<AudioPipelineEvent<T::Event>> {
         self.unified_events
             .as_ref()
@@ -649,7 +653,7 @@ impl<S> Drop for Audio<S> {
 // PcmReader implementation for Audio
 impl<S: Send> PcmReader for Audio<S> {
     fn read(&mut self, buf: &mut [f32]) -> usize {
-        Audio::read(self, buf)
+        Self::read(self, buf)
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -675,31 +679,31 @@ impl<S: Send> PcmReader for Audio<S> {
     }
 
     fn seek(&mut self, position: Duration) -> DecodeResult<()> {
-        Audio::seek(self, position)
+        Self::seek(self, position)
     }
 
     fn spec(&self) -> PcmSpec {
-        Audio::spec(self)
+        Self::spec(self)
     }
 
     fn is_eof(&self) -> bool {
-        Audio::is_eof(self)
+        Self::is_eof(self)
     }
 
     fn position(&self) -> Duration {
-        Audio::position(self)
+        Self::position(self)
     }
 
     fn duration(&self) -> Option<Duration> {
-        Audio::duration(self)
+        Self::duration(self)
     }
 
     fn metadata(&self) -> &TrackMetadata {
-        Audio::metadata(self)
+        Self::metadata(self)
     }
 
     fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-        Audio::decode_events(self)
+        Self::decode_events(self)
     }
 
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {

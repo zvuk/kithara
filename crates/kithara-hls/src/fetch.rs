@@ -79,7 +79,7 @@ pub enum FetchResult {
 // ============================================================================
 
 /// Generic segment loader.
-#[allow(async_fn_in_trait)]
+#[expect(async_fn_in_trait)]
 #[cfg_attr(test, unimock::unimock(api = LoaderMock))]
 pub trait Loader: Send + Sync {
     /// Load segment and return metadata with real size (after processing).
@@ -350,7 +350,7 @@ impl<N: Net> FetchManager<N> {
 
     /// Get URLs for all segments in a variant (init + media segments).
     ///
-    /// Returns (init_url, media_urls) where init_url is None for TS streams.
+    /// Returns (`init_url`, `media_urls`) where `init_url` is None for TS streams.
     /// Does NOT download segments — only resolves URLs from playlist.
     pub async fn get_segment_urls(&self, variant: usize) -> HlsResult<(Option<Url>, Vec<Url>)> {
         let (media_url, playlist) = self.load_media_playlist(variant).await?;

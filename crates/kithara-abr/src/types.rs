@@ -112,7 +112,7 @@ pub enum ThroughputSampleSource {
     Cache,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ThroughputSample {
     pub bytes: u64,
     pub duration: Duration,

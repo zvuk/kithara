@@ -47,7 +47,7 @@ where
         let size = self.cache.try_lock().map(|c| c.len());
         f.debug_struct("CachedAssets")
             .field("cache_size", &size)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -55,6 +55,8 @@ impl<A> CachedAssets<A>
 where
     A: Assets,
 {
+    /// # Panics
+    /// This function will not panic (capacity is a non-zero constant).
     pub fn new(inner: Arc<A>) -> Self {
         Self {
             inner,

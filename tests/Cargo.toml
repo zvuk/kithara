@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 # All kithara crates
 kithara-abr = { workspace = true }

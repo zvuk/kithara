@@ -50,7 +50,7 @@ pub struct FileConfig {
     pub cancel: Option<CancellationToken>,
     /// Events broadcast sender (optional - if not provided, events are not sent).
     pub events_tx: Option<broadcast::Sender<FileEvent>>,
-    /// Events broadcast channel capacity (used when events_tx is not provided).
+    /// Events broadcast channel capacity (used when `events_tx` is not provided).
     pub events_channel_capacity: usize,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     ///
@@ -103,7 +103,7 @@ impl FileConfig {
     ///
     /// When multiple URLs share the same canonical form (differ only in query
     /// parameters), a unique name ensures each gets its own cache directory.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
         self
     }

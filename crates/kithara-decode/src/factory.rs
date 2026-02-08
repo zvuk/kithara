@@ -58,7 +58,7 @@ pub struct ProbeHint {
     pub mime: Option<String>,
 }
 
-/// Configuration for DecoderFactory.
+/// Configuration for `DecoderFactory`.
 #[derive(Debug, Clone)]
 pub struct DecoderConfig {
     /// Prefer hardware decoder when available.
@@ -87,8 +87,8 @@ impl Default for DecoderConfig {
 /// Factory for creating decoders with runtime backend selection.
 ///
 /// Supports multiple backends with automatic fallback:
-/// - Apple AudioToolbox (macOS/iOS) when `apple` feature enabled
-/// - Android MediaCodec (Android) when `android` feature enabled
+/// - Apple `AudioToolbox` (macOS/iOS) when `apple` feature enabled
+/// - Android `MediaCodec` (Android) when `android` feature enabled
 /// - Symphonia (software, all platforms) as default fallback
 pub struct DecoderFactory;
 
@@ -116,14 +116,14 @@ impl DecoderFactory {
     /// Returns [`DecodeError::UnsupportedCodec`] if the codec is not supported.
     pub fn create<R>(
         source: R,
-        selector: CodecSelector,
+        selector: &CodecSelector,
         config: DecoderConfig,
     ) -> DecodeResult<Box<dyn InnerDecoder>>
     where
         R: Read + Seek + Send + Sync + 'static,
     {
         // Determine codec and container from selector
-        let (codec, container) = match selector {
+        let (codec, container) = match *selector {
             CodecSelector::Exact(c) => (c, None),
             CodecSelector::Probe(ref hint) => (Self::probe_codec(hint)?, hint.container),
             CodecSelector::Auto => return Err(DecodeError::ProbeFailed),
@@ -352,9 +352,9 @@ impl DecoderFactory {
         }
     }
 
-    /// Create decoder from MediaInfo (for kithara-audio compatibility).
+    /// Create decoder from `MediaInfo` (for kithara-audio compatibility).
     ///
-    /// This is a convenience method that extracts codec from MediaInfo
+    /// This is a convenience method that extracts codec from `MediaInfo`
     /// and creates the appropriate decoder.
     ///
     /// # Arguments
@@ -383,7 +383,7 @@ impl DecoderFactory {
             mime: None,
         };
 
-        Self::create(source, CodecSelector::Probe(hint), config)
+        Self::create(source, &CodecSelector::Probe(hint), config)
     }
 
     /// Create decoder from file extension hint.
@@ -416,7 +416,7 @@ impl DecoderFactory {
             ..Default::default()
         };
 
-        match Self::create(source, CodecSelector::Probe(probe_hint), config) {
+        match Self::create(source, &CodecSelector::Probe(probe_hint), config) {
             Ok(decoder) => Ok(decoder),
             Err(DecodeError::ProbeFailed) => {
                 // Hints alone couldn't determine the codec.
@@ -836,7 +836,7 @@ mod tests {
     fn test_auto_selector_fails() {
         use std::io::Cursor;
         let empty = Cursor::new(Vec::new());
-        let result = DecoderFactory::create(empty, CodecSelector::Auto, DecoderConfig::default());
+        let result = DecoderFactory::create(empty, &CodecSelector::Auto, DecoderConfig::default());
         assert!(matches!(result, Err(DecodeError::ProbeFailed)));
     }
 
@@ -857,7 +857,7 @@ mod tests {
         // AAC will try Apple first (fails with "not implemented"),
         // then fall back to Symphonia (which will also fail with invalid data)
         let result =
-            DecoderFactory::create(cursor, CodecSelector::Exact(AudioCodec::AacLc), config);
+            DecoderFactory::create(cursor, &CodecSelector::Exact(AudioCodec::AacLc), config);
 
         // The important thing is it falls back to Symphonia
         // (would be Backend error if it didn't fall back)

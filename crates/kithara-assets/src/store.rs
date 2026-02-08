@@ -38,7 +38,7 @@ impl Default for StoreOptions {
 
 impl StoreOptions {
     /// Create new store options with the given cache directory.
-    pub fn new(cache_dir: impl Into<PathBuf>) -> Self {
+    pub fn new<P: Into<PathBuf>>(cache_dir: P) -> Self {
         Self {
             cache_dir: cache_dir.into(),
             max_assets: None,
@@ -58,7 +58,7 @@ impl StoreOptions {
         self
     }
 
-    /// Convert to internal EvictConfig.
+    /// Convert to internal `EvictConfig`.
     pub fn to_evict_config(&self) -> EvictConfig {
         EvictConfig {
             max_assets: self.max_assets,
@@ -70,14 +70,14 @@ impl StoreOptions {
 /// Fully decorated asset store with processing layer.
 ///
 /// ## Decorator order (inside to outside)
-/// - DiskAssetStore (base disk I/O)
-/// - EvictAssets (LRU eviction)
-/// - ProcessingAssets (transformation with context, uses Default if no context)
-/// - LeaseAssets (RAII pinning)
-/// - CachedAssets (caches LeaseResource with guards, outermost)
+/// - `DiskAssetStore` (base disk I/O)
+/// - `EvictAssets` (LRU eviction)
+/// - `ProcessingAssets` (transformation with context, uses Default if no context)
+/// - `LeaseAssets` (RAII pinning)
+/// - `CachedAssets` (caches `LeaseResource` with guards, outermost)
 ///
 /// Generic parameter `Ctx` is the context type for processing.
-/// Use `()` (default) for no processing (ProcessingAssets will pass through unchanged).
+/// Use `()` (default) for no processing (`ProcessingAssets` will pass through unchanged).
 pub type AssetStore<Ctx = ()> =
     CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
@@ -129,7 +129,7 @@ impl Default for AssetStoreBuilder<()> {
 }
 
 impl AssetStoreBuilder<()> {
-    /// Builder with defaults (no root_dir/asset_root/evict/cancel/process set).
+    /// Builder with defaults (no `root_dir`/`asset_root`/evict/cancel/process set).
     pub fn new() -> Self {
         // Default pass-through process_fn for () - just copies input to output
         let dummy_process: ProcessChunkFn<()> = Arc::new(|input, output, _ctx, _is_last| {
@@ -153,13 +153,13 @@ where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + std::fmt::Debug + 'static,
 {
     /// Set the root directory for the asset store.
-    pub fn root_dir(mut self, root: impl Into<PathBuf>) -> Self {
+    pub fn root_dir<P: Into<PathBuf>>(mut self, root: P) -> Self {
         self.root_dir = Some(root.into());
         self
     }
 
     /// Set the asset root identifier (e.g. from `asset_root_for_url`).
-    pub fn asset_root(mut self, asset_root: impl Into<String>) -> Self {
+    pub fn asset_root<S: Into<String>>(mut self, asset_root: S) -> Self {
         self.asset_root = Some(asset_root.into());
         self
     }

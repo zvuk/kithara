@@ -26,7 +26,7 @@ pub enum DecodeError {
     #[error("Seek failed: {0}")]
     SeekFailed(String),
 
-    /// Alias for SeekFailed (backward compatibility).
+    /// Alias for `SeekFailed` (backward compatibility).
     #[error("Seek error: {0}")]
     SeekError(String),
 

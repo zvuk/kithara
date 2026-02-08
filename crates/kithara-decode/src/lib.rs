@@ -3,7 +3,7 @@
 //! Audio decoding library with pluggable backends.
 //!
 //! Provides generic decoder infrastructure supporting Symphonia (software),
-//! Apple AudioToolbox, and Android MediaCodec backends.
+//! Apple `AudioToolbox`, and Android `MediaCodec` backends.
 //!
 //! ## Usage
 //!

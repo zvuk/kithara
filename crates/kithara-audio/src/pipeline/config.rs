@@ -18,10 +18,10 @@ use crate::{
 
 /// Configuration for audio pipeline with stream config.
 ///
-/// Generic over StreamType to include stream-specific configuration.
+/// Generic over `StreamType` to include stream-specific configuration.
 /// Combines stream config and audio pipeline settings into a single builder.
 pub struct AudioConfig<T: StreamType> {
-    /// Stream configuration (HlsConfig, FileConfig, etc.)
+    /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
     pub stream: T::Config,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
     pub pcm_buffer_chunks: usize,
@@ -44,7 +44,7 @@ pub struct AudioConfig<T: StreamType> {
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
     pub preload_chunks: usize,
-    /// Prefer hardware decoder when available (Apple AudioToolbox, Android MediaCodec).
+    /// Prefer hardware decoder when available (Apple `AudioToolbox`, Android `MediaCodec`).
     pub prefer_hardware: bool,
     /// Unified events sender (optional — if not provided, one is created internally).
     pub(super) events_tx: Option<broadcast::Sender<AudioPipelineEvent<T::Event>>>,
@@ -76,7 +76,7 @@ impl<T: StreamType> AudioConfig<T> {
     }
 
     /// Set format hint.
-    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+    pub fn with_hint<S: Into<String>>(mut self, hint: S) -> Self {
         self.hint = Some(hint.into());
         self
     }
@@ -111,7 +111,7 @@ impl<T: StreamType> AudioConfig<T> {
         self
     }
 
-    /// Prefer hardware decoder when available (Apple AudioToolbox, Android MediaCodec).
+    /// Prefer hardware decoder when available (Apple `AudioToolbox`, Android `MediaCodec`).
     ///
     /// When enabled, attempts to use platform-native hardware decoders first,
     /// falling back to Symphonia software decoder on failure.

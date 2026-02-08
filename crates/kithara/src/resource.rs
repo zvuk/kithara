@@ -62,7 +62,7 @@ impl Resource {
     /// Create a resource from any `PcmReader`.
     ///
     /// Only audio events are forwarded. Use this for custom sources.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
         let (events_tx, _) = broadcast::channel(64);
 
@@ -179,7 +179,6 @@ impl Resource {
 
     // -- Internal helpers -----------------------------------------------------
 
-    #[allow(dead_code)]
     fn spawn_audio_forward(
         mut audio_rx: broadcast::Receiver<AudioEvent>,
         forward_tx: broadcast::Sender<ResourceEvent>,
@@ -219,7 +218,6 @@ impl Resource {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use std::time::Duration;
 
@@ -231,7 +229,7 @@ mod tests {
 
     // -- Mock PcmReader -----------------------------------------------------------
 
-    /// A mock PcmReader for testing the Resource facade.
+    /// A mock `PcmReader` for testing the Resource facade.
     ///
     /// Produces a constant sample value, tracks seek position,
     /// and exposes an `AudioEvent` sender for event forwarding tests.

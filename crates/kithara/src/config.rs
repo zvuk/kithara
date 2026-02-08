@@ -107,7 +107,7 @@ impl ResourceConfig {
     ///
     /// Parses the input as a URL first. If parsing fails, treats it as a local
     /// file path (must be absolute). A `file://` URL is normalized to a `Path`.
-    pub fn new(input: impl AsRef<str>) -> Result<Self, DecodeError> {
+    pub fn new<S: AsRef<str>>(input: S) -> Result<Self, DecodeError> {
         let trimmed = input.as_ref().trim();
 
         let src = match Url::parse(trimmed) {
@@ -156,7 +156,7 @@ impl ResourceConfig {
     ///
     /// When multiple URLs share the same canonical form (differ only in query
     /// parameters), a unique name ensures each gets its own cache directory.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn with_name<N: Into<String>>(mut self, name: N) -> Self {
         self.name = Some(name.into());
         self
     }
@@ -168,7 +168,7 @@ impl ResourceConfig {
     }
 
     /// Set format hint (file extension like "mp3", "wav").
-    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+    pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
         self.hint = Some(hint.into());
         self
     }
@@ -251,14 +251,14 @@ impl ResourceConfig {
     pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {
         let (file_src, hint) = match self.src {
             ResourceSrc::Url(url) => {
-                let h = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
+                let h = url.path().rsplit('.').next().map(str::to_lowercase);
                 (kithara_file::FileSrc::Remote(url), h)
             }
             ResourceSrc::Path(path) => {
                 let h = path
                     .extension()
                     .and_then(|e| e.to_str())
-                    .map(|e| e.to_lowercase());
+                    .map(str::to_lowercase);
                 (kithara_file::FileSrc::Local(path), h)
             }
         };

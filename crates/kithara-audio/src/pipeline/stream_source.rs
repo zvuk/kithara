@@ -18,9 +18,9 @@ use crate::{events::AudioEvent, traits::AudioEffect};
 
 /// Shared stream wrapper for format change detection.
 ///
-/// Wraps Stream in Arc<Mutex> to allow:
+/// Wraps Stream in `Arc<Mutex>` to allow:
 /// - Decoder to read via Read + Seek
-/// - StreamAudioSource to check media_info() for format changes
+/// - `StreamAudioSource` to check `media_info()` for format changes
 pub(super) struct SharedStream<T: StreamType> {
     inner: Arc<Mutex<Stream<T>>>,
 }
@@ -129,14 +129,14 @@ impl<T: StreamType> Seek for OffsetReader<T> {
 
 /// Factory closure that creates a new decoder from stream, media info, and base offset.
 ///
-/// Production: creates Symphonia `Decoder` via `OffsetReader`.
+/// Production: creates Symphonia `Decoder` via [`OffsetReader`].
 /// Tests: returns `MockDecoder` without real I/O.
 pub(super) type DecoderFactory<T> =
     Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn InnerDecoder>> + Send>;
 
 /// Audio source for Stream with format change detection.
 ///
-/// Monitors media_info changes and recreates decoder at segment boundaries.
+/// Monitors `media_info` changes and recreates decoder at segment boundaries.
 /// The old decoder naturally decodes all data from the current segment.
 /// When it encounters new segment data (different format), it errors or returns EOF.
 /// At that point, we seek to the segment boundary and recreate the decoder.
@@ -145,7 +145,7 @@ pub(super) struct StreamAudioSource<T: StreamType> {
     decoder: Box<dyn InnerDecoder>,
     decoder_factory: DecoderFactory<T>,
     cached_media_info: Option<MediaInfo>,
-    /// Pending format change: (new MediaInfo, byte offset where new segment starts).
+    /// Pending format change: (new `MediaInfo`, byte offset where new segment starts).
     pending_format_change: Option<(MediaInfo, u64)>,
     epoch: Arc<AtomicU64>,
     chunks_decoded: u64,
@@ -189,7 +189,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         self
     }
 
-    /// Detect media_info change: mark as pending.
+    /// Detect `media_info` change: mark as pending.
     ///
     /// The variant fence in `Source::read_at()` prevents the old decoder
     /// from reading data from a new variant. This causes Symphonia to hit
@@ -251,14 +251,14 @@ impl<T: StreamType> StreamAudioSource<T> {
             return false;
         }
 
-        self.recreate_decoder(new_info, target_offset)
+        self.recreate_decoder(&new_info, target_offset)
     }
 
-    /// Recreate decoder with new MediaInfo via factory.
+    /// Recreate decoder with new `MediaInfo` via factory.
     ///
-    /// The factory handles OffsetReader creation and decoder instantiation.
+    /// The factory handles `OffsetReader` creation and decoder instantiation.
     /// Returns true if decoder was recreated successfully.
-    fn recreate_decoder(&mut self, new_info: MediaInfo, base_offset: u64) -> bool {
+    fn recreate_decoder(&mut self, new_info: &MediaInfo, base_offset: u64) -> bool {
         debug!(
             old = ?self.cached_media_info,
             new = ?new_info,
@@ -269,7 +269,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.cached_media_info = Some(new_info.clone());
         self.base_offset = base_offset;
 
-        match (self.decoder_factory)(self.shared_stream.clone(), &new_info, base_offset) {
+        match (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset) {
             Some(new_decoder) => {
                 let new_duration = new_decoder.duration();
                 self.decoder = new_decoder;
@@ -464,7 +464,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                             self.shared_stream
                                 .seek(SeekFrom::Start(self.base_offset))
                                 .is_ok()
-                                && self.recreate_decoder(info, self.base_offset)
+                                && self.recreate_decoder(&info, self.base_offset)
                         })
                     } else {
                         false

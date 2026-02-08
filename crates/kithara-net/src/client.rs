@@ -17,6 +17,9 @@ pub struct HttpClient {
 }
 
 impl HttpClient {
+    /// # Panics
+    ///
+    /// Panics if the `reqwest::Client` builder fails to build.
     pub fn new(options: NetOptions) -> Self {
         let inner = Client::builder()
             .pool_max_idle_per_host(options.pool_max_idle_per_host)
@@ -149,7 +152,7 @@ impl Net for HttpClient {
         }
 
         let mut out = Headers::new();
-        for (name, value) in resp.headers().iter() {
+        for (name, value) in resp.headers() {
             if let Ok(v) = value.to_str() {
                 out.insert(name.as_str(), v);
             }

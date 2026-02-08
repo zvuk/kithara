@@ -131,7 +131,7 @@ where
         f.debug_struct("LeaseResource")
             .field("inner", &self.inner)
             .field("asset_root", &self.asset_root)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -244,7 +244,7 @@ pub struct LeaseGuard<A>
 where
     A: Assets,
 {
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     inner: Arc<LeaseGuardInner<A>>,
 }
 

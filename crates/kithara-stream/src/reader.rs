@@ -38,7 +38,7 @@ impl<S: Source> Reader<S> {
 
     /// Check if length is zero or unknown.
     pub fn is_empty(&self) -> bool {
-        self.source.len().map(|l| l == 0).unwrap_or(true)
+        self.source.len().is_none_or(|l| l == 0)
     }
 
     /// Get media info if known.

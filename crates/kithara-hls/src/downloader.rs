@@ -27,7 +27,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct SegmentMetadata {
     /// Segment index in playlist.
-    #[allow(dead_code)]
+    #[expect(dead_code)]
     pub(crate) index: usize,
     /// Byte offset in theoretical stream (cumulative from segment 0).
     pub(crate) byte_offset: u64,
@@ -52,7 +52,7 @@ pub struct HlsDownloader {
     pub(crate) yield_interval: usize,
     /// Counter for yield interval.
     pub(crate) segments_since_yield: usize,
-    /// Cache of expected_total_length per variant (variant_index → total_bytes).
+    /// Cache of `expected_total_length` per variant (`variant_index` → `total_bytes`).
     pub(crate) variant_lengths: HashMap<usize, u64>,
     /// True after a mid-stream variant switch. Subsequent segments use cumulative offsets.
     pub(crate) had_midstream_switch: bool,
@@ -121,7 +121,7 @@ impl HlsDownloader {
     /// Stops at the first uncached segment to maintain contiguous entries.
     ///
     /// Returns `(count, final_byte_offset)` for caller to update downloader state.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_arguments)]
     fn populate_cached_segments(
         shared: &SharedSegments,
         fetch: &DefaultFetchManager,
@@ -159,9 +159,8 @@ impl HlsDownloader {
 
         for (index, (meta, segment_url)) in metadata.iter().zip(media_urls.iter()).enumerate() {
             let key = ResourceKey::from_url(segment_url);
-            let resource = match assets.open_resource(&key) {
-                Ok(r) => r,
-                Err(_) => break, // Stop on first uncached segment
+            let Ok(resource) = assets.open_resource(&key) else {
+                break; // Stop on first uncached segment
             };
 
             if let ResourceStatus::Committed { final_len } = resource.status() {
@@ -320,10 +319,8 @@ impl HlsDownloader {
                         // (variant_total - switch_metadata_offset).
                         let effective_total = if is_midstream_switch {
                             let switch_byte = self.byte_offset;
-                            let switch_meta = metadata
-                                .get(segment_index)
-                                .map(|s| s.byte_offset)
-                                .unwrap_or(0);
+                            let switch_meta =
+                                metadata.get(segment_index).map_or(0, |s| s.byte_offset);
                             let result = total
                                 .saturating_sub(switch_meta)
                                 .saturating_add(switch_byte);

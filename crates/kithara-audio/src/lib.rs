@@ -8,7 +8,7 @@
 //! - [`AudioGenerator`] - Trait for PCM audio sources
 //! - [`AudioEffect`] - Trait for audio processing effects
 //! - [`ResamplerProcessor`] - Sample rate conversion effect
-//! - [`AudioSyncReader`] - rodio::Source adapter (requires `rodio` feature)
+//! - [`AudioSyncReader`] - `rodio::Source` adapter (requires `rodio` feature)
 //!
 //! ## Target API
 //!

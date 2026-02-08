@@ -57,7 +57,7 @@ impl File {
     /// Create a source for a local file.
     ///
     /// Opens the file directly via `StorageResource` in `ReadOnly` mode,
-    /// skipping network, AssetStore, and background downloader entirely.
+    /// skipping network, `AssetStore`, and background downloader entirely.
     fn create_local(
         path: std::path::PathBuf,
         config: FileConfig,
@@ -313,10 +313,10 @@ impl Downloader for FileDownloader {
         // If sequential stream ended, wait for on-demand requests or cancel
         if self.sequential_ended {
             tokio::select! {
-                _ = self.shared.reader_needs_data.notified() => {
+                () = self.shared.reader_needs_data.notified() => {
                     return true; // Loop will check pop_range_request
                 }
-                _ = self.cancel.cancelled() => {
+                () = self.cancel.cancelled() => {
                     return false;
                 }
             }
@@ -337,8 +337,8 @@ impl Downloader for FileDownloader {
 
                 // Also break on on-demand requests while waiting
                 tokio::select! {
-                    _ = advanced => {}
-                    _ = self.shared.reader_needs_data.notified() => {
+                    () = advanced => {}
+                    () = self.shared.reader_needs_data.notified() => {
                         break;
                     }
                 }
@@ -376,10 +376,7 @@ impl Downloader for FileDownloader {
             }
             Ok(WriterItem::StreamEnded { total_bytes }) => {
                 // Check if download is complete
-                let is_complete = self
-                    .total
-                    .map(|expected| total_bytes >= expected)
-                    .unwrap_or(true); // No Content-Length → assume complete
+                let is_complete = self.total.is_none_or(|expected| total_bytes >= expected); // No Content-Length → assume complete
 
                 self.sequential_ended = true;
 
