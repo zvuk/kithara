@@ -89,6 +89,12 @@ async fn stream_file_seek_start_reads_correct_bytes(
     let expected_vec = expected.to_vec();
 
     let result = tokio::task::spawn_blocking(move || {
+        // Primer read: forces wait_range to block until download delivers data.
+        // For a 27-byte file the entire payload arrives in one chunk,
+        // so after this read all offsets are guaranteed available.
+        let mut primer = [0u8; 1];
+        stream.read(&mut primer).unwrap();
+
         let pos = stream.seek(SeekFrom::Start(seek_pos)).unwrap();
         assert_eq!(pos, seek_pos);
 

@@ -69,7 +69,12 @@ impl NetError {
 
 impl From<ReqwestError> for NetError {
     fn from(e: ReqwestError) -> Self {
-        NetError::Http(e.to_string())
+        if e.is_timeout() {
+            return NetError::Timeout;
+        }
+        // Use alternate formatting {:#} to include the full error chain
+        // (e.g. "error sending request … : connection refused")
+        NetError::Http(format!("{e:#}"))
     }
 }
 
