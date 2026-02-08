@@ -56,6 +56,11 @@ impl<S: Source> Reader<S> {
         self.source.format_change_segment_range()
     }
 
+    /// Clear variant fence, allowing reads from the next variant.
+    pub fn clear_variant_fence(&mut self) {
+        self.source.clear_variant_fence();
+    }
+
     /// Get mutable reference to inner source.
     pub fn source_mut(&mut self) -> &mut S {
         &mut self.source

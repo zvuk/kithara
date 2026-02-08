@@ -163,6 +163,11 @@ impl<T: StreamType> Stream<T> {
     pub fn format_change_segment_range(&self) -> Option<std::ops::Range<u64>> {
         self.reader.format_change_segment_range()
     }
+
+    /// Clear variant fence, allowing reads from the next variant.
+    pub fn clear_variant_fence(&mut self) {
+        self.reader.clear_variant_fence();
+    }
 }
 
 impl<T: StreamType> Read for Stream<T> {

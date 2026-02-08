@@ -3,6 +3,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::time::sleep;
+#[cfg(test)]
+use unimock::unimock;
 use url::Url;
 
 use crate::{
@@ -11,9 +13,6 @@ use crate::{
     traits::Net,
     types::{Headers, RangeSpec, RetryPolicy},
 };
-
-#[cfg(test)]
-use unimock::unimock;
 
 #[cfg_attr(test, unimock(api = RetryClassifierMock))]
 pub trait RetryClassifier {

@@ -462,7 +462,6 @@ impl DecoderFactory {
         let decoder = Symphonia::<ProbeAny>::create(source, symphonia_config)?;
         Ok(Box::new(decoder))
     }
-
 }
 
 #[cfg(test)]

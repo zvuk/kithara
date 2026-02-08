@@ -71,6 +71,12 @@ pub trait Source: Send + 'static {
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         None
     }
+
+    /// Clear variant fence, allowing reads from the next variant.
+    ///
+    /// Called when the decoder is recreated after ABR switch.
+    /// Default no-op for non-HLS sources.
+    fn clear_variant_fence(&mut self) {}
 }
 
 #[cfg(test)]

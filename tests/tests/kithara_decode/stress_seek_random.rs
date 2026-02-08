@@ -117,9 +117,7 @@ async fn stress_random_seek_read_synthetic_wav() {
         .expect("create audio pipeline");
 
     // --- Step 3: Query duration ---
-    let total_duration = audio
-        .duration()
-        .expect("WAV should report known duration");
+    let total_duration = audio.duration().expect("WAV should report known duration");
     let total_secs = total_duration.as_secs_f64();
     info!(total_secs, "Stream duration");
 
@@ -129,7 +127,11 @@ async fn stress_random_seek_read_synthetic_wav() {
     );
 
     let spec = audio.spec();
-    info!(sample_rate = spec.sample_rate, channels = spec.channels, "Audio spec");
+    info!(
+        sample_rate = spec.sample_rate,
+        channels = spec.channels,
+        "Audio spec"
+    );
 
     // --- Step 4: Compute optimal chunk size ---
     // ~0.5% of total duration, clamped to [0.05s, 0.5s].
@@ -153,8 +155,7 @@ async fn stress_random_seek_read_synthetic_wav() {
 
         info!(
             count = seek_positions.len(),
-            max_seek_secs,
-            "Generated seek positions"
+            max_seek_secs, "Generated seek positions"
         );
 
         // Step 6: Iterate seek + read + verify
@@ -205,10 +206,7 @@ async fn stress_random_seek_read_synthetic_wav() {
             if (i + 1) % 200 == 0 {
                 info!(
                     iteration = i + 1,
-                    successful_reads,
-                    total_samples_read,
-                    channel_mismatches,
-                    "Progress"
+                    successful_reads, total_samples_read, channel_mismatches, "Progress"
                 );
             }
         }
@@ -230,9 +228,11 @@ async fn stress_random_seek_read_synthetic_wav() {
         let final_seek_secs = total_secs - chunk_duration_secs;
         info!(final_seek_secs, "Final seek near end");
 
-        audio.seek(Duration::from_secs_f64(final_seek_secs)).unwrap_or_else(|e| {
-            panic!("final seek to {final_seek_secs:.4}s failed: {e}");
-        });
+        audio
+            .seek(Duration::from_secs_f64(final_seek_secs))
+            .unwrap_or_else(|e| {
+                panic!("final seek to {final_seek_secs:.4}s failed: {e}");
+            });
 
         let mut remaining_samples = 0u64;
         loop {

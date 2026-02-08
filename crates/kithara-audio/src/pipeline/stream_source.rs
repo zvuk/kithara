@@ -21,34 +21,15 @@ use crate::{events::AudioEvent, traits::AudioEffect};
 /// Wraps Stream in Arc<Mutex> to allow:
 /// - Decoder to read via Read + Seek
 /// - StreamAudioSource to check media_info() for format changes
-///
-/// Supports a read boundary: when set, reads at or past the boundary
-/// return 0 (EOF). This prevents the old decoder from reading data
-/// from a new segment after an ABR variant switch.
 pub(super) struct SharedStream<T: StreamType> {
     inner: Arc<Mutex<Stream<T>>>,
-    /// Byte offset at which reads stop (return EOF).
-    /// `u64::MAX` means no boundary (unlimited reads).
-    boundary: Arc<AtomicU64>,
 }
 
 impl<T: StreamType> SharedStream<T> {
     pub(super) fn new(stream: Stream<T>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(stream)),
-            boundary: Arc::new(AtomicU64::new(u64::MAX)),
         }
-    }
-
-    /// Set read boundary at the given byte offset.
-    /// Reads at or past this offset will return 0 (EOF).
-    fn set_boundary(&self, offset: u64) {
-        self.boundary.store(offset, Ordering::Release);
-    }
-
-    /// Clear read boundary (allow unlimited reads).
-    fn clear_boundary(&self) {
-        self.boundary.store(u64::MAX, Ordering::Release);
     }
 
     fn position(&self) -> u64 {
@@ -70,34 +51,23 @@ impl<T: StreamType> SharedStream<T> {
     fn format_change_segment_range(&self) -> Option<std::ops::Range<u64>> {
         self.inner.lock().format_change_segment_range()
     }
+
+    fn clear_variant_fence(&self) {
+        self.inner.lock().clear_variant_fence();
+    }
 }
 
 impl<T: StreamType> Clone for SharedStream<T> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
-            boundary: Arc::clone(&self.boundary),
         }
     }
 }
 
 impl<T: StreamType> Read for SharedStream<T> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let boundary = self.boundary.load(Ordering::Acquire);
-        let mut stream = self.inner.lock();
-
-        if boundary < u64::MAX {
-            let pos = stream.position();
-            if pos >= boundary {
-                return Ok(0);
-            }
-            let remaining = (boundary - pos) as usize;
-            if remaining < buf.len() {
-                return stream.read(&mut buf[..remaining]);
-            }
-        }
-
-        stream.read(buf)
+        self.inner.lock().read(buf)
     }
 }
 
@@ -187,6 +157,10 @@ pub(super) struct StreamAudioSource<T: StreamType> {
     /// Used to adjust `update_byte_len` after ABR variant switch:
     /// symphonia sees `total_len - base_offset` as byte length.
     base_offset: u64,
+    /// Whether next chunk is the first after decoder recreation.
+    log_new_decoder_head: bool,
+    /// Last output sample per channel (for discontinuity detection).
+    last_output: Option<(f32, f32)>,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -211,6 +185,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             emit: None,
             effects,
             base_offset: 0,
+            log_new_decoder_head: false,
+            last_output: None,
         }
     }
 
@@ -219,11 +195,11 @@ impl<T: StreamType> StreamAudioSource<T> {
         self
     }
 
-    /// Detect media_info change: mark as pending and set read boundary.
+    /// Detect media_info change: mark as pending.
     ///
-    /// The boundary prevents the old decoder from reading past the new
-    /// segment start. This causes Symphonia to hit EOF naturally, after
-    /// which `fetch_next` recreates the decoder for the new format.
+    /// The variant fence in `Source::read_at()` prevents the old decoder
+    /// from reading data from a new variant. This causes Symphonia to hit
+    /// EOF naturally, after which `fetch_next` recreates the decoder.
     fn detect_format_change(&mut self) {
         if self.pending_format_change.is_some() {
             return;
@@ -248,17 +224,16 @@ impl<T: StreamType> StreamAudioSource<T> {
                     old = ?self.cached_media_info,
                     new = ?current_info,
                     current_pos,
-                    boundary = seg_range.start,
+                    new_segment_start = seg_range.start,
                     remaining_bytes,
-                    "Format change detected, setting read boundary"
+                    "Format change detected"
                 );
-                self.shared_stream.set_boundary(seg_range.start);
                 self.pending_format_change = Some((current_info, seg_range.start));
             }
         }
     }
 
-    /// Apply pending format change: clear boundary, seek to segment start, recreate decoder.
+    /// Apply pending format change: clear fence, seek to segment start, recreate decoder.
     /// Returns true if decoder was recreated successfully.
     fn apply_format_change(&mut self) -> bool {
         let Some((new_info, target_offset)) = self.pending_format_change.take() else {
@@ -274,8 +249,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             "Applying format change: old decoder finished, seeking to new segment start"
         );
 
-        // Clear boundary so the new decoder can read freely.
-        self.shared_stream.clear_boundary();
+        // Clear variant fence so the new decoder can read the new variant.
+        self.shared_stream.clear_variant_fence();
 
         if let Err(e) = self.shared_stream.seek(SeekFrom::Start(target_offset)) {
             warn!(?e, target_offset, "Failed to seek to segment boundary");
@@ -304,6 +279,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             Some(new_decoder) => {
                 let new_duration = new_decoder.duration();
                 self.decoder = new_decoder;
+                self.log_new_decoder_head = true;
                 debug!(?new_duration, base_offset, "Decoder recreated successfully");
                 true
             }
@@ -346,6 +322,19 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     self.chunks_decoded += 1;
                     self.total_samples += chunk.pcm.len() as u64;
 
+                    // Log first samples from new decoder for boundary diagnostics.
+                    if self.log_new_decoder_head {
+                        self.log_new_decoder_head = false;
+                        let head_len = chunk.pcm.len().min(8);
+                        let head: Vec<f32> = chunk.pcm[..head_len].to_vec();
+                        debug!(
+                            new_decoder_head = ?head,
+                            spec = ?chunk.spec,
+                            chunk_samples = chunk.pcm.len(),
+                            "PCM boundary: first samples from new decoder"
+                        );
+                    }
+
                     // Emit FormatDetected on first chunk
                     if self.chunks_decoded == 1
                         && let Some(ref emit) = self.emit
@@ -382,6 +371,40 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     // Apply effects chain
                     match apply_effects(&mut self.effects, chunk) {
                         Some(processed) => {
+                            // Detect inter-chunk PCM discontinuities.
+                            if let Some((prev_l, prev_r)) = self.last_output
+                                && processed.spec.channels >= 2
+                                && processed.pcm.len() >= 2
+                            {
+                                let cur_l = processed.pcm[0];
+                                let cur_r = processed.pcm[1];
+                                let dl = (cur_l - prev_l).abs();
+                                let dr = (cur_r - prev_r).abs();
+                                if dl > 0.05 || dr > 0.05 {
+                                    let head: Vec<f32> =
+                                        processed.pcm[..8.min(processed.pcm.len())].to_vec();
+                                    debug!(
+                                        dl,
+                                        dr,
+                                        prev_l,
+                                        prev_r,
+                                        cur_l,
+                                        cur_r,
+                                        head = ?head,
+                                        chunk_samples = processed.pcm.len(),
+                                        chunks_decoded = self.chunks_decoded,
+                                        spec = ?processed.spec,
+                                        "DISCONTINUITY between chunks"
+                                    );
+                                }
+                            }
+                            // Update last output for next check.
+                            if processed.spec.channels >= 2 && processed.pcm.len() >= 2 {
+                                let n = processed.pcm.len();
+                                self.last_output =
+                                    Some((processed.pcm[n - 2], processed.pcm[n - 1]));
+                            }
+
                             return Fetch::new(processed, false, current_epoch);
                         }
                         None => continue,
@@ -398,6 +421,10 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                             "Decoder EOF at format boundary, recreating decoder"
                         );
                         if self.apply_format_change() {
+                            // Reset effects to discard residual data from old codec.
+                            // Without this, the resampler mixes old buffered samples
+                            // with new decoder output → audible click.
+                            reset_effects(&mut self.effects);
                             continue;
                         }
                     }
@@ -424,6 +451,23 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     return Fetch::new(PcmChunk::default(), true, current_epoch);
                 }
                 Err(e) => {
+                    // Check if error is due to format boundary (variant fence EOF).
+                    // The fence causes Ok(0) from read_at(), which Symphonia may
+                    // surface as an error rather than clean EOF in some codecs.
+                    self.detect_format_change();
+                    if self.pending_format_change.is_some() {
+                        debug!(
+                            ?e,
+                            chunks = self.chunks_decoded,
+                            samples = self.total_samples,
+                            "Decoder error at format boundary, recreating decoder"
+                        );
+                        if self.apply_format_change() {
+                            reset_effects(&mut self.effects);
+                            continue;
+                        }
+                    }
+
                     warn!(?e, "decode error, signaling EOF");
                     return Fetch::new(PcmChunk::default(), true, current_epoch);
                 }
@@ -470,7 +514,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                         // corrupt Symphonia's internal state. Recreate decoder.
                         debug!("recovering from failed seek after ABR switch");
                         self.cached_media_info.clone().is_some_and(|info| {
-                            self.shared_stream.clear_boundary();
+                            self.shared_stream.clear_variant_fence();
                             self.shared_stream
                                 .seek(SeekFrom::Start(self.base_offset))
                                 .is_ok()
@@ -650,6 +694,10 @@ mod tests {
         /// Range of the first segment with current format (for ABR switch).
         /// Used by `format_change_segment_range()` to return where init data lives.
         format_change_range: Option<Range<u64>>,
+        /// Variant fence: auto-detected on first read, blocks cross-variant reads.
+        variant_fence: Option<usize>,
+        /// Mapping of byte ranges to variant indices (for fence logic).
+        variant_map: Vec<(Range<u64>, usize)>,
     }
 
     struct TestSource {
@@ -665,6 +713,8 @@ mod tests {
                     media_info: None,
                     segment_range: None,
                     format_change_range: None,
+                    variant_fence: None,
+                    variant_map: Vec::new(),
                 })),
             }
         }
@@ -683,15 +733,51 @@ mod tests {
         }
 
         fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
-            let state = self.state.lock();
-            let offset = offset as usize;
-            if offset >= state.data.len() {
+            let mut state = self.state.lock();
+            let offset_usize = offset as usize;
+            if offset_usize >= state.data.len() {
                 return Ok(0);
             }
-            let available = &state.data[offset..];
+
+            // Variant fence logic (mirrors HlsSource behavior).
+            if !state.variant_map.is_empty() {
+                let variant = state
+                    .variant_map
+                    .iter()
+                    .find(|(range, _)| range.contains(&offset))
+                    .map(|(_, v)| *v);
+
+                if let Some(v) = variant {
+                    if state.variant_fence.is_none() {
+                        state.variant_fence = Some(v);
+                    }
+                    if let Some(fence) = state.variant_fence {
+                        if v != fence {
+                            return Ok(0);
+                        }
+                    }
+                }
+            }
+
+            // Clip reads at variant boundary (mirrors HlsSource::read_from_entry()).
+            let data_end = if !state.variant_map.is_empty() {
+                state
+                    .variant_map
+                    .iter()
+                    .find(|(range, _)| range.contains(&offset))
+                    .map_or(state.data.len(), |(range, _)| range.end as usize)
+            } else {
+                state.data.len()
+            };
+            let available = &state.data[offset_usize..data_end];
             let n = available.len().min(buf.len());
             buf[..n].copy_from_slice(&available[..n]);
+
             Ok(n)
+        }
+
+        fn clear_variant_fence(&mut self) {
+            self.state.lock().variant_fence = None;
         }
 
         fn len(&self) -> Option<u64> {
@@ -1262,6 +1348,386 @@ mod tests {
                 panic!("Test timed out after 30s — deadlock in seek/format-change interaction");
             }
             std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    /// Variant fence blocks cross-variant reads and clears on reset.
+    ///
+    /// Layout: [V0: 0..1000] [V3: 1000..2000]
+    /// - First read in V0 → fence auto-detects V0
+    /// - Seek to V3 offset → read returns 0 (fence blocks)
+    /// - clear_variant_fence() → read V3 → fence auto-detects V3
+    #[test]
+    fn source_variant_fence_blocks_cross_variant_reads() {
+        let mut data = vec![0xAA; 2000];
+        data[1000..].fill(0xBB);
+
+        let source = TestSource::new(data, Some(2000));
+        let state = source.state_handle();
+
+        // Set up variant map: [V0: 0..1000] [V3: 1000..2000]
+        {
+            let mut s = state.lock();
+            s.variant_map = vec![(0..1000, 0), (1000..2000, 3)];
+        }
+
+        let stream = Stream::<TestStream>::from_source(source);
+        let mut shared = SharedStream::new(stream);
+
+        // Read from V0 region — fence auto-detects V0
+        let mut buf = vec![0u8; 100];
+        let n = shared.read(&mut buf).unwrap();
+        assert_eq!(n, 100, "V0 read should succeed");
+        assert!(buf[..n].iter().all(|&b| b == 0xAA), "Should be V0 data");
+
+        // Seek to V3 region — fence blocks
+        shared.seek(SeekFrom::Start(1000)).unwrap();
+        let mut buf = vec![0u8; 100];
+        let n = shared.read(&mut buf).unwrap();
+        assert_eq!(n, 0, "V3 read must be blocked by fence (V0)");
+
+        // Clear fence → read V3
+        shared.clear_variant_fence();
+        shared.seek(SeekFrom::Start(1000)).unwrap();
+        let mut buf = vec![0u8; 100];
+        let n = shared.read(&mut buf).unwrap();
+        assert_eq!(n, 100, "V3 read should succeed after fence clear");
+        assert!(buf[..n].iter().all(|&b| b == 0xBB), "Should be V3 data");
+    }
+
+    // ========================================================================
+    // Encoded ABR switch test — verify no samples lost during decoder recreation
+    // ========================================================================
+
+    const SAMPLES_PER_SEGMENT: usize = 1200;
+    const SEGMENTS_PER_VARIANT: usize = 32;
+    const V0_SAMPLE_SIZE: usize = 4;
+    const V1_SAMPLE_SIZE: usize = 16;
+
+    // -- Byte-level encoding (what Source delivers) --
+
+    fn encode_v0_sample(variant: u8, segment: u8, gsi: u16) -> [u8; 4] {
+        let val: u32 = (variant as u32) << 24 | (segment as u32) << 16 | (gsi as u32);
+        val.to_be_bytes()
+    }
+
+    fn decode_v0_sample(bytes: &[u8; 4]) -> (u32, u32, u64) {
+        let val = u32::from_be_bytes(*bytes);
+        let variant = (val >> 24) & 0xFF;
+        let segment = (val >> 16) & 0xFF;
+        let gsi = (val & 0xFFFF) as u64;
+        (variant, segment, gsi)
+    }
+
+    fn encode_v1_sample(variant: u32, segment: u32, gsi: u64) -> [u8; 16] {
+        let val: u128 = (variant as u128) << 96 | (segment as u128) << 64 | (gsi as u128);
+        val.to_be_bytes()
+    }
+
+    fn decode_v1_sample(bytes: &[u8; 16]) -> (u32, u32, u64) {
+        let val = u128::from_be_bytes(*bytes);
+        let variant = ((val >> 96) & 0xFFFF_FFFF) as u32;
+        let segment = ((val >> 64) & 0xFFFF_FFFF) as u32;
+        let gsi = (val & 0xFFFF_FFFF_FFFF_FFFF) as u64;
+        (variant, segment, gsi)
+    }
+
+    /// Generate encoded byte stream from segment descriptors.
+    ///
+    /// Each entry: `(variant, segment, start_gsi, sample_size)`.
+    fn generate_encoded_stream(segments: &[(u32, u32, u64, usize)]) -> Vec<u8> {
+        let mut data = Vec::new();
+        for &(variant, segment, start_gsi, sample_size) in segments {
+            for i in 0..SAMPLES_PER_SEGMENT {
+                let gsi = start_gsi + i as u64;
+                match sample_size {
+                    V0_SAMPLE_SIZE => {
+                        data.extend_from_slice(&encode_v0_sample(
+                            variant as u8,
+                            segment as u8,
+                            gsi as u16,
+                        ));
+                    }
+                    V1_SAMPLE_SIZE => {
+                        data.extend_from_slice(&encode_v1_sample(variant, segment, gsi));
+                    }
+                    _ => panic!("unsupported sample_size {sample_size}"),
+                }
+            }
+        }
+        data
+    }
+
+    // -- PCM f32 bit-packing (what decoder outputs) --
+
+    fn encode_pcm_sample(variant_segment: u8, sample_index: u32) -> f32 {
+        let exponent = (variant_segment as u32 + 1) & 0xFF;
+        let bits: u32 = (exponent << 23) | (sample_index & 0x7F_FFFF);
+        f32::from_bits(bits)
+    }
+
+    fn decode_pcm_sample(val: f32) -> (u8, u32) {
+        let bits = val.to_bits();
+        let variant_segment = (((bits >> 23) & 0xFF) - 1) as u8;
+        let sample_index = bits & 0x7F_FFFF;
+        (variant_segment, sample_index)
+    }
+
+    // -- EncodedDecoder --
+
+    /// Decoder that reads real bytes from OffsetReader, validates byte-level
+    /// consistency, and encodes output as PCM f32 with bit-packed metadata.
+    struct EncodedDecoder {
+        reader: OffsetReader<TestStream>,
+        spec: PcmSpec,
+        sample_size: usize,
+        samples_per_chunk: usize,
+        expected_gsi: Option<u64>,
+        expected_variant: Option<u32>,
+    }
+
+    impl EncodedDecoder {
+        fn new(
+            reader: OffsetReader<TestStream>,
+            spec: PcmSpec,
+            sample_size: usize,
+            samples_per_chunk: usize,
+        ) -> Self {
+            Self {
+                reader,
+                spec,
+                sample_size,
+                samples_per_chunk,
+                expected_gsi: None,
+                expected_variant: None,
+            }
+        }
+
+        fn read_exact_or_eof(&mut self, buf: &mut [u8]) -> std::io::Result<bool> {
+            let mut filled = 0;
+            while filled < buf.len() {
+                match self.reader.read(&mut buf[filled..]) {
+                    Ok(0) => return Ok(false),
+                    Ok(n) => filled += n,
+                    Err(e) => return Err(e),
+                }
+            }
+            Ok(true)
+        }
+    }
+
+    impl InnerDecoder for EncodedDecoder {
+        fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+            let mut pcm = Vec::new();
+            let mut sample_buf = vec![0u8; self.sample_size];
+
+            for _ in 0..self.samples_per_chunk {
+                match self.read_exact_or_eof(&mut sample_buf) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        // EOF: return accumulated samples or None
+                        return if pcm.is_empty() {
+                            Ok(None)
+                        } else {
+                            Ok(Some(PcmChunk::new(self.spec, pcm)))
+                        };
+                    }
+                    Err(e) => return Err(DecodeError::Io(e)),
+                }
+
+                let (variant, segment, gsi) = match self.sample_size {
+                    V0_SAMPLE_SIZE => {
+                        let bytes: [u8; 4] = sample_buf[..4].try_into().unwrap();
+                        decode_v0_sample(&bytes)
+                    }
+                    V1_SAMPLE_SIZE => {
+                        let bytes: [u8; 16] = sample_buf[..16].try_into().unwrap();
+                        decode_v1_sample(&bytes)
+                    }
+                    _ => panic!("unsupported sample_size {}", self.sample_size),
+                };
+
+                // Validate: sequential GSI
+                if let Some(expected) = self.expected_gsi {
+                    assert_eq!(
+                        gsi, expected,
+                        "GSI gap: expected {expected}, got {gsi} \
+                         (variant={variant}, segment={segment})"
+                    );
+                }
+                self.expected_gsi = Some(gsi + 1);
+
+                // Validate: single variant per decoder lifetime
+                if let Some(expected_v) = self.expected_variant {
+                    assert_eq!(
+                        variant, expected_v,
+                        "Cross-variant read: expected variant {expected_v}, got {variant} \
+                         (segment={segment}, gsi={gsi})"
+                    );
+                }
+                self.expected_variant = Some(variant);
+
+                // Encode as f32: variant_segment encodes both variant and segment
+                let local_segment = segment - variant * SEGMENTS_PER_VARIANT as u32;
+                let variant_segment = (variant * SEGMENTS_PER_VARIANT as u32 + local_segment) as u8;
+                pcm.push(encode_pcm_sample(variant_segment, gsi as u32));
+            }
+
+            Ok(Some(PcmChunk::new(self.spec, pcm)))
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+
+        fn seek(&mut self, _pos: Duration) -> DecodeResult<()> {
+            Ok(())
+        }
+
+        fn update_byte_len(&self, _len: u64) {}
+
+        fn duration(&self) -> Option<Duration> {
+            None
+        }
+    }
+
+    fn make_encoded_factory(spec: PcmSpec, sample_size: usize) -> DecoderFactory<TestStream> {
+        Box::new(move |stream, _info, base_offset| {
+            let reader = OffsetReader::new(stream, base_offset);
+            Some(Box::new(EncodedDecoder::new(reader, spec, sample_size, 50)))
+        })
+    }
+
+    fn v1_spec() -> PcmSpec {
+        PcmSpec {
+            sample_rate: 48000,
+            channels: 1,
+        }
+    }
+
+    fn v1_info() -> MediaInfo {
+        MediaInfo::default()
+            .with_sample_rate(48000)
+            .with_channels(1)
+    }
+
+    /// **End-to-end ABR switch test** — verify no samples lost during decoder recreation.
+    ///
+    /// Uses encoded byte streams (V0: 4 bytes/sample, V1: 16 bytes/sample) and a mock
+    /// decoder that reads real bytes via OffsetReader. Each f32 PCM sample encodes both
+    /// the variant/segment origin and the global sample index via IEEE 754 bit-packing.
+    ///
+    /// Stream layout (64 segments × 1200 samples, 32 per variant):
+    ///   V0 segments 0..31:  each 1200 × 4 = 4800 bytes  → 153600 bytes total
+    ///   V1 segments 32..63: each 1200 × 16 = 19200 bytes → 614400 bytes total
+    ///   Grand total: 768000 bytes, 76800 samples
+    ///
+    /// Catches: wrong base_offset, forgotten seek, cross-variant data, sample gaps.
+    #[test]
+    fn abr_switch_must_not_lose_samples() {
+        let spv = SEGMENTS_PER_VARIANT;
+        let sps = SAMPLES_PER_SEGMENT;
+
+        // Build segment descriptors: V0 (segments 0..spv), V1 (segments spv..2*spv)
+        let mut segments = Vec::new();
+        for seg in 0..spv {
+            let gsi = (seg * sps) as u64;
+            segments.push((0, seg as u32, gsi, V0_SAMPLE_SIZE));
+        }
+        for seg in 0..spv {
+            let global_seg = spv + seg;
+            let gsi = (global_seg * sps) as u64;
+            segments.push((1, global_seg as u32, gsi, V1_SAMPLE_SIZE));
+        }
+
+        let data = generate_encoded_stream(&segments);
+        let v0_bytes = spv * sps * V0_SAMPLE_SIZE; // 153600
+        let v1_bytes = spv * sps * V1_SAMPLE_SIZE; // 614400
+        let total_bytes = v0_bytes + v1_bytes; // 768000
+        assert_eq!(data.len(), total_bytes);
+
+        // First V1 segment byte range (for format_change_range)
+        let v1_first_seg_end = v0_bytes + sps * V1_SAMPLE_SIZE;
+
+        // Setup TestSource with variant map
+        let source = TestSource::new(data, Some(total_bytes as u64));
+        let state = source.state_handle();
+        {
+            let mut s = state.lock();
+            s.media_info = Some(v1_info());
+            s.format_change_range = Some(v0_bytes as u64..v1_first_seg_end as u64);
+            s.variant_map = vec![
+                (0..v0_bytes as u64, 0),
+                (v0_bytes as u64..total_bytes as u64, 1),
+            ];
+        }
+        let stream = Stream::<TestStream>::from_source(source);
+        let shared = SharedStream::new(stream);
+
+        // Initial decoder: V0 (4 bytes/sample)
+        let v0_mono_spec = PcmSpec {
+            sample_rate: 44100,
+            channels: 1,
+        };
+        let v0_mono_info = MediaInfo::default()
+            .with_sample_rate(44100)
+            .with_channels(1);
+        let initial_decoder = {
+            let reader = OffsetReader::new(shared.clone(), 0);
+            Box::new(EncodedDecoder::new(
+                reader,
+                v0_mono_spec,
+                V0_SAMPLE_SIZE,
+                50,
+            ))
+        };
+
+        // Factory: V1 (16 bytes/sample)
+        let factory = make_encoded_factory(v1_spec(), V1_SAMPLE_SIZE);
+
+        let epoch = Arc::new(AtomicU64::new(0));
+        let mut src = StreamAudioSource::new(
+            shared,
+            initial_decoder,
+            factory,
+            Some(v0_mono_info),
+            epoch,
+            vec![],
+        );
+
+        // Collect all PCM samples
+        let mut all_pcm: Vec<f32> = Vec::new();
+        loop {
+            let fetch = src.fetch_next();
+            if !fetch.data.pcm.is_empty() {
+                all_pcm.extend(&fetch.data.pcm);
+            }
+            if fetch.is_eof {
+                break;
+            }
+        }
+
+        // Verify: decode each f32 and check both axes
+        let total_samples = 2 * spv * sps; // 76800
+        assert_eq!(
+            all_pcm.len(),
+            total_samples,
+            "Expected {total_samples} samples, got {}",
+            all_pcm.len()
+        );
+
+        for (i, &val) in all_pcm.iter().enumerate() {
+            let (variant_segment, sample_index) = decode_pcm_sample(val);
+            // variant_segment = global segment index (0..63)
+            let expected_vs = (i / sps) as u8;
+            assert_eq!(
+                variant_segment, expected_vs,
+                "sample {i}: expected variant_segment {expected_vs}, got {variant_segment}"
+            );
+            assert_eq!(
+                sample_index, i as u32,
+                "sample {i}: expected sample_index {i}, got {sample_index}"
+            );
         }
     }
 }

@@ -190,9 +190,7 @@ async fn stress_seek_audio_hls_wav() {
         .expect("create Audio<Stream<Hls>> pipeline");
 
     // --- Step 4: Verify duration ---
-    let total_duration = audio
-        .duration()
-        .expect("WAV should report known duration");
+    let total_duration = audio.duration().expect("WAV should report known duration");
     let total_secs = total_duration.as_secs_f64();
     info!(total_secs, expected_dur, "Stream duration");
 
@@ -229,8 +227,7 @@ async fn stress_seek_audio_hls_wav() {
 
         info!(
             count = seek_positions.len(),
-            max_seek_secs,
-            "Generated seek positions"
+            max_seek_secs, "Generated seek positions"
         );
 
         // Step 5: Iterate seek + read + verify
@@ -276,14 +273,7 @@ async fn stress_seek_audio_hls_wav() {
                     if (l - r).abs() > f32::EPSILON {
                         channel_mismatches += 1;
                         if channel_mismatches <= 3 {
-                            info!(
-                                iteration = i,
-                                frame = f,
-                                l,
-                                r,
-                                pos_secs,
-                                "Channel mismatch"
-                            );
+                            info!(iteration = i, frame = f, l, r, pos_secs, "Channel mismatch");
                         }
                     }
                 }
@@ -322,8 +312,7 @@ async fn stress_seek_audio_hls_wav() {
             // boundary BEFORE the target, so the actual position can be
             // up to 1151 frames earlier. Tolerance of 1200 covers this
             // while still detecting gross seek errors (>27ms at 44.1 kHz).
-            let expected_frame_idx =
-                (pos_secs * spec.sample_rate as f64).round() as usize;
+            let expected_frame_idx = (pos_secs * spec.sample_rate as f64).round() as usize;
             let expected_phase = expected_frame_idx % SAW_PERIOD;
             let actual_phase = phase_from_f32(buf[0]);
             let dist = phase_distance(actual_phase, expected_phase);

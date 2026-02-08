@@ -9,7 +9,6 @@ use std::{
 };
 
 use kithara_stream::AudioCodec;
-
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 

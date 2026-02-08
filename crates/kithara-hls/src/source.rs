@@ -847,6 +847,8 @@ pub struct HlsSource {
     fetch: Arc<DefaultFetchManager>,
     shared: Arc<SharedSegments>,
     events_tx: Option<broadcast::Sender<HlsEvent>>,
+    /// Variant fence: auto-detected on first read, blocks cross-variant reads.
+    variant_fence: Option<usize>,
 }
 
 impl HlsSource {
@@ -1025,6 +1027,27 @@ impl Source for HlsSource {
             return Ok(0);
         };
 
+        // Variant fence: auto-detect on first read, block cross-variant reads.
+        if self.variant_fence.is_none() {
+            tracing::debug!(
+                variant = entry.variant,
+                offset,
+                "Variant fence auto-detected"
+            );
+            self.variant_fence = Some(entry.variant);
+        }
+        if let Some(fence) = self.variant_fence
+            && entry.variant != fence
+        {
+            tracing::debug!(
+                fence,
+                entry_variant = entry.variant,
+                offset,
+                "Variant fence blocked cross-variant read"
+            );
+            return Ok(0);
+        }
+
         let bytes = self
             .read_from_entry(&entry, offset, buf)
             .map_err(StreamError::Source)?;
@@ -1073,6 +1096,10 @@ impl Source for HlsSource {
             .first_segment_of_variant(last.variant)
             .map(|entry| entry.byte_offset..entry.end_offset())
     }
+
+    fn clear_variant_fence(&mut self) {
+        self.variant_fence = None;
+    }
 }
 
 /// Build an HlsDownloader + HlsSource pair from config.
@@ -1118,6 +1145,7 @@ pub fn build_pair(
         fetch,
         shared,
         events_tx: config.events_tx.clone(),
+        variant_fence: None,
     };
 
     (downloader, source)

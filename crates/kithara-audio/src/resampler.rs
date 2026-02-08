@@ -675,7 +675,8 @@ impl AudioEffect for ResamplerProcessor {
             trace!(
                 source_rate = self.source_rate,
                 target_rate = self.output_spec.sample_rate,
-                "Passthrough mode"
+                chunk_samples = chunk.pcm.len(),
+                "Resampler passthrough (no resampling)"
             );
             // Passthrough: transfer ownership, just update spec
             let mut out = chunk;
@@ -700,6 +701,11 @@ impl AudioEffect for ResamplerProcessor {
         for buf in &mut self.input_buffer {
             buf.clear();
         }
+        // Drop the rubato resampler so internal filter state (taps, phase,
+        // buffered samples) from the old audio doesn't bleed into the new
+        // stream.  `update_resampler_if_needed()` will create a fresh
+        // instance on the next `process()` call.
+        self.resampler = None;
     }
 }
 

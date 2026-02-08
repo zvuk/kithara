@@ -1,5 +1,6 @@
-use rstest::*;
 use std::path::PathBuf;
+
+use rstest::*;
 use tempfile::TempDir;
 
 /// Common fixture for temporary directory

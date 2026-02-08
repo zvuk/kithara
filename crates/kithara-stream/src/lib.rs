@@ -28,10 +28,10 @@ pub use kithara_storage::WaitOutcome;
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use reader::Reader;
 pub use source::Source;
-pub use stream::{Stream, StreamConfig, StreamType};
-pub use writer::{NetWriter, Writer, WriterError, WriterItem};
 // Test utilities
 #[cfg(any(test, feature = "test-utils"))]
 pub use source::SourceMock;
+pub use stream::{Stream, StreamConfig, StreamType};
 #[cfg(any(test, feature = "test-utils"))]
 pub use unimock;
+pub use writer::{NetWriter, Writer, WriterError, WriterItem};

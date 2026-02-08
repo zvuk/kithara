@@ -44,9 +44,10 @@ async fn stress_random_seek_read_hls() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| {
-            "kithara_hls=debug,kithara_stream=debug".to_string()
-        }))
+        .with_env_filter(
+            std::env::var("RUST_LOG")
+                .unwrap_or_else(|_| "kithara_hls=debug,kithara_stream=debug".to_string()),
+        )
         .try_init();
 
     // --- Step 1: Spawn HLS server ---
@@ -107,7 +108,10 @@ async fn stress_random_seek_read_hls() {
             .map(|_| rng.range_u64(1, max_seek))
             .collect();
 
-        info!(count = seek_positions.len(), max_seek, "Generated seek positions");
+        info!(
+            count = seek_positions.len(),
+            max_seek, "Generated seek positions"
+        );
 
         // Step 6: Iterate seek + read + verify
         let mut successful_reads = 0u64;
@@ -153,19 +157,14 @@ async fn stress_random_seek_read_hls() {
             if (i + 1) % 200 == 0 {
                 info!(
                     iteration = i + 1,
-                    successful_reads,
-                    total_bytes_read,
-                    byte_mismatches,
-                    "Progress"
+                    successful_reads, total_bytes_read, byte_mismatches, "Progress"
                 );
             }
         }
 
         info!(
             successful_reads,
-            total_bytes_read,
-            byte_mismatches,
-            "All {SEEK_ITERATIONS} seek+read iterations done"
+            total_bytes_read, byte_mismatches, "All {SEEK_ITERATIONS} seek+read iterations done"
         );
 
         assert_eq!(successful_reads, SEEK_ITERATIONS as u64);
@@ -178,9 +177,11 @@ async fn stress_random_seek_read_hls() {
         let final_seek = total_bytes - chunk_size as u64;
         info!(final_seek, "Final seek near end");
 
-        stream.seek(SeekFrom::Start(final_seek)).unwrap_or_else(|e| {
-            panic!("final seek to {final_seek} failed: {e}");
-        });
+        stream
+            .seek(SeekFrom::Start(final_seek))
+            .unwrap_or_else(|e| {
+                panic!("final seek to {final_seek} failed: {e}");
+            });
 
         let mut remaining_bytes = 0u64;
         loop {
@@ -195,7 +196,8 @@ async fn stress_random_seek_read_hls() {
             for (j, &byte) in buf[..n].iter().enumerate() {
                 let expected = server.expected_byte_at(0, final_seek + remaining_bytes + j as u64);
                 assert_eq!(
-                    byte, expected,
+                    byte,
+                    expected,
                     "tail byte mismatch at offset {}",
                     final_seek + remaining_bytes + j as u64
                 );

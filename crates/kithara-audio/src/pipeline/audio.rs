@@ -534,10 +534,7 @@ where
                                 Some(d)
                             }
                             Err(e) => {
-                                warn!(
-                                    ?e,
-                                    "Probe fallback failed, trying Symphonia native probe"
-                                );
+                                warn!(?e, "Probe fallback failed, trying Symphonia native probe");
                                 let reader = OffsetReader::new(stream, base_offset);
                                 let config = kithara_decode::DecoderConfig {
                                     prefer_hardware,

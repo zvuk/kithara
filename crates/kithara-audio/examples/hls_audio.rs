@@ -82,7 +82,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             let result: Result<(), Box<dyn Error + Send + Sync>> = (|| {
                 let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
                 let sink = rodio::Sink::connect_new(stream_handle.mixer());
-                sink.set_volume(0.02);
+                sink.set_volume(0.2);
                 sink.append(audio);
 
                 info!("Playing...");

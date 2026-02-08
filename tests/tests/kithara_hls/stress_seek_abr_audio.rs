@@ -360,7 +360,10 @@ async fn stress_seek_abr_audio() {
                     "too many continuity breaks in post-switch chunk {chunk_idx}: {break_count}",
                 );
                 if break_count == 1 {
-                    info!(chunk_idx, "post-switch chunk has 1 expected decoder handoff break");
+                    info!(
+                        chunk_idx,
+                        "post-switch chunk has 1 expected decoder handoff break"
+                    );
                 }
             }
 
@@ -375,7 +378,10 @@ async fn stress_seek_abr_audio() {
             post_switch_ok += 1;
         }
 
-        info!(post_switch_ok, "Phase 2 complete: all post-switch chunks descending");
+        info!(
+            post_switch_ok,
+            "Phase 2 complete: all post-switch chunks descending"
+        );
 
         // ========== Phase 3: Random seeks ==========
         info!("Phase 3: {SEEK_ITERATIONS} random seek+read cycles...");
@@ -424,14 +430,7 @@ async fn stress_seek_abr_audio() {
                     if (l - r).abs() > f32::EPSILON {
                         channel_mismatches += 1;
                         if channel_mismatches <= 3 {
-                            info!(
-                                iteration = i,
-                                frame = f,
-                                l,
-                                r,
-                                pos_secs,
-                                "Channel mismatch"
-                            );
+                            info!(iteration = i, frame = f, l, r, pos_secs, "Channel mismatch");
                         }
                     }
                 }
