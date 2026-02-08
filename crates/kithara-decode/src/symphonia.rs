@@ -424,9 +424,10 @@ impl SymphoniaInner {
                 continue;
             }
 
-            // Convert to f32 interleaved
-            let mut pcm = vec![0.0f32; num_samples];
-            decoded.copy_to_slice_interleaved(&mut pcm);
+            // Convert to f32 interleaved (pool-backed to reduce allocations)
+            let mut pooled = kithara_bufpool::pcm_pool().get_with(|v| v.resize(num_samples, 0.0));
+            decoded.copy_to_slice_interleaved(&mut *pooled);
+            let pcm = pooled.into_inner();
 
             let pcm_spec = PcmSpec {
                 channels: channels as u16,

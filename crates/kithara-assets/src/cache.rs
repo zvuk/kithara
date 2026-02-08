@@ -29,7 +29,7 @@ type Cache<R, C> = Mutex<LruCache<CacheKey<C>, CacheEntry<R>>>;
 /// - Caching is done at the resource level (not asset level).
 /// - Same `(ResourceKey, Context)` returns the same resource handle.
 /// - Cache is process-scoped and not persisted.
-/// - LRU capacity: 5 entries (enough for init + 2-3 media segments).
+/// - LRU capacity is configurable (default: 5 entries).
 #[derive(Clone)]
 pub struct CachedAssets<A>
 where
@@ -55,14 +55,10 @@ impl<A> CachedAssets<A>
 where
     A: Assets,
 {
-    /// # Panics
-    /// This function will not panic (capacity is a non-zero constant).
-    pub fn new(inner: Arc<A>) -> Self {
+    pub fn new(inner: Arc<A>, capacity: NonZeroUsize) -> Self {
         Self {
             inner,
-            cache: Arc::new(Mutex::new(LruCache::new(
-                NonZeroUsize::new(5).expect("capacity must be non-zero"),
-            ))),
+            cache: Arc::new(Mutex::new(LruCache::new(capacity))),
         }
     }
 
@@ -93,49 +89,58 @@ where
     ) -> AssetsResult<Self::Res> {
         let cache_key = CacheKey::Resource(key.clone(), ctx.clone());
 
-        let mut cache = self.cache.lock();
-
-        if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
-            return Ok(res.clone());
+        // Check cache (short lock)
+        {
+            let mut cache = self.cache.lock();
+            if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
+                return Ok(res.clone());
+            }
         }
 
-        // Cache miss - load from base (still holding lock)
+        // Cache miss — load without holding the lock (I/O happens here)
         let res = self.inner.open_resource_with_ctx(key, ctx)?;
 
-        // Insert into cache (LRU evicts oldest if full)
-        cache.put(cache_key, CacheEntry::Resource(res.clone()));
+        // Insert into cache (short lock; concurrent miss on same key is benign — LRU overwrites)
+        {
+            let mut cache = self.cache.lock();
+            cache.put(cache_key, CacheEntry::Resource(res.clone()));
+        }
 
         Ok(res)
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
-        let mut cache = self.cache.lock();
-
-        if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::PinsIndex) {
-            return Ok(res.clone());
+        {
+            let cache = self.cache.lock();
+            if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::PinsIndex) {
+                return Ok(res.clone());
+            }
         }
 
-        // Cache miss - load from base (still holding lock)
         let res = self.inner.open_pins_index_resource()?;
 
-        // Insert into cache
-        cache.put(CacheKey::PinsIndex, CacheEntry::Index(res.clone()));
+        {
+            let mut cache = self.cache.lock();
+            cache.put(CacheKey::PinsIndex, CacheEntry::Index(res.clone()));
+        }
 
         Ok(res)
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
-        let mut cache = self.cache.lock();
-
-        if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::LruIndex) {
-            return Ok(res.clone());
+        {
+            let cache = self.cache.lock();
+            if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::LruIndex) {
+                return Ok(res.clone());
+            }
         }
 
-        // Cache miss - load from base (still holding lock)
         let res = self.inner.open_lru_index_resource()?;
 
-        // Insert into cache
-        cache.put(CacheKey::LruIndex, CacheEntry::Index(res.clone()));
+        {
+            let mut cache = self.cache.lock();
+            cache.put(CacheKey::LruIndex, CacheEntry::Index(res.clone()));
+        }
 
         Ok(res)
     }
@@ -167,5 +172,87 @@ where
         }
 
         self.inner.delete_asset()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use kithara_storage::ResourceExt;
+    use rstest::rstest;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+    use crate::base::DiskAssetStore;
+
+    fn make_cached(dir: &Path, capacity: NonZeroUsize) -> CachedAssets<DiskAssetStore> {
+        let disk = Arc::new(DiskAssetStore::new(
+            dir,
+            "test_asset",
+            CancellationToken::new(),
+        ));
+        CachedAssets::new(disk, capacity)
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn evicts_at_custom_capacity() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap = NonZeroUsize::new(3).unwrap();
+        let cached = make_cached(dir.path(), cap);
+
+        // Open 4 resources — first should be evicted from LRU (capacity 3)
+        let keys: Vec<ResourceKey> = (0..4)
+            .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
+            .collect();
+
+        for key in &keys {
+            cached.open_resource(key).unwrap();
+        }
+
+        // Cache should have exactly 3 entries (capacity)
+        let cache = cached.cache.lock();
+        assert_eq!(cache.len(), 3);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn cache_hit_returns_same_resource() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap = NonZeroUsize::new(5).unwrap();
+        let cached = make_cached(dir.path(), cap);
+        let key = ResourceKey::new("audio.mp3");
+
+        let res1 = cached.open_resource(&key).unwrap();
+        let res2 = cached.open_resource(&key).unwrap();
+
+        // Same resource path — cache hit
+        assert_eq!(res1.path(), res2.path());
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn concurrent_opens_do_not_block_each_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let cap = NonZeroUsize::new(5).unwrap();
+        let cached = Arc::new(make_cached(dir.path(), cap));
+
+        let handles: Vec<_> = (0..4)
+            .map(|i| {
+                let c = cached.clone();
+                std::thread::spawn(move || {
+                    let key = ResourceKey::new(format!("seg_{i}.m4s"));
+                    c.open_resource(&key).unwrap();
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let cache = cached.cache.lock();
+        assert_eq!(cache.len(), 4);
     }
 }

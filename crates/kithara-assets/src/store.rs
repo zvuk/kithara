@@ -1,11 +1,17 @@
 #![forbid(unsafe_code)]
 
-use std::{hash::Hash, path::PathBuf, sync::Arc};
+use std::{hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use kithara_bufpool::{BytePool, byte_pool};
 use kithara_storage::StorageResource;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
+
+/// Default in-memory LRU cache capacity (enough for init + 2-3 media segments).
+const DEFAULT_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(5) {
+    Some(v) => v,
+    None => unreachable!(),
+};
 
 use crate::{
     base::DiskAssetStore,
@@ -24,6 +30,8 @@ use crate::{
 pub struct StoreOptions {
     /// Directory for persistent cache storage (required).
     pub cache_dir: PathBuf,
+    /// In-memory LRU cache capacity for opened resources.
+    pub cache_capacity: Option<NonZeroUsize>,
     /// Maximum number of assets to keep (soft cap for LRU eviction).
     pub max_assets: Option<usize>,
     /// Maximum bytes to store (soft cap for LRU eviction).
@@ -32,7 +40,12 @@ pub struct StoreOptions {
 
 impl Default for StoreOptions {
     fn default() -> Self {
-        Self::new(std::env::temp_dir().join("kithara"))
+        Self {
+            cache_dir: std::env::temp_dir().join("kithara"),
+            cache_capacity: None,
+            max_assets: None,
+            max_bytes: None,
+        }
     }
 }
 
@@ -41,6 +54,7 @@ impl StoreOptions {
     pub fn new<P: Into<PathBuf>>(cache_dir: P) -> Self {
         Self {
             cache_dir: cache_dir.into(),
+            cache_capacity: None,
             max_assets: None,
             max_bytes: None,
         }
@@ -114,12 +128,13 @@ pub type AssetResource<Ctx = ()> = LeaseResource<
 /// - `LeaseAssets` provides RAII pinning for opened resources (outermost)
 /// - `ProcessingAssets` (if configured) wraps resources for transformation
 pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()> {
+    cache_capacity: Option<NonZeroUsize>,
+    cancel: Option<CancellationToken>,
+    evict_config: Option<EvictConfig>,
+    pool: Option<BytePool>,
+    process_fn: Option<ProcessChunkFn<Ctx>>,
     root_dir: Option<PathBuf>,
     asset_root: Option<String>,
-    evict_config: Option<EvictConfig>,
-    cancel: Option<CancellationToken>,
-    process_fn: Option<ProcessChunkFn<Ctx>>,
-    pool: Option<BytePool>,
 }
 
 impl Default for AssetStoreBuilder<()> {
@@ -138,12 +153,13 @@ impl AssetStoreBuilder<()> {
         });
 
         Self {
+            cache_capacity: None,
+            cancel: None,
+            evict_config: None,
+            pool: None,
+            process_fn: Some(dummy_process),
             root_dir: None,
             asset_root: None,
-            evict_config: None,
-            cancel: None,
-            process_fn: Some(dummy_process),
-            pool: None,
         }
     }
 }
@@ -171,6 +187,12 @@ where
 
     pub fn cancel(mut self, cancel: CancellationToken) -> Self {
         self.cancel = Some(cancel);
+        self
+    }
+
+    /// Set the in-memory LRU cache capacity for opened resources.
+    pub fn cache_capacity(mut self, capacity: NonZeroUsize) -> Self {
+        self.cache_capacity = Some(capacity);
         self
     }
 
@@ -216,7 +238,8 @@ where
         );
 
         // CachedAssets on top to cache LeaseResource with guards
-        CachedAssets::new(Arc::new(lease))
+        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
+        CachedAssets::new(Arc::new(lease), capacity)
     }
 }
 
@@ -229,12 +252,13 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
         NewCtx: Clone + Hash + Eq + Send + Sync + 'static,
     {
         AssetStoreBuilder {
+            cache_capacity: self.cache_capacity,
+            cancel: self.cancel,
+            evict_config: self.evict_config,
+            pool: self.pool,
+            process_fn: Some(f),
             root_dir: self.root_dir,
             asset_root: self.asset_root,
-            evict_config: self.evict_config,
-            cancel: self.cancel,
-            process_fn: Some(f),
-            pool: self.pool,
         }
     }
 }
