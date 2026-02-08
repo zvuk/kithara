@@ -32,6 +32,7 @@ pub mod keys;
 pub mod playlist;
 
 // Private modules
+mod downloader;
 mod inner;
 mod parsing;
 mod source;
