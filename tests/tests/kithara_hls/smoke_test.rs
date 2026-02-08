@@ -15,7 +15,7 @@ use url::Url;
 use super::fixture;
 use crate::common::fixtures::{temp_dir, tracing_setup};
 
-// ==================== Test Cases ====================
+// Test Cases
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]

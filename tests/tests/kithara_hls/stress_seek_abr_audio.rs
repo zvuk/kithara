@@ -32,7 +32,7 @@ const SEEK_ITERATIONS: usize = 200;
 const SAW_PERIOD: usize = 65536;
 const WARMUP_TIMEOUT_SECS: u64 = 30;
 
-// ==================== WAV Generators ====================
+// WAV Generators
 
 /// Ascending saw-tooth: frame 0 → -32768, frame 65535 → 32767.
 fn ascending_sample(frame: usize) -> i16 {
@@ -97,7 +97,7 @@ fn create_pcm_segments(sample_fn: fn(usize) -> i16) -> Vec<u8> {
     pcm
 }
 
-// ==================== Direction Detection ====================
+// Direction Detection
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Direction {
@@ -150,7 +150,7 @@ fn detect_direction(buf: &[f32], channels: usize) -> Direction {
     }
 }
 
-// ==================== Stress Test ====================
+// Stress Test
 
 /// ABR variant switch stress test with ascending/descending saw-tooth verification.
 ///
@@ -247,7 +247,7 @@ async fn stress_seek_abr_audio() {
             (chunk_duration_secs * spec.sample_rate as f64 * channels as f64) as usize;
         let mut buf = vec![0.0f32; chunk_samples];
 
-        // ========== Phase 1: Warmup + ABR switch detection ==========
+        // Phase 1: Warmup + ABR switch detection
         info!("Phase 1: waiting for ABR switch (ascending → descending)...");
 
         let warmup_start = std::time::Instant::now();
@@ -307,7 +307,7 @@ async fn stress_seek_abr_audio() {
 
         assert!(switch_detected, "ABR switch was not detected");
 
-        // ========== Phase 2: Post-switch verification ==========
+        // Phase 2: Post-switch verification
         info!("Phase 2: verifying 10 post-switch chunks are descending...");
 
         let mut post_switch_ok = 0u64;
@@ -383,7 +383,7 @@ async fn stress_seek_abr_audio() {
             "Phase 2 complete: all post-switch chunks descending"
         );
 
-        // ========== Phase 3: Random seeks ==========
+        // Phase 3: Random seeks
         info!("Phase 3: {SEEK_ITERATIONS} random seek+read cycles...");
 
         let total_duration = audio.duration();
@@ -510,7 +510,7 @@ async fn stress_seek_abr_audio() {
             "{direction_errors} direction errors (expected descending after ABR switch)"
         );
 
-        // ========== Phase 4: Final seek near end → EOF ==========
+        // Phase 4: Final seek near end -> EOF
         info!("Phase 4: seek near end + read to EOF...");
 
         let final_seek_secs = (total_secs - chunk_duration_secs).max(0.0);

@@ -9,14 +9,14 @@ use tokio_util::sync::CancellationToken;
 
 use super::fixture;
 
-// ==================== Fixtures ====================
+// Fixtures
 
 #[fixture]
 async fn test_server() -> TestServer {
     TestServer::new().await
 }
 
-// ==================== Test Cases ====================
+// Test Cases
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]

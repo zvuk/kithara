@@ -16,7 +16,7 @@ use url::Url;
 use super::fixture;
 use crate::common::fixtures::{cancel_token, temp_dir};
 
-// ==================== Fixtures ====================
+// Fixtures
 
 #[fixture]
 fn tracing_setup() {
@@ -31,7 +31,7 @@ fn tracing_setup() {
         .try_init();
 }
 
-// ==================== Test Cases ====================
+// Test Cases
 
 /// Basic integration test for HLS playback functionality.
 /// This test verifies that:

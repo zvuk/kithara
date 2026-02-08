@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::fixture;
 
-// ==================== Fixtures ====================
+// Fixtures
 
 #[fixture]
 async fn test_server() -> TestServer {
@@ -36,7 +36,7 @@ fn variant_id_1() -> VariantId {
     VariantId(1)
 }
 
-// ==================== Test Cases ====================
+// Test Cases
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]

@@ -16,7 +16,7 @@ use tokio::net::TcpListener;
 
 use crate::common::fixtures::temp_dir;
 
-// ==================== Test Server Fixtures ====================
+// Test Server Fixtures
 
 async fn test_audio_endpoint() -> Response {
     let audio_data = Bytes::from_static(b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345");
@@ -54,14 +54,14 @@ async fn run_test_server() -> String {
     format!("http://127.0.0.1:{}", addr.port())
 }
 
-// ==================== Fixtures ====================
+// Fixtures
 
 #[fixture]
 async fn test_server() -> String {
     run_test_server().await
 }
 
-// ==================== Stream<File> Seek Tests ====================
+// Stream<File> Seek Tests
 
 #[rstest]
 #[case(0, b"ID3\x04\x00")]

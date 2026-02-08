@@ -26,7 +26,7 @@ use tracing::info;
 use super::fixture;
 use crate::common::fixtures::{cancel_token, temp_dir, tracing_setup};
 
-// ==================== Helper Functions ====================
+// Helper Functions
 
 /// Get variant from data by parsing prefix "V{n}-SEG-".
 fn variant_from_data(data: &[u8]) -> Option<usize> {
@@ -41,7 +41,7 @@ fn variant_from_data(data: &[u8]) -> Option<usize> {
     }
 }
 
-// ==================== Manual Variant Switch Tests ====================
+// Manual Variant Switch Tests
 
 /// Test: Manual variant switch with fixed ABR, verify data comes from correct variant.
 ///
@@ -225,7 +225,7 @@ async fn after_seek_sequential_reads_maintain_variant(
     }
 }
 
-// ==================== Edge Case Tests ====================
+// Edge Case Tests
 
 /// Test: Multiple seeks don't cause variant confusion.
 ///

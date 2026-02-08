@@ -508,9 +508,7 @@ mod tests {
 
     use super::*;
 
-    // ========================================================================
     // MockDecoder
-    // ========================================================================
 
     struct MockDecoder {
         chunks: VecDeque<PcmChunk<f32>>,
@@ -580,9 +578,7 @@ mod tests {
         }
     }
 
-    // ========================================================================
     // InfiniteMockDecoder — produces chunks forever until stopped
-    // ========================================================================
 
     struct InfiniteMockDecoder {
         spec: PcmSpec,
@@ -628,9 +624,7 @@ mod tests {
         }
     }
 
-    // ========================================================================
     // TestSource + TestStream
-    // ========================================================================
 
     struct TestSourceState {
         data: Vec<u8>,
@@ -786,9 +780,7 @@ mod tests {
         }
     }
 
-    // ========================================================================
     // Helpers
-    // ========================================================================
 
     fn make_chunk(spec: PcmSpec, num_samples: usize) -> PcmChunk<f32> {
         PcmChunk::new(spec, vec![0.5; num_samples])
@@ -859,9 +851,7 @@ mod tests {
             .with_channels(2)
     }
 
-    // ========================================================================
     // Tests
-    // ========================================================================
 
     /// Test that ABR switch uses `format_change_segment_range()` to find init data.
     ///
@@ -1341,9 +1331,7 @@ mod tests {
         assert!(buf[..n].iter().all(|&b| b == 0xBB), "Should be V3 data");
     }
 
-    // ========================================================================
     // Encoded ABR switch test — verify no samples lost during decoder recreation
-    // ========================================================================
 
     const SAMPLES_PER_SEGMENT: usize = 1200;
     const SEGMENTS_PER_VARIANT: usize = 32;

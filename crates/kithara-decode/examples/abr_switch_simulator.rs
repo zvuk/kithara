@@ -50,9 +50,7 @@ fn main() {
     let variants = ["slq", "smq", "shq", "slossless"];
     let max_seg = 37;
 
-    // =========================================================================
     // Part 1: Full continuous WAV per variant.
-    // =========================================================================
     println!("{}", "=".repeat(80));
     println!("PART 1: Continuous decode (single reader per variant, all segments)");
     println!("{}", "=".repeat(80));
@@ -81,9 +79,7 @@ fn main() {
         );
     }
 
-    // =========================================================================
     // Part 1.5: Measure initial silence (encoder delay) per variant.
-    // =========================================================================
     println!();
     println!("{}", "=".repeat(80));
     println!("ENCODER DELAY: initial silence per variant (continuous decode)");
@@ -126,9 +122,7 @@ fn main() {
         );
     }
 
-    // =========================================================================
     // Part 2: ABR switch transitions.
-    // =========================================================================
     let switch_pairs: &[(&str, &str, &str)] = &[
         ("slq", "slossless", "AAC 66k → FLAC"),
         ("slossless", "slq", "FLAC → AAC 66k"),
@@ -186,7 +180,7 @@ fn main() {
                 }
             };
 
-            // ── Strategy 1: Raw (hard cut) — current behavior ───────────
+            // Strategy 1: Raw (hard cut) — current behavior
             let raw = concat_pcm(&old.samples, &new_cold.samples);
             let raw_path = out_dir.join(format!("{from_var}_to_{to_var}_at{cold_seg}_raw.wav"));
             write_wav(&raw_path, &raw, rate, out_ch);
@@ -195,7 +189,7 @@ fn main() {
             let head_cold = first_frame(&new_cold.samples, ch);
             let delta_raw = max_delta(&tail_old, &head_cold);
 
-            // ── Strategy 2: Silence detection + xcorr + crossfade ───────
+            // Strategy 2: Silence detection + xcorr + crossfade
             let old_delay = count_leading_silence(&old_full.samples, ch, 0.001);
             let new_delay = count_leading_silence(&new_full.samples, ch, 0.001);
             let delay_diff_measured = old_delay as isize - new_delay as isize;
@@ -215,7 +209,7 @@ fn main() {
                 out_dir.join(format!("{from_var}_to_{to_var}_at{cold_seg}_overlap.wav"));
             write_wav(&overlap_path, &overlap_result.output, rate, out_ch);
 
-            // ── Strategy 3: Apple implicit delay + crossfade ────────────
+            // Strategy 3: Apple implicit delay + crossfade
             let apple_old = implicit_delay(from_var) as isize;
             let apple_new = implicit_delay(to_var) as isize;
             let delay_diff_apple = apple_old - apple_new;
@@ -233,7 +227,7 @@ fn main() {
             let apple_path = out_dir.join(format!("{from_var}_to_{to_var}_at{cold_seg}_apple.wav"));
             write_wav(&apple_path, &apple_result.output, rate, out_ch);
 
-            // ── Report ──────────────────────────────────────────────────
+            // Report
             println!(
                 "  seg {switch_after}→{cold_seg}:  raw={delta_raw:.4} ({})",
                 severity(delta_raw),
@@ -267,9 +261,7 @@ fn main() {
     println!("  *_apple.wav   — Apple implicit 2112/0 + xcorr + 20ms crossfade");
 }
 
-// =============================================================================
 // Overlap builder.
-// =============================================================================
 
 struct OverlapResult {
     output: Vec<f32>,
@@ -345,9 +337,7 @@ fn build_overlap(
     }
 }
 
-// =============================================================================
 // Decoding.
-// =============================================================================
 
 struct DecodedPcm {
     samples: Vec<f32>,
@@ -483,9 +473,7 @@ fn decode_fmp4(data: &[u8]) -> Result<DecodedPcm, String> {
     })
 }
 
-// =============================================================================
 // PCM manipulation.
-// =============================================================================
 
 fn concat_pcm(a: &[f32], b: &[f32]) -> Vec<f32> {
     let mut out = Vec::with_capacity(a.len() + b.len());
@@ -494,9 +482,7 @@ fn concat_pcm(a: &[f32], b: &[f32]) -> Vec<f32> {
     out
 }
 
-// =============================================================================
 // Analysis helpers.
-// =============================================================================
 
 /// Count leading near-silent frames (all channels below threshold).
 fn count_leading_silence(samples: &[f32], channels: usize, threshold: f32) -> usize {

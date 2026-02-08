@@ -25,7 +25,7 @@ use url::Url;
 
 use super::HlsResult;
 
-// ==================== Config ====================
+// Config
 
 /// Configuration for [`HlsTestServer`].
 pub struct HlsTestServerConfig {
@@ -79,7 +79,7 @@ impl Default for HlsTestServerConfig {
     }
 }
 
-// ==================== Server ====================
+// Server
 
 /// Reusable HLS test server with parametric segment count and size.
 ///
@@ -178,7 +178,7 @@ impl HlsTestServer {
     }
 }
 
-// ==================== Content Generators ====================
+// Content Generators
 
 fn generate_master_playlist(config: &HlsTestServerConfig) -> String {
     let mut pl = String::from("#EXTM3U\n#EXT-X-VERSION:6\n");

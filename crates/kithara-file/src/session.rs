@@ -393,7 +393,7 @@ mod tests {
 
     use super::*;
 
-    // ── Progress ────────────────────────────────────────────────────────
+    // Progress
 
     #[test]
     fn test_progress_initial_state() {
@@ -438,7 +438,7 @@ mod tests {
         assert_eq!(progress.read_pos(), 42);
     }
 
-    // ── SharedFileState ────────────────────────────────────────────────
+    // SharedFileState
 
     #[test]
     fn test_shared_file_state_empty_queue() {
@@ -477,7 +477,7 @@ mod tests {
         assert!(state.pop_range_request().is_none());
     }
 
-    // ── FileSource ─────────────────────────────────────────────────────
+    // FileSource
 
     /// Helper: create a committed StorageResource with `data` written.
     fn create_committed_resource(dir: &TempDir, data: &[u8]) -> StorageResource {

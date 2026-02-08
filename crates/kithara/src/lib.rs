@@ -19,7 +19,7 @@
 //! resource.read(&mut buf);
 //! ```
 
-// ── Re-export sub-crates ────────────────────────────────────────────────
+// Re-export sub-crates
 
 pub mod audio {
     pub use kithara_audio::*;
@@ -63,8 +63,6 @@ pub mod bufpool {
     pub use kithara_bufpool::*;
 }
 
-// ── Resource ────────────────────────────────────────────────────────────
-
 mod config;
 mod events;
 mod resource;
@@ -76,8 +74,6 @@ pub use config::{ResourceConfig, ResourceSrc};
 pub use events::ResourceEvent;
 pub use resource::Resource;
 pub use source_type::SourceType;
-
-// ── Prelude ─────────────────────────────────────────────────────────────
 
 pub mod prelude {
     pub use kithara_audio::{Audio, AudioConfig, PcmReader, ResamplerQuality};

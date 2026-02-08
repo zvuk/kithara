@@ -37,9 +37,7 @@ mod inner;
 mod parsing;
 mod source;
 
-// ============================================================================
 // Public API re-exports
-// ============================================================================
 
 pub use config::{HlsConfig, KeyContext, KeyOptions, KeyProcessor};
 pub use error::{HlsError, HlsResult};

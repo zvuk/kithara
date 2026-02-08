@@ -77,8 +77,6 @@ impl ResamplerQuality {
     }
 }
 
-// ─────────────────────────── ResamplerKind ───────────────────────────
-
 /// Enum wrapper for rubato resamplers (trait is not object-safe).
 enum ResamplerKind {
     Poly(Async<f32>),
@@ -143,8 +141,6 @@ impl ResamplerKind {
     }
 }
 
-// ─────────────────────────── Params ───────────────────────────
-
 /// Configuration parameters for the resampler effect.
 ///
 /// Contains all values needed to construct a [`ResamplerProcessor`].
@@ -185,8 +181,6 @@ impl ResamplerParams {
         self
     }
 }
-
-// ─────────────────────────── Processor ───────────────────────────
 
 /// Audio resampler that converts between source and host sample rates.
 ///
@@ -911,7 +905,7 @@ mod tests {
         assert!(processor.input_buffer[0].is_empty());
     }
 
-    // ── Quality-specific tests ──
+    // Quality-specific tests
 
     #[test]
     fn test_fast_quality_resamples() {

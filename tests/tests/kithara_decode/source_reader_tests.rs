@@ -9,7 +9,7 @@ use rstest::{fixture, rstest};
 
 use crate::common::memory_source::MemorySource;
 
-// ==================== Fixtures ====================
+// Fixtures
 
 #[fixture]
 fn hello_source() -> MemorySource {
@@ -37,7 +37,7 @@ fn large_source() -> MemorySource {
     MemorySource::new(data)
 }
 
-// ==================== SourceReader Tests ====================
+// SourceReader Tests
 
 #[rstest]
 #[test]

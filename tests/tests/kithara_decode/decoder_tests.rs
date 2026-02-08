@@ -15,7 +15,7 @@ fn test_config() -> DecoderConfig {
     DecoderConfig::default()
 }
 
-// ==================== Fixtures ====================
+// Fixtures
 
 #[fixture]
 fn audio() -> EmbeddedAudio {
@@ -44,7 +44,7 @@ fn mp3_media_info() -> MediaInfo {
     }
 }
 
-// ==================== Basic Decode Tests ====================
+// Basic Decode Tests
 
 #[rstest]
 fn decode_wav_with_probe(audio: EmbeddedAudio) {
@@ -103,7 +103,7 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &st
     assert!(chunk_count > 0, "Should have at least one chunk");
 }
 
-// ==================== MediaInfo Creation Tests ====================
+// MediaInfo Creation Tests
 
 #[rstest]
 fn from_media_info_wav(audio: EmbeddedAudio, wav_media_info: MediaInfo) {
@@ -132,7 +132,7 @@ fn from_media_info_mp3(audio: EmbeddedAudio, mp3_media_info: MediaInfo) {
     assert!(spec.channels > 0);
 }
 
-// ==================== Spec Tests ====================
+// Spec Tests
 
 #[rstest]
 fn spec_wav_properties(audio: EmbeddedAudio) {
@@ -162,7 +162,7 @@ fn spec_mp3_properties(audio: EmbeddedAudio) {
     assert!(spec.channels == 1 || spec.channels == 2);
 }
 
-// ==================== Error Handling Tests ====================
+// Error Handling Tests
 
 #[rstest]
 #[case::invalid(vec![0u8; 100])]
@@ -189,7 +189,7 @@ fn truncated_data_handles_gracefully(audio: EmbeddedAudio) {
     }
 }
 
-// ==================== Chunk Properties Tests ====================
+// Chunk Properties Tests
 
 #[rstest]
 fn chunk_has_valid_samples(audio: EmbeddedAudio) {
@@ -261,7 +261,7 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     }
 }
 
-// ==================== Decode Consistency Tests ====================
+// Decode Consistency Tests
 
 #[rstest]
 fn consecutive_chunks_differ(audio: EmbeddedAudio) {

@@ -36,7 +36,7 @@ const SEEK_ITERATIONS: usize = 1000;
 /// Each frame within a period has a unique i16 value.
 const SAW_PERIOD: usize = 65536;
 
-// ==================== Verification Helpers ====================
+// Verification Helpers
 
 /// Recover saw-tooth phase from a decoded f32 sample.
 fn phase_from_f32(sample: f32) -> usize {
@@ -58,7 +58,7 @@ fn phase_distance(a: usize, b: usize) -> usize {
     d.min(SAW_PERIOD - d)
 }
 
-// ==================== Stress Test ====================
+// Stress Test
 
 /// 1000 random seek+read cycles with three-level PCM verification
 /// on `Audio<Stream<Hls>>` serving a 20 MB WAV.

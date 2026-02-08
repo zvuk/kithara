@@ -26,13 +26,13 @@ use tracing::info;
 use super::fixture;
 use crate::common::fixtures::{cancel_token, temp_dir, tracing_setup};
 
-// ==================== Test Data Helpers ====================
+// Test Data Helpers
 
 /// Segment size in bytes (test fixture pads to 200KB).
 #[allow(dead_code)]
 const SEGMENT_SIZE: u64 = 200_000;
 
-// ==================== Stream<Hls> Seek + Read Tests ====================
+// Stream<Hls> Seek + Read Tests
 
 #[rstest]
 #[case(0, b"V0-SEG-0:")] // Start of segment 0
@@ -225,7 +225,7 @@ async fn hls_stream_read_all_then_seek_back(
     .unwrap();
 }
 
-// ==================== ABR considerations ====================
+// ABR considerations
 
 #[rstest]
 #[timeout(Duration::from_secs(10))]

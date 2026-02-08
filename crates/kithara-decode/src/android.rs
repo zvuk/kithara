@@ -116,8 +116,6 @@ impl<C: CodecType> InnerDecoder for Android<C> {
     }
 }
 
-// ────────────────────────────────── Type Aliases ──────────────────────────────────
-
 /// Android AAC decoder.
 pub type AndroidAac = Android<Aac>;
 
@@ -129,8 +127,6 @@ pub type AndroidFlac = Android<Flac>;
 
 /// Android ALAC decoder.
 pub type AndroidAlac = Android<Alac>;
-
-// ────────────────────────────────── Tests ──────────────────────────────────
 
 #[cfg(test)]
 mod tests {

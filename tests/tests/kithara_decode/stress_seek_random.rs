@@ -22,7 +22,7 @@ const DURATION_SECS: f64 = 10.0;
 const SAMPLE_COUNT: usize = (SAMPLE_RATE as f64 * DURATION_SECS) as usize;
 const SEEK_ITERATIONS: usize = 1000;
 
-// ==================== Stress Test ====================
+// Stress Test
 
 /// 1000 random seek+read cycles with data verification.
 ///

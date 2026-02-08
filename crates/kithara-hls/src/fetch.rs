@@ -24,9 +24,7 @@ use crate::{
     },
 };
 
-// ============================================================================
 // Types
-// ============================================================================
 
 /// Segment type: initialization segment or media segment with index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,9 +72,7 @@ pub enum FetchResult {
     Active(Writer, AssetResource),
 }
 
-// ============================================================================
 // Loader trait
-// ============================================================================
 
 /// Generic segment loader.
 #[expect(async_fn_in_trait)]
@@ -92,9 +88,7 @@ pub trait Loader: Send + Sync {
     async fn num_segments(&self, variant: usize) -> HlsResult<usize>;
 }
 
-// ============================================================================
 // FetchManager
-// ============================================================================
 
 fn uri_basename_no_query(uri: &str) -> Option<&str> {
     let no_query = uri.split('?').next().unwrap_or(uri);
@@ -385,9 +379,7 @@ impl FetchManager<HttpClient> {
 
 pub type DefaultFetchManager = FetchManager<HttpClient>;
 
-// ============================================================================
 // Loader impl for FetchManager
-// ============================================================================
 
 impl<N: Net> Loader for FetchManager<N> {
     async fn load_segment(&self, variant: usize, segment_index: usize) -> HlsResult<SegmentMeta> {

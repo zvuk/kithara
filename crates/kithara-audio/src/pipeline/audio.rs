@@ -125,9 +125,7 @@ pub struct Audio<S> {
     _marker: std::marker::PhantomData<S>,
 }
 
-// ============================================================================
 // Public API for cpal/rodio compatibility
-// ============================================================================
 
 impl<S> Audio<S> {
     /// Get reference to PCM receiver for direct channel access.

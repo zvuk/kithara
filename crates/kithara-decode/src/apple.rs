@@ -28,8 +28,6 @@ use std::{
     time::Duration,
 };
 
-// ────────────────────────────────── ReadSeek Trait ──────────────────────────────────
-
 /// Trait combining Read and Seek for use as trait object.
 trait ReadSeek: Read + Seek + Send {}
 impl<T: Read + Seek + Send> ReadSeek for T {}
@@ -42,8 +40,6 @@ use crate::{
     traits::{Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, InnerDecoder, Mp3},
     types::{PcmChunk, PcmSpec, TrackMetadata},
 };
-
-// ────────────────────────────────── FFI Types ──────────────────────────────────
 
 type OSStatus = i32;
 type AudioFileStreamID = *mut c_void;
@@ -243,8 +239,6 @@ struct AudioConverterPrimeInfo {
     trailing_frames: u32,
 }
 
-// ────────────────────────────────── Helpers ──────────────────────────────────
-
 fn os_status_to_string(status: OSStatus) -> String {
     if status == noErr {
         return "noErr".to_string();
@@ -268,8 +262,6 @@ fn container_to_file_type(container: ContainerFormat) -> Option<AudioFileTypeID>
         _ => None,
     }
 }
-
-// ────────────────────────────────── Packet Buffer ──────────────────────────────────
 
 /// A compressed audio packet with its description.
 #[derive(Clone)]
@@ -307,8 +299,6 @@ impl PacketBuffer {
     }
 }
 
-// ────────────────────────────────── Stream Parser State ──────────────────────────────────
-
 /// State shared between AudioFileStream callbacks and the decoder.
 struct StreamParserState {
     /// Audio format from the stream.
@@ -338,8 +328,6 @@ impl StreamParserState {
     }
 }
 
-// ────────────────────────────────── Converter Input State ──────────────────────────────────
-
 /// State for AudioConverter input callback.
 struct ConverterInputState {
     /// Current packet being provided to converter.
@@ -360,8 +348,6 @@ impl ConverterInputState {
     }
 }
 
-// ────────────────────────────────── Config ──────────────────────────────────
-
 /// Configuration for Apple AudioToolbox decoder.
 #[derive(Debug, Clone, Default)]
 pub struct AppleConfig {
@@ -370,8 +356,6 @@ pub struct AppleConfig {
     /// Container format hint for file type detection.
     pub container: Option<ContainerFormat>,
 }
-
-// ────────────────────────────────── Inner ──────────────────────────────────
 
 /// Apple AudioToolbox streaming decoder inner state.
 struct AppleInner {
@@ -981,8 +965,6 @@ impl Drop for AppleInner {
     }
 }
 
-// ────────────────────────────────── Callbacks ──────────────────────────────────
-
 /// AudioFileStream property listener callback.
 extern "C" fn property_listener_callback(
     client_data: *mut c_void,
@@ -1181,8 +1163,6 @@ extern "C" fn converter_input_callback(
     noErr
 }
 
-// ────────────────────────────────── Apple<C> ──────────────────────────────────
-
 /// Apple AudioToolbox streaming decoder parameterized by codec type.
 ///
 /// Uses AudioFileStream for parsing and AudioConverter for decoding.
@@ -1280,8 +1260,6 @@ impl<C: CodecType> InnerDecoder for Apple<C> {
     }
 }
 
-// ────────────────────────────────── Type Aliases ──────────────────────────────────
-
 /// Apple AAC decoder.
 pub type AppleAac = Apple<Aac>;
 
@@ -1293,8 +1271,6 @@ pub type AppleFlac = Apple<Flac>;
 
 /// Apple ALAC decoder.
 pub type AppleAlac = Apple<Alac>;
-
-// ────────────────────────────────── Tests ──────────────────────────────────
 
 #[cfg(test)]
 mod tests {

@@ -10,7 +10,7 @@ use rstest::{fixture, rstest};
 
 use crate::common::memory_source::{MemorySource, UnknownLenSource};
 
-// ==================== Fixtures ====================
+// Fixtures
 
 #[fixture]
 fn test_data() -> Vec<u8> {
@@ -22,7 +22,7 @@ fn small_data() -> Vec<u8> {
     b"Hello".to_vec()
 }
 
-// ==================== SeekFrom::Start tests ====================
+// SeekFrom::Start tests
 
 #[rstest]
 #[case(0, b"ABCDE")]
@@ -73,7 +73,7 @@ fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
     assert_eq!(&buf[..n], b"ABCDE");
 }
 
-// ==================== SeekFrom::Current tests ====================
+// SeekFrom::Current tests
 
 #[rstest]
 #[timeout(Duration::from_secs(3))]
@@ -137,7 +137,7 @@ fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
     assert_eq!(pos, 10);
 }
 
-// ==================== SeekFrom::End tests ====================
+// SeekFrom::End tests
 
 #[rstest]
 #[case(-5, b"VWXYZ")]
@@ -193,7 +193,7 @@ fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
     assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
 }
 
-// ==================== Error cases ====================
+// Error cases
 
 #[rstest]
 #[timeout(Duration::from_secs(3))]
@@ -238,7 +238,7 @@ fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
     assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 }
 
-// ==================== Multiple seeks ====================
+// Multiple seeks
 
 #[rstest]
 #[timeout(Duration::from_secs(3))]
@@ -305,7 +305,7 @@ fn position_tracks_correctly(test_data: Vec<u8>) {
     assert_eq!(positions[3], 18);
 }
 
-// ==================== Edge cases ====================
+// Edge cases
 
 #[rstest]
 #[timeout(Duration::from_secs(3))]

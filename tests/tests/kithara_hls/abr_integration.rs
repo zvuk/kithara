@@ -18,7 +18,7 @@ fn variants_from_master(master: &MasterPlaylist) -> Vec<Variant> {
         .collect()
 }
 
-// ==================== Fixtures ====================
+// Fixtures
 
 #[fixture]
 fn abr_config_default() -> AbrOptions {
@@ -54,7 +54,7 @@ fn variants_from_parsed_playlist(
     variants_from_master(&parsed_master_playlist)
 }
 
-// ==================== Test Cases ====================
+// Test Cases
 
 #[rstest]
 fn test_variant_selection_manual_override(

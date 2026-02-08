@@ -33,7 +33,7 @@ use url::Url;
 
 use crate::common::fixtures::{cancel_token, debug_tracing_setup, temp_dir};
 
-// ==================== Constants ====================
+// Constants
 
 /// Actual segment body size returned by GET.
 const ACTUAL_SEGMENT_SIZE: usize = 200_000;
@@ -50,7 +50,7 @@ const HEAD_TOTAL: u64 = (HEAD_REPORTED_SIZE * NUM_SEGMENTS) as u64; // 597_600
 /// Actual total bytes that will be downloaded and cached.
 const ACTUAL_TOTAL: u64 = (ACTUAL_SEGMENT_SIZE * NUM_SEGMENTS) as u64; // 600_000
 
-// ==================== Test Server ====================
+// Test Server
 
 fn segment_data(variant: usize, segment: usize) -> Vec<u8> {
     let prefix = format!("V{}-SEG-{}:", variant, segment);
@@ -149,7 +149,7 @@ async fn start_mismatch_server() -> Url {
     url
 }
 
-// ==================== Tests ====================
+// Tests
 
 /// Seek to a position between HEAD-reported total and actual total must succeed.
 ///

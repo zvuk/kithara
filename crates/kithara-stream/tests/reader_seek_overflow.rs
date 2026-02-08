@@ -83,14 +83,12 @@ impl Source for MockSource {
     }
 }
 
-// ========================================================================
 // Regression tests — document the seek bug from production (2026-02-01)
 //
 // Fixed: `probe_byte_len()` in `kithara-decode/src/decoder.rs` makes
 // adapters report `byte_len() -> Some(len)`, so symphonia computes
 // correct deltas. These tests replay the corrupted deltas that symphonia
 // produced *before* the fix — they can't turn green at the Reader level.
-// ========================================================================
 
 /// Reproduction of epoch 10 seek failure from production log.
 ///
@@ -149,9 +147,7 @@ fn seek_epoch_11_corrupted_delta() {
     );
 }
 
-// ========================================================================
 // GREEN tests — normal seek behavior (sanity checks)
-// ========================================================================
 
 /// Normal backward seek via SeekFrom::Current with negative delta.
 #[test]
@@ -205,7 +201,6 @@ fn seek_from_end_backward() {
     assert_eq!(result.unwrap(), 999_900);
 }
 
-// ========================================================================
 // ABR variant switch — unsynchronized decoder causes garbage seeks
 //
 // Production scenario (2026-02-01T22:57:37, stream.silvercomet.top):
@@ -225,7 +220,6 @@ fn seek_from_end_backward() {
 // segment layout. After variant switch, old variant's segment data
 // remains accessible through SegmentIndex. Symphonia has no fence
 // preventing reads past the new variant's segment boundary.
-// ========================================================================
 
 /// Exact replay of production crash (now returns error instead of panic).
 ///

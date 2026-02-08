@@ -88,8 +88,6 @@ pub struct SymphoniaConfig {
     pub probe_no_seek: bool,
 }
 
-// ────────────────────────────────── Inner ──────────────────────────────────
-
 /// Inner implementation shared across all Symphonia codecs.
 ///
 /// This struct holds the actual Symphonia format reader and decoder,
@@ -477,8 +475,6 @@ impl SymphoniaInner {
     }
 }
 
-// ────────────────────────────────── Symphonia<C> ──────────────────────────────────
-
 /// Generic Symphonia-based decoder parameterized by codec type.
 ///
 /// This decoder wraps Symphonia's format reader and codec decoder,
@@ -541,8 +537,6 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
     }
 }
 
-// ────────────────────────────────── InnerDecoder ──────────────────────────────────
-
 use crate::traits::InnerDecoder;
 
 impl<C: CodecType> InnerDecoder for Symphonia<C> {
@@ -575,8 +569,6 @@ impl<C: CodecType> InnerDecoder for Symphonia<C> {
     }
 }
 
-// ────────────────────────────────── Type Aliases ──────────────────────────────────
-
 /// Symphonia-based AAC decoder.
 pub type SymphoniaAac = Symphonia<Aac>;
 
@@ -588,8 +580,6 @@ pub type SymphoniaFlac = Symphonia<Flac>;
 
 /// Symphonia-based Vorbis decoder.
 pub type SymphoniaVorbis = Symphonia<Vorbis>;
-
-// ────────────────────────────────── ReadSeekAdapter ──────────────────────────────────
 
 /// Adapter that wraps a Read + Seek source as a Symphonia `MediaSource`.
 ///
@@ -683,8 +673,6 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for ReadSeek
         if len > 0 { Some(len) } else { None }
     }
 }
-
-// ────────────────────────────────── Tests ──────────────────────────────────
 
 #[cfg(test)]
 mod tests {
