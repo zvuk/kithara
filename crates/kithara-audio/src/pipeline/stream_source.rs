@@ -157,10 +157,6 @@ pub(super) struct StreamAudioSource<T: StreamType> {
     /// Used to adjust `update_byte_len` after ABR variant switch:
     /// symphonia sees `total_len - base_offset` as byte length.
     base_offset: u64,
-    /// Whether next chunk is the first after decoder recreation.
-    log_new_decoder_head: bool,
-    /// Last output sample per channel (for discontinuity detection).
-    last_output: Option<(f32, f32)>,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -185,8 +181,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             emit: None,
             effects,
             base_offset: 0,
-            log_new_decoder_head: false,
-            last_output: None,
         }
     }
 
@@ -279,7 +273,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             Some(new_decoder) => {
                 let new_duration = new_decoder.duration();
                 self.decoder = new_decoder;
-                self.log_new_decoder_head = true;
                 debug!(?new_duration, base_offset, "Decoder recreated successfully");
                 true
             }
@@ -322,19 +315,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     self.chunks_decoded += 1;
                     self.total_samples += chunk.pcm.len() as u64;
 
-                    // Log first samples from new decoder for boundary diagnostics.
-                    if self.log_new_decoder_head {
-                        self.log_new_decoder_head = false;
-                        let head_len = chunk.pcm.len().min(8);
-                        let head: Vec<f32> = chunk.pcm[..head_len].to_vec();
-                        debug!(
-                            new_decoder_head = ?head,
-                            spec = ?chunk.spec,
-                            chunk_samples = chunk.pcm.len(),
-                            "PCM boundary: first samples from new decoder"
-                        );
-                    }
-
                     // Emit FormatDetected on first chunk
                     if self.chunks_decoded == 1
                         && let Some(ref emit) = self.emit
@@ -371,40 +351,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     // Apply effects chain
                     match apply_effects(&mut self.effects, chunk) {
                         Some(processed) => {
-                            // Detect inter-chunk PCM discontinuities.
-                            if let Some((prev_l, prev_r)) = self.last_output
-                                && processed.spec.channels >= 2
-                                && processed.pcm.len() >= 2
-                            {
-                                let cur_l = processed.pcm[0];
-                                let cur_r = processed.pcm[1];
-                                let dl = (cur_l - prev_l).abs();
-                                let dr = (cur_r - prev_r).abs();
-                                if dl > 0.05 || dr > 0.05 {
-                                    let head: Vec<f32> =
-                                        processed.pcm[..8.min(processed.pcm.len())].to_vec();
-                                    debug!(
-                                        dl,
-                                        dr,
-                                        prev_l,
-                                        prev_r,
-                                        cur_l,
-                                        cur_r,
-                                        head = ?head,
-                                        chunk_samples = processed.pcm.len(),
-                                        chunks_decoded = self.chunks_decoded,
-                                        spec = ?processed.spec,
-                                        "DISCONTINUITY between chunks"
-                                    );
-                                }
-                            }
-                            // Update last output for next check.
-                            if processed.spec.channels >= 2 && processed.pcm.len() >= 2 {
-                                let n = processed.pcm.len();
-                                self.last_output =
-                                    Some((processed.pcm[n - 2], processed.pcm[n - 1]));
-                            }
-
                             return Fetch::new(processed, false, current_epoch);
                         }
                         None => continue,

@@ -1029,22 +1029,11 @@ impl Source for HlsSource {
 
         // Variant fence: auto-detect on first read, block cross-variant reads.
         if self.variant_fence.is_none() {
-            tracing::debug!(
-                variant = entry.variant,
-                offset,
-                "Variant fence auto-detected"
-            );
             self.variant_fence = Some(entry.variant);
         }
         if let Some(fence) = self.variant_fence
             && entry.variant != fence
         {
-            tracing::debug!(
-                fence,
-                entry_variant = entry.variant,
-                offset,
-                "Variant fence blocked cross-variant read"
-            );
             return Ok(0);
         }
 
