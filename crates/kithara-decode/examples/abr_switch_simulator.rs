@@ -230,8 +230,7 @@ fn main() {
                 true, // use cross-correlation
             );
 
-            let apple_path =
-                out_dir.join(format!("{from_var}_to_{to_var}_at{cold_seg}_apple.wav"));
+            let apple_path = out_dir.join(format!("{from_var}_to_{to_var}_at{cold_seg}_apple.wav"));
             write_wav(&apple_path, &apple_result.output, rate, out_ch);
 
             // ── Report ──────────────────────────────────────────────────
@@ -297,7 +296,13 @@ fn build_overlap(
         let search_radius = 128 * ch;
         let window = 2048 * ch;
         cross_correlate(
-            old_full, old_pos, new_full, new_pos, window, search_radius, ch,
+            old_full,
+            old_pos,
+            new_full,
+            new_pos,
+            window,
+            search_radius,
+            ch,
         )
     } else {
         0

@@ -46,9 +46,7 @@ mod pipeline;
 mod reader;
 mod resampler;
 #[cfg(feature = "rodio")]
-mod rodio_impl;
-#[cfg(feature = "rodio")]
-mod sync;
+mod rodio;
 mod traits;
 mod types;
 
@@ -63,6 +61,6 @@ pub use pipeline::{Audio, AudioConfig};
 pub use reader::SourceReader;
 pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
 #[cfg(feature = "rodio")]
-pub use sync::AudioSyncReader;
+pub use rodio::AudioSyncReader;
 pub use traits::{AudioEffect, AudioGenerator};
 pub use types::{DecodeError, DecodeResult, PcmReader};

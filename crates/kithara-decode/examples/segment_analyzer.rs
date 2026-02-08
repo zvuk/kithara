@@ -152,8 +152,8 @@ fn main() {
                         variant.to_string(),
                         seg_idx,
                         SegmentResult {
-                            total_frames,
-                            sample_rate: decoded.sample_rate,
+                            _total_frames: total_frames,
+                            _sample_rate: decoded.sample_rate,
                             channels: decoded.channels,
                             priming_frames: priming,
                             head: decoded.samples[..4.min(decoded.samples.len()) * ch].to_vec(),
@@ -228,8 +228,8 @@ struct DecodedSegment {
 }
 
 struct SegmentResult {
-    total_frames: usize,
-    sample_rate: u32,
+    _total_frames: usize,
+    _sample_rate: u32,
     channels: u16,
     priming_frames: usize,
     head: Vec<f32>,

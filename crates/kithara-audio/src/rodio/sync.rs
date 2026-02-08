@@ -1,8 +1,6 @@
 //! AudioSyncReader: rodio-compatible audio source adapter.
 //!
 //! Reads decoded audio from a channel and implements rodio::Source.
-//!
-//! This module is only available when the `rodio` feature is enabled.
 
 use std::time::Duration;
 
@@ -113,7 +111,7 @@ impl Iterator for AudioSyncReader {
     }
 }
 
-impl rodio::Source for AudioSyncReader {
+impl ::rodio::Source for AudioSyncReader {
     fn current_span_len(&self) -> Option<usize> {
         // Return remaining samples in current chunk
         if let Some(ref chunk) = self.current_chunk

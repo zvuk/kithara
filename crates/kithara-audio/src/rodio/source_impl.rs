@@ -35,7 +35,7 @@ impl<S> Iterator for Audio<S> {
     }
 }
 
-impl<S> rodio::Source for Audio<S> {
+impl<S> ::rodio::Source for Audio<S> {
     fn current_span_len(&self) -> Option<usize> {
         if let Some(ref chunk) = self.current_chunk
             && self.chunk_offset < chunk.len()
