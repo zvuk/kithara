@@ -82,6 +82,8 @@ perf = [
     "kithara-decode/perf",
     "kithara-bufpool/perf",
     "kithara-hls/perf",
+    "kithara-stream/perf",
+    "kithara-net/perf",
 ]
 
 # Performance test binaries
