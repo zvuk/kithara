@@ -12,7 +12,7 @@
 //! ## Key mapping (normative)
 //!
 //! Resources are addressed by strings chosen by higher layers:
-//! - `asset_root`: e.g. hex(hash(canonical_url))
+//! - `asset_root`: e.g. `hex(hash(canonical_url))`
 //! - `rel_path`: e.g. `media/audio.mp3`, `segments/0001.m4s`
 //!
 //! Disk mapping is:

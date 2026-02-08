@@ -13,7 +13,9 @@ use std::time::Duration;
 
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
 use kithara_storage::ResourceExt;
-use rstest::{fixture, rstest};
+use rstest::rstest;
+
+use crate::common::fixtures::temp_dir;
 
 #[derive(serde::Deserialize)]
 #[allow(dead_code)]
@@ -24,11 +26,6 @@ struct PinsIndexFile {
 
 fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
     root.join(asset_root).exists()
-}
-
-#[fixture]
-fn temp_dir() -> tempfile::TempDir {
-    tempfile::tempdir().unwrap()
 }
 
 fn asset_store_with_root(

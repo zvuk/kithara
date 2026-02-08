@@ -14,7 +14,9 @@ use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
-// ==================== Test Server Fixtures ====================
+use crate::common::fixtures::temp_dir;
+
+// Test Server Fixtures
 
 async fn test_audio_endpoint() -> Response {
     let audio_data = Bytes::from_static(b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345");
@@ -52,19 +54,14 @@ async fn run_test_server() -> String {
     format!("http://127.0.0.1:{}", addr.port())
 }
 
-// ==================== Fixtures ====================
-
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().unwrap()
-}
+// Fixtures
 
 #[fixture]
 async fn test_server() -> String {
     run_test_server().await
 }
 
-// ==================== Stream<File> Seek Tests ====================
+// Stream<File> Seek Tests
 
 #[rstest]
 #[case(0, b"ID3\x04\x00")]
@@ -89,6 +86,12 @@ async fn stream_file_seek_start_reads_correct_bytes(
     let expected_vec = expected.to_vec();
 
     let result = tokio::task::spawn_blocking(move || {
+        // Primer read: forces wait_range to block until download delivers data.
+        // For a 27-byte file the entire payload arrives in one chunk,
+        // so after this read all offsets are guaranteed available.
+        let mut primer = [0u8; 1];
+        stream.read(&mut primer).unwrap();
+
         let pos = stream.seek(SeekFrom::Start(seek_pos)).unwrap();
         assert_eq!(pos, seek_pos);
 

@@ -10,12 +10,8 @@ use kithara_stream::StreamType;
 use tokio::sync::broadcast;
 
 use crate::{
-    config::HlsConfig,
-    error::HlsError,
-    events::HlsEvent,
-    fetch::FetchManager,
-    playlist::variant_info_from_master,
-    source::{VariantMetadata, build_pair},
+    config::HlsConfig, error::HlsError, events::HlsEvent, fetch::FetchManager,
+    playlist::variant_info_from_master, source::build_pair,
 };
 
 /// Marker type for HLS streaming.
@@ -77,22 +73,9 @@ impl StreamType for Hls {
             initial_variant,
         });
 
-        // Extract variant metadata
-        let variant_metadata: Vec<VariantMetadata> = master
-            .variants
-            .iter()
-            .enumerate()
-            .map(|(index, v)| VariantMetadata {
-                index,
-                codec: v.codec.as_ref().and_then(|c| c.audio_codec),
-                container: v.codec.as_ref().and_then(|c| c.container),
-                bitrate: v.bandwidth,
-            })
-            .collect();
-
         // Create HlsDownloader + HlsSource pair
         let (downloader, source) =
-            build_pair(Arc::clone(&fetch_manager), variant_metadata, &config);
+            build_pair(Arc::clone(&fetch_manager), master.variants.clone(), &config);
 
         // Spawn downloader as background task
         std::mem::forget(kithara_stream::Backend::new(downloader, cancel));

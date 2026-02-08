@@ -136,6 +136,11 @@ All async operations accept `tokio_util::sync::CancellationToken`, forwarded thr
 - `rustfmt.toml`: max width 100, grouped imports
 - `clippy.toml`: `unwrap_used = "deny"`, `allow-unwrap-in-tests = true`
 
+### Style check
+```bash
+bash scripts/lint-style.sh
+```
+
 ## Adding new crates
 
 1. Create directory under `crates/`

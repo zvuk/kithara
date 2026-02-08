@@ -74,9 +74,9 @@ pub struct DiskAssetStore {
 
 impl DiskAssetStore {
     /// Create a store rooted at `root_dir` for a specific `asset_root`.
-    pub fn new(
-        root_dir: impl Into<PathBuf>,
-        asset_root: impl Into<String>,
+    pub fn new<P: Into<PathBuf>, S: Into<String>>(
+        root_dir: P,
+        asset_root: S,
         cancel: CancellationToken,
     ) -> Self {
         Self {
@@ -162,7 +162,7 @@ impl Assets for DiskAssetStore {
         if self.cancel.is_cancelled() {
             return Err(kithara_storage::StorageError::Cancelled.into());
         }
-        delete_asset_dir(&self.root_dir, &self.asset_root).map_err(|e| e.into())
+        delete_asset_dir(&self.root_dir, &self.asset_root).map_err(std::convert::Into::into)
     }
 }
 

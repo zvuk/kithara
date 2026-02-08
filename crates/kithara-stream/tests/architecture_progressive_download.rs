@@ -33,9 +33,7 @@
 //! These tests document what the architecture SHOULD support.
 //! Implementation comes after we agree on contracts.
 
-// ============================================================================
 // PROBLEM 1: Resource State Ambiguity
-// ============================================================================
 
 /// Current ResourceExt API cannot distinguish:
 /// - Partial uncommitted: 512KB downloaded, 1MB expected, still writing
@@ -80,9 +78,7 @@ fn test_resource_status_should_expose_partial_state() {
     // - Whether download is stuck or still progressing
 }
 
-// ============================================================================
 // PROBLEM 2: Writer::Completed Should NOT Imply Commit
-// ============================================================================
 
 /// Current WriterItem::Completed documentation says:
 /// "Download completed, resource committed."
@@ -128,9 +124,7 @@ fn test_writer_completed_vs_committed_semantics() {
     // Resource stays Active { downloaded: 512KB, expected: 1MB }
 }
 
-// ============================================================================
 // PROBLEM 3: Downloader Lifecycle - Sequential vs On-Demand
-// ============================================================================
 
 /// Current Downloader trait:
 ///
@@ -190,9 +184,7 @@ fn test_downloader_should_support_on_demand_mode() {
     // Desired: Downloader continues, waits for on-demand requests
 }
 
-// ============================================================================
 // PROBLEM 4: Source::len() Semantics
-// ============================================================================
 
 /// Current Source::len() returns:
 /// ```ignore
@@ -231,9 +223,7 @@ fn test_source_len_should_return_expected_total() {
     // Decoder sees 1MB → calculates correct duration → seeks work
 }
 
-// ============================================================================
 // PROBLEM 5: wait_range() For Partial Uncommitted
-// ============================================================================
 
 /// Current wait_range() for partial uncommitted:
 /// ```ignore
@@ -268,9 +258,7 @@ fn test_wait_range_should_not_deadlock_on_partial() {
     // 5. Desired: returns NeedsFetch OR Source handles this before calling wait_range
 }
 
-// ============================================================================
 // PROBLEM 6: On-Demand Request Mechanism
-// ============================================================================
 
 /// How should Source signal Downloader to fetch a range?
 ///
@@ -319,9 +307,7 @@ fn test_on_demand_request_should_be_explicit() {
     // Decision needed: Is SharedState pattern acceptable for trait contract?
 }
 
-// ============================================================================
 // PROBLEM 7: Resuming Partial Downloads After Restart
-// ============================================================================
 
 /// Scenario:
 /// 1. App downloads 512KB of 1MB file
@@ -385,9 +371,7 @@ fn test_partial_download_resume_needs_download_index() {
     // - On commit: remove entry from DownloadIndex
 }
 
-// ============================================================================
 // PROBLEM 8: HLS Segment Duration Tracking
-// ============================================================================
 
 /// HLS-specific problem: Time-based seek requires knowing segment durations.
 ///
@@ -442,9 +426,7 @@ fn test_hls_time_seek_needs_duration_tracking() {
     // - find_segment_by_time(36s) returns segment 9
 }
 
-// ============================================================================
 // PROBLEM 9: HLS ABR Variant Switch Invalidates Byte Offsets
-// ============================================================================
 
 /// Problem: After ABR switches variants, byte offsets change.
 ///
@@ -488,13 +470,9 @@ fn test_hls_abr_switch_needs_virtual_byte_space() {
     // - Decoder seeks work correctly
 }
 
-// ============================================================================
 // SUMMARY: Architectural Changes Needed
-// ============================================================================
 
-// ============================================================================
 // PROBLEM 10: HLS Partial Segment Committed As Complete
-// ============================================================================
 
 /// HLS uses Writer per segment (FetchManager.start_fetch()).
 /// Same auto-commit bug as File, but manifestation is different:

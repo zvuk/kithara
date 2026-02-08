@@ -129,7 +129,7 @@ impl KeyManager {
     }
 
     fn process_key(&self, key: Bytes, url: Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
-        let context = KeyContext { url, iv };
+        let context = KeyContext { iv, url };
 
         if let Some(processor) = &self.key_processor {
             processor(key, context)

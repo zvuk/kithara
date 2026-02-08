@@ -115,7 +115,7 @@ pub struct Audio<S> {
     /// Notify for async preload (first chunk available).
     preload_notify: Arc<Notify>,
 
-    /// Whether preload() has been called (enables non-blocking mode).
+    /// Whether `preload()` has been called (enables non-blocking mode).
     preloaded: bool,
 
     /// Worker thread handle for graceful shutdown.
@@ -125,9 +125,7 @@ pub struct Audio<S> {
     _marker: std::marker::PhantomData<S>,
 }
 
-// ============================================================================
 // Public API for cpal/rodio compatibility
-// ============================================================================
 
 impl<S> Audio<S> {
     /// Get reference to PCM receiver for direct channel access.
@@ -277,7 +275,7 @@ impl<S> Audio<S> {
     }
 
     /// Receive next chunk from channel, filtering stale chunks.
-    /// After preload(), non-blocking. Before preload(), blocks on first call.
+    /// After `preload()`, non-blocking. Before `preload()`, blocks on first call.
     pub(crate) fn fill_buffer(&mut self) -> bool {
         if self.eof {
             return false;
@@ -342,15 +340,15 @@ impl<S> Audio<S> {
 /// Specialized impl for Stream-based audio pipelines.
 ///
 /// Provides async constructor that creates Stream internally.
-/// Uses StreamAudioSource for automatic format change detection on ABR switch.
+/// Uses `StreamAudioSource` for automatic format change detection on ABR switch.
 impl<T> Audio<Stream<T>>
 where
     T: StreamType,
 {
-    /// Create audio pipeline from AudioConfig.
+    /// Create audio pipeline from `AudioConfig`.
     ///
     /// This is the target API for Stream sources.
-    /// Uses StreamAudioSource for automatic decoder recreation on format change.
+    /// Uses `StreamAudioSource` for automatic decoder recreation on format change.
     ///
     /// # Example
     ///
@@ -364,18 +362,18 @@ where
 
         // Destructure config to avoid partial move issues.
         let AudioConfig {
-            stream: stream_config,
-            pcm_buffer_chunks,
             command_channel_capacity,
             event_channel_capacity,
             hint,
-            media_info: user_media_info,
-            pcm_pool: mut pool,
             host_sample_rate: config_host_sr,
-            resampler_quality,
-            events_tx,
-            preload_chunks,
+            media_info: user_media_info,
+            pcm_buffer_chunks,
+            pcm_pool: mut pool,
             prefer_hardware,
+            preload_chunks,
+            resampler_quality,
+            stream: stream_config,
+            events_tx,
         } = config;
 
         let event_capacity = event_channel_capacity.max(1);
@@ -395,7 +393,7 @@ where
             tokio::spawn(async move {
                 loop {
                     tokio::select! {
-                        _ = forward_cancel.cancelled() => break,
+                        () = forward_cancel.cancelled() => break,
                         result = stream_events_rx.recv() => {
                             match result {
                                 Ok(event) => {
@@ -480,8 +478,7 @@ where
 
         let epoch = Arc::new(AtomicU64::new(0));
         let (audio_events_tx, _) = broadcast::channel(event_capacity);
-        let host_sample_rate =
-            Arc::new(AtomicU32::new(config_host_sr.map(|v| v.get()).unwrap_or(0)));
+        let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
 
         let output_spec = expected_output_spec(initial_spec, &host_sample_rate);
         let effects = create_effects(initial_spec, &host_sample_rate, resampler_quality);
@@ -534,10 +531,7 @@ where
                                 Some(d)
                             }
                             Err(e) => {
-                                warn!(
-                                    ?e,
-                                    "Probe fallback failed, trying Symphonia native probe"
-                                );
+                                warn!(?e, "Probe fallback failed, trying Symphonia native probe");
                                 let reader = OffsetReader::new(stream, base_offset);
                                 let config = kithara_decode::DecoderConfig {
                                     prefer_hardware,
@@ -586,11 +580,11 @@ where
             .spawn(move || {
                 run_audio_loop(
                     audio_source,
-                    cmd_rx,
-                    data_tx,
-                    worker_notify,
+                    &cmd_rx,
+                    &data_tx,
+                    &worker_notify,
                     worker_preload_chunks,
-                    worker_cancel,
+                    &worker_cancel,
                 );
             })
             .map_err(|e| {
@@ -626,6 +620,11 @@ where
     }
 
     /// Subscribe to unified events (stream + audio).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal unified events channel is not set (should never
+    /// happen for `Audio<Stream<T>>` created via `new`).
     pub fn events(&self) -> broadcast::Receiver<AudioPipelineEvent<T::Event>> {
         self.unified_events
             .as_ref()
@@ -652,7 +651,7 @@ impl<S> Drop for Audio<S> {
 // PcmReader implementation for Audio
 impl<S: Send> PcmReader for Audio<S> {
     fn read(&mut self, buf: &mut [f32]) -> usize {
-        Audio::read(self, buf)
+        Self::read(self, buf)
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -678,31 +677,31 @@ impl<S: Send> PcmReader for Audio<S> {
     }
 
     fn seek(&mut self, position: Duration) -> DecodeResult<()> {
-        Audio::seek(self, position)
+        Self::seek(self, position)
     }
 
     fn spec(&self) -> PcmSpec {
-        Audio::spec(self)
+        Self::spec(self)
     }
 
     fn is_eof(&self) -> bool {
-        Audio::is_eof(self)
+        Self::is_eof(self)
     }
 
     fn position(&self) -> Duration {
-        Audio::position(self)
+        Self::position(self)
     }
 
     fn duration(&self) -> Option<Duration> {
-        Audio::duration(self)
+        Self::duration(self)
     }
 
     fn metadata(&self) -> &TrackMetadata {
-        Audio::metadata(self)
+        Self::metadata(self)
     }
 
     fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-        Audio::decode_events(self)
+        Self::decode_events(self)
     }
 
     fn set_host_sample_rate(&self, sample_rate: NonZeroU32) {
@@ -724,57 +723,16 @@ impl<S: Send> PcmReader for Audio<S> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_decode::test_support::create_test_wav;
     use kithara_stream::Stream;
 
     use super::*;
-
-    /// Create minimal valid WAV file
-    fn create_test_wav(sample_count: usize) -> Vec<u8> {
-        let channels = 2u16;
-        let sample_rate = 44100u32;
-        let bytes_per_sample = 2;
-        let data_size = (sample_count * channels as usize * bytes_per_sample) as u32;
-        let file_size = 36 + data_size;
-
-        let mut wav = Vec::new();
-
-        // RIFF header
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&file_size.to_le_bytes());
-        wav.extend_from_slice(b"WAVE");
-
-        // fmt chunk
-        wav.extend_from_slice(b"fmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
-        wav.extend_from_slice(&channels.to_le_bytes());
-        wav.extend_from_slice(&sample_rate.to_le_bytes());
-        let byte_rate = sample_rate * channels as u32 * bytes_per_sample as u32;
-        wav.extend_from_slice(&byte_rate.to_le_bytes());
-        let block_align = channels * bytes_per_sample as u16;
-        wav.extend_from_slice(&block_align.to_le_bytes());
-        wav.extend_from_slice(&16u16.to_le_bytes());
-
-        // data chunk
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_size.to_le_bytes());
-
-        // Generate samples
-        for i in 0..sample_count {
-            let sample = ((i as f32 * 0.1).sin() * 32767.0) as i16;
-            for _ in 0..channels {
-                wav.extend_from_slice(&sample.to_le_bytes());
-            }
-        }
-
-        wav
-    }
 
     /// Write test WAV to a temp file and return config for it.
     fn test_wav_config(
         sample_count: usize,
     ) -> (tempfile::NamedTempFile, AudioConfig<kithara_file::File>) {
-        let wav_data = create_test_wav(sample_count);
+        let wav_data = create_test_wav(sample_count, 44100, 2);
         let tmp = tempfile::NamedTempFile::new().unwrap();
         std::io::Write::write_all(&mut std::fs::File::create(tmp.path()).unwrap(), &wav_data)
             .unwrap();

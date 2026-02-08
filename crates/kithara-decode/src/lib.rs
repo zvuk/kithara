@@ -3,7 +3,7 @@
 //! Audio decoding library with pluggable backends.
 //!
 //! Provides generic decoder infrastructure supporting Symphonia (software),
-//! Apple AudioToolbox, and Android MediaCodec backends.
+//! Apple `AudioToolbox`, and Android `MediaCodec` backends.
 //!
 //! ## Usage
 //!
@@ -32,6 +32,9 @@ mod symphonia;
 mod traits;
 mod types;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_support;
+
 // Platform-specific backends
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android;
@@ -56,16 +59,16 @@ pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 pub use symphonia::{
     Symphonia, SymphoniaAac, SymphoniaConfig, SymphoniaFlac, SymphoniaMp3, SymphoniaVorbis,
 };
+// Test utilities
+#[cfg(any(test, feature = "test-utils"))]
+pub use traits::AudioDecoderMock;
+#[cfg(any(test, feature = "test-utils"))]
+pub use traits::InnerDecoderMock;
 // Traits and codec markers
 pub use traits::{
     Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, InnerDecoder, Mp3, Vorbis,
 };
 // Core types
 pub use types::{PcmChunk, PcmSpec, TrackMetadata};
-// Test utilities
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::AudioDecoderMock;
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::InnerDecoderMock;
 #[cfg(any(test, feature = "test-utils"))]
 pub use unimock;

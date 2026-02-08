@@ -1,4 +1,4 @@
-//! ResamplerProcessor: wraps rubato for sample rate conversion.
+//! `ResamplerProcessor`: wraps rubato for sample rate conversion.
 //!
 //! Reacts to dynamic `host_sample_rate` changes via `Arc<AtomicU32>`.
 
@@ -77,8 +77,6 @@ impl ResamplerQuality {
     }
 }
 
-// ─────────────────────────── ResamplerKind ───────────────────────────
-
 /// Enum wrapper for rubato resamplers (trait is not object-safe).
 enum ResamplerKind {
     Poly(Async<f32>),
@@ -143,33 +141,31 @@ impl ResamplerKind {
     }
 }
 
-// ─────────────────────────── Params ───────────────────────────
-
 /// Configuration parameters for the resampler effect.
 ///
 /// Contains all values needed to construct a [`ResamplerProcessor`].
 pub struct ResamplerParams {
-    /// Quality preset controlling resampling algorithm.
-    pub quality: ResamplerQuality,
+    /// Number of audio channels.
+    pub channels: usize,
     /// Number of input frames per resampler processing block.
     pub chunk_size: usize,
     /// Shared atomic for dynamic host sample rate tracking.
     pub host_sample_rate: Arc<AtomicU32>,
+    /// Quality preset controlling resampling algorithm.
+    pub quality: ResamplerQuality,
     /// Initial source sample rate.
     pub source_sample_rate: u32,
-    /// Number of audio channels.
-    pub channels: usize,
 }
 
 impl ResamplerParams {
     /// Create resampler params with required runtime values and default settings.
     pub fn new(host_sample_rate: Arc<AtomicU32>, source_sample_rate: u32, channels: usize) -> Self {
         Self {
-            quality: ResamplerQuality::default(),
+            channels,
             chunk_size: 4096,
             host_sample_rate,
+            quality: ResamplerQuality::default(),
             source_sample_rate,
-            channels,
         }
     }
 
@@ -186,30 +182,28 @@ impl ResamplerParams {
     }
 }
 
-// ─────────────────────────── Processor ───────────────────────────
-
 /// Audio resampler that converts between source and host sample rates.
 ///
 /// Monitors `host_sample_rate` (an `Arc<AtomicU32>`) for dynamic changes.
 /// When `host_sample_rate == 0` or equals `source_rate`, operates in passthrough mode.
 pub struct ResamplerProcessor {
-    source_rate: u32,
-    host_sample_rate: Arc<AtomicU32>,
     channels: usize,
-    resampler: Option<ResamplerKind>,
-    current_ratio: f64,
-    quality: ResamplerQuality,
     chunk_size: usize,
+    current_ratio: f64,
+    host_sample_rate: Arc<AtomicU32>,
     /// Accumulated input buffer (planar format).
     input_buffer: SmallVec<[Vec<f32>; 8]>,
     output_spec: PcmSpec,
-    // Reusable temporary buffers
-    temp_input_slice: SmallVec<[Vec<f32>; 8]>,
-    temp_output_bufs: SmallVec<[Vec<f32>; 8]>,
-    temp_output_all: SmallVec<[Vec<f32>; 8]>,
-    temp_deinterleave: SmallVec<[Vec<f32>; 8]>,
     /// Pool for interleave output buffers.
     pool: PcmPool,
+    quality: ResamplerQuality,
+    resampler: Option<ResamplerKind>,
+    source_rate: u32,
+    // Reusable temporary buffers
+    temp_deinterleave: SmallVec<[Vec<f32>; 8]>,
+    temp_input_slice: SmallVec<[Vec<f32>; 8]>,
+    temp_output_all: SmallVec<[Vec<f32>; 8]>,
+    temp_output_bufs: SmallVec<[Vec<f32>; 8]>,
 }
 
 impl ResamplerProcessor {
@@ -220,25 +214,25 @@ impl ResamplerProcessor {
         let host_sr = params.host_sample_rate.load(Ordering::Relaxed);
         let target_rate = if host_sr == 0 { source_rate } else { host_sr };
         let output_spec = PcmSpec {
-            sample_rate: target_rate,
             channels: channels as u16,
+            sample_rate: target_rate,
         };
 
         let mut processor = Self {
             channels,
-            source_rate,
-            output_spec,
-            host_sample_rate: params.host_sample_rate,
-            resampler: None,
-            current_ratio: 1.0,
-            quality: params.quality,
             chunk_size: params.chunk_size,
+            current_ratio: 1.0,
+            host_sample_rate: params.host_sample_rate,
             input_buffer: smallvec_new_vecs(channels),
-            temp_input_slice: smallvec_new_vecs(channels),
-            temp_output_bufs: smallvec_new_vecs(channels),
-            temp_output_all: smallvec_new_vecs(channels),
-            temp_deinterleave: smallvec_new_vecs(channels),
+            output_spec,
             pool: pcm_pool().clone(),
+            quality: params.quality,
+            resampler: None,
+            source_rate,
+            temp_deinterleave: smallvec_new_vecs(channels),
+            temp_input_slice: smallvec_new_vecs(channels),
+            temp_output_all: smallvec_new_vecs(channels),
+            temp_output_bufs: smallvec_new_vecs(channels),
         };
 
         processor.update_resampler_if_needed();
@@ -627,7 +621,7 @@ impl ResamplerProcessor {
     }
 }
 
-/// Create a SmallVec of empty Vecs for each channel.
+/// Create a `SmallVec` of empty Vecs for each channel.
 #[cfg_attr(feature = "perf", hotpath::measure)]
 fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
     (0..channels).map(|_| Vec::new()).collect()
@@ -675,7 +669,8 @@ impl AudioEffect for ResamplerProcessor {
             trace!(
                 source_rate = self.source_rate,
                 target_rate = self.output_spec.sample_rate,
-                "Passthrough mode"
+                chunk_samples = chunk.pcm.len(),
+                "Resampler passthrough (no resampling)"
             );
             // Passthrough: transfer ownership, just update spec
             let mut out = chunk;
@@ -700,6 +695,11 @@ impl AudioEffect for ResamplerProcessor {
         for buf in &mut self.input_buffer {
             buf.clear();
         }
+        // Drop the rubato resampler so internal filter state (taps, phase,
+        // buffered samples) from the old audio doesn't bleed into the new
+        // stream.  `update_resampler_if_needed()` will create a fresh
+        // instance on the next `process()` call.
+        self.resampler = None;
     }
 }
 
@@ -748,8 +748,8 @@ mod tests {
 
         let chunk = PcmChunk::new(
             PcmSpec {
-                sample_rate: 44100,
                 channels: 2,
+                sample_rate: 44100,
             },
             vec![0.1, 0.2, 0.3, 0.4],
         );
@@ -779,8 +779,8 @@ mod tests {
 
         let chunk = PcmChunk::new(
             PcmSpec {
-                sample_rate: 44100,
                 channels: 2,
+                sample_rate: 44100,
             },
             vec![0.1; 2048],
         );
@@ -795,8 +795,8 @@ mod tests {
 
         let small_chunk = PcmChunk::new(
             PcmSpec {
-                sample_rate: 48000,
                 channels: 2,
+                sample_rate: 48000,
             },
             vec![0.1; 100],
         );
@@ -812,8 +812,8 @@ mod tests {
 
         let large_chunk = PcmChunk::new(
             PcmSpec {
-                sample_rate: 48000,
                 channels: 2,
+                sample_rate: 48000,
             },
             vec![0.1; 16384],
         );
@@ -829,8 +829,8 @@ mod tests {
 
         let chunk1 = PcmChunk::new(
             PcmSpec {
-                sample_rate: 48000,
                 channels: 2,
+                sample_rate: 48000,
             },
             vec![0.1; 4096],
         );
@@ -840,8 +840,8 @@ mod tests {
         // Source rate changed (e.g. ABR switch) — resampler should update dynamically
         let chunk2 = PcmChunk::new(
             PcmSpec {
-                sample_rate: 44100,
                 channels: 2,
+                sample_rate: 44100,
             },
             vec![0.2; 4096],
         );
@@ -861,8 +861,8 @@ mod tests {
         for _ in 0..10 {
             let chunk = PcmChunk::new(
                 PcmSpec {
-                    sample_rate: 48000,
                     channels: 2,
+                    sample_rate: 48000,
                 },
                 vec![0.1; 2048],
             );
@@ -890,8 +890,8 @@ mod tests {
 
         let chunk = PcmChunk::new(
             PcmSpec {
-                sample_rate: 44100,
                 channels: 2,
+                sample_rate: 44100,
             },
             vec![0.1, 0.2, 0.3, 0.4],
         );
@@ -905,7 +905,7 @@ mod tests {
         assert!(processor.input_buffer[0].is_empty());
     }
 
-    // ── Quality-specific tests ──
+    // Quality-specific tests
 
     #[test]
     fn test_fast_quality_resamples() {
@@ -919,8 +919,8 @@ mod tests {
 
         let chunk = PcmChunk::new(
             PcmSpec {
-                sample_rate: 48000,
                 channels: 2,
+                sample_rate: 48000,
             },
             vec![0.1; 16384],
         );
@@ -940,8 +940,8 @@ mod tests {
 
         let chunk = PcmChunk::new(
             PcmSpec {
-                sample_rate: 48000,
                 channels: 2,
+                sample_rate: 48000,
             },
             vec![0.1; 16384],
         );
@@ -961,8 +961,8 @@ mod tests {
 
         let chunk = PcmChunk::new(
             PcmSpec {
-                sample_rate: 48000,
                 channels: 2,
+                sample_rate: 48000,
             },
             vec![0.1; 16384],
         );

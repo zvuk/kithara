@@ -15,12 +15,12 @@ use crate::{error::SourceError, events::FileEvent};
 
 pub(crate) type AssetResourceType = AssetResource;
 
-/// Unified file resource: either a remote asset (via AssetStore) or a local file.
+/// Unified file resource: either a remote asset (via `AssetStore`) or a local file.
 #[derive(Clone, Debug)]
 pub(crate) enum FileResource {
-    /// Remote file — managed by AssetStore (caching, eviction, leases).
+    /// Remote file — managed by `AssetStore` (caching, eviction, leases).
     Asset(AssetResourceType),
-    /// Local file — direct StorageResource in ReadOnly mode.
+    /// Local file — direct `StorageResource` in `ReadOnly` mode.
     Local(StorageResource),
 }
 
@@ -133,7 +133,7 @@ impl FileStreamState {
         let events =
             events_tx.unwrap_or_else(|| broadcast::channel(events_channel_capacity.max(1)).0);
 
-        Ok(Arc::new(FileStreamState {
+        Ok(Arc::new(Self {
             url,
             cancel,
             res,
@@ -219,7 +219,7 @@ impl Default for Progress {
     }
 }
 
-/// Shared state between FileSource (sync reader) and FileDownloader (async).
+/// Shared state between `FileSource` (sync reader) and `FileDownloader` (async).
 ///
 /// Enables on-demand Range requests: when the reader needs data beyond what
 /// the sequential download has fetched, it pushes a range request here.
@@ -378,5 +378,167 @@ impl kithara_stream::Source for FileSource {
         // so decoder can calculate correct duration and seek bounds.
         // For committed files, resource.len() == expected total anyway.
         self.len.or_else(|| self.res.len())
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::unwrap_used)]
+mod tests {
+    use std::sync::Arc;
+
+    use kithara_storage::{OpenMode, ResourceExt, StorageOptions, StorageResource};
+    use tempfile::TempDir;
+    use tokio::sync::broadcast;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+
+    // Progress
+
+    #[test]
+    fn test_progress_initial_state() {
+        let p = Progress::new();
+        assert_eq!(p.read_pos(), 0);
+        assert_eq!(p.download_pos(), 0);
+    }
+
+    #[test]
+    fn test_progress_set_and_get_read_pos() {
+        let p = Progress::new();
+        p.set_read_pos(100);
+        assert_eq!(p.read_pos(), 100);
+    }
+
+    #[test]
+    fn test_progress_set_and_get_download_pos() {
+        let p = Progress::new();
+        p.set_download_pos(500);
+        assert_eq!(p.download_pos(), 500);
+    }
+
+    #[tokio::test]
+    async fn test_progress_signal_reader_advanced() {
+        let progress = Arc::new(Progress::new());
+
+        // Register the notified future BEFORE signaling (Notify protocol).
+        let notified = progress.notified_reader_advance();
+
+        // Spawn a task that will signal after a short delay.
+        let p = Arc::clone(&progress);
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            p.set_read_pos(42);
+        });
+
+        // The notified future must resolve within the timeout.
+        tokio::time::timeout(std::time::Duration::from_secs(2), notified)
+            .await
+            .unwrap();
+
+        assert_eq!(progress.read_pos(), 42);
+    }
+
+    // SharedFileState
+
+    #[test]
+    fn test_shared_file_state_empty_queue() {
+        let state = SharedFileState::new();
+        assert!(state.pop_range_request().is_none());
+    }
+
+    #[test]
+    fn test_shared_file_state_request_and_pop() {
+        let state = SharedFileState::new();
+        state.request_range(100..200);
+        let r = state.pop_range_request().unwrap();
+        assert_eq!(r, 100..200);
+    }
+
+    #[test]
+    fn test_shared_file_state_fifo_order() {
+        let state = SharedFileState::new();
+        state.request_range(0..10);
+        state.request_range(10..20);
+        state.request_range(20..30);
+
+        assert_eq!(state.pop_range_request().unwrap(), 0..10);
+        assert_eq!(state.pop_range_request().unwrap(), 10..20);
+        assert_eq!(state.pop_range_request().unwrap(), 20..30);
+    }
+
+    #[test]
+    fn test_shared_file_state_multiple_pops() {
+        let state = SharedFileState::new();
+        state.request_range(0..50);
+        state.request_range(50..100);
+
+        assert!(state.pop_range_request().is_some());
+        assert!(state.pop_range_request().is_some());
+        assert!(state.pop_range_request().is_none());
+    }
+
+    // FileSource
+
+    /// Helper: create a committed StorageResource with `data` written.
+    fn create_committed_resource(dir: &TempDir, data: &[u8]) -> StorageResource {
+        let path = dir.path().join("test.dat");
+        let res = StorageResource::open(StorageOptions {
+            path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+            cancel: CancellationToken::new(),
+        })
+        .unwrap();
+        res.write_all(data).unwrap();
+        res
+    }
+
+    #[test]
+    fn test_file_source_read_at() {
+        use kithara_stream::Source;
+
+        let dir = TempDir::new().unwrap();
+        let data = b"hello world from kithara";
+        let res = create_committed_resource(&dir, data);
+
+        let progress = Arc::new(Progress::new());
+        let (events_tx, _rx) = broadcast::channel(16);
+
+        let mut source = FileSource::new(
+            FileResource::Local(res),
+            Arc::clone(&progress),
+            events_tx,
+            Some(data.len() as u64),
+        );
+
+        let mut buf = [0u8; 11];
+        let n = source.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 11);
+        assert_eq!(&buf[..n], b"hello world");
+
+        // Progress should be updated to offset + bytes_read.
+        assert_eq!(progress.read_pos(), 11);
+
+        // Read from an offset.
+        let mut buf2 = [0u8; 7];
+        let n2 = source.read_at(6, &mut buf2).unwrap();
+        assert_eq!(n2, 7);
+        assert_eq!(&buf2[..n2], b"world f");
+        assert_eq!(progress.read_pos(), 13);
+    }
+
+    #[test]
+    fn test_file_source_len() {
+        let dir = TempDir::new().unwrap();
+        let res = create_committed_resource(&dir, b"abc");
+
+        let progress = Arc::new(Progress::new());
+        let (events_tx, _rx) = broadcast::channel(16);
+
+        let source = FileSource::new(FileResource::Local(res), progress, events_tx, Some(12345));
+
+        // len() should return the explicit value provided at construction.
+        use kithara_stream::Source;
+        assert_eq!(source.len(), Some(12345));
     }
 }

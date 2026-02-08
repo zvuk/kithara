@@ -264,7 +264,7 @@ async fn partial_cache_resume_works() {
     let file_data: Vec<u8> = (0..TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
     let (url, _call_count, shutdown_tx) = setup_server(file_data).await;
 
-    // ── Phase 1: partial download, then drop ──
+    // Phase 1: partial download, then drop
     let cancel1 = CancellationToken::new();
     let config1 = FileConfig::new(FileSrc::Remote(url.clone()))
         .with_store(StoreOptions::new(cache_dir.path()))
@@ -294,7 +294,7 @@ async fn partial_cache_resume_works() {
     tokio::time::sleep(Duration::from_millis(200)).await;
     tracing::info!("Phase 1 complete, stream dropped");
 
-    // ── Phase 2: reopen same URL + cache dir, seek beyond partial ──
+    // Phase 2: reopen same URL + cache dir, seek beyond partial
     let cancel2 = CancellationToken::new();
     let config2 = FileConfig::new(FileSrc::Remote(url))
         .with_store(StoreOptions::new(cache_dir.path()))

@@ -1,4 +1,4 @@
-//! Audio pipeline traits: AudioGenerator and AudioEffect.
+//! Audio pipeline traits: `AudioGenerator` and `AudioEffect`.
 
 use std::time::Duration;
 

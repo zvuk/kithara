@@ -166,32 +166,27 @@ where
             return;
         }
 
-        let lru = match self.open_lru() {
-            Ok(v) => v,
-            Err(_) => return,
+        let Ok(lru) = self.open_lru() else {
+            return;
         };
 
-        let pins = match self.open_pins() {
-            Ok(v) => v,
-            Err(_) => return,
+        let Ok(pins) = self.open_pins() else {
+            return;
         };
 
-        let pinned = match pins.load() {
-            Ok(v) => v,
-            Err(_) => return,
+        let Ok(pinned) = pins.load() else {
+            return;
         };
 
-        let _lru_state = match lru.load() {
-            Ok(state) => state,
-            Err(_) => return,
+        let Ok(_lru_state) = lru.load() else {
+            return;
         };
 
         let mut pinned_with_new = pinned.clone();
         pinned_with_new.insert(asset_root.to_string());
 
-        let candidates = match lru.eviction_candidates(&self.cfg, &pinned_with_new) {
-            Ok(v) => v,
-            Err(_) => return,
+        let Ok(candidates) = lru.eviction_candidates(&self.cfg, &pinned_with_new) else {
+            return;
         };
 
         for cand in candidates {
@@ -218,14 +213,12 @@ where
             return;
         }
 
-        let lru = match self.open_lru() {
-            Ok(v) => v,
-            Err(_) => return,
+        let Ok(lru) = self.open_lru() else {
+            return;
         };
 
-        let created = match lru.touch(asset_root, bytes_hint) {
-            Ok(created) => created,
-            Err(_) => return,
+        let Ok(created) = lru.touch(asset_root, bytes_hint) else {
+            return;
         };
 
         if created {

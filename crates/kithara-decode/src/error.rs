@@ -26,7 +26,7 @@ pub enum DecodeError {
     #[error("Seek failed: {0}")]
     SeekFailed(String),
 
-    /// Alias for SeekFailed (backward compatibility).
+    /// Alias for `SeekFailed` (backward compatibility).
     #[error("Seek error: {0}")]
     SeekError(String),
 
@@ -44,7 +44,27 @@ pub type DecodeResult<T> = Result<T, DecodeError>;
 mod tests {
     use std::io;
 
+    use rstest::rstest;
+
     use super::*;
+
+    #[rstest]
+    #[case::invalid_data(DecodeError::InvalidData("bad frame".into()), "Invalid data: bad frame")]
+    #[case::seek_failed(DecodeError::SeekFailed("timestamp out of range".into()), "Seek failed: timestamp out of range")]
+    #[case::seek_error(DecodeError::SeekError("invalid position".into()), "Seek error: invalid position")]
+    #[case::probe_failed(DecodeError::ProbeFailed, "Probe failed: could not detect codec")]
+    #[case::unsupported_codec(
+        DecodeError::UnsupportedCodec(AudioCodec::AacLc),
+        "Unsupported codec: AacLc"
+    )]
+    #[case::unsupported_container(
+        DecodeError::UnsupportedContainer(ContainerFormat::Fmp4),
+        "Unsupported container: Fmp4"
+    )]
+    #[test]
+    fn test_error_display(#[case] error: DecodeError, #[case] expected: &str) {
+        assert_eq!(error.to_string(), expected);
+    }
 
     #[test]
     fn test_decode_error_from_io() {
@@ -54,15 +74,15 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_error_display() {
-        let err = DecodeError::InvalidData("bad frame".into());
-        assert_eq!(err.to_string(), "Invalid data: bad frame");
-    }
-
-    #[test]
     fn test_decode_error_backend_wraps_any_error() {
         let inner = io::Error::new(io::ErrorKind::Other, "symphonia error");
         let err = DecodeError::Backend(Box::new(inner));
         assert!(err.to_string().contains("Decoder error"));
+    }
+
+    #[test]
+    fn test_decode_error_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<DecodeError>();
     }
 }

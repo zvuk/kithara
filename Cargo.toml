@@ -32,6 +32,16 @@ missing_panics_doc = "warn"
 explicit_iter_loop = "warn"
 explicit_into_iter_loop = "warn"
 redundant_closure_for_method_calls = "warn"
+cloned_instead_of_copied = "warn"
+flat_map_option = "warn"
+manual_let_else = "warn"
+needless_pass_by_value = "warn"
+trivially_copy_pass_by_ref = "warn"
+inconsistent_struct_constructor = "warn"
+map_unwrap_or = "warn"
+mut_mut = "warn"
+needless_for_each = "warn"
+match_wildcard_for_single_variants = "warn"
 
 [workspace.metadata.kithara]
 # Single place to document workspace-wide tool expectations.

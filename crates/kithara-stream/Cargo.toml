@@ -30,6 +30,7 @@ test-utils = ["unimock"]
 
 [dev-dependencies]
 tokio = { workspace = true }
+tokio-stream = { workspace = true }
 rstest = { workspace = true }
 memory-stats = { workspace = true }
 axum = { workspace = true }

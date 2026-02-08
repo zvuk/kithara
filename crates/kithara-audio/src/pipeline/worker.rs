@@ -84,11 +84,11 @@ fn send_with_backpressure<S: AudioWorkerSource>(
 /// `cancel` token signals graceful shutdown when Audio is dropped.
 pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     mut source: S,
-    cmd_rx: kanal::Receiver<S::Command>,
-    data_tx: kanal::Sender<Fetch<S::Chunk>>,
-    preload_notify: Arc<Notify>,
+    cmd_rx: &kanal::Receiver<S::Command>,
+    data_tx: &kanal::Sender<Fetch<S::Chunk>>,
+    preload_notify: &Arc<Notify>,
     preload_chunks: usize,
-    cancel: CancellationToken,
+    cancel: &CancellationToken,
 ) {
     trace!("audio worker started");
     let mut at_eof = false;
@@ -102,7 +102,7 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
         }
 
         // Apply pending commands eagerly.
-        if drain_commands(&mut source, &cmd_rx) {
+        if drain_commands(&mut source, cmd_rx) {
             at_eof = false;
         }
 
@@ -131,7 +131,7 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
         let fetch = source.fetch_next();
         let is_eof = fetch.is_eof();
 
-        match send_with_backpressure(&mut source, &cmd_rx, &data_tx, &cancel, fetch) {
+        match send_with_backpressure(&mut source, cmd_rx, data_tx, cancel, fetch) {
             Ok(true) => {
                 if !preloaded {
                     chunks_sent += 1;
@@ -145,7 +145,7 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
                 // Command handled during backpressure: refetch next loop.
                 continue;
             }
-            Err(_) => {
+            Err(()) => {
                 trace!("audio worker stopped (data channel closed)");
                 return;
             }
@@ -167,7 +167,7 @@ pub(super) fn apply_effects(
     effects: &mut [Box<dyn AudioEffect>],
     mut chunk: PcmChunk<f32>,
 ) -> Option<PcmChunk<f32>> {
-    for effect in effects.iter_mut() {
+    for effect in &mut *effects {
         chunk = effect.process(chunk)?;
     }
     Some(chunk)
@@ -176,7 +176,7 @@ pub(super) fn apply_effects(
 /// Flush effects chain at end of stream.
 pub(super) fn flush_effects(effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmChunk<f32>> {
     let mut chunk: Option<PcmChunk<f32>> = None;
-    for effect in effects.iter_mut() {
+    for effect in &mut *effects {
         chunk = match chunk.take() {
             Some(input) => effect.process(input),
             None => effect.flush(),
@@ -187,7 +187,7 @@ pub(super) fn flush_effects(effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmC
 
 /// Reset effects chain (e.g. after seek).
 pub(super) fn reset_effects(effects: &mut [Box<dyn AudioEffect>]) {
-    for effect in effects.iter_mut() {
+    for effect in &mut *effects {
         effect.reset();
     }
 }

@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 publish = false
 
+[lints]
+workspace = true
+
 [dependencies]
 # All kithara crates
 kithara-abr = { workspace = true }
@@ -82,6 +85,8 @@ perf = [
     "kithara-decode/perf",
     "kithara-bufpool/perf",
     "kithara-hls/perf",
+    "kithara-stream/perf",
+    "kithara-net/perf",
 ]
 
 # Performance test binaries

@@ -3,6 +3,8 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::time::sleep;
+#[cfg(test)]
+use unimock::unimock;
 use url::Url;
 
 use crate::{
@@ -11,9 +13,6 @@ use crate::{
     traits::Net,
     types::{Headers, RangeSpec, RetryPolicy},
 };
-
-#[cfg(test)]
-use unimock::unimock;
 
 #[cfg_attr(test, unimock(api = RetryClassifierMock))]
 pub trait RetryClassifier {
@@ -226,9 +225,7 @@ mod tests {
     use super::*;
     use crate::traits::NetMock;
 
-    // ============================================================================
     // DefaultRetryClassifier Tests
-    // ============================================================================
 
     #[rstest]
     fn test_default_retry_classifier_new() {
@@ -259,9 +256,7 @@ mod tests {
         assert_eq!(classifier.should_retry(&error), expected);
     }
 
-    // ============================================================================
     // DefaultRetryPolicy Tests
-    // ============================================================================
 
     #[rstest]
     fn test_default_retry_policy_new() {
@@ -306,17 +301,15 @@ mod tests {
         #[case] _desc: &str,
     ) {
         let policy = RetryPolicy {
-            max_retries: 5,
             base_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(10),
+            max_retries: 5,
         };
         let retry_policy = DefaultRetryPolicy::new(policy);
         assert_eq!(retry_policy.delay_for_attempt(attempt), expected);
     }
 
-    // ============================================================================
     // RetryNet Tests - get_bytes
-    // ============================================================================
 
     #[rstest]
     #[tokio::test]
@@ -350,9 +343,9 @@ mod tests {
                 .returns(Ok(Bytes::from("success"))),
         ));
         let policy = RetryPolicy {
-            max_retries: 3,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
+            max_retries: 3,
         };
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
 
@@ -371,9 +364,9 @@ mod tests {
                 .returns(Err(NetError::Timeout)),
         );
         let policy = RetryPolicy {
-            max_retries: 2,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
+            max_retries: 2,
         };
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
 
@@ -400,9 +393,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    // ============================================================================
     // RetryNet Tests - stream
-    // ============================================================================
 
     #[rstest]
     #[tokio::test]
@@ -442,9 +433,9 @@ mod tests {
                 }),
         ));
         let policy = RetryPolicy {
-            max_retries: 3,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
+            max_retries: 3,
         };
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
 
@@ -454,9 +445,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // ============================================================================
     // RetryNet Tests - get_range
-    // ============================================================================
 
     #[rstest]
     #[tokio::test]
@@ -495,9 +484,9 @@ mod tests {
                 }),
         ));
         let policy = RetryPolicy {
-            max_retries: 3,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
+            max_retries: 3,
         };
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
 
@@ -508,9 +497,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // ============================================================================
     // RetryNet Tests - head
-    // ============================================================================
 
     #[rstest]
     #[tokio::test]
@@ -544,9 +531,9 @@ mod tests {
                 .returns(Ok(Headers::new())),
         ));
         let policy = RetryPolicy {
-            max_retries: 3,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
+            max_retries: 3,
         };
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
 
@@ -556,16 +543,14 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // ============================================================================
     // RetryPolicyTrait Tests
-    // ============================================================================
 
     #[rstest]
     fn test_retry_policy_trait_max_attempts() {
         let policy = RetryPolicy {
-            max_retries: 5,
             base_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(10),
+            max_retries: 5,
         };
         let retry_policy = DefaultRetryPolicy::new(policy);
         assert_eq!(retry_policy.max_attempts(), 5);
@@ -574,9 +559,9 @@ mod tests {
     #[rstest]
     fn test_retry_policy_trait_delay() {
         let policy = RetryPolicy {
-            max_retries: 3,
             base_delay: Duration::from_millis(50),
             max_delay: Duration::from_secs(10),
+            max_retries: 3,
         };
         let retry_policy = DefaultRetryPolicy::new(policy);
         assert_eq!(retry_policy.delay_for_attempt(0), Duration::ZERO);

@@ -34,51 +34,51 @@ impl From<PathBuf> for FileSrc {
 /// Used with `Stream::<File>::new(config)`.
 #[derive(Clone, Debug)]
 pub struct FileConfig {
-    /// File source (remote URL or local path).
-    pub src: FileSrc,
-    /// Optional name for cache disambiguation.
-    ///
-    /// When multiple URLs share the same canonical form (e.g. differ only in
-    /// query parameters), setting a unique `name` ensures each gets its own
-    /// cache directory.
-    pub name: Option<String>,
-    /// Storage configuration.
-    pub store: StoreOptions,
-    /// Network configuration.
-    pub net: NetOptions,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// Events broadcast sender (optional - if not provided, events are not sent).
-    pub events_tx: Option<broadcast::Sender<FileEvent>>,
-    /// Events broadcast channel capacity (used when events_tx is not provided).
-    pub events_channel_capacity: usize,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
-    /// - `None` — no backpressure, download as fast as possible
-    pub look_ahead_bytes: Option<u64>,
     /// How often to yield to the async runtime during fast downloads.
     ///
     /// When `look_ahead_bytes` is `None`, the downloader yields after this many
     /// chunks to allow other tasks (like playback progress) to run.
     /// Default: 8 chunks.
     pub download_yield_interval: usize,
+    /// Events broadcast channel capacity (used when `events_tx` is not provided).
+    pub events_channel_capacity: usize,
+    /// Events broadcast sender (optional - if not provided, events are not sent).
+    pub events_tx: Option<broadcast::Sender<FileEvent>>,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    ///
+    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
+    /// - `None` — no backpressure, download as fast as possible
+    pub look_ahead_bytes: Option<u64>,
+    /// Optional name for cache disambiguation.
+    ///
+    /// When multiple URLs share the same canonical form (e.g. differ only in
+    /// query parameters), setting a unique `name` ensures each gets its own
+    /// cache directory.
+    pub name: Option<String>,
+    /// Network configuration.
+    pub net: NetOptions,
+    /// File source (remote URL or local path).
+    pub src: FileSrc,
+    /// Storage configuration.
+    pub store: StoreOptions,
 }
 
 impl Default for FileConfig {
     fn default() -> Self {
         Self {
+            cancel: None,
+            download_yield_interval: 8,
+            events_channel_capacity: 16,
+            events_tx: None,
+            look_ahead_bytes: None,
+            name: None,
+            net: NetOptions::default(),
             src: FileSrc::Remote(
                 Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
             ),
-            name: None,
             store: StoreOptions::default(),
-            net: NetOptions::default(),
-            cancel: None,
-            events_tx: None,
-            events_channel_capacity: 16,
-            look_ahead_bytes: None,
-            download_yield_interval: 8,
         }
     }
 }
@@ -87,15 +87,15 @@ impl FileConfig {
     /// Create new file config with source.
     pub fn new(src: FileSrc) -> Self {
         Self {
-            src,
-            name: None,
-            store: StoreOptions::default(),
-            net: NetOptions::default(),
             cancel: None,
-            events_tx: None,
-            events_channel_capacity: 16,
-            look_ahead_bytes: None,
             download_yield_interval: 8,
+            events_channel_capacity: 16,
+            events_tx: None,
+            look_ahead_bytes: None,
+            name: None,
+            net: NetOptions::default(),
+            src,
+            store: StoreOptions::default(),
         }
     }
 
@@ -103,7 +103,7 @@ impl FileConfig {
     ///
     /// When multiple URLs share the same canonical form (differ only in query
     /// parameters), a unique name ensures each gets its own cache directory.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
         self
     }

@@ -57,49 +57,49 @@ impl From<PathBuf> for ResourceSrc {
 ///     .with_look_ahead_bytes(Some(1_000_000));
 /// ```
 pub struct ResourceConfig {
-    /// Audio resource source (URL or local path).
-    pub src: ResourceSrc,
+    /// ABR (Adaptive Bitrate) configuration.
+    #[cfg(feature = "hls")]
+    pub abr: kithara_abr::AbrOptions,
+    /// Cancellation token for graceful shutdown.
+    pub cancel: Option<CancellationToken>,
+    /// Optional format hint (file extension like "mp3", "wav").
+    pub hint: Option<String>,
+    /// Base URL for resolving relative HLS playlist/segment URLs.
+    #[cfg(feature = "hls")]
+    pub hls_base_url: Option<Url>,
+    /// Target sample rate of the audio host (for resampling).
+    pub host_sample_rate: Option<NonZeroU32>,
+    /// Encryption key handling configuration.
+    #[cfg(feature = "hls")]
+    pub keys: kithara_hls::KeyOptions,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    ///
+    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
+    /// - `None` — no backpressure, download as fast as possible
+    pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
     ///
     /// When multiple URLs share the same canonical form (e.g. differ only in
     /// query parameters), setting a unique `name` ensures each gets its own
     /// cache directory.
     pub name: Option<String>,
-    /// Cancellation token for graceful shutdown.
-    pub cancel: Option<CancellationToken>,
-    /// Optional format hint (file extension like "mp3", "wav").
-    pub hint: Option<String>,
+    /// Network configuration (timeouts, retries).
+    #[cfg(any(feature = "file", feature = "hls"))]
+    pub net: NetOptions,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
-    /// Target sample rate of the audio host (for resampling).
-    pub host_sample_rate: Option<NonZeroU32>,
-    /// Resampling quality preset.
-    pub resampler_quality: ResamplerQuality,
     /// Number of chunks to buffer before signaling preload readiness.
     ///
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
     pub preload_chunks: usize,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
-    /// - `None` — no backpressure, download as fast as possible
-    pub look_ahead_bytes: Option<u64>,
+    /// Resampling quality preset.
+    pub resampler_quality: ResamplerQuality,
+    /// Audio resource source (URL or local path).
+    pub src: ResourceSrc,
     /// Storage configuration (cache directory, eviction limits).
     #[cfg(any(feature = "file", feature = "hls"))]
     pub store: StoreOptions,
-    /// Network configuration (timeouts, retries).
-    #[cfg(any(feature = "file", feature = "hls"))]
-    pub net: NetOptions,
-    /// ABR (Adaptive Bitrate) configuration.
-    #[cfg(feature = "hls")]
-    pub abr: kithara_abr::AbrOptions,
-    /// Encryption key handling configuration.
-    #[cfg(feature = "hls")]
-    pub keys: kithara_hls::KeyOptions,
-    /// Base URL for resolving relative HLS playlist/segment URLs.
-    #[cfg(feature = "hls")]
-    pub hls_base_url: Option<Url>,
 }
 
 impl ResourceConfig {
@@ -107,7 +107,7 @@ impl ResourceConfig {
     ///
     /// Parses the input as a URL first. If parsing fails, treats it as a local
     /// file path (must be absolute). A `file://` URL is normalized to a `Path`.
-    pub fn new(input: impl AsRef<str>) -> Result<Self, DecodeError> {
+    pub fn new<S: AsRef<str>>(input: S) -> Result<Self, DecodeError> {
         let trimmed = input.as_ref().trim();
 
         let src = match Url::parse(trimmed) {
@@ -130,25 +130,25 @@ impl ResourceConfig {
         };
 
         Ok(Self {
-            src,
-            name: None,
-            cancel: None,
-            hint: None,
-            pcm_pool: None,
-            host_sample_rate: None,
-            resampler_quality: ResamplerQuality::default(),
-            preload_chunks: 3,
-            look_ahead_bytes: None,
-            #[cfg(any(feature = "file", feature = "hls"))]
-            store: StoreOptions::default(),
-            #[cfg(any(feature = "file", feature = "hls"))]
-            net: NetOptions::default(),
             #[cfg(feature = "hls")]
             abr: kithara_abr::AbrOptions::default(),
-            #[cfg(feature = "hls")]
-            keys: kithara_hls::KeyOptions::default(),
+            cancel: None,
+            hint: None,
             #[cfg(feature = "hls")]
             hls_base_url: None,
+            host_sample_rate: None,
+            #[cfg(feature = "hls")]
+            keys: kithara_hls::KeyOptions::default(),
+            look_ahead_bytes: None,
+            name: None,
+            #[cfg(any(feature = "file", feature = "hls"))]
+            net: NetOptions::default(),
+            pcm_pool: None,
+            preload_chunks: 3,
+            resampler_quality: ResamplerQuality::default(),
+            src,
+            #[cfg(any(feature = "file", feature = "hls"))]
+            store: StoreOptions::default(),
         })
     }
 
@@ -156,7 +156,7 @@ impl ResourceConfig {
     ///
     /// When multiple URLs share the same canonical form (differ only in query
     /// parameters), a unique name ensures each gets its own cache directory.
-    pub fn with_name(mut self, name: impl Into<String>) -> Self {
+    pub fn with_name<N: Into<String>>(mut self, name: N) -> Self {
         self.name = Some(name.into());
         self
     }
@@ -168,7 +168,7 @@ impl ResourceConfig {
     }
 
     /// Set format hint (file extension like "mp3", "wav").
-    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+    pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
         self.hint = Some(hint.into());
         self
     }
@@ -251,14 +251,14 @@ impl ResourceConfig {
     pub(crate) fn into_file_config(self) -> AudioConfig<kithara_file::File> {
         let (file_src, hint) = match self.src {
             ResourceSrc::Url(url) => {
-                let h = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
+                let h = url.path().rsplit('.').next().map(str::to_lowercase);
                 (kithara_file::FileSrc::Remote(url), h)
             }
             ResourceSrc::Path(path) => {
                 let h = path
                     .extension()
                     .and_then(|e| e.to_str())
-                    .map(|e| e.to_lowercase());
+                    .map(str::to_lowercase);
                 (kithara_file::FileSrc::Local(path), h)
             }
         };

@@ -23,7 +23,7 @@ use crate::error::{AssetsError, AssetsResult};
 pub struct ResourceKey(String);
 
 impl ResourceKey {
-    pub fn new(rel_path: impl Into<String>) -> Self {
+    pub fn new<S: Into<String>>(rel_path: S) -> Self {
         Self(rel_path.into())
     }
 
@@ -45,19 +45,19 @@ impl ResourceKey {
 
 impl From<&Url> for ResourceKey {
     fn from(url: &Url) -> Self {
-        ResourceKey::from_url(url)
+        Self::from_url(url)
     }
 }
 
 impl From<&str> for ResourceKey {
     fn from(s: &str) -> Self {
-        ResourceKey::new(s)
+        Self::new(s)
     }
 }
 
 impl From<String> for ResourceKey {
     fn from(s: String) -> Self {
-        ResourceKey::new(s)
+        Self::new(s)
     }
 }
 

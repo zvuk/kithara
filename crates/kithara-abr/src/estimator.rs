@@ -23,11 +23,11 @@ pub trait Estimator {
 
 #[derive(Clone, Debug)]
 pub struct ThroughputEstimator {
-    fast_ewma: Ewma,
-    slow_ewma: Ewma,
-    bytes_sampled: u64,
-    initial_bps: f64,
     buffered_content_secs: f64,
+    bytes_sampled: u64,
+    fast_ewma: Ewma,
+    initial_bps: f64,
+    slow_ewma: Ewma,
 }
 
 impl ThroughputEstimator {
@@ -38,11 +38,11 @@ impl ThroughputEstimator {
 
     pub fn new(_cfg: &AbrOptions) -> Self {
         Self {
-            fast_ewma: Ewma::new(Self::FAST_HALF_LIFE_SECS),
-            slow_ewma: Ewma::new(Self::SLOW_HALF_LIFE_SECS),
-            bytes_sampled: 0,
-            initial_bps: 0.0,
             buffered_content_secs: 0.0,
+            bytes_sampled: 0,
+            fast_ewma: Ewma::new(Self::FAST_HALF_LIFE_SECS),
+            initial_bps: 0.0,
+            slow_ewma: Ewma::new(Self::SLOW_HALF_LIFE_SECS),
         }
     }
 

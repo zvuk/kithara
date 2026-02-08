@@ -6,37 +6,22 @@ use fixture::TestServer;
 use kithara_assets::StoreOptions;
 use kithara_hls::{Hls, HlsConfig};
 use kithara_stream::Stream;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-use tracing_subscriber::EnvFilter;
 use url::Url;
 
 use super::fixture;
+use crate::common::fixtures::{temp_dir, tracing_setup};
 
-// ==================== Fixtures ====================
-
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().unwrap()
-}
-
-#[fixture]
-fn minimal_tracing_setup() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::default().add_directive("warn".parse().unwrap()))
-        .with_test_writer()
-        .try_init();
-}
-
-// ==================== Test Cases ====================
+// Test Cases
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_session_creation(
-    _minimal_tracing_setup: (),
+    _tracing_setup: (),
     temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;
@@ -85,7 +70,7 @@ async fn test_hls_session_creation(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_with_local_fixture(
-    _minimal_tracing_setup: (),
+    _tracing_setup: (),
     temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;
@@ -106,7 +91,7 @@ async fn test_hls_with_local_fixture(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_session_with_init_segments(
-    _minimal_tracing_setup: (),
+    _tracing_setup: (),
     temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;
@@ -127,7 +112,7 @@ async fn test_hls_session_with_init_segments(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_session_events_consumption(
-    _minimal_tracing_setup: (),
+    _tracing_setup: (),
     temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;
@@ -167,7 +152,7 @@ async fn test_hls_session_events_consumption(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_invalid_url_handling(
-    _minimal_tracing_setup: (),
+    _tracing_setup: (),
     temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Test with invalid URL
@@ -195,7 +180,7 @@ async fn test_hls_invalid_url_handling(
 #[timeout(Duration::from_secs(5))]
 #[tokio::test]
 async fn test_hls_session_drop_cleanup(
-    _minimal_tracing_setup: (),
+    _tracing_setup: (),
     temp_dir: TempDir,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let server = TestServer::new().await;

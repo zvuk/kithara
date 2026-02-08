@@ -39,8 +39,8 @@ fn resampler_process_single(
 fn perf_resampler_quality_comparison() {
     let _guard = hotpath::GuardBuilder::new("resampler_quality").build();
     let input_spec = PcmSpec {
-        sample_rate: 48000,
         channels: 2,
+        sample_rate: 48000,
     };
     let output_rate = 44100;
     let test_frames = 2048;
@@ -96,8 +96,8 @@ fn resampler_passthrough_process(
 fn perf_resampler_passthrough_detection() {
     let _guard = hotpath::GuardBuilder::new("resampler_passthrough").build();
     let spec = PcmSpec {
-        sample_rate: 44100,
         channels: 2,
+        sample_rate: 44100,
     };
 
     // Same rate input/output → should trigger passthrough
@@ -129,8 +129,8 @@ fn perf_resampler_passthrough_detection() {
 fn perf_resampler_deinterleave_overhead() {
     let _guard = hotpath::GuardBuilder::new("resampler_deinterleave").build();
     let input_spec = PcmSpec {
-        sample_rate: 48000,
         channels: 2,
+        sample_rate: 48000,
     };
 
     let chunk = create_test_chunk(2048, input_spec);
@@ -182,8 +182,8 @@ fn perf_resampler_detailed_breakdown() {
     let _guard = hotpath::GuardBuilder::new("resampler_breakdown").build();
 
     let input_spec = PcmSpec {
-        sample_rate: 48000,
         channels: 2,
+        sample_rate: 48000,
     };
     let output_rate = 44100;
 

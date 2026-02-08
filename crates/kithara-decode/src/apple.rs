@@ -28,8 +28,6 @@ use std::{
     time::Duration,
 };
 
-// ────────────────────────────────── ReadSeek Trait ──────────────────────────────────
-
 /// Trait combining Read and Seek for use as trait object.
 trait ReadSeek: Read + Seek + Send {}
 impl<T: Read + Seek + Send> ReadSeek for T {}
@@ -42,8 +40,6 @@ use crate::{
     traits::{Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, InnerDecoder, Mp3},
     types::{PcmChunk, PcmSpec, TrackMetadata},
 };
-
-// ────────────────────────────────── FFI Types ──────────────────────────────────
 
 type OSStatus = i32;
 type AudioFileStreamID = *mut c_void;
@@ -215,6 +211,13 @@ unsafe extern "C" {
         outPacketDescription: *mut AudioStreamPacketDescription,
     ) -> OSStatus;
 
+    fn AudioConverterGetProperty(
+        inAudioConverter: AudioConverterRef,
+        inPropertyID: u32,
+        ioPropertyDataSize: *mut UInt32,
+        outPropertyData: *mut c_void,
+    ) -> OSStatus;
+
     fn AudioConverterDispose(inAudioConverter: AudioConverterRef) -> OSStatus;
 
     fn AudioConverterReset(inAudioConverter: AudioConverterRef) -> OSStatus;
@@ -222,8 +225,19 @@ unsafe extern "C" {
 
 // AudioConverter Property IDs
 const kAudioConverterDecompressionMagicCookie: u32 = 0x646d6763; // 'dmgc'
+const kAudioConverterPrimeInfo: u32 = 0x7072696d; // 'prim'
 
-// ────────────────────────────────── Helpers ──────────────────────────────────
+/// Priming information reported by AudioConverter.
+///
+/// `leading_frames` is the encoder delay (priming samples the decoder produces
+/// before real audio). `trailing_frames` is the padding at the end.
+/// These values come directly from the codec — no heuristics.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+struct AudioConverterPrimeInfo {
+    leading_frames: u32,
+    trailing_frames: u32,
+}
 
 fn os_status_to_string(status: OSStatus) -> String {
     if status == noErr {
@@ -248,8 +262,6 @@ fn container_to_file_type(container: ContainerFormat) -> Option<AudioFileTypeID>
         _ => None,
     }
 }
-
-// ────────────────────────────────── Packet Buffer ──────────────────────────────────
 
 /// A compressed audio packet with its description.
 #[derive(Clone)]
@@ -287,8 +299,6 @@ impl PacketBuffer {
     }
 }
 
-// ────────────────────────────────── Stream Parser State ──────────────────────────────────
-
 /// State shared between AudioFileStream callbacks and the decoder.
 struct StreamParserState {
     /// Audio format from the stream.
@@ -318,8 +328,6 @@ impl StreamParserState {
     }
 }
 
-// ────────────────────────────────── Converter Input State ──────────────────────────────────
-
 /// State for AudioConverter input callback.
 struct ConverterInputState {
     /// Current packet being provided to converter.
@@ -340,8 +348,6 @@ impl ConverterInputState {
     }
 }
 
-// ────────────────────────────────── Config ──────────────────────────────────
-
 /// Configuration for Apple AudioToolbox decoder.
 #[derive(Debug, Clone, Default)]
 pub struct AppleConfig {
@@ -350,8 +356,6 @@ pub struct AppleConfig {
     /// Container format hint for file type detection.
     pub container: Option<ContainerFormat>,
 }
-
-// ────────────────────────────────── Inner ──────────────────────────────────
 
 /// Apple AudioToolbox streaming decoder inner state.
 struct AppleInner {
@@ -389,6 +393,8 @@ struct AppleInner {
     source_byte_pos: u64,
     /// Data offset where audio data starts (from parser).
     data_offset: u64,
+    /// Codec-reported priming info (encoder delay).
+    prime_info: Option<AudioConverterPrimeInfo>,
 }
 
 impl AppleInner {
@@ -588,9 +594,38 @@ impl AppleInner {
             }
         }
 
+        // Query codec-reported priming (encoder delay).
+        let prime_info = {
+            let mut info = AudioConverterPrimeInfo::default();
+            let mut size = std::mem::size_of::<AudioConverterPrimeInfo>() as UInt32;
+            let status = unsafe {
+                AudioConverterGetProperty(
+                    converter,
+                    kAudioConverterPrimeInfo,
+                    &mut size,
+                    &mut info as *mut _ as *mut c_void,
+                )
+            };
+            if status == noErr {
+                debug!(
+                    leading_frames = info.leading_frames,
+                    trailing_frames = info.trailing_frames,
+                    "Apple decoder: prime info from codec"
+                );
+                Some(info)
+            } else {
+                debug!(
+                    status,
+                    err = %os_status_to_string(status),
+                    "Apple decoder: prime info not available"
+                );
+                None
+            }
+        };
+
         let spec = PcmSpec {
-            sample_rate,
             channels,
+            sample_rate,
         };
         let byte_len_handle = config.byte_len_handle.clone().unwrap_or_default();
 
@@ -628,6 +663,7 @@ impl AppleInner {
             source_len,
             source_byte_pos: total_parsed as u64,
             data_offset,
+            prime_info,
         })
     }
 
@@ -868,6 +904,28 @@ impl AppleInner {
         self.data_offset + offset
     }
 
+    /// Query kAudioConverterPrimeInfo from the converter.
+    fn query_prime_info(&self) -> Option<(u32, u32)> {
+        if self.converter.is_null() {
+            return None;
+        }
+        let mut info = AudioConverterPrimeInfo::default();
+        let mut size = std::mem::size_of::<AudioConverterPrimeInfo>() as UInt32;
+        let status = unsafe {
+            AudioConverterGetProperty(
+                self.converter,
+                kAudioConverterPrimeInfo,
+                &mut size,
+                &mut info as *mut _ as *mut c_void,
+            )
+        };
+        if status == noErr {
+            Some((info.leading_frames, info.trailing_frames))
+        } else {
+            None
+        }
+    }
+
     /// Estimate total duration from decoded frames and bytes processed.
     fn estimate_total_duration(&self) -> Duration {
         if self.frames_decoded == 0 || self.source_byte_pos <= self.data_offset {
@@ -906,8 +964,6 @@ impl Drop for AppleInner {
         }
     }
 }
-
-// ────────────────────────────────── Callbacks ──────────────────────────────────
 
 /// AudioFileStream property listener callback.
 extern "C" fn property_listener_callback(
@@ -1107,8 +1163,6 @@ extern "C" fn converter_input_callback(
     noErr
 }
 
-// ────────────────────────────────── Apple<C> ──────────────────────────────────
-
 /// Apple AudioToolbox streaming decoder parameterized by codec type.
 ///
 /// Uses AudioFileStream for parsing and AudioConverter for decoding.
@@ -1125,6 +1179,21 @@ impl<C: CodecType> std::fmt::Debug for Apple<C> {
             .field("position", &self.inner.position)
             .field("duration", &self.inner.duration)
             .finish_non_exhaustive()
+    }
+}
+
+impl<C: CodecType> Apple<C> {
+    /// Returns the codec-reported encoder delay (leading priming frames)
+    /// and trailing padding, if available.
+    ///
+    /// This is the same information AVPlayer uses internally via
+    /// `kAudioConverterPrimeInfo`. Values come directly from the codec,
+    /// not from container metadata or audio analysis.
+    ///
+    /// Re-queries the converter each time, since PrimeInfo may become
+    /// available only after some packets have been decoded.
+    pub fn prime_info(&self) -> Option<(u32, u32)> {
+        self.inner.query_prime_info()
     }
 }
 
@@ -1191,8 +1260,6 @@ impl<C: CodecType> InnerDecoder for Apple<C> {
     }
 }
 
-// ────────────────────────────────── Type Aliases ──────────────────────────────────
-
 /// Apple AAC decoder.
 pub type AppleAac = Apple<Aac>;
 
@@ -1204,8 +1271,6 @@ pub type AppleFlac = Apple<Flac>;
 
 /// Apple ALAC decoder.
 pub type AppleAlac = Apple<Alac>;
-
-// ────────────────────────────────── Tests ──────────────────────────────────
 
 #[cfg(test)]
 mod tests {

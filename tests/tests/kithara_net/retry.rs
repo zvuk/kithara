@@ -5,9 +5,7 @@ use kithara_net::{Headers, Net, NetError, NetExt, RangeSpec, RetryPolicy};
 use rstest::*;
 use url::Url;
 
-// ============================================================================
 // Mock Net implementation for testing retry logic
-// ============================================================================
 
 #[derive(Clone)]
 struct RetryMockNet {
@@ -89,9 +87,7 @@ impl Net for RetryMockNet {
     }
 }
 
-// ============================================================================
 // Helper functions
-// ============================================================================
 
 async fn test_all_net_methods_with_retry_net(net: &impl Net) {
     let url = Url::parse("http://example.com").unwrap();
@@ -131,9 +127,7 @@ async fn test_all_net_methods_with_retry_net(net: &impl Net) {
     assert_eq!(headers.get("content-length"), Some("7"));
 }
 
-// ============================================================================
 // Tests
-// ============================================================================
 
 // Test retryable errors - should succeed after retries
 #[rstest]

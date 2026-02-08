@@ -13,10 +13,7 @@ pub enum NetError {
     #[error("Timeout")]
     Timeout,
     #[error("Request failed after {max_retries} retries: {source}")]
-    RetryExhausted {
-        max_retries: u32,
-        source: Box<NetError>,
-    },
+    RetryExhausted { max_retries: u32, source: Box<Self> },
     #[error("HTTP {status}: {body:?} for URL: {url:?}")]
     HttpError {
         status: u16,
@@ -41,7 +38,7 @@ impl NetError {
     /// Checks if this error is considered retryable
     pub fn is_retryable(&self) -> bool {
         match self {
-            NetError::Http(http_err_str) => {
+            Self::Http(http_err_str) => {
                 // Check for retryable HTTP status codes in error strings
                 http_err_str.contains("500") ||  // Server errors
                 http_err_str.contains("502") ||  // Bad Gateway
@@ -56,20 +53,25 @@ impl NetError {
                 http_err_str.contains("decoding") ||  // Body decode errors
                 http_err_str.contains("body") // Body read errors
             }
-            NetError::Timeout => true,
-            NetError::RetryExhausted { .. } => false,
-            NetError::HttpError { status, .. } => {
+            Self::Timeout => true,
+            Self::RetryExhausted { .. } => false,
+            Self::HttpError { status, .. } => {
                 // Retry on 5xx server errors and 429 Too Many Requests
                 *status >= 500 || *status == 429 || *status == 408
             }
-            NetError::InvalidRange(_) | NetError::Unimplemented => false,
+            Self::InvalidRange(_) | Self::Unimplemented => false,
         }
     }
 }
 
 impl From<ReqwestError> for NetError {
     fn from(e: ReqwestError) -> Self {
-        NetError::Http(e.to_string())
+        if e.is_timeout() {
+            return Self::Timeout;
+        }
+        // Use alternate formatting {:#} to include the full error chain
+        // (e.g. "error sending request … : connection refused")
+        Self::Http(format!("{e:#}"))
     }
 }
 

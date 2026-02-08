@@ -16,14 +16,14 @@ use crate::{MediaInfo, source::Source};
 /// Calls `Source` methods directly for I/O.
 /// Implements `Read + Seek` for use with symphonia.
 pub struct Reader<S: Source> {
-    source: S,
     pos: u64,
+    source: S,
 }
 
 impl<S: Source> Reader<S> {
     /// Create new reader.
     pub fn new(source: S) -> Self {
-        Self { source, pos: 0 }
+        Self { pos: 0, source }
     }
 
     /// Get current position.
@@ -38,7 +38,7 @@ impl<S: Source> Reader<S> {
 
     /// Check if length is zero or unknown.
     pub fn is_empty(&self) -> bool {
-        self.source.len().map(|l| l == 0).unwrap_or(true)
+        self.source.len().is_none_or(|l| l == 0)
     }
 
     /// Get media info if known.
@@ -54,6 +54,11 @@ impl<S: Source> Reader<S> {
     /// Get byte range of first segment with current format after ABR switch.
     pub fn format_change_segment_range(&self) -> Option<std::ops::Range<u64>> {
         self.source.format_change_segment_range()
+    }
+
+    /// Clear variant fence, allowing reads from the next variant.
+    pub fn clear_variant_fence(&mut self) {
+        self.source.clear_variant_fence();
     }
 
     /// Get mutable reference to inner source.

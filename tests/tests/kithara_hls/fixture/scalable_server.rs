@@ -25,7 +25,7 @@ use url::Url;
 
 use super::HlsResult;
 
-// ==================== Config ====================
+// Config
 
 /// Configuration for [`HlsTestServer`].
 pub struct HlsTestServerConfig {
@@ -79,7 +79,7 @@ impl Default for HlsTestServerConfig {
     }
 }
 
-// ==================== Server ====================
+// Server
 
 /// Reusable HLS test server with parametric segment count and size.
 ///
@@ -137,7 +137,9 @@ impl HlsTestServer {
             );
 
         tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve HlsTestServer");
+            axum::serve(listener, app)
+                .await
+                .expect("serve HlsTestServer");
         });
 
         Self { base_url, config }
@@ -176,13 +178,16 @@ impl HlsTestServer {
     }
 }
 
-// ==================== Content Generators ====================
+// Content Generators
 
 fn generate_master_playlist(config: &HlsTestServerConfig) -> String {
     let mut pl = String::from("#EXTM3U\n#EXT-X-VERSION:6\n");
     for v in 0..config.variant_count {
         let bw = if let Some(ref bandwidths) = config.variant_bandwidths {
-            bandwidths.get(v).copied().unwrap_or((v + 1) as u64 * 1_280_000)
+            bandwidths
+                .get(v)
+                .copied()
+                .unwrap_or((v + 1) as u64 * 1_280_000)
         } else {
             (v + 1) as u64 * 1_280_000
         };
@@ -204,9 +209,7 @@ fn generate_media_playlist(config: &HlsTestServerConfig, variant: usize) -> Stri
         dur.ceil() as u64,
     );
     if config.init_data_per_variant.is_some() {
-        pl.push_str(&format!(
-            "#EXT-X-MAP:URI=\"../init/v{variant}_init.bin\"\n"
-        ));
+        pl.push_str(&format!("#EXT-X-MAP:URI=\"../init/v{variant}_init.bin\"\n"));
     }
     for seg in 0..config.segments_per_variant {
         pl.push_str(&format!("#EXTINF:{dur:.1},\n../seg/v{variant}_{seg}.bin\n"));
@@ -290,11 +293,7 @@ fn serve_init_segment(config: &HlsTestServerConfig, filename: &str) -> Vec<u8> {
 }
 
 /// Compute expected byte for verification (shared logic for server + tests).
-fn expected_byte_at_impl(
-    config: &HlsTestServerConfig,
-    variant: usize,
-    offset: u64,
-) -> u8 {
+fn expected_byte_at_impl(config: &HlsTestServerConfig, variant: usize, offset: u64) -> u8 {
     if let Some(ref per_variant) = config.custom_data_per_variant {
         if let Some(data) = per_variant.get(variant) {
             return data.get(offset as usize).copied().unwrap_or(0);

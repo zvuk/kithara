@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[lints]
+workspace = true
+
 [dependencies]
 kithara-stream = { workspace = true }
 kithara-bufpool = { workspace = true }
@@ -27,3 +30,11 @@ test-utils = ["unimock"]
 [dev-dependencies]
 rstest = { workspace = true }
 unimock = { workspace = true }
+
+[[example]]
+name = "prime_info_check"
+required-features = ["apple"]
+
+[[example]]
+name = "abr_switch_simulator_apple"
+required-features = ["apple"]

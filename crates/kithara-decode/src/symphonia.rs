@@ -43,7 +43,7 @@ use symphonia::{
         },
         errors::Error as SymphoniaError,
         formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
-        io::MediaSourceStream,
+        io::{MediaSourceStream, MediaSourceStreamOptions},
         meta::MetadataOptions,
         units::Time,
     },
@@ -87,8 +87,6 @@ pub struct SymphoniaConfig {
     /// available data). Seek is re-enabled after successful initialization.
     pub probe_no_seek: bool,
 }
-
-// ────────────────────────────────── Inner ──────────────────────────────────
 
 /// Inner implementation shared across all Symphonia codecs.
 ///
@@ -162,7 +160,7 @@ impl SymphoniaInner {
         // Keep handle to re-enable seek after initialization
         let seek_enabled_handle = adapter.seek_enabled_handle();
 
-        let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
+        let mss = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
 
         tracing::debug!(?container, "Creating format reader directly (no probe)");
         let format_reader = Self::create_reader_for_container(mss, container, format_opts)?;
@@ -230,7 +228,7 @@ impl SymphoniaInner {
 
         let seek_enabled_handle = adapter.seek_enabled_handle();
 
-        let mss = MediaSourceStream::new(Box::new(adapter), Default::default());
+        let mss = MediaSourceStream::new(Box::new(adapter), MediaSourceStreamOptions::default());
 
         // Build probe hint from config
         let mut probe_hint = Hint::new();
@@ -335,11 +333,10 @@ impl SymphoniaInner {
         let channels = codec_params
             .channels
             .as_ref()
-            .map(|c| c.count() as u16)
-            .unwrap_or(2);
+            .map_or(2, |c| c.count() as u16);
         let spec = PcmSpec {
-            sample_rate,
             channels,
+            sample_rate,
         };
 
         // Create decoder
@@ -432,8 +429,8 @@ impl SymphoniaInner {
             decoded.copy_to_slice_interleaved(&mut pcm);
 
             let pcm_spec = PcmSpec {
-                sample_rate: spec.rate(),
                 channels: channels as u16,
+                sample_rate: spec.rate(),
             };
 
             let chunk = PcmChunk::new(pcm_spec, pcm);
@@ -472,13 +469,11 @@ impl SymphoniaInner {
         Ok(())
     }
 
-    /// Update the byte length reported to symphonia's MediaSource.
+    /// Update the byte length reported to symphonia's `MediaSource`.
     fn update_byte_len(&self, len: u64) {
         self.byte_len_handle.store(len, Ordering::Release);
     }
 }
-
-// ────────────────────────────────── Symphonia<C> ──────────────────────────────────
 
 /// Generic Symphonia-based decoder parameterized by codec type.
 ///
@@ -542,8 +537,6 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
     }
 }
 
-// ────────────────────────────────── InnerDecoder ──────────────────────────────────
-
 use crate::traits::InnerDecoder;
 
 impl<C: CodecType> InnerDecoder for Symphonia<C> {
@@ -576,8 +569,6 @@ impl<C: CodecType> InnerDecoder for Symphonia<C> {
     }
 }
 
-// ────────────────────────────────── Type Aliases ──────────────────────────────────
-
 /// Symphonia-based AAC decoder.
 pub type SymphoniaAac = Symphonia<Aac>;
 
@@ -590,9 +581,7 @@ pub type SymphoniaFlac = Symphonia<Flac>;
 /// Symphonia-based Vorbis decoder.
 pub type SymphoniaVorbis = Symphonia<Vorbis>;
 
-// ────────────────────────────────── ReadSeekAdapter ──────────────────────────────────
-
-/// Adapter that wraps a Read + Seek source as a Symphonia MediaSource.
+/// Adapter that wraps a Read + Seek source as a Symphonia `MediaSource`.
 ///
 /// This adapter tracks the byte length dynamically, allowing it to be
 /// updated after construction (useful for HLS streams where the total
@@ -600,11 +589,11 @@ pub type SymphoniaVorbis = Symphonia<Vorbis>;
 struct ReadSeekAdapter<R> {
     inner: R,
     /// Dynamic byte length. Updated externally via `Arc<AtomicU64>`.
-    /// 0 means unknown (returns None from byte_len()).
+    /// 0 means unknown (returns None from `byte_len()`).
     byte_len: Arc<AtomicU64>,
     /// Controls whether seek operations are allowed.
     /// Used to temporarily disable seeking during fMP4 reader initialization
-    /// (prevents IsoMp4Reader from seeking to end looking for moov atom).
+    /// (prevents `IsoMp4Reader` from seeking to end looking for moov atom).
     seek_enabled: Arc<AtomicBool>,
 }
 
@@ -685,14 +674,12 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for ReadSeek
     }
 }
 
-// ────────────────────────────────── Tests ──────────────────────────────────
-
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
     use super::*;
-    use crate::traits::AudioDecoder;
+    use crate::{test_support::create_test_wav, traits::AudioDecoder};
 
     #[test]
     fn test_symphonia_config_default() {
@@ -719,46 +706,6 @@ mod tests {
         fn _check_mp3(_: SymphoniaMp3) {}
         fn _check_flac(_: SymphoniaFlac) {}
         fn _check_vorbis(_: SymphoniaVorbis) {}
-    }
-
-    /// Create minimal valid WAV file (PCM 16-bit stereo, 44100Hz)
-    fn create_test_wav(sample_count: usize, sample_rate: u32, channels: u16) -> Vec<u8> {
-        let bytes_per_sample = 2; // 16-bit = 2 bytes
-        let data_size = (sample_count * channels as usize * bytes_per_sample) as u32;
-        let file_size = 36 + data_size;
-
-        let mut wav = Vec::new();
-
-        // RIFF header
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&file_size.to_le_bytes());
-        wav.extend_from_slice(b"WAVE");
-
-        // fmt chunk
-        wav.extend_from_slice(b"fmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes()); // chunk size
-        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM format
-        wav.extend_from_slice(&channels.to_le_bytes());
-        wav.extend_from_slice(&sample_rate.to_le_bytes());
-        let byte_rate = sample_rate * channels as u32 * bytes_per_sample as u32;
-        wav.extend_from_slice(&byte_rate.to_le_bytes());
-        let block_align = channels * bytes_per_sample as u16;
-        wav.extend_from_slice(&block_align.to_le_bytes());
-        wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
-
-        // data chunk
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_size.to_le_bytes());
-
-        // Generate simple sine wave samples
-        for i in 0..sample_count {
-            let sample = ((i as f32 * 0.1).sin() * 32767.0) as i16;
-            for _ in 0..channels {
-                wav.extend_from_slice(&sample.to_le_bytes());
-            }
-        }
-
-        wav
     }
 
     // Use PCM codec type for WAV files in tests

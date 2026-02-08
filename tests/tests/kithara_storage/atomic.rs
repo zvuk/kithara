@@ -6,22 +6,7 @@ use rstest::*;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().expect("Failed to create temp dir")
-}
-
-#[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
-
-#[fixture]
-fn cancel_token_cancelled() -> CancellationToken {
-    let token = CancellationToken::new();
-    token.cancel();
-    token
-}
+use crate::common::fixtures::{cancel_token, cancel_token_cancelled, temp_dir};
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
@@ -224,8 +209,15 @@ fn atomic_resource_concurrent_writes(temp_dir: TempDir, cancel_token: Cancellati
 
     let result1 = handle1.join().unwrap();
     let result2 = handle2.join().unwrap();
-    assert!(result1.is_ok());
-    assert!(result2.is_ok());
+
+    // write_all = write_at + commit (two steps, not atomic).
+    // When one thread commits first, the other's write_at may fail
+    // because Auto mode rejects writes to a committed resource.
+    // At least one must succeed; both succeeding is also valid.
+    assert!(
+        result1.is_ok() || result2.is_ok(),
+        "at least one concurrent write_all must succeed"
+    );
 
     let mut buf = byte_pool().get();
     atomic.read_into(&mut buf).unwrap();

@@ -97,8 +97,8 @@ impl LruIndex {
 
     /// Compute eviction candidates in LRU order (oldest first) under the given config.
     ///
-    /// - `pinned` contains asset_roots that must not be evicted (will be skipped).
-    /// - Returns a list of candidate asset_roots to attempt eviction for.
+    /// - `pinned` contains `asset_root`s that must not be evicted (will be skipped).
+    /// - Returns a list of candidate `asset_root`s to attempt eviction for.
     ///
     /// This function does not mutate storage.
     pub fn eviction_candidates(
@@ -162,7 +162,7 @@ impl LruState {
         self.by_root
             .values()
             .filter_map(|e| e.bytes)
-            .fold(0u64, |acc, b| acc.saturating_add(b))
+            .fold(0u64, u64::saturating_add)
     }
 
     pub fn oldest_first(&self) -> Vec<(String, LruEntry)> {

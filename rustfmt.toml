@@ -1,6 +1,6 @@
-# Stable rustfmt configuration (no nightly-only options).
+# Workspace rustfmt configuration.
 #
-# Keep this strict and predictable for agents, but compatible with stable rustfmt.
+# Keep this strict and predictable for agents.
 
 edition = "2024"
 newline_style = "Unix"
@@ -20,3 +20,7 @@ reorder_modules = true
 reorder_imports = true
 imports_granularity = "Crate"
 group_imports = "StdExternalCrate"
+
+# Shorthand
+use_field_init_shorthand = true
+use_try_shorthand = true

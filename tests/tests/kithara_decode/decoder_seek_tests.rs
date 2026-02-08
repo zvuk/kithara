@@ -14,11 +14,7 @@ use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
 use super::fixture::AudioTestServer;
-
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().unwrap()
-}
+use crate::common::fixtures::temp_dir;
 
 #[fixture]
 async fn server() -> AudioTestServer {

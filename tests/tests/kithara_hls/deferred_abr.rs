@@ -18,36 +18,15 @@ use fixture::TestServer;
 use kithara_assets::StoreOptions;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_stream::Stream;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture;
+use crate::common::fixtures::{cancel_token, temp_dir, tracing_setup};
 
-// ==================== Fixtures ====================
-
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().unwrap()
-}
-
-#[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
-
-#[fixture]
-fn tracing_setup() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::default().add_directive("warn".parse().unwrap()),
-        )
-        .with_test_writer()
-        .try_init();
-}
-
-// ==================== Helper Functions ====================
+// Helper Functions
 
 /// Get variant from data by parsing prefix "V{n}-SEG-".
 fn variant_from_data(data: &[u8]) -> Option<usize> {
@@ -62,7 +41,7 @@ fn variant_from_data(data: &[u8]) -> Option<usize> {
     }
 }
 
-// ==================== Manual Variant Switch Tests ====================
+// Manual Variant Switch Tests
 
 /// Test: Manual variant switch with fixed ABR, verify data comes from correct variant.
 ///
@@ -246,7 +225,7 @@ async fn after_seek_sequential_reads_maintain_variant(
     }
 }
 
-// ==================== Edge Case Tests ====================
+// Edge Case Tests
 
 /// Test: Multiple seeks don't cause variant confusion.
 ///

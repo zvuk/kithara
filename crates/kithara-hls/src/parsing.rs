@@ -157,12 +157,12 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
                     uri, stream_data, ..
                 } => {
                     let bw = stream_data.bandwidth();
-                    let codecs = stream_data.codecs().map(|c| c.to_string());
+                    let codecs = stream_data.codecs().map(std::string::ToString::to_string);
                     (uri.to_string(), Some(bw), codecs)
                 }
                 HlsVariantStreamTag::ExtXIFrame { uri, stream_data } => {
                     let bw = stream_data.bandwidth();
-                    let codecs = stream_data.codecs().map(|c| c.to_string());
+                    let codecs = stream_data.codecs().map(std::string::ToString::to_string);
                     (uri.to_string(), Some(bw), codecs)
                 }
             };
@@ -172,7 +172,7 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
                 // CODECS can contain multiple codecs separated by comma (e.g., "avc1.42c00d,mp4a.40.2")
                 let audio_codec = c
                     .split(',')
-                    .map(|s| s.trim())
+                    .map(str::trim)
                     .find_map(AudioCodec::from_hls_codec);
 
                 // Determine container format from URI extension
@@ -211,7 +211,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
     let target_duration = Some(hls_media.target_duration);
     let media_sequence = hls_media.media_sequence as u64;
 
-    fn map_encryption_method(m: &hls_m3u8::types::EncryptionMethod) -> EncryptionMethod {
+    fn map_encryption_method(m: hls_m3u8::types::EncryptionMethod) -> EncryptionMethod {
         match m {
             hls_m3u8::types::EncryptionMethod::Aes128 => EncryptionMethod::Aes128,
             hls_m3u8::types::EncryptionMethod::SampleAes => EncryptionMethod::SampleAes,
@@ -220,7 +220,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
     }
 
     fn keyinfo_from_decryption_key(k: &HlsDecryptionKey<'_>) -> Option<KeyInfo> {
-        let method = map_encryption_method(&k.method);
+        let method = map_encryption_method(k.method);
 
         let uri = k.uri().trim();
         if uri.is_empty() {
@@ -231,8 +231,8 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
             method,
             uri: Some(uri.to_string()),
             iv: k.iv.to_slice(),
-            key_format: k.format.as_ref().map(|s| s.to_string()),
-            key_format_versions: k.versions.as_ref().map(|s| s.to_string()),
+            key_format: k.format.as_ref().map(std::string::ToString::to_string),
+            key_format_versions: k.versions.as_ref().map(std::string::ToString::to_string),
         })
     }
 
@@ -384,7 +384,7 @@ segment0.m4s
 video.m3u8"
     }
 
-    // ==================== Test Cases ====================
+    // Test Cases
 
     #[rstest]
     fn test_variant_id_creation(variant_id_42: VariantId) {

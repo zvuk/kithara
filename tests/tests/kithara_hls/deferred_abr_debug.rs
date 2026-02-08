@@ -8,42 +8,20 @@ use fixture::TestServer;
 use kithara_assets::StoreOptions;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_stream::Stream;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture;
-
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().unwrap()
-}
-
-#[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
-
-#[fixture]
-fn tracing_setup() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::default()
-                .add_directive("kithara_hls=debug".parse().unwrap())
-                .add_directive("kithara_stream=debug".parse().unwrap())
-                .add_directive("kithara_decode=debug".parse().unwrap()),
-        )
-        .with_test_writer()
-        .try_init();
-}
+use crate::common::fixtures::{cancel_token, debug_tracing_setup, temp_dir};
 
 /// Diagnostic version with detailed logging and safety limits
 #[rstest]
 #[timeout(Duration::from_secs(15))]
 #[tokio::test]
 async fn debug_sequential_read(
-    _tracing_setup: (),
+    _debug_tracing_setup: (),
     temp_dir: TempDir,
     cancel_token: CancellationToken,
 ) {

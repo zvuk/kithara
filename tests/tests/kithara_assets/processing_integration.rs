@@ -18,12 +18,9 @@ use std::{
 
 use kithara_assets::{AssetStoreBuilder, Assets, EvictConfig, ProcessChunkFn, ResourceKey};
 use kithara_storage::ResourceExt;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 
-#[fixture]
-fn temp_dir() -> tempfile::TempDir {
-    tempfile::tempdir().unwrap()
-}
+use crate::common::fixtures::temp_dir;
 
 /// Context for test processing callback.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Default)]

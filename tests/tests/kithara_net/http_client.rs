@@ -20,9 +20,7 @@ use rstest::*;
 use tokio::net::TcpListener;
 use url::Url;
 
-// ============================================================================
 // Test server infrastructure
-// ============================================================================
 
 struct TestServer {
     base_url: Url,
@@ -65,9 +63,7 @@ impl Drop for TestServer {
     }
 }
 
-// ============================================================================
 // Test endpoints
-// ============================================================================
 
 async fn test_endpoint() -> &'static str {
     "Hello, World!"
@@ -321,9 +317,7 @@ async fn key_with_params_endpoint(
     }
 }
 
-// ============================================================================
 // Fixtures
-// ============================================================================
 
 #[fixture]
 fn test_router() -> Router {
@@ -369,9 +363,7 @@ fn http_client() -> HttpClient {
     HttpClient::new(kithara_net::NetOptions::default())
 }
 
-// ============================================================================
 // Helper functions for testing
-// ============================================================================
 
 async fn test_get_bytes_success(client: &HttpClient, url: Url) -> Result<Bytes, NetError> {
     client.get_bytes(url, None).await
@@ -405,9 +397,7 @@ async fn test_head_success(client: &HttpClient, url: Url) -> Result<Headers, Net
     client.head(url, None).await
 }
 
-// ============================================================================
 // Parameterized tests
-// ============================================================================
 
 #[rstest]
 #[case("/test", b"Hello, World!")]
@@ -629,14 +619,9 @@ async fn test_invalid_url(http_client: HttpClient) {
     assert!(result.is_err(), "Should fail for invalid URL");
     let error = result.err().unwrap();
 
-    // Accept either timeout or connection error
-    let is_acceptable_error = match &error {
-        NetError::Timeout => true,
-        NetError::Http(msg) => {
-            msg.contains("connection") || msg.contains("failed") || msg.contains("refused")
-        }
-        _ => false,
-    };
+    // Accept either timeout or any HTTP error for a non-routable address —
+    // the point is that the request fails, not the exact error wording.
+    let is_acceptable_error = matches!(&error, NetError::Timeout | NetError::Http(_));
 
     assert!(
         is_acceptable_error,

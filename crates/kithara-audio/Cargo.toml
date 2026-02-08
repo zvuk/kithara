@@ -4,6 +4,9 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[lints]
+workspace = true
+
 [dependencies]
 kithara-decode = { workspace = true }
 kithara-stream = { workspace = true }
@@ -41,6 +44,7 @@ reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+kithara-decode = { workspace = true, features = ["test-utils"] }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-assets = { workspace = true }

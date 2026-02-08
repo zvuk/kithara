@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
 use kithara_storage::ResourceExt;
-use rstest::{fixture, rstest};
+use rstest::rstest;
+
+use crate::common::fixtures::temp_dir;
 
 /// Helper to read bytes from resource into a new Vec
 fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
@@ -12,11 +14,6 @@ fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
     buf.truncate(n);
     buf
-}
-
-#[fixture]
-fn temp_dir() -> tempfile::TempDir {
-    tempfile::tempdir().unwrap()
 }
 
 fn asset_store_with_root(temp_dir: &tempfile::TempDir, asset_root: &str) -> AssetStore {

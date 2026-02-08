@@ -12,12 +12,12 @@ impl Headers {
         }
     }
 
-    pub fn insert(&mut self, key: impl Into<String>, value: impl Into<String>) {
+    pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) {
         self.inner.insert(key.into(), value.into());
     }
 
     pub fn get(&self, key: &str) -> Option<&str> {
-        self.inner.get(key).map(|s| s.as_str())
+        self.inner.get(key).map(String::as_str)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
@@ -43,17 +43,17 @@ impl From<HashMap<String, String>> for Headers {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RangeSpec {
-    pub start: u64,
     pub end: Option<u64>,
+    pub start: u64,
 }
 
 impl RangeSpec {
     pub fn new(start: u64, end: Option<u64>) -> Self {
-        Self { start, end }
+        Self { end, start }
     }
 
     pub fn from_start(start: u64) -> Self {
-        Self { start, end: None }
+        Self { end: None, start }
     }
 
     pub fn to_header_value(&self) -> String {
@@ -67,17 +67,17 @@ impl RangeSpec {
 
 #[derive(Clone, Debug)]
 pub struct RetryPolicy {
-    pub max_retries: u32,
     pub base_delay: Duration,
     pub max_delay: Duration,
+    pub max_retries: u32,
 }
 
 impl Default for RetryPolicy {
     fn default() -> Self {
         Self {
-            max_retries: 3,
             base_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(5),
+            max_retries: 3,
         }
     }
 }
@@ -85,9 +85,9 @@ impl Default for RetryPolicy {
 impl RetryPolicy {
     pub fn new(max_retries: u32, base_delay: Duration, max_delay: Duration) -> Self {
         Self {
-            max_retries,
             base_delay,
             max_delay,
+            max_retries,
         }
     }
 
@@ -103,18 +103,18 @@ impl RetryPolicy {
 
 #[derive(Clone, Debug)]
 pub struct NetOptions {
-    pub request_timeout: Duration,
-    pub retry_policy: RetryPolicy,
     /// Max idle connections per host. Set to 0 to disable pooling and reduce memory.
     pub pool_max_idle_per_host: usize,
+    pub request_timeout: Duration,
+    pub retry_policy: RetryPolicy,
 }
 
 impl Default for NetOptions {
     fn default() -> Self {
         Self {
+            pool_max_idle_per_host: 0, // Disable pooling for lower memory
             request_timeout: Duration::from_secs(30),
             retry_policy: RetryPolicy::default(),
-            pool_max_idle_per_host: 0, // Disable pooling for lower memory
         }
     }
 }

@@ -30,8 +30,6 @@ use tracing::trace;
 
 use crate::{StorageError, StorageResult};
 
-// ──────────────────────────────── Open mode ──────────────────────────────
-
 /// Controls how `StorageResource` opens the backing file.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OpenMode {
@@ -47,8 +45,6 @@ pub enum OpenMode {
     /// are treated as empty committed resources. Writes are rejected.
     ReadOnly,
 }
-
-// ────────────────────────────────── Trait ──────────────────────────────────
 
 /// Outcome of waiting for a byte range.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -133,14 +129,11 @@ pub trait ResourceExt: Send + Sync + Clone + 'static {
     /// The buffer is resized to fit the data. Returns the number of bytes read.
     /// Returns `0` if resource has no data.
     fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
-        let len = match self.len() {
-            Some(l) => l,
-            None => {
-                // Probe via read_at to detect error state (cancelled/failed).
-                let mut probe = [0u8; 1];
-                let _ = self.read_at(0, &mut probe)?;
-                return Ok(0);
-            }
+        let Some(len) = self.len() else {
+            // Probe via read_at to detect error state (cancelled/failed).
+            let mut probe = [0u8; 1];
+            let _ = self.read_at(0, &mut probe)?;
+            return Ok(0);
         };
         if len == 0 {
             buf.clear();
@@ -158,8 +151,6 @@ pub trait ResourceExt: Send + Sync + Clone + 'static {
         self.commit(Some(data.len() as u64))
     }
 }
-
-// ────────────────────────────── Implementation ────────────────────────────
 
 /// Default initial size for new mmap files (64 KB).
 const DEFAULT_INITIAL_SIZE: u64 = 64 * 1024;

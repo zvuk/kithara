@@ -34,39 +34,39 @@ pub trait VariantSource {
 /// ABR (Adaptive Bitrate) configuration.
 #[derive(Clone)]
 pub struct AbrOptions {
-    /// ABR mode: Auto (adaptive) or Manual (fixed variant).
-    pub mode: AbrMode,
-    /// Available variants for ABR selection.
-    /// Set by the streaming layer after parsing playlist.
-    pub variants: Vec<Variant>,
-    /// Minimum buffer level (seconds) required for up-switch.
-    pub min_buffer_for_up_switch_secs: f64,
+    /// Hysteresis ratio for down-switch.
+    pub down_hysteresis_ratio: f64,
     /// Buffer level (seconds) that triggers down-switch.
     pub down_switch_buffer_secs: f64,
+    /// Minimum buffer level (seconds) required for up-switch.
+    pub min_buffer_for_up_switch_secs: f64,
+    /// Minimum interval between variant switches.
+    pub min_switch_interval: Duration,
+    /// ABR mode: Auto (adaptive) or Manual (fixed variant).
+    pub mode: AbrMode,
+    /// Sample window for throughput estimation.
+    pub sample_window: Duration,
     /// Safety factor for throughput estimation (e.g., 1.5 means use 66% of estimated throughput).
     pub throughput_safety_factor: f64,
     /// Hysteresis ratio for up-switch (bandwidth must exceed target by this factor).
     pub up_hysteresis_ratio: f64,
-    /// Hysteresis ratio for down-switch.
-    pub down_hysteresis_ratio: f64,
-    /// Minimum interval between variant switches.
-    pub min_switch_interval: Duration,
-    /// Sample window for throughput estimation.
-    pub sample_window: Duration,
+    /// Available variants for ABR selection.
+    /// Set by the streaming layer after parsing playlist.
+    pub variants: Vec<Variant>,
 }
 
 impl Default for AbrOptions {
     fn default() -> Self {
         Self {
-            mode: AbrMode::default(),
-            variants: Vec::new(),
-            min_buffer_for_up_switch_secs: 10.0,
+            down_hysteresis_ratio: 0.8,
             down_switch_buffer_secs: 5.0,
+            min_buffer_for_up_switch_secs: 10.0,
+            min_switch_interval: Duration::from_secs(30),
+            mode: AbrMode::default(),
+            sample_window: Duration::from_secs(30),
             throughput_safety_factor: 1.5,
             up_hysteresis_ratio: 1.3,
-            down_hysteresis_ratio: 0.8,
-            min_switch_interval: Duration::from_secs(30),
-            sample_window: Duration::from_secs(30),
+            variants: Vec::new(),
         }
     }
 }
@@ -74,18 +74,18 @@ impl Default for AbrOptions {
 impl std::fmt::Debug for AbrOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AbrOptions")
-            .field("mode", &self.mode)
-            .field("variants", &self.variants.len())
+            .field("down_hysteresis_ratio", &self.down_hysteresis_ratio)
+            .field("down_switch_buffer_secs", &self.down_switch_buffer_secs)
             .field(
                 "min_buffer_for_up_switch_secs",
                 &self.min_buffer_for_up_switch_secs,
             )
-            .field("down_switch_buffer_secs", &self.down_switch_buffer_secs)
+            .field("min_switch_interval", &self.min_switch_interval)
+            .field("mode", &self.mode)
+            .field("sample_window", &self.sample_window)
             .field("throughput_safety_factor", &self.throughput_safety_factor)
             .field("up_hysteresis_ratio", &self.up_hysteresis_ratio)
-            .field("down_hysteresis_ratio", &self.down_hysteresis_ratio)
-            .field("min_switch_interval", &self.min_switch_interval)
-            .field("sample_window", &self.sample_window)
+            .field("variants", &self.variants.len())
             .finish()
     }
 }
@@ -112,7 +112,7 @@ pub enum ThroughputSampleSource {
     Cache,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ThroughputSample {
     pub bytes: u64,
     pub duration: Duration,
