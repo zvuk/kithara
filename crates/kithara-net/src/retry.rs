@@ -301,9 +301,9 @@ mod tests {
         #[case] _desc: &str,
     ) {
         let policy = RetryPolicy {
-            max_retries: 5,
             base_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(10),
+            max_retries: 5,
         };
         let retry_policy = DefaultRetryPolicy::new(policy);
         assert_eq!(retry_policy.delay_for_attempt(attempt), expected);
@@ -343,9 +343,9 @@ mod tests {
                 .returns(Ok(Bytes::from("success"))),
         ));
         let policy = RetryPolicy {
-            max_retries: 3,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
+            max_retries: 3,
         };
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
 
@@ -364,9 +364,9 @@ mod tests {
                 .returns(Err(NetError::Timeout)),
         );
         let policy = RetryPolicy {
-            max_retries: 2,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
+            max_retries: 2,
         };
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
 
@@ -433,9 +433,9 @@ mod tests {
                 }),
         ));
         let policy = RetryPolicy {
-            max_retries: 3,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
+            max_retries: 3,
         };
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
 
@@ -484,9 +484,9 @@ mod tests {
                 }),
         ));
         let policy = RetryPolicy {
-            max_retries: 3,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
+            max_retries: 3,
         };
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
 
@@ -531,9 +531,9 @@ mod tests {
                 .returns(Ok(Headers::new())),
         ));
         let policy = RetryPolicy {
-            max_retries: 3,
             base_delay: Duration::from_millis(1),
             max_delay: Duration::from_secs(1),
+            max_retries: 3,
         };
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
 
@@ -548,9 +548,9 @@ mod tests {
     #[rstest]
     fn test_retry_policy_trait_max_attempts() {
         let policy = RetryPolicy {
-            max_retries: 5,
             base_delay: Duration::from_millis(100),
             max_delay: Duration::from_secs(10),
+            max_retries: 5,
         };
         let retry_policy = DefaultRetryPolicy::new(policy);
         assert_eq!(retry_policy.max_attempts(), 5);
@@ -559,9 +559,9 @@ mod tests {
     #[rstest]
     fn test_retry_policy_trait_delay() {
         let policy = RetryPolicy {
-            max_retries: 3,
             base_delay: Duration::from_millis(50),
             max_delay: Duration::from_secs(10),
+            max_retries: 3,
         };
         let retry_policy = DefaultRetryPolicy::new(policy);
         assert_eq!(retry_policy.delay_for_attempt(0), Duration::ZERO);

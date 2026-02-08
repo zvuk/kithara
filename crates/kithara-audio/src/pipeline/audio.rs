@@ -362,18 +362,18 @@ where
 
         // Destructure config to avoid partial move issues.
         let AudioConfig {
-            stream: stream_config,
-            pcm_buffer_chunks,
             command_channel_capacity,
             event_channel_capacity,
             hint,
-            media_info: user_media_info,
-            pcm_pool: mut pool,
             host_sample_rate: config_host_sr,
-            resampler_quality,
-            events_tx,
-            preload_chunks,
+            media_info: user_media_info,
+            pcm_buffer_chunks,
+            pcm_pool: mut pool,
             prefer_hardware,
+            preload_chunks,
+            resampler_quality,
+            stream: stream_config,
+            events_tx,
         } = config;
 
         let event_capacity = event_channel_capacity.max(1);

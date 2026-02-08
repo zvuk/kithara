@@ -45,12 +45,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let config = HlsConfig::new(url)
         .with_abr(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
             // Aggressive ABR for testing
             min_buffer_for_up_switch_secs: 0.0, // no buffer requirement
             min_switch_interval: Duration::from_secs(3), // switch every 3s
-            up_hysteresis_ratio: 1.05,          // 5% headroom
-            throughput_safety_factor: 1.1,      // use 91% of throughput
+            mode: AbrMode::Auto(Some(0)),
+            throughput_safety_factor: 1.1, // use 91% of throughput
+            up_hysteresis_ratio: 1.05,     // 5% headroom
             ..Default::default()
         })
         .with_events(events_tx);

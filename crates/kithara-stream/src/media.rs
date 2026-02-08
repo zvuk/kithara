@@ -60,14 +60,14 @@ pub enum AudioCodec {
 /// - Container metadata
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MediaInfo {
-    /// Container format (fMP4, MPEG-TS, etc.)
-    pub container: Option<ContainerFormat>,
-    /// Audio codec
-    pub codec: Option<AudioCodec>,
-    /// Sample rate in Hz
-    pub sample_rate: Option<u32>,
     /// Number of audio channels
     pub channels: Option<u16>,
+    /// Audio codec
+    pub codec: Option<AudioCodec>,
+    /// Container format (fMP4, MPEG-TS, etc.)
+    pub container: Option<ContainerFormat>,
+    /// Sample rate in Hz
+    pub sample_rate: Option<u32>,
     /// Variant index (for ABR streams).
     /// Different variants have different init segments (ftyp/moov),
     /// so decoder must be recreated when variant changes.
@@ -78,10 +78,10 @@ impl MediaInfo {
     /// Create `MediaInfo` with optional codec and container.
     pub fn new(codec: Option<AudioCodec>, container: Option<ContainerFormat>) -> Self {
         Self {
-            container,
-            codec,
-            sample_rate: None,
             channels: None,
+            codec,
+            container,
+            sample_rate: None,
             variant_index: None,
         }
     }

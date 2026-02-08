@@ -335,8 +335,8 @@ impl SymphoniaInner {
             .as_ref()
             .map_or(2, |c| c.count() as u16);
         let spec = PcmSpec {
-            sample_rate,
             channels,
+            sample_rate,
         };
 
         // Create decoder
@@ -429,8 +429,8 @@ impl SymphoniaInner {
             decoded.copy_to_slice_interleaved(&mut pcm);
 
             let pcm_spec = PcmSpec {
-                sample_rate: spec.rate(),
                 channels: channels as u16,
+                sample_rate: spec.rate(),
             };
 
             let chunk = PcmChunk::new(pcm_spec, pcm);

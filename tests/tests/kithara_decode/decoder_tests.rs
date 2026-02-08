@@ -25,10 +25,10 @@ fn audio() -> EmbeddedAudio {
 #[fixture]
 fn wav_media_info() -> MediaInfo {
     MediaInfo {
-        container: Some(ContainerFormat::Wav),
-        codec: None,
-        sample_rate: None,
         channels: None,
+        codec: None,
+        container: Some(ContainerFormat::Wav),
+        sample_rate: None,
         variant_index: None,
     }
 }
@@ -36,10 +36,10 @@ fn wav_media_info() -> MediaInfo {
 #[fixture]
 fn mp3_media_info() -> MediaInfo {
     MediaInfo {
-        container: Some(ContainerFormat::MpegAudio),
-        codec: Some(AudioCodec::Mp3),
-        sample_rate: None,
         channels: None,
+        codec: Some(AudioCodec::Mp3),
+        container: Some(ContainerFormat::MpegAudio),
+        sample_rate: None,
         variant_index: None,
     }
 }

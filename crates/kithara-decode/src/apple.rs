@@ -624,8 +624,8 @@ impl AppleInner {
         };
 
         let spec = PcmSpec {
-            sample_rate,
             channels,
+            sample_rate,
         };
         let byte_len_handle = config.byte_len_handle.clone().unwrap_or_default();
 

@@ -218,10 +218,10 @@ async fn stress_seek_abr_audio() {
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel)
         .with_abr(AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            min_switch_interval: Duration::ZERO,
-            min_buffer_for_up_switch_secs: 0.0,
             down_switch_buffer_secs: 0.0,
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(0)),
             throughput_safety_factor: 1.0,
             ..AbrOptions::default()
         });

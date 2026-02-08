@@ -827,15 +827,15 @@ mod tests {
 
     fn v0_spec() -> PcmSpec {
         PcmSpec {
-            sample_rate: 44100,
             channels: 2,
+            sample_rate: 44100,
         }
     }
 
     fn v3_spec() -> PcmSpec {
         PcmSpec {
-            sample_rate: 96000,
             channels: 2,
+            sample_rate: 96000,
         }
     }
 
@@ -1534,8 +1534,8 @@ mod tests {
 
     fn v1_spec() -> PcmSpec {
         PcmSpec {
-            sample_rate: 48000,
             channels: 1,
+            sample_rate: 48000,
         }
     }
 
@@ -1600,8 +1600,8 @@ mod tests {
 
         // Initial decoder: V0 (4 bytes/sample)
         let v0_mono_spec = PcmSpec {
-            sample_rate: 44100,
             channels: 1,
+            sample_rate: 44100,
         };
         let v0_mono_info = MediaInfo::default()
             .with_sample_rate(44100)

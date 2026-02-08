@@ -250,10 +250,10 @@ mod tests {
             Self {
                 spec,
                 metadata: TrackMetadata {
-                    title: Some("Mock Track".to_owned()),
-                    artist: Some("Mock Artist".to_owned()),
                     album: Some("Mock Album".to_owned()),
+                    artist: Some("Mock Artist".to_owned()),
                     artwork: None,
+                    title: Some("Mock Track".to_owned()),
                 },
                 total_frames,
                 position_frames: 0,
@@ -357,8 +357,8 @@ mod tests {
 
     fn mock_spec() -> PcmSpec {
         PcmSpec {
-            sample_rate: 44100,
             channels: 2,
+            sample_rate: 44100,
         }
     }
 

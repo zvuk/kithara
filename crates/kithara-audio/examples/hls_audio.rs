@@ -58,12 +58,12 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     // Create audio pipeline
     let (events_tx, mut events_rx) = broadcast::channel(128);
     let hls_config = HlsConfig::new(url).with_abr(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
         // Aggressive ABR for testing (faster switching)
         min_buffer_for_up_switch_secs: 2.0, // default: 10.0
         min_switch_interval: Duration::from_secs(5), // default: 30
-        up_hysteresis_ratio: 1.1,           // default: 1.3
-        throughput_safety_factor: 1.2,      // default: 1.5
+        mode: AbrMode::Auto(Some(0)),
+        throughput_safety_factor: 1.2, // default: 1.5
+        up_hysteresis_ratio: 1.1,      // default: 1.3
         ..Default::default()
     });
     let config = AudioConfig::<Hls>::new(hls_config)

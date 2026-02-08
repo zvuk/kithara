@@ -3,21 +3,21 @@ use std::{fmt, sync::Arc};
 /// Audio track metadata extracted from Symphonia tags.
 #[derive(Debug, Clone, Default)]
 pub struct TrackMetadata {
-    /// Track title.
-    pub title: Option<String>,
-    /// Artist name.
-    pub artist: Option<String>,
     /// Album name.
     pub album: Option<String>,
+    /// Artist name.
+    pub artist: Option<String>,
     /// Album artwork (JPEG/PNG bytes).
     pub artwork: Option<Arc<Vec<u8>>>,
+    /// Track title.
+    pub title: Option<String>,
 }
 
 /// PCM specification - core audio format information
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PcmSpec {
-    pub sample_rate: u32,
     pub channels: u16,
+    pub sample_rate: u32,
 }
 
 impl fmt::Display for PcmSpec {
@@ -34,22 +34,22 @@ impl fmt::Display for PcmSpec {
 /// - All samples are of type T and interleaved (LRLRLR...)
 #[derive(Clone, Debug)]
 pub struct PcmChunk<T> {
-    pub spec: PcmSpec,
     pub pcm: Vec<T>,
+    pub spec: PcmSpec,
 }
 
 impl<T> Default for PcmChunk<T> {
     fn default() -> Self {
         Self {
-            spec: PcmSpec::default(),
             pcm: Vec::new(),
+            spec: PcmSpec::default(),
         }
     }
 }
 
 impl<T> PcmChunk<T> {
     pub fn new(spec: PcmSpec, pcm: Vec<T>) -> Self {
-        Self { spec, pcm }
+        Self { pcm, spec }
     }
 
     /// Number of audio frames in this chunk
@@ -104,8 +104,8 @@ mod tests {
         #[case] expected: &str,
     ) {
         let spec = PcmSpec {
-            sample_rate,
             channels,
+            sample_rate,
         };
         assert_eq!(format!("{}", spec), expected);
     }
@@ -113,8 +113,8 @@ mod tests {
     #[test]
     fn test_pcm_spec_clone() {
         let spec = PcmSpec {
-            sample_rate: 44100,
             channels: 2,
+            sample_rate: 44100,
         };
         let cloned = spec.clone();
         assert_eq!(spec, cloned);
@@ -133,12 +133,12 @@ mod tests {
         #[case] should_equal: bool,
     ) {
         let spec1 = PcmSpec {
-            sample_rate: sr1,
             channels: ch1,
+            sample_rate: sr1,
         };
         let spec2 = PcmSpec {
-            sample_rate: sr2,
             channels: ch2,
+            sample_rate: sr2,
         };
         assert_eq!(spec1 == spec2, should_equal);
     }
@@ -146,8 +146,8 @@ mod tests {
     #[test]
     fn test_pcm_spec_debug() {
         let spec = PcmSpec {
-            sample_rate: 44100,
             channels: 2,
+            sample_rate: 44100,
         };
         let debug_str = format!("{:?}", spec);
         assert!(debug_str.contains("PcmSpec"));
@@ -161,8 +161,8 @@ mod tests {
     #[case(96000, 6)]
     fn test_pcm_spec_copy_trait(#[case] sample_rate: u32, #[case] channels: u16) {
         let spec = PcmSpec {
-            sample_rate,
             channels,
+            sample_rate,
         };
         let copied = spec; // Copy, not move
         assert_eq!(spec, copied);
@@ -173,8 +173,8 @@ mod tests {
     #[test]
     fn test_pcm_chunk_new() {
         let spec = PcmSpec {
-            sample_rate: 44100,
             channels: 2,
+            sample_rate: 44100,
         };
         let pcm = vec![0.1f32, 0.2, 0.3, 0.4];
         let chunk = PcmChunk::new(spec, pcm.clone());
@@ -195,8 +195,8 @@ mod tests {
         #[case] expected_frames: usize,
     ) {
         let spec = PcmSpec {
-            sample_rate: 44100,
             channels,
+            sample_rate: 44100,
         };
         let chunk = PcmChunk::new(spec, pcm);
         assert_eq!(chunk.frames(), expected_frames);
@@ -205,8 +205,8 @@ mod tests {
     #[test]
     fn test_frames_zero_channels() {
         let spec = PcmSpec {
-            sample_rate: 44100,
             channels: 0,
+            sample_rate: 44100,
         };
         let chunk = PcmChunk::new(spec, vec![0.0, 1.0, 2.0, 3.0]);
         assert_eq!(chunk.frames(), 0);
@@ -225,8 +225,8 @@ mod tests {
         #[case] expected_duration: f64,
     ) {
         let spec = PcmSpec {
-            sample_rate,
             channels,
+            sample_rate,
         };
         let chunk = PcmChunk::new(spec, pcm);
         let duration = chunk.duration_secs();
@@ -236,8 +236,8 @@ mod tests {
     #[test]
     fn test_duration_secs_zero_sample_rate() {
         let spec = PcmSpec {
-            sample_rate: 0,
             channels: 2,
+            sample_rate: 0,
         };
         let chunk = PcmChunk::new(spec, vec![0.0, 1.0, 2.0, 3.0]);
         assert_eq!(chunk.duration_secs(), 0.0);
@@ -246,8 +246,8 @@ mod tests {
     #[test]
     fn test_samples_access() {
         let spec = PcmSpec {
-            sample_rate: 44100,
             channels: 2,
+            sample_rate: 44100,
         };
         let pcm = vec![0.1, 0.2, 0.3, 0.4];
         let chunk = PcmChunk::new(spec, pcm.clone());
@@ -260,8 +260,8 @@ mod tests {
     #[test]
     fn test_into_samples() {
         let spec = PcmSpec {
-            sample_rate: 44100,
             channels: 2,
+            sample_rate: 44100,
         };
         let pcm = vec![0.1, 0.2, 0.3, 0.4];
         let chunk = PcmChunk::new(spec, pcm.clone());
@@ -274,8 +274,8 @@ mod tests {
     #[test]
     fn test_pcm_chunk_with_i16() {
         let spec = PcmSpec {
-            sample_rate: 44100,
             channels: 2,
+            sample_rate: 44100,
         };
         let pcm: Vec<i16> = vec![100, 200, 300, 400];
         let chunk = PcmChunk::new(spec, pcm);
@@ -287,8 +287,8 @@ mod tests {
     #[test]
     fn test_pcm_chunk_with_f64() {
         let spec = PcmSpec {
-            sample_rate: 48000,
             channels: 1,
+            sample_rate: 48000,
         };
         let pcm: Vec<f64> = vec![0.1, 0.2, 0.3];
         let chunk = PcmChunk::new(spec, pcm);
@@ -301,8 +301,8 @@ mod tests {
     #[test]
     fn test_pcm_chunk_clone() {
         let spec = PcmSpec {
-            sample_rate: 44100,
             channels: 2,
+            sample_rate: 44100,
         };
         let pcm = vec![0.1, 0.2, 0.3, 0.4];
         let chunk = PcmChunk::new(spec, pcm);
@@ -315,8 +315,8 @@ mod tests {
     #[test]
     fn test_pcm_chunk_debug() {
         let spec = PcmSpec {
-            sample_rate: 44100,
             channels: 2,
+            sample_rate: 44100,
         };
         let pcm = vec![0.1f32, 0.2];
         let chunk = PcmChunk::new(spec, pcm);

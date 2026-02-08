@@ -34,19 +34,19 @@ use crate::{
 /// Request to load a specific segment (on-demand or sequential).
 #[derive(Debug, Clone)]
 pub(crate) struct SegmentRequest {
-    pub(crate) variant: usize,
     pub(crate) segment_index: usize,
+    pub(crate) variant: usize,
 }
 
 /// Entry tracking a loaded segment in the virtual stream.
 #[derive(Debug, Clone)]
 pub(crate) struct SegmentEntry {
+    pub(crate) byte_offset: u64,
+    pub(crate) codec: Option<AudioCodec>,
+    pub(crate) init_len: u64,
+    pub(crate) init_url: Option<Url>,
     /// Segment metadata from the fetch layer (url, len, variant, container).
     pub(crate) meta: SegmentMeta,
-    pub(crate) init_url: Option<Url>,
-    pub(crate) byte_offset: u64,
-    pub(crate) init_len: u64,
-    pub(crate) codec: Option<AudioCodec>,
 }
 
 impl SegmentEntry {
@@ -72,26 +72,26 @@ impl SegmentEntry {
 #[derive(Debug)]
 pub(crate) struct SegmentIndex {
     pub(crate) entries: HashMap<(usize, usize), SegmentEntry>,
-    /// Byte ranges that have been loaded (reflects actual data on disk).
-    loaded_ranges: RangeSet<u64>,
     /// Expected total length of current variant's theoretical stream.
     /// Used for seek bounds checking by Symphonia.
     pub(crate) expected_total_length: u64,
-    /// Key of the most recently pushed entry (for `last()`, `media_info`, `segment_range`).
-    last_entry_key: Option<(usize, usize)>,
     /// True after a mid-stream variant switch. On-demand loading should
     /// just wake the sequential downloader instead of using metadata lookups.
     pub(crate) had_midstream_switch: bool,
+    /// Key of the most recently pushed entry (for `last()`, `media_info`, `segment_range`).
+    last_entry_key: Option<(usize, usize)>,
+    /// Byte ranges that have been loaded (reflects actual data on disk).
+    loaded_ranges: RangeSet<u64>,
 }
 
 impl Default for SegmentIndex {
     fn default() -> Self {
         Self {
             entries: HashMap::new(),
-            loaded_ranges: RangeSet::new(),
             expected_total_length: 0,
-            last_entry_key: None,
             had_midstream_switch: false,
+            last_entry_key: None,
+            loaded_ranges: RangeSet::new(),
         }
     }
 }
@@ -358,8 +358,8 @@ impl Source for HlsSource {
                         while self.shared.segment_requests.pop().is_some() {}
 
                         self.shared.segment_requests.push(SegmentRequest {
-                            variant: current_variant,
                             segment_index,
+                            variant: current_variant,
                         });
 
                         self.shared.reader_advanced.notify_one();
@@ -524,6 +524,10 @@ mod tests {
         len: u64,
     ) -> SegmentEntry {
         SegmentEntry {
+            byte_offset,
+            codec: Some(AudioCodec::AacLc),
+            init_len: 0,
+            init_url: None,
             meta: SegmentMeta {
                 variant,
                 segment_type: SegmentType::Media(segment_index),
@@ -534,10 +538,6 @@ mod tests {
                 len,
                 container: Some(ContainerFormat::Fmp4),
             },
-            init_url: None,
-            byte_offset,
-            init_len: 0,
-            codec: Some(AudioCodec::AacLc),
         }
     }
 

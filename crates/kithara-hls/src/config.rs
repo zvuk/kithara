@@ -13,8 +13,8 @@ use crate::error::HlsResult;
 
 #[derive(Clone, Debug)]
 pub struct KeyContext {
-    pub url: Url,
     pub iv: Option<[u8; 16]>,
+    pub url: Url,
 }
 
 /// Callback for processing encryption keys.
@@ -26,23 +26,23 @@ pub use kithara_abr::{AbrMode, AbrOptions};
 /// Encryption key handling configuration.
 #[derive(Clone, Default)]
 pub struct KeyOptions {
+    /// Callback for processing (e.g. decrypting) raw key bytes after fetch.
+    pub key_processor: Option<KeyProcessor>,
     /// Query parameters to append to key URLs.
     pub query_params: Option<HashMap<String, String>>,
     /// Headers to include in key requests.
     pub request_headers: Option<HashMap<String, String>>,
-    /// Callback for processing (e.g. decrypting) raw key bytes after fetch.
-    pub key_processor: Option<KeyProcessor>,
 }
 
 impl std::fmt::Debug for KeyOptions {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("KeyOptions")
-            .field("query_params", &self.query_params)
-            .field("request_headers", &self.request_headers)
             .field(
                 "key_processor",
                 &self.key_processor.as_ref().map(|_| "KeyProcessor"),
             )
+            .field("query_params", &self.query_params)
+            .field("request_headers", &self.request_headers)
             .finish()
     }
 }
@@ -77,67 +77,67 @@ impl KeyOptions {
 /// Used with `Stream::<Hls>::new(config)`.
 #[derive(Clone)]
 pub struct HlsConfig {
-    /// Master playlist URL.
-    pub url: Url,
-    /// Optional name for cache disambiguation.
-    ///
-    /// When multiple URLs share the same canonical form (e.g. differ only in
-    /// query parameters), setting a unique `name` ensures each gets its own
-    /// cache directory.
-    pub name: Option<String>,
-    /// Storage configuration.
-    pub store: StoreOptions,
-    /// Network configuration.
-    pub net: NetOptions,
     /// ABR (Adaptive Bitrate) configuration.
     pub abr: AbrOptions,
-    /// Encryption key handling configuration.
-    pub keys: KeyOptions,
     /// Base URL for resolving relative playlist/segment URLs.
     pub base_url: Option<Url>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// Events broadcast sender (optional - if not provided, one is created internally).
-    pub events_tx: Option<broadcast::Sender<crate::HlsEvent>>,
-    /// Capacity of the command channel.
-    pub command_channel_capacity: usize,
     /// Capacity of the chunk/data channel.
     pub chunk_channel_capacity: usize,
-    /// Capacity of the events broadcast channel (used when `events_tx` is not provided).
-    pub events_channel_capacity: usize,
-    /// Buffer pool (shared across all components, created if not provided).
-    pub pool: Option<BytePool>,
-    /// Max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
-    /// - `None` — no backpressure, download as fast as possible
-    pub look_ahead_bytes: Option<u64>,
+    /// Capacity of the command channel.
+    pub command_channel_capacity: usize,
     /// How often to yield to the async runtime during fast downloads.
     ///
     /// When `look_ahead_bytes` is `None`, the downloader yields after this many
     /// chunks to allow other tasks (like playback progress) to run.
     /// Default: 8 chunks.
     pub download_yield_interval: usize,
+    /// Capacity of the events broadcast channel (used when `events_tx` is not provided).
+    pub events_channel_capacity: usize,
+    /// Events broadcast sender (optional - if not provided, one is created internally).
+    pub events_tx: Option<broadcast::Sender<crate::HlsEvent>>,
+    /// Encryption key handling configuration.
+    pub keys: KeyOptions,
+    /// Max bytes the downloader may be ahead of the reader before it pauses.
+    ///
+    /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
+    /// - `None` — no backpressure, download as fast as possible
+    pub look_ahead_bytes: Option<u64>,
+    /// Optional name for cache disambiguation.
+    ///
+    /// When multiple URLs share the same canonical form (e.g. differ only in
+    /// query parameters), setting a unique `name` ensures each gets its own
+    /// cache directory.
+    pub name: Option<String>,
+    /// Network configuration.
+    pub net: NetOptions,
+    /// Buffer pool (shared across all components, created if not provided).
+    pub pool: Option<BytePool>,
+    /// Storage configuration.
+    pub store: StoreOptions,
+    /// Master playlist URL.
+    pub url: Url,
 }
 
 impl Default for HlsConfig {
     fn default() -> Self {
         Self {
-            url: Url::parse("http://localhost/stream.m3u8").expect("valid default URL"),
-            name: None,
-            store: StoreOptions::default(),
-            net: NetOptions::default(),
             abr: AbrOptions::default(),
-            keys: KeyOptions::default(),
             base_url: None,
             cancel: None,
-            events_tx: None,
-            command_channel_capacity: 16,
             chunk_channel_capacity: 8,
-            events_channel_capacity: 32,
-            pool: None,
-            look_ahead_bytes: None,
+            command_channel_capacity: 16,
             download_yield_interval: 1,
+            events_channel_capacity: 32,
+            events_tx: None,
+            keys: KeyOptions::default(),
+            look_ahead_bytes: None,
+            name: None,
+            net: NetOptions::default(),
+            pool: None,
+            store: StoreOptions::default(),
+            url: Url::parse("http://localhost/stream.m3u8").expect("valid default URL"),
         }
     }
 }
@@ -146,21 +146,21 @@ impl HlsConfig {
     /// Create new HLS config with URL.
     pub fn new(url: Url) -> Self {
         Self {
-            url,
-            name: None,
-            store: StoreOptions::default(),
-            net: NetOptions::default(),
             abr: AbrOptions::default(),
-            keys: KeyOptions::default(),
             base_url: None,
             cancel: None,
-            events_tx: None,
-            command_channel_capacity: 16,
             chunk_channel_capacity: 8,
-            events_channel_capacity: 32,
-            pool: None,
-            look_ahead_bytes: None,
+            command_channel_capacity: 16,
             download_yield_interval: 8,
+            events_channel_capacity: 32,
+            events_tx: None,
+            keys: KeyOptions::default(),
+            look_ahead_bytes: None,
+            name: None,
+            net: NetOptions::default(),
+            pool: None,
+            store: StoreOptions::default(),
+            url,
         }
     }
 

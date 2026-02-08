@@ -16,14 +16,14 @@ use crate::{MediaInfo, source::Source};
 /// Calls `Source` methods directly for I/O.
 /// Implements `Read + Seek` for use with symphonia.
 pub struct Reader<S: Source> {
-    source: S,
     pos: u64,
+    source: S,
 }
 
 impl<S: Source> Reader<S> {
     /// Create new reader.
     pub fn new(source: S) -> Self {
-        Self { source, pos: 0 }
+        Self { pos: 0, source }
     }
 
     /// Get current position.

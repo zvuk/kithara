@@ -32,12 +32,12 @@ const NO_SWITCH: u64 = 0;
 
 pub struct AbrController<E: Estimator> {
     pub(crate) cfg: AbrOptions,
-    estimator: E,
     current_variant: Arc<AtomicUsize>,
-    /// Reference instant for computing elapsed time (created at controller init).
-    reference_instant: Instant,
+    estimator: E,
     /// Nanoseconds since `reference_instant` of last switch, or `NO_SWITCH` if none.
     last_switch_at_nanos: AtomicU64,
+    /// Reference instant for computing elapsed time (created at controller init).
+    reference_instant: Instant,
 }
 
 impl<E: Estimator> AbrController<E> {
@@ -45,10 +45,10 @@ impl<E: Estimator> AbrController<E> {
         let initial_variant = cfg.initial_variant();
         Self {
             cfg,
-            estimator,
             current_variant: Arc::new(AtomicUsize::new(initial_variant)),
-            reference_instant: Instant::now(),
+            estimator,
             last_switch_at_nanos: AtomicU64::new(NO_SWITCH),
+            reference_instant: Instant::now(),
         }
     }
 
@@ -366,11 +366,11 @@ mod tests {
         #[case] expected_changed: bool,
     ) {
         let cfg = AbrOptions {
-            throughput_safety_factor: 1.5,
-            min_buffer_for_up_switch_secs: 0.0,
             down_switch_buffer_secs: 0.0,
+            min_buffer_for_up_switch_secs: 0.0,
             min_switch_interval: Duration::ZERO,
             mode: AbrMode::Auto(Some(initial_variant)),
+            throughput_safety_factor: 1.5,
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -399,10 +399,10 @@ mod tests {
     fn upswitch_requires_buffer_and_hysteresis() {
         let cfg = AbrOptions {
             min_buffer_for_up_switch_secs: 10.0,
-            throughput_safety_factor: 1.5,
-            up_hysteresis_ratio: 1.3,
             min_switch_interval: Duration::ZERO,
             mode: AbrMode::Auto(Some(0)),
+            throughput_safety_factor: 1.5,
+            up_hysteresis_ratio: 1.3,
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -440,9 +440,9 @@ mod tests {
     #[test]
     fn min_switch_interval_prevents_oscillation() {
         let cfg = AbrOptions {
-            min_switch_interval: Duration::from_secs(30),
-            min_buffer_for_up_switch_secs: 0.0,
             down_switch_buffer_secs: 0.0,
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::from_secs(30),
             mode: AbrMode::Auto(Some(1)),
             variants: variants(),
             ..AbrOptions::default()
@@ -487,8 +487,8 @@ mod tests {
     #[test]
     fn test_estimator_called_once_per_decide() {
         let cfg = AbrOptions {
-            mode: AbrMode::Auto(Some(1)),
             min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(1)),
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -520,8 +520,8 @@ mod tests {
     #[test]
     fn test_min_interval_skips_estimator_call() {
         let cfg = AbrOptions {
-            mode: AbrMode::Auto(Some(1)),
             min_switch_interval: Duration::from_secs(30),
+            mode: AbrMode::Auto(Some(1)),
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -555,8 +555,8 @@ mod tests {
     #[test]
     fn test_abr_sequence_estimate_then_push() {
         let cfg = AbrOptions {
-            mode: AbrMode::Auto(Some(1)),
             min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(1)),
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -597,8 +597,8 @@ mod tests {
     #[test]
     fn test_abr_sequence_multiple_decisions() {
         let cfg = AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
             min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(0)),
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -634,8 +634,8 @@ mod tests {
     #[test]
     fn apply_no_change_leaves_variant_and_timestamp_unchanged() {
         let cfg = AbrOptions {
-            mode: AbrMode::Auto(Some(1)),
             min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(1)),
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -669,9 +669,9 @@ mod tests {
     #[test]
     fn apply_with_change_updates_variant_and_records_switch() {
         let cfg = AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            min_switch_interval: Duration::from_secs(30),
             min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::from_secs(30),
+            mode: AbrMode::Auto(Some(0)),
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -703,9 +703,9 @@ mod tests {
     #[test]
     fn apply_round_trip_decide_reflects_new_state() {
         let cfg = AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            min_switch_interval: Duration::ZERO,
             min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(0)),
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -758,11 +758,11 @@ mod tests {
         let threshold_bps: u64 = (candidate_bw as f64 * up_hysteresis * safety) as u64;
 
         let base_cfg = AbrOptions {
-            throughput_safety_factor: safety,
-            up_hysteresis_ratio: up_hysteresis,
             min_buffer_for_up_switch_secs: 0.0,
             min_switch_interval: Duration::ZERO,
             mode: AbrMode::Auto(Some(0)),
+            throughput_safety_factor: safety,
+            up_hysteresis_ratio: up_hysteresis,
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -820,12 +820,12 @@ mod tests {
         let threshold_bps: u64 = (current_bw as f64 * down_hysteresis * safety) as u64;
 
         let base_cfg = AbrOptions {
-            throughput_safety_factor: safety,
             down_hysteresis_ratio: down_hysteresis,
             down_switch_buffer_secs: 0.0, // disable urgent-down path
             min_buffer_for_up_switch_secs: 0.0,
             min_switch_interval: Duration::ZERO,
             mode: AbrMode::Auto(Some(2)),
+            throughput_safety_factor: safety,
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -876,10 +876,10 @@ mod tests {
 
         let base_cfg = AbrOptions {
             min_buffer_for_up_switch_secs: min_buffer,
-            throughput_safety_factor: 1.5,
-            up_hysteresis_ratio: 1.3,
             min_switch_interval: Duration::ZERO,
             mode: AbrMode::Auto(Some(0)),
+            throughput_safety_factor: 1.5,
+            up_hysteresis_ratio: 1.3,
             variants: variants(),
             ..AbrOptions::default()
         };
@@ -928,8 +928,8 @@ mod tests {
     #[test]
     fn single_variant_returns_already_optimal() {
         let cfg = AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
             min_switch_interval: Duration::ZERO,
+            mode: AbrMode::Auto(Some(0)),
             variants: vec![Variant {
                 variant_index: 0,
                 bandwidth_bps: 256_000,
@@ -961,9 +961,9 @@ mod tests {
     fn min_interval_enforcement_precise() {
         let interval = Duration::from_secs(30);
         let cfg = AbrOptions {
-            mode: AbrMode::Auto(Some(0)),
-            min_switch_interval: interval,
             min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: interval,
+            mode: AbrMode::Auto(Some(0)),
             variants: variants(),
             ..AbrOptions::default()
         };

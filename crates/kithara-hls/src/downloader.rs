@@ -173,6 +173,10 @@ impl HlsDownloader {
                 let actual_init_len = if count == 0 { init_len } else { 0 };
 
                 let entry = SegmentEntry {
+                    byte_offset: meta.byte_offset,
+                    codec: variant_codec,
+                    init_len: actual_init_len,
+                    init_url: init_url.clone(),
                     meta: SegmentMeta {
                         variant,
                         segment_type: SegmentType::Media(index),
@@ -183,10 +187,6 @@ impl HlsDownloader {
                         len: media_len,
                         container,
                     },
-                    init_url: init_url.clone(),
-                    byte_offset: meta.byte_offset,
-                    init_len: actual_init_len,
-                    codec: variant_codec,
                 };
 
                 final_offset = entry.end_offset();
@@ -453,11 +453,11 @@ impl HlsDownloader {
 
         let media_len = meta.len;
         let entry = SegmentEntry {
-            meta,
-            init_url,
             byte_offset,
-            init_len: actual_init_len,
             codec: variant_codec,
+            init_len: actual_init_len,
+            init_url,
+            meta,
         };
 
         let end = byte_offset + actual_init_len + media_len;
@@ -596,8 +596,8 @@ impl Downloader for HlsDownloader {
             }
 
             self.shared.segment_requests.push(SegmentRequest {
-                variant: next_variant,
                 segment_index: self.current_segment_index,
+                variant: next_variant,
             });
         }
 

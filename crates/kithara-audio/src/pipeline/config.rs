@@ -21,31 +21,31 @@ use crate::{
 /// Generic over `StreamType` to include stream-specific configuration.
 /// Combines stream config and audio pipeline settings into a single builder.
 pub struct AudioConfig<T: StreamType> {
-    /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
-    pub stream: T::Config,
-    /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
-    pub pcm_buffer_chunks: usize,
     /// Command channel capacity.
     pub command_channel_capacity: usize,
     /// Broadcast event channel capacity.
     pub event_channel_capacity: usize,
     /// Optional format hint (file extension like "mp3", "wav")
     pub hint: Option<String>,
-    /// Media info hint for format detection
-    pub media_info: Option<kithara_stream::MediaInfo>,
-    /// Shared PCM pool for temporary buffers.
-    pub pcm_pool: Option<PcmPool>,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
-    /// Resampling quality preset.
-    pub resampler_quality: ResamplerQuality,
+    /// Media info hint for format detection
+    pub media_info: Option<kithara_stream::MediaInfo>,
+    /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
+    pub pcm_buffer_chunks: usize,
+    /// Shared PCM pool for temporary buffers.
+    pub pcm_pool: Option<PcmPool>,
+    /// Prefer hardware decoder when available (Apple `AudioToolbox`, Android `MediaCodec`).
+    pub prefer_hardware: bool,
     /// Number of chunks to buffer before signaling preload readiness.
     ///
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
     pub preload_chunks: usize,
-    /// Prefer hardware decoder when available (Apple `AudioToolbox`, Android `MediaCodec`).
-    pub prefer_hardware: bool,
+    /// Resampling quality preset.
+    pub resampler_quality: ResamplerQuality,
+    /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
+    pub stream: T::Config,
     /// Unified events sender (optional — if not provided, one is created internally).
     pub(super) events_tx: Option<broadcast::Sender<AudioPipelineEvent<T::Event>>>,
 }
@@ -54,17 +54,17 @@ impl<T: StreamType> AudioConfig<T> {
     /// Create config with stream config and default audio settings.
     pub fn new(stream: T::Config) -> Self {
         Self {
-            stream,
-            pcm_buffer_chunks: 10,
             command_channel_capacity: 4,
             event_channel_capacity: 64,
             hint: None,
-            media_info: None,
-            pcm_pool: None,
             host_sample_rate: None,
-            resampler_quality: ResamplerQuality::default(),
-            preload_chunks: 3,
+            media_info: None,
+            pcm_buffer_chunks: 10,
+            pcm_pool: None,
             prefer_hardware: false,
+            preload_chunks: 3,
+            resampler_quality: ResamplerQuality::default(),
+            stream,
             events_tx: None,
         }
     }
@@ -143,8 +143,8 @@ pub(super) fn expected_output_spec(
         initial_spec
     } else {
         PcmSpec {
-            sample_rate: host_sr,
             channels: initial_spec.channels,
+            sample_rate: host_sr,
         }
     }
 }
