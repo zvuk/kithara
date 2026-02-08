@@ -5,7 +5,9 @@ use std::time::Duration;
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
 use kithara_bufpool::byte_pool;
 use kithara_storage::ResourceExt;
-use rstest::{fixture, rstest};
+use rstest::rstest;
+
+use crate::common::fixtures::temp_dir;
 
 /// Helper to read bytes from resource into a pooled buffer
 fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
@@ -42,11 +44,6 @@ fn read_pins_file(root: &std::path::Path) -> Option<Vec<String>> {
         bincode::serde::decode_from_slice(&bytes, bincode::config::legacy())
             .expect("pins index must be valid bincode if exists");
     Some(file.pinned)
-}
-
-#[fixture]
-fn temp_dir() -> tempfile::TempDir {
-    tempfile::tempdir().unwrap()
 }
 
 fn asset_store_with_root(temp_dir: &tempfile::TempDir, asset_root: &str) -> AssetStore {

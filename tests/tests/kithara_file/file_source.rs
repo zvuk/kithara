@@ -14,6 +14,8 @@ use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
+use crate::common::fixtures::temp_dir;
+
 // ==================== Test Server Fixtures ====================
 
 async fn test_audio_endpoint() -> Response {
@@ -53,11 +55,6 @@ async fn run_test_server() -> String {
 }
 
 // ==================== Fixtures ====================
-
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().unwrap()
-}
 
 #[fixture]
 async fn test_server() -> String {

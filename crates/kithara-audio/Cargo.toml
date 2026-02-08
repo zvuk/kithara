@@ -41,6 +41,7 @@ reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }
+kithara-decode = { workspace = true, features = ["test-utils"] }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-assets = { workspace = true }

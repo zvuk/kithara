@@ -35,12 +35,18 @@ pub type AssetsResult<T> = Result<T, AssetsError>;
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
+    #[rstest]
+    #[case::invalid_key(AssetsError::InvalidKey, "invalid resource key")]
+    #[case::canonicalization(AssetsError::Canonicalization("path error".into()), "URL canonicalization failed: path error")]
+    #[case::invalid_url(AssetsError::InvalidUrl("bad://url".into()), "Invalid URL: bad://url")]
+    #[case::missing_component(AssetsError::MissingComponent("host".into()), "URL is missing required component: host")]
     #[test]
-    fn test_invalid_key_display() {
-        let err = AssetsError::InvalidKey;
-        assert_eq!(err.to_string(), "invalid resource key");
+    fn test_error_display(#[case] error: AssetsError, #[case] expected: &str) {
+        assert_eq!(error.to_string(), expected);
     }
 
     #[test]
@@ -70,24 +76,6 @@ mod tests {
         let decode_err = bincode::error::DecodeError::UnexpectedEnd { additional: 8 };
         let err: AssetsError = decode_err.into();
         assert!(matches!(err, AssetsError::BincodeDecode(_)));
-    }
-
-    #[test]
-    fn test_canonicalization_error_display() {
-        let err = AssetsError::Canonicalization("path error".into());
-        assert_eq!(err.to_string(), "URL canonicalization failed: path error");
-    }
-
-    #[test]
-    fn test_invalid_url_display() {
-        let err = AssetsError::InvalidUrl("bad://url".into());
-        assert_eq!(err.to_string(), "Invalid URL: bad://url");
-    }
-
-    #[test]
-    fn test_missing_component_display() {
-        let err = AssetsError::MissingComponent("host".into());
-        assert_eq!(err.to_string(), "URL is missing required component: host");
     }
 
     #[test]

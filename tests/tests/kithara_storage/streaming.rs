@@ -9,22 +9,14 @@ use rstest::*;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
+use crate::common::fixtures::{cancel_token, temp_dir};
+
 /// Helper to read bytes from resource into a new Vec
 fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
     buf.truncate(n);
     buf
-}
-
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().expect("failed to create temp dir")
-}
-
-#[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
 }
 
 #[rstest]

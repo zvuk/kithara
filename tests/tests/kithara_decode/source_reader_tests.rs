@@ -2,67 +2,12 @@
 
 //! Tests for SourceReader - sync Read+Seek adapter over sync Source.
 
-use std::{
-    io::{Read, Seek, SeekFrom},
-    ops::Range,
-};
+use std::io::{Read, Seek, SeekFrom};
 
 use kithara_audio::SourceReader;
-use kithara_stream::{MediaInfo, Source, StreamResult, WaitOutcome};
 use rstest::{fixture, rstest};
 
-// ==================== Mock Source ====================
-
-/// In-memory source for testing SourceReader.
-struct MemorySource {
-    data: Vec<u8>,
-}
-
-impl MemorySource {
-    fn new(data: Vec<u8>) -> Self {
-        Self { data }
-    }
-
-    fn from_str(s: &str) -> Self {
-        Self::new(s.as_bytes().to_vec())
-    }
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("MemorySourceError")]
-struct MemorySourceError;
-
-impl Source for MemorySource {
-    type Item = u8;
-    type Error = MemorySourceError;
-
-    fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
-        if range.start >= self.data.len() as u64 {
-            Ok(WaitOutcome::Eof)
-        } else {
-            Ok(WaitOutcome::Ready)
-        }
-    }
-
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
-        let offset = offset as usize;
-        if offset >= self.data.len() {
-            return Ok(0);
-        }
-        let available = self.data.len() - offset;
-        let n = buf.len().min(available);
-        buf[..n].copy_from_slice(&self.data[offset..offset + n]);
-        Ok(n)
-    }
-
-    fn len(&self) -> Option<u64> {
-        Some(self.data.len() as u64)
-    }
-
-    fn media_info(&self) -> Option<MediaInfo> {
-        None
-    }
-}
+use crate::common::memory_source::MemorySource;
 
 // ==================== Fixtures ====================
 

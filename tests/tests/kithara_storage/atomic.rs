@@ -6,22 +6,7 @@ use rstest::*;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().expect("Failed to create temp dir")
-}
-
-#[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
-
-#[fixture]
-fn cancel_token_cancelled() -> CancellationToken {
-    let token = CancellationToken::new();
-    token.cancel();
-    token
-}
+use crate::common::fixtures::{cancel_token, cancel_token_cancelled, temp_dir};
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]

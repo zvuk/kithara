@@ -721,57 +721,16 @@ impl<S: Send> PcmReader for Audio<S> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_decode::test_support::create_test_wav;
     use kithara_stream::Stream;
 
     use super::*;
-
-    /// Create minimal valid WAV file
-    fn create_test_wav(sample_count: usize) -> Vec<u8> {
-        let channels = 2u16;
-        let sample_rate = 44100u32;
-        let bytes_per_sample = 2;
-        let data_size = (sample_count * channels as usize * bytes_per_sample) as u32;
-        let file_size = 36 + data_size;
-
-        let mut wav = Vec::new();
-
-        // RIFF header
-        wav.extend_from_slice(b"RIFF");
-        wav.extend_from_slice(&file_size.to_le_bytes());
-        wav.extend_from_slice(b"WAVE");
-
-        // fmt chunk
-        wav.extend_from_slice(b"fmt ");
-        wav.extend_from_slice(&16u32.to_le_bytes());
-        wav.extend_from_slice(&1u16.to_le_bytes()); // PCM
-        wav.extend_from_slice(&channels.to_le_bytes());
-        wav.extend_from_slice(&sample_rate.to_le_bytes());
-        let byte_rate = sample_rate * channels as u32 * bytes_per_sample as u32;
-        wav.extend_from_slice(&byte_rate.to_le_bytes());
-        let block_align = channels * bytes_per_sample as u16;
-        wav.extend_from_slice(&block_align.to_le_bytes());
-        wav.extend_from_slice(&16u16.to_le_bytes());
-
-        // data chunk
-        wav.extend_from_slice(b"data");
-        wav.extend_from_slice(&data_size.to_le_bytes());
-
-        // Generate samples
-        for i in 0..sample_count {
-            let sample = ((i as f32 * 0.1).sin() * 32767.0) as i16;
-            for _ in 0..channels {
-                wav.extend_from_slice(&sample.to_le_bytes());
-            }
-        }
-
-        wav
-    }
 
     /// Write test WAV to a temp file and return config for it.
     fn test_wav_config(
         sample_count: usize,
     ) -> (tempfile::NamedTempFile, AudioConfig<kithara_file::File>) {
-        let wav_data = create_test_wav(sample_count);
+        let wav_data = create_test_wav(sample_count, 44100, 2);
         let tmp = tempfile::NamedTempFile::new().unwrap();
         std::io::Write::write_all(&mut std::fs::File::create(tmp.path()).unwrap(), &wav_data)
             .unwrap();

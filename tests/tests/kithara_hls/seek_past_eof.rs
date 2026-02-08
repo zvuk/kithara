@@ -25,11 +25,13 @@ use axum::{
 use kithara_assets::StoreOptions;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_stream::Stream;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use url::Url;
+
+use crate::common::fixtures::{cancel_token, debug_tracing_setup, temp_dir};
 
 // ==================== Constants ====================
 
@@ -47,28 +49,6 @@ const HEAD_TOTAL: u64 = (HEAD_REPORTED_SIZE * NUM_SEGMENTS) as u64; // 597_600
 
 /// Actual total bytes that will be downloaded and cached.
 const ACTUAL_TOTAL: u64 = (ACTUAL_SEGMENT_SIZE * NUM_SEGMENTS) as u64; // 600_000
-
-// ==================== Fixtures ====================
-
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().unwrap()
-}
-
-#[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
-
-#[fixture]
-fn tracing_setup() {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::default().add_directive("debug".parse().unwrap()),
-        )
-        .with_test_writer()
-        .try_init();
-}
 
 // ==================== Test Server ====================
 
@@ -181,7 +161,7 @@ async fn start_mismatch_server() -> Url {
 #[timeout(Duration::from_secs(15))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn seek_beyond_head_total_within_actual_total(
-    _tracing_setup: (),
+    _debug_tracing_setup: (),
     temp_dir: TempDir,
     cancel_token: CancellationToken,
 ) {

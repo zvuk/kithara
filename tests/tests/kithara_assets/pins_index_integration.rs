@@ -6,13 +6,10 @@ use kithara_assets::{AssetStore, AssetStoreBuilder, DiskAssetStore, EvictConfig,
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
 
+use crate::common::fixtures::temp_dir;
+
 fn pins_path(root: &std::path::Path) -> std::path::PathBuf {
     root.join("_index").join("pins.json")
-}
-
-#[fixture]
-fn temp_dir() -> tempfile::TempDir {
-    tempfile::tempdir().unwrap()
 }
 
 #[fixture]

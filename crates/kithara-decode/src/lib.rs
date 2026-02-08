@@ -32,6 +32,9 @@ mod symphonia;
 mod traits;
 mod types;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_support;
+
 // Platform-specific backends
 #[cfg(all(feature = "android", target_os = "android"))]
 mod android;

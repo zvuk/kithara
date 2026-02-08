@@ -4,15 +4,12 @@ use std::time::Duration;
 
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
 use kithara_storage::ResourceExt;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use tempfile::TempDir;
 
-// === Test Fixtures ===
+use crate::common::fixtures::temp_dir;
 
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().expect("Failed to create temp dir")
-}
+// === Test Fixtures ===
 
 fn asset_store_with_root(temp_dir: &TempDir, asset_root: &str) -> AssetStore {
     AssetStoreBuilder::new()

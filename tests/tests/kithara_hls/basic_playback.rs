@@ -14,18 +14,9 @@ use tracing_subscriber::EnvFilter;
 use url::Url;
 
 use super::fixture;
+use crate::common::fixtures::{cancel_token, temp_dir};
 
 // ==================== Fixtures ====================
-
-#[fixture]
-fn temp_dir() -> TempDir {
-    TempDir::new().unwrap()
-}
-
-#[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
 
 #[fixture]
 fn tracing_setup() {

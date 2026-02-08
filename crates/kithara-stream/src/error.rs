@@ -40,39 +40,19 @@ pub type StreamResult<T, E> = Result<T, StreamError<E>>;
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
+    #[rstest]
+    #[case::seek_not_supported(StreamError::<std::io::Error>::SeekNotSupported, "seek not supported")]
+    #[case::invalid_seek(StreamError::<std::io::Error>::InvalidSeek, "invalid seek position")]
+    #[case::unknown_length(StreamError::<std::io::Error>::UnknownLength, "seek requires known length, but source length is unknown")]
+    #[case::channel_closed(StreamError::<std::io::Error>::ChannelClosed, "internal channel closed")]
+    #[case::writer_join(StreamError::<std::io::Error>::WriterJoin("panic message".into()), "writer task join error: panic message")]
     #[test]
-    fn test_seek_not_supported_display() {
-        let err: StreamError<std::io::Error> = StreamError::SeekNotSupported;
-        assert_eq!(err.to_string(), "seek not supported");
-    }
-
-    #[test]
-    fn test_invalid_seek_display() {
-        let err: StreamError<std::io::Error> = StreamError::InvalidSeek;
-        assert_eq!(err.to_string(), "invalid seek position");
-    }
-
-    #[test]
-    fn test_unknown_length_display() {
-        let err: StreamError<std::io::Error> = StreamError::UnknownLength;
-        assert_eq!(
-            err.to_string(),
-            "seek requires known length, but source length is unknown"
-        );
-    }
-
-    #[test]
-    fn test_channel_closed_display() {
-        let err: StreamError<std::io::Error> = StreamError::ChannelClosed;
-        assert_eq!(err.to_string(), "internal channel closed");
-    }
-
-    #[test]
-    fn test_writer_join_display() {
-        let err: StreamError<std::io::Error> = StreamError::WriterJoin("panic message".into());
-        assert_eq!(err.to_string(), "writer task join error: panic message");
+    fn test_error_display(#[case] error: StreamError<std::io::Error>, #[case] expected: &str) {
+        assert_eq!(error.to_string(), expected);
     }
 
     #[test]

@@ -14,21 +14,13 @@ use std::time::Duration;
 use bytes::Bytes;
 use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
 use kithara_storage::ResourceExt;
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use tokio_util::sync::CancellationToken;
+
+use crate::common::fixtures::{cancel_token, temp_dir};
 
 fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
     root.join(asset_root).exists()
-}
-
-#[fixture]
-fn cancel_token() -> CancellationToken {
-    CancellationToken::new()
-}
-
-#[fixture]
-fn temp_dir() -> tempfile::TempDir {
-    tempfile::tempdir().unwrap()
 }
 
 fn asset_store_with_root_and_limit(

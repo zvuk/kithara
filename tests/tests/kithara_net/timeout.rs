@@ -269,52 +269,40 @@ async fn test_timeout_preserves_error(#[case] delay: Duration) {
 }
 
 // Test timeout with representative scenarios
+#[rstest]
+#[case::fast_delay(100, 200, true)]
+#[case::slow_delay(200, 100, false)]
+#[case::quick_success(50, 100, true)]
+#[case::moderate_timeout(150, 100, false)]
+#[case::zero_delay(0, 100, true)]
+#[case::large_delay(1000, 10, false)]
 #[tokio::test]
-async fn test_timeout_representative_scenarios() {
-    let scenarios = vec![
-        (Duration::from_millis(100), Duration::from_millis(200), true),
-        (
-            Duration::from_millis(200),
-            Duration::from_millis(100),
-            false,
-        ),
-        (Duration::from_millis(50), Duration::from_millis(100), true),
-        (
-            Duration::from_millis(150),
-            Duration::from_millis(100),
-            false,
-        ),
-        (Duration::from_millis(0), Duration::from_millis(100), true),
-        (
-            Duration::from_millis(1000),
-            Duration::from_millis(10),
-            false,
-        ),
-    ];
+async fn test_timeout_representative_scenarios(
+    #[case] delay_ms: u64,
+    #[case] timeout_ms: u64,
+    #[case] should_succeed: bool,
+) {
+    let mock_net = TimeoutMockNet::new(Duration::from_millis(delay_ms), true);
+    let timeout_net = mock_net.with_timeout(Duration::from_millis(timeout_ms));
 
-    for (delay, timeout, should_succeed) in scenarios {
-        let mock_net = TimeoutMockNet::new(delay, true);
-        let timeout_net = mock_net.with_timeout(timeout);
+    let url = Url::parse("http://example.com").unwrap();
+    let result = timeout_net.get_bytes(url, None).await;
 
-        let url = Url::parse("http://example.com").unwrap();
-        let result = timeout_net.get_bytes(url, None).await;
-
-        if should_succeed {
-            assert!(
-                result.is_ok(),
-                "Should succeed with delay={:?}, timeout={:?}",
-                delay,
-                timeout
-            );
-            assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
-        } else {
-            assert!(
-                result.is_err(),
-                "Should timeout with delay={:?}, timeout={:?}",
-                delay,
-                timeout
-            );
-            assert!(matches!(result.err().unwrap(), NetError::Timeout));
-        }
+    if should_succeed {
+        assert!(
+            result.is_ok(),
+            "Should succeed with delay={}ms, timeout={}ms",
+            delay_ms,
+            timeout_ms
+        );
+        assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
+    } else {
+        assert!(
+            result.is_err(),
+            "Should timeout with delay={}ms, timeout={}ms",
+            delay_ms,
+            timeout_ms
+        );
+        assert!(matches!(result.err().unwrap(), NetError::Timeout));
     }
 }
