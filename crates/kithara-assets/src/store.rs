@@ -111,14 +111,20 @@ pub type AssetResource<Ctx = ()> = LeaseResource<
 /// // Without processing:
 /// let store = AssetStoreBuilder::new()
 ///     .root_dir("/path/to/cache")
-///     .asset_root(asset_root_for_url(&master_url))
+///     .asset_root(Some(&asset_root_for_url(&master_url)))
 ///     .build();
 ///
 /// // With processing callback:
 /// let store = AssetStoreBuilder::new()
 ///     .root_dir("/path/to/cache")
-///     .asset_root(asset_root_for_url(&master_url))
+///     .asset_root(Some(&asset_root_for_url(&master_url)))
 ///     .process_fn(my_decrypt_callback)
+///     .build();
+///
+/// // Local-only (absolute keys only, no asset_root):
+/// let store = AssetStoreBuilder::new()
+///     .root_dir("/path/to/cache")
+///     .asset_root(None)
 ///     .build();
 /// ```
 ///
@@ -181,8 +187,12 @@ where
     }
 
     /// Set the asset root identifier (e.g. from `asset_root_for_url`).
-    pub fn asset_root<S: Into<String>>(mut self, asset_root: S) -> Self {
-        self.asset_root = Some(asset_root.into());
+    ///
+    /// Pass `None` when the store will only be used with absolute keys
+    /// (e.g. local file playback). Relative keys will fail with `InvalidKey`
+    /// when `asset_root` is `None`.
+    pub fn asset_root(mut self, asset_root: Option<&str>) -> Self {
+        self.asset_root = asset_root.map(str::to_string);
         self
     }
 
@@ -240,16 +250,14 @@ where
     /// Build the asset store.
     ///
     /// # Panics
-    /// Panics if `asset_root` is not set or if `process_fn` is not set for Ctx != ().
+    /// Panics if `process_fn` is not set for Ctx != ().
     pub fn build(self) -> AssetStore<Ctx> {
         let root_dir = self.root_dir.unwrap_or_else(|| {
             tempdir()
                 .expect("failed to create AssetStore temp dir")
                 .keep()
         });
-        let asset_root = self
-            .asset_root
-            .expect("asset_root is required for AssetStoreBuilder");
+        let asset_root = self.asset_root.unwrap_or_default();
         let evict_cfg = self.evict_config.unwrap_or_default();
         let cancel = self.cancel.unwrap_or_default();
 
@@ -324,7 +332,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
-            .asset_root("test_asset")
+            .asset_root(Some("test_asset"))
             .cache_enabled(false)
             .lease_enabled(false)
             .evict_enabled(false)
@@ -349,7 +357,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
-            .asset_root("test_asset")
+            .asset_root(Some("test_asset"))
             .build();
 
         let key = ResourceKey::new("test.bin");
@@ -360,5 +368,46 @@ mod tests {
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 5);
         assert_eq!(&buf, b"hello");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn builder_no_asset_root_with_absolute_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("song.mp3");
+        std::fs::write(&file_path, b"test data").unwrap();
+
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(None)
+            .cache_enabled(false)
+            .lease_enabled(false)
+            .evict_enabled(false)
+            .build();
+
+        let key = ResourceKey::absolute(&file_path);
+        let res = store.open_resource(&key).unwrap();
+
+        let mut buf = [0u8; 9];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"test data");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn builder_no_asset_root_rejects_relative_key() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(None)
+            .cache_enabled(false)
+            .lease_enabled(false)
+            .evict_enabled(false)
+            .build();
+
+        let key = ResourceKey::new("test.bin");
+        let result = store.open_resource(&key);
+        assert!(result.is_err());
     }
 }

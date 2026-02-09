@@ -104,7 +104,7 @@ impl File {
 
         let store = AssetStoreBuilder::new()
             .root_dir(&config.store.cache_dir)
-            .asset_root(&asset_root)
+            .asset_root(Some(asset_root.as_str()))
             .evict_config(config.store.to_evict_config())
             .cancel(cancel.clone())
             .build();

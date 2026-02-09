@@ -16,7 +16,7 @@ fn pins_path(root: &std::path::Path) -> std::path::PathBuf {
 fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root("test-asset")
+        .asset_root(Some("test-asset"))
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,

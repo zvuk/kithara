@@ -35,7 +35,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 
     let assets = AssetStoreBuilder::new()
         .root_dir(temp_dir.path().to_path_buf())
-        .asset_root(asset_root)
+        .asset_root(Some(asset_root))
         .evict_config(EvictConfig::default())
         .cancel(CancellationToken::new())
         .build();

@@ -51,7 +51,7 @@ fn processing_transforms_data_on_commit(temp_dir: tempfile::TempDir) {
 
     let store = AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root("test-processing")
+        .asset_root(Some("test-processing"))
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
@@ -97,7 +97,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: tempfile::TempDir) {
 
     let store = AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root("test-cache")
+        .asset_root(Some("test-cache"))
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
@@ -149,7 +149,7 @@ fn processing_partial_reads_work_correctly(temp_dir: tempfile::TempDir) {
 
     let store = AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root("test-partial")
+        .asset_root(Some("test-partial"))
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
@@ -198,7 +198,7 @@ fn processing_read_past_end_returns_zero(temp_dir: tempfile::TempDir) {
 
     let store = AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root("test-eof")
+        .asset_root(Some("test-eof"))
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
@@ -234,7 +234,7 @@ fn store_without_processing_works_normally(temp_dir: tempfile::TempDir) {
     // Build store WITHOUT custom process_fn (uses default pass-through).
     let store = AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root("no-processing")
+        .asset_root(Some("no-processing"))
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,

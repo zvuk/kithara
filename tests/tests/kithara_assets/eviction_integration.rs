@@ -35,7 +35,7 @@ fn asset_store_with_root(
 ) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root(asset_root)
+        .asset_root(Some(asset_root))
         .evict_config(EvictConfig {
             max_assets,
             max_bytes: None,
