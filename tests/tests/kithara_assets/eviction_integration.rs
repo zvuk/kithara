@@ -69,7 +69,7 @@ fn eviction_max_assets_skips_pinned_assets(
         if i == create_count - 1 {
             let res_b = res;
             // Sanity: pins file should contain last asset while handle is alive.
-            if let Ok(pins_bytes) = std::fs::read(dir.join("_index/pins.json"))
+            if let Ok(pins_bytes) = std::fs::read(dir.join("_index/pins.bin"))
                 && let Ok((pins_file, _)) = bincode::serde::decode_from_slice::<PinsIndexFile, _>(
                     &pins_bytes,
                     bincode::config::legacy(),
@@ -138,7 +138,7 @@ fn eviction_ignores_missing_index(#[case] asset_count: usize, temp_dir: tempfile
     }
 
     // Manually corrupt LRU index to simulate missing metadata
-    let index_path = dir.join("_index/lru.json");
+    let index_path = dir.join("_index/lru.bin");
     if index_path.exists() {
         std::fs::write(&index_path, b"corrupted json").unwrap();
     }

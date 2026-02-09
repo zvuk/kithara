@@ -101,11 +101,11 @@ impl DiskAssetStore {
     }
 
     fn pins_index_path(&self) -> PathBuf {
-        self.root_dir.join("_index").join("pins.json")
+        self.root_dir.join("_index").join("pins.bin")
     }
 
     fn lru_index_path(&self) -> PathBuf {
-        self.root_dir.join("_index").join("lru.json")
+        self.root_dir.join("_index").join("lru.bin")
     }
 
     fn open_storage_resource(&self, path: PathBuf) -> AssetsResult<StorageResource> {

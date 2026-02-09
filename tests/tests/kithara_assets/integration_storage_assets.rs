@@ -35,7 +35,7 @@ struct PinsIndexFile {
 }
 
 fn read_pins_file(root: &std::path::Path) -> Option<Vec<String>> {
-    let path = root.join("_index").join("pins.json");
+    let path = root.join("_index").join("pins.bin");
     if !path.exists() {
         return None;
     }

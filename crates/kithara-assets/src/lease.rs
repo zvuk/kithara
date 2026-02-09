@@ -24,8 +24,8 @@ use crate::{
 /// ## Normative behavior
 /// - Every successful `open_resource()` pins `key.asset_root`.
 /// - The pin table is stored as a `HashSet<String>` (unique roots) in memory.
-/// - Pin/unpin operations set a dirty flag; disk persistence is deferred until
-///   [`flush_pins()`](Self::flush_pins) is called or the last clone is dropped.
+/// - Pin/unpin operations eagerly persist to disk (best-effort) so that
+///   crash-recovery sees the current pin set immediately.
 /// - The pin index resource must be excluded from pinning to avoid recursion.
 /// - When `enabled` is `false`, all operations delegate directly to the inner layer
 ///   (no pinning, no byte recording, no persistence).
@@ -143,6 +143,9 @@ where
                 self.dirty.store(true, Ordering::Release);
             }
         }
+
+        // Eagerly persist so crash-recovery sees the pin.
+        let _ = self.flush_pins();
 
         Ok(LeaseGuard {
             inner: Some(Arc::new(LeaseGuardInner {
@@ -335,10 +338,15 @@ where
 
         tracing::trace!(asset_root = %self.asset_root, "LeaseGuard::drop - removing pin");
 
-        let mut pins = self.owner.pins.lock();
-        if pins.remove(&self.asset_root) {
-            self.owner.dirty.store(true, Ordering::Release);
+        {
+            let mut pins = self.owner.pins.lock();
+            if pins.remove(&self.asset_root) {
+                self.owner.dirty.store(true, Ordering::Release);
+            }
         }
+
+        // Eagerly persist unpin so crash-recovery sees it.
+        let _ = self.owner.flush_pins();
     }
 }
 
@@ -379,7 +387,7 @@ mod tests {
 
     #[rstest]
     #[timeout(Duration::from_secs(5))]
-    fn pin_does_not_persist_until_flush() {
+    fn pin_persists_immediately() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());
         let key = ResourceKey::new("audio.mp3");
@@ -387,58 +395,55 @@ mod tests {
         // Open a resource — this pins `test_asset`
         let _res = lease.open_resource(&key).unwrap();
 
-        // Pins should NOT be on disk yet
-        let on_disk = load_persisted_pins(dir.path());
-        assert!(on_disk.is_empty(), "pins should not be persisted yet");
-
-        // After flush, pins should be on disk
-        lease.flush_pins().unwrap();
+        // Pins should be on disk immediately (eager persistence)
         let on_disk = load_persisted_pins(dir.path());
         assert!(
             on_disk.contains("test_asset"),
-            "pins should be persisted after flush"
+            "pin should be persisted immediately"
         );
     }
 
     #[rstest]
     #[timeout(Duration::from_secs(5))]
-    fn flush_clears_dirty_flag() {
+    fn eager_flush_clears_dirty_flag() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease(dir.path());
         let key = ResourceKey::new("audio.mp3");
 
         let _res = lease.open_resource(&key).unwrap();
-        assert!(lease.dirty.load(Ordering::Acquire));
 
-        lease.flush_pins().unwrap();
-        assert!(!lease.dirty.load(Ordering::Acquire));
+        // Dirty flag is already cleared by eager flush in pin()
+        assert!(
+            !lease.dirty.load(Ordering::Acquire),
+            "dirty flag should be cleared by eager flush"
+        );
 
-        // Second flush is a no-op
+        // Explicit flush is a no-op
         lease.flush_pins().unwrap();
     }
 
     #[rstest]
     #[timeout(Duration::from_secs(5))]
-    fn drop_last_lease_persists_dirty_pins() {
+    fn drop_guard_eagerly_persists_unpin() {
         let dir = tempfile::tempdir().unwrap();
         let key = ResourceKey::new("audio.mp3");
 
         let lease = make_lease(dir.path());
         let res = lease.open_resource(&key).unwrap();
 
-        // Not persisted yet
-        assert!(load_persisted_pins(dir.path()).is_empty());
+        // Pin is persisted eagerly
+        assert!(load_persisted_pins(dir.path()).contains("test_asset"));
 
-        // Drop guard first (unpins test_asset, sets dirty)
+        // Drop guard (unpins test_asset, eagerly persists)
         drop(res);
 
-        // Drop the last lease — should persist via Drop
-        drop(lease);
-
-        // Verify the Drop path ran (persisted the empty pin set after unpin).
-        // The file exists because persist was called — this is the key assertion.
-        let disk = DiskAssetStore::new(dir.path(), "test_asset", CancellationToken::new());
-        assert!(PinsIndex::open(&disk).is_ok());
+        // After unpin, the pin set on disk should be empty
+        let on_disk = load_persisted_pins(dir.path());
+        assert!(
+            on_disk.is_empty(),
+            "unpin should be eagerly persisted, got {:?}",
+            on_disk
+        );
     }
 
     #[rstest]
@@ -461,7 +466,7 @@ mod tests {
 
     #[rstest]
     #[timeout(Duration::from_secs(5))]
-    fn drop_intermediate_clone_does_not_persist() {
+    fn clone_pin_persists_immediately() {
         let dir = tempfile::tempdir().unwrap();
         let key = ResourceKey::new("audio.mp3");
 
@@ -469,18 +474,19 @@ mod tests {
         let lease_clone = lease.clone();
         let _res = lease_clone.open_resource(&key).unwrap();
 
-        // Drop clone (not the last — lease still exists, plus _res holds inner clone)
-        drop(lease_clone);
-        assert!(
-            load_persisted_pins(dir.path()).is_empty(),
-            "intermediate clone drop should not persist"
-        );
-
-        // Flush through remaining lease
-        lease.flush_pins().unwrap();
+        // Pin should be persisted eagerly, even through a clone
         assert!(
             load_persisted_pins(dir.path()).contains("test_asset"),
-            "flush on remaining clone should persist"
+            "pin via clone should be persisted immediately"
+        );
+
+        // Drop clone (not the last — lease still exists, plus _res holds inner clone)
+        drop(lease_clone);
+
+        // Pin should still be on disk (resource handle still alive)
+        assert!(
+            load_persisted_pins(dir.path()).contains("test_asset"),
+            "pin should remain while resource handle is alive"
         );
     }
 
