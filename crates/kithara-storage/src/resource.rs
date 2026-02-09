@@ -5,9 +5,9 @@
 //! `ResourceExt` is a sync trait covering both streaming (incremental write) and
 //! atomic (whole-file) use-cases.
 //!
-//! Concrete implementations:
-//! - [`StorageResource`](crate::StorageResource) — mmap-backed (filesystem).
-//! - [`MemoryResource`](crate::MemoryResource) — in-memory `Vec<u8>` (WASM).
+//! Concrete implementations via [`Resource<D>`](crate::Resource):
+//! - [`MmapResource`](crate::MmapResource) — mmap-backed (filesystem).
+//! - [`MemResource`](crate::MemResource) — in-memory `Vec<u8>` (WASM).
 
 use std::{ops::Range, path::Path};
 
@@ -15,7 +15,7 @@ use rangemap::RangeSet;
 
 use crate::StorageResult;
 
-/// Controls how `StorageResource` opens the backing file.
+/// Controls how [`MmapDriver`](crate::MmapDriver) opens the backing file.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum OpenMode {
     /// Auto-detect: existing files open as committed (read-only mmap),
@@ -58,7 +58,11 @@ pub enum ResourceStatus {
 ///
 /// For streaming: use `write_at` + `commit`.
 /// For atomic: use `write_all` / `read_into` convenience methods.
-pub trait ResourceExt: Send + Sync + Clone + 'static {
+#[cfg_attr(
+    any(test, feature = "test-utils"),
+    unimock::unimock(api = ResourceMock)
+)]
+pub trait ResourceExt: Send + Sync + 'static {
     /// Read data at the given offset into `buf`.
     ///
     /// Returns the number of bytes read.
@@ -75,7 +79,7 @@ pub trait ResourceExt: Send + Sync + Clone + 'static {
 
     /// Mark the resource as fully written.
     ///
-    /// If `final_len` is provided, the backing file may be truncated to that size.
+    /// If `final_len` is provided, the backing storage may be truncated to that size.
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
 
     /// Mark the resource as failed.
@@ -99,11 +103,11 @@ pub trait ResourceExt: Send + Sync + Clone + 'static {
 
     /// Reactivate a committed resource for continued writing.
     ///
-    /// Transitions Committed → Active: reopens the backing file as read-write,
+    /// Transitions Committed → Active: reopens the backing store for writing,
     /// resets committed flag, and clears `final_len`. Existing data remains
     /// available for reading. New data can be written at any offset.
     ///
-    /// Use for resuming partial downloads where the file on disk is smaller
+    /// Use for resuming partial downloads where the resource is smaller
     /// than the expected total.
     ///
     /// No-op if the resource is already Active.

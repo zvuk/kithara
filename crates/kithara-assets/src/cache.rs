@@ -107,7 +107,7 @@ where
 
         // Hold the lock for the entire check-create-insert sequence.
         // This prevents a TOCTOU race where two threads both miss the cache
-        // and create separate StorageResources for the same file.  With
+        // and create separate MmapResources for the same file.  With
         // OpenMode::Auto the second open sees an existing file and returns a
         // Committed (read-only) resource, making writes fail.
         //

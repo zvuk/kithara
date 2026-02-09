@@ -1,279 +1,159 @@
 #![forbid(unsafe_code)]
 
-//! In-memory storage resource for platforms without filesystem access.
+//! In-memory storage driver for platforms without filesystem access.
 //!
-//! `MemoryResource` implements [`ResourceExt`] backed by a `Vec<u8>` instead of
-//! mmap. Uses the same `RangeSet<u64>` + `Condvar` synchronization as
-//! [`StorageResource`](crate::StorageResource), so `wait_range` works identically.
-//!
-//! Intended for WASM (wasm32 + atomics) where mmap is unavailable.
+//! [`MemDriver`] implements [`Driver`](crate::Driver) backed by a `Vec<u8>`
+//! instead of mmap. Intended for WASM (wasm32 + atomics) where mmap is unavailable.
 
-use std::{ops::Range, path::Path, sync::Arc};
+use std::path::Path;
 
-use parking_lot::{Condvar, Mutex};
-use rangemap::RangeSet;
+use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome,
-    resource::range_covered_by,
+    StorageError, StorageResult,
+    driver::{Driver, DriverState, Resource},
 };
 
-/// Internal state protected by Mutex.
-struct MemState {
-    buf: Vec<u8>,
-    available: RangeSet<u64>,
-    committed: bool,
-    final_len: Option<u64>,
-    failed: Option<String>,
+/// Options for creating a [`MemResource`].
+#[derive(Debug, Clone, Default)]
+pub struct MemOptions {
+    /// Pre-fill the resource with this data (committed on creation).
+    pub initial_data: Option<Vec<u8>>,
 }
 
-impl Default for MemState {
-    fn default() -> Self {
-        Self {
-            buf: Vec::new(),
-            available: RangeSet::new(),
-            committed: false,
-            final_len: None,
-            failed: None,
-        }
-    }
-}
-
-struct MemInner {
-    state: Mutex<MemState>,
-    condvar: Condvar,
-    cancel: CancellationToken,
-}
-
-/// In-memory storage resource.
+/// In-memory storage driver.
 ///
-/// Drop-in replacement for [`StorageResource`](crate::StorageResource) on
-/// platforms without filesystem access. All data lives in a `Vec<u8>` protected
-/// by a `Mutex`; `wait_range` blocks via `Condvar`, same as the mmap variant.
-///
+/// All data lives in a `Vec<u8>` protected by a `Mutex`.
 /// `path()` returns `None`.
-#[derive(Clone)]
-pub struct MemoryResource {
-    inner: Arc<MemInner>,
+pub struct MemDriver {
+    buf: Mutex<Vec<u8>>,
 }
 
-impl std::fmt::Debug for MemoryResource {
+impl std::fmt::Debug for MemDriver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.inner.state.lock();
-        f.debug_struct("MemoryResource")
-            .field("len", &state.buf.len())
-            .field("committed", &state.committed)
+        let buf = self.buf.lock();
+        f.debug_struct("MemDriver")
+            .field("len", &buf.len())
             .finish()
     }
 }
 
-impl MemoryResource {
-    /// Create a new empty in-memory resource.
-    pub fn new(cancel: CancellationToken) -> Self {
-        Self {
-            inner: Arc::new(MemInner {
-                state: Mutex::new(MemState::default()),
-                condvar: Condvar::new(),
-                cancel,
-            }),
-        }
-    }
+impl Driver for MemDriver {
+    type Options = MemOptions;
 
-    /// Create a committed resource pre-filled with data.
-    pub fn from_bytes(data: &[u8], cancel: CancellationToken) -> Self {
-        let len = data.len() as u64;
-        let mut available = RangeSet::new();
-        if len > 0 {
-            available.insert(0..len);
-        }
-        Self {
-            inner: Arc::new(MemInner {
-                state: Mutex::new(MemState {
-                    buf: data.to_vec(),
+    fn open(opts: MemOptions) -> StorageResult<(Self, DriverState)> {
+        let (buf, init) = if let Some(data) = opts.initial_data {
+            let len = data.len() as u64;
+            let mut available = rangemap::RangeSet::new();
+            if len > 0 {
+                available.insert(0..len);
+            }
+            (
+                data,
+                DriverState {
                     available,
                     committed: true,
                     final_len: Some(len),
-                    failed: None,
-                }),
-                condvar: Condvar::new(),
-                cancel,
-            }),
-        }
+                },
+            )
+        } else {
+            (Vec::new(), DriverState::default())
+        };
+
+        let driver = Self {
+            buf: Mutex::new(buf),
+        };
+
+        Ok((driver, init))
     }
 
-    fn check_health(&self) -> StorageResult<()> {
-        if self.inner.cancel.is_cancelled() {
-            return Err(StorageError::Cancelled);
-        }
-        let state = self.inner.state.lock();
-        if let Some(ref reason) = state.failed {
-            return Err(StorageError::Failed(reason.clone()));
-        }
-        Ok(())
-    }
-}
-
-impl ResourceExt for MemoryResource {
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-
-        self.check_health()?;
-
-        let state = self.inner.state.lock();
-        let data_len = state.final_len.unwrap_or(state.buf.len() as u64);
-        let effective_len = data_len.min(state.buf.len() as u64);
-
-        if offset >= effective_len {
-            return Ok(0);
-        }
-
-        let available = (effective_len - offset) as usize;
-        let to_read = buf.len().min(available);
+    fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
+        let data = self.buf.lock();
         let start = offset as usize;
-        buf[..to_read].copy_from_slice(&state.buf[start..start + to_read]);
-
+        if start >= data.len() {
+            return Ok(0);
+        }
+        let available = data.len() - start;
+        let to_read = buf.len().min(available);
+        buf[..to_read].copy_from_slice(&data[start..start + to_read]);
         Ok(to_read)
     }
 
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        if data.is_empty() {
-            return Ok(());
-        }
-
-        self.check_health()?;
-
-        let end = offset
-            .checked_add(data.len() as u64)
-            .ok_or(StorageError::InvalidRange {
-                start: offset,
-                end: u64::MAX,
-            })?;
-
-        let mut state = self.inner.state.lock();
-
-        if state.committed {
+    fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
+        if committed {
             return Err(StorageError::Failed(
                 "cannot write to committed resource".to_string(),
             ));
         }
 
-        // Grow buffer if needed.
-        let end_usize = end as usize;
-        if state.buf.len() < end_usize {
-            state.buf.resize(end_usize, 0);
+        let end = offset as usize + data.len();
+        let mut buf = self.buf.lock();
+        if buf.len() < end {
+            buf.resize(end, 0);
         }
-
         let start = offset as usize;
-        state.buf[start..end_usize].copy_from_slice(data);
-        state.available.insert(offset..end);
-
-        self.inner.condvar.notify_all();
+        buf[start..end].copy_from_slice(data);
         Ok(())
-    }
-
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        if range.start > range.end {
-            return Err(StorageError::InvalidRange {
-                start: range.start,
-                end: range.end,
-            });
-        }
-
-        if range.is_empty() {
-            return Ok(WaitOutcome::Ready);
-        }
-
-        let mut state = self.inner.state.lock();
-
-        loop {
-            if self.inner.cancel.is_cancelled() {
-                return Err(StorageError::Cancelled);
-            }
-
-            if let Some(ref reason) = state.failed {
-                return Err(StorageError::Failed(reason.clone()));
-            }
-
-            if range_covered_by(&state.available, &range) {
-                return Ok(WaitOutcome::Ready);
-            }
-
-            if state.committed {
-                let final_len = state.final_len.unwrap_or(0);
-                if range.start >= final_len {
-                    return Ok(WaitOutcome::Eof);
-                }
-                return Ok(WaitOutcome::Ready);
-            }
-
-            self.inner
-                .condvar
-                .wait_for(&mut state, std::time::Duration::from_millis(50));
-        }
     }
 
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.check_health()?;
-
-        let mut state = self.inner.state.lock();
-
-        // Truncate buffer if final_len is smaller.
         if let Some(len) = final_len {
             let len_usize = len as usize;
-            if state.buf.len() > len_usize {
-                state.buf.truncate(len_usize);
-            }
-            if len > 0 {
-                state.available.insert(0..len);
+            let mut buf = self.buf.lock();
+            if buf.len() > len_usize {
+                buf.truncate(len_usize);
             }
         }
-
-        state.committed = true;
-        state.final_len = final_len;
-
-        self.inner.condvar.notify_all();
         Ok(())
     }
 
-    fn fail(&self, reason: String) {
-        let mut state = self.inner.state.lock();
-        state.failed = Some(reason);
-        self.inner.condvar.notify_all();
+    fn reactivate(&self) -> StorageResult<()> {
+        // Buffer data preserved — nothing to do for in-memory driver.
+        Ok(())
     }
 
     fn path(&self) -> Option<&Path> {
         None
     }
 
-    fn len(&self) -> Option<u64> {
-        let state = self.inner.state.lock();
-        state.final_len
+    fn storage_len(&self) -> u64 {
+        let buf = self.buf.lock();
+        buf.len() as u64
+    }
+}
+
+/// In-memory storage resource.
+///
+/// Type alias for [`Resource<MemDriver>`]. Drop-in replacement for
+/// [`MmapResource`](crate::MmapResource) on platforms without filesystem access.
+pub type MemResource = Resource<MemDriver>;
+
+impl MemResource {
+    /// Create a new empty in-memory resource.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `MemDriver::open` fails (should never happen with default options).
+    pub fn new(cancel: CancellationToken) -> Self {
+        // MemDriver::open with default opts never fails.
+        Self::open(cancel, MemOptions::default())
+            .expect("MemDriver::open with default options should never fail")
     }
 
-    fn reactivate(&self) -> StorageResult<()> {
-        self.check_health()?;
-
-        let mut state = self.inner.state.lock();
-        state.committed = false;
-        state.final_len = None;
-        self.inner.condvar.notify_all();
-        Ok(())
-    }
-
-    fn status(&self) -> ResourceStatus {
-        let state = self.inner.state.lock();
-        if let Some(ref reason) = state.failed {
-            ResourceStatus::Failed(reason.clone())
-        } else if state.committed {
-            ResourceStatus::Committed {
-                final_len: state.final_len,
-            }
-        } else {
-            ResourceStatus::Active
-        }
+    /// Create a committed resource pre-filled with data.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `MemDriver::open` fails (should never happen with initial data).
+    pub fn from_bytes(data: &[u8], cancel: CancellationToken) -> Self {
+        Self::open(
+            cancel,
+            MemOptions {
+                initial_data: Some(data.to_vec()),
+            },
+        )
+        .expect("MemDriver::open with initial_data should never fail")
     }
 }
 
@@ -283,10 +163,13 @@ mod tests {
 
     use rstest::*;
 
+    use crate::StorageError;
+    use crate::resource::{ResourceExt, ResourceStatus, WaitOutcome};
+
     use super::*;
 
-    fn create_resource() -> MemoryResource {
-        MemoryResource::new(CancellationToken::new())
+    fn create_resource() -> MemResource {
+        MemResource::new(CancellationToken::new())
     }
 
     #[rstest]
@@ -332,7 +215,7 @@ mod tests {
     #[timeout(Duration::from_secs(1))]
     #[test]
     fn test_from_bytes() {
-        let res = MemoryResource::from_bytes(b"preloaded", CancellationToken::new());
+        let res = MemResource::from_bytes(b"preloaded", CancellationToken::new());
 
         assert_eq!(
             res.status(),
@@ -410,7 +293,7 @@ mod tests {
     #[test]
     fn test_cancel_wakes_waiters() {
         let cancel = CancellationToken::new();
-        let res = MemoryResource::new(cancel.clone());
+        let res = MemResource::new(cancel.clone());
 
         let handle = std::thread::spawn({
             let cancel = cancel.clone();

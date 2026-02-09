@@ -80,22 +80,24 @@ impl<R: ResourceExt> PinsIndex<R> {
 mod tests {
     use std::{collections::HashSet, time::Duration};
 
-    use kithara_storage::{OpenMode, StorageOptions, StorageResource};
+    use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
     use rstest::*;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
 
-    // Helper to create StorageResource for tests
-    fn create_test_resource(dir: &TempDir) -> StorageResource {
+    // Helper to create MmapResource for tests
+    fn create_test_resource(dir: &TempDir) -> MmapResource {
         let path = dir.path().join("pins.bin");
-        StorageResource::open(StorageOptions {
-            path,
-            initial_len: Some(4096),
-            mode: OpenMode::ReadWrite,
-            cancel: CancellationToken::new(),
-        })
+        Resource::open(
+            CancellationToken::new(),
+            MmapOptions {
+                path,
+                initial_len: Some(4096),
+                mode: OpenMode::ReadWrite,
+            },
+        )
         .unwrap()
     }
 
@@ -172,12 +174,14 @@ mod tests {
 
         // First instance
         {
-            let res = StorageResource::open(StorageOptions {
-                path: path.clone(),
-                initial_len: Some(4096),
-                mode: OpenMode::ReadWrite,
-                cancel: CancellationToken::new(),
-            })
+            let res: MmapResource = Resource::open(
+                CancellationToken::new(),
+                MmapOptions {
+                    path: path.clone(),
+                    initial_len: Some(4096),
+                    mode: OpenMode::ReadWrite,
+                },
+            )
             .unwrap();
             let index = PinsIndex::new(res);
 
@@ -188,12 +192,14 @@ mod tests {
 
         // Second instance (new resource, same path)
         {
-            let res = StorageResource::open(StorageOptions {
-                path,
-                initial_len: Some(4096),
-                mode: OpenMode::ReadWrite,
-                cancel: CancellationToken::new(),
-            })
+            let res: MmapResource = Resource::open(
+                CancellationToken::new(),
+                MmapOptions {
+                    path,
+                    initial_len: Some(4096),
+                    mode: OpenMode::ReadWrite,
+                },
+            )
             .unwrap();
             let index = PinsIndex::new(res);
 

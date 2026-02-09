@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use kithara_storage::{OpenMode, StorageOptions, StorageResource};
+use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -25,7 +25,7 @@ use crate::{
 /// context (e.g. encryption info) when opening resources. Use `()` for no context.
 ///
 /// `IndexRes` is the resource type used for internal index persistence (pins, LRU).
-/// Disk-backed stores use `StorageResource`; in-memory stores use `MemoryResource`.
+/// Disk-backed stores use `MmapResource`; in-memory stores use `MemResource`.
 pub trait Assets: Clone + Send + Sync + 'static {
     /// Type returned by `open_resource`. Must be Clone for caching.
     type Res: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
@@ -119,34 +119,38 @@ impl DiskAssetStore {
         &self,
         key: &ResourceKey,
         path: PathBuf,
-    ) -> AssetsResult<StorageResource> {
+    ) -> AssetsResult<MmapResource> {
         let mode = if key.is_absolute() {
             OpenMode::ReadOnly
         } else {
             OpenMode::Auto
         };
-        Ok(StorageResource::open(StorageOptions {
-            path,
-            initial_len: None,
-            mode,
-            cancel: self.cancel.clone(),
-        })?)
+        Ok(Resource::open(
+            self.cancel.clone(),
+            MmapOptions {
+                path,
+                initial_len: None,
+                mode,
+            },
+        )?)
     }
 
-    fn open_index_resource(&self, path: PathBuf) -> AssetsResult<StorageResource> {
-        Ok(StorageResource::open(StorageOptions {
-            path,
-            initial_len: Some(4096),
-            mode: OpenMode::ReadWrite,
-            cancel: self.cancel.clone(),
-        })?)
+    fn open_index_resource(&self, path: PathBuf) -> AssetsResult<MmapResource> {
+        Ok(Resource::open(
+            self.cancel.clone(),
+            MmapOptions {
+                path,
+                initial_len: Some(4096),
+                mode: OpenMode::ReadWrite,
+            },
+        )?)
     }
 }
 
 impl Assets for DiskAssetStore {
-    type Res = StorageResource;
+    type Res = MmapResource;
     type Context = ();
-    type IndexRes = StorageResource;
+    type IndexRes = MmapResource;
 
     fn root_dir(&self) -> &Path {
         &self.root_dir
@@ -165,12 +169,12 @@ impl Assets for DiskAssetStore {
         self.open_storage_resource(key, path)
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<MmapResource> {
         let path = self.pins_index_path();
         self.open_index_resource(path)
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<MmapResource> {
         let path = self.lru_index_path();
         self.open_index_resource(path)
     }

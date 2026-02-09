@@ -2,20 +2,22 @@
 
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_storage::{OpenMode, ResourceExt, StorageOptions, StorageResource};
+use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
 use kithara_stream::{Writer, WriterError, WriterItem};
 use tokio_util::sync::CancellationToken;
 
-/// Helper: open a fresh `StorageResource` backed by a temp file.
+/// Helper: open a fresh `MmapResource` backed by a temp file.
 #[expect(clippy::unwrap_used)]
-fn open_resource(dir: &tempfile::TempDir, name: &str, len: u64) -> StorageResource {
+fn open_resource(dir: &tempfile::TempDir, name: &str, len: u64) -> MmapResource {
     let path = dir.path().join(name);
-    StorageResource::open(StorageOptions {
-        path,
-        initial_len: Some(len),
-        mode: OpenMode::ReadWrite,
-        cancel: CancellationToken::new(),
-    })
+    Resource::open(
+        CancellationToken::new(),
+        MmapOptions {
+            path,
+            initial_len: Some(len),
+            mode: OpenMode::ReadWrite,
+        },
+    )
     .unwrap()
 }
 

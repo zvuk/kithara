@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 
-//! Mmap-backed storage resource.
+//! Mmap-backed storage driver.
 //!
-//! `StorageResource` is backed by `mmap-io` with lock-free queues for fast-path
-//! notifications and `Condvar` for blocking waits.
+//! [`MmapDriver`] implements [`Driver`](crate::Driver) backed by `mmap-io`
+//! with lock-free queues for fast-path notifications.
 //!
 //! ## Performance optimizations
 //!
@@ -11,59 +11,35 @@
 //!   Reader checks queue before blocking on mutex, reducing contention.
 //! - **Fallback slow path**: If queue is empty, falls back to `Mutex + Condvar`
 //!   for full synchronization.
-//! - **Hybrid approach**: Combines lock-free performance with mutex correctness.
 
 use std::{
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 
 use crossbeam_queue::SegQueue;
 use mmap_io::MemoryMappedFile;
-use parking_lot::{Condvar, Mutex};
-use rangemap::RangeSet;
-use tokio_util::sync::CancellationToken;
+use parking_lot::Mutex;
 use tracing::trace;
 
 use crate::{
     StorageError, StorageResult,
-    resource::{OpenMode, ResourceExt, ResourceStatus, WaitOutcome, range_covered_by},
+    driver::{Driver, DriverState, Resource},
+    resource::OpenMode,
 };
 
 /// Default initial size for new mmap files (64 KB).
 const DEFAULT_INITIAL_SIZE: u64 = 64 * 1024;
 
-/// Options for opening a `StorageResource`.
+/// Options for opening a [`MmapResource`].
 #[derive(Debug, Clone)]
-pub struct StorageOptions {
+pub struct MmapOptions {
     /// Path to the backing file.
     pub path: PathBuf,
     /// Initial file size for new files. Ignored for existing files.
     pub initial_len: Option<u64>,
     /// Open mode controlling read/write behavior for existing files.
     pub mode: OpenMode,
-    /// Cancellation token.
-    pub cancel: CancellationToken,
-}
-
-/// Internal state protected by Mutex.
-struct State {
-    available: RangeSet<u64>,
-    committed: bool,
-    final_len: Option<u64>,
-    failed: Option<String>,
-}
-
-impl Default for State {
-    fn default() -> Self {
-        Self {
-            available: RangeSet::new(),
-            committed: false,
-            final_len: None,
-            failed: None,
-        }
-    }
 }
 
 /// Mmap state machine.
@@ -93,399 +69,237 @@ impl MmapState {
     }
 }
 
-/// Shared inner storage.
-struct Inner {
+/// Mmap-backed storage driver.
+///
+/// Uses `mmap-io` for file-backed storage with a lock-free `SegQueue`
+/// for fast-path wait notifications.
+pub struct MmapDriver {
     mmap: Mutex<MmapState>,
-    state: Mutex<State>,
-    condvar: Condvar,
     /// Lock-free queue for fast-path range notifications.
-    /// Writer pushes ready ranges here; Reader checks queue before blocking.
     ready_ranges: SegQueue<Range<u64>>,
-    cancel: CancellationToken,
     path: PathBuf,
     mode: OpenMode,
 }
 
-/// Unified mmap-backed storage resource.
-///
-/// Supports both streaming (incremental `write_at` -> `wait_range` + `read_at` -> `commit`)
-/// and atomic (`write_all` / `read_into`) use-cases.
-#[derive(Clone)]
-pub struct StorageResource {
-    inner: Arc<Inner>,
-}
-
-impl std::fmt::Debug for StorageResource {
+impl std::fmt::Debug for MmapDriver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("StorageResource")
-            .field("path", &self.inner.path)
-            .finish()
+        f.debug_struct("MmapDriver")
+            .field("path", &self.path)
+            .field("mode", &self.mode)
+            .finish_non_exhaustive()
     }
 }
 
-impl StorageResource {
-    /// Open or create a storage resource.
-    ///
-    /// Behavior depends on [`OpenMode`]:
-    /// - `Auto`: existing files → committed (read-only), new files → active (read-write).
-    /// - `ReadWrite`: existing files → active (read-write, no truncation), new files → active.
-    /// - `ReadOnly`: existing files → committed (read-only), missing files → empty committed.
-    pub fn open(opts: StorageOptions) -> StorageResult<Self> {
+impl Driver for MmapDriver {
+    type Options = MmapOptions;
+
+    fn open(opts: MmapOptions) -> StorageResult<(Self, DriverState)> {
         let mode = opts.mode;
 
-        let (mmap_state, state) = if opts.path.exists() && std::fs::metadata(&opts.path)?.len() > 0
-        {
+        let (mmap_state, init) = if opts.path.exists() && std::fs::metadata(&opts.path)?.len() > 0 {
             let len;
             let mmap_state = if mode == OpenMode::ReadWrite {
-                // ReadWrite: open existing file as read-write (no truncation).
                 let mmap = MemoryMappedFile::open_rw(&opts.path)?;
                 len = mmap.len();
                 MmapState::Active(mmap)
             } else {
-                // Auto / ReadOnly: open existing file as read-only.
                 let mmap = MemoryMappedFile::open_ro(&opts.path)?;
                 len = mmap.len();
                 MmapState::Committed(mmap)
             };
-            let mut available = RangeSet::new();
+            let mut available = rangemap::RangeSet::new();
             available.insert(0..len);
-            let state = State {
+            let init = DriverState {
                 available,
                 committed: true,
                 final_len: Some(len),
-                failed: None,
             };
-            (mmap_state, state)
+            (mmap_state, init)
         } else if mode == OpenMode::ReadOnly {
-            // ReadOnly on missing/empty file: empty committed resource.
             (
                 MmapState::Empty,
-                State {
-                    available: RangeSet::new(),
+                DriverState {
+                    available: rangemap::RangeSet::new(),
                     committed: true,
                     final_len: Some(0),
-                    failed: None,
                 },
             )
         } else {
-            // Auto / ReadWrite: create new file.
             if let Some(parent) = opts.path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
             let size = opts.initial_len.unwrap_or(DEFAULT_INITIAL_SIZE);
-            if size == 0 {
-                (MmapState::Empty, State::default())
+            let mmap_state = if size == 0 {
+                MmapState::Empty
             } else {
                 let mmap = MemoryMappedFile::create_rw(&opts.path, size)?;
-                (MmapState::Active(mmap), State::default())
-            }
+                MmapState::Active(mmap)
+            };
+            (mmap_state, DriverState::default())
         };
 
-        Ok(Self {
-            inner: Arc::new(Inner {
-                mmap: Mutex::new(mmap_state),
-                state: Mutex::new(state),
-                condvar: Condvar::new(),
-                ready_ranges: SegQueue::new(),
-                cancel: opts.cancel,
-                path: opts.path,
-                mode,
-            }),
-        })
+        let driver = Self {
+            mmap: Mutex::new(mmap_state),
+            ready_ranges: SegQueue::new(),
+            path: opts.path,
+            mode,
+        };
+
+        Ok((driver, init))
     }
 
-    /// Check if the resource is cancelled or failed, returning error if so.
-    fn check_health(&self) -> StorageResult<()> {
-        if self.inner.cancel.is_cancelled() {
-            return Err(StorageError::Cancelled);
-        }
-        let state = self.inner.state.lock();
-        if let Some(ref reason) = state.failed {
-            return Err(StorageError::Failed(reason.clone()));
-        }
-        Ok(())
-    }
-}
-
-impl ResourceExt for StorageResource {
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        if buf.is_empty() {
-            return Ok(0);
-        }
-
-        self.check_health()?;
-
-        let state = self.inner.state.lock();
-        let mmap_guard = self.inner.mmap.lock();
-
-        let mmap_len = mmap_guard.len();
-        let final_len = state.final_len.unwrap_or(mmap_len);
-
-        // Clamp to both final_len and actual mmap size
-        let effective_len = final_len.min(mmap_len);
-
-        if offset >= effective_len {
-            return Ok(0);
-        }
-
-        let available = (effective_len - offset) as usize;
-        let to_read = buf.len().min(available);
-        drop(state);
-
+    fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
+        let mmap_guard = self.mmap.lock();
         if let Some(mmap) = mmap_guard.as_readable() {
-            mmap.read_into(offset, &mut buf[..to_read])?;
+            mmap.read_into(offset, buf)?;
         }
-        drop(mmap_guard);
-
-        Ok(to_read)
+        Ok(buf.len())
     }
 
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        if data.is_empty() {
-            return Ok(());
-        }
+    fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
+        let end = offset + data.len() as u64;
+        let mut mmap_guard = self.mmap.lock();
 
-        self.check_health()?;
-
-        let end = offset
-            .checked_add(data.len() as u64)
-            .ok_or(StorageError::InvalidRange {
-                start: offset,
-                end: u64::MAX,
-            })?;
-
-        {
-            let mut mmap_guard = self.inner.mmap.lock();
-
-            // ReadWrite mode: transition Committed → Active via open_rw.
-            if self.inner.mode == OpenMode::ReadWrite
-                && matches!(&*mmap_guard, MmapState::Committed(_))
-            {
-                *mmap_guard = MmapState::Empty;
-                let rw = MemoryMappedFile::open_rw(&self.inner.path)?;
-                *mmap_guard = MmapState::Active(rw);
-            }
-
-            let mmap = match &*mmap_guard {
-                MmapState::Active(m) => {
-                    if end > m.len() {
-                        let new_size = end.max(m.len() * 2);
-                        m.resize(new_size)?;
-                    }
-                    m
+        // ReadWrite mode: allow writes even when common state is committed.
+        // Committed → Active: reopen as rw.
+        // Active: already writable (happens when existing files open as Active
+        // but the common state starts as committed).
+        if committed {
+            match (&*mmap_guard, self.mode) {
+                (MmapState::Committed(_), OpenMode::ReadWrite) => {
+                    *mmap_guard = MmapState::Empty;
+                    let rw = MemoryMappedFile::open_rw(&self.path)?;
+                    *mmap_guard = MmapState::Active(rw);
                 }
-                MmapState::Committed(_) => {
+                (MmapState::Active(_), OpenMode::ReadWrite) => {
+                    // Already active — ok to write.
+                }
+                _ => {
                     return Err(StorageError::Failed(
                         "cannot write to committed resource".to_string(),
                     ));
                 }
-                MmapState::Empty => {
-                    let size = end.max(DEFAULT_INITIAL_SIZE);
-                    let m = MemoryMappedFile::create_rw(&self.inner.path, size)?;
-                    *mmap_guard = MmapState::Active(m);
-                    match &*mmap_guard {
-                        MmapState::Active(m) => m,
-                        _ => {
-                            return Err(StorageError::Failed(
-                                "mmap not available after create".to_string(),
-                            ));
-                        }
+            }
+        }
+
+        let mmap = match &*mmap_guard {
+            MmapState::Active(m) => {
+                if end > m.len() {
+                    let new_size = end.max(m.len() * 2);
+                    m.resize(new_size)?;
+                }
+                m
+            }
+            MmapState::Committed(_) => {
+                return Err(StorageError::Failed(
+                    "cannot write to committed resource".to_string(),
+                ));
+            }
+            MmapState::Empty => {
+                let size = end.max(DEFAULT_INITIAL_SIZE);
+                let m = MemoryMappedFile::create_rw(&self.path, size)?;
+                *mmap_guard = MmapState::Active(m);
+                match &*mmap_guard {
+                    MmapState::Active(m) => m,
+                    _ => {
+                        return Err(StorageError::Failed(
+                            "mmap not available after create".to_string(),
+                        ));
                     }
                 }
-            };
+            }
+        };
 
-            mmap.update_region(offset, data)?;
-        }
-
-        // Lock-free fast path: publish ready range to queue.
-        // Readers check this queue before blocking on condvar.
-        let range = offset..end;
-        self.inner.ready_ranges.push(range.clone());
-
-        // Slow path: update shared state and notify waiters.
-        let mut state = self.inner.state.lock();
-        state.available.insert(range);
-        self.inner.condvar.notify_all();
-
-        trace!(offset, len = data.len(), "StorageResource: write_at");
+        mmap.update_region(offset, data)?;
+        trace!(offset, len = data.len(), "MmapDriver: write_at");
         Ok(())
-    }
-
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        if range.start > range.end {
-            return Err(StorageError::InvalidRange {
-                start: range.start,
-                end: range.end,
-            });
-        }
-
-        if range.is_empty() {
-            return Ok(WaitOutcome::Ready);
-        }
-
-        // Fast path: consume lock-free queue and check coverage without blocking.
-        // This avoids mutex contention when writer is actively publishing ranges.
-        loop {
-            // Drain all ready ranges from queue and check if our range is covered.
-            let mut found_match = false;
-            while let Some(ready) = self.inner.ready_ranges.pop() {
-                // Check if this ready range overlaps or covers our requested range.
-                if ready.start <= range.start && ready.end >= range.end {
-                    found_match = true;
-                    break;
-                }
-                // Even if not a match, the range was already inserted into state.available
-                // by write_at, so we don't need to re-insert it here.
-            }
-
-            if found_match {
-                return Ok(WaitOutcome::Ready);
-            }
-
-            // Slow path: lock state and check coverage, wait if needed.
-            let mut state = self.inner.state.lock();
-
-            // Check cancellation and failure.
-            if self.inner.cancel.is_cancelled() {
-                return Err(StorageError::Cancelled);
-            }
-
-            if let Some(ref reason) = state.failed {
-                return Err(StorageError::Failed(reason.clone()));
-            }
-
-            // Check if range is now available (might have been added between queue check and lock).
-            if range_covered_by(&state.available, &range) {
-                return Ok(WaitOutcome::Ready);
-            }
-
-            // Check if committed and EOF.
-            if state.committed {
-                let final_len = state.final_len.unwrap_or(0);
-                if range.start >= final_len {
-                    return Ok(WaitOutcome::Eof);
-                }
-                return Ok(WaitOutcome::Ready);
-            }
-
-            // Wait for notification (with timeout to periodically re-check queue).
-            self.inner
-                .condvar
-                .wait_for(&mut state, std::time::Duration::from_millis(50));
-
-            // Drop lock and re-check queue in next iteration.
-        }
     }
 
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        self.check_health()?;
+        let mut mmap_guard = self.mmap.lock();
 
-        {
-            let mut mmap_guard = self.inner.mmap.lock();
-
-            if let Some(len) = final_len {
-                if len > 0 {
-                    if let MmapState::Active(ref mmap) = *mmap_guard
-                        && len < mmap.len()
-                    {
-                        mmap.resize(len)?;
-                    }
-                    *mmap_guard = MmapState::Empty;
-                    let ro = MemoryMappedFile::open_ro(&self.inner.path)?;
-                    *mmap_guard = MmapState::Committed(ro);
-                } else {
-                    *mmap_guard = MmapState::Empty;
-                    let _ = std::fs::write(&self.inner.path, b"");
+        if let Some(len) = final_len {
+            if len > 0 {
+                if let MmapState::Active(ref mmap) = *mmap_guard
+                    && len < mmap.len()
+                {
+                    mmap.resize(len)?;
                 }
+                *mmap_guard = MmapState::Empty;
+                let ro = MemoryMappedFile::open_ro(&self.path)?;
+                *mmap_guard = MmapState::Committed(ro);
             } else {
-                let is_active = matches!(*mmap_guard, MmapState::Active(_));
-                if is_active {
-                    *mmap_guard = MmapState::Empty;
-                    if self.inner.path.exists()
-                        && std::fs::metadata(&self.inner.path)
-                            .map(|m| m.len() > 0)
-                            .unwrap_or(false)
-                    {
-                        let ro = MemoryMappedFile::open_ro(&self.inner.path)?;
-                        *mmap_guard = MmapState::Committed(ro);
-                    }
+                *mmap_guard = MmapState::Empty;
+                let _ = std::fs::write(&self.path, b"");
+            }
+        } else {
+            let is_active = matches!(*mmap_guard, MmapState::Active(_));
+            if is_active {
+                *mmap_guard = MmapState::Empty;
+                if self.path.exists()
+                    && std::fs::metadata(&self.path)
+                        .map(|m| m.len() > 0)
+                        .unwrap_or(false)
+                {
+                    let ro = MemoryMappedFile::open_ro(&self.path)?;
+                    *mmap_guard = MmapState::Committed(ro);
                 }
             }
         }
 
-        let mut state = self.inner.state.lock();
-        state.committed = true;
-        state.final_len = final_len;
-        if let Some(len) = final_len
-            && len > 0
-        {
-            state.available.insert(0..len);
-        }
-        self.inner.condvar.notify_all();
         Ok(())
-    }
-
-    fn fail(&self, reason: String) {
-        let mut state = self.inner.state.lock();
-        state.failed = Some(reason);
-        self.inner.condvar.notify_all();
-    }
-
-    fn path(&self) -> Option<&Path> {
-        Some(&self.inner.path)
-    }
-
-    fn len(&self) -> Option<u64> {
-        let state = self.inner.state.lock();
-        state.final_len
     }
 
     fn reactivate(&self) -> StorageResult<()> {
-        self.check_health()?;
+        let mut mmap_guard = self.mmap.lock();
 
-        {
-            let mut mmap_guard = self.inner.mmap.lock();
-
-            match &*mmap_guard {
-                MmapState::Active(_) => {
-                    // Already active, nothing to do for mmap.
-                }
-                MmapState::Committed(_) | MmapState::Empty => {
-                    // Reopen as read-write.
-                    *mmap_guard = MmapState::Empty;
-                    if self.inner.path.exists()
-                        && std::fs::metadata(&self.inner.path)
-                            .map(|m| m.len() > 0)
-                            .unwrap_or(false)
-                    {
-                        let rw = MemoryMappedFile::open_rw(&self.inner.path)?;
-                        *mmap_guard = MmapState::Active(rw);
-                    }
+        match &*mmap_guard {
+            MmapState::Active(_) => {}
+            MmapState::Committed(_) | MmapState::Empty => {
+                *mmap_guard = MmapState::Empty;
+                if self.path.exists()
+                    && std::fs::metadata(&self.path)
+                        .map(|m| m.len() > 0)
+                        .unwrap_or(false)
+                {
+                    let rw = MemoryMappedFile::open_rw(&self.path)?;
+                    *mmap_guard = MmapState::Active(rw);
                 }
             }
         }
 
-        let mut state = self.inner.state.lock();
-        state.committed = false;
-        state.final_len = None;
-        // Keep available data as-is — existing bytes remain readable.
-        self.inner.condvar.notify_all();
         Ok(())
     }
 
-    fn status(&self) -> ResourceStatus {
-        let state = self.inner.state.lock();
-        if let Some(ref reason) = state.failed {
-            ResourceStatus::Failed(reason.clone())
-        } else if state.committed {
-            ResourceStatus::Committed {
-                final_len: state.final_len,
+    fn path(&self) -> Option<&Path> {
+        Some(&self.path)
+    }
+
+    fn storage_len(&self) -> u64 {
+        let mmap_guard = self.mmap.lock();
+        mmap_guard.len()
+    }
+
+    fn try_fast_check(&self, range: &Range<u64>) -> bool {
+        let mut found_match = false;
+        while let Some(ready) = self.ready_ranges.pop() {
+            if ready.start <= range.start && ready.end >= range.end {
+                found_match = true;
+                break;
             }
-        } else {
-            ResourceStatus::Active
         }
+        found_match
+    }
+
+    fn notify_write(&self, range: &Range<u64>) {
+        self.ready_ranges.push(range.clone());
     }
 }
+
+/// Mmap-backed storage resource.
+///
+/// Type alias for [`Resource<MmapDriver>`].
+pub type MmapResource = Resource<MmapDriver>;
 
 #[cfg(test)]
 mod tests {
@@ -493,22 +307,28 @@ mod tests {
 
     use rstest::*;
     use tempfile::TempDir;
+    use tokio_util::sync::CancellationToken;
+
+    use crate::StorageError;
+    use crate::resource::{ResourceExt, ResourceStatus, WaitOutcome};
 
     use super::*;
 
-    fn create_resource(dir: &TempDir) -> StorageResource {
+    fn create_resource(dir: &TempDir) -> MmapResource {
         create_resource_with_size(dir, None)
     }
 
-    fn create_resource_with_size(dir: &TempDir, size: Option<u64>) -> StorageResource {
+    fn create_resource_with_size(dir: &TempDir, size: Option<u64>) -> MmapResource {
         let path = dir.path().join("test.dat");
-        StorageResource::open(StorageOptions {
-            path,
-            initial_len: size,
-            mode: OpenMode::Auto,
-            cancel: CancellationToken::new(),
-        })
-        .unwrap()
+        Resource::open(
+            CancellationToken::new(),
+            MmapOptions {
+                path,
+                initial_len: size,
+                mode: OpenMode::Auto,
+            },
+        )
+        .expect("open test resource")
     }
 
     #[rstest]
@@ -623,13 +443,15 @@ mod tests {
         let cancel = CancellationToken::new();
         let path = dir.path().join("cancel_test.dat");
 
-        let res = StorageResource::open(StorageOptions {
-            path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-            cancel: cancel.clone(),
-        })
-        .unwrap();
+        let res: MmapResource = Resource::open(
+            cancel.clone(),
+            MmapOptions {
+                path,
+                initial_len: None,
+                mode: OpenMode::Auto,
+            },
+        )
+        .expect("open cancel test resource");
 
         let handle = std::thread::spawn({
             let cancel = cancel.clone();
@@ -652,23 +474,27 @@ mod tests {
         let path = dir.path().join("existing.dat");
 
         {
-            let res = StorageResource::open(StorageOptions {
-                path: path.clone(),
-                initial_len: None,
-                mode: OpenMode::Auto,
-                cancel: CancellationToken::new(),
-            })
-            .unwrap();
+            let res: MmapResource = Resource::open(
+                CancellationToken::new(),
+                MmapOptions {
+                    path: path.clone(),
+                    initial_len: None,
+                    mode: OpenMode::Auto,
+                },
+            )
+            .expect("open first resource");
             res.write_all(b"persisted data").unwrap();
         }
 
-        let res = StorageResource::open(StorageOptions {
-            path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-            cancel: CancellationToken::new(),
-        })
-        .unwrap();
+        let res: MmapResource = Resource::open(
+            CancellationToken::new(),
+            MmapOptions {
+                path,
+                initial_len: None,
+                mode: OpenMode::Auto,
+            },
+        )
+        .expect("open reopened resource");
 
         assert_eq!(
             res.status(),

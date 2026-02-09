@@ -5,7 +5,7 @@
 
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_storage::{OpenMode, ResourceExt, ResourceStatus, StorageOptions, StorageResource};
+use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt, ResourceStatus};
 use kithara_stream::{Writer, WriterItem};
 use tokio_util::sync::CancellationToken;
 
@@ -14,12 +14,14 @@ async fn writer_stream_end_does_not_commit_resource() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test_file.bin");
 
-    let res = StorageResource::open(StorageOptions {
-        path,
-        initial_len: Some(1024),
-        mode: OpenMode::ReadWrite,
-        cancel: CancellationToken::new(),
-    })
+    let res: MmapResource = Resource::open(
+        CancellationToken::new(),
+        MmapOptions {
+            path,
+            initial_len: Some(1024),
+            mode: OpenMode::ReadWrite,
+        },
+    )
     .unwrap();
 
     // Create a stream that yields some data then ends
@@ -62,12 +64,14 @@ async fn writer_run_returns_total_on_stream_ended() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test_file_run.bin");
 
-    let res = StorageResource::open(StorageOptions {
-        path,
-        initial_len: Some(1024),
-        mode: OpenMode::ReadWrite,
-        cancel: CancellationToken::new(),
-    })
+    let res: MmapResource = Resource::open(
+        CancellationToken::new(),
+        MmapOptions {
+            path,
+            initial_len: Some(1024),
+            mode: OpenMode::ReadWrite,
+        },
+    )
     .unwrap();
 
     let data = vec![
