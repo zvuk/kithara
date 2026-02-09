@@ -38,7 +38,7 @@ mod global;
 mod pool;
 mod slice;
 
-pub use global::{BytePool, PcmPool, byte_pool, pcm_pool};
+pub use global::{BytePool, PcmBuf, PcmPool, byte_pool, pcm_pool};
 pub use pool::{Pool, Pooled, PooledOwned, Reuse, SharedPool};
 pub use slice::{PooledSlice, PooledSliceOwned};
 

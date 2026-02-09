@@ -4,6 +4,7 @@
 
 use std::time::Duration;
 
+use kithara_bufpool::PcmBuf;
 use tracing::{debug, trace};
 
 use crate::{PcmChunk, PcmSpec};
@@ -14,13 +15,13 @@ use crate::{PcmChunk, PcmSpec};
 /// Spec is updated dynamically from received chunks (handles variant switches).
 pub struct AudioSyncReader {
     /// Channel receiver for reading PCM chunks.
-    pcm_rx: kanal::Receiver<PcmChunk<f32>>,
+    pcm_rx: kanal::Receiver<PcmChunk>,
     /// Current audio specification (updated from chunks).
     spec: PcmSpec,
     /// End of stream reached.
     eof: bool,
-    /// Current chunk being read.
-    current_chunk: Option<Vec<f32>>,
+    /// Current chunk being read (auto-recycles to pool on drop).
+    current_chunk: Option<PcmBuf>,
     /// Current position in chunk.
     chunk_offset: usize,
 }
@@ -31,7 +32,7 @@ impl AudioSyncReader {
     /// # Arguments
     /// - `pcm_rx`: Channel receiver for PCM chunks
     /// - `initial_spec`: Initial audio specification (updated from chunks)
-    pub fn new(pcm_rx: kanal::Receiver<PcmChunk<f32>>, initial_spec: PcmSpec) -> Self {
+    pub fn new(pcm_rx: kanal::Receiver<PcmChunk>, initial_spec: PcmSpec) -> Self {
         Self {
             pcm_rx,
             spec: initial_spec,
@@ -64,6 +65,7 @@ impl AudioSyncReader {
                 );
                 // Update spec from chunk (handles dynamic format changes)
                 self.spec = chunk.spec;
+                // Old current_chunk auto-recycles via Drop on reassignment
                 self.current_chunk = Some(chunk.pcm);
                 self.chunk_offset = 0;
                 true

@@ -10,7 +10,7 @@ use unimock::unimock;
 #[cfg_attr(test, unimock(api = AudioGeneratorMock))]
 pub trait AudioGenerator: Send + 'static {
     /// Decode/generate next chunk of audio.
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>>;
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>>;
 
     /// Get current PCM specification.
     fn spec(&self) -> PcmSpec;
@@ -28,17 +28,17 @@ pub trait AudioEffect: Send + 'static {
     /// Process a PCM chunk, returning transformed output.
     ///
     /// Returns `None` if the effect is accumulating data (not enough for output yet).
-    fn process(&mut self, chunk: PcmChunk<f32>) -> Option<PcmChunk<f32>>;
+    fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk>;
 
     /// Flush remaining buffered data (called at end of stream).
-    fn flush(&mut self) -> Option<PcmChunk<f32>>;
+    fn flush(&mut self) -> Option<PcmChunk>;
 
     /// Reset internal state (called after seek).
     fn reset(&mut self);
 }
 
 impl AudioGenerator for Box<dyn InnerDecoder> {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         InnerDecoder::next_chunk(self.as_mut())
     }
 

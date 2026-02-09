@@ -165,8 +165,8 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
 /// Apply effects chain to a chunk.
 pub(super) fn apply_effects(
     effects: &mut [Box<dyn AudioEffect>],
-    mut chunk: PcmChunk<f32>,
-) -> Option<PcmChunk<f32>> {
+    mut chunk: PcmChunk,
+) -> Option<PcmChunk> {
     for effect in &mut *effects {
         chunk = effect.process(chunk)?;
     }
@@ -174,8 +174,8 @@ pub(super) fn apply_effects(
 }
 
 /// Flush effects chain at end of stream.
-pub(super) fn flush_effects(effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmChunk<f32>> {
-    let mut chunk: Option<PcmChunk<f32>> = None;
+pub(super) fn flush_effects(effects: &mut [Box<dyn AudioEffect>]) -> Option<PcmChunk> {
+    let mut chunk: Option<PcmChunk> = None;
     for effect in &mut *effects {
         chunk = match chunk.take() {
             Some(input) => effect.process(input),

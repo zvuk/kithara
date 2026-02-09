@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
@@ -118,6 +119,23 @@ where
         if !shard.try_put(value) {
             // Shard full or buffer rejected, drop it
         }
+    }
+}
+
+impl<const SHARDS: usize, T> Pool<SHARDS, T>
+where
+    T: Reuse,
+{
+    /// Return a value to the pool for reuse.
+    ///
+    /// Useful for returning buffers that were extracted via [`Pooled::into_inner()`]
+    /// or [`PooledOwned::into_inner()`] after the caller is done with them.
+    ///
+    /// The value is cleared and trimmed via [`Reuse::reuse()`] before storing.
+    /// If the pool is full, the value is silently dropped.
+    pub fn recycle(&self, value: T) {
+        let shard_idx = self.shard_index();
+        self.put(value, shard_idx);
     }
 }
 
@@ -345,6 +363,40 @@ where
     }
 }
 
+impl<const SHARDS: usize, T> fmt::Debug for PooledOwned<SHARDS, T>
+where
+    T: Reuse + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.value {
+            Some(v) => fmt::Debug::fmt(v, f),
+            None => write!(f, "<taken>"),
+        }
+    }
+}
+
+impl<const SHARDS: usize, T> Clone for PooledOwned<SHARDS, T>
+where
+    T: Reuse + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            pool: Arc::clone(&self.pool),
+            shard_idx: self.shard_idx,
+        }
+    }
+}
+
+impl<const SHARDS: usize, T> PartialEq for PooledOwned<SHARDS, T>
+where
+    T: Reuse + PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
+    }
+}
+
 /// Helper to create `Arc`-wrapped Pool for shared access.
 ///
 /// Useful when pool needs to be shared across multiple components.
@@ -392,6 +444,34 @@ where
         let mut value = value.unwrap_or_default();
         init(&mut value);
 
+        PooledOwned {
+            value: Some(value),
+            pool: Arc::clone(&self.0),
+            shard_idx,
+        }
+    }
+}
+
+impl<const SHARDS: usize, T> SharedPool<SHARDS, T>
+where
+    T: Reuse,
+{
+    /// Return a value to the pool for reuse.
+    ///
+    /// See [`Pool::recycle()`] for details.
+    pub fn recycle(&self, value: T) {
+        self.0.recycle(value);
+    }
+
+    /// Wrap an externally-owned value into a [`PooledOwned`] guard.
+    ///
+    /// The returned guard automatically returns the value to this pool on drop,
+    /// just like a value obtained via [`get()`](SharedPool::get).
+    ///
+    /// Useful for attaching pool-recycling to values that were extracted via
+    /// [`PooledOwned::into_inner()`] or created outside the pool.
+    pub fn attach(&self, value: T) -> PooledOwned<SHARDS, T> {
+        let shard_idx = self.0.shard_index();
         PooledOwned {
             value: Some(value),
             pool: Arc::clone(&self.0),

@@ -54,7 +54,7 @@ impl<D: AudioDecoder> Decoder<D> {
     /// # Errors
     ///
     /// Returns an error if decoding fails.
-    pub fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    pub fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         self.inner.next_chunk()
     }
 

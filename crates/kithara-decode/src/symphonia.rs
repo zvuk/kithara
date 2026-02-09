@@ -375,7 +375,7 @@ impl SymphoniaInner {
     }
 
     /// Decode the next chunk of PCM data.
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         loop {
             // Read next packet
             let packet = match self.format_reader.next_packet() {
@@ -422,17 +422,17 @@ impl SymphoniaInner {
                 continue;
             }
 
-            // Convert to f32 interleaved (pool-backed to reduce allocations)
+            // Convert to f32 interleaved (pool-backed to reduce allocations).
+            // The PooledOwned buffer flows through PcmChunk and auto-recycles on drop.
             let mut pooled = kithara_bufpool::pcm_pool().get_with(|v| v.resize(num_samples, 0.0));
             decoded.copy_to_slice_interleaved(&mut *pooled);
-            let pcm = pooled.into_inner();
 
             let pcm_spec = PcmSpec {
                 channels: channels as u16,
                 sample_rate: spec.rate(),
             };
 
-            let chunk = PcmChunk::new(pcm_spec, pcm);
+            let chunk = PcmChunk::with_pooled(pcm_spec, pooled);
 
             // Update position
             if self.spec.sample_rate > 0 {
@@ -515,7 +515,7 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
         })
     }
 
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         self.inner.next_chunk()
     }
 
@@ -539,7 +539,7 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
 use crate::traits::InnerDecoder;
 
 impl<C: CodecType> InnerDecoder for Symphonia<C> {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         AudioDecoder::next_chunk(self)
     }
 
