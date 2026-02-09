@@ -32,12 +32,12 @@ fn streaming_resource_path_method(temp_dir: TempDir, cancel_token: CancellationT
     })
     .expect("open should succeed");
 
-    assert_eq!(streaming.path(), file_path);
+    assert_eq!(streaming.path(), Some(file_path.as_path()));
 
     streaming
         .write_at(0, b"test")
         .expect("write should succeed");
-    assert_eq!(streaming.path(), file_path);
+    assert_eq!(streaming.path(), Some(file_path.as_path()));
 }
 
 #[rstest]

@@ -181,7 +181,7 @@ where
         self.inner.fail(reason);
     }
 
-    fn path(&self) -> &Path {
+    fn path(&self) -> Option<&Path> {
         self.inner.path()
     }
 

@@ -21,12 +21,12 @@ fn atomic_resource_path_method(temp_dir: TempDir, cancel_token: CancellationToke
     })
     .unwrap();
 
-    assert_eq!(atomic.path(), file_path);
+    assert_eq!(atomic.path(), Some(file_path.as_path()));
 
     atomic
         .write_all(b"test data")
         .expect("write should succeed");
-    assert_eq!(atomic.path(), file_path);
+    assert_eq!(atomic.path(), Some(file_path.as_path()));
 }
 
 #[rstest]

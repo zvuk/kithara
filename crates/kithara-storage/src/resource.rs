@@ -96,8 +96,10 @@ pub trait ResourceExt: Send + Sync + Clone + 'static {
     /// Mark the resource as failed.
     fn fail(&self, reason: String);
 
-    /// Get the file path.
-    fn path(&self) -> &Path;
+    /// Get the file path, if backed by a file.
+    ///
+    /// Returns `None` for in-memory resources that have no filesystem path.
+    fn path(&self) -> Option<&Path>;
 
     /// Get the committed length, if known.
     fn len(&self) -> Option<u64>;
@@ -552,8 +554,8 @@ impl ResourceExt for StorageResource {
         self.inner.condvar.notify_all();
     }
 
-    fn path(&self) -> &Path {
-        &self.inner.path
+    fn path(&self) -> Option<&Path> {
+        Some(&self.inner.path)
     }
 
     fn len(&self) -> Option<u64> {

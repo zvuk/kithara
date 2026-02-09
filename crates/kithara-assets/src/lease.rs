@@ -200,7 +200,8 @@ where
 
         // Record bytes if recorder is set (best-effort)
         if let Some(ref recorder) = self.byte_recorder
-            && let Ok(metadata) = std::fs::metadata(self.inner.path())
+            && let Some(path) = self.inner.path()
+            && let Ok(metadata) = std::fs::metadata(path)
             && metadata.is_file()
         {
             recorder.record_bytes(&self.asset_root, metadata.len());
@@ -213,7 +214,7 @@ where
         self.inner.fail(reason);
     }
 
-    fn path(&self) -> &Path {
+    fn path(&self) -> Option<&Path> {
         self.inner.path()
     }
 

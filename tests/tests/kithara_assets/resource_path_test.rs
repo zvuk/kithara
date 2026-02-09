@@ -40,7 +40,7 @@ fn asset_resource_path_method(temp_dir: TempDir) {
         .expect("Write should succeed");
 
     // Get the path from AssetResource
-    let asset_path = asset_resource.path();
+    let asset_path = asset_resource.path().unwrap();
 
     // Get the root directory from the store
     let root_dir = asset_store.root_dir();
@@ -73,7 +73,7 @@ fn asset_resource_streaming_path_method(temp_dir: TempDir) {
         .expect("Commit should succeed");
 
     // Get the path from AssetResource
-    let asset_path = asset_resource.path();
+    let asset_path = asset_resource.path().unwrap();
 
     // Get the root directory from the store
     let root_dir = asset_store.root_dir();
@@ -97,7 +97,7 @@ fn asset_resource_path_consistency(temp_dir: TempDir) {
         .open_resource(&key)
         .expect("Failed to open resource");
 
-    let asset_path = asset_resource.path();
+    let asset_path = asset_resource.path().unwrap();
 
     // Just verify the path is accessible
     assert!(!asset_path.as_os_str().is_empty());
@@ -108,7 +108,7 @@ fn asset_resource_path_consistency(temp_dir: TempDir) {
         .expect("Write should succeed");
 
     // Path should still be accessible after write
-    assert!(!asset_resource.path().as_os_str().is_empty());
+    assert!(!asset_resource.path().unwrap().as_os_str().is_empty());
 }
 
 #[rstest]
@@ -123,7 +123,7 @@ fn asset_resource_path_reflects_asset_root_and_resource_name(temp_dir: TempDir) 
         .open_resource(&key)
         .expect("Failed to open resource");
 
-    let path = asset_resource.path();
+    let path = asset_resource.path().unwrap();
     let root_dir = asset_store.root_dir();
 
     // Check that the path is under the store's root directory
@@ -161,9 +161,26 @@ fn multiple_resources_same_asset_root_have_different_paths(temp_dir: TempDir) {
     assert_ne!(resource1.path(), resource2.path());
 
     // But they should share the same parent directory (asset root)
-    assert_eq!(resource1.path().parent(), resource2.path().parent());
+    assert_eq!(
+        resource1.path().unwrap().parent(),
+        resource2.path().unwrap().parent()
+    );
 
     // Both should be under the asset root directory
-    assert!(resource1.path().parent().unwrap().ends_with(asset_root));
-    assert!(resource2.path().parent().unwrap().ends_with(asset_root));
+    assert!(
+        resource1
+            .path()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .ends_with(asset_root)
+    );
+    assert!(
+        resource2
+            .path()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .ends_with(asset_root)
+    );
 }
