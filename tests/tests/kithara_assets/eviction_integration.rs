@@ -2,12 +2,8 @@
 
 //! Eviction integration tests.
 //!
-//! NOTE: These tests were designed for the old architecture where a single AssetStore
-//! could hold multiple assets (different asset_roots). With the new architecture,
-//! each AssetStore is scoped to a single asset_root, so eviction between assets
+//! Each AssetStore is scoped to a single asset_root, so eviction between assets
 //! requires creating multiple AssetStore instances with the same root_dir.
-//!
-//! These tests are currently ignored and need to be redesigned for the new architecture.
 
 use std::time::Duration;
 
@@ -154,7 +150,6 @@ fn eviction_ignores_missing_index(#[case] asset_count: usize, temp_dir: tempfile
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
-#[ignore = "Test needs redesign for new scoped AssetStore architecture"]
 #[test]
 fn eviction_with_zero_byte_assets(temp_dir: tempfile::TempDir) {
     let dir = temp_dir.path().to_path_buf();
