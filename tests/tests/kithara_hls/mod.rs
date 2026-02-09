@@ -13,7 +13,7 @@ mod basic_playback;
 // mod cached_loader_integration;  // uses old open_v2 API
 mod deferred_abr;
 mod deferred_abr_debug;
-// mod driver_test;  // uses old API
+mod driver_test;
 mod keys_integration;
 mod playlist_integration;
 mod seek_past_eof;
