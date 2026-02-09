@@ -439,7 +439,6 @@ where
 
         // Create initial decoder in spawn_blocking to avoid blocking tokio runtime.
         // Symphonia probe() does blocking IO which would deadlock the async downloader.
-        debug!(prefer_hardware, "Creating initial decoder...");
         let decoder_config = kithara_decode::DecoderConfig {
             prefer_hardware,
             hint: hint.clone(),
@@ -450,7 +449,6 @@ where
         let initial_media_info_for_decoder = initial_media_info.clone();
         let decoder: Box<dyn kithara_decode::InnerDecoder> = spawn_blocking(move || {
             if let Some(ref info) = initial_media_info_for_decoder {
-                debug!(?info, "Calling create_from_media_info");
                 kithara_decode::DecoderFactory::create_from_media_info(
                     shared_stream_for_decoder,
                     info,

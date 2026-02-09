@@ -31,7 +31,7 @@ pub use source::Source;
 // Test utilities
 #[cfg(any(test, feature = "test-utils"))]
 pub use source::SourceMock;
-pub use stream::{Stream, StreamConfig, StreamType};
+pub use stream::{Stream, StreamType};
 #[cfg(any(test, feature = "test-utils"))]
 pub use unimock;
 pub use writer::{NetWriter, Writer, WriterError, WriterItem};

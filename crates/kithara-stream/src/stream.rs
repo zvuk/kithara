@@ -49,23 +49,6 @@ pub trait StreamType: Send + 'static {
     fn ensure_events(config: &mut Self::Config) -> broadcast::Receiver<Self::Event>;
 }
 
-/// Configuration for stream behavior.
-#[derive(Debug, Clone)]
-pub struct StreamConfig {
-    /// Read buffer size in bytes.
-    pub read_buffer_size: usize,
-    /// Number of segments to prefetch (for HLS).
-    pub prefetch_segments: usize,
-}
-
-impl Default for StreamConfig {
-    fn default() -> Self {
-        Self {
-            read_buffer_size: 32 * 1024, // 32KB
-            prefetch_segments: 2,
-        }
-    }
-}
 
 /// Generic audio stream.
 ///
