@@ -105,22 +105,22 @@ where
 
         let cache_key = CacheKey::Resource(key.clone(), ctx.clone());
 
-        // Check cache (short lock)
-        {
-            let mut cache = self.cache.lock();
-            if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
-                return Ok(res.clone());
-            }
+        // Hold the lock for the entire check-create-insert sequence.
+        // This prevents a TOCTOU race where two threads both miss the cache
+        // and create separate StorageResources for the same file.  With
+        // OpenMode::Auto the second open sees an existing file and returns a
+        // Committed (read-only) resource, making writes fail.
+        //
+        // The inner chain (Processing → Evict → Disk) does not call back
+        // into CachedAssets, so holding the lock is deadlock-free.
+        let mut cache = self.cache.lock();
+
+        if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
+            return Ok(res.clone());
         }
 
-        // Cache miss — load without holding the lock (I/O happens here)
         let res = self.inner.open_resource_with_ctx(key, ctx)?;
-
-        // Insert into cache (short lock; concurrent miss on same key is benign — LRU overwrites)
-        {
-            let mut cache = self.cache.lock();
-            cache.put(cache_key, CacheEntry::Resource(res.clone()));
-        }
+        cache.put(cache_key, CacheEntry::Resource(res.clone()));
 
         Ok(res)
     }
@@ -130,19 +130,14 @@ where
             return self.inner.open_pins_index_resource();
         }
 
-        {
-            let cache = self.cache.lock();
-            if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::PinsIndex) {
-                return Ok(res.clone());
-            }
+        let mut cache = self.cache.lock();
+
+        if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::PinsIndex) {
+            return Ok(res.clone());
         }
 
         let res = self.inner.open_pins_index_resource()?;
-
-        {
-            let mut cache = self.cache.lock();
-            cache.put(CacheKey::PinsIndex, CacheEntry::Index(res.clone()));
-        }
+        cache.put(CacheKey::PinsIndex, CacheEntry::Index(res.clone()));
 
         Ok(res)
     }
@@ -152,19 +147,14 @@ where
             return self.inner.open_lru_index_resource();
         }
 
-        {
-            let cache = self.cache.lock();
-            if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::LruIndex) {
-                return Ok(res.clone());
-            }
+        let mut cache = self.cache.lock();
+
+        if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::LruIndex) {
+            return Ok(res.clone());
         }
 
         let res = self.inner.open_lru_index_resource()?;
-
-        {
-            let mut cache = self.cache.lock();
-            cache.put(CacheKey::LruIndex, CacheEntry::Index(res.clone()));
-        }
+        cache.put(CacheKey::LruIndex, CacheEntry::Index(res.clone()));
 
         Ok(res)
     }
