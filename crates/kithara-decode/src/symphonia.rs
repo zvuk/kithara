@@ -45,7 +45,7 @@ use symphonia::{
         formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
         io::{MediaSourceStream, MediaSourceStreamOptions},
         meta::MetadataOptions,
-        units::Time,
+        units::{Time, Timestamp},
     },
     default::formats::{AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader},
 };
@@ -369,11 +369,9 @@ impl SymphoniaInner {
     fn calculate_duration(track: &symphonia::core::formats::Track) -> Option<Duration> {
         let num_frames = track.num_frames?;
         let time_base = track.time_base?;
-        let time = time_base.calc_time(num_frames);
-        Some(Duration::new(
-            time.seconds,
-            (time.frac * 1_000_000_000.0) as u32,
-        ))
+        let time = time_base.calc_time(Timestamp::new(num_frames as i64))?;
+        let (seconds, nanos) = time.parts();
+        Some(Duration::new(seconds as u64, nanos))
     }
 
     /// Decode the next chunk of PCM data.
@@ -451,7 +449,7 @@ impl SymphoniaInner {
     /// Seek to a time position.
     fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
         let seek_to = SeekTo::Time {
-            time: Time::new(pos.as_secs(), pos.subsec_nanos() as f64 / 1_000_000_000.0),
+            time: Time::try_new(pos.as_secs() as i64, pos.subsec_nanos()).unwrap_or(Time::ZERO),
             track_id: Some(self.track_id),
         };
 

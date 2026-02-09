@@ -17,8 +17,10 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use super::fixture::TestServer;
-use super::fixture::abr::{AbrTestServer, master_playlist};
+use super::fixture::{
+    TestServer,
+    abr::{AbrTestServer, master_playlist},
+};
 use crate::common::fixtures::{cancel_token, temp_dir, tracing_setup};
 
 /// Driver-1: Verify that seek works AFTER all segments have been downloaded.
