@@ -113,7 +113,7 @@ pub trait AudioDecoder: Send + 'static {
     /// # Errors
     ///
     /// Returns [`DecodeError`] if decoding fails.
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>>;
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>>;
 
     /// Get the PCM output specification.
     fn spec(&self) -> PcmSpec;
@@ -150,7 +150,7 @@ pub trait InnerDecoder: Send + 'static {
     /// Decode the next chunk of PCM data.
     ///
     /// Returns `Ok(Some(chunk))` with PCM data, or `Ok(None)` at end of stream.
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>>;
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>>;
 
     /// Get the PCM output specification.
     fn spec(&self) -> PcmSpec;

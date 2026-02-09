@@ -11,7 +11,7 @@ use kithara_bufpool::pcm_pool;
 use kithara_decode::{PcmChunk, PcmSpec};
 
 /// Create a test PCM chunk with specified sample count.
-fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk<f32> {
+fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {
     let samples = frames * spec.channels as usize;
     let pool = pcm_pool();
     let pcm = pool.get_with(|b| {
@@ -27,10 +27,7 @@ fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk<f32> {
 }
 
 #[hotpath::measure]
-fn resampler_process_single(
-    resampler: &mut kithara_audio::ResamplerProcessor,
-    chunk: &PcmChunk<f32>,
-) {
+fn resampler_process_single(resampler: &mut kithara_audio::ResamplerProcessor, chunk: &PcmChunk) {
     let _ = resampler.process(chunk.clone());
 }
 
@@ -86,7 +83,7 @@ fn perf_resampler_quality_comparison() {
 #[hotpath::measure]
 fn resampler_passthrough_process(
     resampler: &mut kithara_audio::ResamplerProcessor,
-    chunk: &PcmChunk<f32>,
+    chunk: &PcmChunk,
 ) {
     let _ = resampler.process(chunk.clone());
 }
@@ -171,8 +168,8 @@ fn perf_resampler_deinterleave_overhead() {
 #[hotpath::measure]
 fn resampler_full_process_cycle(
     resampler: &mut kithara_audio::ResamplerProcessor,
-    chunk: &PcmChunk<f32>,
-) -> Option<PcmChunk<f32>> {
+    chunk: &PcmChunk,
+) -> Option<PcmChunk> {
     resampler.process(chunk.clone())
 }
 

@@ -68,7 +68,7 @@ impl<C: CodecType> AudioDecoder for Android<C> {
         ))))
     }
 
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         // This should never be called since create() always fails
         unreachable!("Android decoder not yet implemented")
     }
@@ -91,7 +91,7 @@ impl<C: CodecType> AudioDecoder for Android<C> {
 }
 
 impl<C: CodecType> InnerDecoder for Android<C> {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         AudioDecoder::next_chunk(self)
     }
 

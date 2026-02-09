@@ -4,13 +4,10 @@
 
 use std::time::Duration;
 
-use kithara_bufpool::{PcmPool, PooledOwned, pcm_pool};
+use kithara_bufpool::PcmBuf;
 use tracing::{debug, trace};
 
 use crate::{PcmChunk, PcmSpec};
-
-/// PCM buffer that auto-recycles to the pool on drop.
-type PcmBuf = PooledOwned<32, Vec<f32>>;
 
 /// rodio-compatible audio source that reads from a channel.
 ///
@@ -18,7 +15,7 @@ type PcmBuf = PooledOwned<32, Vec<f32>>;
 /// Spec is updated dynamically from received chunks (handles variant switches).
 pub struct AudioSyncReader {
     /// Channel receiver for reading PCM chunks.
-    pcm_rx: kanal::Receiver<PcmChunk<f32>>,
+    pcm_rx: kanal::Receiver<PcmChunk>,
     /// Current audio specification (updated from chunks).
     spec: PcmSpec,
     /// End of stream reached.
@@ -27,8 +24,6 @@ pub struct AudioSyncReader {
     current_chunk: Option<PcmBuf>,
     /// Current position in chunk.
     chunk_offset: usize,
-    /// PCM buffer pool for recycling consumed chunks.
-    pcm_pool: PcmPool,
 }
 
 impl AudioSyncReader {
@@ -37,14 +32,13 @@ impl AudioSyncReader {
     /// # Arguments
     /// - `pcm_rx`: Channel receiver for PCM chunks
     /// - `initial_spec`: Initial audio specification (updated from chunks)
-    pub fn new(pcm_rx: kanal::Receiver<PcmChunk<f32>>, initial_spec: PcmSpec) -> Self {
+    pub fn new(pcm_rx: kanal::Receiver<PcmChunk>, initial_spec: PcmSpec) -> Self {
         Self {
             pcm_rx,
             spec: initial_spec,
             eof: false,
             current_chunk: None,
             chunk_offset: 0,
-            pcm_pool: pcm_pool().clone(),
         }
     }
 
@@ -72,7 +66,7 @@ impl AudioSyncReader {
                 // Update spec from chunk (handles dynamic format changes)
                 self.spec = chunk.spec;
                 // Old current_chunk auto-recycles via Drop on reassignment
-                self.current_chunk = Some(self.pcm_pool.attach(chunk.pcm));
+                self.current_chunk = Some(chunk.pcm);
                 self.chunk_offset = 0;
                 true
             }

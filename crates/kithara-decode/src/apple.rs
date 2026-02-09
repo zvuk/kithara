@@ -667,7 +667,7 @@ impl AppleInner {
         })
     }
 
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         // Ensure we have packets to decode
         while self.parser_state.packet_buffer.len() < 4 && !self.source_eof {
             self.feed_parser()?;
@@ -1213,7 +1213,7 @@ impl<C: CodecType> AudioDecoder for Apple<C> {
         })
     }
 
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         self.inner.next_chunk()
     }
 
@@ -1235,7 +1235,7 @@ impl<C: CodecType> AudioDecoder for Apple<C> {
 }
 
 impl<C: CodecType> InnerDecoder for Apple<C> {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         AudioDecoder::next_chunk(self)
     }
 

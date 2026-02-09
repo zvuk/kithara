@@ -4,7 +4,7 @@
 
 # kithara-decode
 
-Pure audio decoding library built on Symphonia. Provides a synchronous `Decoder` that converts compressed audio (MP3, AAC, FLAC, WAV, etc.) into `PcmChunk<f32>` samples. No threading, no channels -- just a thin wrapper over Symphonia's codec pipeline.
+Pure audio decoding library built on Symphonia. Provides a synchronous `Decoder` that converts compressed audio (MP3, AAC, FLAC, WAV, etc.) into `PcmChunk` samples (pool-backed `Vec<f32>`). No threading, no channels -- just a thin wrapper over Symphonia's codec pipeline.
 
 ## Usage
 

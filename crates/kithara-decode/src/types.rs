@@ -1,5 +1,7 @@
 use std::{fmt, sync::Arc};
 
+use kithara_bufpool::{PcmBuf, pcm_pool};
+
 /// Audio track metadata extracted from Symphonia tags.
 #[derive(Debug, Clone, Default)]
 pub struct TrackMetadata {
@@ -26,29 +28,46 @@ impl fmt::Display for PcmSpec {
     }
 }
 
-/// PCM chunk containing interleaved audio samples
+/// PCM chunk containing interleaved audio samples with automatic pool recycling.
+///
+/// The `pcm` buffer is pool-backed via [`PcmBuf`]: when the chunk is dropped,
+/// the buffer returns to the global PCM pool for reuse instead of being deallocated.
 ///
 /// # Invariants
 /// - `pcm.len() % channels == 0` (frame-aligned)
 /// - `spec.channels > 0` and `spec.sample_rate > 0`
-/// - All samples are of type T and interleaved (LRLRLR...)
+/// - All samples are f32 and interleaved (LRLRLR...)
 #[derive(Clone, Debug)]
-pub struct PcmChunk<T> {
-    pub pcm: Vec<T>,
+pub struct PcmChunk {
+    pub pcm: PcmBuf,
     pub spec: PcmSpec,
 }
 
-impl<T> Default for PcmChunk<T> {
+impl Default for PcmChunk {
     fn default() -> Self {
         Self {
-            pcm: Vec::new(),
+            pcm: pcm_pool().get(),
             spec: PcmSpec::default(),
         }
     }
 }
 
-impl<T> PcmChunk<T> {
-    pub fn new(spec: PcmSpec, pcm: Vec<T>) -> Self {
+impl PcmChunk {
+    /// Create a new `PcmChunk` from a raw `Vec<f32>`.
+    ///
+    /// The Vec is attached to the global PCM pool for automatic recycling on drop.
+    pub fn new(spec: PcmSpec, pcm: Vec<f32>) -> Self {
+        Self {
+            pcm: pcm_pool().attach(pcm),
+            spec,
+        }
+    }
+
+    /// Create a new `PcmChunk` from a pool-backed buffer (zero overhead).
+    ///
+    /// Use this when the buffer was already obtained from the pool
+    /// (e.g., via `pcm_pool().get_with()`).
+    pub fn with_pooled(spec: PcmSpec, pcm: PcmBuf) -> Self {
         Self { pcm, spec }
     }
 
@@ -74,12 +93,12 @@ impl<T> PcmChunk<T> {
     }
 
     /// Get reference to raw samples.
-    pub fn samples(&self) -> &[T] {
+    pub fn samples(&self) -> &[f32] {
         &self.pcm
     }
 
-    /// Consume chunk and return samples.
-    pub fn into_samples(self) -> Vec<T> {
+    /// Consume chunk and return the pooled buffer.
+    pub fn into_samples(self) -> PcmBuf {
         self.pcm
     }
 }
@@ -180,7 +199,7 @@ mod tests {
         let chunk = PcmChunk::new(spec, pcm.clone());
 
         assert_eq!(chunk.spec, spec);
-        assert_eq!(chunk.pcm, pcm);
+        assert_eq!(chunk.samples(), &pcm[..]);
     }
 
     #[rstest]
@@ -268,34 +287,7 @@ mod tests {
 
         let extracted = chunk.into_samples();
         assert_eq!(extracted.len(), 4);
-        assert_eq!(extracted, pcm);
-    }
-
-    #[test]
-    fn test_pcm_chunk_with_i16() {
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
-        let pcm: Vec<i16> = vec![100, 200, 300, 400];
-        let chunk = PcmChunk::new(spec, pcm);
-
-        assert_eq!(chunk.frames(), 2);
-        assert_eq!(chunk.samples().len(), 4);
-    }
-
-    #[test]
-    fn test_pcm_chunk_with_f64() {
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 48000,
-        };
-        let pcm: Vec<f64> = vec![0.1, 0.2, 0.3];
-        let chunk = PcmChunk::new(spec, pcm);
-
-        assert_eq!(chunk.frames(), 3);
-        let expected_duration = 3.0 / 48000.0;
-        assert!((chunk.duration_secs() - expected_duration).abs() < 1e-9);
+        assert_eq!(&extracted[..], &pcm[..]);
     }
 
     #[test]

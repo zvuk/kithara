@@ -1,4 +1,5 @@
 use std::{
+    fmt,
     ops::{Deref, DerefMut},
     sync::Arc,
 };
@@ -359,6 +360,40 @@ where
         self.value
             .as_mut()
             .expect("PooledOwned value already taken")
+    }
+}
+
+impl<const SHARDS: usize, T> fmt::Debug for PooledOwned<SHARDS, T>
+where
+    T: Reuse + fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.value {
+            Some(v) => fmt::Debug::fmt(v, f),
+            None => write!(f, "<taken>"),
+        }
+    }
+}
+
+impl<const SHARDS: usize, T> Clone for PooledOwned<SHARDS, T>
+where
+    T: Reuse + Clone,
+{
+    fn clone(&self) -> Self {
+        Self {
+            value: self.value.clone(),
+            pool: Arc::clone(&self.pool),
+            shard_idx: self.shard_idx,
+        }
+    }
+}
+
+impl<const SHARDS: usize, T> PartialEq for PooledOwned<SHARDS, T>
+where
+    T: Reuse + PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        self.value == other.value
     }
 }
 

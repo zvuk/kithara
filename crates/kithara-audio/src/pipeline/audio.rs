@@ -11,10 +11,7 @@ use std::{
 };
 
 use kanal::Receiver;
-use kithara_bufpool::{PcmPool, PooledOwned, byte_pool, pcm_pool};
-
-/// PCM buffer that auto-recycles to the pool on drop.
-type PcmBuf = PooledOwned<32, Vec<f32>>;
+use kithara_bufpool::{PcmBuf, PcmPool, byte_pool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_stream::{EpochValidator, Fetch, Stream, StreamType};
 use tokio::{
@@ -66,7 +63,7 @@ pub struct Audio<S> {
     cmd_tx: kanal::Sender<AudioCommand>,
 
     /// PCM chunk receiver.
-    pcm_rx: Receiver<Fetch<PcmChunk<f32>>>,
+    pcm_rx: Receiver<Fetch<PcmChunk>>,
 
     /// Shared epoch counter with worker.
     epoch: Arc<AtomicU64>,
@@ -132,7 +129,7 @@ pub struct Audio<S> {
 
 impl<S> Audio<S> {
     /// Get reference to PCM receiver for direct channel access.
-    pub fn pcm_rx(&self) -> &Receiver<Fetch<PcmChunk<f32>>> {
+    pub fn pcm_rx(&self) -> &Receiver<Fetch<PcmChunk>> {
         &self.pcm_rx
     }
 
@@ -256,7 +253,7 @@ impl<S> Audio<S> {
                 if !fetch.is_eof() {
                     let chunk = fetch.into_inner();
                     self.spec = chunk.spec;
-                    self.current_chunk = Some(self.pcm_pool.attach(chunk.pcm));
+                    self.current_chunk = Some(chunk.pcm);
                     self.chunk_offset = 0;
                     trace!("seek: saved first valid chunk after drain");
                 }
@@ -327,7 +324,7 @@ impl<S> Audio<S> {
                     );
                     self.spec = chunk.spec;
                     // Old current_chunk auto-recycles via Drop on reassignment
-                    self.current_chunk = Some(self.pcm_pool.attach(chunk.pcm));
+                    self.current_chunk = Some(chunk.pcm);
                     self.chunk_offset = 0;
                     return true;
                 }
