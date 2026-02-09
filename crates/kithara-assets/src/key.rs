@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+use std::path::{Path, PathBuf};
+
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use url::Url;
@@ -9,22 +11,29 @@ use crate::error::{AssetsError, AssetsResult};
 /// Key type for addressing resources within an asset.
 ///
 /// A `ResourceKey` identifies a single resource (file) within an asset store.
-/// The asset store is already scoped to a specific `asset_root`, so `ResourceKey`
-/// only contains the relative path within that asset.
 ///
-/// Higher layers are responsible for choosing `rel_path` (e.g. `media/audio.mp3`,
-/// `segments/0001.m4s`).
-///
-/// The assets store only:
-/// - safely maps keys under `<root_dir>/<asset_root>`,
-/// - prevents path traversal / absolute paths,
-/// - opens the file using the requested resource type (streaming vs atomic).
+/// Two variants:
+/// - `Relative`: path within `<root_dir>/<asset_root>` (existing behavior).
+/// - `Absolute`: filesystem path used directly, bypassing `root/asset_root` resolution.
+///   Used for local files opened via `AssetStore`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct ResourceKey(String);
+pub enum ResourceKey {
+    /// Relative path within `asset_root` (existing behavior).
+    Relative(String),
+    /// Absolute filesystem path — bypasses `root_dir/asset_root` resolution.
+    /// Used for local files opened directly.
+    Absolute(PathBuf),
+}
 
 impl ResourceKey {
+    /// Create a relative resource key (backward-compatible).
     pub fn new<S: Into<String>>(rel_path: S) -> Self {
-        Self(rel_path.into())
+        Self::Relative(rel_path.into())
+    }
+
+    /// Create an absolute resource key for a local file.
+    pub fn absolute<P: Into<PathBuf>>(path: P) -> Self {
+        Self::Absolute(path.into())
     }
 
     /// Extracts the relative path (last path segment) from a URL.
@@ -35,11 +44,28 @@ impl ResourceKey {
             .filter(|s| !s.is_empty())
             .unwrap_or("index")
             .to_string();
-        Self(rel_path)
+        Self::Relative(rel_path)
     }
 
-    pub fn rel_path(&self) -> &str {
-        &self.0
+    /// Returns the relative path if this is a Relative key.
+    pub fn rel_path(&self) -> Option<&str> {
+        match self {
+            Self::Relative(s) => Some(s),
+            Self::Absolute(_) => None,
+        }
+    }
+
+    /// Returns true if this is an absolute path key.
+    pub fn is_absolute(&self) -> bool {
+        matches!(self, Self::Absolute(_))
+    }
+
+    /// Returns the absolute path if this is an Absolute key.
+    pub fn as_absolute_path(&self) -> Option<&Path> {
+        match self {
+            Self::Absolute(p) => Some(p),
+            Self::Relative(_) => None,
+        }
     }
 }
 
@@ -140,6 +166,8 @@ pub fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use rstest::rstest;
     use url::Url;
 
@@ -351,5 +379,30 @@ mod tests {
             "{} should return MissingComponent error for host",
             description
         );
+    }
+
+    #[test]
+    fn test_resource_key_absolute() {
+        let path = PathBuf::from("/tmp/song.mp3");
+        let key = ResourceKey::absolute(&path);
+        assert!(key.is_absolute());
+        assert_eq!(key.as_absolute_path(), Some(path.as_path()));
+    }
+
+    #[test]
+    fn test_resource_key_relative_is_not_absolute() {
+        let key = ResourceKey::new("seg.m4s");
+        assert!(!key.is_absolute());
+        assert_eq!(key.as_absolute_path(), None);
+    }
+
+    #[test]
+    fn test_resource_key_absolute_hash_differs() {
+        use std::collections::HashSet;
+        let abs = ResourceKey::absolute("/tmp/a.mp3");
+        let rel = ResourceKey::new("/tmp/a.mp3");
+        let mut set = HashSet::new();
+        set.insert(abs.clone());
+        assert_ne!(abs, rel);
     }
 }

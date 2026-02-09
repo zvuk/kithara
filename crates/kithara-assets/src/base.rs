@@ -95,9 +95,15 @@ impl DiskAssetStore {
     }
 
     fn resource_path(&self, key: &ResourceKey) -> AssetsResult<PathBuf> {
-        let asset_root = sanitize_rel(&self.asset_root).map_err(|()| AssetsError::InvalidKey)?;
-        let rel_path = sanitize_rel(key.rel_path()).map_err(|()| AssetsError::InvalidKey)?;
-        Ok(self.root_dir.join(asset_root).join(rel_path))
+        match key {
+            ResourceKey::Relative(rel) => {
+                let asset_root =
+                    sanitize_rel(&self.asset_root).map_err(|()| AssetsError::InvalidKey)?;
+                let rel_path = sanitize_rel(rel).map_err(|()| AssetsError::InvalidKey)?;
+                Ok(self.root_dir.join(asset_root).join(rel_path))
+            }
+            ResourceKey::Absolute(path) => Ok(path.clone()),
+        }
     }
 
     fn pins_index_path(&self) -> PathBuf {
