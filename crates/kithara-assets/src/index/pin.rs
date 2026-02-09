@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use kithara_storage::{ResourceExt, StorageResource};
+use kithara_storage::ResourceExt;
 
 use crate::{base::Assets, error::AssetsResult};
 
@@ -22,22 +22,22 @@ struct PinsIndexFile {
 /// ## Normative
 /// - The set is stored as a `HashSet<String>` in-memory.
 /// - Every mutation (`insert`/`remove`) persists the full set immediately.
-/// - The underlying storage is a `StorageResource` (whole-object read/write via `read_all`/`write_all`).
+/// - The underlying storage uses whole-object read/write via `read_into`/`write_all`.
 ///
 /// ## Key selection
 /// `PinsIndex` does **not** form keys. The concrete [`Assets`] implementation decides where this
 /// index lives by implementing [`Assets::open_pins_index_resource`].
-pub struct PinsIndex {
-    res: StorageResource,
+pub struct PinsIndex<R: ResourceExt> {
+    res: R,
 }
 
-impl PinsIndex {
-    pub(crate) fn new(res: StorageResource) -> Self {
+impl<R: ResourceExt> PinsIndex<R> {
+    pub(crate) fn new(res: R) -> Self {
         Self { res }
     }
 
     /// Open a `PinsIndex` for the given base assets store.
-    pub fn open<A: Assets>(assets: &A) -> AssetsResult<Self> {
+    pub fn open<A: Assets<IndexRes = R>>(assets: &A) -> AssetsResult<Self> {
         let res = assets.open_pins_index_resource()?;
         Ok(Self::new(res))
     }
@@ -80,7 +80,7 @@ impl PinsIndex {
 mod tests {
     use std::{collections::HashSet, time::Duration};
 
-    use kithara_storage::{OpenMode, StorageOptions};
+    use kithara_storage::{OpenMode, StorageOptions, StorageResource};
     use rstest::*;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;

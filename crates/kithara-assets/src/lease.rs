@@ -11,7 +11,7 @@ use std::{
     },
 };
 
-use kithara_storage::{ResourceExt, ResourceStatus, StorageResource, StorageResult, WaitOutcome};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -96,7 +96,7 @@ where
         &self.inner
     }
 
-    fn open_index(&self) -> AssetsResult<PinsIndex> {
+    fn open_index(&self) -> AssetsResult<PinsIndex<A::IndexRes>> {
         PinsIndex::open(self.inner())
     }
 
@@ -237,6 +237,7 @@ where
 {
     type Res = LeaseResource<A::Res, LeaseGuard<A>>;
     type Context = A::Context;
+    type IndexRes = A::IndexRes;
 
     fn root_dir(&self) -> &Path {
         self.inner.root_dir()
@@ -272,12 +273,12 @@ where
         })
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         // Pins index must be opened without pinning to avoid recursion
         self.inner.open_pins_index_resource()
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         // LRU index must be opened without pinning
         self.inner.open_lru_index_resource()
     }

@@ -2,7 +2,6 @@
 
 use std::{num::NonZeroUsize, path::Path, sync::Arc};
 
-use kithara_storage::StorageResource;
 use lru::LruCache;
 use parking_lot::Mutex;
 
@@ -16,12 +15,12 @@ enum CacheKey<C> {
 }
 
 #[derive(Clone, Debug)]
-enum CacheEntry<R> {
+enum CacheEntry<R, I> {
     Resource(R),
-    Index(StorageResource),
+    Index(I),
 }
 
-type Cache<R, C> = Mutex<LruCache<CacheKey<C>, CacheEntry<R>>>;
+type Cache<R, C, I> = Mutex<LruCache<CacheKey<C>, CacheEntry<R, I>>>;
 
 /// A decorator that caches opened resources in memory with LRU eviction.
 ///
@@ -37,7 +36,7 @@ where
     A: Assets,
 {
     inner: Arc<A>,
-    cache: Arc<Cache<A::Res, A::Context>>,
+    cache: Arc<Cache<A::Res, A::Context, A::IndexRes>>,
     enabled: bool,
 }
 
@@ -85,6 +84,7 @@ where
 {
     type Res = A::Res;
     type Context = A::Context;
+    type IndexRes = A::IndexRes;
 
     fn root_dir(&self) -> &Path {
         self.inner.root_dir()
@@ -125,7 +125,7 @@ where
         Ok(res)
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         if !self.enabled {
             return self.inner.open_pins_index_resource();
         }
@@ -142,7 +142,7 @@ where
         Ok(res)
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         if !self.enabled {
             return self.inner.open_lru_index_resource();
         }

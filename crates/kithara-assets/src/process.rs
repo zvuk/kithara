@@ -8,9 +8,7 @@
 use std::{fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
 
 use kithara_bufpool::BytePool;
-use kithara_storage::{
-    ResourceExt, ResourceStatus, StorageError, StorageResource, StorageResult, WaitOutcome,
-};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome};
 use parking_lot::Mutex;
 
 use crate::{AssetsResult, ResourceKey, base::Assets};
@@ -242,6 +240,7 @@ where
 {
     type Res = ProcessedResource<A::Res, Ctx>;
     type Context = Ctx;
+    type IndexRes = A::IndexRes;
 
     fn root_dir(&self) -> &Path {
         self.inner.root_dir()
@@ -264,11 +263,11 @@ where
         Ok(processed)
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         self.inner.open_pins_index_resource()
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         self.inner.open_lru_index_resource()
     }
 

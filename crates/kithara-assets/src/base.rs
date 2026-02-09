@@ -19,15 +19,20 @@ use crate::{
 /// `kithara-assets` is about *assets* and their *resources*:
 /// - an **asset** is a logical unit that may consist of multiple files/resources,
 /// - a **resource** is addressed by [`ResourceKey`] and is opened as a unified
-///   [`StorageResource`] supporting both streaming and atomic access patterns.
+///   resource supporting both streaming and atomic access patterns.
 ///
 /// The `Context` associated type allows decorators to pass additional processing
 /// context (e.g. encryption info) when opening resources. Use `()` for no context.
+///
+/// `IndexRes` is the resource type used for internal index persistence (pins, LRU).
+/// Disk-backed stores use `StorageResource`; in-memory stores use `MemoryResource`.
 pub trait Assets: Clone + Send + Sync + 'static {
     /// Type returned by `open_resource`. Must be Clone for caching.
     type Res: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
     /// Context type for resource processing. Use `()` for no context.
     type Context: Clone + Send + Sync + Hash + Eq + Debug + 'static;
+    /// Resource type for index persistence (pins, LRU).
+    type IndexRes: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
 
     /// Open a resource with optional context (main method).
     fn open_resource_with_ctx(
@@ -42,14 +47,10 @@ pub trait Assets: Clone + Send + Sync + 'static {
     }
 
     /// Open the resource used for persisting the pins index.
-    ///
-    /// Returns bare `StorageResource` to bypass decorator wrapping.
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource>;
+    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
     /// Open the resource used for persisting the LRU index.
-    ///
-    /// Returns bare `StorageResource` to bypass decorator wrapping.
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource>;
+    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
     /// Delete the entire asset (all resources under this store's `asset_root`).
     fn delete_asset(&self) -> AssetsResult<()>;
@@ -145,6 +146,7 @@ impl DiskAssetStore {
 impl Assets for DiskAssetStore {
     type Res = StorageResource;
     type Context = ();
+    type IndexRes = StorageResource;
 
     fn root_dir(&self) -> &Path {
         &self.root_dir
