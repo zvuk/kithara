@@ -27,6 +27,8 @@ use crate::{
 /// - Pin/unpin operations set a dirty flag; disk persistence is deferred until
 ///   [`flush_pins()`](Self::flush_pins) is called or the last clone is dropped.
 /// - The pin index resource must be excluded from pinning to avoid recursion.
+/// - When `enabled` is `false`, all operations delegate directly to the inner layer
+///   (no pinning, no byte recording, no persistence).
 ///
 /// This type does **not** do any filesystem/path logic; it uses the inner `Assets` abstraction.
 #[derive(Clone)]
@@ -37,6 +39,7 @@ where
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
     cancel: CancellationToken,
     dirty: Arc<AtomicBool>,
+    enabled: bool,
     inner: Arc<A>,
     pins: Arc<Mutex<HashSet<String>>>,
 }
@@ -50,6 +53,7 @@ where
             byte_recorder: None,
             cancel,
             dirty: Arc::new(AtomicBool::new(false)),
+            enabled: true,
             inner,
             pins: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -65,6 +69,24 @@ where
             byte_recorder: Some(byte_recorder),
             cancel,
             dirty: Arc::new(AtomicBool::new(false)),
+            enabled: true,
+            inner,
+            pins: Arc::new(Mutex::new(HashSet::new())),
+        }
+    }
+
+    /// Create with explicit enabled flag. When `false`, lease/pin logic is bypassed.
+    pub fn with_enabled(
+        inner: Arc<A>,
+        cancel: CancellationToken,
+        byte_recorder: Option<Arc<dyn ByteRecorder>>,
+        enabled: bool,
+    ) -> Self {
+        Self {
+            byte_recorder,
+            cancel,
+            dirty: Arc::new(AtomicBool::new(false)),
+            enabled,
             inner,
             pins: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -105,7 +127,7 @@ where
 
     /// Persist the current pin set to disk if dirty, then clear the dirty flag.
     pub fn flush_pins(&self) -> AssetsResult<()> {
-        if !self.dirty.swap(false, Ordering::AcqRel) {
+        if !self.enabled || !self.dirty.swap(false, Ordering::AcqRel) {
             return Ok(());
         }
         let snapshot = self.pins.lock().clone();
@@ -123,11 +145,11 @@ where
         }
 
         Ok(LeaseGuard {
-            inner: Arc::new(LeaseGuardInner {
+            inner: Some(Arc::new(LeaseGuardInner {
                 owner: self.clone(),
                 asset_root: asset_root.to_string(),
                 cancel: self.cancel.clone(),
-            }),
+            })),
         })
     }
 }
@@ -226,6 +248,16 @@ where
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         let inner = self.inner.open_resource_with_ctx(key, ctx)?;
+
+        if !self.enabled {
+            return Ok(LeaseResource {
+                inner,
+                _lease: LeaseGuard { inner: None },
+                asset_root: self.inner.asset_root().to_string(),
+                byte_recorder: None,
+            });
+        }
+
         let lease = self.pin(self.inner.asset_root())?;
 
         Ok(LeaseResource {
@@ -256,6 +288,9 @@ where
     A: Assets,
 {
     fn drop(&mut self) {
+        if !self.enabled {
+            return;
+        }
         // Only persist on the last clone (all Arc fields share the same refcount via `pins`)
         if Arc::strong_count(&self.pins) == 1 && self.dirty.load(Ordering::Acquire) {
             let snapshot = self.pins.lock().clone();
@@ -270,13 +305,14 @@ where
 /// to disk (best-effort) via the decorator.
 ///
 /// Uses `Arc` internally for reference counting - unpin happens only when the last clone is dropped.
+/// When `inner` is `None`, the guard is a no-op (used when lease is bypassed).
 #[derive(Clone)]
 pub struct LeaseGuard<A>
 where
     A: Assets,
 {
     #[expect(dead_code)]
-    inner: Arc<LeaseGuardInner<A>>,
+    inner: Option<Arc<LeaseGuardInner<A>>>,
 }
 
 struct LeaseGuardInner<A>
@@ -322,6 +358,15 @@ mod tests {
             CancellationToken::new(),
         ));
         LeaseAssets::new(disk, CancellationToken::new())
+    }
+
+    fn make_lease_disabled(dir: &Path) -> LeaseAssets<DiskAssetStore> {
+        let disk = Arc::new(DiskAssetStore::new(
+            dir,
+            "test_asset",
+            CancellationToken::new(),
+        ));
+        LeaseAssets::with_enabled(disk, CancellationToken::new(), None, false)
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {
@@ -437,5 +482,51 @@ mod tests {
             load_persisted_pins(dir.path()).contains("test_asset"),
             "flush on remaining clone should persist"
         );
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn bypass_does_not_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = make_lease_disabled(dir.path());
+        let key = ResourceKey::new("audio.mp3");
+
+        let _res = lease.open_resource(&key).unwrap();
+
+        // Pins should be empty when disabled
+        let pins = lease.pins.lock();
+        assert!(pins.is_empty(), "bypass should not pin");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn bypass_flush_is_noop() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = make_lease_disabled(dir.path());
+        let key = ResourceKey::new("audio.mp3");
+
+        let _res = lease.open_resource(&key).unwrap();
+        lease.flush_pins().unwrap();
+
+        // Nothing should be persisted
+        let on_disk = load_persisted_pins(dir.path());
+        assert!(on_disk.is_empty(), "bypass flush should not persist");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn bypass_still_returns_resources() {
+        let dir = tempfile::tempdir().unwrap();
+        let lease = make_lease_disabled(dir.path());
+        let key = ResourceKey::new("audio.mp3");
+
+        let res = lease.open_resource(&key).unwrap();
+
+        // Resource should still be usable
+        res.write_at(0, b"hello").unwrap();
+        let mut buf = [0u8; 5];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, b"hello");
     }
 }

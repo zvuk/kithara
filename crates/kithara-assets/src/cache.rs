@@ -30,6 +30,7 @@ type Cache<R, C> = Mutex<LruCache<CacheKey<C>, CacheEntry<R>>>;
 /// - Same `(ResourceKey, Context)` returns the same resource handle.
 /// - Cache is process-scoped and not persisted.
 /// - LRU capacity is configurable (default: 5 entries).
+/// - When `enabled` is `false`, all operations delegate directly to the inner layer.
 #[derive(Clone)]
 pub struct CachedAssets<A>
 where
@@ -37,6 +38,7 @@ where
 {
     inner: Arc<A>,
     cache: Arc<Cache<A::Res, A::Context>>,
+    enabled: bool,
 }
 
 impl<A> std::fmt::Debug for CachedAssets<A>
@@ -59,6 +61,16 @@ where
         Self {
             inner,
             cache: Arc::new(Mutex::new(LruCache::new(capacity))),
+            enabled: true,
+        }
+    }
+
+    /// Create with explicit enabled flag. When `false`, all operations bypass the cache.
+    pub fn with_enabled(inner: Arc<A>, capacity: NonZeroUsize, enabled: bool) -> Self {
+        Self {
+            inner,
+            cache: Arc::new(Mutex::new(LruCache::new(capacity))),
+            enabled,
         }
     }
 
@@ -87,6 +99,10 @@ where
         key: &ResourceKey,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
+        if !self.enabled {
+            return self.inner.open_resource_with_ctx(key, ctx);
+        }
+
         let cache_key = CacheKey::Resource(key.clone(), ctx.clone());
 
         // Check cache (short lock)
@@ -110,6 +126,10 @@ where
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
+        if !self.enabled {
+            return self.inner.open_pins_index_resource();
+        }
+
         {
             let cache = self.cache.lock();
             if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::PinsIndex) {
@@ -128,6 +148,10 @@ where
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
+        if !self.enabled {
+            return self.inner.open_lru_index_resource();
+        }
+
         {
             let cache = self.cache.lock();
             if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::LruIndex) {
@@ -195,6 +219,15 @@ mod tests {
         CachedAssets::new(disk, capacity)
     }
 
+    fn make_cached_disabled(dir: &Path) -> CachedAssets<DiskAssetStore> {
+        let disk = Arc::new(DiskAssetStore::new(
+            dir,
+            "test_asset",
+            CancellationToken::new(),
+        ));
+        CachedAssets::with_enabled(disk, NonZeroUsize::new(5).unwrap(), false)
+    }
+
     #[rstest]
     #[timeout(Duration::from_secs(5))]
     fn evicts_at_custom_capacity() {
@@ -254,5 +287,38 @@ mod tests {
 
         let cache = cached.cache.lock();
         assert_eq!(cache.len(), 4);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn bypass_does_not_cache() {
+        let dir = tempfile::tempdir().unwrap();
+        let cached = make_cached_disabled(dir.path());
+
+        let keys: Vec<ResourceKey> = (0..3)
+            .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
+            .collect();
+
+        for key in &keys {
+            cached.open_resource(key).unwrap();
+        }
+
+        // Cache should be empty when disabled
+        let cache = cached.cache.lock();
+        assert_eq!(cache.len(), 0);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn bypass_still_returns_resources() {
+        let dir = tempfile::tempdir().unwrap();
+        let cached = make_cached_disabled(dir.path());
+        let key = ResourceKey::new("audio.mp3");
+
+        let res1 = cached.open_resource(&key).unwrap();
+        let res2 = cached.open_resource(&key).unwrap();
+
+        // Both should work (same path) even without caching
+        assert_eq!(res1.path(), res2.path());
     }
 }
