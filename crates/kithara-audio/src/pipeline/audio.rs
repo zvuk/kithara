@@ -11,7 +11,10 @@ use std::{
 };
 
 use kanal::Receiver;
-use kithara_bufpool::{PcmPool, byte_pool, pcm_pool};
+use kithara_bufpool::{PcmPool, PooledOwned, byte_pool, pcm_pool};
+
+/// PCM buffer that auto-recycles to the pool on drop.
+type PcmBuf = PooledOwned<32, Vec<f32>>;
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_stream::{EpochValidator, Fetch, Stream, StreamType};
 use tokio::{
@@ -74,8 +77,8 @@ pub struct Audio<S> {
     /// Current audio specification (updated from chunks).
     pub(crate) spec: PcmSpec,
 
-    /// Current chunk being read.
-    pub(crate) current_chunk: Option<Vec<f32>>,
+    /// Current chunk being read (auto-recycles to pool on drop).
+    pub(crate) current_chunk: Option<PcmBuf>,
 
     /// Current position in chunk.
     pub(crate) chunk_offset: usize,
@@ -203,7 +206,7 @@ impl<S> Audio<S> {
                 self.chunk_offset += to_copy;
 
                 if self.chunk_offset >= chunk.len() {
-                    self.current_chunk = None;
+                    self.current_chunk = None; // auto-recycles via Drop
                     self.chunk_offset = 0;
                 }
 
@@ -238,7 +241,7 @@ impl<S> Audio<S> {
             })
             .map_err(|_| DecodeError::SeekError("channel closed".to_string()))?;
 
-        // Clear local state
+        // Clear local state (current_chunk auto-recycles via Drop)
         self.current_chunk = None;
         self.chunk_offset = 0;
         self.eof = false;
@@ -253,7 +256,7 @@ impl<S> Audio<S> {
                 if !fetch.is_eof() {
                     let chunk = fetch.into_inner();
                     self.spec = chunk.spec;
-                    self.current_chunk = Some(chunk.pcm);
+                    self.current_chunk = Some(self.pcm_pool.attach(chunk.pcm));
                     self.chunk_offset = 0;
                     trace!("seek: saved first valid chunk after drain");
                 }
@@ -323,7 +326,8 @@ impl<S> Audio<S> {
                         "Audio: received chunk"
                     );
                     self.spec = chunk.spec;
-                    self.current_chunk = Some(chunk.pcm);
+                    // Old current_chunk auto-recycles via Drop on reassignment
+                    self.current_chunk = Some(self.pcm_pool.attach(chunk.pcm));
                     self.chunk_offset = 0;
                     return true;
                 }

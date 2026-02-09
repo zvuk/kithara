@@ -195,6 +195,77 @@ fn test_pooled_owned_into_inner_not_returned() {
 }
 
 #[test]
+fn test_pool_recycle() {
+    let pool = Pool::<4, Vec<u8>>::new(16, 1024);
+
+    // Get a buffer, extract it, and recycle manually
+    let buf = pool.get_with(|b| b.extend_from_slice(b"recycle me"));
+    let vec = buf.into_inner(); // Extracted — not returned to pool
+    assert_eq!(&vec[..], b"recycle me");
+
+    let cap = vec.capacity();
+    pool.recycle(vec);
+
+    // Next get should return the recycled buffer (cleared, capacity retained)
+    let reused = pool.get();
+    assert_eq!(reused.len(), 0);
+    assert_eq!(reused.capacity(), cap);
+}
+
+#[test]
+fn test_shared_pool_recycle() {
+    let pool = SharedPool::<4, Vec<f32>>::new(16, 1024);
+
+    let buf = pool.get_with(|b| b.resize(100, 1.0));
+    let vec = buf.into_inner();
+    assert_eq!(vec.len(), 100);
+
+    let cap = vec.capacity();
+    pool.recycle(vec);
+
+    // Next get should return the recycled buffer
+    let reused = pool.get();
+    assert_eq!(reused.len(), 0);
+    assert_eq!(reused.capacity(), cap);
+}
+
+#[test]
+fn test_shared_pool_attach() {
+    let pool = SharedPool::<4, Vec<f32>>::new(16, 1024);
+
+    // Create a Vec outside the pool
+    let mut vec = Vec::with_capacity(256);
+    vec.resize(100, 42.0);
+    let cap = vec.capacity();
+
+    // Attach it to the pool — drop returns it
+    {
+        let attached = pool.attach(vec);
+        assert_eq!(attached.len(), 100);
+        assert_eq!(attached[0], 42.0);
+    } // dropped → returned to pool
+
+    // Next get should return the recycled buffer (cleared, capacity retained)
+    let reused = pool.get();
+    assert_eq!(reused.len(), 0);
+    assert_eq!(reused.capacity(), cap);
+}
+
+#[test]
+fn test_attach_into_inner_does_not_recycle() {
+    let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
+
+    let vec = Vec::with_capacity(128);
+    let attached = pool.attach(vec);
+    let _extracted = attached.into_inner(); // Should NOT return to pool
+    drop(_extracted);
+
+    // Pool should be empty
+    let fresh = pool.get();
+    assert_eq!(fresh.capacity(), 0, "pool should be empty after into_inner");
+}
+
+#[test]
 fn test_multi_threaded_contention() {
     use std::{sync::Arc, thread};
 

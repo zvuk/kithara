@@ -4,9 +4,13 @@
 
 use std::time::Duration;
 
+use kithara_bufpool::{PcmPool, PooledOwned, pcm_pool};
 use tracing::{debug, trace};
 
 use crate::{PcmChunk, PcmSpec};
+
+/// PCM buffer that auto-recycles to the pool on drop.
+type PcmBuf = PooledOwned<32, Vec<f32>>;
 
 /// rodio-compatible audio source that reads from a channel.
 ///
@@ -19,10 +23,12 @@ pub struct AudioSyncReader {
     spec: PcmSpec,
     /// End of stream reached.
     eof: bool,
-    /// Current chunk being read.
-    current_chunk: Option<Vec<f32>>,
+    /// Current chunk being read (auto-recycles to pool on drop).
+    current_chunk: Option<PcmBuf>,
     /// Current position in chunk.
     chunk_offset: usize,
+    /// PCM buffer pool for recycling consumed chunks.
+    pcm_pool: PcmPool,
 }
 
 impl AudioSyncReader {
@@ -38,6 +44,7 @@ impl AudioSyncReader {
             eof: false,
             current_chunk: None,
             chunk_offset: 0,
+            pcm_pool: pcm_pool().clone(),
         }
     }
 
@@ -64,7 +71,8 @@ impl AudioSyncReader {
                 );
                 // Update spec from chunk (handles dynamic format changes)
                 self.spec = chunk.spec;
-                self.current_chunk = Some(chunk.pcm);
+                // Old current_chunk auto-recycles via Drop on reassignment
+                self.current_chunk = Some(self.pcm_pool.attach(chunk.pcm));
                 self.chunk_offset = 0;
                 true
             }
