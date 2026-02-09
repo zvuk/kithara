@@ -34,6 +34,7 @@ pub trait ByteRecorder: Send + Sync {
 /// - Both `max_assets` and `max_bytes` are soft caps enforced best-effort.
 /// - Byte accounting is best-effort and must be explicitly updated via
 ///   `touch_asset_bytes`; the evictor does NOT walk the filesystem.
+/// - When `enabled` is `false`, all operations delegate directly to the inner layer.
 #[derive(Clone, Debug)]
 pub struct EvictAssets<A>
 where
@@ -43,18 +44,29 @@ where
     cfg: EvictConfig,
     seen: Arc<Mutex<HashSet<String>>>,
     cancel: CancellationToken,
+    enabled: bool,
 }
 
 impl<A> EvictAssets<A>
 where
     A: Assets,
 {
-    pub(crate) fn new(inner: Arc<A>, cfg: EvictConfig, cancel: CancellationToken) -> Self {
+    /// Create a new eviction decorator.
+    ///
+    /// When `enabled` is `false`, all eviction logic is bypassed and operations
+    /// delegate directly to the inner layer.
+    pub(crate) fn new(
+        inner: Arc<A>,
+        cfg: EvictConfig,
+        cancel: CancellationToken,
+        enabled: bool,
+    ) -> Self {
         Self {
             inner,
             cfg,
             seen: Arc::new(Mutex::new(HashSet::new())),
             cancel,
+            enabled,
         }
     }
 
@@ -64,6 +76,9 @@ where
 
     /// Record asset size for byte-based eviction (best-effort).
     pub fn record_asset_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<()> {
+        if !self.enabled {
+            return Ok(());
+        }
         tracing::debug!(asset_root = %asset_root, bytes, "Recording asset bytes");
         let lru = self.open_lru()?;
         let _ = lru.touch(asset_root, Some(bytes))?;
@@ -73,7 +88,7 @@ where
 
     /// Check if byte limit is exceeded and run eviction if needed.
     pub fn check_and_evict_if_over_limit(&self) {
-        if self.cancel.is_cancelled() || self.cfg.max_bytes.is_none() {
+        if !self.enabled || self.cancel.is_cancelled() || self.cfg.max_bytes.is_none() {
             return;
         }
 
@@ -205,7 +220,7 @@ where
     }
 
     fn touch_and_maybe_evict(&self, asset_root: &str, bytes_hint: Option<u64>) {
-        if self.cancel.is_cancelled() {
+        if !self.enabled || self.cancel.is_cancelled() {
             return;
         }
 

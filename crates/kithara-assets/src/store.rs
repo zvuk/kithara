@@ -1,11 +1,17 @@
 #![forbid(unsafe_code)]
 
-use std::{hash::Hash, path::PathBuf, sync::Arc};
+use std::{hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use kithara_bufpool::{BytePool, byte_pool};
 use kithara_storage::StorageResource;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
+
+/// Default in-memory LRU cache capacity (enough for init + 2-3 media segments).
+const DEFAULT_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(5) {
+    Some(v) => v,
+    None => unreachable!(),
+};
 
 use crate::{
     base::DiskAssetStore,
@@ -24,6 +30,8 @@ use crate::{
 pub struct StoreOptions {
     /// Directory for persistent cache storage (required).
     pub cache_dir: PathBuf,
+    /// In-memory LRU cache capacity for opened resources.
+    pub cache_capacity: Option<NonZeroUsize>,
     /// Maximum number of assets to keep (soft cap for LRU eviction).
     pub max_assets: Option<usize>,
     /// Maximum bytes to store (soft cap for LRU eviction).
@@ -32,7 +40,12 @@ pub struct StoreOptions {
 
 impl Default for StoreOptions {
     fn default() -> Self {
-        Self::new(std::env::temp_dir().join("kithara"))
+        Self {
+            cache_dir: std::env::temp_dir().join("kithara"),
+            cache_capacity: None,
+            max_assets: None,
+            max_bytes: None,
+        }
     }
 }
 
@@ -41,6 +54,7 @@ impl StoreOptions {
     pub fn new<P: Into<PathBuf>>(cache_dir: P) -> Self {
         Self {
             cache_dir: cache_dir.into(),
+            cache_capacity: None,
             max_assets: None,
             max_bytes: None,
         }
@@ -97,14 +111,20 @@ pub type AssetResource<Ctx = ()> = LeaseResource<
 /// // Without processing:
 /// let store = AssetStoreBuilder::new()
 ///     .root_dir("/path/to/cache")
-///     .asset_root(asset_root_for_url(&master_url))
+///     .asset_root(Some(&asset_root_for_url(&master_url)))
 ///     .build();
 ///
 /// // With processing callback:
 /// let store = AssetStoreBuilder::new()
 ///     .root_dir("/path/to/cache")
-///     .asset_root(asset_root_for_url(&master_url))
+///     .asset_root(Some(&asset_root_for_url(&master_url)))
 ///     .process_fn(my_decrypt_callback)
+///     .build();
+///
+/// // Local-only (absolute keys only, no asset_root):
+/// let store = AssetStoreBuilder::new()
+///     .root_dir("/path/to/cache")
+///     .asset_root(None)
 ///     .build();
 /// ```
 ///
@@ -114,12 +134,16 @@ pub type AssetResource<Ctx = ()> = LeaseResource<
 /// - `LeaseAssets` provides RAII pinning for opened resources (outermost)
 /// - `ProcessingAssets` (if configured) wraps resources for transformation
 pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()> {
+    cache_capacity: Option<NonZeroUsize>,
+    cache_enabled: bool,
+    cancel: Option<CancellationToken>,
+    evict_config: Option<EvictConfig>,
+    evict_enabled: bool,
+    lease_enabled: bool,
+    pool: Option<BytePool>,
+    process_fn: Option<ProcessChunkFn<Ctx>>,
     root_dir: Option<PathBuf>,
     asset_root: Option<String>,
-    evict_config: Option<EvictConfig>,
-    cancel: Option<CancellationToken>,
-    process_fn: Option<ProcessChunkFn<Ctx>>,
-    pool: Option<BytePool>,
 }
 
 impl Default for AssetStoreBuilder<()> {
@@ -138,12 +162,16 @@ impl AssetStoreBuilder<()> {
         });
 
         Self {
+            cache_capacity: None,
+            cache_enabled: true,
+            cancel: None,
+            evict_config: None,
+            evict_enabled: true,
+            lease_enabled: true,
+            pool: None,
+            process_fn: Some(dummy_process),
             root_dir: None,
             asset_root: None,
-            evict_config: None,
-            cancel: None,
-            process_fn: Some(dummy_process),
-            pool: None,
         }
     }
 }
@@ -159,8 +187,12 @@ where
     }
 
     /// Set the asset root identifier (e.g. from `asset_root_for_url`).
-    pub fn asset_root<S: Into<String>>(mut self, asset_root: S) -> Self {
-        self.asset_root = Some(asset_root.into());
+    ///
+    /// Pass `None` when the store will only be used with absolute keys
+    /// (e.g. local file playback). Relative keys will fail with `InvalidKey`
+    /// when `asset_root` is `None`.
+    pub fn asset_root(mut self, asset_root: Option<&str>) -> Self {
+        self.asset_root = asset_root.map(str::to_string);
         self
     }
 
@@ -174,25 +206,58 @@ where
         self
     }
 
+    /// Set the in-memory LRU cache capacity for opened resources.
+    pub fn cache_capacity(mut self, capacity: NonZeroUsize) -> Self {
+        self.cache_capacity = Some(capacity);
+        self
+    }
+
     /// Set the buffer pool (created at application startup and shared).
     pub fn pool(mut self, pool: BytePool) -> Self {
         self.pool = Some(pool);
         self
     }
 
+    /// Enable or disable the in-memory LRU cache layer.
+    ///
+    /// When disabled, `CachedAssets` delegates directly to the inner layer.
+    /// Default: `true`.
+    pub fn cache_enabled(mut self, enabled: bool) -> Self {
+        self.cache_enabled = enabled;
+        self
+    }
+
+    /// Enable or disable the eviction layer.
+    ///
+    /// When disabled, `EvictAssets` delegates directly to the inner layer
+    /// (no LRU tracking, no eviction).
+    /// Default: `true`.
+    pub fn evict_enabled(mut self, enabled: bool) -> Self {
+        self.evict_enabled = enabled;
+        self
+    }
+
+    /// Enable or disable the lease (pin) layer.
+    ///
+    /// When disabled, `LeaseAssets` delegates directly to the inner layer
+    /// (no pinning, no byte recording, no persistence).
+    /// Default: `true`.
+    pub fn lease_enabled(mut self, enabled: bool) -> Self {
+        self.lease_enabled = enabled;
+        self
+    }
+
     /// Build the asset store.
     ///
     /// # Panics
-    /// Panics if `asset_root` is not set or if `process_fn` is not set for Ctx != ().
+    /// Panics if `process_fn` is not set for Ctx != ().
     pub fn build(self) -> AssetStore<Ctx> {
         let root_dir = self.root_dir.unwrap_or_else(|| {
             tempdir()
                 .expect("failed to create AssetStore temp dir")
                 .keep()
         });
-        let asset_root = self
-            .asset_root
-            .expect("asset_root is required for AssetStoreBuilder");
+        let asset_root = self.asset_root.unwrap_or_default();
         let evict_cfg = self.evict_config.unwrap_or_default();
         let cancel = self.cancel.unwrap_or_default();
 
@@ -205,18 +270,26 @@ where
 
         // Build decorator chain: Disk -> Evict -> Processing -> Lease -> Cached
         let disk = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));
-        let evict = Arc::new(EvictAssets::new(disk, evict_cfg, cancel.clone()));
+        let evict = Arc::new(EvictAssets::new(
+            disk,
+            evict_cfg,
+            cancel.clone(),
+            self.evict_enabled,
+        ));
         let processing = Arc::new(ProcessingAssets::new(evict.clone(), process_fn, pool));
 
         // LeaseAssets holds evict for byte recording
-        let lease = LeaseAssets::with_byte_recorder(
-            processing,
-            cancel,
-            evict as Arc<dyn crate::evict::ByteRecorder>,
-        );
+        let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> = if self.lease_enabled {
+            Some(evict as Arc<dyn crate::evict::ByteRecorder>)
+        } else {
+            None
+        };
+        let lease =
+            LeaseAssets::with_enabled(processing, cancel, byte_recorder, self.lease_enabled);
 
         // CachedAssets on top to cache LeaseResource with guards
-        CachedAssets::new(Arc::new(lease))
+        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
+        CachedAssets::with_enabled(Arc::new(lease), capacity, self.cache_enabled)
     }
 }
 
@@ -229,12 +302,112 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
         NewCtx: Clone + Hash + Eq + Send + Sync + 'static,
     {
         AssetStoreBuilder {
+            cache_capacity: self.cache_capacity,
+            cache_enabled: self.cache_enabled,
+            cancel: self.cancel,
+            evict_config: self.evict_config,
+            evict_enabled: self.evict_enabled,
+            lease_enabled: self.lease_enabled,
+            pool: self.pool,
+            process_fn: Some(f),
             root_dir: self.root_dir,
             asset_root: self.asset_root,
-            evict_config: self.evict_config,
-            cancel: self.cancel,
-            process_fn: Some(f),
-            pool: self.pool,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use kithara_storage::ResourceExt;
+    use rstest::rstest;
+
+    use super::*;
+    use crate::{base::Assets, key::ResourceKey};
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn builder_all_decorators_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(Some("test_asset"))
+            .cache_enabled(false)
+            .lease_enabled(false)
+            .evict_enabled(false)
+            .build();
+
+        let key = ResourceKey::new("test.bin");
+        let res = store.open_resource(&key).unwrap();
+
+        // Resource should be fully functional
+        res.write_at(0, b"data").unwrap();
+        res.commit(Some(4)).unwrap();
+
+        let mut buf = [0u8; 4];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(&buf, b"data");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn builder_defaults_all_enabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(Some("test_asset"))
+            .build();
+
+        let key = ResourceKey::new("test.bin");
+        let res = store.open_resource(&key).unwrap();
+        res.write_at(0, b"hello").unwrap();
+
+        let mut buf = [0u8; 5];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(&buf, b"hello");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn builder_no_asset_root_with_absolute_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("song.mp3");
+        std::fs::write(&file_path, b"test data").unwrap();
+
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(None)
+            .cache_enabled(false)
+            .lease_enabled(false)
+            .evict_enabled(false)
+            .build();
+
+        let key = ResourceKey::absolute(&file_path);
+        let res = store.open_resource(&key).unwrap();
+
+        let mut buf = [0u8; 9];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"test data");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn builder_no_asset_root_rejects_relative_key() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(None)
+            .cache_enabled(false)
+            .lease_enabled(false)
+            .evict_enabled(false)
+            .build();
+
+        let key = ResourceKey::new("test.bin");
+        let result = store.open_resource(&key);
+        assert!(result.is_err());
     }
 }

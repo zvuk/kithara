@@ -17,20 +17,6 @@ impl Default for AbrMode {
     }
 }
 
-/// Source of variant information for ABR algorithm.
-///
-/// This trait abstracts ABR from specific streaming protocols (HLS, DASH, etc.).
-/// Implementations provide bandwidth information for each available variant.
-pub trait VariantSource {
-    /// Returns the total number of available variants.
-    fn variant_count(&self) -> usize;
-
-    /// Returns the bandwidth (bits per second) for a variant at the given index.
-    ///
-    /// Returns `None` if the index is out of bounds.
-    fn variant_bandwidth(&self, index: usize) -> Option<u64>;
-}
-
 /// ABR (Adaptive Bitrate) configuration.
 #[derive(Clone)]
 pub struct AbrOptions {
@@ -99,11 +85,6 @@ impl AbrOptions {
             AbrMode::Manual(idx) => idx,
         }
     }
-
-    /// Check if ABR is enabled (Auto mode).
-    pub fn is_auto(&self) -> bool {
-        matches!(self.mode, AbrMode::Auto(_))
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -122,9 +103,6 @@ pub struct ThroughputSample {
 }
 
 /// Minimal variant information needed for ABR decisions.
-///
-/// This struct is kept for backward compatibility and testing.
-/// ABR algorithm works directly with `VariantSource` trait.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Variant {
     pub variant_index: usize,
@@ -148,27 +126,4 @@ pub struct VariantInfo {
     pub codecs: Option<String>,
     /// Container format (MP4, MPEG-TS, etc.).
     pub container: Option<String>,
-}
-
-// Implement VariantSource for slices of Variant (for testing and compatibility)
-impl VariantSource for [Variant] {
-    fn variant_count(&self) -> usize {
-        self.len()
-    }
-
-    fn variant_bandwidth(&self, index: usize) -> Option<u64> {
-        self.iter()
-            .find(|v| v.variant_index == index)
-            .map(|v| v.bandwidth_bps)
-    }
-}
-
-impl VariantSource for Vec<Variant> {
-    fn variant_count(&self) -> usize {
-        self.as_slice().variant_count()
-    }
-
-    fn variant_bandwidth(&self, index: usize) -> Option<u64> {
-        self.as_slice().variant_bandwidth(index)
-    }
 }

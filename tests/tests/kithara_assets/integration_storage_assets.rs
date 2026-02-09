@@ -35,7 +35,7 @@ struct PinsIndexFile {
 }
 
 fn read_pins_file(root: &std::path::Path) -> Option<Vec<String>> {
-    let path = root.join("_index").join("pins.json");
+    let path = root.join("_index").join("pins.bin");
     if !path.exists() {
         return None;
     }
@@ -49,7 +49,7 @@ fn read_pins_file(root: &std::path::Path) -> Option<Vec<String>> {
 fn asset_store_with_root(temp_dir: &tempfile::TempDir, asset_root: &str) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root(asset_root)
+        .asset_root(Some(asset_root))
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,

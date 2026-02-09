@@ -9,14 +9,14 @@ use tokio_util::sync::CancellationToken;
 use crate::common::fixtures::temp_dir;
 
 fn pins_path(root: &std::path::Path) -> std::path::PathBuf {
-    root.join("_index").join("pins.json")
+    root.join("_index").join("pins.bin")
 }
 
 #[fixture]
 fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
     AssetStoreBuilder::new()
         .root_dir(temp_dir.path())
-        .asset_root("test-asset")
+        .asset_root(Some("test-asset"))
         .evict_config(EvictConfig {
             max_assets: None,
             max_bytes: None,
@@ -40,7 +40,7 @@ fn pins_index_missing_returns_default(
     let base = disk_asset_store;
 
     let path = pins_path(dir);
-    assert!(!path.exists(), "pins.json must not exist initially");
+    assert!(!path.exists(), "pins.bin must not exist initially");
 
     let idx = PinsIndex::open(&base).unwrap();
     let pins = idx.load().unwrap();
@@ -67,7 +67,7 @@ fn pins_index_invalid_json_returns_default(
 
     let path = pins_path(dir);
     std::fs::write(&path, b"{ this is not valid json").unwrap();
-    assert!(path.exists(), "pins.json must exist for this test");
+    assert!(path.exists(), "pins.bin must exist for this test");
 
     let idx = PinsIndex::open(&base).unwrap();
     let pins = idx.load().unwrap();

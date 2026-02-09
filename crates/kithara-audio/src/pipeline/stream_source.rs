@@ -297,7 +297,7 @@ impl<T: StreamType> StreamAudioSource<T> {
 }
 
 impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
-    type Chunk = PcmChunk<f32>;
+    type Chunk = PcmChunk;
     type Command = AudioCommand;
 
     fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
@@ -511,7 +511,7 @@ mod tests {
     // MockDecoder
 
     struct MockDecoder {
-        chunks: VecDeque<PcmChunk<f32>>,
+        chunks: VecDeque<PcmChunk>,
         spec: PcmSpec,
         duration_val: Option<Duration>,
         /// Pre-configured seek results. Popped in order.
@@ -524,7 +524,7 @@ mod tests {
     }
 
     impl MockDecoder {
-        fn new(spec: PcmSpec, chunks: Vec<PcmChunk<f32>>) -> Self {
+        fn new(spec: PcmSpec, chunks: Vec<PcmChunk>) -> Self {
             Self {
                 chunks: VecDeque::from(chunks),
                 spec,
@@ -553,7 +553,7 @@ mod tests {
     }
 
     impl InnerDecoder for MockDecoder {
-        fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+        fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
             Ok(self.chunks.pop_front())
         }
 
@@ -599,7 +599,7 @@ mod tests {
     }
 
     impl InnerDecoder for InfiniteMockDecoder {
-        fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+        fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
             if self.stop.load(Ordering::Acquire) {
                 return Ok(None);
             }
@@ -782,7 +782,7 @@ mod tests {
 
     // Helpers
 
-    fn make_chunk(spec: PcmSpec, num_samples: usize) -> PcmChunk<f32> {
+    fn make_chunk(spec: PcmSpec, num_samples: usize) -> PcmChunk {
         PcmChunk::new(spec, vec![0.5; num_samples])
     }
 
@@ -1451,7 +1451,7 @@ mod tests {
     }
 
     impl InnerDecoder for EncodedDecoder {
-        fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+        fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
             let mut pcm = Vec::new();
             let mut sample_buf = vec![0u8; self.sample_size];
 
@@ -1634,7 +1634,7 @@ mod tests {
         loop {
             let fetch = src.fetch_next();
             if !fetch.data.pcm.is_empty() {
-                all_pcm.extend(&fetch.data.pcm);
+                all_pcm.extend_from_slice(&fetch.data.pcm);
             }
             if fetch.is_eof {
                 break;

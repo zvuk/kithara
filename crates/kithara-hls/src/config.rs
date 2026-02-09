@@ -104,6 +104,11 @@ pub struct HlsConfig {
     /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
     /// - `None` — no backpressure, download as fast as possible
     pub look_ahead_bytes: Option<u64>,
+    /// Max segments to download per step.
+    ///
+    /// Higher values reduce per-step overhead (ABR decisions happen per-batch)
+    /// but reduce ABR reactivity. Default: 3.
+    pub download_batch_size: usize,
     /// Optional name for cache disambiguation.
     ///
     /// When multiple URLs share the same canonical form (e.g. differ only in
@@ -136,6 +141,7 @@ impl Default for HlsConfig {
             name: None,
             net: NetOptions::default(),
             pool: None,
+            download_batch_size: 3,
             store: StoreOptions::default(),
             url: Url::parse("http://localhost/stream.m3u8").expect("valid default URL"),
         }
@@ -159,6 +165,7 @@ impl HlsConfig {
             name: None,
             net: NetOptions::default(),
             pool: None,
+            download_batch_size: 3,
             store: StoreOptions::default(),
             url,
         }

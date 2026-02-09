@@ -45,7 +45,7 @@ use symphonia::{
         formats::{FormatOptions, FormatReader, SeekMode, SeekTo, TrackType, probe::Hint},
         io::{MediaSourceStream, MediaSourceStreamOptions},
         meta::MetadataOptions,
-        units::Time,
+        units::{Time, Timestamp},
     },
     default::formats::{AdtsReader, FlacReader, IsoMp4Reader, MpaReader, OggReader, WavReader},
 };
@@ -369,15 +369,13 @@ impl SymphoniaInner {
     fn calculate_duration(track: &symphonia::core::formats::Track) -> Option<Duration> {
         let num_frames = track.num_frames?;
         let time_base = track.time_base?;
-        let time = time_base.calc_time(num_frames);
-        Some(Duration::new(
-            time.seconds,
-            (time.frac * 1_000_000_000.0) as u32,
-        ))
+        let time = time_base.calc_time(Timestamp::new(num_frames as i64))?;
+        let (seconds, nanos) = time.parts();
+        Some(Duration::new(seconds as u64, nanos))
     }
 
     /// Decode the next chunk of PCM data.
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         loop {
             // Read next packet
             let packet = match self.format_reader.next_packet() {
@@ -424,16 +422,17 @@ impl SymphoniaInner {
                 continue;
             }
 
-            // Convert to f32 interleaved
-            let mut pcm = vec![0.0f32; num_samples];
-            decoded.copy_to_slice_interleaved(&mut pcm);
+            // Convert to f32 interleaved (pool-backed to reduce allocations).
+            // The PooledOwned buffer flows through PcmChunk and auto-recycles on drop.
+            let mut pooled = kithara_bufpool::pcm_pool().get_with(|v| v.resize(num_samples, 0.0));
+            decoded.copy_to_slice_interleaved(&mut *pooled);
 
             let pcm_spec = PcmSpec {
                 channels: channels as u16,
                 sample_rate: spec.rate(),
             };
 
-            let chunk = PcmChunk::new(pcm_spec, pcm);
+            let chunk = PcmChunk::with_pooled(pcm_spec, pooled);
 
             // Update position
             if self.spec.sample_rate > 0 {
@@ -450,7 +449,7 @@ impl SymphoniaInner {
     /// Seek to a time position.
     fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
         let seek_to = SeekTo::Time {
-            time: Time::new(pos.as_secs(), pos.subsec_nanos() as f64 / 1_000_000_000.0),
+            time: Time::try_new(pos.as_secs() as i64, pos.subsec_nanos()).unwrap_or(Time::ZERO),
             track_id: Some(self.track_id),
         };
 
@@ -516,7 +515,7 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
         })
     }
 
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         self.inner.next_chunk()
     }
 
@@ -540,7 +539,7 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
 use crate::traits::InnerDecoder;
 
 impl<C: CodecType> InnerDecoder for Symphonia<C> {
-    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk<f32>>> {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
         AudioDecoder::next_chunk(self)
     }
 

@@ -89,7 +89,7 @@ mod tests {
 
     // Helper to create StorageResource for tests
     fn create_test_resource(dir: &TempDir) -> StorageResource {
-        let path = dir.path().join("pins.json");
+        let path = dir.path().join("pins.bin");
         StorageResource::open(StorageOptions {
             path,
             initial_len: Some(4096),
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn test_persistence_across_instances() {
         let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("pins.json");
+        let path = temp_dir.path().join("pins.bin");
 
         // First instance
         {

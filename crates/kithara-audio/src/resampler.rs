@@ -8,7 +8,7 @@ use std::sync::{
 };
 
 use fast_interleave::{deinterleave_variable, interleave_variable};
-use kithara_bufpool::{PcmPool, pcm_pool};
+use kithara_bufpool::{PcmBuf, PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmSpec};
 use rubato::{
     Async, Fft, FixedAsync, FixedSync, PolynomialDegree, Resampler as RubatoResampler,
@@ -251,7 +251,7 @@ impl ResamplerProcessor {
     }
 
     /// Flush remaining data from buffer (called at end of stream).
-    pub fn flush_buffer(&mut self) -> Option<PcmChunk<f32>> {
+    pub fn flush_buffer(&mut self) -> Option<PcmChunk> {
         self.resampler.as_ref()?;
 
         if self.input_buffer[0].is_empty() {
@@ -305,7 +305,7 @@ impl ResamplerProcessor {
                 }
 
                 let interleaved = self.interleave(&self.temp_output_all);
-                Some(PcmChunk::new(self.output_spec, interleaved))
+                Some(PcmChunk::with_pooled(self.output_spec, interleaved))
             }
             Err(e) => {
                 trace!(err = %e, "Resampler flush error");
@@ -491,7 +491,7 @@ impl ResamplerProcessor {
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn resample(&mut self, chunk: &PcmChunk<f32>) -> Option<PcmChunk<f32>> {
+    fn resample(&mut self, chunk: &PcmChunk) -> Option<PcmChunk> {
         self.resampler.as_ref()?;
 
         self.append_to_buffer(&chunk.pcm);
@@ -561,7 +561,7 @@ impl ResamplerProcessor {
         }
 
         let interleaved = self.interleave(&self.temp_output_all);
-        Some(PcmChunk::new(self.output_spec, interleaved))
+        Some(PcmChunk::with_pooled(self.output_spec, interleaved))
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -598,15 +598,15 @@ impl ResamplerProcessor {
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn interleave(&self, planar: &[Vec<f32>]) -> Vec<f32> {
+    fn interleave(&self, planar: &[Vec<f32>]) -> PcmBuf {
         if planar.is_empty() || planar[0].is_empty() {
-            return Vec::new();
+            return self.pool.get();
         }
 
         let frames = planar[0].len();
         let total = frames * self.channels;
 
-        // Get buffer from pool
+        // Get buffer from pool — returned as PooledOwned for auto-recycling
         let mut result = self.pool.get_with(|b| {
             b.clear();
             b.resize(total, 0.0);
@@ -617,7 +617,7 @@ impl ResamplerProcessor {
             std::num::NonZeroUsize::new(self.channels).expect("channels must be > 0");
         interleave_variable(planar, 0..frames, &mut result[..], num_channels);
 
-        result.into_inner()
+        result
     }
 }
 
@@ -629,7 +629,7 @@ fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
 
 impl AudioEffect for ResamplerProcessor {
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn process(&mut self, chunk: PcmChunk<f32>) -> Option<PcmChunk<f32>> {
+    fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
         let chunk_rate = chunk.spec.sample_rate;
         let chunk_channels = chunk.spec.channels as usize;
 
@@ -687,7 +687,7 @@ impl AudioEffect for ResamplerProcessor {
         self.resample(&chunk)
     }
 
-    fn flush(&mut self) -> Option<PcmChunk<f32>> {
+    fn flush(&mut self) -> Option<PcmChunk> {
         self.flush_buffer()
     }
 

@@ -496,6 +496,7 @@ pub fn build_pair(
         segments_since_yield: 0,
         variant_lengths: HashMap::new(),
         had_midstream_switch: false,
+        prefetch_count: config.download_batch_size.max(1),
     };
 
     let source = HlsSource {

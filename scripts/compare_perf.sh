@@ -12,7 +12,7 @@
 set -euo pipefail
 
 CURRENT="${1:-}"
-BASELINE="${2:-perf-baseline/baseline-run.txt}"
+BASELINE="${2:-baseline-results.txt}"
 THRESHOLD="${3:-10}"  # Default: fail if >10% slower
 
 if [[ -z "$CURRENT" ]]; then

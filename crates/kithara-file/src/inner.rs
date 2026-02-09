@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
-use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, Assets, ResourceKey, asset_root_for_url};
 use kithara_net::{Headers, HttpClient};
-use kithara_storage::{OpenMode, ResourceExt, ResourceStatus, StorageOptions, StorageResource};
+use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{Backend, Downloader, StreamType, Writer, WriterItem};
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -17,9 +17,7 @@ use crate::{
     config::{FileConfig, FileSrc},
     error::SourceError,
     events::FileEvent,
-    session::{
-        AssetResourceType, FileResource, FileSource, FileStreamState, Progress, SharedFileState,
-    },
+    session::{FileSource, FileStreamState, Progress, SharedFileState},
 };
 
 /// Marker type for file streaming.
@@ -56,8 +54,8 @@ impl StreamType for File {
 impl File {
     /// Create a source for a local file.
     ///
-    /// Opens the file directly via `StorageResource` in `ReadOnly` mode,
-    /// skipping network, `AssetStore`, and background downloader entirely.
+    /// Opens the file via `AssetStore` with an absolute `ResourceKey`,
+    /// skipping network and background downloader entirely.
     fn create_local(
         path: std::path::PathBuf,
         config: FileConfig,
@@ -70,14 +68,17 @@ impl File {
             )));
         }
 
-        let opts = StorageOptions {
-            path,
-            initial_len: None,
-            mode: OpenMode::ReadOnly,
-            cancel,
-        };
-        let resource = StorageResource::open(opts)?;
-        let len = resource.len();
+        let store = AssetStoreBuilder::new()
+            .asset_root(None)
+            .cache_enabled(false)
+            .lease_enabled(false)
+            .evict_enabled(false)
+            .cancel(cancel)
+            .build();
+
+        let key = ResourceKey::absolute(path);
+        let res = store.open_resource(&key).map_err(SourceError::Assets)?;
+        let len = res.len();
 
         let events = config
             .events_tx
@@ -89,9 +90,7 @@ impl File {
         progress.set_download_pos(total);
         let _ = events.send(FileEvent::DownloadComplete { total_bytes: total });
 
-        let source = FileSource::new(FileResource::Local(resource), progress, events, len);
-
-        Ok(source)
+        Ok(FileSource::new(res, progress, events, len))
     }
 
     /// Create a source for a remote file (HTTP/HTTPS).
@@ -104,7 +103,7 @@ impl File {
 
         let store = AssetStoreBuilder::new()
             .root_dir(&config.store.cache_dir)
-            .asset_root(&asset_root)
+            .asset_root(Some(asset_root.as_str()))
             .evict_config(config.store.to_evict_config())
             .cancel(cancel.clone())
             .build();
@@ -173,7 +172,7 @@ impl File {
 
         // Create source with shared state for on-demand loading
         let source = FileSource::with_shared(
-            FileResource::Asset(state.res().clone()),
+            state.res().clone(),
             progress,
             state.events().clone(),
             state.len(),
@@ -192,7 +191,7 @@ impl File {
 /// - On-demand: HTTP Range requests when reader seeks beyond downloaded data
 pub struct FileDownloader {
     writer: Writer,
-    res: AssetResourceType,
+    res: kithara_assets::AssetResource,
     progress: Arc<Progress>,
     events_tx: broadcast::Sender<FileEvent>,
     total: Option<u64>,

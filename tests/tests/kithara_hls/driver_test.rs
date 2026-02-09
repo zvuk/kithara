@@ -1,110 +1,194 @@
-//! Isolated tests for HLS driver (SegmentStream + Pipeline).
+//! Isolated tests for HLS driver (Stream<Hls> seek behavior).
 //!
 //! Tests:
-//! - Driver-1: Pipeline seek after finished
+//! - Driver-1: Seek works after all segments downloaded (playlist finished)
 //! - Driver-2: ABR switch + seek backward
-//! - Driver-4: Full driver chain
 
-use std::time::Duration;
+use std::{
+    io::{Read, Seek, SeekFrom},
+    time::Duration,
+};
 
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsParams};
-use kithara_stream::{Source, SourceFactory};
+use kithara_assets::StoreOptions;
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig, HlsEvent};
+use kithara_stream::Stream;
 use rstest::rstest;
+use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 
-use super::fixture::abr::{AbrTestServer, master_playlist};
+use super::fixture::{
+    TestServer,
+    abr::{AbrTestServer, master_playlist},
+};
+use crate::common::fixtures::{cancel_token, temp_dir, tracing_setup};
 
-/// Driver-1: Проверка что pipeline обрабатывает seek ПОСЛЕ завершения playlist.
+/// Driver-1: Verify that seek works AFTER all segments have been downloaded.
 ///
-/// Сценарий:
-/// 1. Загружаем все 3 сегмента из playlist
-/// 2. SegmentStream завершается (возвращает None)
-/// 3. Отправляем команду seek(1)
-/// 4. Проверяем что сегмент 1 загружен ПОВТОРНО
+/// Scenario:
+/// 1. Load all 3 segments from playlist (variant 0, fixed ABR)
+/// 2. Read all data until EOF (segment stream finishes)
+/// 3. Seek back to segment 1 start (offset 200_000)
+/// 4. Verify segment 1 data is readable
 ///
-/// ОЖИДАНИЕ: seek обработан, сегмент загружен
-/// БЕЗ ФИКСА: seek игнорируется, pipeline остановлен
+/// EXPECTED: seek is processed, segment data is read correctly
 #[rstest]
 #[timeout(Duration::from_secs(10))]
-#[tokio::test]
-async fn test_driver_seek_after_playlist_finished() {
-    use kithara_stream::Source;
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_driver_seek_after_playlist_finished(
+    _tracing_setup: (),
+    temp_dir: TempDir,
+    cancel_token: CancellationToken,
+) {
+    let server = TestServer::new().await;
+    let url = server.url("/master.m3u8").unwrap();
 
-    // Create HLS server with 3 segments
+    let config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel_token)
+        .with_abr(AbrOptions {
+            mode: AbrMode::Manual(0),
+            ..AbrOptions::default()
+        });
+
+    let mut stream = Stream::<Hls>::new(config).await.unwrap();
+
+    tokio::task::spawn_blocking(move || {
+        // Read ALL data until EOF
+        let mut all_data = Vec::new();
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = stream.read(&mut buf).unwrap();
+            if n == 0 {
+                break;
+            }
+            all_data.extend_from_slice(&buf[..n]);
+        }
+
+        // Verify all 3 segments loaded (200KB each = 600KB total)
+        assert!(
+            all_data.len() >= 600_000,
+            "Should read all 3 segments (~600KB), got {} bytes",
+            all_data.len()
+        );
+
+        // CRITICAL: Seek to segment 1 AFTER playlist finished and EOF reached
+        let pos = stream.seek(SeekFrom::Start(200_000)).unwrap();
+        assert_eq!(pos, 200_000);
+
+        // Read and verify segment 1 data
+        let mut buf = [0u8; 9];
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, 9);
+        assert_eq!(
+            &buf, b"V0-SEG-1:",
+            "After seek past EOF to segment 1, should read V0-SEG-1: prefix"
+        );
+    })
+    .await
+    .unwrap();
+}
+
+/// Driver-2: ABR switch + seek backward.
+///
+/// Scenario:
+/// 1. Start with variant 0, ABR enabled (auto mode)
+/// 2. Read data forward (ABR may switch variants based on throughput)
+/// 3. Seek backward to beginning
+/// 4. Verify data is readable and consistent from the start
+///
+/// This tests seek backward at the Stream<Hls> level with ABR active,
+/// without the full decoder chain.
+#[rstest]
+#[timeout(Duration::from_secs(30))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_driver_abr_seek_backward(
+    _tracing_setup: (),
+    temp_dir: TempDir,
+    cancel_token: CancellationToken,
+) {
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
         false,
-        Duration::from_millis(10),
+        Duration::from_secs(2), // Slow segment0 to potentially trigger ABR
     )
     .await;
 
     let url = server.url("/master.m3u8").unwrap();
-    let cancel_token = CancellationToken::new();
 
-    let hls_params = HlsParams::default()
-        .with_cancel(cancel_token.clone())
+    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+
+    let config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_cancel(cancel_token)
+        .with_events(events_tx)
         .with_abr(AbrOptions {
-            mode: AbrMode::Manual(0), // Fixed variant 0
+            down_switch_buffer_secs: 0.5,
+            min_buffer_for_up_switch_secs: 1.0,
+            mode: AbrMode::Auto(Some(0)),
+            throughput_safety_factor: 1.2,
             ..Default::default()
         });
 
-    // Open HLS source directly (not via StreamSource wrapper)
-    let opened = Hls::open(url.clone(), hls_params).await.unwrap();
-    let hls_source = opened.source;
+    let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    // Wait for ALL segments to load
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Track variant switches in background
+    let variant_switches = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let switches_clone = variant_switches.clone();
 
-    // At this point:
-    // - All 3 segments loaded
-    // - SegmentStream returned None
-    // - Index marked as finished
+    tokio::spawn(async move {
+        while let Ok(ev) = events_rx.recv().await {
+            match ev {
+                HlsEvent::VariantApplied {
+                    from_variant,
+                    to_variant,
+                    ..
+                } => {
+                    info!("Variant switch: {} -> {}", from_variant, to_variant);
+                    switches_clone
+                        .lock()
+                        .unwrap()
+                        .push((from_variant, to_variant));
+                }
+                HlsEvent::EndOfStream => break,
+                _ => {}
+            }
+        }
+    });
 
-    // Read first segment data (offset 0)
-    let mut buf = vec![0u8; 1000];
-    let n1 = hls_source.read_at(0, &mut buf).await.unwrap();
-    assert!(n1 > 0, "Should read first segment");
+    // Give ABR time to start downloading
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
-    println!("✓ Read {} bytes from segment 0", n1);
+    tokio::task::spawn_blocking(move || {
+        // Read some data forward
+        let mut first_read = vec![0u8; 50_000];
+        let n1 = stream.read(&mut first_read).unwrap();
+        assert!(n1 > 0, "Should read initial data");
 
-    // CRITICAL TEST: Trigger seek AFTER playlist finished
-    println!("→ Sending seek(1) after playlist finished");
-    hls_source.handle().seek(1);
+        // Save first bytes for comparison
+        let initial_prefix = first_read[..n1.min(9)].to_vec();
 
-    // Wait for segment to reload
-    tokio::time::sleep(Duration::from_millis(500)).await;
+        // Seek backward to start
+        let pos = stream.seek(SeekFrom::Start(0)).unwrap();
+        assert_eq!(pos, 0, "Seek should return to position 0");
 
-    // Try to read segment 1 again (offset 200000)
-    let offset_seg1 = 200_000u64;
-    let n2 = hls_source.read_at(offset_seg1, &mut buf).await.unwrap();
+        // Read from beginning again
+        let mut second_read = vec![0u8; 1000];
+        let n2 = stream.read(&mut second_read).unwrap();
+        assert!(n2 > 0, "Should read data after seeking to beginning");
 
-    if n2 > 0 {
-        println!("✅ PASS: Read {} bytes from segment 1 after seek", n2);
-        println!("✅ Pipeline processed seek AFTER playlist finished!");
-    } else {
-        panic!("❌ FAIL: Could not read segment 1 after seek - pipeline stopped!");
-    }
+        // Verify first bytes match (same data at position 0)
+        let check_len = n2.min(initial_prefix.len());
+        assert_eq!(
+            &initial_prefix[..check_len],
+            &second_read[..check_len],
+            "Data at position 0 should be consistent before and after seek"
+        );
+    })
+    .await
+    .unwrap();
 
-    cancel_token.cancel();
-}
-
-/// Driver-2: ABR switch + seek backward
-///
-/// Сценарий:
-/// 1. variant=0: загружаем segments 0,1
-/// 2. ABR switch на variant=2
-/// 3. variant=2: загружаем segment 2
-/// 4. Sequential read достигает offset 400000 (начало seg 2)
-/// 5. wait_range() обнаруживает что seg 2 есть только в variant 2
-/// 6. Должен отправить seek(2) для variant 0
-/// 7. Проверяем что seg 2 загружается из variant 0
-///
-/// Это уже протестировано в Тесте 9, но там полная цепочка с decoder.
-/// Здесь нужно изолировать только HLS driver.
-#[rstest]
-#[timeout(Duration::from_secs(10))]
-#[tokio::test]
-#[ignore] // TODO: Implement after fixing Driver-1
-async fn test_driver_abr_seek_backward() {
-    todo!("Need to isolate HLS driver testing - see Driver-1")
+    // Log variant switches for debugging
+    let switches = variant_switches.lock().unwrap();
+    info!("Variant switches detected: {:?}", *switches);
 }

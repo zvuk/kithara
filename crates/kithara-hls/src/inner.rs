@@ -41,7 +41,7 @@ impl StreamType for Hls {
 
         // Build asset store
         let base_assets = AssetStoreBuilder::new()
-            .asset_root(&asset_root)
+            .asset_root(Some(asset_root.as_str()))
             .cancel(cancel.clone())
             .root_dir(&config.store.cache_dir)
             .evict_config(config.store.to_evict_config())

@@ -551,7 +551,7 @@ mod tests {
     async fn test_fetch_playlist_with_mock_net() {
         let temp_dir = TempDir::new().unwrap();
         let assets = AssetStoreBuilder::new()
-            .asset_root("test")
+            .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
 
@@ -579,7 +579,7 @@ mod tests {
     async fn test_fetch_playlist_uses_cache() {
         let temp_dir = TempDir::new().unwrap();
         let assets = AssetStoreBuilder::new()
-            .asset_root("test")
+            .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
 
@@ -611,7 +611,7 @@ mod tests {
     async fn test_fetch_key_with_mock_net() {
         let temp_dir = TempDir::new().unwrap();
         let assets = AssetStoreBuilder::new()
-            .asset_root("test")
+            .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
 
@@ -639,7 +639,7 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let assets = AssetStoreBuilder::new()
-            .asset_root("test")
+            .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
 
@@ -664,7 +664,7 @@ mod tests {
     async fn test_matcher_url_path_matching() {
         let temp_dir = TempDir::new().unwrap();
         let assets = AssetStoreBuilder::new()
-            .asset_root("test")
+            .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
 
@@ -695,7 +695,7 @@ mod tests {
     async fn test_matcher_url_domain_matching() {
         let temp_dir = TempDir::new().unwrap();
         let assets = AssetStoreBuilder::new()
-            .asset_root("test")
+            .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
 
@@ -723,7 +723,7 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let assets = AssetStoreBuilder::new()
-            .asset_root("test")
+            .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
 
@@ -818,7 +818,7 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let assets = AssetStoreBuilder::new()
-            .asset_root("partial-test")
+            .asset_root(Some("partial-test"))
             .root_dir(temp_dir.path())
             .build();
 
@@ -869,7 +869,7 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let assets = AssetStoreBuilder::new()
-            .asset_root("partial-test")
+            .asset_root(Some("partial-test"))
             .root_dir(temp_dir.path())
             .build();
 

@@ -1,4 +1,4 @@
-use crate::pool::SharedPool;
+use crate::pool::{PooledOwned, SharedPool};
 
 /// Standard byte buffer pool type for the entire workspace.
 ///
@@ -10,6 +10,12 @@ pub type BytePool = SharedPool<32, Vec<u8>>;
 /// Used by decoders, resamplers, and audio pipelines for zero-allocation
 /// PCM sample buffer reuse.
 pub type PcmPool = SharedPool<32, Vec<f32>>;
+
+/// Pooled PCM buffer that auto-recycles to the global pool on drop.
+///
+/// Use this instead of `Vec<f32>` in audio pipelines to enable
+/// zero-allocation buffer reuse.
+pub type PcmBuf = PooledOwned<32, Vec<f32>>;
 
 // Global byte pool (32 shards, 1024 max buffers, 64KB trim capacity)
 static GLOBAL_BYTE_POOL: std::sync::OnceLock<BytePool> = std::sync::OnceLock::new();

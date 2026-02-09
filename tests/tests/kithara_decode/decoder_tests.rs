@@ -202,7 +202,7 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
     let chunk = decoder.next_chunk().unwrap().unwrap();
 
     // Samples should be f32 values in reasonable range
-    for sample in &chunk.pcm {
+    for sample in chunk.pcm.iter() {
         assert!(
             sample.is_finite(),
             "Sample should be finite, got: {}",
