@@ -48,5 +48,4 @@ pub use controller::{AbrController, AbrDecision, AbrReason, DefaultAbrController
 pub use estimator::{Estimator, ThroughputEstimator};
 pub use types::{
     AbrMode, AbrOptions, ThroughputSample, ThroughputSampleSource, Variant, VariantInfo,
-    VariantSource,
 };

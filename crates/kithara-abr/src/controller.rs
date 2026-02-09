@@ -31,7 +31,7 @@ pub struct AbrDecision {
 const NO_SWITCH: u64 = 0;
 
 pub struct AbrController<E: Estimator> {
-    pub(crate) cfg: AbrOptions,
+    cfg: AbrOptions,
     current_variant: Arc<AtomicUsize>,
     estimator: E,
     /// Nanoseconds since `reference_instant` of last switch, or `NO_SWITCH` if none.
@@ -76,47 +76,9 @@ impl<E: Estimator> AbrController<E> {
             .store(self.instant_to_nanos(now), Ordering::Release);
     }
 
-    pub fn current_variant(&self) -> Arc<AtomicUsize> {
-        Arc::clone(&self.current_variant)
-    }
-
     /// Get current variant index.
-    ///
-    /// This is a convenience method to get the current variant index
-    /// without dealing with atomics.
     pub fn get_current_variant_index(&self) -> usize {
         self.current_variant.load(Ordering::Acquire)
-    }
-
-    pub fn set_current_variant(&mut self, variant_index: usize) {
-        self.current_variant.store(variant_index, Ordering::Release);
-    }
-
-    /// Switch to manual mode with specified variant.
-    ///
-    /// This disables ABR and locks playback to the specified variant index.
-    /// The variant switch takes effect on the next `decide()` call.
-    pub fn set_manual_variant(&mut self, variant_index: usize) {
-        self.cfg.mode = AbrMode::Manual(variant_index);
-    }
-
-    /// Switch to automatic mode.
-    ///
-    /// This enables ABR algorithm. Optionally specify initial variant index
-    /// (defaults to current variant if None).
-    pub fn set_auto_mode(&mut self, initial_variant: Option<usize>) {
-        let initial = initial_variant.unwrap_or_else(|| self.get_current_variant_index());
-        self.cfg.mode = AbrMode::Auto(Some(initial));
-    }
-
-    /// Get current ABR mode.
-    pub fn get_mode(&self) -> AbrMode {
-        self.cfg.mode
-    }
-
-    /// Check if ABR is enabled (Auto mode).
-    pub fn is_auto(&self) -> bool {
-        self.cfg.is_auto()
     }
 
     pub fn push_throughput_sample(&mut self, sample: ThroughputSample) {
