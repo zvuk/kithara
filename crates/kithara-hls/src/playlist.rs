@@ -1,6 +1,6 @@
 //! Playlist parsing helpers and ABR integration.
 
-use kithara_abr::{VariantInfo, VariantSource};
+use kithara_abr::VariantInfo;
 pub use kithara_stream::ContainerFormat;
 
 // Re-export parsing types and functions for external use
@@ -26,18 +26,4 @@ pub fn variant_info_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
                 .map(|fmt| format!("{:?}", fmt)),
         })
         .collect()
-}
-
-/// Implement `VariantSource` for `MasterPlaylist`.
-impl VariantSource for MasterPlaylist {
-    fn variant_count(&self) -> usize {
-        self.variants.len()
-    }
-
-    fn variant_bandwidth(&self, index: usize) -> Option<u64> {
-        self.variants
-            .iter()
-            .find(|v| v.id.0 == index)
-            .and_then(|v| v.bandwidth)
-    }
 }
