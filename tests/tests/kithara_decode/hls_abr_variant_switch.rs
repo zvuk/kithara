@@ -187,7 +187,6 @@ async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error 
 #[rstest]
 #[timeout(Duration::from_secs(10))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "hangs — needs investigation"]
 async fn test_basic_multi_segment_reading() -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
