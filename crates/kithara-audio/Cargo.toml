@@ -30,8 +30,10 @@ hotpath = { workspace = true, optional = true }
 default = []
 # Enable rodio::Source adapter for playback
 rodio = ["dep:rodio"]
-# Enable performance monitoring with hotpath-rs
+# Enable performance monitoring with hotpath-rs (timing only, minimal overhead)
 perf = ["dep:hotpath", "hotpath/hotpath"]
+# Enable memory profiling for examples (includes allocation tracking, adds overhead)
+memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
 # Enable Apple AudioToolbox hardware decoder (macOS/iOS)
 apple = ["kithara-decode/apple"]
 
@@ -54,13 +56,13 @@ rodio = { workspace = true }
 rstest = { workspace = true }
 aes = { workspace = true }
 cbc = { workspace = true }
-hotpath = { workspace = true, features = ["hotpath", "hotpath-alloc"] }
+hotpath = { workspace = true }
 unimock = { workspace = true }
 
 [[example]]
 name = "file_audio"
-required-features = ["rodio"]
+required-features = ["rodio", "memprof"]
 
 [[example]]
 name = "hls_audio"
-required-features = ["rodio"]
+required-features = ["rodio", "memprof"]
