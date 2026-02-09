@@ -114,11 +114,20 @@ impl DiskAssetStore {
         self.root_dir.join("_index").join("lru.bin")
     }
 
-    fn open_storage_resource(&self, path: PathBuf) -> AssetsResult<StorageResource> {
+    fn open_storage_resource(
+        &self,
+        key: &ResourceKey,
+        path: PathBuf,
+    ) -> AssetsResult<StorageResource> {
+        let mode = if key.is_absolute() {
+            OpenMode::ReadOnly
+        } else {
+            OpenMode::Auto
+        };
         Ok(StorageResource::open(StorageOptions {
             path,
             initial_len: None,
-            mode: OpenMode::Auto,
+            mode,
             cancel: self.cancel.clone(),
         })?)
     }
@@ -151,7 +160,7 @@ impl Assets for DiskAssetStore {
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         let path = self.resource_path(key)?;
-        self.open_storage_resource(path)
+        self.open_storage_resource(key, path)
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
@@ -195,9 +204,12 @@ pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
 
 #[cfg(test)]
 mod tests {
+    use kithara_storage::{ResourceExt, ResourceStatus};
     use rstest::rstest;
+    use tokio_util::sync::CancellationToken;
 
     use super::*;
+    use crate::key::ResourceKey;
 
     #[rstest]
     #[case("valid.txt", true, "Simple filename")]
@@ -232,5 +244,26 @@ mod tests {
                 "Backslashes should be normalized"
             );
         }
+    }
+
+    #[expect(clippy::unwrap_used)]
+    #[test]
+    fn test_open_absolute_resource_readonly() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("local_audio.mp3");
+        std::fs::write(&file_path, b"fake audio data").unwrap();
+
+        let store = DiskAssetStore::new(dir.path().join("cache"), "_", CancellationToken::new());
+
+        let key = ResourceKey::absolute(&file_path);
+        let res = store.open_resource(&key).unwrap();
+
+        // Should be Committed (read-only file already exists)
+        assert!(matches!(res.status(), ResourceStatus::Committed { .. }));
+
+        // Should read existing data
+        let mut buf = [0u8; 15];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(&buf[..n], b"fake audio data");
     }
 }
