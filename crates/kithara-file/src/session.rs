@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::{ops::Range, path::Path, sync::Arc};
+use std::{ops::Range, sync::Arc};
 
 use crossbeam_queue::SegQueue;
 use kithara_assets::{AssetResource, AssetStore, Assets};
 use kithara_net::{HttpClient, Net};
-use kithara_storage::{ResourceExt, ResourceStatus, StorageResource, StorageResult, WaitOutcome};
+use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
@@ -13,101 +13,11 @@ use url::Url;
 
 use crate::{error::SourceError, events::FileEvent};
 
-pub(crate) type AssetResourceType = AssetResource;
-
-/// Unified file resource: either a remote asset (via `AssetStore`) or a local file.
-#[derive(Clone, Debug)]
-pub(crate) enum FileResource {
-    /// Remote file — managed by `AssetStore` (caching, eviction, leases).
-    Asset(AssetResourceType),
-    /// Local file — direct `StorageResource` in `ReadOnly` mode.
-    Local(StorageResource),
-}
-
-impl ResourceExt for FileResource {
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        match self {
-            Self::Asset(r) => r.read_at(offset, buf),
-            Self::Local(r) => r.read_at(offset, buf),
-        }
-    }
-
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        match self {
-            Self::Asset(r) => r.write_at(offset, data),
-            Self::Local(r) => r.write_at(offset, data),
-        }
-    }
-
-    fn wait_range(&self, range: std::ops::Range<u64>) -> StorageResult<WaitOutcome> {
-        match self {
-            Self::Asset(r) => r.wait_range(range),
-            Self::Local(r) => r.wait_range(range),
-        }
-    }
-
-    fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        match self {
-            Self::Asset(r) => r.commit(final_len),
-            Self::Local(r) => r.commit(final_len),
-        }
-    }
-
-    fn fail(&self, reason: String) {
-        match self {
-            Self::Asset(r) => r.fail(reason),
-            Self::Local(r) => r.fail(reason),
-        }
-    }
-
-    fn path(&self) -> &Path {
-        match self {
-            Self::Asset(r) => r.path(),
-            Self::Local(r) => r.path(),
-        }
-    }
-
-    fn len(&self) -> Option<u64> {
-        match self {
-            Self::Asset(r) => r.len(),
-            Self::Local(r) => r.len(),
-        }
-    }
-
-    fn reactivate(&self) -> StorageResult<()> {
-        match self {
-            Self::Asset(r) => r.reactivate(),
-            Self::Local(r) => r.reactivate(),
-        }
-    }
-
-    fn status(&self) -> ResourceStatus {
-        match self {
-            Self::Asset(r) => r.status(),
-            Self::Local(r) => r.status(),
-        }
-    }
-
-    fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
-        match self {
-            Self::Asset(r) => r.read_into(buf),
-            Self::Local(r) => r.read_into(buf),
-        }
-    }
-
-    fn write_all(&self, data: &[u8]) -> StorageResult<()> {
-        match self {
-            Self::Asset(r) => r.write_all(data),
-            Self::Local(r) => r.write_all(data),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct FileStreamState {
     pub(crate) url: Url,
     pub(crate) cancel: CancellationToken,
-    pub(crate) res: AssetResourceType,
+    pub(crate) res: AssetResource,
     pub(crate) events: broadcast::Sender<FileEvent>,
     pub(crate) len: Option<u64>,
 }
@@ -146,7 +56,7 @@ impl FileStreamState {
         &self.url
     }
 
-    pub(crate) fn res(&self) -> &AssetResourceType {
+    pub(crate) fn res(&self) -> &AssetResource {
         &self.res
     }
 
@@ -260,7 +170,7 @@ impl SharedFileState {
 ///
 /// Wraps storage resource with progress tracking and event emission.
 pub struct FileSource {
-    res: FileResource,
+    res: AssetResource,
     progress: Arc<Progress>,
     events_tx: broadcast::Sender<FileEvent>,
     len: Option<u64>,
@@ -270,7 +180,7 @@ pub struct FileSource {
 impl FileSource {
     /// Create new file source (no on-demand support — for local files).
     pub(crate) fn new(
-        res: FileResource,
+        res: AssetResource,
         progress: Arc<Progress>,
         events_tx: broadcast::Sender<FileEvent>,
         len: Option<u64>,
@@ -286,7 +196,7 @@ impl FileSource {
 
     /// Create new file source with shared state (for on-demand loading).
     pub(crate) fn with_shared(
-        res: FileResource,
+        res: AssetResource,
         progress: Arc<Progress>,
         events_tx: broadcast::Sender<FileEvent>,
         len: Option<u64>,
@@ -386,7 +296,7 @@ impl kithara_stream::Source for FileSource {
 mod tests {
     use std::sync::Arc;
 
-    use kithara_storage::{OpenMode, ResourceExt, StorageOptions, StorageResource};
+    use kithara_assets::{AssetStoreBuilder, Assets, ResourceKey};
     use tempfile::TempDir;
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
@@ -479,18 +389,22 @@ mod tests {
 
     // FileSource
 
-    /// Helper: create a committed StorageResource with `data` written.
-    fn create_committed_resource(dir: &TempDir, data: &[u8]) -> StorageResource {
-        let path = dir.path().join("test.dat");
-        let res = StorageResource::open(StorageOptions {
-            path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-            cancel: CancellationToken::new(),
-        })
-        .unwrap();
-        res.write_all(data).unwrap();
-        res
+    /// Helper: create a committed AssetResource backed by a file with `data`.
+    fn create_committed_resource(dir: &TempDir, data: &[u8]) -> AssetResource {
+        let file_path = dir.path().join("test.dat");
+        std::fs::write(&file_path, data).unwrap();
+
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(None)
+            .cache_enabled(false)
+            .lease_enabled(false)
+            .evict_enabled(false)
+            .cancel(CancellationToken::new())
+            .build();
+
+        let key = ResourceKey::absolute(&file_path);
+        store.open_resource(&key).unwrap()
     }
 
     #[test]
@@ -505,7 +419,7 @@ mod tests {
         let (events_tx, _rx) = broadcast::channel(16);
 
         let mut source = FileSource::new(
-            FileResource::Local(res),
+            res,
             Arc::clone(&progress),
             events_tx,
             Some(data.len() as u64),
@@ -535,7 +449,7 @@ mod tests {
         let progress = Arc::new(Progress::new());
         let (events_tx, _rx) = broadcast::channel(16);
 
-        let source = FileSource::new(FileResource::Local(res), progress, events_tx, Some(12345));
+        let source = FileSource::new(res, progress, events_tx, Some(12345));
 
         // len() should return the explicit value provided at construction.
         use kithara_stream::Source;
