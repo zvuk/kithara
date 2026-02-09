@@ -14,7 +14,10 @@ use parking_lot::{Condvar, Mutex};
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::{ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome};
+use crate::{
+    ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome,
+    resource::range_covered_by,
+};
 
 /// Internal state protected by Mutex.
 struct MemState {
@@ -272,14 +275,6 @@ impl ResourceExt for MemoryResource {
             ResourceStatus::Active
         }
     }
-}
-
-/// Check if the `available` range set fully covers `range`.
-fn range_covered_by(available: &RangeSet<u64>, range: &Range<u64>) -> bool {
-    if range.is_empty() {
-        return true;
-    }
-    !available.gaps(range).any(|_| true)
 }
 
 #[cfg(test)]

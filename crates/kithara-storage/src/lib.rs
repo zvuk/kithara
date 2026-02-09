@@ -14,10 +14,10 @@
 
 mod error;
 mod memory;
+mod mmap;
 mod resource;
 
 pub use error::{StorageError, StorageResult};
 pub use memory::MemoryResource;
-pub use resource::{
-    OpenMode, ResourceExt, ResourceStatus, StorageOptions, StorageResource, WaitOutcome,
-};
+pub use mmap::{StorageOptions, StorageResource};
+pub use resource::{OpenMode, ResourceExt, ResourceStatus, WaitOutcome};
