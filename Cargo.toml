@@ -88,14 +88,14 @@ futures = "0.3.31"
 
 # channels/buffers
 kanal = "0.1.1"
-bytes = "1.11.0"
+bytes = "1.11.1"
 ringbuf = "0.4.8"
 async-stream = "0.3.6"
 parking_lot = "0.12"
 crossbeam-queue = "0.3"
 
 # http/url
-reqwest = { version = "0.13.1", default-features = false, features = ["rustls", "stream"] }
+reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "stream"] }
 url = "2.5.8"
 axum = "0.8.8"
 
