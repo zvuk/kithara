@@ -81,47 +81,20 @@ Tests buffer pool lock contention and work-stealing.
 
 ## Baseline Management
 
-### Update Baseline
+Baselines are managed automatically via CI using `actions/cache`:
 
-After confirming an optimization improves performance:
+- **Main branch pushes**: perf results are saved to cache as the new baseline
+- **Pull requests**: the latest cached baseline is restored and compared using `scripts/compare_perf.sh`
+- Regression threshold: >10% slower triggers a warning in the PR comment
 
-```bash
-# Run perf tests and save new baseline
-cargo test --features perf --release --test-threads=1 -- --ignored
-cp target/hotpath-*.json ../perf-baseline/
-
-# Commit baseline update
-git add perf-baseline/
-git commit -m "perf: update baseline after [optimization description]"
-```
-
-### Compare with Baseline
-
-```bash
-# Run current tests
-cargo test --features perf --release --test-threads=1 -- --ignored
-
-# Compare with baseline (requires python script)
-python ../scripts/compare_perf.py \
-  --current target/hotpath-*.json \
-  --baseline ../perf-baseline/hotpath-*.json \
-  --threshold 10%
-```
-
-## CI Integration
-
-Performance tests run automatically on:
-- **Pull requests**: Compare against main branch baseline, fail if >10% regression
-- **Main branch commits**: Results used as baseline for future PRs
-
-### Manual Comparison
+### Local Comparison
 
 ```bash
 # Run tests and save output
-cargo test --features perf --release -- --ignored --nocapture > my-results.txt
+cargo test --features perf --release -- --ignored --nocapture 2>&1 | tee my-results.txt
 
-# Compare with baseline
-./scripts/compare_perf.sh my-results.txt perf-baseline/baseline-run.txt 10
+# Compare with a saved baseline
+./scripts/compare_perf.sh my-results.txt saved-baseline.txt 10
 ```
 
 See `.github/workflows/perf.yml` for CI configuration.

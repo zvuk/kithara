@@ -17,6 +17,10 @@ on:
       - 'Cargo.lock'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  pull-requests: write
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -29,13 +33,9 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Full history for baseline comparison
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
 
       - name: Setup Rust cache
         uses: Swatinem/rust-cache@v2
@@ -47,9 +47,38 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev
 
+      - name: Restore perf baseline
+        if: github.event_name == 'pull_request'
+        id: restore-baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: baseline-results.txt
+          key: perf-baseline-will-not-match
+          restore-keys: perf-baseline-
+
       - name: Run performance tests
         run: |
-          cargo test -p kithara-integration-tests --features perf --release -- --ignored --test-threads=1 --nocapture 2>&1 | tee perf-results.txt
+          cargo test -p kithara-integration-tests --features perf --release \
+            -- --ignored --test-threads=1 --nocapture 2>&1 | tee perf-results.txt
+
+      - name: Save perf baseline
+        if: github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: perf-results.txt
+          key: perf-baseline-${{ github.sha }}
+
+      - name: Compare with baseline
+        if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-hit != ''
+        id: compare
+        run: |
+          result=$(bash scripts/compare_perf.sh perf-results.txt baseline-results.txt 10 2>&1) || true
+          echo "$result"
+          {
+            echo 'comparison<<EOF'
+            echo "$result"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Upload performance results
         uses: actions/upload-artifact@v4
@@ -59,32 +88,31 @@ jobs:
           path: perf-results.txt
           retention-days: 30
 
-      - name: Check for baseline (main branch only)
-        if: github.ref == 'refs/heads/main'
-        run: |
-          echo "Running on main branch - results will be used as baseline"
-
-      - name: Compare with baseline (PR only)
-        if: github.event_name == 'pull_request'
-        run: |
-          echo "TODO: Implement baseline comparison"
-          echo "For now, just showing perf results:"
-          cat perf-results.txt | grep -A 5 "hotpath"
-
       - name: Comment PR with results
         if: github.event_name == 'pull_request' && always()
         uses: actions/github-script@v7
+        env:
+          BASELINE_HIT: ${{ steps.restore-baseline.outputs.cache-hit }}
+          COMPARISON: ${{ steps.compare.outputs.comparison }}
         with:
           script: |
             const fs = require('fs');
             const results = fs.readFileSync('perf-results.txt', 'utf8');
 
-            // Extract hotpath summaries
             const summaries = results.match(/\[hotpath\] timing[\s\S]*?(?=\n\n|\ntest |$)/g) || [];
 
-            const body = `## Performance Test Results\n\n` +
-              `Perf tests completed. See full results in artifacts.\n\n` +
-              `<details>\n<summary>Hotpath Summaries</summary>\n\n\`\`\`\n` +
+            const hasBaseline = process.env.BASELINE_HIT !== '';
+            const comparison = process.env.COMPARISON;
+
+            let body = `## Performance Test Results\n\n`;
+
+            if (hasBaseline && comparison) {
+              body += `### Baseline Comparison\n\n\`\`\`\n${comparison}\n\`\`\`\n\n`;
+            } else {
+              body += `> No baseline found. Results from this run will become the baseline after merge to main.\n\n`;
+            }
+
+            body += `<details>\n<summary>Hotpath Summaries</summary>\n\n\`\`\`\n` +
               summaries.slice(0, 5).join('\n\n') +
               `\n\`\`\`\n</details>`;
 
