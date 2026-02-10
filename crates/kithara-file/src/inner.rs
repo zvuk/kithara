@@ -6,9 +6,11 @@
 use std::sync::Arc;
 
 use futures::StreamExt;
-use kithara_assets::{AssetStoreBuilder, Assets, ResourceKey, asset_root_for_url};
+use kithara_assets::{
+    AssetStoreBuilder, Assets, CoverageIndex, DiskCoverage, ResourceKey, asset_root_for_url,
+};
 use kithara_net::{Headers, HttpClient};
-use kithara_storage::{Coverage, MemCoverage, ResourceExt, ResourceStatus};
+use kithara_storage::{Coverage, MemCoverage, MmapResource, ResourceExt, ResourceStatus};
 use kithara_stream::{
     Backend, Downloader, DownloaderIo, PlanOutcome, StepResult, StreamType, Writer, WriterItem,
 };
@@ -110,6 +112,12 @@ impl File {
             .cancel(cancel.clone())
             .build();
 
+        // Open coverage index for crash-safe download tracking.
+        let coverage_index = store
+            .open_coverage_index_resource()
+            .ok()
+            .map(|res| Arc::new(CoverageIndex::new(res)));
+
         let net_client = HttpClient::new(config.net.clone());
 
         let state = FileStreamState::create(
@@ -162,6 +170,7 @@ impl File {
                 state.events().clone(),
                 config.look_ahead_bytes,
                 shared.clone(),
+                coverage_index,
             )
             .await;
 
@@ -279,6 +288,68 @@ impl DownloaderIo for FileIo {
 
 // FileDownloader — mutable state (plan + commit)
 
+/// Coverage tracker that works with both in-memory and disk-backed storage.
+///
+/// Remote files use `Disk` for crash-safe persistence; local files and tests
+/// use `Memory`.
+pub(crate) enum FileCoverage {
+    Memory(MemCoverage),
+    Disk(DiskCoverage<MmapResource>),
+}
+
+impl Coverage for FileCoverage {
+    fn mark(&mut self, range: std::ops::Range<u64>) {
+        match self {
+            Self::Memory(c) => c.mark(range),
+            Self::Disk(c) => c.mark(range),
+        }
+    }
+
+    fn is_complete(&self) -> bool {
+        match self {
+            Self::Memory(c) => c.is_complete(),
+            Self::Disk(c) => c.is_complete(),
+        }
+    }
+
+    fn next_gap(&self, max_size: u64) -> Option<std::ops::Range<u64>> {
+        match self {
+            Self::Memory(c) => c.next_gap(max_size),
+            Self::Disk(c) => c.next_gap(max_size),
+        }
+    }
+
+    fn gaps(&self) -> Vec<std::ops::Range<u64>> {
+        match self {
+            Self::Memory(c) => c.gaps(),
+            Self::Disk(c) => c.gaps(),
+        }
+    }
+
+    fn total_size(&self) -> Option<u64> {
+        match self {
+            Self::Memory(c) => c.total_size(),
+            Self::Disk(c) => c.total_size(),
+        }
+    }
+
+    fn set_total_size(&mut self, size: u64) {
+        match self {
+            Self::Memory(c) => c.set_total_size(size),
+            Self::Disk(c) => c.set_total_size(size),
+        }
+    }
+}
+
+impl FileCoverage {
+    /// Flush dirty coverage to disk (no-op for in-memory).
+    fn flush(&mut self) {
+        if let Self::Disk(c) = self {
+            c.flush();
+        }
+    }
+}
+
 /// Current phase of file download.
 enum FilePhase {
     /// Sequential download from start.
@@ -306,7 +377,7 @@ pub struct FileDownloader {
     look_ahead_bytes: Option<u64>,
     shared: Arc<SharedFileState>,
     /// Coverage tracker for downloaded ranges.
-    coverage: MemCoverage,
+    coverage: FileCoverage,
     /// Current download phase.
     phase: FilePhase,
 }
@@ -319,6 +390,7 @@ impl FileDownloader {
         events_tx: broadcast::Sender<FileEvent>,
         look_ahead_bytes: Option<u64>,
         shared: Arc<SharedFileState>,
+        coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
     ) -> Self {
         let url = state.url().clone();
         let total = state.len();
@@ -340,15 +412,31 @@ impl FileDownloader {
             }
         };
 
-        let mut coverage = if let Some(size) = total {
-            MemCoverage::with_total_size(size)
-        } else {
-            MemCoverage::new()
+        let mut coverage: FileCoverage = match coverage_index {
+            Some(idx) => {
+                let key = url.to_string();
+                let mut dc = DiskCoverage::open(idx, key);
+                if let Some(size) = total {
+                    dc.set_total_size(size);
+                }
+                FileCoverage::Disk(dc)
+            }
+            None => {
+                let mc = if let Some(size) = total {
+                    MemCoverage::with_total_size(size)
+                } else {
+                    MemCoverage::new()
+                };
+                FileCoverage::Memory(mc)
+            }
         };
 
-        // If resource already has some data (partial cache), mark it.
+        // If resource already has some data (partial cache) and coverage
+        // doesn't know about it yet, mark it. This handles legacy files
+        // (downloaded before coverage was introduced).
         if let Some(len) = res.len()
             && len > 0
+            && coverage.next_gap(len).is_some_and(|g| g.start == 0)
         {
             coverage.mark(0..len);
         }
@@ -512,6 +600,8 @@ impl Downloader for FileDownloader {
             }
             FileFetch::RangeDone { range } => {
                 self.coverage.mark(range);
+                // Flush after each gap-fill batch for crash-safety.
+                self.coverage.flush();
                 // Check if gap-filling completed everything.
                 if self.coverage.is_complete() {
                     if let Err(e) = self.res.commit(self.total) {
@@ -552,6 +642,8 @@ impl Downloader for FileDownloader {
                     self.phase = FilePhase::Complete;
                 } else {
                     // Partial download — switch to gap-filling.
+                    // Flush coverage before phase change for crash-safety.
+                    self.coverage.flush();
                     tracing::warn!(
                         total_bytes,
                         expected = ?self.total,
