@@ -160,10 +160,16 @@ impl Driver for MmapDriver {
         let end = offset + data.len() as u64;
         let mut mmap_guard = self.mmap.lock();
 
-        // ReadWrite mode: allow writes even when common state is committed.
-        // Committed → Active: reopen as rw.
-        // Active: already writable (happens when existing files open as Active
-        // but the common state starts as committed).
+        // Handle writes when common state is committed.
+        //
+        // The `committed` flag is a hint from common state — the driver decides
+        // whether the underlying storage can accept writes.
+        //
+        // - `Committed` + `ReadWrite`: reopen as rw (index files rewritten in place).
+        // - `Active` + any mode: already writable, allow the write.
+        // - `Empty` + non-ReadOnly: no backing data to protect, fall through to
+        //   creation logic below (handles zero-length commit → resume write).
+        // - Otherwise: reject (use `reactivate()` to resume writing).
         if committed {
             match (&*mmap_guard, self.mode) {
                 (MmapState::Committed(_), OpenMode::ReadWrite) => {
@@ -171,8 +177,12 @@ impl Driver for MmapDriver {
                     let rw = MemoryMappedFile::open_rw(&self.path)?;
                     *mmap_guard = MmapState::Active(rw);
                 }
-                (MmapState::Active(_), OpenMode::ReadWrite) => {
-                    // Already active — ok to write.
+                (MmapState::Active(_), _) => {
+                    // Already active — ok to write regardless of mode.
+                }
+                (MmapState::Empty, OpenMode::Auto | OpenMode::ReadWrite) => {
+                    // Zero-length committed resource — no data to protect.
+                    // Fall through to creation logic below.
                 }
                 _ => {
                     return Err(StorageError::Failed(
