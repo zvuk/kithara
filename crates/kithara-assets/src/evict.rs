@@ -2,7 +2,6 @@
 
 use std::{collections::HashSet, path::Path, sync::Arc};
 
-use kithara_storage::StorageResource;
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -162,12 +161,12 @@ where
         }
     }
 
-    fn open_lru(&self) -> AssetsResult<LruIndex> {
+    fn open_lru(&self) -> AssetsResult<LruIndex<A::IndexRes>> {
         let res = self.inner.open_lru_index_resource()?;
         Ok(LruIndex::new(res))
     }
 
-    fn open_pins(&self) -> AssetsResult<PinsIndex> {
+    fn open_pins(&self) -> AssetsResult<PinsIndex<A::IndexRes>> {
         PinsIndex::open(self.inner())
     }
 
@@ -248,6 +247,7 @@ where
 {
     type Res = A::Res;
     type Context = A::Context;
+    type IndexRes = A::IndexRes;
 
     fn root_dir(&self) -> &Path {
         self.inner.root_dir()
@@ -266,11 +266,11 @@ where
         self.inner.open_resource_with_ctx(key, ctx)
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         self.inner.open_pins_index_resource()
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         self.inner.open_lru_index_resource()
     }
 

@@ -4,15 +4,31 @@
 //!
 //! Storage primitives for Kithara.
 //!
-//! Provides a unified `StorageResource` backed by `mmap-io` with:
-//! - Random-access `read_at`/`write_at` (streaming use-case)
-//! - Blocking `wait_range` via `Condvar`
-//! - Convenience `read_into`/`write_all` (atomic use-case)
+//! Provides a generic [`Resource<D>`] parameterized by a [`Driver`]:
+//! - [`MmapResource`] — mmap-backed (filesystem), with lock-free fast path.
+//! - [`MemResource`] — in-memory `Vec<u8>` (WASM).
+//!
+//! The consumer-facing trait is [`ResourceExt`].
 
+mod driver;
 mod error;
+mod memory;
+mod mmap;
 mod resource;
 
+pub use driver::{Driver, DriverState, Resource};
 pub use error::{StorageError, StorageResult};
-pub use resource::{
-    OpenMode, ResourceExt, ResourceStatus, StorageOptions, StorageResource, WaitOutcome,
-};
+pub use memory::{MemDriver, MemOptions, MemResource};
+pub use mmap::{MmapDriver, MmapOptions, MmapResource};
+pub use resource::{OpenMode, ResourceExt, ResourceStatus, WaitOutcome};
+
+#[cfg(any(test, feature = "test-utils"))]
+pub use resource::ResourceMock;
+
+// Backward compatibility aliases.
+#[deprecated(note = "renamed to MmapResource")]
+pub type StorageResource = MmapResource;
+#[deprecated(note = "renamed to MmapOptions")]
+pub type StorageOptions = MmapOptions;
+#[deprecated(note = "renamed to MemResource")]
+pub type MemoryResource = MemResource;

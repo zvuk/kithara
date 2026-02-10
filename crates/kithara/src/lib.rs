@@ -82,7 +82,9 @@ pub mod prelude {
     pub use kithara_file::{File, FileConfig};
     #[cfg(feature = "hls")]
     pub use kithara_hls::{Hls, HlsConfig};
-    pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
+    pub use kithara_stream::{
+        AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType, ThreadPool,
+    };
 
     pub use crate::{Resource, ResourceConfig, ResourceEvent};
 }

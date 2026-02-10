@@ -11,7 +11,7 @@ use std::{
     },
 };
 
-use kithara_storage::{ResourceExt, ResourceStatus, StorageResource, StorageResult, WaitOutcome};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -96,7 +96,7 @@ where
         &self.inner
     }
 
-    fn open_index(&self) -> AssetsResult<PinsIndex> {
+    fn open_index(&self) -> AssetsResult<PinsIndex<A::IndexRes>> {
         PinsIndex::open(self.inner())
     }
 
@@ -200,7 +200,8 @@ where
 
         // Record bytes if recorder is set (best-effort)
         if let Some(ref recorder) = self.byte_recorder
-            && let Ok(metadata) = std::fs::metadata(self.inner.path())
+            && let Some(path) = self.inner.path()
+            && let Ok(metadata) = std::fs::metadata(path)
             && metadata.is_file()
         {
             recorder.record_bytes(&self.asset_root, metadata.len());
@@ -213,7 +214,7 @@ where
         self.inner.fail(reason);
     }
 
-    fn path(&self) -> &Path {
+    fn path(&self) -> Option<&Path> {
         self.inner.path()
     }
 
@@ -236,6 +237,7 @@ where
 {
     type Res = LeaseResource<A::Res, LeaseGuard<A>>;
     type Context = A::Context;
+    type IndexRes = A::IndexRes;
 
     fn root_dir(&self) -> &Path {
         self.inner.root_dir()
@@ -271,12 +273,12 @@ where
         })
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         // Pins index must be opened without pinning to avoid recursion
         self.inner.open_pins_index_resource()
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         // LRU index must be opened without pinning
         self.inner.open_lru_index_resource()
     }

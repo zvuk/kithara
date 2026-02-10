@@ -5,6 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use bytes::Bytes;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_net::NetOptions;
+use kithara_stream::ThreadPool;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -121,6 +122,10 @@ pub struct HlsConfig {
     pub pool: Option<BytePool>,
     /// Storage configuration.
     pub store: StoreOptions,
+    /// Thread pool for background work.
+    ///
+    /// Shared across all components. Defaults to the global rayon pool.
+    pub thread_pool: ThreadPool,
     /// Master playlist URL.
     pub url: Url,
 }
@@ -143,6 +148,7 @@ impl Default for HlsConfig {
             pool: None,
             download_batch_size: 3,
             store: StoreOptions::default(),
+            thread_pool: ThreadPool::default(),
             url: Url::parse("http://localhost/stream.m3u8").expect("valid default URL"),
         }
     }
@@ -167,6 +173,7 @@ impl HlsConfig {
             pool: None,
             download_batch_size: 3,
             store: StoreOptions::default(),
+            thread_pool: ThreadPool::default(),
             url,
         }
     }
@@ -261,6 +268,14 @@ impl HlsConfig {
     /// many chunks to allow other tasks to run. Default: 8.
     pub fn with_download_yield_interval(mut self, interval: usize) -> Self {
         self.download_yield_interval = interval;
+        self
+    }
+
+    /// Set thread pool for background work.
+    ///
+    /// The pool is shared across all components. Defaults to the global rayon pool.
+    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
+        self.thread_pool = pool;
         self
     }
 }

@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use kithara_assets::StoreOptions;
 use kithara_net::NetOptions;
+use kithara_stream::ThreadPool;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -63,6 +64,10 @@ pub struct FileConfig {
     pub src: FileSrc,
     /// Storage configuration.
     pub store: StoreOptions,
+    /// Thread pool for background work.
+    ///
+    /// Shared across all components. Defaults to the global rayon pool.
+    pub thread_pool: ThreadPool,
 }
 
 impl Default for FileConfig {
@@ -79,6 +84,7 @@ impl Default for FileConfig {
                 Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
             ),
             store: StoreOptions::default(),
+            thread_pool: ThreadPool::default(),
         }
     }
 }
@@ -96,6 +102,7 @@ impl FileConfig {
             net: NetOptions::default(),
             src,
             store: StoreOptions::default(),
+            thread_pool: ThreadPool::default(),
         }
     }
 
@@ -153,6 +160,14 @@ impl FileConfig {
     /// many chunks to allow other tasks to run. Default: 8.
     pub fn with_download_yield_interval(mut self, interval: usize) -> Self {
         self.download_yield_interval = interval;
+        self
+    }
+
+    /// Set thread pool for background work.
+    ///
+    /// The pool is shared across all components. Defaults to the global rayon pool.
+    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
+        self.thread_pool = pool;
         self
     }
 }

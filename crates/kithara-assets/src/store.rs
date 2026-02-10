@@ -3,7 +3,7 @@
 use std::{hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use kithara_bufpool::{BytePool, byte_pool};
-use kithara_storage::StorageResource;
+use kithara_storage::MmapResource;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
@@ -97,10 +97,10 @@ pub type AssetStore<Ctx = ()> =
 
 /// Resource handle returned by [`AssetStore::open_resource`].
 ///
-/// Wraps `StorageResource` with processing and lease semantics.
+/// Wraps `MmapResource` with processing and lease semantics.
 /// Implements `ResourceExt` for read/write/commit operations.
 pub type AssetResource<Ctx = ()> = LeaseResource<
-    ProcessedResource<StorageResource, Ctx>,
+    ProcessedResource<MmapResource, Ctx>,
     LeaseGuard<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>,
 >;
 
