@@ -122,6 +122,12 @@ pub struct HlsConfig {
     pub thread_pool: ThreadPool,
     /// Master playlist URL.
     pub url: Url,
+    /// Force in-memory storage (no disk caching).
+    ///
+    /// When `true`, segments are stored in memory and never written to disk.
+    /// Useful for content marked with `#EXT-X-ALLOW-CACHE:NO` or when disk
+    /// caching is not desired.
+    pub ephemeral: bool,
 }
 
 impl Default for HlsConfig {
@@ -144,6 +150,7 @@ impl Default for HlsConfig {
             store: StoreOptions::default(),
             thread_pool: ThreadPool::default(),
             url: Url::parse("http://localhost/stream.m3u8").expect("valid default URL"),
+            ephemeral: false,
         }
     }
 }
@@ -169,6 +176,7 @@ impl HlsConfig {
             store: StoreOptions::default(),
             thread_pool: ThreadPool::default(),
             url,
+            ephemeral: false,
         }
     }
 
@@ -261,6 +269,12 @@ impl HlsConfig {
     /// The pool is shared across all components. Defaults to the global rayon pool.
     pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
         self.thread_pool = pool;
+        self
+    }
+
+    /// Force in-memory storage (no disk caching).
+    pub fn with_ephemeral(mut self, ephemeral: bool) -> Self {
+        self.ephemeral = ephemeral;
         self
     }
 }

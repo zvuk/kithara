@@ -7,7 +7,7 @@ use std::{
 };
 
 use kithara_abr::{AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource};
-use kithara_assets::{Assets, CoverageIndex, DiskCoverage, ResourceKey};
+use kithara_assets::{CoverageIndex, DiskCoverage, ResourceKey};
 use kithara_storage::{Coverage, MmapResource, ResourceExt, ResourceStatus};
 use kithara_stream::{ContainerFormat, Downloader, DownloaderIo, PlanOutcome, StepResult};
 use tokio::sync::broadcast;
@@ -216,7 +216,12 @@ impl HlsDownloader {
         variant_stream: &VariantStream,
         coverage_index: &Option<Arc<CoverageIndex<MmapResource>>>,
     ) -> (usize, u64) {
-        let assets = fetch.assets();
+        // Ephemeral backend has no persistent cache to scan.
+        if fetch.backend().is_ephemeral() {
+            return (0, 0);
+        }
+
+        let backend = fetch.backend();
         let container = if init_url.is_some() {
             Some(ContainerFormat::Fmp4)
         } else {
@@ -226,7 +231,7 @@ impl HlsDownloader {
         // If init is required, verify it's cached on disk
         if let Some(url) = init_url {
             let init_key = ResourceKey::from_url(url);
-            let init_cached = assets
+            let init_cached = backend
                 .open_resource(&init_key)
                 .map(|r| matches!(r.status(), ResourceStatus::Committed { .. }))
                 .unwrap_or(false);
@@ -243,7 +248,7 @@ impl HlsDownloader {
 
         for (index, (meta, segment_url)) in metadata.iter().zip(media_urls.iter()).enumerate() {
             let key = ResourceKey::from_url(segment_url);
-            let Ok(resource) = assets.open_resource(&key) else {
+            let Ok(resource) = backend.open_resource(&key) else {
                 break; // Stop on first uncached segment
             };
 
@@ -379,6 +384,26 @@ impl HlsDownloader {
             cov.set_total_size(media_len);
             cov.mark(0..media_len);
             // flush happens via Drop, or explicitly in commit()
+        }
+
+        // Evict segments behind reader for ephemeral backend (free memory).
+        if self.fetch.backend().is_ephemeral() {
+            let reader_pos = self
+                .shared
+                .reader_offset
+                .load(std::sync::atomic::Ordering::Acquire);
+            let segments = self.shared.segments.lock();
+            for entry in segments.entries.values() {
+                if entry.end_offset() >= reader_pos {
+                    continue;
+                }
+                if entry.meta.segment_type.is_init() {
+                    continue;
+                }
+                self.fetch
+                    .backend()
+                    .remove_resource(&ResourceKey::from_url(&entry.meta.url));
+            }
         }
     }
 

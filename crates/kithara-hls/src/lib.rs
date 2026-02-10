@@ -31,7 +31,12 @@ pub mod keys;
 #[doc(hidden)]
 pub mod playlist;
 
-// Private modules
+// Private modules (with selective re-exports)
+mod backend;
+
+#[doc(hidden)]
+pub use backend::AssetsBackend;
+
 mod downloader;
 mod inner;
 mod parsing;

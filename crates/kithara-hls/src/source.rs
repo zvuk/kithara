@@ -14,7 +14,7 @@ use std::{
 
 use crossbeam_queue::SegQueue;
 use kithara_abr::Variant;
-use kithara_assets::{AssetStore, Assets, ResourceKey};
+use kithara_assets::ResourceKey;
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{AudioCodec, MediaInfo, Source, StreamError, StreamResult};
 use parking_lot::{Condvar, Mutex};
@@ -223,11 +223,6 @@ pub struct HlsSource {
 }
 
 impl HlsSource {
-    /// Get asset store.
-    pub fn assets(&self) -> AssetStore {
-        self.fetch.assets().clone()
-    }
-
     fn emit_event(&self, event: HlsEvent) {
         if let Some(ref tx) = self.events_tx {
             let _ = tx.send(event);
@@ -253,7 +248,6 @@ impl HlsSource {
         buf: &mut [u8],
     ) -> Result<usize, HlsError> {
         let local_offset = offset - entry.byte_offset;
-        let assets = self.assets();
 
         if local_offset < entry.init_len {
             let Some(ref init_url) = entry.init_url else {
@@ -261,7 +255,7 @@ impl HlsSource {
             };
 
             let key = ResourceKey::from_url(init_url);
-            let resource = assets.open_resource(&key)?;
+            let resource = self.fetch.backend().open_resource(&key)?;
 
             let read_end = (local_offset + buf.len() as u64).min(entry.init_len);
             resource.wait_range(local_offset..read_end)?;
@@ -289,9 +283,8 @@ impl HlsSource {
         media_offset: u64,
         buf: &mut [u8],
     ) -> Result<usize, HlsError> {
-        let assets = self.assets();
         let key = ResourceKey::from_url(&entry.meta.url);
-        let resource = assets.open_resource(&key)?;
+        let resource = self.fetch.backend().open_resource(&key)?;
 
         let read_end = (media_offset + buf.len() as u64).min(entry.meta.len);
         resource.wait_range(media_offset..read_end)?;

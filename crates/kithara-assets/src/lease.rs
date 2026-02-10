@@ -134,7 +134,7 @@ where
         self.persist_pins_best_effort(&snapshot)
     }
 
-    fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard<A>> {
+    fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard> {
         self.ensure_loaded_best_effort()?;
 
         {
@@ -147,11 +147,29 @@ where
         // Eagerly persist so crash-recovery sees the pin.
         let _ = self.flush_pins();
 
+        let owner = self.clone();
+        let ar = asset_root.to_string();
+        let cancel = self.cancel.clone();
+
         Ok(LeaseGuard {
             inner: Some(Arc::new(LeaseGuardInner {
-                owner: self.clone(),
-                asset_root: asset_root.to_string(),
-                cancel: self.cancel.clone(),
+                on_drop: Box::new(move || {
+                    if cancel.is_cancelled() {
+                        return;
+                    }
+
+                    tracing::trace!(asset_root = %ar, "LeaseGuard::drop - removing pin");
+
+                    {
+                        let mut pins = owner.pins.lock();
+                        if pins.remove(&ar) {
+                            owner.dirty.store(true, Ordering::Release);
+                        }
+                    }
+
+                    // Eagerly persist unpin so crash-recovery sees it.
+                    let _ = owner.flush_pins();
+                }),
             })),
         })
     }
@@ -235,7 +253,7 @@ impl<A> Assets for LeaseAssets<A>
 where
     A: Assets,
 {
-    type Res = LeaseResource<A::Res, LeaseGuard<A>>;
+    type Res = LeaseResource<A::Res, LeaseGuard>;
     type Context = A::Context;
     type IndexRes = A::IndexRes;
 
@@ -290,6 +308,10 @@ where
     fn delete_asset(&self) -> AssetsResult<()> {
         self.inner.delete_asset()
     }
+
+    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        self.inner.remove_resource(key)
+    }
 }
 
 impl<A> Drop for LeaseAssets<A>
@@ -315,44 +337,21 @@ where
 ///
 /// Uses `Arc` internally for reference counting - unpin happens only when the last clone is dropped.
 /// When `inner` is `None`, the guard is a no-op (used when lease is bypassed).
+///
+/// Non-generic: drop logic is captured as a closure for type erasure.
 #[derive(Clone)]
-pub struct LeaseGuard<A>
-where
-    A: Assets,
-{
+pub struct LeaseGuard {
     #[expect(dead_code)]
-    inner: Option<Arc<LeaseGuardInner<A>>>,
+    inner: Option<Arc<LeaseGuardInner>>,
 }
 
-struct LeaseGuardInner<A>
-where
-    A: Assets,
-{
-    owner: LeaseAssets<A>,
-    asset_root: String,
-    cancel: CancellationToken,
+struct LeaseGuardInner {
+    on_drop: Box<dyn Fn() + Send + Sync>,
 }
 
-impl<A> Drop for LeaseGuardInner<A>
-where
-    A: Assets,
-{
+impl Drop for LeaseGuardInner {
     fn drop(&mut self) {
-        if self.cancel.is_cancelled() {
-            return;
-        }
-
-        tracing::trace!(asset_root = %self.asset_root, "LeaseGuard::drop - removing pin");
-
-        {
-            let mut pins = self.owner.pins.lock();
-            if pins.remove(&self.asset_root) {
-                self.owner.dirty.store(true, Ordering::Release);
-            }
-        }
-
-        // Eagerly persist unpin so crash-recovery sees it.
-        let _ = self.owner.flush_pins();
+        (self.on_drop)();
     }
 }
 

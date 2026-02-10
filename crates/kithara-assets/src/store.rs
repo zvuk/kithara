@@ -3,7 +3,7 @@
 use std::{hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use kithara_bufpool::{BytePool, byte_pool};
-use kithara_storage::MmapResource;
+use kithara_storage::StorageResource;
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
@@ -19,6 +19,7 @@ use crate::{
     evict::EvictAssets,
     index::EvictConfig,
     lease::{LeaseAssets, LeaseGuard, LeaseResource},
+    mem_store::MemAssetStore,
     process::{ProcessChunkFn, ProcessedResource, ProcessingAssets},
 };
 
@@ -95,14 +96,56 @@ impl StoreOptions {
 pub type AssetStore<Ctx = ()> =
     CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
-/// Resource handle returned by [`AssetStore::open_resource`].
+/// Resource handle returned by [`AssetStore::open_resource`] or [`MemStore::open_resource`].
 ///
-/// Wraps `MmapResource` with processing and lease semantics.
+/// Wraps `StorageResource` with processing and lease semantics.
 /// Implements `ResourceExt` for read/write/commit operations.
-pub type AssetResource<Ctx = ()> = LeaseResource<
-    ProcessedResource<MmapResource, Ctx>,
-    LeaseGuard<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>,
->;
+/// Both `AssetStore` (disk) and `MemStore` (memory) return this same type.
+pub type AssetResource<Ctx = ()> =
+    LeaseResource<ProcessedResource<StorageResource, Ctx>, LeaseGuard>;
+
+/// In-memory asset store with disabled decorators.
+///
+/// Same decorator chain as [`AssetStore`] but backed by [`MemAssetStore`]
+/// instead of [`DiskAssetStore`]. All decorators run in disabled/no-op mode.
+/// Returns the same [`AssetResource`] type as `AssetStore`.
+pub type MemStore<Ctx = ()> =
+    CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<MemAssetStore>, Ctx>>>;
+
+/// Create a pass-through process function that copies input to output unchanged.
+fn passthrough_process_fn() -> ProcessChunkFn<()> {
+    Arc::new(|input, output, _ctx, _is_last| {
+        output[..input.len()].copy_from_slice(input);
+        Ok(input.len())
+    })
+}
+
+impl MemAssetStore {
+    /// Build a fully decorated [`MemStore`] with all decorators in disabled/no-op mode.
+    ///
+    /// The decorator chain matches [`AssetStore`] for type compatibility, but eviction,
+    /// caching, and lease layers are disabled since memory resources are ephemeral.
+    #[expect(clippy::missing_panics_doc)]
+    pub fn decorated(asset_root: String, cancel: CancellationToken) -> MemStore {
+        let root_dir = std::env::temp_dir().join("kithara-ephemeral");
+        let mem = Arc::new(Self::new(asset_root, cancel.clone(), root_dir));
+        let evict = Arc::new(EvictAssets::new(
+            mem,
+            EvictConfig::default(),
+            cancel.clone(),
+            false,
+        ));
+        let process_fn = passthrough_process_fn();
+        let pool = byte_pool().clone();
+        let processing = Arc::new(ProcessingAssets::new(evict, process_fn, pool));
+        let lease = LeaseAssets::with_enabled(processing, cancel, None, false);
+        CachedAssets::with_enabled(
+            Arc::new(lease),
+            NonZeroUsize::new(1).expect("NonZeroUsize(1)"),
+            false,
+        )
+    }
+}
 
 /// Constructor for the ready-to-use [`AssetStore`].
 ///

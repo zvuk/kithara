@@ -53,4 +53,4 @@ sequenceDiagram
 
 ## Integration
 
-Depends on `kithara-net` for HTTP, `kithara-assets` for caching, and `kithara-abr` for ABR algorithm. Composes with `kithara-audio` as `Audio<Stream<Hls>>`. Emits `HlsEvent` via broadcast channel for monitoring.
+Depends on `kithara-net` for HTTP, `kithara-assets` for caching (disk or in-memory via `AssetsBackend`), and `kithara-abr` for ABR algorithm. Composes with `kithara-audio` as `Audio<Stream<Hls>>`. Emits `HlsEvent` via broadcast channel for monitoring.

@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
+use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, StorageResource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -57,6 +57,15 @@ pub trait Assets: Clone + Send + Sync + 'static {
 
     /// Delete the entire asset (all resources under this store's `asset_root`).
     fn delete_asset(&self) -> AssetsResult<()>;
+
+    /// Remove a single resource by key.
+    ///
+    /// Default implementation is a no-op (suitable for disk stores where
+    /// resources are managed by filesystem eviction). In-memory stores
+    /// override this to free memory.
+    fn remove_resource(&self, _key: &ResourceKey) -> AssetsResult<()> {
+        Ok(())
+    }
 
     /// Return the root directory for disk-backed implementations.
     fn root_dir(&self) -> &Path;
@@ -155,7 +164,7 @@ impl DiskAssetStore {
 }
 
 impl Assets for DiskAssetStore {
-    type Res = MmapResource;
+    type Res = StorageResource;
     type Context = ();
     type IndexRes = MmapResource;
 
@@ -173,7 +182,8 @@ impl Assets for DiskAssetStore {
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         let path = self.resource_path(key)?;
-        self.open_storage_resource(key, path)
+        let mmap = self.open_storage_resource(key, path)?;
+        Ok(StorageResource::Mmap(mmap))
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<MmapResource> {

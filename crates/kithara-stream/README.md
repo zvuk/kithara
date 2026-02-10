@@ -22,7 +22,7 @@ let stream = Stream::<File>::new(config).await?;
 ```mermaid
 sequenceDiagram
     participant DL as Downloader (tokio task)
-    participant SR as StorageResource (mmap)
+    participant SR as StorageResource
     participant S as Stream<T> (sync Read+Seek)
     participant Dec as Decoder (sync)
 

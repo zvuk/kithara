@@ -10,8 +10,8 @@ use kithara_stream::StreamType;
 use tokio::sync::broadcast;
 
 use crate::{
-    config::HlsConfig, error::HlsError, events::HlsEvent, fetch::FetchManager,
-    playlist::variant_info_from_master, source::build_pair,
+    backend::AssetsBackend, config::HlsConfig, error::HlsError, events::HlsEvent,
+    fetch::FetchManager, playlist::variant_info_from_master, source::build_pair,
 };
 
 /// Marker type for HLS streaming.
@@ -39,17 +39,25 @@ impl StreamType for Hls {
         let cancel = config.cancel.clone().unwrap_or_default();
         let net = HttpClient::new(config.net.clone());
 
-        // Build asset store
-        let base_assets = AssetStoreBuilder::new()
-            .asset_root(Some(asset_root.as_str()))
-            .cancel(cancel.clone())
-            .root_dir(&config.store.cache_dir)
-            .evict_config(config.store.to_evict_config())
-            .build();
+        // Build storage backend
+        let backend = if config.ephemeral {
+            AssetsBackend::Mem(kithara_assets::MemAssetStore::decorated(
+                asset_root.clone(),
+                cancel.clone(),
+            ))
+        } else {
+            let disk_store = AssetStoreBuilder::new()
+                .asset_root(Some(asset_root.as_str()))
+                .cancel(cancel.clone())
+                .root_dir(&config.store.cache_dir)
+                .evict_config(config.store.to_evict_config())
+                .build();
+            AssetsBackend::Disk(disk_store)
+        };
 
         // Build FetchManager (unified: fetch + playlist cache + Loader)
         let fetch_manager = Arc::new(
-            FetchManager::new(base_assets.clone(), net, cancel.clone())
+            FetchManager::new(backend, net, cancel.clone())
                 .with_master_url(config.url.clone())
                 .with_base_url(config.base_url.clone()),
         );
@@ -73,11 +81,14 @@ impl StreamType for Hls {
             initial_variant,
         });
 
-        // Create coverage index for crash-safe segment tracking.
-        let coverage_index = base_assets
-            .open_coverage_index_resource()
-            .ok()
-            .map(|res| Arc::new(CoverageIndex::new(res)));
+        // Create coverage index for crash-safe segment tracking (disk only).
+        let coverage_index = match fetch_manager.backend() {
+            AssetsBackend::Disk(store) => store
+                .open_coverage_index_resource()
+                .ok()
+                .map(|res| Arc::new(CoverageIndex::new(res))),
+            AssetsBackend::Mem(_) => None,
+        };
 
         // Create HlsDownloader + HlsSource pair
         let (downloader, mut source) = build_pair(

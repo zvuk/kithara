@@ -278,6 +278,10 @@ where
     fn delete_asset(&self) -> AssetsResult<()> {
         self.inner.delete_asset()
     }
+
+    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        self.inner.remove_resource(key)
+    }
 }
 
 #[cfg(test)]

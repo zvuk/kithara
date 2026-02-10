@@ -205,6 +205,16 @@ where
 
         self.inner.delete_asset()
     }
+
+    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        // Remove from cache (all contexts)
+        {
+            let mut cache = self.cache.lock();
+            let cache_key = CacheKey::Resource(key.clone(), None);
+            cache.pop(&cache_key);
+        }
+        self.inner.remove_resource(key)
+    }
 }
 
 #[cfg(test)]

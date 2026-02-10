@@ -110,6 +110,10 @@ pub struct MediaPlaylist {
     pub current_key: Option<KeyInfo>,
     /// Container format detected from segment/init URIs.
     pub detected_container: Option<ContainerFormat>,
+    /// Whether the playlist allows caching.
+    ///
+    /// `false` when the playlist contains `#EXT-X-ALLOW-CACHE:NO` (HLS v3, deprecated in v7).
+    pub allow_cache: bool,
 }
 
 /// One media segment entry.
@@ -208,6 +212,9 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
 
     // Treat `#EXT-X-ENDLIST` as the only reliable end-of-stream marker.
     let end_list = input.contains("#EXT-X-ENDLIST");
+
+    // HLS v3 `#EXT-X-ALLOW-CACHE:NO` (deprecated in v7, but still used by servers).
+    let allow_cache = !input.contains("#EXT-X-ALLOW-CACHE:NO");
     let target_duration = Some(hls_media.target_duration);
     let media_sequence = hls_media.media_sequence as u64;
 
@@ -304,6 +311,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
         end_list,
         current_key,
         detected_container,
+        allow_cache,
     })
 }
 
@@ -621,5 +629,25 @@ video.m3u8"
         let media = result.unwrap();
         assert_eq!(media.segments.len(), expected_segments);
         assert_eq!(media.end_list, expected_endlist);
+    }
+
+    #[rstest]
+    fn test_allow_cache_no(variant_id_0: VariantId) {
+        let data = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-ALLOW-CACHE:NO\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXT-X-ENDLIST";
+        let media = parse_media_playlist(data, variant_id_0).unwrap();
+        assert!(!media.allow_cache, "allow_cache should be false");
+    }
+
+    #[rstest]
+    fn test_allow_cache_default(simple_media_playlist_data: &[u8], variant_id_0: VariantId) {
+        let media = parse_media_playlist(simple_media_playlist_data, variant_id_0).unwrap();
+        assert!(media.allow_cache, "allow_cache should be true by default");
+    }
+
+    #[rstest]
+    fn test_allow_cache_yes(variant_id_0: VariantId) {
+        let data = b"#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-ALLOW-CACHE:YES\n#EXT-X-TARGETDURATION:4\n#EXTINF:4.0,\nseg1.ts\n#EXT-X-ENDLIST";
+        let media = parse_media_playlist(data, variant_id_0).unwrap();
+        assert!(media.allow_cache, "allow_cache should be true for YES");
     }
 }

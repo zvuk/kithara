@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::{AssetResource, AssetStore, Assets, ResourceKey};
+use kithara_assets::{AssetResource, ResourceKey};
 use kithara_net::{Headers, HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{ContainerFormat, Writer, WriterItem};
@@ -18,6 +18,7 @@ use url::Url;
 
 use crate::{
     HlsError, HlsResult,
+    backend::AssetsBackend,
     parsing::{
         MasterPlaylist, MediaPlaylist, SegmentKey, VariantId, VariantStream, parse_master_playlist,
         parse_media_playlist,
@@ -102,7 +103,7 @@ fn uri_basename_no_query(uri: &str) -> Option<&str> {
 /// and implements `Loader` for segment loading.
 #[derive(Clone)]
 pub struct FetchManager<N> {
-    assets: AssetStore,
+    backend: AssetsBackend,
     net: N,
     cancel: CancellationToken,
     // Playlist state
@@ -114,9 +115,9 @@ pub struct FetchManager<N> {
 }
 
 impl<N: Net> FetchManager<N> {
-    pub fn with_net(assets: AssetStore, net: N, cancel: CancellationToken) -> Self {
+    pub fn with_net(backend: AssetsBackend, net: N, cancel: CancellationToken) -> Self {
         Self {
-            assets,
+            backend,
             net,
             cancel,
             master_url: None,
@@ -140,11 +141,11 @@ impl<N: Net> FetchManager<N> {
     }
 
     pub fn asset_root(&self) -> &str {
-        self.assets.asset_root()
+        self.backend.asset_root()
     }
 
-    pub fn assets(&self) -> &AssetStore {
-        &self.assets
+    pub fn backend(&self) -> &AssetsBackend {
+        &self.backend
     }
 
     // ---- Low-level fetch ----
@@ -172,7 +173,7 @@ impl<N: Net> FetchManager<N> {
         resource_kind: &str,
     ) -> HlsResult<Bytes> {
         let key = ResourceKey::from_url(url);
-        let res = self.assets.open_resource(&key)?;
+        let res = self.backend.open_resource(&key)?;
 
         let mut buf = kithara_assets::byte_pool().get();
         let n = res.read_into(&mut buf)?;
@@ -214,7 +215,7 @@ impl<N: Net> FetchManager<N> {
     /// Start fetching a segment. Returns cached size if already cached.
     pub(crate) async fn start_fetch(&self, url: &Url) -> HlsResult<FetchResult> {
         let key = ResourceKey::from_url(url);
-        let res = self.assets.open_resource(&key)?;
+        let res = self.backend.open_resource(&key)?;
 
         let status = res.status();
         if let ResourceStatus::Committed { final_len } = status {
@@ -372,8 +373,8 @@ impl<N: Net> FetchManager<N> {
 }
 
 impl FetchManager<HttpClient> {
-    pub fn new(assets: AssetStore, net: HttpClient, cancel: CancellationToken) -> Self {
-        Self::with_net(assets, net, cancel)
+    pub fn new(backend: AssetsBackend, net: HttpClient, cancel: CancellationToken) -> Self {
+        Self::with_net(backend, net, cancel)
     }
 }
 
@@ -564,7 +565,11 @@ mod tests {
                 .returns(Ok(Bytes::from_static(playlist_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::with_net(
+            AssetsBackend::Disk(assets),
+            mock_net,
+            CancellationToken::new(),
+        );
 
         let result: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -593,7 +598,11 @@ mod tests {
                 .returns(Ok(Bytes::from_static(playlist_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::with_net(
+            AssetsBackend::Disk(assets),
+            mock_net,
+            CancellationToken::new(),
+        );
 
         let result1: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -624,7 +633,11 @@ mod tests {
                 .returns(Ok(Bytes::from(key_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::with_net(
+            AssetsBackend::Disk(assets),
+            mock_net,
+            CancellationToken::new(),
+        );
 
         let result: HlsResult<Bytes> = fetch_manager.fetch_key(&test_url, "key.bin", None).await;
 
@@ -651,7 +664,11 @@ mod tests {
                 .returns(Err(NetError::Timeout)),
         );
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::with_net(
+            AssetsBackend::Disk(assets),
+            mock_net,
+            CancellationToken::new(),
+        );
 
         let result: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -678,7 +695,11 @@ mod tests {
                 .returns(Ok(Bytes::from_static(media_content)));
         }));
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::with_net(
+            AssetsBackend::Disk(assets),
+            mock_net,
+            CancellationToken::new(),
+        );
 
         let master_url = Url::parse("http://example.com/master.m3u8").unwrap();
         let master: HlsResult<Bytes> = fetch_manager
@@ -707,7 +728,11 @@ mod tests {
                 .returns(Ok(Bytes::from_static(content))),
         );
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::with_net(
+            AssetsBackend::Disk(assets),
+            mock_net,
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://cdn1.example.com/file.m3u8").unwrap();
         let result: HlsResult<Bytes> = fetch_manager.fetch_playlist(&url, "file.m3u8").await;
@@ -735,7 +760,11 @@ mod tests {
                 .returns(Ok(Bytes::from(key_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(assets, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::with_net(
+            AssetsBackend::Disk(assets),
+            mock_net,
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://example.com/key.bin").unwrap();
         let mut headers_map = HashMap::new();
@@ -853,8 +882,12 @@ mod tests {
         ));
 
         let master_url = Url::parse("http://test.com/master.m3u8").unwrap();
-        let fetch = FetchManager::with_net(assets, mock_net, CancellationToken::new())
-            .with_master_url(master_url);
+        let fetch = FetchManager::with_net(
+            AssetsBackend::Disk(assets),
+            mock_net,
+            CancellationToken::new(),
+        )
+        .with_master_url(master_url);
 
         let result = fetch.load_segment(0, 0).await;
         assert!(
@@ -901,8 +934,12 @@ mod tests {
         ));
 
         let master_url = Url::parse("http://test.com/master.m3u8").unwrap();
-        let fetch = FetchManager::with_net(assets, mock_net, CancellationToken::new())
-            .with_master_url(master_url);
+        let fetch = FetchManager::with_net(
+            AssetsBackend::Disk(assets),
+            mock_net,
+            CancellationToken::new(),
+        )
+        .with_master_url(master_url);
 
         let result = fetch.load_segment(0, 0).await;
         assert!(
