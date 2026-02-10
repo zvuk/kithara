@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use kithara_storage::ResourceExt;
+use kithara_storage::{Atomic, ResourceExt};
 
 use crate::{base::Assets, error::AssetsResult};
 
@@ -28,12 +28,14 @@ struct PinsIndexFile {
 /// `PinsIndex` does **not** form keys. The concrete [`Assets`] implementation decides where this
 /// index lives by implementing [`Assets::open_pins_index_resource`].
 pub struct PinsIndex<R: ResourceExt> {
-    res: R,
+    res: Atomic<R>,
 }
 
 impl<R: ResourceExt> PinsIndex<R> {
     pub(crate) fn new(res: R) -> Self {
-        Self { res }
+        Self {
+            res: Atomic::new(res),
+        }
     }
 
     /// Open a `PinsIndex` for the given base assets store.
@@ -62,7 +64,7 @@ impl<R: ResourceExt> PinsIndex<R> {
         Ok(file.pinned.into_iter().collect())
     }
 
-    /// Persist the given set to storage.
+    /// Persist the given set to storage (crash-safe via atomic write-rename).
     pub fn store(&self, pins: &HashSet<String>) -> AssetsResult<()> {
         // Stored as a list for stable serialization; treated as a set by higher layers.
         let file = PinsIndexFile {

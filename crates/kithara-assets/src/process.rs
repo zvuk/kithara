@@ -271,6 +271,10 @@ where
         self.inner.open_lru_index_resource()
     }
 
+    fn open_coverage_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+        self.inner.open_coverage_index_resource()
+    }
+
     fn delete_asset(&self) -> AssetsResult<()> {
         self.inner.delete_asset()
     }

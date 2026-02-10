@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use kithara_storage::ResourceExt;
+use kithara_storage::{Atomic, ResourceExt};
 
 use crate::error::AssetsResult;
 
@@ -39,12 +39,14 @@ pub struct EvictConfig {
 /// - It does not delete anything.
 /// - It does not know about pinning; the eviction decorator combines this with a pins index.
 pub struct LruIndex<R: ResourceExt> {
-    res: R,
+    res: Atomic<R>,
 }
 
 impl<R: ResourceExt> LruIndex<R> {
     pub(crate) fn new(res: R) -> Self {
-        Self { res }
+        Self {
+            res: Atomic::new(res),
+        }
     }
 
     /// Load the entire LRU table from storage.

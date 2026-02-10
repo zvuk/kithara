@@ -12,6 +12,7 @@ enum CacheKey<C> {
     Resource(ResourceKey, Option<C>),
     PinsIndex,
     LruIndex,
+    CoverageIndex,
 }
 
 #[derive(Clone, Debug)]
@@ -155,6 +156,23 @@ where
 
         let res = self.inner.open_lru_index_resource()?;
         cache.put(CacheKey::LruIndex, CacheEntry::Index(res.clone()));
+
+        Ok(res)
+    }
+
+    fn open_coverage_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+        if !self.enabled {
+            return self.inner.open_coverage_index_resource();
+        }
+
+        let mut cache = self.cache.lock();
+
+        if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::CoverageIndex) {
+            return Ok(res.clone());
+        }
+
+        let res = self.inner.open_coverage_index_resource()?;
+        cache.put(CacheKey::CoverageIndex, CacheEntry::Index(res.clone()));
 
         Ok(res)
     }

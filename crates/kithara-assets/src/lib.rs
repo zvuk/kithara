@@ -49,9 +49,9 @@ pub use base::{Assets, DiskAssetStore};
 pub use cache::CachedAssets;
 pub use error::{AssetsError, AssetsResult};
 pub use evict::EvictAssets;
-pub use index::EvictConfig;
 #[cfg(feature = "internal")]
 pub use index::PinsIndex;
+pub use index::{CoverageIndex, DiskCoverage, EvictConfig};
 #[cfg(feature = "internal")]
 pub use key::canonicalize_for_asset;
 pub use key::{ResourceKey, asset_root_for_url};
