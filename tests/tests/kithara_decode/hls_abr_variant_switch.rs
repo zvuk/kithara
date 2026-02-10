@@ -12,12 +12,15 @@
 
 use std::{env, error::Error, io::Read as _, time::Duration};
 
+use kithara_assets::StoreOptions;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig, HlsEvent};
 use kithara_stream::Stream;
 use rstest::rstest;
+use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
+use crate::common::temp_dir;
 // Import AbrTestServer from kithara-hls fixture
 use crate::kithara_hls::fixture::abr::{AbrTestServer, master_playlist};
 
@@ -37,7 +40,9 @@ use crate::kithara_hls::fixture::abr::{AbrTestServer, master_playlist};
 #[rstest]
 #[timeout(Duration::from_secs(30))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn test_abr_variant_switch_no_byte_glitches(
+    temp_dir: TempDir,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     // Initialize tracing for debug output
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -73,6 +78,7 @@ async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error 
     let config = HlsConfig::new(url.clone())
         .with_cancel(cancel_token.clone())
         .with_events(events_tx)
+        .with_store(StoreOptions::new(temp_dir.path()))
         .with_abr(AbrOptions {
             down_switch_buffer_secs: 0.5,
             min_buffer_for_up_switch_secs: 1.0, // Low threshold for quick upswitch
@@ -187,7 +193,9 @@ async fn test_abr_variant_switch_no_byte_glitches() -> Result<(), Box<dyn Error 
 #[rstest]
 #[timeout(Duration::from_secs(10))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_basic_multi_segment_reading() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn test_basic_multi_segment_reading(
+    temp_dir: TempDir,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::INFO)
@@ -205,6 +213,7 @@ async fn test_basic_multi_segment_reading() -> Result<(), Box<dyn Error + Send +
 
     let config = HlsConfig::new(url)
         .with_cancel(cancel_token.clone())
+        .with_store(StoreOptions::new(temp_dir.path()))
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(0), // Fixed variant - no ABR
             ..Default::default()
@@ -256,7 +265,9 @@ async fn test_basic_multi_segment_reading() -> Result<(), Box<dyn Error + Send +
 #[rstest]
 #[timeout(Duration::from_secs(30))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn test_abr_variant_switch_with_seek_backward() -> Result<(), Box<dyn Error + Send + Sync>> {
+async fn test_abr_variant_switch_with_seek_backward(
+    temp_dir: TempDir,
+) -> Result<(), Box<dyn Error + Send + Sync>> {
     use std::io::Seek as _;
 
     let _ = tracing_subscriber::fmt()
@@ -280,6 +291,7 @@ async fn test_abr_variant_switch_with_seek_backward() -> Result<(), Box<dyn Erro
     let config = HlsConfig::new(url)
         .with_cancel(cancel_token.clone())
         .with_events(events_tx)
+        .with_store(StoreOptions::new(temp_dir.path()))
         .with_abr(AbrOptions {
             down_switch_buffer_secs: 0.5,
             min_buffer_for_up_switch_secs: 1.0,

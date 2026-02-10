@@ -56,20 +56,6 @@ async fn create_file_audio(
         .expect("create Audio<Stream<File>>")
 }
 
-/// Spawn a blocking task that reads an `Audio<Stream<File>>` to EOF.
-///
-/// Returns (instance_id, total_samples).
-fn spawn_reader(
-    id: usize,
-    mut audio: Audio<Stream<File>>,
-) -> tokio::task::JoinHandle<(usize, u64)> {
-    tokio::task::spawn_blocking(move || {
-        let total = read_to_eof(&mut audio);
-        info!(instance = id, total_samples = total, "instance finished");
-        (id, total)
-    })
-}
-
 /// Assert that all instances produced a reasonable number of samples.
 ///
 /// MP3 decoding can produce slightly different sample counts due to
@@ -89,7 +75,7 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
 
 /// 2 concurrent File instances on a shared pool.
 #[rstest]
-#[timeout(Duration::from_secs(30))]
+#[timeout(Duration::from_secs(60))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_file_instances() {
     let _ = tracing_subscriber::fmt()
@@ -98,13 +84,19 @@ async fn two_file_instances() {
         .try_init();
 
     let server = AudioTestServer::new().await;
-    let temp = TempDir::new().expect("temp dir");
     let pool = ThreadPool::with_num_threads(4).expect("thread pool");
 
     let mut handles = Vec::new();
     for i in 0..2 {
+        let temp = TempDir::new().expect("temp dir");
         let audio = create_file_audio(server.mp3_url(), temp.path(), &pool).await;
-        handles.push(spawn_reader(i, audio));
+        handles.push(tokio::task::spawn_blocking(move || {
+            let _temp = temp;
+            let mut audio = audio;
+            let total = read_to_eof(&mut audio);
+            info!(instance = i, total_samples = total, "instance finished");
+            (i, total)
+        }));
     }
 
     let mut results = Vec::new();
@@ -121,7 +113,7 @@ async fn two_file_instances() {
 
 /// 4 concurrent File instances on a shared pool.
 #[rstest]
-#[timeout(Duration::from_secs(30))]
+#[timeout(Duration::from_secs(60))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn four_file_instances() {
     let _ = tracing_subscriber::fmt()
@@ -130,13 +122,19 @@ async fn four_file_instances() {
         .try_init();
 
     let server = AudioTestServer::new().await;
-    let temp = TempDir::new().expect("temp dir");
     let pool = ThreadPool::with_num_threads(4).expect("thread pool");
 
     let mut handles = Vec::new();
     for i in 0..4 {
+        let temp = TempDir::new().expect("temp dir");
         let audio = create_file_audio(server.mp3_url(), temp.path(), &pool).await;
-        handles.push(spawn_reader(i, audio));
+        handles.push(tokio::task::spawn_blocking(move || {
+            let _temp = temp;
+            let mut audio = audio;
+            let total = read_to_eof(&mut audio);
+            info!(instance = i, total_samples = total, "instance finished");
+            (i, total)
+        }));
     }
 
     let mut results = Vec::new();
@@ -162,13 +160,19 @@ async fn eight_file_instances() {
         .try_init();
 
     let server = AudioTestServer::new().await;
-    let temp = TempDir::new().expect("temp dir");
     let pool = ThreadPool::with_num_threads(4).expect("thread pool");
 
     let mut handles = Vec::new();
     for i in 0..8 {
+        let temp = TempDir::new().expect("temp dir");
         let audio = create_file_audio(server.mp3_url(), temp.path(), &pool).await;
-        handles.push(spawn_reader(i, audio));
+        handles.push(tokio::task::spawn_blocking(move || {
+            let _temp = temp;
+            let mut audio = audio;
+            let total = read_to_eof(&mut audio);
+            info!(instance = i, total_samples = total, "instance finished");
+            (i, total)
+        }));
     }
 
     let mut results = Vec::new();

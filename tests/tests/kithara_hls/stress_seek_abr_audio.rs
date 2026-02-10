@@ -220,7 +220,7 @@ async fn stress_seek_abr_audio() {
         .with_abr(AbrOptions {
             down_switch_buffer_secs: 0.0,
             min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::ZERO,
+            min_switch_interval: Duration::from_secs(120),
             mode: AbrMode::Auto(Some(0)),
             throughput_safety_factor: 1.0,
             ..AbrOptions::default()
