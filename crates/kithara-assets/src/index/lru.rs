@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use kithara_storage::{ResourceExt, StorageResource};
+use kithara_storage::ResourceExt;
 
 use crate::error::AssetsResult;
 
@@ -25,7 +25,8 @@ pub struct EvictConfig {
 
 /// A best-effort, storage-backed LRU index over `asset_root`.
 ///
-/// This index is persisted via a [`StorageResource`] (whole-object read/write).
+/// This index is persisted via a resource implementing [`ResourceExt`]
+/// (whole-object read/write).
 ///
 /// ## Data model (normative)
 /// - We track per-asset metadata:
@@ -37,12 +38,12 @@ pub struct EvictConfig {
 /// - It is not a filesystem walker.
 /// - It does not delete anything.
 /// - It does not know about pinning; the eviction decorator combines this with a pins index.
-pub struct LruIndex {
-    res: StorageResource,
+pub struct LruIndex<R: ResourceExt> {
+    res: R,
 }
 
-impl LruIndex {
-    pub(crate) fn new(res: StorageResource) -> Self {
+impl<R: ResourceExt> LruIndex<R> {
+    pub(crate) fn new(res: R) -> Self {
         Self { res }
     }
 

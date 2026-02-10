@@ -49,7 +49,6 @@ pub trait StreamType: Send + 'static {
     fn ensure_events(config: &mut Self::Config) -> broadcast::Receiver<Self::Event>;
 }
 
-
 /// Generic audio stream.
 ///
 /// `T` is a marker type defining the stream source (`Hls`, `File`, etc.).

@@ -2,7 +2,7 @@
 use std::time::Duration;
 
 use kithara_storage::{
-    OpenMode, ResourceExt, ResourceStatus, StorageError, StorageOptions, StorageResource,
+    MmapOptions, MmapResource, OpenMode, Resource, ResourceExt, ResourceStatus, StorageError,
     WaitOutcome,
 };
 use rstest::*;
@@ -24,20 +24,22 @@ fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
 #[test]
 fn streaming_resource_path_method(temp_dir: TempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("streaming.dat");
-    let streaming = StorageResource::open(StorageOptions {
-        path: file_path.clone(),
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let streaming: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path.clone(),
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .expect("open should succeed");
 
-    assert_eq!(streaming.path(), file_path);
+    assert_eq!(streaming.path(), Some(file_path.as_path()));
 
     streaming
         .write_at(0, b"test")
         .expect("write should succeed");
-    assert_eq!(streaming.path(), file_path);
+    assert_eq!(streaming.path(), Some(file_path.as_path()));
 }
 
 #[rstest]
@@ -46,12 +48,14 @@ fn streaming_resource_path_method(temp_dir: TempDir, cancel_token: CancellationT
 fn streaming_resource_open_and_status_new(temp_dir: TempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("stream.dat");
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     // A brand new resource should be Active
@@ -69,24 +73,28 @@ fn streaming_resource_open_existing_is_committed(
 
     // Create and commit a resource first
     {
-        let resource = StorageResource::open(StorageOptions {
-            path: file_path.clone(),
-            initial_len: None,
-            mode: OpenMode::Auto,
-            cancel: cancel_token.clone(),
-        })
+        let resource: MmapResource = Resource::open(
+            cancel_token.clone(),
+            MmapOptions {
+                path: file_path.clone(),
+                initial_len: None,
+                mode: OpenMode::Auto,
+            },
+        )
         .unwrap();
         resource.write_at(0, b"existing data").unwrap();
         resource.commit(Some(13)).unwrap();
     }
 
     // Reopen — should be Committed
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     assert_eq!(
@@ -102,12 +110,14 @@ fn streaming_resource_open_existing_is_committed(
 #[test]
 fn streaming_resource_range_write_wait_read(temp_dir: TempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("ranges.dat");
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     resource.write_at(0, b"Hello, ").unwrap();
@@ -126,12 +136,14 @@ fn streaming_resource_sparse_file_behavior() {
     let file_path = temp_dir.path().join("sparse.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     resource.write_at(100, b"start").unwrap();
@@ -155,12 +167,14 @@ fn streaming_resource_overlapping_writes() {
     let file_path = temp_dir.path().join("overlap.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     resource.write_at(0, b"Hello World!").unwrap();
@@ -179,12 +193,14 @@ fn streaming_resource_zero_length_commit() {
     let file_path = temp_dir.path().join("zero.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     resource.commit(Some(0)).unwrap();
@@ -207,12 +223,14 @@ fn streaming_resource_edge_case_ranges() {
     let file_path = temp_dir.path().join("edges.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     resource.write_at(0, b"X").unwrap();
@@ -237,12 +255,14 @@ fn streaming_resource_concurrent_wait_and_write() {
     let file_path = temp_dir.path().join("concurrent_wait.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     let resource_clone = resource.clone();
@@ -265,12 +285,14 @@ fn streaming_resource_persists_across_reopen() {
     let cancel_token = CancellationToken::new();
 
     {
-        let resource = StorageResource::open(StorageOptions {
-            path: file_path.clone(),
-            initial_len: None,
-            mode: OpenMode::Auto,
-            cancel: cancel_token.clone(),
-        })
+        let resource: MmapResource = Resource::open(
+            cancel_token.clone(),
+            MmapOptions {
+                path: file_path.clone(),
+                initial_len: None,
+                mode: OpenMode::Auto,
+            },
+        )
         .unwrap();
 
         resource.write_at(0, b"persisted data").unwrap();
@@ -282,12 +304,14 @@ fn streaming_resource_persists_across_reopen() {
     }
 
     let file_len = std::fs::metadata(&file_path).unwrap().len();
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: CancellationToken::new(),
-    })
+    let resource: MmapResource = Resource::open(
+        CancellationToken::new(),
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     let data = read_bytes(&resource, 0, file_len as usize);
@@ -304,12 +328,14 @@ fn streaming_resource_wait_after_reopen() {
     let payload = b"waited bytes";
 
     {
-        let resource = StorageResource::open(StorageOptions {
-            path: file_path.clone(),
-            initial_len: None,
-            mode: OpenMode::Auto,
-            cancel: cancel_token.clone(),
-        })
+        let resource: MmapResource = Resource::open(
+            cancel_token.clone(),
+            MmapOptions {
+                path: file_path.clone(),
+                initial_len: None,
+                mode: OpenMode::Auto,
+            },
+        )
         .unwrap();
 
         resource.write_at(0, payload).unwrap();
@@ -318,12 +344,14 @@ fn streaming_resource_wait_after_reopen() {
     }
 
     let file_len = std::fs::metadata(&file_path).unwrap().len();
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: CancellationToken::new(),
-    })
+    let resource: MmapResource = Resource::open(
+        CancellationToken::new(),
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     let outcome = resource.wait_range(0..file_len).unwrap();
@@ -341,12 +369,14 @@ fn streaming_resource_wait_range_partial_coverage() {
     let file_path = temp_dir.path().join("partial.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token.clone(),
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token.clone(),
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     resource.write_at(0, b"Hello").unwrap();
@@ -375,12 +405,14 @@ fn streaming_resource_wait_range_partial_coverage() {
 #[test]
 fn streaming_resource_commit_and_eof(temp_dir: TempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("commit.dat");
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     resource.write_at(0, b"Hello").unwrap();
@@ -405,12 +437,14 @@ fn streaming_resource_commit_without_final_len() {
     let file_path = temp_dir.path().join("commit_no_len.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     resource.write_at(0, b"Hello").unwrap();
@@ -434,12 +468,14 @@ fn streaming_resource_sealed_after_commit() {
     let file_path = temp_dir.path().join("sealed.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     // First commit with zero — resource is committed but empty
@@ -461,12 +497,14 @@ fn streaming_resource_cancel_during_wait() {
     let file_path = temp_dir.path().join("cancel_wait.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token.clone(),
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token.clone(),
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     let resource_clone = resource.clone();
@@ -487,12 +525,14 @@ fn streaming_resource_fail_wakes_waiters() {
     let file_path = temp_dir.path().join("fail_waiters.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     let resource_clone = resource.clone();
@@ -516,12 +556,14 @@ fn streaming_resource_concurrent_operations() {
     let file_path = temp_dir.path().join("concurrent_ops.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     let resource_clone = resource.clone();
@@ -554,12 +596,14 @@ fn streaming_resource_invalid_ranges() {
     let file_path = temp_dir.path().join("invalid_ranges.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     // Reversed range (start > end) should return InvalidRange
@@ -586,12 +630,14 @@ fn streaming_resource_whole_object_operations() {
     let file_path = temp_dir.path().join("whole_object.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     resource.write_at(0, b"Hello, World!").unwrap();
@@ -618,12 +664,14 @@ fn streaming_resource_empty_operations() {
     let file_path = temp_dir.path().join("empty_ops.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     // Empty write is a no-op
@@ -647,12 +695,14 @@ fn streaming_resource_complex_range_scenario() {
     let file_path = temp_dir.path().join("complex_ranges.dat");
     let cancel_token = CancellationToken::new();
 
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     resource.write_at(0, b"0123456789").unwrap();
@@ -692,12 +742,14 @@ fn streaming_resource_initial_len_hint() {
     let cancel_token = CancellationToken::new();
 
     // initial_len is a hint for backing file size, not data availability
-    let resource = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: Some(100),
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let resource: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: Some(100),
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     // Resource is Active (not committed), no data available yet
