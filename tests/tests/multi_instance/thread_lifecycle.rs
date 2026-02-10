@@ -101,7 +101,10 @@ fn read_partial_and_drop_file(audio: Audio<Stream<File>>, samples_to_read: usize
         }
         total += n;
     }
-    info!(total_samples = total, "partial read done, dropping instance");
+    info!(
+        total_samples = total,
+        "partial read done, dropping instance"
+    );
     // audio is dropped here — should cancel worker + downloader
 }
 
@@ -117,7 +120,10 @@ fn read_partial_and_drop_hls(audio: Audio<Stream<Hls>>, samples_to_read: usize) 
         }
         total += n;
     }
-    info!(total_samples = total, "partial read done, dropping instance");
+    info!(
+        total_samples = total,
+        "partial read done, dropping instance"
+    );
 }
 
 // === Tests ===
@@ -440,5 +446,8 @@ async fn pool_recovers_after_saturation() {
     .expect("join");
 
     assert!(total > 0, "post-recovery instance read 0 samples");
-    info!(total_samples = total, "pool recovered and new instance completed");
+    info!(
+        total_samples = total,
+        "pool recovered and new instance completed"
+    );
 }
