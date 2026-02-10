@@ -88,12 +88,6 @@ pub struct HlsConfig {
     pub chunk_channel_capacity: usize,
     /// Capacity of the command channel.
     pub command_channel_capacity: usize,
-    /// How often to yield to the async runtime during fast downloads.
-    ///
-    /// When `look_ahead_bytes` is `None`, the downloader yields after this many
-    /// chunks to allow other tasks (like playback progress) to run.
-    /// Default: 8 chunks.
-    pub download_yield_interval: usize,
     /// Capacity of the events broadcast channel (used when `events_tx` is not provided).
     pub events_channel_capacity: usize,
     /// Events broadcast sender (optional - if not provided, one is created internally).
@@ -138,7 +132,7 @@ impl Default for HlsConfig {
             cancel: None,
             chunk_channel_capacity: 8,
             command_channel_capacity: 16,
-            download_yield_interval: 1,
+
             events_channel_capacity: 32,
             events_tx: None,
             keys: KeyOptions::default(),
@@ -163,7 +157,7 @@ impl HlsConfig {
             cancel: None,
             chunk_channel_capacity: 8,
             command_channel_capacity: 16,
-            download_yield_interval: 8,
+
             events_channel_capacity: 32,
             events_tx: None,
             keys: KeyOptions::default(),
@@ -259,15 +253,6 @@ impl HlsConfig {
     /// - `None` — disable backpressure, download as fast as possible
     pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
         self.look_ahead_bytes = bytes;
-        self
-    }
-
-    /// Set how often to yield to the async runtime during fast downloads.
-    ///
-    /// When downloading without backpressure, the downloader yields after this
-    /// many chunks to allow other tasks to run. Default: 8.
-    pub fn with_download_yield_interval(mut self, interval: usize) -> Self {
-        self.download_yield_interval = interval;
         self
     }
 

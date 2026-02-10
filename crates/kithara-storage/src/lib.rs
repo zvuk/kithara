@@ -10,12 +10,14 @@
 //!
 //! The consumer-facing trait is [`ResourceExt`].
 
+mod coverage;
 mod driver;
 mod error;
 mod memory;
 mod mmap;
 mod resource;
 
+pub use coverage::{Coverage, MemCoverage};
 pub use driver::{Driver, DriverState, Resource};
 pub use error::{StorageError, StorageResult};
 pub use memory::{MemDriver, MemOptions, MemResource};

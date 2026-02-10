@@ -37,12 +37,6 @@ impl From<PathBuf> for FileSrc {
 pub struct FileConfig {
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// How often to yield to the async runtime during fast downloads.
-    ///
-    /// When `look_ahead_bytes` is `None`, the downloader yields after this many
-    /// chunks to allow other tasks (like playback progress) to run.
-    /// Default: 8 chunks.
-    pub download_yield_interval: usize,
     /// Events broadcast channel capacity (used when `events_tx` is not provided).
     pub events_channel_capacity: usize,
     /// Events broadcast sender (optional - if not provided, events are not sent).
@@ -74,7 +68,7 @@ impl Default for FileConfig {
     fn default() -> Self {
         Self {
             cancel: None,
-            download_yield_interval: 8,
+
             events_channel_capacity: 16,
             events_tx: None,
             look_ahead_bytes: None,
@@ -94,7 +88,7 @@ impl FileConfig {
     pub fn new(src: FileSrc) -> Self {
         Self {
             cancel: None,
-            download_yield_interval: 8,
+
             events_channel_capacity: 16,
             events_tx: None,
             look_ahead_bytes: None,
@@ -151,15 +145,6 @@ impl FileConfig {
     /// - `None` — disable backpressure, download as fast as possible
     pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
         self.look_ahead_bytes = bytes;
-        self
-    }
-
-    /// Set how often to yield to the async runtime during fast downloads.
-    ///
-    /// When downloading without backpressure, the downloader yields after this
-    /// many chunks to allow other tasks to run. Default: 8.
-    pub fn with_download_yield_interval(mut self, interval: usize) -> Self {
-        self.download_yield_interval = interval;
         self
     }
 

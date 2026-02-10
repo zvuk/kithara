@@ -22,7 +22,9 @@ mod stream;
 mod writer;
 
 pub use backend::Backend;
-pub use downloader::{Downloader, NoDownload};
+pub use downloader::{
+    Downloader, DownloaderIo, NoDownload, NoDownloadError, NoIo, PlanOutcome, StepResult,
+};
 pub use error::{StreamError, StreamResult};
 pub use fetch::{EpochValidator, Fetch};
 pub use kithara_storage::WaitOutcome;

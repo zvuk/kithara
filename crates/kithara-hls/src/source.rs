@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::{
     HlsError,
-    downloader::{HlsDownloader, SegmentMetadata},
+    downloader::{HlsDownloader, HlsIo, SegmentMetadata},
     events::HlsEvent,
     fetch::{DefaultFetchManager, SegmentMeta},
     parsing::VariantStream,
@@ -471,8 +471,6 @@ pub fn build_pair(
     variants: Vec<VariantStream>,
     config: &crate::config::HlsConfig,
 ) -> (HlsDownloader, HlsSource) {
-    let cancel = config.cancel.clone().unwrap_or_default();
-
     let abr_variants: Vec<Variant> = variants
         .iter()
         .map(|v| Variant {
@@ -488,6 +486,7 @@ pub fn build_pair(
     let shared = Arc::new(SharedSegments::new());
 
     let downloader = HlsDownloader {
+        io: HlsIo::new(Arc::clone(&fetch)),
         fetch: Arc::clone(&fetch),
         variants,
         current_segment_index: 0,
@@ -496,10 +495,7 @@ pub fn build_pair(
         byte_offset: 0,
         shared: Arc::clone(&shared),
         events_tx: config.events_tx.clone(),
-        cancel,
         look_ahead_bytes: config.look_ahead_bytes,
-        yield_interval: config.download_yield_interval,
-        segments_since_yield: 0,
         variant_lengths: HashMap::new(),
         had_midstream_switch: false,
         prefetch_count: config.download_batch_size.max(1),
