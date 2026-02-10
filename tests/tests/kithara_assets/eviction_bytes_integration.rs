@@ -37,7 +37,7 @@ fn asset_store_with_root_and_limit(
             max_bytes,
         })
         .cancel(cancel)
-        .build()
+        .build_disk()
 }
 
 #[rstest]

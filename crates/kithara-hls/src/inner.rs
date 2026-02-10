@@ -4,14 +4,14 @@
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetStoreBuilder, Assets, CoverageIndex, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, Assets, AssetsBackend, CoverageIndex, asset_root_for_url};
 use kithara_net::HttpClient;
 use kithara_stream::StreamType;
 use tokio::sync::broadcast;
 
 use crate::{
-    backend::AssetsBackend, config::HlsConfig, error::HlsError, events::HlsEvent,
-    fetch::FetchManager, playlist::variant_info_from_master, source::build_pair,
+    config::HlsConfig, error::HlsError, events::HlsEvent, fetch::FetchManager,
+    playlist::variant_info_from_master, source::build_pair,
 };
 
 /// Marker type for HLS streaming.
@@ -40,20 +40,16 @@ impl StreamType for Hls {
         let net = HttpClient::new(config.net.clone());
 
         // Build storage backend
-        let backend = if config.ephemeral {
-            AssetsBackend::Mem(kithara_assets::MemAssetStore::decorated(
-                asset_root.clone(),
-                cancel.clone(),
-            ))
-        } else {
-            let disk_store = AssetStoreBuilder::new()
-                .asset_root(Some(asset_root.as_str()))
-                .cancel(cancel.clone())
-                .root_dir(&config.store.cache_dir)
-                .evict_config(config.store.to_evict_config())
-                .build();
-            AssetsBackend::Disk(disk_store)
-        };
+        let mut builder = AssetStoreBuilder::new()
+            .asset_root(Some(asset_root.as_str()))
+            .cancel(cancel.clone())
+            .root_dir(&config.store.cache_dir)
+            .evict_config(config.store.to_evict_config())
+            .ephemeral(config.ephemeral);
+        if let Some(cap) = config.store.cache_capacity {
+            builder = builder.cache_capacity(cap);
+        }
+        let backend = builder.build();
 
         // Build FetchManager (unified: fetch + playlist cache + Loader)
         let fetch_manager = Arc::new(

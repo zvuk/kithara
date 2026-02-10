@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::{AssetResource, ResourceKey};
+use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
 use kithara_net::{Headers, HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{ContainerFormat, Writer, WriterItem};
@@ -18,7 +18,6 @@ use url::Url;
 
 use crate::{
     HlsError, HlsResult,
-    backend::AssetsBackend,
     parsing::{
         MasterPlaylist, MediaPlaylist, SegmentKey, VariantId, VariantStream, parse_master_playlist,
         parse_media_playlist,
@@ -551,7 +550,7 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_playlist_with_mock_net() {
         let temp_dir = TempDir::new().unwrap();
-        let assets = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
@@ -565,11 +564,7 @@ mod tests {
                 .returns(Ok(Bytes::from_static(playlist_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(
-            AssetsBackend::Disk(assets),
-            mock_net,
-            CancellationToken::new(),
-        );
+        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
 
         let result: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -583,7 +578,7 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_playlist_uses_cache() {
         let temp_dir = TempDir::new().unwrap();
-        let assets = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
@@ -598,11 +593,7 @@ mod tests {
                 .returns(Ok(Bytes::from_static(playlist_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(
-            AssetsBackend::Disk(assets),
-            mock_net,
-            CancellationToken::new(),
-        );
+        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
 
         let result1: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -619,7 +610,7 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_key_with_mock_net() {
         let temp_dir = TempDir::new().unwrap();
-        let assets = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
@@ -633,11 +624,7 @@ mod tests {
                 .returns(Ok(Bytes::from(key_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(
-            AssetsBackend::Disk(assets),
-            mock_net,
-            CancellationToken::new(),
-        );
+        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
 
         let result: HlsResult<Bytes> = fetch_manager.fetch_key(&test_url, "key.bin", None).await;
 
@@ -651,7 +638,7 @@ mod tests {
         use kithara_net::NetError;
 
         let temp_dir = TempDir::new().unwrap();
-        let assets = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
@@ -664,11 +651,7 @@ mod tests {
                 .returns(Err(NetError::Timeout)),
         );
 
-        let fetch_manager = FetchManager::with_net(
-            AssetsBackend::Disk(assets),
-            mock_net,
-            CancellationToken::new(),
-        );
+        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
 
         let result: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -680,7 +663,7 @@ mod tests {
     #[tokio::test]
     async fn test_matcher_url_path_matching() {
         let temp_dir = TempDir::new().unwrap();
-        let assets = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
@@ -695,11 +678,7 @@ mod tests {
                 .returns(Ok(Bytes::from_static(media_content)));
         }));
 
-        let fetch_manager = FetchManager::with_net(
-            AssetsBackend::Disk(assets),
-            mock_net,
-            CancellationToken::new(),
-        );
+        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
 
         let master_url = Url::parse("http://example.com/master.m3u8").unwrap();
         let master: HlsResult<Bytes> = fetch_manager
@@ -715,7 +694,7 @@ mod tests {
     #[tokio::test]
     async fn test_matcher_url_domain_matching() {
         let temp_dir = TempDir::new().unwrap();
-        let assets = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
@@ -728,11 +707,7 @@ mod tests {
                 .returns(Ok(Bytes::from_static(content))),
         );
 
-        let fetch_manager = FetchManager::with_net(
-            AssetsBackend::Disk(assets),
-            mock_net,
-            CancellationToken::new(),
-        );
+        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
 
         let url = Url::parse("http://cdn1.example.com/file.m3u8").unwrap();
         let result: HlsResult<Bytes> = fetch_manager.fetch_playlist(&url, "file.m3u8").await;
@@ -747,7 +722,7 @@ mod tests {
         use kithara_net::Headers;
 
         let temp_dir = TempDir::new().unwrap();
-        let assets = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
             .root_dir(temp_dir.path())
             .build();
@@ -760,11 +735,7 @@ mod tests {
                 .returns(Ok(Bytes::from(key_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(
-            AssetsBackend::Disk(assets),
-            mock_net,
-            CancellationToken::new(),
-        );
+        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
 
         let url = Url::parse("http://example.com/key.bin").unwrap();
         let mut headers_map = HashMap::new();
@@ -846,7 +817,7 @@ mod tests {
         use kithara_net::{ByteStream, NetError};
 
         let temp_dir = TempDir::new().unwrap();
-        let assets = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::new()
             .asset_root(Some("partial-test"))
             .root_dir(temp_dir.path())
             .build();
@@ -882,12 +853,8 @@ mod tests {
         ));
 
         let master_url = Url::parse("http://test.com/master.m3u8").unwrap();
-        let fetch = FetchManager::with_net(
-            AssetsBackend::Disk(assets),
-            mock_net,
-            CancellationToken::new(),
-        )
-        .with_master_url(master_url);
+        let fetch = FetchManager::with_net(backend, mock_net, CancellationToken::new())
+            .with_master_url(master_url);
 
         let result = fetch.load_segment(0, 0).await;
         assert!(
@@ -901,7 +868,7 @@ mod tests {
         use kithara_net::{ByteStream, NetError};
 
         let temp_dir = TempDir::new().unwrap();
-        let assets = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::new()
             .asset_root(Some("partial-test"))
             .root_dir(temp_dir.path())
             .build();
@@ -934,12 +901,8 @@ mod tests {
         ));
 
         let master_url = Url::parse("http://test.com/master.m3u8").unwrap();
-        let fetch = FetchManager::with_net(
-            AssetsBackend::Disk(assets),
-            mock_net,
-            CancellationToken::new(),
-        )
-        .with_master_url(master_url);
+        let fetch = FetchManager::with_net(backend, mock_net, CancellationToken::new())
+            .with_master_url(master_url);
 
         let result = fetch.load_segment(0, 0).await;
         assert!(

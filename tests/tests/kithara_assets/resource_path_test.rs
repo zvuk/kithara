@@ -19,7 +19,7 @@ fn asset_store_with_root(temp_dir: &TempDir, asset_root: &str) -> AssetStore {
             max_assets: None,
             max_bytes: None,
         })
-        .build()
+        .build_disk()
 }
 
 // === AssetResource Path Tests ===

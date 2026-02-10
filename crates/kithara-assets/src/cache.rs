@@ -39,6 +39,7 @@ where
     inner: Arc<A>,
     cache: Arc<Cache<A::Res, A::Context, A::IndexRes>>,
     enabled: bool,
+    remove_on_evict: bool,
 }
 
 impl<A> std::fmt::Debug for CachedAssets<A>
@@ -62,15 +63,27 @@ where
             inner,
             cache: Arc::new(Mutex::new(LruCache::new(capacity))),
             enabled: true,
+            remove_on_evict: false,
         }
     }
 
-    /// Create with explicit enabled flag. When `false`, all operations bypass the cache.
-    pub fn with_enabled(inner: Arc<A>, capacity: NonZeroUsize, enabled: bool) -> Self {
+    /// Create with explicit enabled and remove-on-evict flags.
+    ///
+    /// When `enabled` is `false`, all operations bypass the cache.
+    /// When `remove_on_evict` is `true`, evicted resources are removed from the inner store
+    /// via `remove_resource()`. This is useful for ephemeral (in-memory) backends where
+    /// eviction from LRU should also free the underlying data.
+    pub fn with_options(
+        inner: Arc<A>,
+        capacity: NonZeroUsize,
+        enabled: bool,
+        remove_on_evict: bool,
+    ) -> Self {
         Self {
             inner,
             cache: Arc::new(Mutex::new(LruCache::new(capacity))),
             enabled,
+            remove_on_evict,
         }
     }
 
@@ -121,7 +134,15 @@ where
         }
 
         let res = self.inner.open_resource_with_ctx(key, ctx)?;
-        cache.put(cache_key, CacheEntry::Resource(res.clone()));
+        let evicted = cache.push(cache_key, CacheEntry::Resource(res.clone()));
+        // Drop the lock before calling remove_resource to avoid holding it during I/O.
+        drop(cache);
+
+        if self.remove_on_evict
+            && let Some((CacheKey::Resource(evicted_key, _), _)) = evicted
+        {
+            let _ = self.inner.remove_resource(&evicted_key);
+        }
 
         Ok(res)
     }
@@ -243,7 +264,7 @@ mod tests {
             "test_asset",
             CancellationToken::new(),
         ));
-        CachedAssets::with_enabled(disk, NonZeroUsize::new(5).unwrap(), false)
+        CachedAssets::with_options(disk, NonZeroUsize::new(5).unwrap(), false, false)
     }
 
     #[rstest]
@@ -338,5 +359,91 @@ mod tests {
 
         // Both should work (same path) even without caching
         assert_eq!(res1.path(), res2.path());
+    }
+
+    // ---- remove_on_evict tests ----
+
+    fn make_mem_cached(
+        capacity: NonZeroUsize,
+        remove_on_evict: bool,
+    ) -> (
+        Arc<crate::mem_store::MemAssetStore>,
+        CachedAssets<crate::mem_store::MemAssetStore>,
+    ) {
+        let mem = Arc::new(crate::mem_store::MemAssetStore::new(
+            "test_asset",
+            CancellationToken::new(),
+            std::env::temp_dir(),
+        ));
+        let cached = CachedAssets::with_options(mem.clone(), capacity, true, remove_on_evict);
+        (mem, cached)
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn remove_on_evict_false_does_not_remove() {
+        let cap = NonZeroUsize::new(2).unwrap();
+        let (mem, cached) = make_mem_cached(cap, false);
+
+        let k0 = ResourceKey::new("seg_0.m4s");
+        let k1 = ResourceKey::new("seg_1.m4s");
+        let k2 = ResourceKey::new("seg_2.m4s");
+
+        cached.open_resource(&k0).unwrap();
+        cached.open_resource(&k1).unwrap();
+        // This evicts k0 from cache, but should NOT remove from mem store
+        cached.open_resource(&k2).unwrap();
+
+        // k0 is still in the inner MemAssetStore (not removed)
+        assert!(mem.open_resource_with_ctx(&k0, None).is_ok());
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn remove_on_evict_true_removes_evicted_resource() {
+        let cap = NonZeroUsize::new(2).unwrap();
+        let (mem, cached) = make_mem_cached(cap, true);
+
+        let k0 = ResourceKey::new("seg_0.m4s");
+        let k1 = ResourceKey::new("seg_1.m4s");
+        let k2 = ResourceKey::new("seg_2.m4s");
+
+        // Open and write data so we can detect removal
+        let res0 = cached.open_resource(&k0).unwrap();
+        res0.write_at(0, b"data0").unwrap();
+        res0.commit(Some(5)).unwrap();
+
+        cached.open_resource(&k1).unwrap();
+        // This evicts k0 from cache AND removes from mem store
+        cached.open_resource(&k2).unwrap();
+
+        // k0 should be gone from mem store — re-opening gives a fresh empty resource
+        let reopened = mem.open_resource_with_ctx(&k0, None).unwrap();
+        assert_eq!(reopened.len(), None, "evicted resource should be gone");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn cache_hit_does_not_trigger_eviction() {
+        let cap = NonZeroUsize::new(2).unwrap();
+        let (mem, cached) = make_mem_cached(cap, true);
+
+        let k0 = ResourceKey::new("seg_0.m4s");
+        let k1 = ResourceKey::new("seg_1.m4s");
+
+        let res0 = cached.open_resource(&k0).unwrap();
+        res0.write_at(0, b"data0").unwrap();
+        res0.commit(Some(5)).unwrap();
+
+        cached.open_resource(&k1).unwrap();
+
+        // Re-open k0 (cache hit) — no eviction should happen
+        cached.open_resource(&k0).unwrap();
+
+        // Both still in mem store
+        let r0 = mem.open_resource_with_ctx(&k0, None).unwrap();
+        let r1 = mem.open_resource_with_ctx(&k1, None).unwrap();
+        assert!(r0.len().is_some(), "k0 should still exist");
+        assert!(r1.len().is_none(), "k1 was never committed, len is None");
     }
 }

@@ -2,7 +2,12 @@
 
 //! Storage backend: disk or memory asset store.
 
-use kithara_assets::{AssetResource, AssetStore, Assets, AssetsResult, MemStore, ResourceKey};
+use crate::{
+    base::Assets,
+    error::AssetsResult,
+    key::ResourceKey,
+    store::{AssetResource, AssetStore, MemStore},
+};
 
 /// Storage backend: disk or memory asset store.
 ///
@@ -18,7 +23,7 @@ pub enum AssetsBackend {
 
 impl AssetsBackend {
     /// Open a resource by key.
-    pub(crate) fn open_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource> {
+    pub fn open_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource> {
         match self {
             Self::Disk(s) => s.open_resource(key),
             Self::Mem(s) => s.open_resource(key),
@@ -26,7 +31,7 @@ impl AssetsBackend {
     }
 
     /// Return the asset root identifier.
-    pub(crate) fn asset_root(&self) -> &str {
+    pub fn asset_root(&self) -> &str {
         match self {
             Self::Disk(s) => s.asset_root(),
             Self::Mem(s) => s.asset_root(),
@@ -34,7 +39,7 @@ impl AssetsBackend {
     }
 
     /// Whether this backend is ephemeral (in-memory).
-    pub(crate) fn is_ephemeral(&self) -> bool {
+    pub fn is_ephemeral(&self) -> bool {
         matches!(self, Self::Mem(_))
     }
 
@@ -42,7 +47,7 @@ impl AssetsBackend {
     ///
     /// `MemStore`: removes from `DashMap` through decorator chain.
     /// `DiskStore`: no-op (default impl in `Assets` trait).
-    pub(crate) fn remove_resource(&self, key: &ResourceKey) {
+    pub fn remove_resource(&self, key: &ResourceKey) {
         match self {
             Self::Disk(s) => {
                 let _ = s.remove_resource(key);
@@ -51,5 +56,17 @@ impl AssetsBackend {
                 let _ = s.remove_resource(key);
             }
         }
+    }
+}
+
+impl From<AssetStore> for AssetsBackend {
+    fn from(store: AssetStore) -> Self {
+        Self::Disk(store)
+    }
+}
+
+impl From<MemStore> for AssetsBackend {
+    fn from(store: MemStore) -> Self {
+        Self::Mem(store)
     }
 }

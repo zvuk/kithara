@@ -76,7 +76,7 @@ where
     }
 
     /// Create with explicit enabled flag. When `false`, lease/pin logic is bypassed.
-    pub fn with_enabled(
+    pub fn with_options(
         inner: Arc<A>,
         cancel: CancellationToken,
         byte_recorder: Option<Arc<dyn ByteRecorder>>,
@@ -379,7 +379,7 @@ mod tests {
             "test_asset",
             CancellationToken::new(),
         ));
-        LeaseAssets::with_enabled(disk, CancellationToken::new(), None, false)
+        LeaseAssets::with_options(disk, CancellationToken::new(), None, false)
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {

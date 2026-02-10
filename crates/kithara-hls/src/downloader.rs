@@ -385,26 +385,6 @@ impl HlsDownloader {
             cov.mark(0..media_len);
             // flush happens via Drop, or explicitly in commit()
         }
-
-        // Evict segments behind reader for ephemeral backend (free memory).
-        if self.fetch.backend().is_ephemeral() {
-            let reader_pos = self
-                .shared
-                .reader_offset
-                .load(std::sync::atomic::Ordering::Acquire);
-            let segments = self.shared.segments.lock();
-            for entry in segments.entries.values() {
-                if entry.end_offset() >= reader_pos {
-                    continue;
-                }
-                if entry.meta.segment_type.is_init() {
-                    continue;
-                }
-                self.fetch
-                    .backend()
-                    .remove_resource(&ResourceKey::from_url(&entry.meta.url));
-            }
-        }
     }
 
     /// Prepare variant for download: detect switches, calculate metadata, populate cache.

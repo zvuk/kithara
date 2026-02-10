@@ -54,7 +54,7 @@ fn asset_store_with_root(temp_dir: &tempfile::TempDir, asset_root: &str) -> Asse
             max_assets: None,
             max_bytes: None,
         })
-        .build()
+        .build_disk()
 }
 
 #[rstest]

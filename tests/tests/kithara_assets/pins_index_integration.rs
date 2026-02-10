@@ -21,7 +21,7 @@ fn asset_store_no_limits(temp_dir: tempfile::TempDir) -> AssetStore {
             max_assets: None,
             max_bytes: None,
         })
-        .build()
+        .build_disk()
 }
 
 #[fixture]

@@ -34,6 +34,7 @@
 //! `_index/*` stores small files used as best-effort metadata.
 //! Filesystem remains the source of truth; indexes may be missing and can be rebuilt later.
 
+mod backend;
 mod base;
 mod cache;
 mod error;
@@ -46,6 +47,7 @@ mod process;
 mod store;
 
 // Public API - used by other crates
+pub use backend::AssetsBackend;
 pub use base::{Assets, DiskAssetStore};
 pub use cache::CachedAssets;
 pub use error::{AssetsError, AssetsResult};

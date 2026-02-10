@@ -105,7 +105,7 @@ impl File {
     ) -> Result<FileSource, SourceError> {
         let asset_root = asset_root_for_url(&url, config.name.as_deref());
 
-        let store = AssetStoreBuilder::new()
+        let backend = AssetStoreBuilder::new()
             .root_dir(&config.store.cache_dir)
             .asset_root(Some(asset_root.as_str()))
             .evict_config(config.store.to_evict_config())
@@ -113,15 +113,19 @@ impl File {
             .build();
 
         // Open coverage index for crash-safe download tracking.
-        let coverage_index = store
-            .open_coverage_index_resource()
-            .ok()
-            .map(|res| Arc::new(CoverageIndex::new(res)));
+        // Only available for disk-backed storage (ephemeral/mem doesn't need it).
+        let coverage_index = match &backend {
+            kithara_assets::AssetsBackend::Disk(store) => store
+                .open_coverage_index_resource()
+                .ok()
+                .map(|res| Arc::new(CoverageIndex::new(res))),
+            kithara_assets::AssetsBackend::Mem(_) => None,
+        };
 
         let net_client = HttpClient::new(config.net.clone());
 
         let state = FileStreamState::create(
-            Arc::new(store),
+            Arc::new(backend),
             &net_client,
             url,
             cancel.clone(),
