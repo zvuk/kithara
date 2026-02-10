@@ -230,12 +230,33 @@ impl Driver for MmapDriver {
 
         if let Some(len) = final_len {
             if len > 0 {
-                if let MmapState::Active(ref mmap) = *mmap_guard
-                    && len < mmap.len()
-                {
-                    mmap.resize(len)?;
-                }
+                // Check if truncation is needed before dropping the mmap.
+                let needs_truncate = matches!(
+                    &*mmap_guard,
+                    MmapState::Active(mmap) if len < mmap.len()
+                );
+
+                // Drop old mmap first — avoids SIGBUS from resizing a stale
+                // mmap (e.g. after atomic write-rename replaces the backing file).
                 *mmap_guard = MmapState::Empty;
+
+                if needs_truncate {
+                    // Truncate file to final size via ftruncate (no mmap involved).
+                    // After atomic rename, the file already has the correct size
+                    // so this branch is skipped.
+                    let file_len = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+                    if file_len > len {
+                        let f = std::fs::OpenOptions::new()
+                            .write(true)
+                            .open(&self.path)
+                            .map_err(|e| {
+                                crate::StorageError::Failed(format!("truncate open: {e}"))
+                            })?;
+                        f.set_len(len)
+                            .map_err(|e| crate::StorageError::Failed(format!("truncate: {e}")))?;
+                    }
+                }
+
                 let ro = MemoryMappedFile::open_ro(&self.path)?;
                 *mmap_guard = MmapState::Committed(ro);
             } else {

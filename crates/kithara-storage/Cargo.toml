@@ -21,6 +21,9 @@ rangemap = { workspace = true }
 parking_lot = { workspace = true }
 crossbeam-queue = { workspace = true }
 
+# crash-safe atomic writes (unique temp files)
+tempfile = { workspace = true }
+
 # mock support (optional)
 unimock = { workspace = true, optional = true }
 

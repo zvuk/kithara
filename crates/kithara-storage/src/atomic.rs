@@ -3,11 +3,11 @@
 //! Crash-safe whole-file write decorator.
 //!
 //! [`Atomic<R>`] wraps any [`ResourceExt`] and makes [`write_all()`](ResourceExt::write_all)
-//! crash-safe via the write-temp → fsync → rename pattern.
+//! crash-safe via the write-temp → rename pattern.
 //!
-//! For file-backed resources, `write_all()` writes to a `.tmp` sibling, fsyncs,
-//! then atomically renames over the target path. For in-memory resources,
-//! `write_all()` delegates directly (no filesystem to protect).
+//! For file-backed resources, `write_all()` writes to a uniquely-named temp file
+//! (via the `tempfile` crate), then atomically renames over the target path.
+//! For in-memory resources, `write_all()` delegates directly (no filesystem to protect).
 
 use std::{ops::Range, path::Path};
 
@@ -87,35 +87,31 @@ impl<R: ResourceExt> ResourceExt for Atomic<R> {
         match self.inner.path() {
             Some(path) => {
                 let path = path.to_path_buf();
-                let tmp = path.with_extension("tmp");
 
-                // 1. Ensure parent directory exists.
-                if let Some(parent) = tmp.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
+                // Parent directory for temp file (same filesystem = rename is atomic).
+                let parent = path.parent().ok_or_else(|| {
+                    crate::StorageError::Failed("atomic write: no parent dir".to_string())
+                })?;
+                let _ = std::fs::create_dir_all(parent);
 
-                // 2. Write to temp file.
-                std::fs::write(&tmp, data)
-                    .map_err(|e| crate::StorageError::Failed(format!("atomic write tmp: {e}")))?;
+                // 1. Create unique temp file via `tempfile` crate.
+                let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|e| {
+                    crate::StorageError::Failed(format!("atomic write tmpfile: {e}"))
+                })?;
 
-                // 3. fsync temp file.
-                let f = std::fs::File::open(&tmp)
-                    .map_err(|e| crate::StorageError::Failed(format!("atomic fsync open: {e}")))?;
-                f.sync_all()
-                    .map_err(|e| crate::StorageError::Failed(format!("atomic fsync: {e}")))?;
+                // 2. Write data to temp file.
+                std::io::Write::write_all(&mut tmp, data)
+                    .map_err(|e| crate::StorageError::Failed(format!("atomic write: {e}")))?;
 
-                // 4. Atomic rename.
-                std::fs::rename(&tmp, &path)
+                // 3. Atomic rename (POSIX guarantees atomicity).
+                //    `persist()` does `rename(tmp, target)` and disarms the
+                //    auto-delete on drop.
+                tmp.persist(&path)
                     .map_err(|e| crate::StorageError::Failed(format!("atomic rename: {e}")))?;
 
-                // 5. fsync parent directory (best-effort).
-                if let Some(parent) = path.parent()
-                    && let Ok(d) = std::fs::File::open(parent)
-                {
-                    let _ = d.sync_all();
-                }
-
-                // 6. commit() re-opens the file by path — sees new data after rename.
+                // 4. Re-open by path — sees new data after rename.
+                //    commit() drops the old mmap (now stale) and opens the
+                //    renamed file as read-only.
                 self.inner.commit(Some(data.len() as u64))
             }
             None => {
@@ -188,8 +184,16 @@ mod tests {
 
         atomic.write_all(b"data").unwrap();
 
-        let tmp_path = dir.path().join("index.tmp");
-        assert!(!tmp_path.exists(), "tmp file should not remain after write");
+        // No tmp files should remain (they have unique suffixes like index.tmp.0).
+        let tmp_files: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().to_str().map_or(false, |s| s.contains(".tmp.")))
+            .collect();
+        assert!(
+            tmp_files.is_empty(),
+            "tmp files should not remain: {tmp_files:?}"
+        );
     }
 
     #[rstest]
