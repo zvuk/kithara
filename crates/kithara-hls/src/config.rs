@@ -5,6 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use bytes::Bytes;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_net::NetOptions;
+use kithara_stream::ThreadPool;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -87,12 +88,6 @@ pub struct HlsConfig {
     pub chunk_channel_capacity: usize,
     /// Capacity of the command channel.
     pub command_channel_capacity: usize,
-    /// How often to yield to the async runtime during fast downloads.
-    ///
-    /// When `look_ahead_bytes` is `None`, the downloader yields after this many
-    /// chunks to allow other tasks (like playback progress) to run.
-    /// Default: 8 chunks.
-    pub download_yield_interval: usize,
     /// Capacity of the events broadcast channel (used when `events_tx` is not provided).
     pub events_channel_capacity: usize,
     /// Events broadcast sender (optional - if not provided, one is created internally).
@@ -121,8 +116,18 @@ pub struct HlsConfig {
     pub pool: Option<BytePool>,
     /// Storage configuration.
     pub store: StoreOptions,
+    /// Thread pool for background work.
+    ///
+    /// Shared across all components. Defaults to the global rayon pool.
+    pub thread_pool: ThreadPool,
     /// Master playlist URL.
     pub url: Url,
+    /// Force in-memory storage (no disk caching).
+    ///
+    /// When `true`, segments are stored in memory and never written to disk.
+    /// Useful for content marked with `#EXT-X-ALLOW-CACHE:NO` or when disk
+    /// caching is not desired.
+    pub ephemeral: bool,
 }
 
 impl Default for HlsConfig {
@@ -133,7 +138,7 @@ impl Default for HlsConfig {
             cancel: None,
             chunk_channel_capacity: 8,
             command_channel_capacity: 16,
-            download_yield_interval: 1,
+
             events_channel_capacity: 32,
             events_tx: None,
             keys: KeyOptions::default(),
@@ -143,7 +148,9 @@ impl Default for HlsConfig {
             pool: None,
             download_batch_size: 3,
             store: StoreOptions::default(),
+            thread_pool: ThreadPool::default(),
             url: Url::parse("http://localhost/stream.m3u8").expect("valid default URL"),
+            ephemeral: false,
         }
     }
 }
@@ -157,7 +164,7 @@ impl HlsConfig {
             cancel: None,
             chunk_channel_capacity: 8,
             command_channel_capacity: 16,
-            download_yield_interval: 8,
+
             events_channel_capacity: 32,
             events_tx: None,
             keys: KeyOptions::default(),
@@ -167,7 +174,9 @@ impl HlsConfig {
             pool: None,
             download_batch_size: 3,
             store: StoreOptions::default(),
+            thread_pool: ThreadPool::default(),
             url,
+            ephemeral: false,
         }
     }
 
@@ -255,12 +264,17 @@ impl HlsConfig {
         self
     }
 
-    /// Set how often to yield to the async runtime during fast downloads.
+    /// Set thread pool for background work.
     ///
-    /// When downloading without backpressure, the downloader yields after this
-    /// many chunks to allow other tasks to run. Default: 8.
-    pub fn with_download_yield_interval(mut self, interval: usize) -> Self {
-        self.download_yield_interval = interval;
+    /// The pool is shared across all components. Defaults to the global rayon pool.
+    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
+        self.thread_pool = pool;
+        self
+    }
+
+    /// Force in-memory storage (no disk caching).
+    pub fn with_ephemeral(mut self, ephemeral: bool) -> Self {
+        self.ephemeral = ephemeral;
         self
     }
 }

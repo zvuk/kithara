@@ -5,11 +5,15 @@
 
 use std::time::{Duration, Instant};
 
+use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_stream::Stream;
 use rstest::rstest;
+use tempfile::TempDir;
 use tracing::info;
+
+use crate::common::temp_dir;
 
 const HLS_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 
@@ -22,7 +26,7 @@ const HLS_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 #[timeout(Duration::from_secs(60))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires network — production HLS stream"]
-async fn stress_seek_during_abr_switch_real_decoder() {
+async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TempDir) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
@@ -35,10 +39,12 @@ async fn stress_seek_during_abr_switch_real_decoder() {
     info!("Opening HLS stream: {}", url);
 
     // Create audio pipeline with ABR auto (start from cheapest variant)
-    let hls_config = HlsConfig::new(url).with_abr(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        ..Default::default()
-    });
+    let hls_config = HlsConfig::new(url)
+        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_abr(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..Default::default()
+        });
     let config = AudioConfig::<Hls>::new(hls_config);
 
     let mut audio = Audio::<Stream<Hls>>::new(config)

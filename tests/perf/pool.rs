@@ -20,7 +20,7 @@ fn pool_get_put_cycle(pool: &PcmPool) {
 #[test]
 #[ignore]
 fn perf_pool_single_thread_get_put() {
-    let _guard = hotpath::GuardBuilder::new("pool_single_thread").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("pool_single_thread").build();
     let pool = pcm_pool();
 
     // Warm-up
@@ -57,7 +57,7 @@ fn pool_thread_worker(pool: Arc<PcmPool>, thread_id: usize, iterations: usize) {
 #[test]
 #[ignore]
 fn perf_pool_multi_thread_contention() {
-    let _guard = hotpath::GuardBuilder::new("pool_multi_thread").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("pool_multi_thread").build();
     let pool = Arc::new(pcm_pool().clone());
     let num_threads = 8;
     let iterations_per_thread = 1000;
@@ -84,7 +84,7 @@ fn perf_pool_multi_thread_contention() {
 #[test]
 #[ignore]
 fn perf_pool_allocation_rate() {
-    let _guard = hotpath::GuardBuilder::new("pool_allocation_rate").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("pool_allocation_rate").build();
     let pool = pcm_pool();
 
     // Measure allocation rate when pool is empty
@@ -114,7 +114,7 @@ fn perf_pool_scalability() {
 
     for &num_threads in &thread_counts {
         let label = Box::leak(format!("pool_scalability_{}", num_threads).into_boxed_str());
-        let _guard = hotpath::GuardBuilder::new(label).build();
+        let _guard = hotpath::FunctionsGuardBuilder::new(label).build();
         let pool = Arc::new(pcm_pool().clone());
 
         let start = std::time::Instant::now();

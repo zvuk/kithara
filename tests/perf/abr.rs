@@ -37,7 +37,7 @@ fn abr_decision_with_sample(
 #[test]
 #[ignore]
 fn perf_abr_decision_making() {
-    let _guard = hotpath::GuardBuilder::new("abr_decision").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("abr_decision").build();
 
     // Create variants: 500kbps, 1Mbps, 2Mbps, 5Mbps
     let bitrates = vec![500_000, 1_000_000, 2_000_000, 5_000_000];
@@ -100,7 +100,7 @@ fn perf_abr_decision_making() {
 #[test]
 #[ignore]
 fn perf_abr_controller_creation() {
-    let _guard = hotpath::GuardBuilder::new("abr_creation").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("abr_creation").build();
 
     let bitrates = vec![500_000, 1_000_000, 2_000_000, 5_000_000];
     let variants = create_variants(&bitrates);
@@ -139,7 +139,7 @@ fn perf_abr_controller_creation() {
 #[test]
 #[ignore]
 fn perf_abr_pure_decision() {
-    let _guard = hotpath::GuardBuilder::new("abr_pure_decision").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("abr_pure_decision").build();
 
     let bitrates = vec![500_000, 1_000_000, 2_000_000, 5_000_000];
     let variants = create_variants(&bitrates);

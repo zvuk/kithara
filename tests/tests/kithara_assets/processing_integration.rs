@@ -57,7 +57,7 @@ fn processing_transforms_data_on_commit(temp_dir: tempfile::TempDir) {
             max_bytes: None,
         })
         .process_fn(create_xor_chunk_callback(Arc::clone(&call_count)))
-        .build();
+        .build_disk();
 
     let key = ResourceKey::new("data.bin");
 
@@ -103,7 +103,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: tempfile::TempDir) {
             max_bytes: None,
         })
         .process_fn(create_xor_chunk_callback(Arc::clone(&call_count)))
-        .build();
+        .build_disk();
 
     let key = ResourceKey::new("cached.bin");
     let ctx = TestContext { xor_key: 0xAB };
@@ -155,7 +155,7 @@ fn processing_partial_reads_work_correctly(temp_dir: tempfile::TempDir) {
             max_bytes: None,
         })
         .process_fn(create_xor_chunk_callback(Arc::clone(&call_count)))
-        .build();
+        .build_disk();
 
     let key = ResourceKey::new("partial.bin");
     let ctx = TestContext { xor_key: 0xFF };
@@ -204,7 +204,7 @@ fn processing_read_past_end_returns_zero(temp_dir: tempfile::TempDir) {
             max_bytes: None,
         })
         .process_fn(create_xor_chunk_callback(Arc::clone(&call_count)))
-        .build();
+        .build_disk();
 
     let key = ResourceKey::new("eof.bin");
     let ctx = TestContext { xor_key: 0x00 };
@@ -239,7 +239,7 @@ fn store_without_processing_works_normally(temp_dir: tempfile::TempDir) {
             max_assets: None,
             max_bytes: None,
         })
-        .build();
+        .build_disk();
 
     let key = ResourceKey::new("test.bin");
 

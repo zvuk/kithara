@@ -3,7 +3,7 @@
 use std::{ops::Range, sync::Arc};
 
 use crossbeam_queue::SegQueue;
-use kithara_assets::{AssetResource, AssetStore, Assets};
+use kithara_assets::{AssetResource, AssetsBackend};
 use kithara_net::{HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use tokio::sync::{Notify, broadcast};
@@ -24,7 +24,7 @@ pub(crate) struct FileStreamState {
 
 impl FileStreamState {
     pub(crate) async fn create(
-        assets: Arc<AssetStore>,
+        assets: Arc<AssetsBackend>,
         net_client: &HttpClient,
         url: Url,
         cancel: CancellationToken,
@@ -169,12 +169,17 @@ impl SharedFileState {
 /// File source implementing Source trait (sync).
 ///
 /// Wraps storage resource with progress tracking and event emission.
+/// Holds an optional [`Backend`](kithara_stream::Backend) to manage the
+/// downloader lifecycle: when this source is dropped, the backend is dropped,
+/// cancelling the downloader task automatically.
 pub struct FileSource {
     res: AssetResource,
     progress: Arc<Progress>,
     events_tx: broadcast::Sender<FileEvent>,
     len: Option<u64>,
     shared: Option<Arc<SharedFileState>>,
+    /// Downloader backend. Dropped with this source, cancelling the downloader.
+    _backend: Option<kithara_stream::Backend>,
 }
 
 impl FileSource {
@@ -191,16 +196,18 @@ impl FileSource {
             events_tx,
             len,
             shared: None,
+            _backend: None,
         }
     }
 
-    /// Create new file source with shared state (for on-demand loading).
+    /// Create new file source with shared state and backend (for remote files).
     pub(crate) fn with_shared(
         res: AssetResource,
         progress: Arc<Progress>,
         events_tx: broadcast::Sender<FileEvent>,
         len: Option<u64>,
         shared: Arc<SharedFileState>,
+        backend: kithara_stream::Backend,
     ) -> Self {
         Self {
             res,
@@ -208,6 +215,7 @@ impl FileSource {
             events_tx,
             len,
             shared: Some(shared),
+            _backend: Some(backend),
         }
     }
 }
@@ -296,7 +304,7 @@ impl kithara_stream::Source for FileSource {
 mod tests {
     use std::sync::Arc;
 
-    use kithara_assets::{AssetStoreBuilder, Assets, ResourceKey};
+    use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use tempfile::TempDir;
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;

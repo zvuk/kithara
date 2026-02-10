@@ -14,11 +14,13 @@ const DEFAULT_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(5) {
 };
 
 use crate::{
+    backend::AssetsBackend,
     base::DiskAssetStore,
     cache::CachedAssets,
     evict::EvictAssets,
     index::EvictConfig,
     lease::{LeaseAssets, LeaseGuard, LeaseResource},
+    mem_store::MemAssetStore,
     process::{ProcessChunkFn, ProcessedResource, ProcessingAssets},
 };
 
@@ -95,14 +97,21 @@ impl StoreOptions {
 pub type AssetStore<Ctx = ()> =
     CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
-/// Resource handle returned by [`AssetStore::open_resource`].
+/// Resource handle returned by [`AssetStore::open_resource`] or [`MemStore::open_resource`].
 ///
 /// Wraps `StorageResource` with processing and lease semantics.
 /// Implements `ResourceExt` for read/write/commit operations.
-pub type AssetResource<Ctx = ()> = LeaseResource<
-    ProcessedResource<StorageResource, Ctx>,
-    LeaseGuard<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>,
->;
+/// Both `AssetStore` (disk) and `MemStore` (memory) return this same type.
+pub type AssetResource<Ctx = ()> =
+    LeaseResource<ProcessedResource<StorageResource, Ctx>, LeaseGuard>;
+
+/// In-memory asset store with disabled decorators.
+///
+/// Same decorator chain as [`AssetStore`] but backed by [`MemAssetStore`]
+/// instead of [`DiskAssetStore`]. All decorators run in disabled/no-op mode.
+/// Returns the same [`AssetResource`] type as `AssetStore`.
+pub type MemStore<Ctx = ()> =
+    CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<MemAssetStore>, Ctx>>>;
 
 /// Constructor for the ready-to-use [`AssetStore`].
 ///
@@ -137,6 +146,7 @@ pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()
     cache_capacity: Option<NonZeroUsize>,
     cache_enabled: bool,
     cancel: Option<CancellationToken>,
+    ephemeral: bool,
     evict_config: Option<EvictConfig>,
     evict_enabled: bool,
     lease_enabled: bool,
@@ -165,6 +175,7 @@ impl AssetStoreBuilder<()> {
             cache_capacity: None,
             cache_enabled: true,
             cancel: None,
+            ephemeral: false,
             evict_config: None,
             evict_enabled: true,
             lease_enabled: true,
@@ -172,6 +183,21 @@ impl AssetStoreBuilder<()> {
             process_fn: Some(dummy_process),
             root_dir: None,
             asset_root: None,
+        }
+    }
+
+    /// Build the storage backend.
+    ///
+    /// Returns `AssetsBackend::Disk` for persistent storage or
+    /// `AssetsBackend::Mem` when `ephemeral(true)` is set.
+    ///
+    /// # Panics
+    /// Panics if `process_fn` is not set for Ctx != ().
+    pub fn build(self) -> AssetsBackend {
+        if self.ephemeral {
+            self.build_ephemeral().into()
+        } else {
+            self.build_disk().into()
         }
     }
 }
@@ -247,11 +273,21 @@ where
         self
     }
 
-    /// Build the asset store.
+    /// Use ephemeral (in-memory) storage instead of disk.
+    ///
+    /// When `true`, `build()` returns `AssetsBackend::Mem` with auto-eviction
+    /// (LRU cache removes underlying data on eviction).
+    /// Default: `false`.
+    pub fn ephemeral(mut self, ephemeral: bool) -> Self {
+        self.ephemeral = ephemeral;
+        self
+    }
+
+    /// Build disk-backed asset store.
     ///
     /// # Panics
     /// Panics if `process_fn` is not set for Ctx != ().
-    pub fn build(self) -> AssetStore<Ctx> {
+    pub fn build_disk(self) -> AssetStore<Ctx> {
         let root_dir = self.root_dir.unwrap_or_else(|| {
             tempdir()
                 .expect("failed to create AssetStore temp dir")
@@ -285,11 +321,36 @@ where
             None
         };
         let lease =
-            LeaseAssets::with_enabled(processing, cancel, byte_recorder, self.lease_enabled);
+            LeaseAssets::with_options(processing, cancel, byte_recorder, self.lease_enabled);
 
         // CachedAssets on top to cache LeaseResource with guards
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::with_enabled(Arc::new(lease), capacity, self.cache_enabled)
+        CachedAssets::with_options(Arc::new(lease), capacity, self.cache_enabled, false)
+    }
+
+    /// Build ephemeral (in-memory) asset store with auto-eviction.
+    fn build_ephemeral(self) -> MemStore<Ctx> {
+        let root_dir = self
+            .root_dir
+            .unwrap_or_else(|| std::env::temp_dir().join("kithara-ephemeral"));
+        let asset_root = self.asset_root.unwrap_or_default();
+        let cancel = self.cancel.unwrap_or_default();
+        let process_fn = self
+            .process_fn
+            .expect("process_fn is required for AssetStoreBuilder");
+        let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
+
+        let mem = Arc::new(MemAssetStore::new(asset_root, cancel.clone(), root_dir));
+        let evict = Arc::new(EvictAssets::new(
+            mem,
+            EvictConfig::default(),
+            cancel.clone(),
+            false,
+        ));
+        let processing = Arc::new(ProcessingAssets::new(evict, process_fn, pool));
+        let lease = LeaseAssets::with_options(processing, cancel, None, false);
+        let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
+        CachedAssets::with_options(Arc::new(lease), capacity, true, true)
     }
 }
 
@@ -305,6 +366,7 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
             cache_capacity: self.cache_capacity,
             cache_enabled: self.cache_enabled,
             cancel: self.cancel,
+            ephemeral: self.ephemeral,
             evict_config: self.evict_config,
             evict_enabled: self.evict_enabled,
             lease_enabled: self.lease_enabled,
@@ -324,7 +386,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::{base::Assets, key::ResourceKey};
+    use crate::key::ResourceKey;
 
     #[rstest]
     #[timeout(Duration::from_secs(5))]
@@ -409,5 +471,65 @@ mod tests {
         let key = ResourceKey::new("test.bin");
         let result = store.open_resource(&key);
         assert!(result.is_err());
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn build_ephemeral_returns_mem() {
+        let backend = AssetStoreBuilder::new()
+            .asset_root(Some("test"))
+            .ephemeral(true)
+            .build();
+        assert!(backend.is_ephemeral());
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn build_disk_returns_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(Some("test"))
+            .ephemeral(false)
+            .build();
+        assert!(!backend.is_ephemeral());
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn ephemeral_auto_evicts_on_capacity() {
+        let backend = AssetStoreBuilder::new()
+            .asset_root(Some("test"))
+            .cache_capacity(NonZeroUsize::new(3).unwrap())
+            .ephemeral(true)
+            .build();
+
+        // Open 4 resources — first should be auto-evicted
+        let keys: Vec<ResourceKey> = (0..4)
+            .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
+            .collect();
+
+        for key in &keys {
+            let res = backend.open_resource(key).unwrap();
+            res.write_at(0, b"data").unwrap();
+            res.commit(Some(4)).unwrap();
+        }
+
+        // First resource should have been evicted (removed from MemStore).
+        // Re-opening gives a fresh empty resource.
+        let reopened = backend.open_resource(&keys[0]).unwrap();
+        assert_eq!(reopened.len(), None, "evicted resource should be gone");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn from_asset_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(Some("test"))
+            .build_disk();
+        let backend: AssetsBackend = store.into();
+        assert!(!backend.is_ephemeral());
     }
 }

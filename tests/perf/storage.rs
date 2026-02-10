@@ -6,31 +6,30 @@
 
 use std::io::Write;
 
-use kithara_storage::{OpenMode, ResourceExt, StorageOptions, StorageResource};
+use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
 use tempfile::NamedTempFile;
 use tokio_util::sync::CancellationToken;
 
 /// Helper to create test storage with data.
-fn create_test_storage(size: usize) -> (StorageResource, NamedTempFile) {
+fn create_test_storage(size: usize) -> (MmapResource, NamedTempFile) {
     let mut file = NamedTempFile::new().unwrap();
     let data = vec![0u8; size];
     file.write_all(&data).unwrap();
     file.flush().unwrap();
 
     let path = file.path().to_path_buf();
-    let opts = StorageOptions {
+    let opts = MmapOptions {
         path,
         initial_len: None,
         mode: OpenMode::ReadWrite,
-        cancel: CancellationToken::new(),
     };
-    let storage = StorageResource::open(opts).unwrap();
+    let storage: MmapResource = Resource::open(CancellationToken::new(), opts).unwrap();
     (storage, file)
 }
 
 /// Measure sequential read performance.
 #[hotpath::measure]
-fn storage_read_sequential(storage: &StorageResource, offset: u64, size: usize) -> Vec<u8> {
+fn storage_read_sequential(storage: &MmapResource, offset: u64, size: usize) -> Vec<u8> {
     let mut buf = vec![0u8; size];
     storage.read_at(offset, &mut buf).unwrap();
     buf
@@ -39,7 +38,7 @@ fn storage_read_sequential(storage: &StorageResource, offset: u64, size: usize) 
 #[test]
 #[ignore]
 fn perf_storage_sequential_reads() {
-    let _guard = hotpath::GuardBuilder::new("storage_sequential_read").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("storage_sequential_read").build();
 
     // 10MB file
     let (storage, _temp) = create_test_storage(10 * 1024 * 1024);
@@ -69,7 +68,7 @@ fn perf_storage_sequential_reads() {
 
 /// Measure random read performance.
 #[hotpath::measure]
-fn storage_read_random(storage: &StorageResource, offset: u64) -> Vec<u8> {
+fn storage_read_random(storage: &MmapResource, offset: u64) -> Vec<u8> {
     let mut buf = vec![0u8; 4096];
     storage.read_at(offset, &mut buf).unwrap();
     buf
@@ -78,7 +77,7 @@ fn storage_read_random(storage: &StorageResource, offset: u64) -> Vec<u8> {
 #[test]
 #[ignore]
 fn perf_storage_random_reads() {
-    let _guard = hotpath::GuardBuilder::new("storage_random_read").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("storage_random_read").build();
 
     // 100MB file for random access
     let (storage, _temp) = create_test_storage(100 * 1024 * 1024);
@@ -107,14 +106,14 @@ fn perf_storage_random_reads() {
 
 /// Measure write performance.
 #[hotpath::measure]
-fn storage_write_chunk(storage: &StorageResource, offset: u64, data: &[u8]) {
+fn storage_write_chunk(storage: &MmapResource, offset: u64, data: &[u8]) {
     storage.write_at(offset, data).unwrap();
 }
 
 #[test]
 #[ignore]
 fn perf_storage_writes() {
-    let _guard = hotpath::GuardBuilder::new("storage_write").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("storage_write").build();
 
     // Create empty 10MB file
     let (storage, _temp) = create_test_storage(10 * 1024 * 1024);
@@ -147,7 +146,7 @@ fn perf_storage_writes() {
 #[test]
 #[ignore]
 fn perf_storage_wait_range() {
-    let _guard = hotpath::GuardBuilder::new("storage_wait_range").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("storage_wait_range").build();
 
     let (storage, _temp) = create_test_storage(10 * 1024 * 1024);
 

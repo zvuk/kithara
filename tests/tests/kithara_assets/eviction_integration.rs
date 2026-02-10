@@ -36,7 +36,7 @@ fn asset_store_with_root(
             max_assets,
             max_bytes: None,
         })
-        .build()
+        .build_disk()
 }
 
 #[rstest]

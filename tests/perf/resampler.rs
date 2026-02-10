@@ -34,7 +34,7 @@ fn resampler_process_single(resampler: &mut kithara_audio::ResamplerProcessor, c
 #[test]
 #[ignore] // Run explicitly with --ignored
 fn perf_resampler_quality_comparison() {
-    let _guard = hotpath::GuardBuilder::new("resampler_quality").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("resampler_quality").build();
     let input_spec = PcmSpec {
         channels: 2,
         sample_rate: 48000,
@@ -91,7 +91,7 @@ fn resampler_passthrough_process(
 #[test]
 #[ignore]
 fn perf_resampler_passthrough_detection() {
-    let _guard = hotpath::GuardBuilder::new("resampler_passthrough").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("resampler_passthrough").build();
     let spec = PcmSpec {
         channels: 2,
         sample_rate: 44100,
@@ -124,7 +124,7 @@ fn perf_resampler_passthrough_detection() {
 #[test]
 #[ignore]
 fn perf_resampler_deinterleave_overhead() {
-    let _guard = hotpath::GuardBuilder::new("resampler_deinterleave").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("resampler_deinterleave").build();
     let input_spec = PcmSpec {
         channels: 2,
         sample_rate: 48000,
@@ -176,7 +176,7 @@ fn resampler_full_process_cycle(
 #[test]
 #[ignore]
 fn perf_resampler_detailed_breakdown() {
-    let _guard = hotpath::GuardBuilder::new("resampler_breakdown").build();
+    let _guard = hotpath::FunctionsGuardBuilder::new("resampler_breakdown").build();
 
     let input_spec = PcmSpec {
         channels: 2,

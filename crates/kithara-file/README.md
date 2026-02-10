@@ -22,7 +22,7 @@ let stream = Stream::<File>::new(config).await?;
 sequenceDiagram
     participant Net as HttpClient
     participant DL as FileDownloader (tokio task)
-    participant SR as StorageResource (mmap)
+    participant SR as StorageResource
     participant S as Stream<File> (sync)
 
     DL->>Net: stream(url)

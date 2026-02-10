@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use kithara_assets::StoreOptions;
 use kithara_net::NetOptions;
+use kithara_stream::ThreadPool;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -36,12 +37,6 @@ impl From<PathBuf> for FileSrc {
 pub struct FileConfig {
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// How often to yield to the async runtime during fast downloads.
-    ///
-    /// When `look_ahead_bytes` is `None`, the downloader yields after this many
-    /// chunks to allow other tasks (like playback progress) to run.
-    /// Default: 8 chunks.
-    pub download_yield_interval: usize,
     /// Events broadcast channel capacity (used when `events_tx` is not provided).
     pub events_channel_capacity: usize,
     /// Events broadcast sender (optional - if not provided, events are not sent).
@@ -63,13 +58,17 @@ pub struct FileConfig {
     pub src: FileSrc,
     /// Storage configuration.
     pub store: StoreOptions,
+    /// Thread pool for background work.
+    ///
+    /// Shared across all components. Defaults to the global rayon pool.
+    pub thread_pool: ThreadPool,
 }
 
 impl Default for FileConfig {
     fn default() -> Self {
         Self {
             cancel: None,
-            download_yield_interval: 8,
+
             events_channel_capacity: 16,
             events_tx: None,
             look_ahead_bytes: None,
@@ -79,6 +78,7 @@ impl Default for FileConfig {
                 Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
             ),
             store: StoreOptions::default(),
+            thread_pool: ThreadPool::default(),
         }
     }
 }
@@ -88,7 +88,7 @@ impl FileConfig {
     pub fn new(src: FileSrc) -> Self {
         Self {
             cancel: None,
-            download_yield_interval: 8,
+
             events_channel_capacity: 16,
             events_tx: None,
             look_ahead_bytes: None,
@@ -96,6 +96,7 @@ impl FileConfig {
             net: NetOptions::default(),
             src,
             store: StoreOptions::default(),
+            thread_pool: ThreadPool::default(),
         }
     }
 
@@ -147,12 +148,11 @@ impl FileConfig {
         self
     }
 
-    /// Set how often to yield to the async runtime during fast downloads.
+    /// Set thread pool for background work.
     ///
-    /// When downloading without backpressure, the downloader yields after this
-    /// many chunks to allow other tasks to run. Default: 8.
-    pub fn with_download_yield_interval(mut self, interval: usize) -> Self {
-        self.download_yield_interval = interval;
+    /// The pool is shared across all components. Defaults to the global rayon pool.
+    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
+        self.thread_pool = pool;
         self
     }
 }

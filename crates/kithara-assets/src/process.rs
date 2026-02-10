@@ -8,9 +8,7 @@
 use std::{fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
 
 use kithara_bufpool::BytePool;
-use kithara_storage::{
-    ResourceExt, ResourceStatus, StorageError, StorageResource, StorageResult, WaitOutcome,
-};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome};
 use parking_lot::Mutex;
 
 use crate::{AssetsResult, ResourceKey, base::Assets};
@@ -181,7 +179,7 @@ where
         self.inner.fail(reason);
     }
 
-    fn path(&self) -> &Path {
+    fn path(&self) -> Option<&Path> {
         self.inner.path()
     }
 
@@ -242,6 +240,7 @@ where
 {
     type Res = ProcessedResource<A::Res, Ctx>;
     type Context = Ctx;
+    type IndexRes = A::IndexRes;
 
     fn root_dir(&self) -> &Path {
         self.inner.root_dir()
@@ -264,16 +263,24 @@ where
         Ok(processed)
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         self.inner.open_pins_index_resource()
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         self.inner.open_lru_index_resource()
+    }
+
+    fn open_coverage_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+        self.inner.open_coverage_index_resource()
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {
         self.inner.delete_asset()
+    }
+
+    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        self.inner.remove_resource(key)
     }
 }
 
@@ -281,7 +288,7 @@ where
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    use kithara_storage::{OpenMode, StorageOptions, StorageResource};
+    use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
 
@@ -293,17 +300,19 @@ mod tests {
 
     /// Simple mock resource for testing.
     /// Returns both the resource and the TempDir to keep the directory alive.
-    fn mock_resource(content: &[u8]) -> (StorageResource, tempfile::TempDir) {
+    fn mock_resource(content: &[u8]) -> (MmapResource, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test.bin");
         let cancel = CancellationToken::new();
 
-        let res = StorageResource::open(StorageOptions {
-            path,
-            initial_len: None,
-            mode: OpenMode::Auto,
+        let res = Resource::open(
             cancel,
-        })
+            MmapOptions {
+                path,
+                initial_len: None,
+                mode: OpenMode::Auto,
+            },
+        )
         .unwrap();
         res.write_at(0, content).unwrap();
         // Don't commit here - let the test control when commit happens
@@ -394,7 +403,7 @@ mod tests {
 
         let (resource, _dir) = mock_resource(b"test content");
         // ctx = None -> no processing
-        let processed: ProcessedResource<StorageResource, ()> =
+        let processed: ProcessedResource<MmapResource, ()> =
             ProcessedResource::new(resource, None, process_fn, test_pool());
 
         processed

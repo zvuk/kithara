@@ -4,19 +4,20 @@
 
 # kithara-storage
 
-Storage primitives for kithara. Provides a unified `StorageResource` backed by `mmap-io` with random-access `read_at`/`write_at`, blocking `wait_range`, and convenience `read_into`/`write_all`. `OpenMode` controls file access: `Auto` (default), `ReadWrite`, or `ReadOnly`.
+Storage primitives for kithara. Provides a unified `StorageResource` enum (`Mmap` | `Mem`) with random-access `read_at`/`write_at`, blocking `wait_range`, and convenience `read_into`/`write_all`. `MmapResource` is file-backed via `mmap-io`; `MemResource` is fully in-memory. `OpenMode` controls file access for mmap: `Auto` (default), `ReadWrite`, or `ReadOnly`.
 
 ## Usage
 
 ```rust
-use kithara_storage::{StorageResource, StorageOptions, OpenMode};
+use kithara_storage::{MmapResource, MmapOptions, OpenMode, StorageResource};
 
-let resource = StorageResource::open(StorageOptions {
+// File-backed (mmap)
+let mmap = MmapResource::open(cancel_token, MmapOptions {
     path: path.into(),
     initial_len: None,
     mode: OpenMode::Auto,
-    cancel: cancel_token,
 })?;
+let resource = StorageResource::from(mmap);
 resource.write_at(0, &data)?;
 let outcome = resource.wait_range(0..1024)?;
 ```

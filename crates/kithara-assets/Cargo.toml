@@ -19,6 +19,7 @@ kithara-bufpool = { workspace = true }
 kithara-storage = { workspace = true }
 lru = { workspace = true }
 parking_lot = { workspace = true }
+rangemap = { workspace = true }
 serde = { workspace = true }
 sha2 = { workspace = true }
 tempfile = { workspace = true }

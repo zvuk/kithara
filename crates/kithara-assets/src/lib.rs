@@ -34,6 +34,7 @@
 //! `_index/*` stores small files used as best-effort metadata.
 //! Filesystem remains the source of truth; indexes may be missing and can be rebuilt later.
 
+mod backend;
 mod base;
 mod cache;
 mod error;
@@ -41,21 +42,24 @@ mod evict;
 mod index;
 mod key;
 mod lease;
+mod mem_store;
 mod process;
 mod store;
 
 // Public API - used by other crates
+pub use backend::AssetsBackend;
 pub use base::{Assets, DiskAssetStore};
 pub use cache::CachedAssets;
 pub use error::{AssetsError, AssetsResult};
 pub use evict::EvictAssets;
-pub use index::EvictConfig;
 #[cfg(feature = "internal")]
 pub use index::PinsIndex;
+pub use index::{CoverageIndex, DiskCoverage, EvictConfig};
 #[cfg(feature = "internal")]
 pub use key::canonicalize_for_asset;
 pub use key::{ResourceKey, asset_root_for_url};
 pub use kithara_bufpool::{BytePool, byte_pool};
 pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
+pub use mem_store::MemAssetStore;
 pub use process::{ProcessChunkFn, ProcessedResource, ProcessingAssets};
-pub use store::{AssetResource, AssetStore, AssetStoreBuilder, StoreOptions};
+pub use store::{AssetResource, AssetStore, AssetStoreBuilder, MemStore, StoreOptions};

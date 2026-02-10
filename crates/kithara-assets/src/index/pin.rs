@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use kithara_storage::{ResourceExt, StorageResource};
+use kithara_storage::{Atomic, ResourceExt};
 
 use crate::{base::Assets, error::AssetsResult};
 
@@ -22,22 +22,24 @@ struct PinsIndexFile {
 /// ## Normative
 /// - The set is stored as a `HashSet<String>` in-memory.
 /// - Every mutation (`insert`/`remove`) persists the full set immediately.
-/// - The underlying storage is a `StorageResource` (whole-object read/write via `read_all`/`write_all`).
+/// - The underlying storage uses whole-object read/write via `read_into`/`write_all`.
 ///
 /// ## Key selection
 /// `PinsIndex` does **not** form keys. The concrete [`Assets`] implementation decides where this
 /// index lives by implementing [`Assets::open_pins_index_resource`].
-pub struct PinsIndex {
-    res: StorageResource,
+pub struct PinsIndex<R: ResourceExt> {
+    res: Atomic<R>,
 }
 
-impl PinsIndex {
-    pub(crate) fn new(res: StorageResource) -> Self {
-        Self { res }
+impl<R: ResourceExt> PinsIndex<R> {
+    pub(crate) fn new(res: R) -> Self {
+        Self {
+            res: Atomic::new(res),
+        }
     }
 
     /// Open a `PinsIndex` for the given base assets store.
-    pub fn open<A: Assets>(assets: &A) -> AssetsResult<Self> {
+    pub fn open<A: Assets<IndexRes = R>>(assets: &A) -> AssetsResult<Self> {
         let res = assets.open_pins_index_resource()?;
         Ok(Self::new(res))
     }
@@ -62,7 +64,7 @@ impl PinsIndex {
         Ok(file.pinned.into_iter().collect())
     }
 
-    /// Persist the given set to storage.
+    /// Persist the given set to storage (crash-safe via atomic write-rename).
     pub fn store(&self, pins: &HashSet<String>) -> AssetsResult<()> {
         // Stored as a list for stable serialization; treated as a set by higher layers.
         let file = PinsIndexFile {
@@ -80,22 +82,24 @@ impl PinsIndex {
 mod tests {
     use std::{collections::HashSet, time::Duration};
 
-    use kithara_storage::{OpenMode, StorageOptions};
+    use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
     use rstest::*;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
 
-    // Helper to create StorageResource for tests
-    fn create_test_resource(dir: &TempDir) -> StorageResource {
+    // Helper to create MmapResource for tests
+    fn create_test_resource(dir: &TempDir) -> MmapResource {
         let path = dir.path().join("pins.bin");
-        StorageResource::open(StorageOptions {
-            path,
-            initial_len: Some(4096),
-            mode: OpenMode::ReadWrite,
-            cancel: CancellationToken::new(),
-        })
+        Resource::open(
+            CancellationToken::new(),
+            MmapOptions {
+                path,
+                initial_len: Some(4096),
+                mode: OpenMode::ReadWrite,
+            },
+        )
         .unwrap()
     }
 
@@ -172,12 +176,14 @@ mod tests {
 
         // First instance
         {
-            let res = StorageResource::open(StorageOptions {
-                path: path.clone(),
-                initial_len: Some(4096),
-                mode: OpenMode::ReadWrite,
-                cancel: CancellationToken::new(),
-            })
+            let res: MmapResource = Resource::open(
+                CancellationToken::new(),
+                MmapOptions {
+                    path: path.clone(),
+                    initial_len: Some(4096),
+                    mode: OpenMode::ReadWrite,
+                },
+            )
             .unwrap();
             let index = PinsIndex::new(res);
 
@@ -188,12 +194,14 @@ mod tests {
 
         // Second instance (new resource, same path)
         {
-            let res = StorageResource::open(StorageOptions {
-                path,
-                initial_len: Some(4096),
-                mode: OpenMode::ReadWrite,
-                cancel: CancellationToken::new(),
-            })
+            let res: MmapResource = Resource::open(
+                CancellationToken::new(),
+                MmapOptions {
+                    path,
+                    initial_len: Some(4096),
+                    mode: OpenMode::ReadWrite,
+                },
+            )
             .unwrap();
             let index = PinsIndex::new(res);
 

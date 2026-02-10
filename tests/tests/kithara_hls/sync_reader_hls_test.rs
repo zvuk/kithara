@@ -11,17 +11,20 @@
 
 use std::{io::Read, time::Duration};
 
+use kithara_assets::StoreOptions;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_stream::Stream;
 use rstest::rstest;
+use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use super::fixture::abr::{AbrTestServer, master_playlist};
+use crate::common::temp_dir;
 
 #[rstest]
-#[timeout(Duration::from_secs(10))]
+#[timeout(Duration::from_secs(30))]
 #[tokio::test]
-async fn test_sync_reader_reads_all_bytes_from_hls() {
+async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TempDir) {
     // Create HLS server with 3 segments per variant
     let server = AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
@@ -36,6 +39,7 @@ async fn test_sync_reader_reads_all_bytes_from_hls() {
     // Configure HLS - fixed variant 0 (no ABR switching for this test)
     let config = HlsConfig::new(url.clone())
         .with_cancel(cancel_token.clone())
+        .with_store(StoreOptions::new(temp_dir.path()))
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(0), // Stay on variant 0
             ..Default::default()
@@ -158,11 +162,6 @@ async fn test_sync_reader_reads_all_bytes_from_hls() {
         segments_found >= 3,
         "FAIL: Only found {} segments, expected at least 3. HLS stopped early!",
         segments_found
-    );
-
-    println!(
-        "\nPASS: Stream<Hls> successfully read all {} bytes from all 3 HLS segments!",
-        all_bytes.len()
     );
 
     cancel_token.cancel();

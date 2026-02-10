@@ -38,7 +38,7 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
         .asset_root(Some(asset_root))
         .evict_config(EvictConfig::default())
         .cancel(CancellationToken::new())
-        .build();
+        .build_disk();
 
     TestAssets {
         assets,

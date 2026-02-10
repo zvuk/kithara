@@ -31,7 +31,10 @@ pub mod keys;
 #[doc(hidden)]
 pub mod playlist;
 
-// Private modules
+// Re-export from kithara-assets
+#[doc(hidden)]
+pub use kithara_assets::AssetsBackend;
+
 mod downloader;
 mod inner;
 mod parsing;

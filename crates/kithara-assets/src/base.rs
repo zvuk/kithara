@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use kithara_storage::{OpenMode, StorageOptions, StorageResource};
+use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, StorageResource};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -19,15 +19,20 @@ use crate::{
 /// `kithara-assets` is about *assets* and their *resources*:
 /// - an **asset** is a logical unit that may consist of multiple files/resources,
 /// - a **resource** is addressed by [`ResourceKey`] and is opened as a unified
-///   [`StorageResource`] supporting both streaming and atomic access patterns.
+///   resource supporting both streaming and atomic access patterns.
 ///
 /// The `Context` associated type allows decorators to pass additional processing
 /// context (e.g. encryption info) when opening resources. Use `()` for no context.
+///
+/// `IndexRes` is the resource type used for internal index persistence (pins, LRU).
+/// Disk-backed stores use `MmapResource`; in-memory stores use `MemResource`.
 pub trait Assets: Clone + Send + Sync + 'static {
     /// Type returned by `open_resource`. Must be Clone for caching.
     type Res: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
     /// Context type for resource processing. Use `()` for no context.
     type Context: Clone + Send + Sync + Hash + Eq + Debug + 'static;
+    /// Resource type for index persistence (pins, LRU).
+    type IndexRes: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
 
     /// Open a resource with optional context (main method).
     fn open_resource_with_ctx(
@@ -42,17 +47,25 @@ pub trait Assets: Clone + Send + Sync + 'static {
     }
 
     /// Open the resource used for persisting the pins index.
-    ///
-    /// Returns bare `StorageResource` to bypass decorator wrapping.
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource>;
+    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
     /// Open the resource used for persisting the LRU index.
-    ///
-    /// Returns bare `StorageResource` to bypass decorator wrapping.
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource>;
+    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+
+    /// Open the resource used for persisting the coverage index.
+    fn open_coverage_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
     /// Delete the entire asset (all resources under this store's `asset_root`).
     fn delete_asset(&self) -> AssetsResult<()>;
+
+    /// Remove a single resource by key.
+    ///
+    /// Default implementation is a no-op (suitable for disk stores where
+    /// resources are managed by filesystem eviction). In-memory stores
+    /// override this to free memory.
+    fn remove_resource(&self, _key: &ResourceKey) -> AssetsResult<()> {
+        Ok(())
+    }
 
     /// Return the root directory for disk-backed implementations.
     fn root_dir(&self) -> &Path;
@@ -114,37 +127,46 @@ impl DiskAssetStore {
         self.root_dir.join("_index").join("lru.bin")
     }
 
+    fn coverage_index_path(&self) -> PathBuf {
+        self.root_dir.join("_index").join("cov.bin")
+    }
+
     fn open_storage_resource(
         &self,
         key: &ResourceKey,
         path: PathBuf,
-    ) -> AssetsResult<StorageResource> {
+    ) -> AssetsResult<MmapResource> {
         let mode = if key.is_absolute() {
             OpenMode::ReadOnly
         } else {
             OpenMode::Auto
         };
-        Ok(StorageResource::open(StorageOptions {
-            path,
-            initial_len: None,
-            mode,
-            cancel: self.cancel.clone(),
-        })?)
+        Ok(Resource::open(
+            self.cancel.clone(),
+            MmapOptions {
+                path,
+                initial_len: None,
+                mode,
+            },
+        )?)
     }
 
-    fn open_index_resource(&self, path: PathBuf) -> AssetsResult<StorageResource> {
-        Ok(StorageResource::open(StorageOptions {
-            path,
-            initial_len: Some(4096),
-            mode: OpenMode::ReadWrite,
-            cancel: self.cancel.clone(),
-        })?)
+    fn open_index_resource(&self, path: PathBuf) -> AssetsResult<MmapResource> {
+        Ok(Resource::open(
+            self.cancel.clone(),
+            MmapOptions {
+                path,
+                initial_len: Some(4096),
+                mode: OpenMode::ReadWrite,
+            },
+        )?)
     }
 }
 
 impl Assets for DiskAssetStore {
     type Res = StorageResource;
     type Context = ();
+    type IndexRes = MmapResource;
 
     fn root_dir(&self) -> &Path {
         &self.root_dir
@@ -160,16 +182,22 @@ impl Assets for DiskAssetStore {
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         let path = self.resource_path(key)?;
-        self.open_storage_resource(key, path)
+        let mmap = self.open_storage_resource(key, path)?;
+        Ok(StorageResource::Mmap(mmap))
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<MmapResource> {
         let path = self.pins_index_path();
         self.open_index_resource(path)
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<MmapResource> {
         let path = self.lru_index_path();
+        self.open_index_resource(path)
+    }
+
+    fn open_coverage_index_resource(&self) -> AssetsResult<MmapResource> {
+        let path = self.coverage_index_path();
         self.open_index_resource(path)
     }
 

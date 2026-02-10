@@ -81,6 +81,7 @@ hotpath = { workspace = true, optional = true }
 [features]
 perf = [
     "dep:hotpath",
+    "hotpath/hotpath",
     "kithara-audio/perf",
     "kithara-decode/perf",
     "kithara-bufpool/perf",

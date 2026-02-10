@@ -14,7 +14,7 @@ use std::{
 
 use crossbeam_queue::SegQueue;
 use kithara_abr::Variant;
-use kithara_assets::{AssetStore, Assets, ResourceKey};
+use kithara_assets::ResourceKey;
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{AudioCodec, MediaInfo, Source, StreamError, StreamResult};
 use parking_lot::{Condvar, Mutex};
@@ -25,7 +25,7 @@ use url::Url;
 
 use crate::{
     HlsError,
-    downloader::{HlsDownloader, SegmentMetadata},
+    downloader::{HlsDownloader, HlsIo, SegmentMetadata},
     events::HlsEvent,
     fetch::{DefaultFetchManager, SegmentMeta},
     parsing::VariantStream,
@@ -208,20 +208,21 @@ impl SharedSegments {
 }
 
 /// HLS source: provides random-access reading from loaded segments.
+///
+/// Holds an optional [`Backend`](kithara_stream::Backend) to manage the
+/// downloader lifecycle: when this source is dropped, the backend is dropped,
+/// cancelling the downloader task automatically.
 pub struct HlsSource {
     fetch: Arc<DefaultFetchManager>,
     shared: Arc<SharedSegments>,
     events_tx: Option<broadcast::Sender<HlsEvent>>,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
     variant_fence: Option<usize>,
+    /// Downloader backend. Dropped with this source, cancelling the downloader.
+    _backend: Option<kithara_stream::Backend>,
 }
 
 impl HlsSource {
-    /// Get asset store.
-    pub fn assets(&self) -> AssetStore {
-        self.fetch.assets().clone()
-    }
-
     fn emit_event(&self, event: HlsEvent) {
         if let Some(ref tx) = self.events_tx {
             let _ = tx.send(event);
@@ -247,7 +248,6 @@ impl HlsSource {
         buf: &mut [u8],
     ) -> Result<usize, HlsError> {
         let local_offset = offset - entry.byte_offset;
-        let assets = self.assets();
 
         if local_offset < entry.init_len {
             let Some(ref init_url) = entry.init_url else {
@@ -255,7 +255,7 @@ impl HlsSource {
             };
 
             let key = ResourceKey::from_url(init_url);
-            let resource = assets.open_resource(&key)?;
+            let resource = self.fetch.backend().open_resource(&key)?;
 
             let read_end = (local_offset + buf.len() as u64).min(entry.init_len);
             resource.wait_range(local_offset..read_end)?;
@@ -283,9 +283,8 @@ impl HlsSource {
         media_offset: u64,
         buf: &mut [u8],
     ) -> Result<usize, HlsError> {
-        let assets = self.assets();
         let key = ResourceKey::from_url(&entry.meta.url);
-        let resource = assets.open_resource(&key)?;
+        let resource = self.fetch.backend().open_resource(&key)?;
 
         let read_end = (media_offset + buf.len() as u64).min(entry.meta.len);
         resource.wait_range(media_offset..read_end)?;
@@ -464,9 +463,8 @@ pub fn build_pair(
     fetch: Arc<DefaultFetchManager>,
     variants: Vec<VariantStream>,
     config: &crate::config::HlsConfig,
+    coverage_index: Option<Arc<kithara_assets::CoverageIndex<kithara_storage::MmapResource>>>,
 ) -> (HlsDownloader, HlsSource) {
-    let cancel = config.cancel.clone().unwrap_or_default();
-
     let abr_variants: Vec<Variant> = variants
         .iter()
         .map(|v| Variant {
@@ -482,6 +480,7 @@ pub fn build_pair(
     let shared = Arc::new(SharedSegments::new());
 
     let downloader = HlsDownloader {
+        io: HlsIo::new(Arc::clone(&fetch)),
         fetch: Arc::clone(&fetch),
         variants,
         current_segment_index: 0,
@@ -490,13 +489,11 @@ pub fn build_pair(
         byte_offset: 0,
         shared: Arc::clone(&shared),
         events_tx: config.events_tx.clone(),
-        cancel,
         look_ahead_bytes: config.look_ahead_bytes,
-        yield_interval: config.download_yield_interval,
-        segments_since_yield: 0,
         variant_lengths: HashMap::new(),
         had_midstream_switch: false,
         prefetch_count: config.download_batch_size.max(1),
+        coverage_index,
     };
 
     let source = HlsSource {
@@ -504,9 +501,17 @@ pub fn build_pair(
         shared,
         events_tx: config.events_tx.clone(),
         variant_fence: None,
+        _backend: None,
     };
 
     (downloader, source)
+}
+
+impl HlsSource {
+    /// Set the backend (called after downloader is spawned).
+    pub(crate) fn set_backend(&mut self, backend: kithara_stream::Backend) {
+        self._backend = Some(backend);
+    }
 }
 
 #[cfg(test)]

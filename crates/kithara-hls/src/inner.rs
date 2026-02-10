@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, Assets, AssetsBackend, CoverageIndex, asset_root_for_url};
 use kithara_net::HttpClient;
 use kithara_stream::StreamType;
 use tokio::sync::broadcast;
@@ -39,17 +39,21 @@ impl StreamType for Hls {
         let cancel = config.cancel.clone().unwrap_or_default();
         let net = HttpClient::new(config.net.clone());
 
-        // Build asset store
-        let base_assets = AssetStoreBuilder::new()
+        // Build storage backend
+        let mut builder = AssetStoreBuilder::new()
             .asset_root(Some(asset_root.as_str()))
             .cancel(cancel.clone())
             .root_dir(&config.store.cache_dir)
             .evict_config(config.store.to_evict_config())
-            .build();
+            .ephemeral(config.ephemeral);
+        if let Some(cap) = config.store.cache_capacity {
+            builder = builder.cache_capacity(cap);
+        }
+        let backend = builder.build();
 
         // Build FetchManager (unified: fetch + playlist cache + Loader)
         let fetch_manager = Arc::new(
-            FetchManager::new(base_assets.clone(), net, cancel.clone())
+            FetchManager::new(backend, net, cancel.clone())
                 .with_master_url(config.url.clone())
                 .with_base_url(config.base_url.clone()),
         );
@@ -73,12 +77,27 @@ impl StreamType for Hls {
             initial_variant,
         });
 
-        // Create HlsDownloader + HlsSource pair
-        let (downloader, source) =
-            build_pair(Arc::clone(&fetch_manager), master.variants.clone(), &config);
+        // Create coverage index for crash-safe segment tracking (disk only).
+        let coverage_index = match fetch_manager.backend() {
+            AssetsBackend::Disk(store) => store
+                .open_coverage_index_resource()
+                .ok()
+                .map(|res| Arc::new(CoverageIndex::new(res))),
+            AssetsBackend::Mem(_) => None,
+        };
 
-        // Spawn downloader as background task
-        std::mem::forget(kithara_stream::Backend::new(downloader, cancel));
+        // Create HlsDownloader + HlsSource pair
+        let (downloader, mut source) = build_pair(
+            Arc::clone(&fetch_manager),
+            master.variants.clone(),
+            &config,
+            coverage_index,
+        );
+
+        // Spawn downloader on the thread pool.
+        // Backend is stored in HlsSource — dropping the source cancels the downloader.
+        let backend = kithara_stream::Backend::new(downloader, &cancel, &config.thread_pool);
+        source.set_backend(backend);
 
         Ok(source)
     }

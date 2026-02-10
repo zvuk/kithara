@@ -7,11 +7,10 @@ use std::{
 };
 
 use kithara_abr::{AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource};
-use kithara_assets::{Assets, ResourceKey};
-use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{ContainerFormat, Downloader};
+use kithara_assets::{CoverageIndex, DiskCoverage, ResourceKey};
+use kithara_storage::{Coverage, MmapResource, ResourceExt, ResourceStatus};
+use kithara_stream::{ContainerFormat, Downloader, DownloaderIo, PlanOutcome, StepResult};
 use tokio::sync::broadcast;
-use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use url::Url;
 
@@ -35,8 +34,82 @@ pub(crate) struct SegmentMetadata {
     pub(crate) size: u64,
 }
 
+// HlsIo — pure I/O executor (Clone, no &mut self)
+
+/// Pure I/O executor for HLS segment fetching.
+#[derive(Clone)]
+pub struct HlsIo {
+    fetch: Arc<DefaultFetchManager>,
+}
+
+impl HlsIo {
+    pub(crate) fn new(fetch: Arc<DefaultFetchManager>) -> Self {
+        Self { fetch }
+    }
+}
+
+/// Plan for downloading a single HLS segment.
+pub struct HlsPlan {
+    pub(crate) variant: usize,
+    pub(crate) segment_index: usize,
+    pub(crate) need_init: bool,
+}
+
+/// Result of downloading a single HLS segment.
+pub struct HlsFetch {
+    pub(crate) init_len: u64,
+    pub(crate) init_url: Option<Url>,
+    pub(crate) media: SegmentMeta,
+    pub(crate) segment_index: usize,
+    pub(crate) variant: usize,
+    pub(crate) duration: Duration,
+}
+
+impl DownloaderIo for HlsIo {
+    type Plan = HlsPlan;
+    type Fetch = HlsFetch;
+    type Error = HlsError;
+
+    async fn fetch(&self, plan: HlsPlan) -> Result<HlsFetch, HlsError> {
+        let start = Instant::now();
+
+        let init_fut = {
+            let fetch = Arc::clone(&self.fetch);
+            async move {
+                if plan.need_init {
+                    match fetch.load_segment(plan.variant, usize::MAX).await {
+                        Ok(m) => (Some(m.url), m.len),
+                        Err(_) => (None, 0),
+                    }
+                } else {
+                    (None, 0)
+                }
+            }
+        };
+
+        let (media_result, (init_url, init_len)) = tokio::join!(
+            self.fetch.load_segment(plan.variant, plan.segment_index),
+            init_fut,
+        );
+
+        let duration = start.elapsed();
+
+        Ok(HlsFetch {
+            init_len,
+            init_url,
+            media: media_result?,
+            segment_index: plan.segment_index,
+            variant: plan.variant,
+            duration,
+        })
+    }
+}
+
+// HlsDownloader — mutable state (plan + commit)
+
 /// HLS downloader: fetches segments and maintains ABR state.
 pub struct HlsDownloader {
+    pub(crate) io: HlsIo,
     pub(crate) fetch: Arc<DefaultFetchManager>,
     pub(crate) variants: Vec<VariantStream>,
     pub(crate) current_segment_index: usize,
@@ -45,28 +118,16 @@ pub struct HlsDownloader {
     pub(crate) byte_offset: u64,
     pub(crate) shared: Arc<SharedSegments>,
     pub(crate) events_tx: Option<broadcast::Sender<HlsEvent>>,
-    pub(crate) cancel: CancellationToken,
     /// Backpressure threshold. None = no backpressure.
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// How often to yield to async runtime (every N segments).
-    pub(crate) yield_interval: usize,
-    /// Counter for yield interval.
-    pub(crate) segments_since_yield: usize,
     /// Cache of `expected_total_length` per variant (`variant_index` → `total_bytes`).
     pub(crate) variant_lengths: HashMap<usize, u64>,
     /// True after a mid-stream variant switch. Subsequent segments use cumulative offsets.
     pub(crate) had_midstream_switch: bool,
-    /// Max segments to download in parallel per step.
+    /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
-}
-
-/// Result of a segment download (network I/O only, no state mutation).
-struct SegmentDownload {
-    init_len: u64,
-    init_url: Option<Url>,
-    media: SegmentMeta,
-    segment_index: usize,
-    variant: usize,
+    /// Coverage index for crash-safe segment tracking.
+    pub(crate) coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
 }
 
 impl HlsDownloader {
@@ -153,8 +214,14 @@ impl HlsDownloader {
         init_len: u64,
         media_urls: &[Url],
         variant_stream: &VariantStream,
+        coverage_index: &Option<Arc<CoverageIndex<MmapResource>>>,
     ) -> (usize, u64) {
-        let assets = fetch.assets();
+        // Ephemeral backend has no persistent cache to scan.
+        if fetch.backend().is_ephemeral() {
+            return (0, 0);
+        }
+
+        let backend = fetch.backend();
         let container = if init_url.is_some() {
             Some(ContainerFormat::Fmp4)
         } else {
@@ -164,7 +231,7 @@ impl HlsDownloader {
         // If init is required, verify it's cached on disk
         if let Some(url) = init_url {
             let init_key = ResourceKey::from_url(url);
-            let init_cached = assets
+            let init_cached = backend
                 .open_resource(&init_key)
                 .map(|r| matches!(r.status(), ResourceStatus::Committed { .. }))
                 .unwrap_or(false);
@@ -181,7 +248,7 @@ impl HlsDownloader {
 
         for (index, (meta, segment_url)) in metadata.iter().zip(media_urls.iter()).enumerate() {
             let key = ResourceKey::from_url(segment_url);
-            let Ok(resource) = assets.open_resource(&key) else {
+            let Ok(resource) = backend.open_resource(&key) else {
                 break; // Stop on first uncached segment
             };
 
@@ -189,6 +256,16 @@ impl HlsDownloader {
                 let media_len = final_len.unwrap_or(0);
                 if media_len == 0 {
                     break;
+                }
+
+                // Validate against coverage if available.
+                // No entry → legacy file, treat as valid.
+                // Entry exists but incomplete → partially written, skip.
+                if let Some(idx) = coverage_index {
+                    let cov = DiskCoverage::open(Arc::clone(idx), segment_url.to_string());
+                    if cov.total_size().is_some() && !cov.is_complete() {
+                        break;
+                    }
                 }
 
                 // Init only for the first segment (init-once layout matches metadata)
@@ -231,55 +308,17 @@ impl HlsDownloader {
         (count, final_offset)
     }
 
-    /// Download media + init segment in parallel (network I/O only, no state mutation).
-    async fn download_segment(
-        fetch: Arc<DefaultFetchManager>,
-        variant: usize,
-        segment_index: usize,
-        need_init: bool,
-    ) -> Result<SegmentDownload, HlsError> {
-        let init_fut = {
-            let fetch = Arc::clone(&fetch);
-            async move {
-                if need_init {
-                    match fetch.load_segment(variant, usize::MAX).await {
-                        Ok(m) => (Some(m.url), m.len),
-                        Err(_) => (None, 0),
-                    }
-                } else {
-                    (None, 0)
-                }
-            }
-        };
-
-        let (media_result, (init_url, init_len)) =
-            tokio::join!(fetch.load_segment(variant, segment_index), init_fut,);
-
-        Ok(SegmentDownload {
-            init_len,
-            init_url,
-            media: media_result?,
-            segment_index,
-            variant,
-        })
-    }
-
-    /// Commit a downloaded segment to the segment index. Must be called sequentially.
+    /// Commit a downloaded segment to the segment index.
     ///
-    /// `download_duration` is used only for the `SegmentComplete` event.
-    /// Throughput recording is the caller's responsibility.
-    fn commit_download(
-        &mut self,
-        dl: SegmentDownload,
-        is_variant_switch: bool,
-        is_midstream_switch: bool,
-        download_duration: Duration,
-    ) {
+    /// `is_variant_switch` / `is_midstream_switch` control offset calculation.
+    fn commit_segment(&mut self, dl: HlsFetch, is_variant_switch: bool, is_midstream_switch: bool) {
+        self.record_throughput(dl.media.len, dl.duration, dl.media.duration);
+
         self.emit_event(HlsEvent::SegmentComplete {
             variant: dl.variant,
             segment_index: dl.segment_index,
             bytes_transferred: dl.media.len,
-            duration: download_duration,
+            duration: dl.duration,
         });
 
         if is_variant_switch {
@@ -329,6 +368,8 @@ impl HlsDownloader {
             total: None,
         });
 
+        // Mark segment coverage for crash-safe tracking via DiskCoverage.
+        let segment_url = entry.meta.url.clone();
         {
             let mut segments = self.shared.segments.lock();
             if is_variant_switch {
@@ -337,6 +378,13 @@ impl HlsDownloader {
             segments.push(entry);
         }
         self.shared.condvar.notify_all();
+
+        if let Some(ref idx) = self.coverage_index {
+            let mut cov = DiskCoverage::open(Arc::clone(idx), segment_url.to_string());
+            cov.set_total_size(media_len);
+            cov.mark(0..media_len);
+            // flush happens via Drop, or explicitly in commit()
+        }
     }
 
     /// Prepare variant for download: detect switches, calculate metadata, populate cache.
@@ -384,6 +432,7 @@ impl HlsDownloader {
                                 init_len,
                                 &media_urls,
                                 vstream,
+                                &self.coverage_index,
                             )
                         } else {
                             (0, 0)
@@ -457,88 +506,6 @@ impl HlsDownloader {
         Ok((is_variant_switch, is_midstream_switch))
     }
 
-    /// Fetch a single segment by variant and index.
-    ///
-    /// Used for on-demand requests (seek). For sequential downloads, `step()`
-    /// uses `download_segment` + `commit_download` directly with batching.
-    async fn fetch_segment(
-        &mut self,
-        variant: usize,
-        segment_index: usize,
-    ) -> Result<(), HlsError> {
-        if self.cancel.is_cancelled() {
-            debug!("cancelled, skipping fetch");
-            return Ok(());
-        }
-
-        let num_segments = self.fetch.num_segments(variant).await?;
-        if segment_index >= num_segments {
-            debug!(variant, segment_index, "segment index out of range");
-            return Ok(());
-        }
-
-        if self
-            .shared
-            .segments
-            .lock()
-            .is_segment_loaded(variant, segment_index)
-        {
-            debug!(variant, segment_index, "segment already loaded, skipping");
-            return Ok(());
-        }
-
-        let (is_variant_switch, is_midstream_switch) =
-            self.ensure_variant_ready(variant, segment_index).await?;
-
-        // After a midstream switch, skip segments from the old variant.
-        if self.had_midstream_switch && !is_midstream_switch {
-            let current_variant = self.abr.get_current_variant_index();
-            if variant != current_variant {
-                debug!(
-                    variant,
-                    segment_index,
-                    current_variant,
-                    "skipping stale segment from pre-switch variant"
-                );
-                return Ok(());
-            }
-        }
-
-        // Re-check after metadata calculation (populate_cached_segments may have loaded it)
-        if self
-            .shared
-            .segments
-            .lock()
-            .is_segment_loaded(variant, segment_index)
-        {
-            debug!(
-                variant,
-                segment_index, "segment loaded from cache after metadata calc"
-            );
-            return Ok(());
-        }
-
-        self.emit_event(HlsEvent::SegmentStart {
-            variant,
-            segment_index,
-            byte_offset: self.byte_offset,
-        });
-
-        let start = Instant::now();
-        let dl = Self::download_segment(
-            Arc::clone(&self.fetch),
-            variant,
-            segment_index,
-            true, // always try init for single-segment fetch
-        )
-        .await?;
-        let duration = start.elapsed();
-
-        self.record_throughput(dl.media.len, duration, dl.media.duration);
-        self.commit_download(dl, is_variant_switch, is_midstream_switch, duration);
-        Ok(())
-    }
-
     fn make_abr_decision(&mut self) -> kithara_abr::AbrDecision {
         let now = Instant::now();
         let decision = self.abr.decide(now);
@@ -586,68 +553,112 @@ impl HlsDownloader {
 }
 
 impl Downloader for HlsDownloader {
-    async fn step(&mut self) -> bool {
-        // Backpressure: wait if too far ahead of reader (only when limit is set).
-        // On-demand requests (from wait_range during seek/atom scan) bypass
-        // backpressure to prevent deadlock: reader blocked in condvar.wait()
-        // can't advance reader_pos, so the gap never shrinks.
-        if let Some(limit) = self.look_ahead_bytes {
-            loop {
-                if !self.shared.segment_requests.is_empty() {
-                    break;
-                }
+    type Plan = HlsPlan;
+    type Fetch = HlsFetch;
+    type Error = HlsError;
+    type Io = HlsIo;
 
-                let advanced = self.shared.reader_advanced.notified();
-                tokio::pin!(advanced);
+    fn io(&self) -> &Self::Io {
+        &self.io
+    }
 
-                let reader_pos = self
-                    .shared
-                    .reader_offset
-                    .load(std::sync::atomic::Ordering::Acquire);
-                let downloaded = self.shared.segments.lock().total_bytes();
+    async fn poll_demand(&mut self) -> Option<HlsPlan> {
+        let req = self.shared.segment_requests.pop()?;
 
-                if downloaded.saturating_sub(reader_pos) <= limit {
-                    break;
-                }
+        debug!(
+            variant = req.variant,
+            segment_index = req.segment_index,
+            "processing on-demand segment request"
+        );
 
-                debug!(
-                    downloaded,
-                    reader_pos,
-                    gap = downloaded - reader_pos,
-                    "downloader waiting for reader to catch up"
-                );
-                advanced.await;
-            }
-        }
-
-        // On-demand requests (seek): process immediately, single segment.
-        if let Some(req) = self.shared.segment_requests.pop() {
+        let num_segments = self.fetch.num_segments(req.variant).await.ok().unwrap_or(0);
+        if req.segment_index >= num_segments {
             debug!(
                 variant = req.variant,
                 segment_index = req.segment_index,
-                "processing on-demand segment request"
+                num_segments,
+                "segment index out of range"
             );
-
-            return match self.fetch_segment(req.variant, req.segment_index).await {
-                Ok(()) => {
-                    self.shared.condvar.notify_all();
-                    if req.segment_index == self.current_segment_index {
-                        self.current_segment_index += 1;
-                    }
-                    true
-                }
-                Err(e) => {
-                    self.shared.condvar.notify_all();
-                    debug!(?e, "segment fetch error");
-                    self.emit_event(HlsEvent::DownloadError {
-                        error: e.to_string(),
-                    });
-                    false
-                }
-            };
+            self.shared.condvar.notify_all();
+            return None;
         }
 
-        // Sequential batch download: ABR → prepare → download N in parallel → commit in order.
+        if self
+            .shared
+            .segments
+            .lock()
+            .is_segment_loaded(req.variant, req.segment_index)
+        {
+            debug!(
+                variant = req.variant,
+                segment_index = req.segment_index,
+                "segment already loaded, skipping"
+            );
+            self.shared.condvar.notify_all();
+            return None;
+        }
+
+        // Prepare variant (metadata, variant switch detection).
+        let (is_variant_switch, is_midstream_switch) = match self
+            .ensure_variant_ready(req.variant, req.segment_index)
+            .await
+        {
+            Ok(flags) => flags,
+            Err(e) => {
+                debug!(?e, "variant preparation error in poll_demand");
+                self.shared.condvar.notify_all();
+                self.emit_event(HlsEvent::DownloadError {
+                    error: e.to_string(),
+                });
+                return None;
+            }
+        };
+
+        // Skip stale segments from old variant after midstream switch.
+        if self.had_midstream_switch && !is_midstream_switch {
+            let current_variant = self.abr.get_current_variant_index();
+            if req.variant != current_variant {
+                debug!(
+                    variant = req.variant,
+                    segment_index = req.segment_index,
+                    current_variant,
+                    "skipping stale segment from pre-switch variant"
+                );
+                self.shared.condvar.notify_all();
+                return None;
+            }
+        }
+
+        // Re-check after metadata calculation (populate_cached_segments may have loaded it).
+        if self
+            .shared
+            .segments
+            .lock()
+            .is_segment_loaded(req.variant, req.segment_index)
+        {
+            debug!(
+                variant = req.variant,
+                segment_index = req.segment_index,
+                "segment loaded from cache after metadata calc"
+            );
+            self.shared.condvar.notify_all();
+            return None;
+        }
+
+        self.emit_event(HlsEvent::SegmentStart {
+            variant: req.variant,
+            segment_index: req.segment_index,
+            byte_offset: self.byte_offset,
+        });
+
+        Some(HlsPlan {
+            variant: req.variant,
+            segment_index: req.segment_index,
+            need_init: is_variant_switch || !self.sent_init_for_variant.contains(&req.variant),
+        })
+    }
+
+    async fn plan(&mut self) -> PlanOutcome<HlsPlan> {
         let old_variant = self.abr.get_current_variant_index();
         let decision = self.make_abr_decision();
         let variant = self.abr.get_current_variant_index();
@@ -661,7 +672,7 @@ impl Downloader for HlsDownloader {
                 .eof
                 .store(true, std::sync::atomic::Ordering::Release);
             self.shared.condvar.notify_all();
-            return false;
+            return PlanOutcome::Complete;
         }
 
         if decision.changed {
@@ -684,24 +695,17 @@ impl Downloader for HlsDownloader {
                 self.emit_event(HlsEvent::DownloadError {
                     error: e.to_string(),
                 });
-                return false;
+                return PlanOutcome::Complete;
             }
         };
 
-        // Sequential batch: download → record → commit for up to prefetch_count segments.
-        // Each segment goes through the full chain individually, so throughput
-        // recording is identical to single-segment mode. The batch just reduces
-        // per-step overhead (ABR decision, backpressure check, variant prep).
+        // Build batch of plans.
         let batch_end = (self.current_segment_index + self.prefetch_count).min(num_segments);
+        let mut plans = Vec::new();
         let mut need_init = is_variant_switch;
-        let mut downloaded = 0usize;
 
         for seg_idx in self.current_segment_index..batch_end {
-            // Abort batch if on-demand request (seek) arrived.
-            if !self.shared.segment_requests.is_empty() {
-                break;
-            }
-
+            // Skip already loaded segments.
             if self
                 .shared
                 .segments
@@ -726,51 +730,58 @@ impl Downloader for HlsDownloader {
                 byte_offset: self.byte_offset,
             });
 
-            let start = Instant::now();
-            let dl =
-                match Self::download_segment(Arc::clone(&self.fetch), variant, seg_idx, need_init)
-                    .await
-                {
-                    Ok(dl) => dl,
-                    Err(e) => {
-                        self.shared.condvar.notify_all();
-                        debug!(?e, "segment fetch error");
-                        self.emit_event(HlsEvent::DownloadError {
-                            error: e.to_string(),
-                        });
-                        return false;
-                    }
-                };
-            let duration = start.elapsed();
-
-            self.record_throughput(dl.media.len, duration, dl.media.duration);
-            self.commit_download(
-                dl,
-                is_variant_switch && downloaded == 0,
-                is_midstream_switch && downloaded == 0,
-                duration,
-            );
-
-            self.current_segment_index = seg_idx + 1;
+            plans.push(HlsPlan {
+                variant,
+                segment_index: seg_idx,
+                need_init,
+            });
             need_init = false;
-            downloaded += 1;
         }
 
-        if downloaded == 0 {
+        if plans.is_empty() {
             // All segments in window already loaded (from cache).
             self.current_segment_index = batch_end;
             self.shared.condvar.notify_all();
         }
 
-        // Yield periodically to let other tasks run (e.g., playback).
-        if self.look_ahead_bytes.is_none() {
-            self.segments_since_yield += downloaded.max(1);
-            if self.segments_since_yield >= self.yield_interval {
-                self.segments_since_yield = 0;
-                tokio::task::yield_now().await;
-            }
+        PlanOutcome::Batch(plans)
+    }
+
+    async fn step(&mut self) -> Result<StepResult<HlsFetch>, HlsError> {
+        // HLS does not use streaming step — all work goes through plan/batch.
+        std::future::pending().await
+    }
+
+    fn commit(&mut self, fetch: HlsFetch) {
+        let is_variant_switch = !self.sent_init_for_variant.contains(&fetch.variant);
+        let is_midstream_switch = is_variant_switch && fetch.segment_index > 0;
+
+        // Advance current_segment_index if this is the next expected segment.
+        if fetch.segment_index == self.current_segment_index {
+            self.current_segment_index = fetch.segment_index + 1;
+        } else if fetch.segment_index >= self.current_segment_index {
+            // Batch may commit out of order — advance past if needed.
+            self.current_segment_index = fetch.segment_index + 1;
         }
 
-        true
+        self.commit_segment(fetch, is_variant_switch, is_midstream_switch);
+    }
+
+    fn should_throttle(&self) -> bool {
+        let Some(limit) = self.look_ahead_bytes else {
+            return false;
+        };
+
+        let reader_pos = self
+            .shared
+            .reader_offset
+            .load(std::sync::atomic::Ordering::Acquire);
+        let downloaded = self.shared.segments.lock().total_bytes();
+
+        downloaded.saturating_sub(reader_pos) > limit
+    }
+
+    async fn wait_ready(&self) {
+        self.shared.reader_advanced.notified().await;
     }
 }

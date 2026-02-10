@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use kithara_bufpool::byte_pool;
-use kithara_storage::{OpenMode, ResourceExt, StorageError, StorageOptions, StorageResource};
+use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt, StorageError};
 use rstest::*;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -13,20 +13,22 @@ use crate::common::fixtures::{cancel_token, cancel_token_cancelled, temp_dir};
 #[test]
 fn atomic_resource_path_method(temp_dir: TempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("test.dat");
-    let atomic = StorageResource::open(StorageOptions {
-        path: file_path.clone(),
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let atomic: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path.clone(),
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
-    assert_eq!(atomic.path(), file_path);
+    assert_eq!(atomic.path(), Some(file_path.as_path()));
 
     atomic
         .write_all(b"test data")
         .expect("write should succeed");
-    assert_eq!(atomic.path(), file_path);
+    assert_eq!(atomic.path(), Some(file_path.as_path()));
 }
 
 #[rstest]
@@ -42,12 +44,14 @@ fn atomic_resource_write_read_success(
     #[case] test_data: &[u8],
 ) {
     let file_path = temp_dir.path().join(format!("{}.dat", test_name));
-    let atomic = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let atomic: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     atomic.write_all(test_data).expect("write should succeed");
@@ -62,12 +66,14 @@ fn atomic_resource_write_read_success(
 #[test]
 fn atomic_resource_empty_write_read(temp_dir: TempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("empty.dat");
-    let atomic = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let atomic: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     // write_all with empty data commits with final_len=0
@@ -91,22 +97,26 @@ fn atomic_resource_read_missing_file(
     let file_path = temp_dir.path().join("missing.dat");
 
     if create_file_first {
-        let atomic = StorageResource::open(StorageOptions {
-            path: file_path.clone(),
-            initial_len: None,
-            mode: OpenMode::Auto,
-            cancel: cancel_token.clone(),
-        })
+        let atomic: MmapResource = Resource::open(
+            cancel_token.clone(),
+            MmapOptions {
+                path: file_path.clone(),
+                initial_len: None,
+                mode: OpenMode::Auto,
+            },
+        )
         .unwrap();
         atomic.write_all(b"initial").unwrap();
     }
 
-    let atomic = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let atomic: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     let mut buf = byte_pool().get();
@@ -127,12 +137,14 @@ fn atomic_resource_cancelled_operations(
     cancel_token_cancelled: CancellationToken,
 ) {
     let file_path = temp_dir.path().join("cancelled.dat");
-    let atomic = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token_cancelled,
-    })
+    let atomic: MmapResource = Resource::open(
+        cancel_token_cancelled,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     // write_all on cancelled resource: write_at succeeds (empty check passes first),
@@ -161,12 +173,14 @@ fn atomic_resource_cancelled_operations(
 #[test]
 fn atomic_resource_fail_propagation(temp_dir: TempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("failed.dat");
-    let atomic = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let atomic: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     atomic.fail("test failure".to_string());
@@ -193,12 +207,14 @@ fn atomic_resource_fail_propagation(temp_dir: TempDir, cancel_token: Cancellatio
 #[test]
 fn atomic_resource_concurrent_writes(temp_dir: TempDir, cancel_token: CancellationToken) {
     let file_path = temp_dir.path().join("concurrent.dat");
-    let atomic = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let atomic: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     let atomic_clone = atomic.clone();
@@ -229,12 +245,14 @@ fn atomic_resource_concurrent_writes(temp_dir: TempDir, cancel_token: Cancellati
 #[test]
 fn atomic_resource_invalid_path(temp_dir: TempDir, cancel_token: CancellationToken) {
     let invalid_path = temp_dir.path().join("nonexistent").join("file.dat");
-    let atomic = StorageResource::open(StorageOptions {
-        path: invalid_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let atomic: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: invalid_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     let result = atomic.write_all(b"data");
@@ -249,12 +267,14 @@ fn atomic_resource_large_file_operations() {
     let file_path = temp_dir.path().join("large.dat");
     let cancel_token = CancellationToken::new();
 
-    let atomic = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let atomic: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
 
     let large_data = vec![0x42; 10 * 1024 * 1024];
@@ -279,22 +299,26 @@ fn atomic_resource_persists_across_reopen(
     let file_path = temp_dir.path().join(format!("{name}.dat"));
 
     {
-        let atomic = StorageResource::open(StorageOptions {
-            path: file_path.clone(),
-            initial_len: None,
-            mode: OpenMode::Auto,
-            cancel: cancel_token.clone(),
-        })
+        let atomic: MmapResource = Resource::open(
+            cancel_token.clone(),
+            MmapOptions {
+                path: file_path.clone(),
+                initial_len: None,
+                mode: OpenMode::Auto,
+            },
+        )
         .unwrap();
         atomic.write_all(payload).unwrap();
     }
 
-    let reopened = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let reopened: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
     let mut buf = byte_pool().get();
     reopened.read_into(&mut buf).unwrap();
@@ -311,22 +335,26 @@ fn atomic_resource_empty_persists_across_reopen(
     let file_path = temp_dir.path().join("persist_empty.dat");
 
     {
-        let atomic = StorageResource::open(StorageOptions {
-            path: file_path.clone(),
-            initial_len: None,
-            mode: OpenMode::Auto,
-            cancel: cancel_token.clone(),
-        })
+        let atomic: MmapResource = Resource::open(
+            cancel_token.clone(),
+            MmapOptions {
+                path: file_path.clone(),
+                initial_len: None,
+                mode: OpenMode::Auto,
+            },
+        )
         .unwrap();
         atomic.write_all(b"").unwrap();
     }
 
-    let reopened = StorageResource::open(StorageOptions {
-        path: file_path,
-        initial_len: None,
-        mode: OpenMode::Auto,
-        cancel: cancel_token,
-    })
+    let reopened: MmapResource = Resource::open(
+        cancel_token,
+        MmapOptions {
+            path: file_path,
+            initial_len: None,
+            mode: OpenMode::Auto,
+        },
+    )
     .unwrap();
     let mut buf = byte_pool().get();
     let n = reopened.read_into(&mut buf).unwrap();

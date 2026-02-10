@@ -11,7 +11,7 @@ use std::{
     },
 };
 
-use kithara_storage::{ResourceExt, ResourceStatus, StorageResource, StorageResult, WaitOutcome};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -76,7 +76,7 @@ where
     }
 
     /// Create with explicit enabled flag. When `false`, lease/pin logic is bypassed.
-    pub fn with_enabled(
+    pub fn with_options(
         inner: Arc<A>,
         cancel: CancellationToken,
         byte_recorder: Option<Arc<dyn ByteRecorder>>,
@@ -96,7 +96,7 @@ where
         &self.inner
     }
 
-    fn open_index(&self) -> AssetsResult<PinsIndex> {
+    fn open_index(&self) -> AssetsResult<PinsIndex<A::IndexRes>> {
         PinsIndex::open(self.inner())
     }
 
@@ -134,7 +134,7 @@ where
         self.persist_pins_best_effort(&snapshot)
     }
 
-    fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard<A>> {
+    fn pin(&self, asset_root: &str) -> AssetsResult<LeaseGuard> {
         self.ensure_loaded_best_effort()?;
 
         {
@@ -147,11 +147,29 @@ where
         // Eagerly persist so crash-recovery sees the pin.
         let _ = self.flush_pins();
 
+        let owner = self.clone();
+        let ar = asset_root.to_string();
+        let cancel = self.cancel.clone();
+
         Ok(LeaseGuard {
             inner: Some(Arc::new(LeaseGuardInner {
-                owner: self.clone(),
-                asset_root: asset_root.to_string(),
-                cancel: self.cancel.clone(),
+                on_drop: Box::new(move || {
+                    if cancel.is_cancelled() {
+                        return;
+                    }
+
+                    tracing::trace!(asset_root = %ar, "LeaseGuard::drop - removing pin");
+
+                    {
+                        let mut pins = owner.pins.lock();
+                        if pins.remove(&ar) {
+                            owner.dirty.store(true, Ordering::Release);
+                        }
+                    }
+
+                    // Eagerly persist unpin so crash-recovery sees it.
+                    let _ = owner.flush_pins();
+                }),
             })),
         })
     }
@@ -200,7 +218,8 @@ where
 
         // Record bytes if recorder is set (best-effort)
         if let Some(ref recorder) = self.byte_recorder
-            && let Ok(metadata) = std::fs::metadata(self.inner.path())
+            && let Some(path) = self.inner.path()
+            && let Ok(metadata) = std::fs::metadata(path)
             && metadata.is_file()
         {
             recorder.record_bytes(&self.asset_root, metadata.len());
@@ -213,7 +232,7 @@ where
         self.inner.fail(reason);
     }
 
-    fn path(&self) -> &Path {
+    fn path(&self) -> Option<&Path> {
         self.inner.path()
     }
 
@@ -234,8 +253,9 @@ impl<A> Assets for LeaseAssets<A>
 where
     A: Assets,
 {
-    type Res = LeaseResource<A::Res, LeaseGuard<A>>;
+    type Res = LeaseResource<A::Res, LeaseGuard>;
     type Context = A::Context;
+    type IndexRes = A::IndexRes;
 
     fn root_dir(&self) -> &Path {
         self.inner.root_dir()
@@ -271,18 +291,26 @@ where
         })
     }
 
-    fn open_pins_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         // Pins index must be opened without pinning to avoid recursion
         self.inner.open_pins_index_resource()
     }
 
-    fn open_lru_index_resource(&self) -> AssetsResult<StorageResource> {
+    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         // LRU index must be opened without pinning
         self.inner.open_lru_index_resource()
     }
 
+    fn open_coverage_index_resource(&self) -> AssetsResult<Self::IndexRes> {
+        self.inner.open_coverage_index_resource()
+    }
+
     fn delete_asset(&self) -> AssetsResult<()> {
         self.inner.delete_asset()
+    }
+
+    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
+        self.inner.remove_resource(key)
     }
 }
 
@@ -309,44 +337,21 @@ where
 ///
 /// Uses `Arc` internally for reference counting - unpin happens only when the last clone is dropped.
 /// When `inner` is `None`, the guard is a no-op (used when lease is bypassed).
+///
+/// Non-generic: drop logic is captured as a closure for type erasure.
 #[derive(Clone)]
-pub struct LeaseGuard<A>
-where
-    A: Assets,
-{
+pub struct LeaseGuard {
     #[expect(dead_code)]
-    inner: Option<Arc<LeaseGuardInner<A>>>,
+    inner: Option<Arc<LeaseGuardInner>>,
 }
 
-struct LeaseGuardInner<A>
-where
-    A: Assets,
-{
-    owner: LeaseAssets<A>,
-    asset_root: String,
-    cancel: CancellationToken,
+struct LeaseGuardInner {
+    on_drop: Box<dyn Fn() + Send + Sync>,
 }
 
-impl<A> Drop for LeaseGuardInner<A>
-where
-    A: Assets,
-{
+impl Drop for LeaseGuardInner {
     fn drop(&mut self) {
-        if self.cancel.is_cancelled() {
-            return;
-        }
-
-        tracing::trace!(asset_root = %self.asset_root, "LeaseGuard::drop - removing pin");
-
-        {
-            let mut pins = self.owner.pins.lock();
-            if pins.remove(&self.asset_root) {
-                self.owner.dirty.store(true, Ordering::Release);
-            }
-        }
-
-        // Eagerly persist unpin so crash-recovery sees it.
-        let _ = self.owner.flush_pins();
+        (self.on_drop)();
     }
 }
 
@@ -374,7 +379,7 @@ mod tests {
             "test_asset",
             CancellationToken::new(),
         ));
-        LeaseAssets::with_enabled(disk, CancellationToken::new(), None, false)
+        LeaseAssets::with_options(disk, CancellationToken::new(), None, false)
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {

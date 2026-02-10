@@ -589,9 +589,7 @@ mod tests {
         c.decide(now);
     }
 
-    // ---------------------------------------------------------------
     // apply() tests
-    // ---------------------------------------------------------------
 
     #[test]
     fn apply_no_change_leaves_variant_and_timestamp_unchanged() {
@@ -699,9 +697,7 @@ mod tests {
         assert_eq!(d2.reason, AbrReason::AlreadyOptimal);
     }
 
-    // ---------------------------------------------------------------
     // Hysteresis boundary tests
-    // ---------------------------------------------------------------
 
     #[test]
     fn up_switch_hysteresis_boundary() {
@@ -828,9 +824,7 @@ mod tests {
         );
     }
 
-    // ---------------------------------------------------------------
     // Buffer threshold for up-switch
-    // ---------------------------------------------------------------
 
     #[test]
     fn buffer_level_threshold_for_up_switch() {
@@ -883,9 +877,7 @@ mod tests {
         assert!(!d.changed);
     }
 
-    // ---------------------------------------------------------------
     // Single variant
-    // ---------------------------------------------------------------
 
     #[test]
     fn single_variant_returns_already_optimal() {
@@ -915,9 +907,7 @@ mod tests {
         assert!(!d.changed);
     }
 
-    // ---------------------------------------------------------------
     // Min-interval enforcement
-    // ---------------------------------------------------------------
 
     #[test]
     fn min_interval_enforcement_precise() {

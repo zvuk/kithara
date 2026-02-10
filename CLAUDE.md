@@ -60,15 +60,16 @@ kithara-file     kithara-hls
 
 **`kithara-bufpool`** — Generic sharded buffer pool for zero-allocation hot paths
 
-**`kithara-storage`** — Unified storage backed by `mmap-io`
-- `StorageResource`: random-access with `write_at`/`read_at`/`wait_range` + convenience `read_into`/`write_all`
+**`kithara-storage`** — Unified storage layer
+- `StorageResource`: enum (`Mmap` | `Mem`) with random-access `write_at`/`read_at`/`wait_range` + convenience `read_into`/`write_all`
 - `OpenMode`: `Auto` (default), `ReadWrite` (index files), `ReadOnly`
 - `ResourceExt` trait for generic resource access
 
-**`kithara-assets`** — Persistent disk assets store with lease/pin semantics and eviction
+**`kithara-assets`** — Assets store (disk or in-memory) with lease/pin semantics and eviction
 - `Assets` trait (base), `LeaseAssets`, `CachedAssets`, `EvictAssets`, `ProcessingAssets` decorators
 - Resources identified by `ResourceKey { asset_root, rel_path }`
-- `AssetStore` type alias = `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
+- `AssetStore` type alias = `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>` (disk)
+- `MemAssetStore` / `MemStore` for ephemeral in-memory storage
 - `"_index"` namespace reserved for internal metadata
 
 **`kithara-net`** — HTTP networking with retry, timeout, and streaming
@@ -92,7 +93,7 @@ kithara-file     kithara-hls
 - `Hls` implements `StreamType` for use with `Stream<Hls>`
 - `HlsConfig` for configuration (includes ABR, key processing, caching options)
 - `HlsEvent` for monitoring
-- `FetchManager`: unified fetch layer (network + disk cache)
+- `FetchManager`: unified fetch layer (network + `AssetsBackend` for disk or in-memory cache)
 - Re-exports ABR types from `kithara-abr`
 
 **`kithara-abr`** — Protocol-agnostic adaptive bitrate algorithm
