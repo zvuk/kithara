@@ -3,33 +3,53 @@
 //! Generic backend for streaming sources.
 //!
 //! Backend spawns a Downloader task. Source is owned by Reader directly.
+//! When Backend is dropped, the downloader task is cancelled automatically.
 
-use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
 use crate::downloader::Downloader;
+use crate::pool::ThreadPool;
 
 /// Spawns and owns a Downloader task.
 ///
 /// The downloader runs independently (async, writing data to storage).
 /// Source is owned by Reader and accessed directly (sync).
 ///
-/// Backend exists only to manage the downloader lifecycle.
-/// Drop it to abort the downloader task.
+/// Backend manages the downloader lifecycle:
+/// - On creation, spawns the downloader on the provided [`ThreadPool`].
+/// - On drop, cancels the child token, causing the downloader loop to exit.
+///
+/// Store the Backend alongside the Source to ensure the downloader is
+/// stopped when the stream is destroyed.
 pub struct Backend {
-    _downloader_handle: JoinHandle<()>,
+    /// Child token created from the caller's cancel token.
+    /// Cancelled on drop to stop the downloader.
+    cancel: CancellationToken,
 }
 
 impl Backend {
-    /// Spawn a downloader task.
+    /// Spawn a downloader task on the given thread pool.
     ///
     /// The downloader runs in the background writing data to storage.
-    pub fn new<D: Downloader>(downloader: D, cancel: CancellationToken) -> Self {
-        let handle = tokio::spawn(Self::run_downloader(downloader, cancel));
+    /// A child cancellation token is created: dropping this Backend
+    /// cancels the child (and thus the downloader) without affecting
+    /// the parent token.
+    pub fn new<D: Downloader>(
+        downloader: D,
+        cancel: &CancellationToken,
+        pool: &ThreadPool,
+    ) -> Self {
+        let child_cancel = cancel.child_token();
+        let task_cancel = child_cancel.clone();
+
+        let handle = tokio::runtime::Handle::current();
+        pool.spawn(move || {
+            handle.block_on(Self::run_downloader(downloader, task_cancel));
+        });
 
         Self {
-            _downloader_handle: handle,
+            cancel: child_cancel,
         }
     }
 
@@ -50,5 +70,11 @@ impl Backend {
                 }
             }
         }
+    }
+}
+
+impl Drop for Backend {
+    fn drop(&mut self) {
+        self.cancel.cancel();
     }
 }

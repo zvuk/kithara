@@ -86,6 +86,9 @@ tokio-util = { version = "0.7.18", features = ["full"] }
 tokio-stream = "0.1.18"
 futures = "0.3.31"
 
+# thread pool
+rayon = "1.10"
+
 # channels/buffers
 kanal = "0.1.1"
 bytes = "1.11.1"

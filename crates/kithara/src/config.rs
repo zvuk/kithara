@@ -11,6 +11,7 @@ use kithara_bufpool::PcmPool;
 use kithara_decode::DecodeError;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::NetOptions;
+use kithara_stream::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -100,6 +101,10 @@ pub struct ResourceConfig {
     /// Storage configuration (cache directory, eviction limits).
     #[cfg(any(feature = "file", feature = "hls"))]
     pub store: StoreOptions,
+    /// Thread pool for background work (decode, probe, downloads).
+    ///
+    /// Shared across all components. Defaults to the global rayon pool.
+    pub thread_pool: ThreadPool,
 }
 
 impl ResourceConfig {
@@ -149,6 +154,7 @@ impl ResourceConfig {
             src,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
+            thread_pool: ThreadPool::default(),
         })
     }
 
@@ -244,6 +250,14 @@ impl ResourceConfig {
         self
     }
 
+    /// Set thread pool for background work (decode, probe, downloads).
+    ///
+    /// The pool is shared across all components. Defaults to the global rayon pool.
+    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
+        self.thread_pool = pool;
+        self
+    }
+
     // -- Internal conversions -------------------------------------------------
 
     /// Convert into an `AudioConfig<File>`.
@@ -266,7 +280,8 @@ impl ResourceConfig {
         let mut file_config = kithara_file::FileConfig::new(file_src)
             .with_store(self.store)
             .with_net(self.net)
-            .with_look_ahead_bytes(self.look_ahead_bytes);
+            .with_look_ahead_bytes(self.look_ahead_bytes)
+            .with_thread_pool(self.thread_pool.clone());
 
         if let Some(name) = self.name {
             file_config = file_config.with_name(name);
@@ -276,7 +291,8 @@ impl ResourceConfig {
             file_config = file_config.with_cancel(cancel);
         }
 
-        let mut config = AudioConfig::<kithara_file::File>::new(file_config);
+        let mut config =
+            AudioConfig::<kithara_file::File>::new(file_config).with_thread_pool(self.thread_pool);
 
         // Apply audio settings from ResourceConfig.
         if let Some(h) = self.hint {
@@ -314,7 +330,8 @@ impl ResourceConfig {
             .with_net(self.net)
             .with_abr(self.abr)
             .with_keys(self.keys)
-            .with_look_ahead_bytes(self.look_ahead_bytes);
+            .with_look_ahead_bytes(self.look_ahead_bytes)
+            .with_thread_pool(self.thread_pool.clone());
 
         if let Some(name) = self.name {
             hls_config = hls_config.with_name(name);
@@ -327,7 +344,8 @@ impl ResourceConfig {
             hls_config = hls_config.with_cancel(cancel);
         }
 
-        let mut config = AudioConfig::<kithara_hls::Hls>::new(hls_config);
+        let mut config =
+            AudioConfig::<kithara_hls::Hls>::new(hls_config).with_thread_pool(self.thread_pool);
 
         // Apply audio settings from ResourceConfig.
         if let Some(h) = self.hint {

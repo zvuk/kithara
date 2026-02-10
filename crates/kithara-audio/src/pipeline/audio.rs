@@ -14,10 +14,7 @@ use kanal::Receiver;
 use kithara_bufpool::{PcmBuf, PcmPool, byte_pool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_stream::{EpochValidator, Fetch, Stream, StreamType};
-use tokio::{
-    sync::{Notify, broadcast},
-    task::spawn_blocking,
-};
+use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
 
@@ -117,9 +114,6 @@ pub struct Audio<S> {
 
     /// Whether `preload()` has been called (enables non-blocking mode).
     preloaded: bool,
-
-    /// Worker thread handle for graceful shutdown.
-    worker_thread: Option<std::thread::JoinHandle<()>>,
 
     /// Marker for source type.
     _marker: std::marker::PhantomData<S>,
@@ -374,6 +368,7 @@ where
             preload_chunks,
             resampler_quality,
             stream: stream_config,
+            thread_pool,
             events_tx,
         } = config;
 
@@ -413,16 +408,18 @@ where
         }
 
         // Trigger first segment load to get MediaInfo for proper decoder creation.
-        let stream_join = spawn_blocking(move || {
-            let mut stream = stream;
-            let mut probe_buf = byte_pool().get_with(|b| b.resize(1024, 0));
-            let _ = stream.read(&mut probe_buf);
-            stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
-            Ok::<_, DecodeError>(stream)
-        })
-        .await
-        .map_err(|e| DecodeError::Io(std::io::Error::other(format!("probe task panicked: {e}"))))?;
-        let stream = stream_join?;
+        let stream = thread_pool
+            .spawn_async(move || {
+                let mut stream = stream;
+                let mut probe_buf = byte_pool().get_with(|b| b.resize(1024, 0));
+                let _ = stream.read(&mut probe_buf);
+                stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
+                Ok::<_, DecodeError>(stream)
+            })
+            .await
+            .map_err(|e| {
+                DecodeError::Io(std::io::Error::other(format!("probe task panicked: {e}")))
+            })??;
 
         // Get initial MediaInfo.
         // For decoder creation: user-provided overrides stream-detected.
@@ -437,7 +434,7 @@ where
 
         let pool = pool.get_or_insert_with(|| pcm_pool().clone());
 
-        // Create initial decoder in spawn_blocking to avoid blocking tokio runtime.
+        // Create initial decoder on the thread pool to avoid blocking tokio runtime.
         // Symphonia probe() does blocking IO which would deadlock the async downloader.
         let decoder_config = kithara_decode::DecoderConfig {
             prefer_hardware,
@@ -447,25 +444,26 @@ where
         let shared_stream_for_decoder = shared_stream.clone();
         let hint_for_decoder = hint.clone();
         let initial_media_info_for_decoder = initial_media_info.clone();
-        let decoder: Box<dyn kithara_decode::InnerDecoder> = spawn_blocking(move || {
-            if let Some(ref info) = initial_media_info_for_decoder {
-                kithara_decode::DecoderFactory::create_from_media_info(
-                    shared_stream_for_decoder,
-                    info,
-                    decoder_config,
-                )
-            } else {
-                kithara_decode::DecoderFactory::create_with_probe(
-                    shared_stream_for_decoder,
-                    hint_for_decoder.as_deref(),
-                    decoder_config,
-                )
-            }
-        })
-        .await
-        .map_err(|e| {
-            DecodeError::Io(std::io::Error::other(format!("decoder task panicked: {e}")))
-        })??;
+        let decoder: Box<dyn kithara_decode::InnerDecoder> = thread_pool
+            .spawn_async(move || {
+                if let Some(ref info) = initial_media_info_for_decoder {
+                    kithara_decode::DecoderFactory::create_from_media_info(
+                        shared_stream_for_decoder,
+                        info,
+                        decoder_config,
+                    )
+                } else {
+                    kithara_decode::DecoderFactory::create_with_probe(
+                        shared_stream_for_decoder,
+                        hint_for_decoder.as_deref(),
+                        decoder_config,
+                    )
+                }
+            })
+            .await
+            .map_err(|e| {
+                DecodeError::Io(std::io::Error::other(format!("decoder task panicked: {e}")))
+            })??;
 
         let initial_spec = decoder.spec();
         let total_duration = decoder.duration();
@@ -574,24 +572,16 @@ where
         let worker_preload_chunks = preload_chunks.max(1);
         let worker_cancel = cancel.clone();
 
-        let worker_thread = std::thread::Builder::new()
-            .name("kithara-audio".to_string())
-            .spawn(move || {
-                run_audio_loop(
-                    audio_source,
-                    &cmd_rx,
-                    &data_tx,
-                    &worker_notify,
-                    worker_preload_chunks,
-                    &worker_cancel,
-                );
-            })
-            .map_err(|e| {
-                DecodeError::Io(std::io::Error::other(format!(
-                    "failed to spawn audio thread: {}",
-                    e
-                )))
-            })?;
+        thread_pool.spawn(move || {
+            run_audio_loop(
+                audio_source,
+                &cmd_rx,
+                &data_tx,
+                &worker_notify,
+                worker_preload_chunks,
+                &worker_cancel,
+            );
+        });
 
         Ok(Self {
             cmd_tx,
@@ -613,7 +603,6 @@ where
             host_sample_rate,
             preload_notify,
             preloaded: false,
-            worker_thread: Some(worker_thread),
             _marker: std::marker::PhantomData,
         })
     }
@@ -638,12 +627,9 @@ impl<S> Drop for Audio<S> {
         if let Some(ref cancel) = self.cancel {
             cancel.cancel();
         }
-
         // Channels will be dropped automatically, signaling worker to exit.
-        // Worker thread will terminate when it detects closed channels.
-        // We explicitly drop the JoinHandle here to detach the thread,
-        // allowing it to complete cleanup without blocking the drop.
-        drop(self.worker_thread.take());
+        // The worker task on the thread pool will terminate when it detects
+        // closed channels or the cancellation token fires.
     }
 }
 

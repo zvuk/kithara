@@ -15,6 +15,7 @@ mod downloader;
 mod error;
 mod fetch;
 mod media;
+mod pool;
 mod reader;
 mod source;
 mod stream;
@@ -26,6 +27,7 @@ pub use error::{StreamError, StreamResult};
 pub use fetch::{EpochValidator, Fetch};
 pub use kithara_storage::WaitOutcome;
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
+pub use pool::ThreadPool;
 pub use reader::Reader;
 pub use source::Source;
 // Test utilities
