@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Pre-commit hook: runs the same lint checks as CI.
+# Install:  ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+
+set -euo pipefail
+
+echo "pre-commit: checking formatting..."
+if ! cargo fmt --all --check 2>/dev/null; then
+    echo ""
+    echo "FAILED: formatting issues found. Run 'cargo fmt --all' to fix."
+    exit 1
+fi
+
+echo "pre-commit: running clippy..."
+if ! cargo clippy --workspace -- -D warnings 2>/dev/null; then
+    echo ""
+    echo "FAILED: clippy errors found."
+    exit 1
+fi
+
+echo "pre-commit: running style linter..."
+if ! bash scripts/lint-style.sh; then
+    exit 1
+fi
+
+echo "pre-commit: all checks passed."
