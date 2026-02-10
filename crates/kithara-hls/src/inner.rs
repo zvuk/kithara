@@ -74,11 +74,13 @@ impl StreamType for Hls {
         });
 
         // Create HlsDownloader + HlsSource pair
-        let (downloader, source) =
+        let (downloader, mut source) =
             build_pair(Arc::clone(&fetch_manager), master.variants.clone(), &config);
 
-        // Spawn downloader as background task
-        std::mem::forget(kithara_stream::Backend::new(downloader, cancel));
+        // Spawn downloader on the thread pool.
+        // Backend is stored in HlsSource — dropping the source cancels the downloader.
+        let backend = kithara_stream::Backend::new(downloader, &cancel, &config.thread_pool);
+        source.set_backend(backend);
 
         Ok(source)
     }

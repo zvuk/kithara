@@ -7,7 +7,7 @@ use std::{
 
 use kithara_bufpool::PcmPool;
 use kithara_decode::PcmSpec;
-use kithara_stream::StreamType;
+use kithara_stream::{StreamType, ThreadPool};
 use tokio::sync::broadcast;
 
 use crate::{
@@ -46,6 +46,10 @@ pub struct AudioConfig<T: StreamType> {
     pub resampler_quality: ResamplerQuality,
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
     pub stream: T::Config,
+    /// Thread pool for blocking work (decode, probe).
+    ///
+    /// Shared across all components. Defaults to the global rayon pool.
+    pub thread_pool: ThreadPool,
     /// Unified events sender (optional — if not provided, one is created internally).
     pub(super) events_tx: Option<broadcast::Sender<AudioPipelineEvent<T::Event>>>,
 }
@@ -65,6 +69,7 @@ impl<T: StreamType> AudioConfig<T> {
             preload_chunks: 3,
             resampler_quality: ResamplerQuality::default(),
             stream,
+            thread_pool: ThreadPool::default(),
             events_tx: None,
         }
     }
@@ -129,6 +134,14 @@ impl<T: StreamType> AudioConfig<T> {
         events_tx: broadcast::Sender<AudioPipelineEvent<T::Event>>,
     ) -> Self {
         self.events_tx = Some(events_tx);
+        self
+    }
+
+    /// Set thread pool for blocking work (decode, probe).
+    ///
+    /// The pool is shared across all components. Defaults to the global rayon pool.
+    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
+        self.thread_pool = pool;
         self
     }
 }

@@ -169,12 +169,17 @@ impl SharedFileState {
 /// File source implementing Source trait (sync).
 ///
 /// Wraps storage resource with progress tracking and event emission.
+/// Holds an optional [`Backend`](kithara_stream::Backend) to manage the
+/// downloader lifecycle: when this source is dropped, the backend is dropped,
+/// cancelling the downloader task automatically.
 pub struct FileSource {
     res: AssetResource,
     progress: Arc<Progress>,
     events_tx: broadcast::Sender<FileEvent>,
     len: Option<u64>,
     shared: Option<Arc<SharedFileState>>,
+    /// Downloader backend. Dropped with this source, cancelling the downloader.
+    _backend: Option<kithara_stream::Backend>,
 }
 
 impl FileSource {
@@ -191,16 +196,18 @@ impl FileSource {
             events_tx,
             len,
             shared: None,
+            _backend: None,
         }
     }
 
-    /// Create new file source with shared state (for on-demand loading).
+    /// Create new file source with shared state and backend (for remote files).
     pub(crate) fn with_shared(
         res: AssetResource,
         progress: Arc<Progress>,
         events_tx: broadcast::Sender<FileEvent>,
         len: Option<u64>,
         shared: Arc<SharedFileState>,
+        backend: kithara_stream::Backend,
     ) -> Self {
         Self {
             res,
@@ -208,6 +215,7 @@ impl FileSource {
             events_tx,
             len,
             shared: Some(shared),
+            _backend: Some(backend),
         }
     }
 }

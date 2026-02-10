@@ -164,19 +164,29 @@ impl File {
             )
             .await;
 
-            // Spawn downloader as background task.
-            // Backend is leaked intentionally — downloader runs until cancel or completion.
-            // The JoinHandle is detached: the tokio task continues running independently.
-            std::mem::forget(Backend::new(downloader, cancel));
+            // Spawn downloader on the thread pool.
+            // Backend is stored in FileSource — dropping the source cancels the downloader.
+            let backend = Backend::new(downloader, &cancel, &config.thread_pool);
+
+            // Create source with shared state and backend for on-demand loading.
+            let source = FileSource::with_shared(
+                state.res().clone(),
+                progress,
+                state.events().clone(),
+                state.len(),
+                shared,
+                backend,
+            );
+
+            return Ok(source);
         }
 
-        // Create source with shared state for on-demand loading
-        let source = FileSource::with_shared(
+        // Fully cached — create source without backend (no downloader needed).
+        let source = FileSource::new(
             state.res().clone(),
             progress,
             state.events().clone(),
             state.len(),
-            shared,
         );
 
         Ok(source)

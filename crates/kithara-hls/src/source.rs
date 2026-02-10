@@ -208,12 +208,18 @@ impl SharedSegments {
 }
 
 /// HLS source: provides random-access reading from loaded segments.
+///
+/// Holds an optional [`Backend`](kithara_stream::Backend) to manage the
+/// downloader lifecycle: when this source is dropped, the backend is dropped,
+/// cancelling the downloader task automatically.
 pub struct HlsSource {
     fetch: Arc<DefaultFetchManager>,
     shared: Arc<SharedSegments>,
     events_tx: Option<broadcast::Sender<HlsEvent>>,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
     variant_fence: Option<usize>,
+    /// Downloader backend. Dropped with this source, cancelling the downloader.
+    _backend: Option<kithara_stream::Backend>,
 }
 
 impl HlsSource {
@@ -504,9 +510,17 @@ pub fn build_pair(
         shared,
         events_tx: config.events_tx.clone(),
         variant_fence: None,
+        _backend: None,
     };
 
     (downloader, source)
+}
+
+impl HlsSource {
+    /// Set the backend (called after downloader is spawned).
+    pub(crate) fn set_backend(&mut self, backend: kithara_stream::Backend) {
+        self._backend = Some(backend);
+    }
 }
 
 #[cfg(test)]
