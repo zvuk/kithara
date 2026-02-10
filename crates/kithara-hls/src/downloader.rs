@@ -7,8 +7,8 @@ use std::{
 };
 
 use kithara_abr::{AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource};
-use kithara_assets::{Assets, ResourceKey};
-use kithara_storage::{ResourceExt, ResourceStatus};
+use kithara_assets::{Assets, CoverageIndex, DiskCoverage, ResourceKey};
+use kithara_storage::{Coverage, MmapResource, ResourceExt, ResourceStatus};
 use kithara_stream::{ContainerFormat, Downloader, DownloaderIo, PlanOutcome, StepResult};
 use tokio::sync::broadcast;
 use tracing::debug;
@@ -126,6 +126,8 @@ pub struct HlsDownloader {
     pub(crate) had_midstream_switch: bool,
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
+    /// Coverage index for crash-safe segment tracking.
+    pub(crate) coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
 }
 
 impl HlsDownloader {
@@ -212,6 +214,7 @@ impl HlsDownloader {
         init_len: u64,
         media_urls: &[Url],
         variant_stream: &VariantStream,
+        coverage_index: &Option<Arc<CoverageIndex<MmapResource>>>,
     ) -> (usize, u64) {
         let assets = fetch.assets();
         let container = if init_url.is_some() {
@@ -248,6 +251,16 @@ impl HlsDownloader {
                 let media_len = final_len.unwrap_or(0);
                 if media_len == 0 {
                     break;
+                }
+
+                // Validate against coverage if available.
+                // No entry → legacy file, treat as valid.
+                // Entry exists but incomplete → partially written, skip.
+                if let Some(idx) = coverage_index {
+                    let cov = DiskCoverage::open(Arc::clone(idx), segment_url.to_string());
+                    if cov.total_size().is_some() && !cov.is_complete() {
+                        break;
+                    }
                 }
 
                 // Init only for the first segment (init-once layout matches metadata)
@@ -350,6 +363,8 @@ impl HlsDownloader {
             total: None,
         });
 
+        // Mark segment coverage for crash-safe tracking via DiskCoverage.
+        let segment_url = entry.meta.url.clone();
         {
             let mut segments = self.shared.segments.lock();
             if is_variant_switch {
@@ -358,6 +373,13 @@ impl HlsDownloader {
             segments.push(entry);
         }
         self.shared.condvar.notify_all();
+
+        if let Some(ref idx) = self.coverage_index {
+            let mut cov = DiskCoverage::open(Arc::clone(idx), segment_url.to_string());
+            cov.set_total_size(media_len);
+            cov.mark(0..media_len);
+            // flush happens via Drop, or explicitly in commit()
+        }
     }
 
     /// Prepare variant for download: detect switches, calculate metadata, populate cache.
@@ -405,6 +427,7 @@ impl HlsDownloader {
                                 init_len,
                                 &media_urls,
                                 vstream,
+                                &self.coverage_index,
                             )
                         } else {
                             (0, 0)

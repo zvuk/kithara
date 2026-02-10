@@ -470,6 +470,7 @@ pub fn build_pair(
     fetch: Arc<DefaultFetchManager>,
     variants: Vec<VariantStream>,
     config: &crate::config::HlsConfig,
+    coverage_index: Option<Arc<kithara_assets::CoverageIndex<kithara_storage::MmapResource>>>,
 ) -> (HlsDownloader, HlsSource) {
     let abr_variants: Vec<Variant> = variants
         .iter()
@@ -499,6 +500,7 @@ pub fn build_pair(
         variant_lengths: HashMap::new(),
         had_midstream_switch: false,
         prefetch_count: config.download_batch_size.max(1),
+        coverage_index,
     };
 
     let source = HlsSource {

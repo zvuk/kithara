@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, Assets, CoverageIndex, asset_root_for_url};
 use kithara_net::HttpClient;
 use kithara_stream::StreamType;
 use tokio::sync::broadcast;
@@ -73,9 +73,19 @@ impl StreamType for Hls {
             initial_variant,
         });
 
+        // Create coverage index for crash-safe segment tracking.
+        let coverage_index = base_assets
+            .open_coverage_index_resource()
+            .ok()
+            .map(|res| Arc::new(CoverageIndex::new(res)));
+
         // Create HlsDownloader + HlsSource pair
-        let (downloader, mut source) =
-            build_pair(Arc::clone(&fetch_manager), master.variants.clone(), &config);
+        let (downloader, mut source) = build_pair(
+            Arc::clone(&fetch_manager),
+            master.variants.clone(),
+            &config,
+            coverage_index,
+        );
 
         // Spawn downloader on the thread pool.
         // Backend is stored in HlsSource — dropping the source cancels the downloader.
