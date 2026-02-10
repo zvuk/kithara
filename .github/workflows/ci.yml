@@ -50,6 +50,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     needs: lint
+    timeout-minutes: 20
 
     steps:
       - name: Checkout code

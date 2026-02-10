@@ -576,8 +576,10 @@ impl Downloader for HlsDownloader {
             debug!(
                 variant = req.variant,
                 segment_index = req.segment_index,
+                num_segments,
                 "segment index out of range"
             );
+            self.shared.condvar.notify_all();
             return None;
         }
 
@@ -622,6 +624,7 @@ impl Downloader for HlsDownloader {
                     current_variant,
                     "skipping stale segment from pre-switch variant"
                 );
+                self.shared.condvar.notify_all();
                 return None;
             }
         }
