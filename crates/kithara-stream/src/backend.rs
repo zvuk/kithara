@@ -8,8 +8,7 @@
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use crate::downloader::Downloader;
-use crate::pool::ThreadPool;
+use crate::{downloader::Downloader, pool::ThreadPool};
 
 /// Spawns and owns a Downloader task.
 ///

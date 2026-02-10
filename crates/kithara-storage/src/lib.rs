@@ -20,10 +20,9 @@ pub use driver::{Driver, DriverState, Resource};
 pub use error::{StorageError, StorageResult};
 pub use memory::{MemDriver, MemOptions, MemResource};
 pub use mmap::{MmapDriver, MmapOptions, MmapResource};
-pub use resource::{OpenMode, ResourceExt, ResourceStatus, WaitOutcome};
-
 #[cfg(any(test, feature = "test-utils"))]
 pub use resource::ResourceMock;
+pub use resource::{OpenMode, ResourceExt, ResourceStatus, WaitOutcome};
 
 // Backward compatibility aliases.
 #[deprecated(note = "renamed to MmapResource")]

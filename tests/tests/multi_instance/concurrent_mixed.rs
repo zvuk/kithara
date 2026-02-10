@@ -15,9 +15,11 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use crate::common::wav::create_test_wav;
-use crate::kithara_decode::fixture::AudioTestServer;
-use crate::kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig};
+use crate::{
+    common::wav::create_test_wav,
+    kithara_decode::fixture::AudioTestServer,
+    kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig},
+};
 
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 2;

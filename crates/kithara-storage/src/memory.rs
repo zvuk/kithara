@@ -163,10 +163,11 @@ mod tests {
 
     use rstest::*;
 
-    use crate::StorageError;
-    use crate::resource::{ResourceExt, ResourceStatus, WaitOutcome};
-
     use super::*;
+    use crate::{
+        StorageError,
+        resource::{ResourceExt, ResourceStatus, WaitOutcome},
+    };
 
     fn create_resource() -> MemResource {
         MemResource::new(CancellationToken::new())

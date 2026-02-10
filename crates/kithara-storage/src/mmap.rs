@@ -309,10 +309,11 @@ mod tests {
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
-    use crate::StorageError;
-    use crate::resource::{ResourceExt, ResourceStatus, WaitOutcome};
-
     use super::*;
+    use crate::{
+        StorageError,
+        resource::{ResourceExt, ResourceStatus, WaitOutcome},
+    };
 
     fn create_resource(dir: &TempDir) -> MmapResource {
         create_resource_with_size(dir, None)
