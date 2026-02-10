@@ -85,9 +85,7 @@ pub trait Downloader: Send + 'static {
     fn wait_ready(&self) -> impl Future<Output = ()> + Send;
 }
 
-// ---------------------------------------------------------------------------
 // NoDownload / NoIo — for sources that don't need background downloading.
-// ---------------------------------------------------------------------------
 
 /// No-op I/O executor.
 #[derive(Clone)]

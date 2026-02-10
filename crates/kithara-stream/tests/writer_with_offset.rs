@@ -21,9 +21,7 @@ fn open_resource(dir: &tempfile::TempDir, name: &str, len: u64) -> MmapResource 
     .unwrap()
 }
 
-// ---------------------------------------------------------------------------
 // 1. with_offset writes data at the correct position
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn writer_with_offset_writes_at_correct_position() {
@@ -63,9 +61,7 @@ async fn writer_with_offset_writes_at_correct_position() {
     assert_eq!(buf, payload);
 }
 
-// ---------------------------------------------------------------------------
 // 2. Multiple chunks written at correct cumulative offsets
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn writer_with_offset_multiple_chunks() {
@@ -118,9 +114,7 @@ async fn writer_with_offset_multiple_chunks() {
     assert_eq!(buf, chunk_c);
 }
 
-// ---------------------------------------------------------------------------
 // 3. with_offset(0) behaves identically to new()
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn writer_with_offset_zero_is_same_as_new() {
@@ -159,9 +153,7 @@ async fn writer_with_offset_zero_is_same_as_new() {
     assert_eq!(buf_new, payload);
 }
 
-// ---------------------------------------------------------------------------
 // 4. Offset overflow returns WriterError::OffsetOverflow
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn writer_with_offset_overflow_returns_error() {
@@ -217,9 +209,7 @@ async fn writer_with_offset_overflow_returns_error() {
     }
 }
 
-// ---------------------------------------------------------------------------
 // 5. Cancellation mid-write terminates cleanly
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn writer_with_offset_cancellation() {

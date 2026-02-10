@@ -8,11 +8,11 @@ set -euo pipefail
 errors=0
 warnings=0
 
-# 1. No separator comments (// ====... or // ────...)
+# 1. No separator comments (// ====... or // ────... or // ----...)
 while IFS= read -r line; do
     echo "ERROR: separator comment: $line"
     errors=$((errors + 1))
-done < <(grep -rn '// [=─]\{10,\}' --include='*.rs' crates/ tests/ || true)
+done < <(grep -rn '// [=─-]\{10,\}' --include='*.rs' crates/ tests/ || true)
 
 # 2. No inline std:: qualified paths in function bodies (advisory)
 #    Excludes: use statements, macro_rules!, comments, derive attributes

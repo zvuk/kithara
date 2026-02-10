@@ -34,9 +34,7 @@ pub(crate) struct SegmentMetadata {
     pub(crate) size: u64,
 }
 
-// ---------------------------------------------------------------------------
 // HlsIo — pure I/O executor (Clone, no &mut self)
-// ---------------------------------------------------------------------------
 
 /// Pure I/O executor for HLS segment fetching.
 #[derive(Clone)]
@@ -107,9 +105,7 @@ impl DownloaderIo for HlsIo {
     }
 }
 
-// ---------------------------------------------------------------------------
 // HlsDownloader — mutable state (plan + commit)
-// ---------------------------------------------------------------------------
 
 /// HLS downloader: fetches segments and maintains ABR state.
 pub struct HlsDownloader {

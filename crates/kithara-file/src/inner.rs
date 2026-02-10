@@ -194,9 +194,7 @@ impl File {
     }
 }
 
-// ---------------------------------------------------------------------------
 // FileIo — pure I/O executor (Clone, no &mut self)
-// ---------------------------------------------------------------------------
 
 /// Pure I/O executor for file range fetching.
 #[derive(Clone)]
@@ -279,9 +277,7 @@ impl DownloaderIo for FileIo {
     }
 }
 
-// ---------------------------------------------------------------------------
 // FileDownloader — mutable state (plan + commit)
-// ---------------------------------------------------------------------------
 
 /// Current phase of file download.
 enum FilePhase {
