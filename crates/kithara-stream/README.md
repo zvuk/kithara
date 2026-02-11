@@ -2,6 +2,15 @@
   <img src="../../logo.svg" alt="kithara" width="300">
 </div>
 
+<div align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/kithara-stream.svg)](https://crates.io/crates/kithara-stream)
+[![Downloads](https://img.shields.io/crates/d/kithara-stream.svg)](https://crates.io/crates/kithara-stream)
+[![docs.rs](https://docs.rs/kithara-stream/badge.svg)](https://docs.rs/kithara-stream)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-stream
 
 Byte-stream orchestration bridging async producers (network, disk) to sync consumers (decoders). Provides sync `Source` trait, async `Downloader` trait, a generic `Backend` worker, and `Stream<T>` for sync `Read + Seek` access. Also defines canonical shared types: `AudioCodec`, `ContainerFormat`, `MediaInfo`.

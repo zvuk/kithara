@@ -2,6 +2,15 @@
   <img src="../../logo.svg" alt="kithara" width="300">
 </div>
 
+<div align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/kithara-hls.svg)](https://crates.io/crates/kithara-hls)
+[![Downloads](https://img.shields.io/crates/d/kithara-hls.svg)](https://crates.io/crates/kithara-hls)
+[![docs.rs](https://docs.rs/kithara-hls/badge.svg)](https://docs.rs/kithara-hls)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-hls
 
 HLS (HTTP Live Streaming) VOD orchestration with adaptive bitrate, persistent caching, and encryption key management. Implements `StreamType` for use with `Stream<Hls>`, coordinating playlist parsing, segment fetching, ABR decisions, and disk cache.

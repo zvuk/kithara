@@ -2,6 +2,15 @@
   <img src="../../logo.svg" alt="kithara" width="300">
 </div>
 
+<div align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/kithara-drm.svg)](https://crates.io/crates/kithara-drm)
+[![Downloads](https://img.shields.io/crates/d/kithara-drm.svg)](https://crates.io/crates/kithara-drm)
+[![docs.rs](https://docs.rs/kithara-drm/badge.svg)](https://docs.rs/kithara-drm)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-drm
 
 AES-128-CBC segment decryption for encrypted HLS streams. Provides a single processing function that integrates with `kithara-assets`' `ProcessingAssets` layer for transparent decryption on commit.

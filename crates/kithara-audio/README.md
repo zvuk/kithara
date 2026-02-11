@@ -2,6 +2,15 @@
   <img src="../../logo.svg" alt="kithara" width="300">
 </div>
 
+<div align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/kithara-audio.svg)](https://crates.io/crates/kithara-audio)
+[![Downloads](https://img.shields.io/crates/d/kithara-audio.svg)](https://crates.io/crates/kithara-audio)
+[![docs.rs](https://docs.rs/kithara-audio/badge.svg)](https://docs.rs/kithara-audio)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-audio
 
 Audio pipeline with decoding, effects chain, and sample rate conversion. Runs a dedicated OS thread for blocking decode/process work and bridges it to the caller via `kanal` channels. Provides `Audio<S>` as the main entry point and `AudioSyncReader` (behind `rodio` feature) for rodio integration.

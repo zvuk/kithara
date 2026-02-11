@@ -2,6 +2,15 @@
   <img src="../../logo.svg" alt="kithara" width="300">
 </div>
 
+<div align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/kithara-decode.svg)](https://crates.io/crates/kithara-decode)
+[![Downloads](https://img.shields.io/crates/d/kithara-decode.svg)](https://crates.io/crates/kithara-decode)
+[![docs.rs](https://docs.rs/kithara-decode/badge.svg)](https://docs.rs/kithara-decode)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-decode
 
 Pure audio decoding library built on Symphonia. Provides a synchronous `Decoder` that converts compressed audio (MP3, AAC, FLAC, WAV, etc.) into `PcmChunk` samples (pool-backed `Vec<f32>`). No threading, no channels -- just a thin wrapper over Symphonia's codec pipeline.

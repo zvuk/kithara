@@ -2,6 +2,15 @@
   <img src="../../logo.svg" alt="kithara" width="300">
 </div>
 
+<div align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/kithara-file.svg)](https://crates.io/crates/kithara-file)
+[![Downloads](https://img.shields.io/crates/d/kithara-file.svg)](https://crates.io/crates/kithara-file)
+[![docs.rs](https://docs.rs/kithara-file/badge.svg)](https://docs.rs/kithara-file)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-file
 
 Progressive file download and playback for single-file media (MP3, AAC, etc.). Implements `StreamType` for use with `Stream<File>`, providing HTTP download with disk caching, seeking, and progress events.

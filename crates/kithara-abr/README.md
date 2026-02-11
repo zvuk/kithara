@@ -2,6 +2,15 @@
   <img src="../../logo.svg" alt="kithara" width="300">
 </div>
 
+<div align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/kithara-abr.svg)](https://crates.io/crates/kithara-abr)
+[![Downloads](https://img.shields.io/crates/d/kithara-abr.svg)](https://crates.io/crates/kithara-abr)
+[![docs.rs](https://docs.rs/kithara-abr/badge.svg)](https://docs.rs/kithara-abr)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-abr
 
 Protocol-agnostic adaptive bitrate (ABR) algorithm. Provides `AbrController` with auto (throughput-based) and manual modes, buffer-aware switching decisions, and configurable hysteresis to prevent oscillation.

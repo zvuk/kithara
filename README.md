@@ -5,6 +5,10 @@
 <div align="center">
 
 [![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/zvuk/kithara/branch/main/graph/badge.svg)](https://codecov.io/gh/zvuk/kithara)
+[![Crates.io](https://img.shields.io/crates/v/kithara.svg)](https://crates.io/crates/kithara)
+[![Downloads](https://img.shields.io/crates/d/kithara.svg)](https://crates.io/crates/kithara)
+[![docs.rs](https://docs.rs/kithara/badge.svg)](https://docs.rs/kithara)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
 
 </div>
