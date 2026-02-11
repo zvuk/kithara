@@ -34,9 +34,10 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let temp_dir = TempDir::new().unwrap();
     let temp_dir = Arc::new(temp_dir);
 
-    let drm_fn: ProcessChunkFn<DecryptContext> = Arc::new(|input, output, ctx, is_last| {
-        aes128_cbc_process_chunk(input, output, ctx, is_last)
-    });
+    let drm_fn: ProcessChunkFn<DecryptContext> =
+        Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
+            aes128_cbc_process_chunk(input, output, ctx, is_last)
+        });
 
     let assets = AssetStoreBuilder::new()
         .process_fn(drm_fn)

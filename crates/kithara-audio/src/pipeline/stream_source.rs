@@ -400,17 +400,38 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     // Check if error is due to format boundary (variant fence EOF).
                     // The fence causes Ok(0) from read_at(), which Symphonia may
                     // surface as an error rather than clean EOF in some codecs.
+                    //
+                    // Only apply the format change if we're near the variant boundary.
+                    // Far from it, the error is a genuine decode issue (e.g. corrupted
+                    // DRM data), not fence-induced. Applying it prematurely would skip
+                    // large portions of the current variant's audio.
                     self.detect_format_change();
-                    if self.pending_format_change.is_some() {
-                        debug!(
-                            ?e,
-                            chunks = self.chunks_decoded,
-                            samples = self.total_samples,
-                            "Decoder error at format boundary, recreating decoder"
-                        );
-                        if self.apply_format_change() {
-                            reset_effects(&mut self.effects);
-                            continue;
+                    if let Some((_, target_offset)) = &self.pending_format_change {
+                        let current_pos = self.shared_stream.position();
+                        let remaining = target_offset.saturating_sub(current_pos);
+
+                        if remaining < 1024 * 1024 {
+                            debug!(
+                                ?e,
+                                chunks = self.chunks_decoded,
+                                samples = self.total_samples,
+                                current_pos,
+                                target_offset = *target_offset,
+                                remaining,
+                                "Decoder error at format boundary, recreating decoder"
+                            );
+                            if self.apply_format_change() {
+                                reset_effects(&mut self.effects);
+                                continue;
+                            }
+                        } else {
+                            debug!(
+                                ?e,
+                                current_pos,
+                                target_offset = *target_offset,
+                                remaining,
+                                "Decoder error far from format boundary, not switching"
+                            );
                         }
                     }
 

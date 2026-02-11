@@ -33,7 +33,7 @@ sequenceDiagram
     loop Fetch segments
         DL->>ABR: select variant
         ABR-->>DL: variant index
-        DL->>FM: load_segment(variant, index)
+        DL->>FM: load_media_segment(variant, index)
         FM-->>DL: segment bytes
         DL->>SI: append(offset, len)
         DL--)S: HlsEvent::SegmentComplete

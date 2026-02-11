@@ -549,9 +549,10 @@ impl HlsSource {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
-    use kithara_assets::AssetStoreBuilder;
+    use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
+    use kithara_drm::DecryptContext;
     use kithara_net::{HttpClient, NetOptions};
     use kithara_stream::ContainerFormat;
 
@@ -560,9 +561,15 @@ mod tests {
 
     /// Create a minimal HlsSource for testing wait_range behavior.
     fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> HlsSource {
+        let noop_drm: ProcessChunkFn<DecryptContext> =
+            Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
+                output[..input.len()].copy_from_slice(input);
+                Ok(input.len())
+            });
         let backend = AssetStoreBuilder::new()
             .ephemeral(true)
             .cancel(cancel.clone())
+            .process_fn(noop_drm)
             .build();
         let net = HttpClient::new(NetOptions::default());
         let fetch = Arc::new(FetchManager::new(backend, net, cancel));

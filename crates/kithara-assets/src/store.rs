@@ -166,10 +166,11 @@ impl AssetStoreBuilder<()> {
     /// Builder with defaults (no `root_dir`/`asset_root`/evict/cancel/process set).
     pub fn new() -> Self {
         // Default pass-through process_fn for () - just copies input to output
-        let dummy_process: ProcessChunkFn<()> = Arc::new(|input, output, _ctx, _is_last| {
-            output[..input.len()].copy_from_slice(input);
-            Ok(input.len())
-        });
+        let dummy_process: ProcessChunkFn<()> =
+            Arc::new(|input, output, _ctx: &mut (), _is_last| {
+                output[..input.len()].copy_from_slice(input);
+                Ok(input.len())
+            });
 
         Self {
             cache_capacity: None,

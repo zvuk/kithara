@@ -21,16 +21,19 @@ const PROCESS_CHUNK_SIZE: usize = 64 * 1024;
 /// Processes data in chunks without allocating new buffers.
 /// Suitable for AES-128-CBC and similar block ciphers.
 ///
+/// The context is passed as `&mut Ctx` so stateful transforms (e.g., CBC IV chaining)
+/// can update their state between chunks.
+///
 /// # Arguments
 /// - `input`: source bytes to process
 /// - `output`: buffer to write processed bytes into (same size as input)
-/// - `ctx`: processing context (e.g., encryption key, IV)
+/// - `ctx`: mutable processing context (e.g., encryption key + IV for CBC chaining)
 /// - `is_last`: true if this is the final chunk (for PKCS7 padding)
 ///
 /// # Returns
 /// Number of bytes written to output buffer.
 pub type ProcessChunkFn<Ctx> =
-    Arc<dyn Fn(&[u8], &mut [u8], &Ctx, bool) -> Result<usize, String> + Send + Sync>;
+    Arc<dyn Fn(&[u8], &mut [u8], &mut Ctx, bool) -> Result<usize, String> + Send + Sync>;
 
 /// A resource wrapper that processes content on commit.
 ///
@@ -117,6 +120,10 @@ where
             return Ok(final_len);
         };
 
+        // Clone context so the process function can mutate it between chunks
+        // (e.g., AES-CBC IV chaining: each chunk updates IV to last ciphertext block).
+        let mut ctx = ctx.clone();
+
         let mut input_buf = self.pool.get_with(|b| b.resize(PROCESS_CHUNK_SIZE, 0));
         let mut output_buf = self.pool.get_with(|b| b.resize(PROCESS_CHUNK_SIZE, 0));
 
@@ -134,7 +141,7 @@ where
                 break;
             }
 
-            let written = (self.process)(&input_buf[..n], &mut output_buf[..n], ctx, is_last)
+            let written = (self.process)(&input_buf[..n], &mut output_buf[..n], &mut ctx, is_last)
                 .map_err(StorageError::Failed)?;
 
             self.inner.write_at(write_offset, &output_buf[..written])?;
@@ -334,7 +341,7 @@ mod tests {
 
     /// Create XOR chunk processor (no allocation).
     fn xor_chunk_processor(xor_key: u8, call_count: Arc<AtomicUsize>) -> ProcessChunkFn<()> {
-        Arc::new(move |input, output, _ctx, _is_last| {
+        Arc::new(move |input, output, _ctx: &mut (), _is_last| {
             call_count.fetch_add(1, Ordering::SeqCst);
             for (i, &b) in input.iter().enumerate() {
                 output[i] = b ^ xor_key;

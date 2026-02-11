@@ -44,7 +44,7 @@ impl StreamType for Hls {
 
         // Build DRM process function for ProcessingAssets
         let drm_process_fn: ProcessChunkFn<DecryptContext> =
-            Arc::new(|input, output, ctx, is_last| {
+            Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
                 aes128_cbc_process_chunk(input, output, ctx, is_last)
             });
 

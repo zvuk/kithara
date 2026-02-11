@@ -46,3 +46,4 @@ dhat-heap.json
 target/hotpath-*.json
 hotpath-*.json
 .worktrees/
+log*.txt

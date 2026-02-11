@@ -77,9 +77,16 @@ impl DownloaderIo for HlsIo {
             let fetch = Arc::clone(&self.fetch);
             async move {
                 if plan.need_init {
-                    match fetch.load_segment(plan.variant, usize::MAX).await {
+                    match fetch.load_init_segment(plan.variant).await {
                         Ok(m) => (Some(m.url), m.len),
-                        Err(_) => (None, 0),
+                        Err(e) => {
+                            tracing::warn!(
+                                variant = plan.variant,
+                                error = %e,
+                                "init segment load failed"
+                            );
+                            (None, 0)
+                        }
                     }
                 } else {
                     (None, 0)
@@ -88,7 +95,8 @@ impl DownloaderIo for HlsIo {
         };
 
         let (media_result, (init_url, init_len)) = tokio::join!(
-            self.fetch.load_segment(plan.variant, plan.segment_index),
+            self.fetch
+                .load_media_segment(plan.variant, plan.segment_index),
             init_fut,
         );
 
@@ -197,13 +205,13 @@ impl HlsDownloader {
     /// Pre-populate segment index with segments already committed on disk.
     ///
     /// Scans the asset store for committed segment resources and creates entries
-    /// so that `loaded_ranges` reflects actual disk state. Uses metadata offsets
-    /// for consistency with `expected_total_length` and sidx-based seeking.
+    /// so that `loaded_ranges` reflects actual disk state. Uses cumulative offsets
+    /// derived from actual (decrypted) resource sizes on disk.
     ///
     /// Init data is included only for the first segment (init-once layout).
     /// Stops at the first uncached segment to maintain contiguous entries.
     ///
-    /// Returns `(count, final_byte_offset)` for caller to update downloader state.
+    /// Returns `(count, cumulative_byte_offset)` for caller to update downloader state.
     #[expect(clippy::too_many_arguments)]
     fn populate_cached_segments(
         shared: &SharedSegments,
@@ -244,9 +252,9 @@ impl HlsDownloader {
 
         let mut segments = shared.segments.lock();
         let mut count = 0usize;
-        let mut final_offset = 0u64;
+        let mut cumulative_offset = 0u64;
 
-        for (index, (meta, segment_url)) in metadata.iter().zip(media_urls.iter()).enumerate() {
+        for (index, (_, segment_url)) in metadata.iter().zip(media_urls.iter()).enumerate() {
             let key = ResourceKey::from_url(segment_url);
             let Ok(resource) = backend.open_resource(&key) else {
                 break; // Stop on first uncached segment
@@ -272,7 +280,7 @@ impl HlsDownloader {
                 let actual_init_len = if count == 0 { init_len } else { 0 };
 
                 let entry = SegmentEntry {
-                    byte_offset: meta.byte_offset,
+                    byte_offset: cumulative_offset,
                     codec: variant_codec,
                     init_len: actual_init_len,
                     init_url: init_url.clone(),
@@ -288,7 +296,7 @@ impl HlsDownloader {
                     },
                 };
 
-                final_offset = entry.end_offset();
+                cumulative_offset = entry.end_offset();
                 segments.push(entry);
                 count += 1;
             } else {
@@ -300,17 +308,46 @@ impl HlsDownloader {
         if count > 0 {
             debug!(
                 variant,
-                count, final_offset, "pre-populated cached segments from disk"
+                count, cumulative_offset, "pre-populated cached segments from disk"
             );
             shared.condvar.notify_all();
         }
 
-        (count, final_offset)
+        (count, cumulative_offset)
+    }
+
+    /// Update variant metadata after a segment is committed with its actual size.
+    ///
+    /// For non-DRM streams, actual size equals the predicted size (from HEAD requests),
+    /// so this is effectively a no-op. For DRM (AES-128) streams, decrypted segments
+    /// are smaller than the encrypted Content-Length reported by HEAD (PKCS7 padding
+    /// removed). This method corrects the metadata so that subsequent `byte_offset`
+    /// lookups (used by on-demand/seek loads) reflect actual positions.
+    fn reconcile_metadata(&self, variant: usize, segment_index: usize, actual_size: u64) {
+        let mut metadata_map = self.shared.variant_metadata.lock();
+        let Some(metadata) = metadata_map.get_mut(&variant) else {
+            return;
+        };
+        let Some(entry) = metadata.get_mut(segment_index) else {
+            return;
+        };
+        if entry.size == actual_size {
+            return; // No drift — common path for non-DRM.
+        }
+
+        entry.size = actual_size;
+
+        // Recalculate byte_offsets for all subsequent segments.
+        let mut offset = entry.byte_offset + actual_size;
+        for subsequent in metadata.iter_mut().skip(segment_index + 1) {
+            subsequent.byte_offset = offset;
+            offset += subsequent.size;
+        }
     }
 
     /// Commit a downloaded segment to the segment index.
     ///
-    /// `is_variant_switch` / `is_midstream_switch` control offset calculation.
+    /// `is_variant_switch` / `is_midstream_switch` control init segment inclusion.
     fn commit_segment(&mut self, dl: HlsFetch, is_variant_switch: bool, is_midstream_switch: bool) {
         self.record_throughput(dl.media.len, dl.duration, dl.media.duration);
 
@@ -325,23 +362,26 @@ impl HlsDownloader {
             self.sent_init_for_variant.insert(dl.variant);
         }
 
-        let (byte_offset, actual_init_len) = if is_midstream_switch {
-            (self.byte_offset, dl.init_len)
-        } else if self.had_midstream_switch {
-            (self.byte_offset, 0)
+        let actual_init_len = if is_midstream_switch || is_variant_switch {
+            dl.init_len
         } else {
-            let offset = {
-                let metadata_map = self.shared.variant_metadata.lock();
-                if let Some(metadata) = metadata_map.get(&dl.variant)
-                    && let Some(seg_meta) = metadata.get(dl.segment_index)
-                {
-                    seg_meta.byte_offset
-                } else {
-                    self.byte_offset
-                }
-            };
-            let init = if is_variant_switch { dl.init_len } else { 0 };
-            (offset, init)
+            0
+        };
+
+        let byte_offset = if is_midstream_switch || self.had_midstream_switch {
+            // Variant switch: always use cumulative offset.
+            self.byte_offset
+        } else {
+            // Use metadata offset for correct positioning of both sequential
+            // and on-demand (seek) loads. Metadata is kept in sync with actual
+            // sizes via reconcile_metadata() after each commit.
+            let metadata_map = self.shared.variant_metadata.lock();
+            let meta_off = metadata_map
+                .get(&dl.variant)
+                .and_then(|m| m.get(dl.segment_index))
+                .map(|seg| seg.byte_offset);
+            drop(metadata_map);
+            meta_off.unwrap_or(self.byte_offset)
         };
 
         let variant_codec = self.variants[dl.variant]
@@ -350,6 +390,8 @@ impl HlsDownloader {
             .and_then(|c| c.audio_codec);
 
         let media_len = dl.media.len;
+        let actual_size = actual_init_len + media_len;
+
         let entry = SegmentEntry {
             byte_offset,
             codec: variant_codec,
@@ -358,10 +400,16 @@ impl HlsDownloader {
             meta: dl.media,
         };
 
-        let end = byte_offset + actual_init_len + media_len;
+        let end = byte_offset + actual_size;
         if end > self.byte_offset {
             self.byte_offset = end;
         }
+
+        // Reconcile metadata: update this segment's size and recalculate subsequent
+        // byte_offsets using the actual (possibly decrypted) size. For non-DRM streams
+        // this is a no-op (actual == predicted). For DRM streams, it corrects the drift
+        // from PKCS7 padding removal so future lookups use accurate offsets.
+        self.reconcile_metadata(entry.meta.variant, dl.segment_index, actual_size);
 
         self.emit_event(HlsEvent::DownloadProgress {
             offset: self.byte_offset,

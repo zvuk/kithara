@@ -8,7 +8,7 @@ use std::{
 use bytes::Bytes;
 use futures::{Stream, StreamExt};
 use kithara_net::NetError;
-use kithara_storage::{ResourceExt, StorageError};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageError};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, warn};
@@ -185,7 +185,11 @@ where
                         }
 
                         if let Err(e) = res.write_at(offset, &bytes) {
-                            res.fail(e.to_string());
+                            // Don't mark as failed if another concurrent writer
+                            // already committed the resource — the data is valid.
+                            if !matches!(res.status(), ResourceStatus::Committed { .. }) {
+                                res.fail(e.to_string());
+                            }
                             yield Err(WriterError::SinkWrite(e));
                             return;
                         }

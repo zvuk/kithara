@@ -790,7 +790,7 @@ sequenceDiagram
     DL->>SI: fence_at(current_offset, keep_variant=V1)
     Note over SI: Discard V0 segments after fence
 
-    DL->>FM: load_segment(V1, init + first_segment)
+    DL->>FM: load_init_segment(V1) + load_media_segment(V1, first_segment)
     FM->>Net: GET init segment
     Net-->>FM: init bytes
     FM->>Net: GET media segment
