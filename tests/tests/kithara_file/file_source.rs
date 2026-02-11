@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use axum::{Router, response::Response, routing::get};
+use axum::{Router, extract::Request, response::Response, routing::get};
 use bytes::Bytes;
 use kithara_assets::StoreOptions;
 use kithara_file::{File, FileConfig};
@@ -18,20 +18,53 @@ use crate::common::fixtures::temp_dir;
 
 // Test Server Fixtures
 
-async fn test_audio_endpoint() -> Response {
-    let audio_data = Bytes::from_static(b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345");
+const AUDIO_DATA: &[u8] = b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345";
+const LARGE_DATA: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()";
+
+/// Serve data with HTTP Range request support.
+fn serve_with_range(data: &'static [u8], req: Request) -> Response {
+    if let Some(range_header) = req.headers().get("range").and_then(|v| v.to_str().ok()) {
+        // Parse "bytes=START-END"
+        if let Some(range_str) = range_header.strip_prefix("bytes=") {
+            let parts: Vec<&str> = range_str.split('-').collect();
+            if parts.len() == 2 {
+                let start: usize = parts[0].parse().unwrap_or(0);
+                let end: usize = if parts[1].is_empty() {
+                    data.len() - 1
+                } else {
+                    parts[1].parse().unwrap_or(data.len() - 1)
+                };
+                let end = end.min(data.len() - 1);
+                if start <= end && start < data.len() {
+                    let slice = &data[start..=end];
+                    return Response::builder()
+                        .status(206)
+                        .header(
+                            "Content-Range",
+                            format!("bytes {}-{}/{}", start, end, data.len()),
+                        )
+                        .header("Content-Length", slice.len().to_string())
+                        .body(axum::body::Body::from(Bytes::from_static(slice)))
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    // No Range header or invalid range — return full content.
     Response::builder()
         .status(200)
-        .body(axum::body::Body::from(audio_data))
+        .header("Content-Length", data.len().to_string())
+        .body(axum::body::Body::from(Bytes::from_static(data)))
         .unwrap()
 }
 
-async fn test_large_endpoint() -> Response {
-    let large_data = Bytes::from_static(b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()");
-    Response::builder()
-        .status(200)
-        .body(axum::body::Body::from(large_data))
-        .unwrap()
+async fn test_audio_endpoint(req: Request) -> Response {
+    serve_with_range(AUDIO_DATA, req)
+}
+
+async fn test_large_endpoint(req: Request) -> Response {
+    serve_with_range(LARGE_DATA, req)
 }
 
 fn test_app() -> Router {
