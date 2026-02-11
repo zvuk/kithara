@@ -559,7 +559,7 @@ mod tests {
     use super::*;
     use crate::fetch::{FetchManager, SegmentType};
 
-    /// Create a minimal HlsSource for testing wait_range behavior.
+    /// Create a minimal `HlsSource` for testing `wait_range` behavior.
     fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> HlsSource {
         let noop_drm: ProcessChunkFn<DecryptContext> =
             Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {

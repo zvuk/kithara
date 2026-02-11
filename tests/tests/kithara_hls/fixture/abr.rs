@@ -109,6 +109,10 @@ impl AbrTestServer {
         Self { base_url }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "test-only code, ergonomics over size"
+    )]
     pub fn url(&self, path: &str) -> HlsResult<Url> {
         format!("{}{}", self.base_url, path)
             .parse()
@@ -175,17 +179,13 @@ pub async fn segment_data(
 
     // Calculate DATA_LEN (total_len - header size)
     let header_size = 1 + 4 + 4; // variant + segment + data_len
-    let data_len = if total_len > header_size {
-        total_len - header_size
-    } else {
-        0
-    };
+    let data_len = total_len.saturating_sub(header_size);
 
     // DATA_LEN (4 bytes, big-endian)
     data.extend(&(data_len as u32).to_be_bytes());
 
     // DATA (padding with 'A')
-    data.extend(std::iter::repeat(b'A').take(data_len));
+    data.extend(std::iter::repeat_n(b'A', data_len));
 
     data
 }

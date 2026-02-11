@@ -56,7 +56,7 @@ impl Source for MemorySource {
     }
 }
 
-/// Source without known length for testing SeekFrom::End error.
+/// Source without known length for testing `SeekFrom::End` error.
 pub struct UnknownLenSource {
     data: Vec<u8>,
 }

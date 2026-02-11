@@ -18,7 +18,6 @@ pub struct TestAssets {
 }
 
 impl TestAssets {
-    #[allow(dead_code)]
     pub fn assets(&self) -> &AssetStore<DecryptContext> {
         &self.assets
     }

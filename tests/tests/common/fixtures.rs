@@ -10,7 +10,7 @@ pub fn temp_dir() -> TempDir {
     tempfile::tempdir().expect("Failed to create temp dir")
 }
 
-/// Fixture returning both TempDir and PathBuf
+/// Fixture returning both `TempDir` and `PathBuf`
 #[fixture]
 pub fn temp_path() -> (TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");

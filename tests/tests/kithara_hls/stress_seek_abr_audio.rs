@@ -115,8 +115,8 @@ fn phase_from_f32(sample: f32) -> usize {
 /// Detect saw-tooth direction from a buffer of interleaved f32 samples.
 ///
 /// Checks up to 10 pairs of consecutive frames.
-/// ascending: phase[f+1] == (phase[f] + 1) % SAW_PERIOD
-/// descending: phase[f+1] == (phase[f] + SAW_PERIOD - 1) % SAW_PERIOD
+/// ascending: phase\[f+1\] == (phase\[f\] + 1) % `SAW_PERIOD`
+/// descending: phase\[f+1\] == (phase\[f\] + `SAW_PERIOD` - 1) % `SAW_PERIOD`
 fn detect_direction(buf: &[f32], channels: usize) -> Direction {
     let frames = buf.len() / channels;
     if frames < 2 {
@@ -254,7 +254,6 @@ async fn stress_seek_abr_audio() {
         let warmup_timeout = Duration::from_secs(WARMUP_TIMEOUT_SECS);
         let mut warmup_ascending_chunks = 0u64;
         let mut warmup_unknown_chunks = 0u64;
-        let mut switch_detected = false;
 
         loop {
             if warmup_start.elapsed() > warmup_timeout {
@@ -287,7 +286,6 @@ async fn stress_seek_abr_audio() {
                         elapsed_ms = warmup_start.elapsed().as_millis(),
                         "ABR switch detected: ascending → descending"
                     );
-                    switch_detected = true;
                     break;
                 }
                 Direction::Unknown => {
@@ -295,7 +293,7 @@ async fn stress_seek_abr_audio() {
                 }
             }
 
-            if warmup_ascending_chunks % 100 == 0 && warmup_ascending_chunks > 0 {
+            if warmup_ascending_chunks.is_multiple_of(100) && warmup_ascending_chunks > 0 {
                 info!(
                     warmup_ascending_chunks,
                     warmup_unknown_chunks,
@@ -304,8 +302,6 @@ async fn stress_seek_abr_audio() {
                 );
             }
         }
-
-        assert!(switch_detected, "ABR switch was not detected");
 
         // Phase 2: Post-switch verification
         info!("Phase 2: verifying 10 post-switch chunks are descending...");
@@ -388,8 +384,9 @@ async fn stress_seek_abr_audio() {
 
         let total_duration = audio.duration();
         let total_secs = total_duration
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(SEGMENT_COUNT as f64 * chunk_duration_secs * 20.0);
+            .map_or(SEGMENT_COUNT as f64 * chunk_duration_secs * 20.0, |d| {
+                d.as_secs_f64()
+            });
         let max_seek_secs = (total_secs - chunk_duration_secs).max(0.1);
 
         let mut rng = Xorshift64::new(0xAB25_5017_C400_0000);

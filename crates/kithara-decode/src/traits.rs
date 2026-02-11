@@ -91,12 +91,12 @@ pub trait AudioDecoder: Send + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`DecodeError`] if:
+    /// Returns [`crate::error::DecodeError`] if:
     /// - The source cannot be read
     /// - The codec is not supported
     /// - The container format is invalid
     ///
-    /// The default implementation returns [`DecodeError::ProbeFailed`].
+    /// The default implementation returns [`crate::error::DecodeError::ProbeFailed`].
     /// All concrete backends override this.
     fn create(source: Self::Source, config: Self::Config) -> DecodeResult<Self>
     where
@@ -112,7 +112,7 @@ pub trait AudioDecoder: Send + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`DecodeError`] if decoding fails.
+    /// Returns [`crate::error::DecodeError`] if decoding fails.
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>>;
 
     /// Get the PCM output specification.
@@ -122,7 +122,7 @@ pub trait AudioDecoder: Send + 'static {
     ///
     /// # Errors
     ///
-    /// Returns [`DecodeError::SeekFailed`] if seeking is not supported
+    /// Returns [`crate::error::DecodeError::SeekFailed`] if seeking is not supported
     /// or the position is invalid.
     fn seek(&mut self, pos: Duration) -> DecodeResult<()>;
 

@@ -84,7 +84,8 @@ fn seek_current_forward(test_data: Vec<u8>) {
 
     // Read 5 bytes (position = 5)
     let mut buf = [0u8; 5];
-    reader.read(&mut buf).unwrap();
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 5);
     assert_eq!(&buf, b"ABCDE");
 
     // Seek forward 5 bytes (position = 10)
@@ -107,7 +108,8 @@ fn seek_current_backward(test_data: Vec<u8>) {
 
     // Read 10 bytes (position = 10)
     let mut buf = [0u8; 10];
-    reader.read(&mut buf).unwrap();
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 10);
 
     // Seek backward 5 bytes (position = 5)
     let pos = reader.seek(SeekFrom::Current(-5)).unwrap();
@@ -130,10 +132,11 @@ fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
 
     // Read 10 bytes
     let mut buf = [0u8; 10];
-    reader.read(&mut buf).unwrap();
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 10);
 
-    // Seek 0 should stay at current position
-    let pos = reader.seek(SeekFrom::Current(0)).unwrap();
+    // Seek 0 should stay at current position — use stream_position()
+    let pos = reader.stream_position().unwrap();
     assert_eq!(pos, 10);
 }
 
@@ -251,22 +254,26 @@ fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
     // Seek to position 10
     reader.seek(SeekFrom::Start(10)).unwrap();
     let mut buf = [0u8; 1];
-    reader.read(&mut buf).unwrap();
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 1);
     results.push(buf[0]);
 
     // Seek back to 5
     reader.seek(SeekFrom::Start(5)).unwrap();
-    reader.read(&mut buf).unwrap();
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 1);
     results.push(buf[0]);
 
     // Seek forward from current (+10)
     reader.seek(SeekFrom::Current(10)).unwrap();
-    reader.read(&mut buf).unwrap();
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 1);
     results.push(buf[0]);
 
     // Seek from end (-3)
     reader.seek(SeekFrom::End(-3)).unwrap();
-    reader.read(&mut buf).unwrap();
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 1);
     results.push(buf[0]);
 
     assert_eq!(results[0], b'K');
@@ -287,7 +294,8 @@ fn position_tracks_correctly(test_data: Vec<u8>) {
 
     // Read 5 bytes
     let mut buf = [0u8; 5];
-    reader.read(&mut buf).unwrap();
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 5);
     positions.push(reader.position());
 
     // Seek to 15
@@ -296,7 +304,8 @@ fn position_tracks_correctly(test_data: Vec<u8>) {
 
     // Read 3 more bytes
     let mut buf = [0u8; 3];
-    reader.read(&mut buf).unwrap();
+    let n = reader.read(&mut buf).unwrap();
+    assert_eq!(n, 3);
     positions.push(reader.position());
 
     assert_eq!(positions[0], 0);

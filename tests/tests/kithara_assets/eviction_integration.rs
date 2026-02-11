@@ -2,8 +2,8 @@
 
 //! Eviction integration tests.
 //!
-//! Each AssetStore is scoped to a single asset_root, so eviction between assets
-//! requires creating multiple AssetStore instances with the same root_dir.
+//! Each `AssetStore` is scoped to a single `asset_root`, so eviction between assets
+//! requires creating multiple `AssetStore` instances with the same `root_dir`.
 
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ use rstest::rstest;
 use crate::common::fixtures::temp_dir;
 
 #[derive(serde::Deserialize)]
-#[allow(dead_code)]
+#[expect(dead_code, reason = "fields deserialized from binary")]
 struct PinsIndexFile {
     version: u32,
     pinned: Vec<String>,

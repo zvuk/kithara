@@ -429,7 +429,7 @@ impl DecoderFactory {
 
     /// Create decoder by letting Symphonia probe the data directly.
     ///
-    /// Unlike [`create_with_probe`] which requires codec hints, this method
+    /// Unlike [`Self::create_with_probe`] which requires codec hints, this method
     /// delegates entirely to Symphonia's format detection. Useful after ABR
     /// variant switches when the container format reported by HLS metadata
     /// doesn't match the actual data (e.g., WAV served via HLS).

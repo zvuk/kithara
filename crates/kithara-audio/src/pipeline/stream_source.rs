@@ -512,7 +512,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 mod tests {
     use std::{
         collections::VecDeque,
-        future::Future,
         ops::Range,
         sync::{
             Arc,
@@ -540,7 +539,7 @@ mod tests {
         seek_results: VecDeque<DecodeResult<()>>,
         /// Shared log of seek calls for external verification.
         seek_log: Arc<Mutex<Vec<Duration>>>,
-        /// Shared log of update_byte_len calls.
+        /// Shared log of `update_byte_len` calls.
         byte_len_log: Arc<Mutex<Vec<u64>>>,
     }
 
@@ -556,7 +555,7 @@ mod tests {
             }
         }
 
-        /// Add a seek result that will be returned on next seek() call.
+        /// Add a seek result that will be returned on next `seek()` call.
         fn push_seek_result(mut self, result: DecodeResult<()>) -> Self {
             self.seek_results.push_back(result);
             self
@@ -712,10 +711,10 @@ mod tests {
                     if state.variant_fence.is_none() {
                         state.variant_fence = Some(v);
                     }
-                    if let Some(fence) = state.variant_fence {
-                        if v != fence {
-                            return Ok(0);
-                        }
+                    if let Some(fence) = state.variant_fence
+                        && v != fence
+                    {
+                        return Ok(0);
                     }
                 }
             }
@@ -758,18 +757,10 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
     struct TestConfig {
         source: Option<TestSource>,
         events_tx: Option<broadcast::Sender<()>>,
-    }
-
-    impl Default for TestConfig {
-        fn default() -> Self {
-            Self {
-                source: None,
-                events_tx: None,
-            }
-        }
     }
 
     struct TestStream;
@@ -780,14 +771,10 @@ mod tests {
         type Error = std::io::Error;
         type Event = ();
 
-        fn create(
-            config: Self::Config,
-        ) -> impl Future<Output = Result<Self::Source, Self::Error>> + Send {
-            async move {
-                config
-                    .source
-                    .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::Other, "no source"))
-            }
+        async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
+            config
+                .source
+                .ok_or_else(|| std::io::Error::other("no source"))
         }
 
         fn ensure_events(config: &mut Self::Config) -> broadcast::Receiver<()> {
@@ -822,7 +809,7 @@ mod tests {
         Box::new(move |_stream, _info, _offset| queue.lock().pop_front())
     }
 
-    /// Factory that records every base_offset it receives.
+    /// Factory that records every `base_offset` it receives.
     fn make_tracking_factory(
         decoders: Vec<Box<dyn InnerDecoder>>,
     ) -> (DecoderFactory<TestStream>, Arc<Mutex<Vec<u64>>>) {
@@ -1099,11 +1086,11 @@ mod tests {
     /// **BASELINE TEST** — reproduces the exact production bug.
     ///
     /// Scenario from production logs (HLS ABR switch V0 AAC → V3 FLAC):
-    /// 1. V0 decoder active, base_offset=0
-    /// 2. Format change detected (V0→V3), boundary set, pending_format_change=Some
-    /// 3. Seek command arrives BEFORE apply_format_change runs
+    /// 1. V0 decoder active, `base_offset`=0
+    /// 2. Format change detected (V0→V3), boundary set, `pending_format_change`=Some
+    /// 3. Seek command arrives BEFORE `apply_format_change` runs
     /// 4. Old V0 decoder seek fails (at boundary EOF)
-    /// 5. base_offset==0 → existing recovery is skipped
+    /// 5. `base_offset`==0 → existing recovery is skipped
     /// 6. Seek position is lost — V3 decoder never receives it
     ///
     /// Expected: pending format change is applied, seek retried on V3 decoder.
@@ -1184,7 +1171,7 @@ mod tests {
     /// while ABR switches from V0 (AAC) to V3 (FLAC). After the old decoder
     /// is exhausted and format change is applied at the wrong offset (1732515
     /// instead of 964431), the factory fails to create a decoder ("missing ftyp").
-    /// Audio dies permanently — every subsequent fetch_next returns EOF.
+    /// Audio dies permanently — every subsequent `fetch_next` returns EOF.
     ///
     /// 30-second timeout catches deadlocks.
     #[test]
@@ -1313,7 +1300,7 @@ mod tests {
     /// Layout: [V0: 0..1000] [V3: 1000..2000]
     /// - First read in V0 → fence auto-detects V0
     /// - Seek to V3 offset → read returns 0 (fence blocks)
-    /// - clear_variant_fence() → read V3 → fence auto-detects V3
+    /// - `clear_variant_fence()` → read V3 → fence auto-detects V3
     #[test]
     fn source_variant_fence_blocks_cross_variant_reads() {
         let mut data = vec![0xAA; 2000];
@@ -1366,8 +1353,8 @@ mod tests {
         val.to_be_bytes()
     }
 
-    fn decode_v0_sample(bytes: &[u8; 4]) -> (u32, u32, u64) {
-        let val = u32::from_be_bytes(*bytes);
+    fn decode_v0_sample(bytes: [u8; 4]) -> (u32, u32, u64) {
+        let val = u32::from_be_bytes(bytes);
         let variant = (val >> 24) & 0xFF;
         let segment = (val >> 16) & 0xFF;
         let gsi = (val & 0xFFFF) as u64;
@@ -1430,7 +1417,7 @@ mod tests {
 
     // -- EncodedDecoder --
 
-    /// Decoder that reads real bytes from OffsetReader, validates byte-level
+    /// Decoder that reads real bytes from `OffsetReader`, validates byte-level
     /// consistency, and encodes output as PCM f32 with bit-packed metadata.
     struct EncodedDecoder {
         reader: OffsetReader<TestStream>,
@@ -1493,7 +1480,7 @@ mod tests {
                 let (variant, segment, gsi) = match self.sample_size {
                     V0_SAMPLE_SIZE => {
                         let bytes: [u8; 4] = sample_buf[..4].try_into().unwrap();
-                        decode_v0_sample(&bytes)
+                        decode_v0_sample(bytes)
                     }
                     V1_SAMPLE_SIZE => {
                         let bytes: [u8; 16] = sample_buf[..16].try_into().unwrap();
@@ -1569,7 +1556,7 @@ mod tests {
     /// **End-to-end ABR switch test** — verify no samples lost during decoder recreation.
     ///
     /// Uses encoded byte streams (V0: 4 bytes/sample, V1: 16 bytes/sample) and a mock
-    /// decoder that reads real bytes via OffsetReader. Each f32 PCM sample encodes both
+    /// decoder that reads real bytes via `OffsetReader`. Each f32 PCM sample encodes both
     /// the variant/segment origin and the global sample index via IEEE 754 bit-packing.
     ///
     /// Stream layout (64 segments × 1200 samples, 32 per variant):
@@ -1577,7 +1564,7 @@ mod tests {
     ///   V1 segments 32..63: each 1200 × 16 = 19200 bytes → 614400 bytes total
     ///   Grand total: 768000 bytes, 76800 samples
     ///
-    /// Catches: wrong base_offset, forgotten seek, cross-variant data, sample gaps.
+    /// Catches: wrong `base_offset`, forgotten seek, cross-variant data, sample gaps.
     #[test]
     fn abr_switch_must_not_lose_samples() {
         let spv = SEGMENTS_PER_VARIANT;

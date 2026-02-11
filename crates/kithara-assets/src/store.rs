@@ -97,7 +97,7 @@ impl StoreOptions {
 pub type AssetStore<Ctx = ()> =
     CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
-/// Resource handle returned by [`AssetStore::open_resource`] or [`MemStore::open_resource`].
+/// Resource handle returned by `AssetStore::open_resource` or `MemStore::open_resource`.
 ///
 /// Wraps `StorageResource` with processing and lease semantics.
 /// Implements `ResourceExt` for read/write/commit operations.

@@ -1,11 +1,11 @@
 #![forbid(unsafe_code)]
 
-//! Tests for ProcessingAssets layer.
+//! Tests for `ProcessingAssets` layer.
 //!
 //! Verifies:
 //! - Processing on commit (not on read)
 //! - Chunk-by-chunk transformation without memory buffering
-//! - Caching of processed resources (via CachedAssets)
+//! - Caching of processed resources (via `CachedAssets`)
 //! - Reads from disk after processing
 
 use std::{

@@ -23,7 +23,6 @@ impl Xorshift64 {
     }
 
     /// Returns `f64` in `[min, max)`.
-    #[allow(dead_code)]
     pub fn range_f64(&mut self, min: f64, max: f64) -> f64 {
         min + (max - min) * self.next_f64()
     }

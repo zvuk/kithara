@@ -3,13 +3,13 @@
 //! RED test: seek fails on fMP4 HLS streams due to `byte_len() -> None`.
 //!
 //! Production scenario (from real logs, 2026-02-01):
-//!   1. Stream<Hls> with fMP4, 37 segments cached, total = 1_890_485 bytes, ~220s
+//!   1. `Stream<Hls>` with fMP4, 37 segments cached, total = `1_890_485` bytes, ~220s
 //!   2. User scrubs to ~80.9s (epoch 10)
-//!   3. Symphonia IsoMp4Reader uses sidx for time→byte seek
+//!   3. Symphonia `IsoMp4Reader` uses sidx for time→byte seek
 //!   4. Because `MediaSource::byte_len()` returns `None`,
 //!      symphonia computes a corrupted `SeekFrom::Current(delta)` — a huge positive
 //!      value instead of a small (possibly negative) delta
-//!   5. Reader adds delta to current_pos, gets new_pos ≈ 9.2×10¹⁸ → "seek past EOF"
+//!   5. Reader adds delta to `current_pos`, gets `new_pos` ≈ 9.2×10¹⁸ → "seek past EOF"
 //!
 //! Root cause: `ReadSeekAdapter` and `StreamingFmp4Adapter` in `kithara-decode`
 //! returned `byte_len() -> None`. Fixed by propagating `Some(len)` via
@@ -20,10 +20,10 @@
 //! historical symptom and are `#[ignore]`d.
 //!
 //! Log excerpt:
-//!   seek: about to call decoder.seek() position=80.926208496s epoch=10
-//!     stream_pos=538977 segment_range=Some(1824949..1890485)
-//!   seek failed e=SeekError("seek past EOF: new_pos=9223372036854710271
-//!     len=1890485 current_pos=595033 seek_from=Current(9223372036854115238)")
+//!   seek: about to call `decoder.seek()` position=80.926208496s epoch=10
+//!     `stream_pos=538977` `segment_range=Some(1824949..1890485)`
+//!   seek failed e=SeekError("seek past EOF: `new_pos=9223372036854710271`
+//!     len=1890485 `current_pos=595033` `seek_from=Current(9223372036854115238)`")
 
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -149,7 +149,7 @@ fn seek_epoch_11_corrupted_delta() {
 
 // GREEN tests — normal seek behavior (sanity checks)
 
-/// Normal backward seek via SeekFrom::Current with negative delta.
+/// Normal backward seek via `SeekFrom::Current` with negative delta.
 #[test]
 fn seek_current_normal_backward() {
     let source = MockSource::new(1_000_000);
@@ -162,7 +162,7 @@ fn seek_current_normal_backward() {
     assert_eq!(result.unwrap(), 400_000);
 }
 
-/// Normal forward seek via SeekFrom::Current with positive delta.
+/// Normal forward seek via `SeekFrom::Current` with positive delta.
 #[test]
 fn seek_current_normal_forward() {
     let source = MockSource::new(1_000_000);
@@ -190,7 +190,7 @@ fn seek_past_eof_still_rejected() {
     );
 }
 
-/// SeekFrom::End with negative delta works.
+/// `SeekFrom::End` with negative delta works.
 #[test]
 fn seek_from_end_backward() {
     let source = MockSource::new(1_000_000);
@@ -225,7 +225,7 @@ fn seek_from_end_backward() {
 ///
 /// Symphonia parses stale variant 0 data as an fMP4 atom header,
 /// gets a garbage size (~3.5 GB), and issues a seek that overflows.
-/// With fence_at() removing stale entries, this shouldn't happen in
+/// With `fence_at()` removing stale entries, this shouldn't happen in
 /// production. But if it does, Reader returns Err instead of crashing.
 #[test]
 fn variant_switch_stale_atoms_produce_garbage_seek() {

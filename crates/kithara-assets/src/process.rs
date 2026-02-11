@@ -319,7 +319,7 @@ mod tests {
     }
 
     /// Simple mock resource for testing.
-    /// Returns both the resource and the TempDir to keep the directory alive.
+    /// Returns both the resource and the `TempDir` to keep the directory alive.
     fn mock_resource(content: &[u8]) -> (MmapResource, tempfile::TempDir) {
         let dir = tempdir().unwrap();
         let path = dir.path().join("test.bin");

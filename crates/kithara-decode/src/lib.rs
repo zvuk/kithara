@@ -1,3 +1,8 @@
+// NOTE: deny instead of forbid to allow unsafe in platform-specific FFI modules (apple, android)
+#![deny(unsafe_code)]
+#![allow(clippy::ignored_unit_patterns)]
+#![cfg_attr(test, allow(clippy::allow_attributes))]
+
 //! # Kithara Decode
 //!
 //! Audio decoding library with pluggable backends.
@@ -20,10 +25,6 @@
 //!
 //! let decoder = DecoderFactory::create(file, CodecSelector::Auto, DecoderConfig::default())?;
 //! ```
-
-// NOTE: deny instead of forbid to allow unsafe in platform-specific FFI modules (apple, android)
-#![deny(unsafe_code)]
-#![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 mod decoder;
 mod error;

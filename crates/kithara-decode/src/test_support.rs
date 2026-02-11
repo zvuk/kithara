@@ -1,6 +1,6 @@
-/// Test support utilities for kithara-decode.
-///
-/// Available under `#[cfg(test)]` and optionally via the `test-utils` feature.
+//! Test support utilities for kithara-decode.
+//!
+//! Available under `#[cfg(test)]` and optionally via the `test-utils` feature.
 
 /// Create minimal valid WAV file (PCM 16-bit).
 pub fn create_test_wav(sample_count: usize, sample_rate: u32, channels: u16) -> Vec<u8> {

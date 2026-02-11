@@ -33,7 +33,7 @@ const TOTAL_BYTES: usize = SEGMENT_COUNT * SEGMENT_SIZE; // 20 MB
 const SEEK_ITERATIONS: usize = 1000;
 
 /// Saw-tooth period: 65536 frames (~1.486s at 44100 Hz).
-/// Each frame within a period has a unique i16 value.
+/// Each frame within a period has a unique `i16` value.
 const SAW_PERIOD: usize = 65536;
 
 // Verification Helpers
@@ -52,9 +52,9 @@ fn expected_duration_secs() -> f64 {
     frame_count as f64 / SAMPLE_RATE as f64
 }
 
-/// Check circular distance between two phases (mod SAW_PERIOD).
+/// Check circular distance between two phases (mod `SAW_PERIOD`).
 fn phase_distance(a: usize, b: usize) -> usize {
-    let d = if a > b { a - b } else { b - a };
+    let d = a.abs_diff(b);
     d.min(SAW_PERIOD - d)
 }
 

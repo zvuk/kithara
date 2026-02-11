@@ -171,6 +171,10 @@ impl HlsTestServer {
     }
 
     /// Build a full URL from a path.
+    #[expect(
+        clippy::result_large_err,
+        reason = "test-only code, ergonomics over size"
+    )]
     pub fn url(&self, path: &str) -> HlsResult<Url> {
         format!("{}{}", self.base_url, path)
             .parse()
@@ -178,7 +182,10 @@ impl HlsTestServer {
     }
 
     /// Access the configuration.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "test utility reserved for future integration tests"
+    )]
     pub fn config(&self) -> &HlsTestServerConfig {
         &self.config
     }
@@ -198,7 +205,10 @@ impl HlsTestServer {
     }
 
     /// Total duration in seconds for one variant.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "test utility reserved for future integration tests"
+    )]
     pub fn total_duration_secs(&self) -> f64 {
         self.config.segments_per_variant as f64 * self.config.segment_duration_secs
     }
@@ -401,10 +411,10 @@ fn expected_byte_at_impl(config: &HlsTestServerConfig, variant: usize, offset: u
 
     let media_offset = offset - init_len;
 
-    if let Some(ref per_variant) = config.custom_data_per_variant {
-        if let Some(data) = per_variant.get(variant) {
-            return data.get(media_offset as usize).copied().unwrap_or(0);
-        }
+    if let Some(ref per_variant) = config.custom_data_per_variant
+        && let Some(data) = per_variant.get(variant)
+    {
+        return data.get(media_offset as usize).copied().unwrap_or(0);
     }
 
     if let Some(data) = &config.custom_data {

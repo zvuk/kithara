@@ -30,7 +30,7 @@ use crate::kithara_hls::fixture::abr::{AbrTestServer, master_playlist};
 /// 1. Start reading from variant 0 (slow segment0 triggers ABR down)
 /// 2. ABR triggers switch to variant 2 (faster)
 /// 3. Pipeline starts loading variant 2 segments ahead (e.g., 1, 2)
-/// 4. SourceReader needs to read from beginning - triggers seek back
+/// 4. `SourceReader` needs to read from beginning - triggers seek back
 /// 5. Verify no byte skips/glitches occur
 ///
 /// Expected behavior:
@@ -260,7 +260,7 @@ async fn test_basic_multi_segment_reading(
 /// 2. ABR switches to variant 2
 /// 3. Pipeline loads variant 2 starting from segment 2 (continues from where variant 0 left off)
 /// 4. Reader seeks back to offset 0 - this requires loading segment 0 from variant 2
-/// 5. BUG: first_media_segment stays at 2 instead of updating to 0
+/// 5. BUG: `first_media_segment` stays at 2 instead of updating to 0
 /// 6. This causes gap detection or incorrect offset calculations
 #[rstest]
 #[timeout(Duration::from_secs(30))]

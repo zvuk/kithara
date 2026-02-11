@@ -7,7 +7,7 @@
 //! - [`Audio`] - Generic audio pipeline running in a separate thread
 //! - [`AudioConfig`] - Pipeline configuration
 //! - [`ResamplerQuality`] - Sample rate conversion quality
-//! - [`AudioSyncReader`] - `rodio::Source` adapter (requires `rodio` feature)
+//! - `AudioSyncReader` - `rodio::Source` adapter (requires `rodio` feature)
 //!
 //! ## Target API
 //!

@@ -254,7 +254,7 @@ mod tests {
 
     #[rstest]
     fn test_default_retry_classifier_default() {
-        let classifier = DefaultRetryClassifier::default();
+        let classifier = DefaultRetryClassifier;
         let _ = classifier;
     }
 

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Tests for audio decoding with DecoderFactory.
+//! Tests for audio decoding with `DecoderFactory`.
 
 use std::io::Cursor;
 
@@ -241,16 +241,16 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
         assert_eq!(chunk.pcm.len() % spec.channels as usize, 0);
 
         // Skip first few chunks - they can have different sizes during init
-        if chunk_count > 3 {
-            if let Some(prev) = prev_len {
-                let ratio = chunk.pcm.len() as f64 / prev as f64;
-                if ratio < 0.01 || ratio > 100.0 {
-                    panic!(
-                        "Chunk size varies extremely: {} vs {}",
-                        chunk.pcm.len(),
-                        prev
-                    );
-                }
+        if chunk_count > 3
+            && let Some(prev) = prev_len
+        {
+            let ratio = chunk.pcm.len() as f64 / prev as f64;
+            if !(0.01..=100.0).contains(&ratio) {
+                panic!(
+                    "Chunk size varies extremely: {} vs {}",
+                    chunk.pcm.len(),
+                    prev
+                );
             }
         }
         prev_len = Some(chunk.pcm.len());

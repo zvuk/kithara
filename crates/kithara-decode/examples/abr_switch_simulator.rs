@@ -8,7 +8,10 @@
 //!      - `_apple.wav`   — Apple implicit delay (2112 for AAC, 0 for FLAC) + crossfade
 //!
 //! Usage:
+//!
+//! ```text
 //!   cargo run -p kithara-decode --example abr_switch_simulator -- /tmp/hls_analysis
+//! ```
 
 use std::{env, fs, io::Cursor, path::Path};
 
@@ -16,12 +19,12 @@ use symphonia::{
     core::{
         codecs::{CodecParameters, audio::AudioDecoderOptions},
         formats::{FormatOptions, TrackType},
-        io::MediaSourceStream,
+        io::{MediaSourceStream, MediaSourceStreamOptions},
     },
     default::formats::IsoMp4Reader,
 };
 
-/// Apple's implicit encoder delay for AAC (TN2258 / QuickTime Appendix G).
+/// Apple's implicit encoder delay for AAC (TN2258 / `QuickTime` Appendix G).
 /// When no `elst` or `iTunSMPB` is present, Apple assumes 2112 samples.
 const APPLE_IMPLICIT_AAC_DELAY: usize = 2112;
 
@@ -269,7 +272,7 @@ struct OverlapResult {
     new_pos_aligned: usize,
 }
 
-/// Build overlap-crossfade output using the given delay_diff.
+/// Build overlap-crossfade output using the given `delay_diff`.
 fn build_overlap(
     old_full: &[f32],
     new_full: &[f32],
@@ -393,7 +396,7 @@ fn decode_cold_start(base: &Path, variant: &str, seg_idx: usize) -> Result<Decod
 /// Decode an fMP4 buffer (init + media segments) to interleaved f32 PCM.
 fn decode_fmp4(data: &[u8]) -> Result<DecodedPcm, String> {
     let cursor = Cursor::new(data.to_vec());
-    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+    let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
 
     let format_opts = FormatOptions {
         enable_gapless: true,
@@ -421,8 +424,7 @@ fn decode_fmp4(data: &[u8]) -> Result<DecodedPcm, String> {
     let channels = codec_params
         .channels
         .as_ref()
-        .map(|c| c.count() as u16)
-        .unwrap_or(2);
+        .map_or(2, |c| c.count() as u16);
 
     let decoder_opts = AudioDecoderOptions { verify: false };
     let mut decoder = symphonia::default::get_codecs()
@@ -506,7 +508,7 @@ fn count_leading_silence(samples: &[f32], channels: usize, threshold: f32) -> us
 }
 
 /// Cross-correlate two signals around given positions to find fine alignment.
-/// Returns offset in frames: positive = shift new_signal right.
+/// Returns offset in frames: positive = shift `new_signal` right.
 fn cross_correlate(
     a: &[f32],
     a_center: usize,

@@ -16,7 +16,7 @@ fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     buf[..n].to_vec()
 }
 
-#[allow(dead_code)]
+#[expect(dead_code, reason = "utility reserved for future tests")]
 fn mp3_bytes() -> Vec<u8> {
     // Deterministic "mp3-like" payload (we don't parse mp3 here; just bytes).
     // Big enough to exercise read/write paths.
@@ -28,7 +28,7 @@ fn mp3_bytes() -> Vec<u8> {
 }
 
 #[derive(serde::Deserialize)]
-#[allow(dead_code)]
+#[expect(dead_code, reason = "fields deserialized from binary")]
 struct PinsIndexFile {
     version: u32,
     pinned: Vec<String>,
@@ -401,8 +401,8 @@ fn multiple_resources_same_asset_root_independently_accessible(
     }
 }
 
-/// Test that delete_asset only deletes the asset directory for the store's asset_root,
-/// leaving other assets in the same root_dir untouched.
+/// Test that `delete_asset` only deletes the asset directory for the store's `asset_root`,
+/// leaving other assets in the same `root_dir` untouched.
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[test]
@@ -472,7 +472,7 @@ fn delete_asset_only_removes_own_directory(temp_dir: tempfile::TempDir) {
     }
 }
 
-/// Test sequential deletion of multiple assets in the same root_dir.
+/// Test sequential deletion of multiple assets in the same `root_dir`.
 #[rstest]
 #[timeout(Duration::from_secs(5))]
 #[test]

@@ -763,7 +763,7 @@ mod tests {
             .with_container(kithara_stream::ContainerFormat::Wav)
             .with_sample_rate(44100);
 
-        let config = AudioConfig::<kithara_file::File>::new(Default::default())
+        let config = AudioConfig::<kithara_file::File>::new(kithara_file::FileConfig::default())
             .with_media_info(info.clone());
 
         assert!(config.media_info.is_some());

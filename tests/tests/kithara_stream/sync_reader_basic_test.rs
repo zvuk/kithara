@@ -1,6 +1,6 @@
-//! Tests for SyncReader with static data (Cursor).
+//! Tests for `SyncReader` with static data (Cursor).
 //!
-//! Tests SyncReader in isolation without HLS or networking.
+//! Tests `SyncReader` in isolation without HLS or networking.
 
 use std::io::{Cursor, Read};
 

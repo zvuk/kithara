@@ -118,7 +118,10 @@ fn pins_index_store_load_with_different_sets(
 
     let idx = PinsIndex::open(&base).unwrap();
 
-    let pins: HashSet<String> = asset_names.iter().map(|s| s.to_string()).collect();
+    let pins: HashSet<String> = asset_names
+        .iter()
+        .map(std::string::ToString::to_string)
+        .collect();
     idx.store(&pins).unwrap();
 
     let loaded = idx.load().unwrap();
