@@ -48,18 +48,30 @@ mod store;
 
 // Public API - used by other crates
 pub use backend::AssetsBackend;
-pub use base::{Assets, DiskAssetStore};
-pub use cache::CachedAssets;
 pub use error::{AssetsError, AssetsResult};
+pub use index::CoverageIndex;
+pub use key::{ResourceKey, asset_root_for_url};
+pub use process::ProcessChunkFn;
+pub use store::{AssetResource, AssetStore, AssetStoreBuilder, MemStore, StoreOptions};
+
+// Hidden re-exports (needed by type aliases or cross-crate internals, not end-user API)
+#[doc(hidden)]
+pub use base::{Assets, DiskAssetStore};
+#[doc(hidden)]
+pub use cache::CachedAssets;
+#[doc(hidden)]
 pub use evict::EvictAssets;
 #[cfg(feature = "internal")]
 pub use index::PinsIndex;
-pub use index::{CoverageIndex, DiskCoverage, EvictConfig};
+#[doc(hidden)]
+pub use index::{DiskCoverage, EvictConfig};
 #[cfg(feature = "internal")]
 pub use key::canonicalize_for_asset;
-pub use key::{ResourceKey, asset_root_for_url};
+#[doc(hidden)]
 pub use kithara_bufpool::{BytePool, byte_pool};
+#[doc(hidden)]
 pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
+#[doc(hidden)]
 pub use mem_store::MemAssetStore;
-pub use process::{ProcessChunkFn, ProcessedResource, ProcessingAssets};
-pub use store::{AssetResource, AssetStore, AssetStoreBuilder, MemStore, StoreOptions};
+#[doc(hidden)]
+pub use process::{ProcessedResource, ProcessingAssets};

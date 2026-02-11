@@ -15,7 +15,9 @@ pub use crate::traits::NetMock;
 pub use crate::{
     client::HttpClient,
     error::{NetError, NetResult},
-    timeout::TimeoutNet,
     traits::{ByteStream, Net, NetExt},
     types::{Headers, NetOptions, RangeSpec, RetryPolicy},
 };
+
+#[doc(hidden)]
+pub use crate::timeout::TimeoutNet;

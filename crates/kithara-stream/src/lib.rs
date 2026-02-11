@@ -22,14 +22,15 @@ mod stream;
 mod writer;
 
 pub use backend::Backend;
-pub use downloader::{
-    Downloader, DownloaderIo, NoDownload, NoDownloadError, NoIo, PlanOutcome, StepResult,
-};
+pub use downloader::{Downloader, DownloaderIo, PlanOutcome, StepResult};
+#[doc(hidden)]
+pub use downloader::{NoDownload, NoDownloadError, NoIo};
 pub use error::{StreamError, StreamResult};
 pub use fetch::{EpochValidator, Fetch};
 pub use kithara_storage::WaitOutcome;
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use pool::ThreadPool;
+#[doc(hidden)]
 pub use reader::Reader;
 pub use source::Source;
 // Test utilities
