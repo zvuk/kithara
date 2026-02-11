@@ -54,18 +54,17 @@ pub use events::{AudioEvent, AudioPipelineEvent};
 pub use kithara_decode::{
     AudioCodec, ContainerFormat, MediaInfo, PcmChunk, PcmSpec, TrackMetadata,
 };
-pub use pipeline::{Audio, AudioConfig};
-pub use resampler::ResamplerQuality;
-#[cfg(feature = "rodio")]
-pub use rodio::AudioSyncReader;
-pub use types::{DecodeError, DecodeResult, PcmReader};
-
 // Hidden re-exports (used by integration tests or advanced internal consumers)
 #[doc(hidden)]
 pub use kithara_decode::{DecoderConfig, DecoderFactory, DecoderInput, InnerDecoder};
+pub use pipeline::{Audio, AudioConfig};
 #[doc(hidden)]
 pub use reader::SourceReader;
+pub use resampler::ResamplerQuality;
 #[doc(hidden)]
 pub use resampler::{ResamplerParams, ResamplerProcessor};
+#[cfg(feature = "rodio")]
+pub use rodio::AudioSyncReader;
 #[doc(hidden)]
 pub use traits::{AudioEffect, AudioGenerator};
+pub use types::{DecodeError, DecodeResult, PcmReader};

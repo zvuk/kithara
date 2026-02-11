@@ -10,6 +10,8 @@ mod types;
 #[cfg(any(test, feature = "test-utils"))]
 pub use unimock;
 
+#[doc(hidden)]
+pub use crate::timeout::TimeoutNet;
 #[cfg(any(test, feature = "test-utils"))]
 pub use crate::traits::NetMock;
 pub use crate::{
@@ -18,6 +20,3 @@ pub use crate::{
     traits::{ByteStream, Net, NetExt},
     types::{Headers, NetOptions, RangeSpec, RetryPolicy},
 };
-
-#[doc(hidden)]
-pub use crate::timeout::TimeoutNet;

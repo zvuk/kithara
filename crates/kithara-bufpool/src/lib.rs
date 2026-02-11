@@ -29,7 +29,6 @@ mod pool;
 mod slice;
 
 pub use global::{BytePool, PcmBuf, PcmPool, byte_pool, pcm_pool};
-
 // Low-level pool internals (used by type aliases above; prefer BytePool/PcmPool/PcmBuf)
 #[doc(hidden)]
 pub use pool::{Pool, Pooled, PooledOwned, Reuse, SharedPool};

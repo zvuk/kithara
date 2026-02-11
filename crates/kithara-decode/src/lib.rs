@@ -68,10 +68,10 @@ pub use symphonia::{
 // Test utilities
 #[cfg(any(test, feature = "test-utils"))]
 pub use traits::AudioDecoderMock;
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::InnerDecoderMock;
 // Public traits
 pub use traits::InnerDecoder;
+#[cfg(any(test, feature = "test-utils"))]
+pub use traits::InnerDecoderMock;
 // Internal traits and codec markers
 #[doc(hidden)]
 pub use traits::{Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, Mp3, Vorbis};
