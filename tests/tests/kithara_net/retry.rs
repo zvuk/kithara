@@ -3,6 +3,7 @@ use std::time::Duration;
 use futures::StreamExt;
 use kithara_net::{Headers, Net, NetError, NetExt, RangeSpec, RetryPolicy};
 use rstest::*;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 // Mock Net implementation for testing retry logic
@@ -143,7 +144,7 @@ async fn test_retryable_errors_success_after_retries(#[case] failures_before_suc
         Duration::from_millis(10),
         Duration::from_secs(5),
     );
-    let retry_net = mock_net.with_retry(retry_policy);
+    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
     let url = Url::parse("http://example.com").unwrap();
     let result = retry_net.get_bytes(url, None).await;
@@ -166,7 +167,7 @@ async fn test_non_retryable_errors_no_retry(#[case] failures_before_success: usi
         Duration::from_millis(10),
         Duration::from_secs(5),
     );
-    let retry_net = mock_net.with_retry(retry_policy);
+    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
     let url = Url::parse("http://example.com").unwrap();
     let result = retry_net.get_bytes(url, None).await;
@@ -189,7 +190,7 @@ async fn test_retry_exhaustion(#[case] failures_before_success: usize, #[case] m
         Duration::from_millis(10),
         Duration::from_secs(5),
     );
-    let retry_net = mock_net.with_retry(retry_policy);
+    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
     let url = Url::parse("http://example.com").unwrap();
     let result = retry_net.get_bytes(url, None).await;
@@ -213,7 +214,7 @@ async fn test_exponential_backoff_with_max_delay(
     let error_type = NetError::Http("500 Internal Server Error".to_string());
     let mock_net = RetryMockNet::new((max_retries + 1) as usize, error_type);
     let retry_policy = RetryPolicy::new(max_retries, base_delay, max_delay);
-    let retry_net = mock_net.with_retry(retry_policy);
+    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
     let url = Url::parse("http://example.com").unwrap();
     let result = retry_net.get_bytes(url, None).await;
@@ -234,7 +235,7 @@ async fn test_all_net_methods_with_retry(#[case] failures_before_success: usize)
         Duration::from_millis(10),
         Duration::from_secs(5),
     );
-    let retry_net = mock_net.with_retry(retry_policy);
+    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
     // Test all methods using the helper
     test_all_net_methods_with_retry_net(&retry_net).await;
@@ -257,7 +258,7 @@ async fn test_timeout_retry_chaining(#[case] failures_before_success: usize) {
     // Chain timeout and retry
     let net = mock_net
         .with_timeout(Duration::from_secs(5))
-        .with_retry(retry_policy);
+        .with_retry(retry_policy, CancellationToken::new());
 
     let url = Url::parse("http://example.com").unwrap();
     let result = net.get_bytes(url, None).await;
@@ -272,7 +273,7 @@ async fn test_zero_max_retries() {
     let error_type = NetError::Http("500 Internal Server Error".to_string());
     let mock_net = RetryMockNet::new(1, error_type);
     let retry_policy = RetryPolicy::new(0, Duration::from_millis(10), Duration::from_secs(5));
-    let retry_net = mock_net.with_retry(retry_policy);
+    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
     let url = Url::parse("http://example.com").unwrap();
     let result = retry_net.get_bytes(url, None).await;
@@ -294,7 +295,7 @@ async fn test_zero_base_delay(#[case] failures_before_success: usize) {
         Duration::from_millis(0),
         Duration::from_secs(5),
     );
-    let retry_net = mock_net.with_retry(retry_policy);
+    let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
     let url = Url::parse("http://example.com").unwrap();
     let result = retry_net.get_bytes(url, None).await;

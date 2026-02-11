@@ -3,6 +3,7 @@ use std::{pin::Pin, time::Duration};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
+use tokio_util::sync::CancellationToken;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 use url::Url;
@@ -47,8 +48,12 @@ pub trait NetExt: Net + Sized {
     }
 
     /// Add retry layer
-    fn with_retry(self, policy: RetryPolicy) -> RetryNet<Self, DefaultRetryPolicy> {
-        RetryNet::new(self, DefaultRetryPolicy::new(policy))
+    fn with_retry(
+        self,
+        policy: RetryPolicy,
+        cancel: CancellationToken,
+    ) -> RetryNet<Self, DefaultRetryPolicy> {
+        RetryNet::new(self, DefaultRetryPolicy::new(policy), cancel)
     }
 }
 

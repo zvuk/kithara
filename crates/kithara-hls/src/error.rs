@@ -31,6 +31,9 @@ pub enum HlsError {
 
     #[error("Invalid URL: {0}")]
     InvalidUrl(String),
+
+    #[error("Cancelled")]
+    Cancelled,
 }
 
 pub type HlsResult<T> = Result<T, HlsError>;

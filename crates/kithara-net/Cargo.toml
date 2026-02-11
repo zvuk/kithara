@@ -18,6 +18,7 @@ futures = { workspace = true }
 reqwest = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 url = { workspace = true }
 async-trait = { workspace = true }
 unimock = { workspace = true, optional = true }

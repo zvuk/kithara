@@ -18,6 +18,7 @@ use kithara_net::{
 };
 use rstest::*;
 use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use url::Url;
 
 // Test server infrastructure
@@ -570,7 +571,7 @@ async fn test_retry_variants(#[future] test_server: TestServer, http_client: Htt
     let url = test_server.url("/retry-test");
 
     let retry_policy = RetryPolicy::new(2, Duration::from_millis(10), Duration::from_secs(5));
-    let client = http_client.with_retry(retry_policy);
+    let client = http_client.with_retry(retry_policy, CancellationToken::new());
 
     let result = client.get_bytes(url, None).await;
 

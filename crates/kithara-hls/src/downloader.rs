@@ -2,7 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
-    sync::Arc,
+    sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
 
@@ -552,6 +552,13 @@ impl HlsDownloader {
     }
 }
 
+impl Drop for HlsDownloader {
+    fn drop(&mut self) {
+        self.shared.stopped.store(true, Ordering::Release);
+        self.shared.condvar.notify_all();
+    }
+}
+
 impl Downloader for HlsDownloader {
     type Plan = HlsPlan;
     type Fetch = HlsFetch;
@@ -756,11 +763,10 @@ impl Downloader for HlsDownloader {
         let is_variant_switch = !self.sent_init_for_variant.contains(&fetch.variant);
         let is_midstream_switch = is_variant_switch && fetch.segment_index > 0;
 
-        // Advance current_segment_index if this is the next expected segment.
+        // Only advance sequential position for the next expected segment.
+        // On-demand loads and out-of-order batch results must not jump past gaps —
+        // plan() handles skipping loaded segments when building the next batch.
         if fetch.segment_index == self.current_segment_index {
-            self.current_segment_index = fetch.segment_index + 1;
-        } else if fetch.segment_index >= self.current_segment_index {
-            // Batch may commit out of order — advance past if needed.
             self.current_segment_index = fetch.segment_index + 1;
         }
 

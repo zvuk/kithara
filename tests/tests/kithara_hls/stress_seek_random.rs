@@ -1,8 +1,8 @@
-//! Stress test: 1000 random seek+read cycles on HLS stream (20 MB).
+//! Stress test: random seek+read cycles on HLS stream.
 //!
-//! Spawns a local HLS server with 100 segments × 200 KB = 20 MB via
-//! [`HlsTestServer`], creates `Stream<Hls>`, performs 1000 random byte-level
-//! seeks each followed by a read, verifying exact byte content at every position.
+//! Spawns a local HLS server via [`HlsTestServer`], creates `Stream<Hls>`,
+//! performs random byte-level seeks each followed by a read, verifying exact
+//! byte content at every position. Parametrized via rstest cases (small/medium/large).
 //!
 //! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
 //! No external network required.
@@ -23,24 +23,27 @@ use tracing::info;
 use super::fixture::{HlsTestServer, HlsTestServerConfig};
 use crate::common::Xorshift64;
 
-const SEGMENT_SIZE: usize = 200_000;
-const SEGMENT_COUNT: usize = 100;
-const SEEK_ITERATIONS: usize = 1000;
-
-/// 1000 random seek+read cycles with exact byte verification on 20 MB HLS stream.
+/// Random seek+read cycles with exact byte verification on HLS stream.
 ///
 /// Scenario:
-/// 1. Spawn local HLS server (100 segments × 200 KB = 20 MB)
+/// 1. Spawn local HLS server (`segment_count` segments × `segment_size` bytes)
 /// 2. Create `Stream<Hls>` with `AbrMode::Manual(0)`
 /// 3. Compute total byte length from server config
 /// 4. Compute optimal random chunk size proportional to stream
-/// 5. Sample 1000 random seek positions in `(0, len - chunk_size)`
+/// 5. Sample `seek_iterations` random seek positions in `(0, len - chunk_size)`
 /// 6. For each: seek → read → verify every byte matches `expected_byte_at`
 /// 7. Final: seek to `len - chunk_size`, read all → verify EOF
 #[rstest]
+#[case::small(50_000, 20, 200)]
+#[case::medium(100_000, 50, 500)]
+#[case::large(200_000, 100, 1000)]
 #[timeout(Duration::from_secs(120))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn stress_random_seek_read_hls() {
+async fn stress_random_seek_read_hls(
+    #[case] segment_size: usize,
+    #[case] segment_count: usize,
+    #[case] seek_iterations: usize,
+) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
@@ -52,8 +55,8 @@ async fn stress_random_seek_read_hls() {
 
     // --- Step 1: Spawn HLS server ---
     let server = HlsTestServer::new(HlsTestServerConfig {
-        segments_per_variant: SEGMENT_COUNT,
-        segment_size: SEGMENT_SIZE,
+        segments_per_variant: segment_count,
+        segment_size,
         ..Default::default()
     })
     .await;
@@ -62,7 +65,7 @@ async fn stress_random_seek_read_hls() {
     let total_bytes = server.total_bytes();
     info!(
         %url,
-        segments = SEGMENT_COUNT,
+        segments = segment_count,
         total_mb = total_bytes / 1_000_000,
         "HLS server ready"
     );
@@ -104,7 +107,7 @@ async fn stress_random_seek_read_hls() {
 
         // Step 5: Generate 1000 random seek positions > 0, < len - chunk_size
         let max_seek = total_bytes - chunk_size as u64;
-        let seek_positions: Vec<u64> = (0..SEEK_ITERATIONS)
+        let seek_positions: Vec<u64> = (0..seek_iterations)
             .map(|_| rng.range_u64(1, max_seek))
             .collect();
 
@@ -164,10 +167,10 @@ async fn stress_random_seek_read_hls() {
 
         info!(
             successful_reads,
-            total_bytes_read, byte_mismatches, "All {SEEK_ITERATIONS} seek+read iterations done"
+            total_bytes_read, byte_mismatches, "All {seek_iterations} seek+read iterations done"
         );
 
-        assert_eq!(successful_reads, SEEK_ITERATIONS as u64);
+        assert_eq!(successful_reads, seek_iterations as u64);
         assert_eq!(
             byte_mismatches, 0,
             "{byte_mismatches} byte mismatches detected — data corruption"
