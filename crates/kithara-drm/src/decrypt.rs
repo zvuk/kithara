@@ -101,6 +101,7 @@ mod tests {
         Encryptor,
         cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
     };
+    use rstest::rstest;
 
     use super::*;
 
@@ -116,12 +117,15 @@ mod tests {
         ct.to_vec()
     }
 
-    #[test]
-    fn test_single_chunk_roundtrip() {
-        let key = [0x42u8; 16];
-        let iv = [0x13u8; 16];
-        let plaintext = b"Hello, DRM world! This is a test of AES-128-CBC.";
-
+    /// Roundtrip: encrypt → decrypt single chunk.
+    #[rstest]
+    #[case::hello(b"Hello, DRM world! This is a test of AES-128-CBC.".as_slice(), [0x42u8; 16], [0x13u8; 16])]
+    #[case::exact_block(&[0x55u8; 16], [0xAAu8; 16], [0xBBu8; 16])]
+    fn test_single_chunk_roundtrip(
+        #[case] plaintext: &[u8],
+        #[case] key: [u8; 16],
+        #[case] iv: [u8; 16],
+    ) {
         let ciphertext = encrypt_aes128_cbc(plaintext, &key, &iv);
         let mut ctx = DecryptContext::new(key, iv);
 
@@ -129,6 +133,22 @@ mod tests {
         let written = aes128_cbc_process_chunk(&ciphertext, &mut output, &mut ctx, true).unwrap();
 
         assert_eq!(&output[..written], plaintext);
+    }
+
+    #[test]
+    fn test_single_chunk_roundtrip_large() {
+        let key = [0x01u8; 16];
+        let iv = [0x02u8; 16];
+        let plaintext: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+
+        let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
+        let mut ctx = DecryptContext::new(key, iv);
+
+        let mut output = vec![0u8; ciphertext.len()];
+        let written = aes128_cbc_process_chunk(&ciphertext, &mut output, &mut ctx, true).unwrap();
+
+        assert_eq!(written, plaintext.len());
+        assert_eq!(&output[..written], &plaintext[..]);
     }
 
     #[test]
@@ -148,87 +168,20 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn test_exact_block_size() {
-        let key = [0xAAu8; 16];
-        let iv = [0xBBu8; 16];
-        // 16 bytes exactly — after PKCS7 padding, becomes 32 bytes
-        let plaintext = [0x55u8; 16];
-
-        let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
-        assert_eq!(ciphertext.len(), 32); // 16 + 16 padding block
-
-        let mut ctx = DecryptContext::new(key, iv);
-        let mut output = vec![0u8; ciphertext.len()];
-        let written = aes128_cbc_process_chunk(&ciphertext, &mut output, &mut ctx, true).unwrap();
-
-        assert_eq!(written, 16);
-        assert_eq!(&output[..written], &plaintext);
-    }
-
-    #[test]
-    fn test_large_plaintext() {
-        let key = [0x01u8; 16];
-        let iv = [0x02u8; 16];
-        let plaintext: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
-
-        let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
-        let mut ctx = DecryptContext::new(key, iv);
-
-        let mut output = vec![0u8; ciphertext.len()];
-        let written = aes128_cbc_process_chunk(&ciphertext, &mut output, &mut ctx, true).unwrap();
-
-        assert_eq!(written, plaintext.len());
-        assert_eq!(&output[..written], &plaintext[..]);
-    }
-
-    #[test]
-    fn test_multi_chunk_cbc_iv_chaining() {
-        // Encrypt a plaintext larger than one chunk, then decrypt in two chunks.
-        // This verifies that IV chaining between chunks works correctly.
+    /// Multi-chunk CBC IV chaining.
+    #[rstest]
+    #[case::small_2_chunks(48, 32)]
+    #[case::large_4_chunks(256, 64)]
+    #[case::uneven_3_chunks(160, 48)]
+    fn test_multi_chunk_cbc_chaining(#[case] plaintext_len: usize, #[case] chunk_size: usize) {
         let key = [0x77u8; 16];
         let iv = [0x33u8; 16];
 
-        // 48 bytes of plaintext → 64 bytes ciphertext (48 + 16 PKCS7 padding)
-        let plaintext: Vec<u8> = (0..48).collect();
+        let plaintext: Vec<u8> = (0..plaintext_len).map(|i| (i % 256) as u8).collect();
         let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
-        assert_eq!(ciphertext.len(), 64); // 3 blocks data + 1 padding block
-
-        // Decrypt in two chunks: first 32 bytes (intermediate), then last 32 bytes (last)
-        let mut ctx = DecryptContext::new(key, iv);
-
-        // Chunk 1: first 32 bytes (2 AES blocks), intermediate
-        let mut output1 = vec![0u8; 32];
-        let written1 =
-            aes128_cbc_process_chunk(&ciphertext[..32], &mut output1, &mut ctx, false).unwrap();
-        assert_eq!(written1, 32);
-
-        // Chunk 2: last 32 bytes (2 AES blocks), last with PKCS7 unpadding
-        let mut output2 = vec![0u8; 32];
-        let written2 =
-            aes128_cbc_process_chunk(&ciphertext[32..], &mut output2, &mut ctx, true).unwrap();
-        assert_eq!(written2, 16); // 32 encrypted - 16 padding = 16 plaintext
-
-        // Verify combined output matches original plaintext
-        let mut combined = output1[..written1].to_vec();
-        combined.extend_from_slice(&output2[..written2]);
-        assert_eq!(combined, plaintext);
-    }
-
-    #[test]
-    fn test_multi_chunk_large_cbc_iv_chaining() {
-        // Larger test: 256 bytes plaintext, decrypt in 4 chunks of 64 bytes + 1 last chunk.
-        let key = [0xABu8; 16];
-        let iv = [0xCDu8; 16];
-
-        let plaintext: Vec<u8> = (0..256).map(|i| (i % 256) as u8).collect();
-        let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
-        // 256 bytes → 256 + 16 padding = 272 bytes ciphertext
-        assert_eq!(ciphertext.len(), 272);
 
         let mut ctx = DecryptContext::new(key, iv);
         let mut decrypted = Vec::new();
-        let chunk_size = 64;
 
         let total = ciphertext.len();
         let mut offset = 0;
