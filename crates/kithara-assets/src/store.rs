@@ -185,27 +185,27 @@ impl AssetStoreBuilder<()> {
             asset_root: None,
         }
     }
-
-    /// Build the storage backend.
-    ///
-    /// Returns `AssetsBackend::Disk` for persistent storage or
-    /// `AssetsBackend::Mem` when `ephemeral(true)` is set.
-    ///
-    /// # Panics
-    /// Panics if `process_fn` is not set for Ctx != ().
-    pub fn build(self) -> AssetsBackend {
-        if self.ephemeral {
-            self.build_ephemeral().into()
-        } else {
-            self.build_disk().into()
-        }
-    }
 }
 
 impl<Ctx> AssetStoreBuilder<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + std::fmt::Debug + 'static,
 {
+    /// Build the storage backend.
+    ///
+    /// Returns `AssetsBackend::Disk` for persistent storage or
+    /// `AssetsBackend::Mem` when `ephemeral(true)` is set.
+    ///
+    /// # Panics
+    /// Panics if `process_fn` is not set.
+    pub fn build(self) -> AssetsBackend<Ctx> {
+        if self.ephemeral {
+            self.build_ephemeral().into()
+        } else {
+            self.build_disk().into()
+        }
+    }
+
     /// Set the root directory for the asset store.
     pub fn root_dir<P: Into<PathBuf>>(mut self, root: P) -> Self {
         self.root_dir = Some(root.into());

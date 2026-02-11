@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/kithara",
     "crates/kithara-abr",
+    "crates/kithara-drm",
     "crates/kithara-net",
     "crates/kithara-file",
     "crates/kithara-hls",
@@ -71,6 +72,7 @@ kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.1.0" }
 kithara-audio = { path = "crates/kithara-audio", version = "0.1.0" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
+kithara-drm = { path = "crates/kithara-drm", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }

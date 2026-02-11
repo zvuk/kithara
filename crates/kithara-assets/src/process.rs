@@ -108,23 +108,28 @@ where
     Ctx: Clone + Send + Sync + Debug,
 {
     /// Process content chunk-by-chunk and write back to disk.
-    fn process_and_write(&self, final_len: u64) -> StorageResult<()> {
+    ///
+    /// Returns the total number of bytes written after processing.
+    /// This may be less than `final_len` when the processor removes padding
+    /// (e.g. PKCS7 unpadding in AES-128-CBC decryption).
+    fn process_and_write(&self, final_len: u64) -> StorageResult<u64> {
         let Some(ctx) = &self.ctx else {
-            return Ok(());
+            return Ok(final_len);
         };
 
         let mut input_buf = self.pool.get_with(|b| b.resize(PROCESS_CHUNK_SIZE, 0));
         let mut output_buf = self.pool.get_with(|b| b.resize(PROCESS_CHUNK_SIZE, 0));
 
         let chunk_size = PROCESS_CHUNK_SIZE;
-        let mut offset = 0u64;
+        let mut read_offset = 0u64;
+        let mut write_offset = 0u64;
 
-        while offset < final_len {
-            let remaining = (final_len - offset) as usize;
+        while read_offset < final_len {
+            let remaining = (final_len - read_offset) as usize;
             let to_read = remaining.min(chunk_size);
-            let is_last = offset + to_read as u64 >= final_len;
+            let is_last = read_offset + to_read as u64 >= final_len;
 
-            let n = self.inner.read_at(offset, &mut input_buf[..to_read])?;
+            let n = self.inner.read_at(read_offset, &mut input_buf[..to_read])?;
             if n == 0 {
                 break;
             }
@@ -132,12 +137,13 @@ where
             let written = (self.process)(&input_buf[..n], &mut output_buf[..n], ctx, is_last)
                 .map_err(StorageError::Failed)?;
 
-            self.inner.write_at(offset, &output_buf[..written])?;
+            self.inner.write_at(write_offset, &output_buf[..written])?;
 
-            offset += n as u64;
+            read_offset += n as u64;
+            write_offset += written as u64;
         }
 
-        Ok(())
+        Ok(write_offset)
     }
 }
 
@@ -159,20 +165,27 @@ where
     }
 
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        // Process on commit (once) if ctx is present
-        {
+        // Process on commit (once) if ctx is present.
+        // Use the actual processed length (may differ due to padding removal).
+        let actual_len = {
             let mut processed = self.processed.lock();
             if !*processed && self.ctx.is_some() {
                 if let Some(len) = final_len
                     && len > 0
                 {
-                    self.process_and_write(len)?;
+                    let processed_len = self.process_and_write(len)?;
+                    *processed = true;
+                    Some(processed_len)
+                } else {
+                    *processed = true;
+                    final_len
                 }
-                *processed = true;
+            } else {
+                final_len
             }
-        }
+        };
 
-        self.inner.commit(final_len)
+        self.inner.commit(actual_len)
     }
 
     fn fail(&self, reason: String) {
