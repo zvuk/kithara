@@ -42,7 +42,7 @@ pub fn aes128_cbc_process_chunk(
     }
 
     // AES-CBC requires input aligned to block size
-    if input.len() % AES_BLOCK_SIZE != 0 {
+    if !input.len().is_multiple_of(AES_BLOCK_SIZE) {
         return Err(format!(
             "input length {} is not aligned to AES block size {}",
             input.len(),
@@ -68,14 +68,9 @@ pub fn aes128_cbc_process_chunk(
         Ok(written)
     } else {
         // Intermediate chunk: decrypt without unpadding (block-by-block, same size)
-        let decryptor = Decryptor::<Aes128>::new((&ctx.key).into(), (&ctx.iv).into());
-        // decrypt_padded_b2b_mut is not what we want for intermediate chunks.
-        // For intermediate chunks we need raw CBC decryption without padding.
-        // We use NoPadding for intermediate chunks.
         use cbc::cipher::block_padding::NoPadding;
-        let decryptor_nopad = Decryptor::<Aes128>::new((&ctx.key).into(), (&ctx.iv).into());
-        let _ = decryptor;
-        let plaintext = decryptor_nopad
+        let decryptor = Decryptor::<Aes128>::new((&ctx.key).into(), (&ctx.iv).into());
+        let plaintext = decryptor
             .decrypt_padded_mut::<NoPadding>(&mut output[..input.len()])
             .map_err(|e| format!("CBC decrypt failed: {e}"))?;
         let written = plaintext.len();

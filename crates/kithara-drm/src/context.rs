@@ -8,21 +8,12 @@
 /// When `Some(ctx)` is provided to `open_resource_with_ctx`, the resource
 /// will be decrypted on commit. When `None`, data passes through unchanged
 /// (used for playlists, keys, init segments).
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
 pub struct DecryptContext {
     /// AES-128 key (16 bytes).
     pub key: [u8; 16],
     /// Initialization vector (16 bytes).
     pub iv: [u8; 16],
-}
-
-impl Default for DecryptContext {
-    fn default() -> Self {
-        Self {
-            key: [0u8; 16],
-            iv: [0u8; 16],
-        }
-    }
 }
 
 impl DecryptContext {
