@@ -27,6 +27,7 @@
 //! ```
 
 mod decoder;
+mod encoder_delay;
 mod error;
 mod factory;
 mod symphonia;
@@ -53,6 +54,8 @@ pub use apple::{Apple, AppleAac, AppleAlac, AppleConfig, AppleFlac, AppleMp3};
 // Generic wrapper
 #[doc(hidden)]
 pub use decoder::Decoder;
+// Encoder delay types
+pub use encoder_delay::{DelaySource, EncoderDelayInfo};
 // Error types
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection

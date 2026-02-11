@@ -17,6 +17,7 @@ mod fetch;
 mod media;
 mod pool;
 mod reader;
+mod segment;
 mod source;
 mod stream;
 mod writer;
@@ -32,6 +33,7 @@ pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use pool::ThreadPool;
 #[doc(hidden)]
 pub use reader::Reader;
+pub use segment::SourceSegmentMeta;
 pub use source::Source;
 // Test utilities
 #[cfg(any(test, feature = "test-utils"))]
