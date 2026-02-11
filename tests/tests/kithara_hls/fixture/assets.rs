@@ -4,7 +4,8 @@
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig};
+use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig, ProcessChunkFn};
+use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_net::{HttpClient, NetOptions};
 use rstest::fixture;
 use tempfile::TempDir;
@@ -12,13 +13,13 @@ use tokio_util::sync::CancellationToken;
 
 /// Wrapper for test assets with temp directory lifetime management
 pub struct TestAssets {
-    assets: AssetStore,
+    assets: AssetStore<DecryptContext>,
     _temp_dir: Arc<TempDir>,
 }
 
 impl TestAssets {
     #[allow(dead_code)]
-    pub fn assets(&self) -> &AssetStore {
+    pub fn assets(&self) -> &AssetStore<DecryptContext> {
         &self.assets
     }
 }
@@ -33,7 +34,12 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let temp_dir = TempDir::new().unwrap();
     let temp_dir = Arc::new(temp_dir);
 
+    let drm_fn: ProcessChunkFn<DecryptContext> = Arc::new(|input, output, ctx, is_last| {
+        aes128_cbc_process_chunk(input, output, ctx, is_last)
+    });
+
     let assets = AssetStoreBuilder::new()
+        .process_fn(drm_fn)
         .root_dir(temp_dir.path().to_path_buf())
         .asset_root(Some(asset_root))
         .evict_config(EvictConfig::default())

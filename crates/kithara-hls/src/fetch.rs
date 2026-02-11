@@ -7,6 +7,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
+use kithara_drm::DecryptContext;
 use kithara_net::{Headers, HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{ContainerFormat, Writer, WriterItem};
@@ -69,7 +70,7 @@ pub enum FetchResult {
     Cached { bytes: u64 },
     /// Active fetch in progress via Writer stream.
     /// Includes the resource so the caller can commit after download completes.
-    Active(Writer, AssetResource),
+    Active(Writer, AssetResource<DecryptContext>),
 }
 
 // Loader trait
@@ -102,7 +103,8 @@ fn uri_basename_no_query(uri: &str) -> Option<&str> {
 /// and implements `Loader` for segment loading.
 #[derive(Clone)]
 pub struct FetchManager<N> {
-    backend: AssetsBackend,
+    backend: AssetsBackend<DecryptContext>,
+    key_manager: Option<Arc<crate::keys::KeyManager>>,
     net: N,
     cancel: CancellationToken,
     // Playlist state
@@ -114,9 +116,14 @@ pub struct FetchManager<N> {
 }
 
 impl<N: Net> FetchManager<N> {
-    pub fn with_net(backend: AssetsBackend, net: N, cancel: CancellationToken) -> Self {
+    pub fn with_net(
+        backend: AssetsBackend<DecryptContext>,
+        net: N,
+        cancel: CancellationToken,
+    ) -> Self {
         Self {
             backend,
+            key_manager: None,
             net,
             cancel,
             master_url: None,
@@ -139,12 +146,22 @@ impl<N: Net> FetchManager<N> {
         self
     }
 
+    /// Set key manager for DRM decryption.
+    pub fn with_key_manager(mut self, km: Arc<crate::keys::KeyManager>) -> Self {
+        self.key_manager = Some(km);
+        self
+    }
+
     pub fn asset_root(&self) -> &str {
         self.backend.asset_root()
     }
 
-    pub fn backend(&self) -> &AssetsBackend {
+    pub fn backend(&self) -> &AssetsBackend<DecryptContext> {
         &self.backend
+    }
+
+    pub fn key_manager(&self) -> Option<&Arc<crate::keys::KeyManager>> {
+        self.key_manager.as_ref()
     }
 
     // ---- Low-level fetch ----
@@ -212,9 +229,16 @@ impl<N: Net> FetchManager<N> {
     }
 
     /// Start fetching a segment. Returns cached size if already cached.
-    pub(crate) async fn start_fetch(&self, url: &Url) -> HlsResult<FetchResult> {
+    ///
+    /// When `decrypt_ctx` is `Some`, the resource will be decrypted on commit
+    /// via the `ProcessingAssets` layer (zero-allocation, pool-backed).
+    pub(crate) async fn start_fetch(
+        &self,
+        url: &Url,
+        decrypt_ctx: Option<DecryptContext>,
+    ) -> HlsResult<FetchResult> {
         let key = ResourceKey::from_url(url);
-        let res = self.backend.open_resource(&key)?;
+        let res = self.backend.open_resource_with_ctx(&key, decrypt_ctx)?;
 
         let status = res.status();
         if let ResourceStatus::Committed { final_len } = status {
@@ -296,6 +320,61 @@ impl<N: Net> FetchManager<N> {
         parse(&bytes)
     }
 
+    // ---- DRM helpers ----
+
+    /// Resolve decryption context for a segment.
+    ///
+    /// Returns `Some(DecryptContext)` for AES-128 encrypted segments,
+    /// `None` for unencrypted segments or unsupported methods.
+    async fn resolve_decrypt_context(
+        &self,
+        key: Option<&crate::parsing::SegmentKey>,
+        segment_url: &Url,
+        sequence: u64,
+    ) -> HlsResult<Option<DecryptContext>> {
+        use crate::parsing::EncryptionMethod;
+
+        let Some(seg_key) = key else {
+            return Ok(None);
+        };
+
+        if !matches!(seg_key.method, EncryptionMethod::Aes128) {
+            return Ok(None);
+        }
+
+        let Some(ref key_info) = seg_key.key_info else {
+            return Ok(None);
+        };
+
+        let Some(ref km) = self.key_manager else {
+            return Err(HlsError::KeyProcessing(
+                "encrypted segment but no KeyManager configured".to_string(),
+            ));
+        };
+
+        let iv = crate::keys::KeyManager::derive_iv(key_info, sequence);
+        let key_url = crate::keys::KeyManager::resolve_key_url(key_info, segment_url)?;
+        let raw_key = km.get_raw_key(&key_url, Some(iv)).await?;
+
+        if raw_key.len() != 16 {
+            return Err(HlsError::KeyProcessing(format!(
+                "invalid AES-128 key length: {}",
+                raw_key.len()
+            )));
+        }
+
+        let mut key_bytes = [0u8; 16];
+        key_bytes.copy_from_slice(&raw_key[..16]);
+
+        debug!(
+            url = %segment_url,
+            sequence,
+            "resolved DRM context for segment"
+        );
+
+        Ok(Some(DecryptContext::new(key_bytes, iv)))
+    }
+
     // ---- Loader helpers ----
 
     fn master_url(&self) -> HlsResult<&Url> {
@@ -372,7 +451,11 @@ impl<N: Net> FetchManager<N> {
 }
 
 impl FetchManager<HttpClient> {
-    pub fn new(backend: AssetsBackend, net: HttpClient, cancel: CancellationToken) -> Self {
+    pub fn new(
+        backend: AssetsBackend<DecryptContext>,
+        net: HttpClient,
+        cancel: CancellationToken,
+    ) -> Self {
         Self::with_net(backend, net, cancel)
     }
 }
@@ -410,7 +493,8 @@ impl<N: Net> Loader for FetchManager<N> {
                 HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {}", e))
             })?;
 
-            let fetch_result = self.start_fetch(&init_url).await?;
+            // Init segments are not encrypted
+            let fetch_result = self.start_fetch(&init_url, None).await?;
 
             let init_len = match fetch_result {
                 FetchResult::Cached { bytes } => {
@@ -440,8 +524,10 @@ impl<N: Net> Loader for FetchManager<N> {
                     }
                     // Commit resource explicitly after successful download
                     res.commit(Some(total)).map_err(HlsError::from)?;
-                    debug!(variant, total, "init segment downloaded");
-                    total
+                    // After commit, actual length may differ (no change for init, but use stored)
+                    let committed_len = res.len().unwrap_or(total);
+                    debug!(variant, total, committed_len, "init segment downloaded");
+                    committed_len
                 }
             };
 
@@ -468,7 +554,12 @@ impl<N: Net> Loader for FetchManager<N> {
             .join(&segment.uri)
             .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)))?;
 
-        let fetch_result = self.start_fetch(&segment_url).await?;
+        // Resolve DRM context for encrypted segments
+        let decrypt_ctx = self
+            .resolve_decrypt_context(segment.key.as_ref(), &segment_url, segment.sequence)
+            .await?;
+
+        let fetch_result = self.start_fetch(&segment_url, decrypt_ctx).await?;
 
         let segment_len = match fetch_result {
             FetchResult::Cached { bytes } => bytes,
@@ -493,9 +584,10 @@ impl<N: Net> Loader for FetchManager<N> {
                         segment_index
                     )));
                 }
-                // Commit resource explicitly after successful download
+                // Commit — ProcessingAssets decrypts on commit if ctx was provided.
+                // Committed length may be shorter (PKCS7 padding removed).
                 res.commit(Some(total)).map_err(HlsError::from)?;
-                total
+                res.len().unwrap_or(total)
             }
         };
 
@@ -533,10 +625,11 @@ impl<N: Net> Loader for FetchManager<N> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{path::Path, sync::Arc, time::Duration};
 
     use bytes::Bytes;
-    use kithara_assets::AssetStoreBuilder;
+    use kithara_assets::{AssetStoreBuilder, AssetsBackend, ProcessChunkFn};
+    use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
     use kithara_net::NetMock;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
@@ -545,15 +638,24 @@ mod tests {
 
     use super::*;
 
+    /// Build a test backend with DRM process function.
+    fn test_backend(asset_root: &str, root_dir: &Path) -> AssetsBackend<DecryptContext> {
+        let drm_fn: ProcessChunkFn<DecryptContext> = Arc::new(|input, output, ctx, is_last| {
+            aes128_cbc_process_chunk(input, output, ctx, is_last)
+        });
+        AssetStoreBuilder::new()
+            .process_fn(drm_fn)
+            .asset_root(Some(asset_root))
+            .root_dir(root_dir)
+            .build()
+    }
+
     // ---- FetchManager tests ----
 
     #[tokio::test]
     async fn test_fetch_playlist_with_mock_net() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
-            .root_dir(temp_dir.path())
-            .build();
+        let backend = test_backend("test", temp_dir.path());
 
         let playlist_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
         let test_url = Url::parse("http://example.com/playlist.m3u8").unwrap();
@@ -578,10 +680,7 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_playlist_uses_cache() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
-            .root_dir(temp_dir.path())
-            .build();
+        let backend = test_backend("test", temp_dir.path());
 
         let test_url = Url::parse("http://example.com/playlist.m3u8").unwrap();
         let playlist_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
@@ -610,10 +709,7 @@ mod tests {
     #[tokio::test]
     async fn test_fetch_key_with_mock_net() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
-            .root_dir(temp_dir.path())
-            .build();
+        let backend = test_backend("test", temp_dir.path());
 
         let test_url = Url::parse("http://example.com/key.bin").unwrap();
         let key_content = vec![0u8; 16];
@@ -638,10 +734,7 @@ mod tests {
         use kithara_net::NetError;
 
         let temp_dir = TempDir::new().unwrap();
-        let backend = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
-            .root_dir(temp_dir.path())
-            .build();
+        let backend = test_backend("test", temp_dir.path());
 
         let test_url = Url::parse("http://example.com/playlist.m3u8").unwrap();
 
@@ -663,10 +756,7 @@ mod tests {
     #[tokio::test]
     async fn test_matcher_url_path_matching() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
-            .root_dir(temp_dir.path())
-            .build();
+        let backend = test_backend("test", temp_dir.path());
 
         let master_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
         let media_content = b"#EXTINF:4.0\nseg0.bin\n";
@@ -694,10 +784,7 @@ mod tests {
     #[tokio::test]
     async fn test_matcher_url_domain_matching() {
         let temp_dir = TempDir::new().unwrap();
-        let backend = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
-            .root_dir(temp_dir.path())
-            .build();
+        let backend = test_backend("test", temp_dir.path());
 
         let content = b"test content";
 
@@ -722,10 +809,7 @@ mod tests {
         use kithara_net::Headers;
 
         let temp_dir = TempDir::new().unwrap();
-        let backend = AssetStoreBuilder::new()
-            .asset_root(Some("test"))
-            .root_dir(temp_dir.path())
-            .build();
+        let backend = test_backend("test", temp_dir.path());
 
         let key_content = vec![0u8; 16];
 
@@ -817,10 +901,7 @@ mod tests {
         use kithara_net::{ByteStream, NetError};
 
         let temp_dir = TempDir::new().unwrap();
-        let backend = AssetStoreBuilder::new()
-            .asset_root(Some("partial-test"))
-            .root_dir(temp_dir.path())
-            .build();
+        let backend = test_backend("partial-test", temp_dir.path());
 
         let mock_net = Unimock::new((
             NetMock::get_bytes.stub(|each| {
@@ -868,10 +949,7 @@ mod tests {
         use kithara_net::{ByteStream, NetError};
 
         let temp_dir = TempDir::new().unwrap();
-        let backend = AssetStoreBuilder::new()
-            .asset_root(Some("partial-test"))
-            .root_dir(temp_dir.path())
-            .build();
+        let backend = test_backend("partial-test", temp_dir.path());
 
         let mock_net = Unimock::new((
             NetMock::get_bytes.stub(|each| {

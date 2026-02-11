@@ -2,6 +2,8 @@
 
 //! Storage backend: disk or memory asset store.
 
+use std::{fmt::Debug, hash::Hash};
+
 use crate::{
     base::Assets,
     error::AssetsResult,
@@ -13,20 +15,44 @@ use crate::{
 ///
 /// Provides a unified interface over `AssetStore` (disk) and `MemStore` (memory).
 /// Both variants return the same `AssetResource` type.
+///
+/// Generic parameter `Ctx` is the processing context type.
+/// Use `()` (default) for no processing, or `DecryptContext` for DRM decryption.
 #[derive(Clone, Debug)]
-pub enum AssetsBackend {
+pub enum AssetsBackend<Ctx = ()>
+where
+    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
+{
     /// File-backed storage with mmap resources.
-    Disk(AssetStore),
+    Disk(AssetStore<Ctx>),
     /// In-memory storage (ephemeral, no disk artifacts).
-    Mem(MemStore),
+    Mem(MemStore<Ctx>),
 }
 
-impl AssetsBackend {
-    /// Open a resource by key.
-    pub fn open_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource> {
+impl<Ctx> AssetsBackend<Ctx>
+where
+    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
+{
+    /// Open a resource by key (no processing context).
+    pub fn open_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource<Ctx>> {
         match self {
             Self::Disk(s) => s.open_resource(key),
             Self::Mem(s) => s.open_resource(key),
+        }
+    }
+
+    /// Open a resource with processing context.
+    ///
+    /// When `ctx` is `Some`, the resource will be processed on commit
+    /// (e.g. AES-128-CBC decryption). When `None`, data passes through unchanged.
+    pub fn open_resource_with_ctx(
+        &self,
+        key: &ResourceKey,
+        ctx: Option<Ctx>,
+    ) -> AssetsResult<AssetResource<Ctx>> {
+        match self {
+            Self::Disk(s) => s.open_resource_with_ctx(key, ctx),
+            Self::Mem(s) => s.open_resource_with_ctx(key, ctx),
         }
     }
 
@@ -59,14 +85,20 @@ impl AssetsBackend {
     }
 }
 
-impl From<AssetStore> for AssetsBackend {
-    fn from(store: AssetStore) -> Self {
+impl<Ctx> From<AssetStore<Ctx>> for AssetsBackend<Ctx>
+where
+    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
+{
+    fn from(store: AssetStore<Ctx>) -> Self {
         Self::Disk(store)
     }
 }
 
-impl From<MemStore> for AssetsBackend {
-    fn from(store: MemStore) -> Self {
+impl<Ctx> From<MemStore<Ctx>> for AssetsBackend<Ctx>
+where
+    Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
+{
+    fn from(store: MemStore<Ctx>) -> Self {
         Self::Mem(store)
     }
 }

@@ -1,0 +1,20 @@
+[package]
+name = "kithara-drm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "DRM decryption support for kithara (AES-128-CBC and extensible key processing)"
+
+[lints]
+workspace = true
+
+[dependencies]
+aes = { workspace = true }
+cbc = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+[dev-dependencies]
+rstest = { workspace = true }

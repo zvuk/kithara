@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 kithara-abr = { workspace = true }
 kithara-assets = { workspace = true }
+kithara-drm = { workspace = true }
 kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
