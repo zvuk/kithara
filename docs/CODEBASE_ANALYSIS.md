@@ -8,6 +8,21 @@
 - [Project Overview](#project-overview)
 - [Architecture](#architecture)
 - [Crate Dependency Graph](#crate-dependency-graph)
+- [Diagrams](#diagrams)
+  - [Crate Dependencies (Mermaid)](#crate-dependencies-mermaid)
+  - [Progressive File Dataflow](#progressive-file-dataflow)
+  - [HLS Dataflow](#hls-dataflow)
+  - [Thread and Task Model](#thread-and-task-model)
+  - [Async-to-Sync Bridge (Storage)](#async-to-sync-bridge-storage)
+  - [Assets Decorator Chain](#assets-decorator-chain)
+  - [Net Decorator Chain](#net-decorator-chain)
+  - [ABR Decision Flow](#abr-decision-flow)
+  - [Event Propagation](#event-propagation)
+  - [Buffer Pool Lifecycle](#buffer-pool-lifecycle)
+  - [HLS Segment Stitching](#hls-segment-stitching)
+  - [File Three-Phase Download](#file-three-phase-download)
+  - [Seek Sequence (File)](#seek-sequence-file)
+  - [HLS ABR Variant Switch](#hls-abr-variant-switch)
 - [kithara (facade)](#kithara-facade)
 - [kithara-bufpool](#kithara-bufpool)
 - [kithara-storage](#kithara-storage)
@@ -55,69 +70,747 @@ orchestration in the middle, and decoding/audio pipeline at the top. A single fa
 (`kithara`) unifies everything behind a type-erased `Resource` that can play any supported
 source.
 
-```
-                            +-----------+
-                            |  kithara  |  <-- facade: Resource, ResourceConfig, events
-                            +-----+-----+
-                                  |
-                          +-------+-------+
-                          |               |
-                   +------+------+ +------+------+
-                   | kithara-audio| (audio pipeline, resampling, rodio)
-                   +------+------+
-                          |
-                   +------+------+
-                   |kithara-decode| (Symphonia, Apple, Android backends)
-                   +------+------+
-                          |
-            +-------------+-------------+
-            |                           |
-     +------+------+            +------+------+
-     |kithara-file |            | kithara-hls |
-     +------+------+            +------+------+
-            |                      |        |
-            +----------+-----------+   +----+-----+
-                       |               |kithara-abr|
-                +------+------+        +----+------+
-                | kithara-net |             |
-                +------+------+        +----+-----+
-                       |               |kithara-drm|
-                +------+------+        +----------+
-                |kithara-assets|
-                +------+------+
-                       |
-                +------+------+
-                |kithara-stream| (Source, Writer, Backend, StreamType)
-                +------+------+
-                       |
-                +------+------+
-                |kithara-storage| (Mmap, Mem, range tracking)
-                +------+------+
-                       |
-                +------+------+
-                |kithara-bufpool| (sharded pool, zero-alloc hot paths)
-                +--------------+
-```
-
 ---
 
 ## Crate Dependency Graph
 
+```mermaid
+graph TD
+    kithara["kithara<br/><i>facade</i>"]
+    audio["kithara-audio<br/><i>pipeline, resampling</i>"]
+    decode["kithara-decode<br/><i>Symphonia, Apple, Android</i>"]
+    file["kithara-file<br/><i>progressive download</i>"]
+    hls["kithara-hls<br/><i>HLS VOD</i>"]
+    abr["kithara-abr<br/><i>adaptive bitrate</i>"]
+    drm["kithara-drm<br/><i>AES-128-CBC</i>"]
+    net["kithara-net<br/><i>HTTP + retry</i>"]
+    assets["kithara-assets<br/><i>cache, lease, evict</i>"]
+    stream["kithara-stream<br/><i>Source, Writer, Backend</i>"]
+    storage["kithara-storage<br/><i>mmap / mem</i>"]
+    bufpool["kithara-bufpool<br/><i>sharded pool</i>"]
+
+    kithara --> audio
+    kithara --> decode
+    kithara --> file
+    kithara --> hls
+
+    audio --> decode
+    audio --> stream
+    audio --> file
+    audio --> hls
+    audio --> bufpool
+
+    decode --> stream
+    decode --> bufpool
+
+    file --> stream
+    file --> net
+    file --> assets
+    file --> storage
+
+    hls --> stream
+    hls --> net
+    hls --> assets
+    hls --> storage
+    hls --> abr
+    hls --> drm
+
+    assets --> storage
+    assets --> bufpool
+
+    stream --> storage
+    stream --> bufpool
+    stream --> net
+
+    style kithara fill:#4a6fa5,color:#fff
+    style audio fill:#6b8cae,color:#fff
+    style decode fill:#6b8cae,color:#fff
+    style file fill:#7ea87e,color:#fff
+    style hls fill:#7ea87e,color:#fff
+    style abr fill:#c4a35a,color:#fff
+    style drm fill:#c4a35a,color:#fff
+    style net fill:#b07a5b,color:#fff
+    style assets fill:#b07a5b,color:#fff
+    style stream fill:#8b6b8b,color:#fff
+    style storage fill:#8b6b8b,color:#fff
+    style bufpool fill:#8b6b8b,color:#fff
 ```
-kithara-bufpool          (no internal deps)
-kithara-storage          --> kithara-bufpool (dev only)
-kithara-assets           --> kithara-storage, kithara-bufpool
-kithara-net              (no internal deps)
-kithara-drm              (no internal deps)
-kithara-stream           --> kithara-storage, kithara-bufpool, kithara-net
-kithara-abr              (no internal deps)
-kithara-file             --> kithara-stream, kithara-net, kithara-assets, kithara-storage
-kithara-hls              --> kithara-stream, kithara-net, kithara-assets, kithara-storage,
-                             kithara-abr, kithara-drm
-kithara-decode           --> kithara-stream, kithara-bufpool
-kithara-audio            --> kithara-decode, kithara-stream, kithara-file, kithara-hls,
-                             kithara-bufpool
-kithara (facade)         --> all of the above
+
+---
+
+## Diagrams
+
+### Crate Dependencies (Mermaid)
+
+See [Crate Dependency Graph](#crate-dependency-graph) above.
+
+---
+
+### Progressive File Dataflow
+
+End-to-end data flow for `Stream<File>` (progressive HTTP download to PCM output):
+
+```mermaid
+graph LR
+    subgraph Network
+        HTTP["HTTP Server"]
+    end
+
+    subgraph "Async (tokio)"
+        HEAD["HEAD request<br/><i>Content-Length</i>"]
+        GET["GET stream<br/><i>byte stream</i>"]
+        Writer["Writer&lt;NetError&gt;<br/><i>byte pump</i>"]
+        RangeReq["GET Range<br/><i>gap filling</i>"]
+    end
+
+    subgraph "Storage (shared)"
+        SR["StorageResource<br/><i>Mmap or Mem</i>"]
+        RS["RangeSet&lt;u64&gt;<br/><i>available ranges</i>"]
+    end
+
+    subgraph "Sync (rayon thread)"
+        FS["FileSource<br/><i>Source impl</i>"]
+        Reader["Reader&lt;FileSource&gt;<br/><i>Read + Seek</i>"]
+        StreamW["Stream&lt;File&gt;"]
+    end
+
+    subgraph "Decode (rayon thread)"
+        Decoder["Symphonia<br/><i>InnerDecoder</i>"]
+        PCM["PcmChunk<br/><i>f32 interleaved</i>"]
+    end
+
+    subgraph "Consumer"
+        Audio["Audio&lt;Stream&lt;File&gt;&gt;<br/><i>PcmReader</i>"]
+    end
+
+    HTTP --> HEAD
+    HTTP --> GET
+    HTTP --> RangeReq
+    GET --> Writer
+    RangeReq --> Writer
+    Writer -- "write_at(offset, bytes)" --> SR
+    SR -- "updates" --> RS
+    FS -- "wait_range()" --> SR
+    FS -- "read_at()" --> SR
+    Reader --> FS
+    StreamW --> Reader
+    Decoder -- "Read + Seek" --> StreamW
+    Decoder --> PCM
+    PCM -- "kanal channel" --> Audio
+
+    style SR fill:#d4a574,color:#000
+    style RS fill:#d4a574,color:#000
+```
+
+---
+
+### HLS Dataflow
+
+End-to-end data flow for `Stream<Hls>` (HLS VOD with ABR):
+
+```mermaid
+graph LR
+    subgraph Network
+        MasterPL["Master<br/>Playlist"]
+        MediaPL["Media<br/>Playlist"]
+        SegSrv["Segment<br/>Server"]
+        KeySrv["Key<br/>Server"]
+    end
+
+    subgraph "Async (tokio)"
+        FM["FetchManager<br/><i>fetch + cache</i>"]
+        KM["KeyManager<br/><i>key resolution</i>"]
+        W["Writer<br/><i>byte pump</i>"]
+    end
+
+    subgraph "Downloader (rayon)"
+        DL["HlsDownloader<br/><i>plan, commit</i>"]
+        ABR["AbrController<br/><i>variant select</i>"]
+    end
+
+    subgraph "Assets"
+        AB["AssetsBackend<br/><i>Disk or Mem</i>"]
+        Proc["ProcessingAssets<br/><i>AES decrypt</i>"]
+    end
+
+    subgraph "Sync (rayon thread)"
+        HS["HlsSource<br/><i>Source impl</i>"]
+        SI["SegmentIndex<br/><i>virtual stream</i>"]
+        StreamH["Stream&lt;Hls&gt;"]
+    end
+
+    subgraph "Decode (rayon thread)"
+        Dec["Symphonia<br/><i>InnerDecoder</i>"]
+        PCM2["PcmChunk"]
+    end
+
+    subgraph "Consumer"
+        Audio2["Audio&lt;Stream&lt;Hls&gt;&gt;"]
+    end
+
+    MasterPL --> FM
+    MediaPL --> FM
+    SegSrv --> FM
+    KeySrv --> KM
+    KM --> FM
+    FM --> W
+    W --> AB
+    AB --> Proc
+    DL -- "plan()" --> FM
+    DL -- "commit()" --> SI
+    ABR -- "decide()" --> DL
+    DL -- "throughput sample" --> ABR
+    HS -- "wait on condvar" --> SI
+    HS -- "read_at()" --> AB
+    StreamH --> HS
+    Dec -- "Read + Seek" --> StreamH
+    Dec --> PCM2
+    PCM2 -- "kanal channel" --> Audio2
+
+    style SI fill:#d4a574,color:#000
+    style AB fill:#d4a574,color:#000
+```
+
+---
+
+### Thread and Task Model
+
+Overview of threads, async tasks, and their communication channels:
+
+```mermaid
+graph TB
+    subgraph "Main / Consumer Thread"
+        App["Application Code"]
+        Resource["Resource / Audio&lt;S&gt;<br/><i>PcmReader interface</i>"]
+        App -- "read(buf)" --> Resource
+    end
+
+    subgraph "tokio Runtime (async tasks)"
+        NetTask["Network I/O<br/><i>reqwest + retry</i>"]
+        WriterTask["Writer&lt;E&gt;<br/><i>byte pump</i>"]
+        EventFwd["Event Forwarder<br/><i>broadcast relay</i>"]
+    end
+
+    subgraph "rayon ThreadPool (blocking)"
+        DLLoop["Backend::run_downloader<br/><i>orchestration loop</i>"]
+        DecodeWorker["AudioWorker<br/><i>decode + effects</i>"]
+    end
+
+    subgraph "Shared State (lock-based)"
+        StorageRes["StorageResource<br/><i>Mutex + Condvar</i>"]
+        SegIdx["SegmentIndex / SharedSegments<br/><i>Mutex + Condvar</i>"]
+        Progress["Progress<br/><i>AtomicU64 + Notify</i>"]
+    end
+
+    subgraph "Channels"
+        PcmChan["kanal::bounded&lt;PcmChunk&gt;<br/><i>decode -> consumer</i>"]
+        CmdChan["kanal::bounded&lt;AudioCommand&gt;<br/><i>consumer -> worker</i>"]
+        EventChan["broadcast::channel&lt;Event&gt;<br/><i>all -> consumer</i>"]
+    end
+
+    DLLoop -- "plan + fetch" --> NetTask
+    NetTask -- "bytes" --> WriterTask
+    WriterTask -- "write_at()" --> StorageRes
+    DLLoop -- "commit()" --> SegIdx
+
+    DecodeWorker -- "wait_range() blocks" --> StorageRes
+    DecodeWorker -- "read_at()" --> StorageRes
+    DecodeWorker -- "PcmChunk" --> PcmChan
+    Resource -- "recv()" --> PcmChan
+
+    Resource -- "Seek cmd" --> CmdChan
+    CmdChan --> DecodeWorker
+
+    EventFwd -- "ResourceEvent" --> EventChan
+    EventChan --> App
+
+    DLLoop -- "should_throttle()" --> Progress
+    DecodeWorker -- "set_read_pos()" --> Progress
+
+    style StorageRes fill:#d4a574,color:#000
+    style SegIdx fill:#d4a574,color:#000
+    style Progress fill:#d4a574,color:#000
+    style PcmChan fill:#5b8a5b,color:#fff
+    style CmdChan fill:#5b8a5b,color:#fff
+    style EventChan fill:#5b8a5b,color:#fff
+```
+
+---
+
+### Async-to-Sync Bridge (Storage)
+
+Detailed view of the central synchronization mechanism:
+
+```mermaid
+sequenceDiagram
+    participant DL as Downloader (async)
+    participant W as Writer
+    participant SR as StorageResource
+    participant RS as RangeSet
+    participant CV as Condvar
+    participant R as Reader (sync)
+
+    Note over DL,R: Async downloader and sync reader share StorageResource
+
+    DL->>W: poll next chunk from network
+    W->>SR: write_at(offset, bytes)
+    SR->>RS: insert(offset..offset+len)
+    SR->>CV: notify_all()
+
+    R->>SR: wait_range(pos..pos+len)
+    SR->>RS: check coverage
+    alt Range not ready
+        SR->>CV: wait(50ms timeout)
+        Note over SR,CV: Loop until ready, EOF, or cancelled
+        CV-->>SR: woken by notify_all
+        SR->>RS: re-check coverage
+    end
+    SR-->>R: WaitOutcome::Ready
+
+    R->>SR: read_at(pos, buf)
+    SR-->>R: bytes read
+
+    Note over DL,R: Backpressure via Progress atomics
+    DL->>DL: should_throttle()? (download_pos - read_pos > limit)
+    R->>R: set_read_pos(pos)
+    R-->>DL: Notify (reader advanced)
+```
+
+---
+
+### Assets Decorator Chain
+
+Request flow through the `AssetStore` decorator stack:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Cache as CachedAssets
+    participant Lease as LeaseAssets
+    participant Proc as ProcessingAssets
+    participant Evict as EvictAssets
+    participant Disk as DiskAssetStore
+    participant FS as Filesystem
+
+    Caller->>Cache: open_resource_with_ctx(key, ctx)
+    Cache->>Cache: check LRU cache
+    alt Cache hit
+        Cache-->>Caller: cached resource
+    else Cache miss
+        Cache->>Lease: open_resource_with_ctx(key, ctx)
+        Lease->>Lease: pin(asset_root)
+        Lease->>Lease: persist _index/pins.bin
+        Lease->>Proc: open_resource_with_ctx(key, ctx)
+        Proc->>Evict: open_resource_with_ctx(key, ctx)
+        Evict->>Evict: first access? check LRU limits
+        alt Over limits
+            Evict->>Evict: evict oldest unpinned assets
+        end
+        Evict->>Disk: open_resource_with_ctx(key, ctx)
+        Disk->>FS: MmapResource::open(path, mode)
+        FS-->>Disk: StorageResource::Mmap
+        Disk-->>Evict: StorageResource
+        Evict-->>Proc: StorageResource
+        Proc->>Proc: wrap in ProcessedResource(res, ctx)
+        Proc-->>Lease: ProcessedResource
+        Lease->>Lease: wrap in LeaseResource(res, guard)
+        Lease-->>Cache: LeaseResource
+        Cache->>Cache: insert into LRU cache
+        Cache-->>Caller: LeaseResource
+    end
+
+    Note over Caller: On commit():
+    Caller->>Proc: commit(final_len)
+    alt ctx is Some (encrypted)
+        Proc->>Proc: read 64KB chunks from disk
+        Proc->>Proc: aes128_cbc_process_chunk()
+        Proc->>Proc: write decrypted back to disk
+    end
+    Proc->>Disk: commit(actual_len)
+
+    Note over Caller: On drop(LeaseResource):
+    Caller->>Lease: drop LeaseGuard
+    Lease->>Lease: unpin(asset_root)
+    Lease->>Lease: persist _index/pins.bin
+```
+
+---
+
+### Net Decorator Chain
+
+HTTP request flow through composed decorators:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Retry as RetryNet
+    participant Timeout as TimeoutNet
+    participant HTTP as HttpClient
+    participant Server as HTTP Server
+
+    Caller->>Retry: get_bytes(url, headers)
+    loop attempt 0..max_retries
+        Retry->>Timeout: get_bytes(url, headers)
+        Timeout->>Timeout: start tokio::time::timeout
+        Timeout->>HTTP: get_bytes(url, headers)
+        HTTP->>Server: GET url
+        alt Success (2xx)
+            Server-->>HTTP: 200 OK + body
+            HTTP-->>Timeout: Ok(Bytes)
+            Timeout-->>Retry: Ok(Bytes)
+            Retry-->>Caller: Ok(Bytes)
+        else Timeout elapsed
+            Timeout-->>Retry: Err(NetError::Timeout)
+            Retry->>Retry: is_retryable? Yes
+            Retry->>Retry: sleep(base_delay * 2^attempt)
+            Note over Retry: tokio::select with CancellationToken
+        else Server error (5xx)
+            Server-->>HTTP: 503
+            HTTP-->>Timeout: Err(HttpError{503})
+            Timeout-->>Retry: Err(HttpError{503})
+            Retry->>Retry: is_retryable? Yes
+            Retry->>Retry: sleep(backoff)
+        else Client error (4xx)
+            Server-->>HTTP: 404
+            HTTP-->>Timeout: Err(HttpError{404})
+            Timeout-->>Retry: Err(HttpError{404})
+            Retry->>Retry: is_retryable? No
+            Retry-->>Caller: Err(HttpError{404})
+        end
+    end
+    Retry-->>Caller: Err(RetryExhausted)
+```
+
+---
+
+### ABR Decision Flow
+
+Adaptive bitrate decision-making process:
+
+```mermaid
+graph TD
+    Start["AbrController::decide(now)"]
+    Manual{"AbrMode::Manual?"}
+    Interval{"now - last_switch<br/>< min_switch_interval?"}
+    Estimate{"estimator.estimate_bps()<br/>returns Some?"}
+    Select["Select best variant<br/>bandwidth <= estimate / safety_factor"]
+    CompareUp{"candidate_bw ><br/>current_bw?"}
+    CompareDown{"candidate_bw <<br/>current_bw?"}
+    BufferCheck{"buffer_level >=<br/>min_buffer_for_up_switch?"}
+    HystUp{"throughput >=<br/>candidate * up_hysteresis?"}
+    HystDown{"buffer <= down_switch_buffer<br/>OR throughput <=<br/>current * down_hysteresis?"}
+
+    RetManual["ManualOverride<br/>(fixed variant)"]
+    RetMinInt["MinInterval<br/>(too soon)"]
+    RetNoEst["NoEstimate<br/>(keep current)"]
+    RetBufLow["BufferTooLowForUpSwitch<br/>(keep current)"]
+    RetOptimal["AlreadyOptimal<br/>(keep current)"]
+    RetUp["UpSwitch<br/>(upgrade quality)"]
+    RetDown["DownSwitch<br/>(downgrade quality)"]
+    RetKeep["AlreadyOptimal<br/>(keep current)"]
+
+    Start --> Manual
+    Manual -- "Yes" --> RetManual
+    Manual -- "No" --> Interval
+    Interval -- "Yes" --> RetMinInt
+    Interval -- "No" --> Estimate
+    Estimate -- "None" --> RetNoEst
+    Estimate -- "Some(bps)" --> Select
+    Select --> CompareUp
+    CompareUp -- "Yes" --> BufferCheck
+    CompareUp -- "No" --> CompareDown
+    BufferCheck -- "No" --> RetBufLow
+    BufferCheck -- "Yes" --> HystUp
+    HystUp -- "No" --> RetOptimal
+    HystUp -- "Yes" --> RetUp
+    CompareDown -- "Yes" --> HystDown
+    CompareDown -- "No (equal)" --> RetKeep
+    HystDown -- "Yes" --> RetDown
+    HystDown -- "No" --> RetKeep
+
+    style RetUp fill:#5b8a5b,color:#fff
+    style RetDown fill:#a05050,color:#fff
+    style RetManual fill:#6b6b8b,color:#fff
+    style RetMinInt fill:#8b8b6b,color:#000
+    style RetNoEst fill:#8b8b6b,color:#000
+    style RetBufLow fill:#8b8b6b,color:#000
+    style RetOptimal fill:#5577aa,color:#fff
+    style RetKeep fill:#5577aa,color:#fff
+```
+
+---
+
+### Event Propagation
+
+How events flow from protocol crates to the consumer:
+
+```mermaid
+graph LR
+    subgraph "Protocol Layer"
+        FE["FileEvent<br/><i>DownloadProgress<br/>DownloadComplete<br/>PlaybackProgress</i>"]
+        HE["HlsEvent<br/><i>VariantsDiscovered<br/>VariantApplied<br/>SegmentComplete<br/>ThroughputSample</i>"]
+    end
+
+    subgraph "Audio Layer"
+        AE["AudioEvent<br/><i>FormatDetected<br/>FormatChanged<br/>SeekComplete<br/>EndOfStream</i>"]
+    end
+
+    subgraph "Pipeline Layer"
+        APE_F["AudioPipelineEvent&lt;FileEvent&gt;<br/><i>Stream(FileEvent)<br/>Audio(AudioEvent)</i>"]
+        APE_H["AudioPipelineEvent&lt;HlsEvent&gt;<br/><i>Stream(HlsEvent)<br/>Audio(AudioEvent)</i>"]
+    end
+
+    subgraph "Facade Layer"
+        RE["ResourceEvent<br/><i>unified enum</i>"]
+    end
+
+    subgraph "Consumer"
+        App["Application<br/><i>broadcast::Receiver</i>"]
+    end
+
+    FE -- "broadcast" --> APE_F
+    AE -- "broadcast" --> APE_F
+    AE -- "broadcast" --> APE_H
+    HE -- "broadcast" --> APE_H
+    APE_F -- "tokio task<br/>From impl" --> RE
+    APE_H -- "tokio task<br/>From impl" --> RE
+    RE -- "broadcast" --> App
+
+    style RE fill:#4a6fa5,color:#fff
+```
+
+---
+
+### Buffer Pool Lifecycle
+
+Allocation and recycling flow in `kithara-bufpool`:
+
+```mermaid
+sequenceDiagram
+    participant Caller
+    participant Pool as SharedPool<32, Vec<u8>>
+    participant Home as Shard[home] (Mutex)
+    participant Other as Shard[other] (Mutex)
+    participant Heap as Allocator
+
+    Caller->>Pool: get_with(init_fn)
+    Pool->>Pool: shard_idx = hash(thread_id) % 32
+    Pool->>Home: lock & pop()
+    alt Home shard has buffer
+        Home-->>Pool: Some(buf)
+    else Home shard empty
+        Pool->>Other: lock & pop() (work-stealing, try all shards)
+        alt Other shard has buffer
+            Other-->>Pool: Some(buf)
+        else All shards empty
+            Pool->>Heap: Vec::default()
+            Heap-->>Pool: new Vec
+        end
+    end
+    Pool->>Pool: init_fn(&mut buf)
+    Pool-->>Caller: Pooled { buf, pool, shard_idx }
+
+    Note over Caller: Use buffer...
+
+    Caller->>Caller: drop(Pooled)
+    Caller->>Pool: put(buf, shard_idx)
+    Pool->>Pool: buf.reuse(trim_capacity)
+    alt Shard not full & reuse=true
+        Pool->>Home: lock & push(buf)
+        Note over Home: Buffer recycled
+    else Shard full or capacity=0
+        Pool->>Heap: drop(buf)
+        Note over Heap: Buffer deallocated
+    end
+```
+
+---
+
+### HLS Segment Stitching
+
+Virtual stream layout and mid-stream ABR variant switch:
+
+```mermaid
+graph LR
+    subgraph "Single Variant Playback"
+        direction LR
+        I0["Init V0"]
+        S0["Seg 0"]
+        S1["Seg 1"]
+        S2["Seg 2"]
+        S3["Seg 3"]
+        I0 --- S0 --- S1 --- S2 --- S3
+    end
+
+    subgraph "Mid-Stream ABR Switch (V0 -> V1)"
+        direction LR
+        A0["V0 Init"]
+        A1["V0 Seg0"]
+        A2["V0 Seg1"]
+        FENCE["fence_at()"]
+        B0["V1 Init"]
+        B1["V1 Seg2"]
+        B2["V1 Seg3"]
+        A0 --- A1 --- A2 -.- FENCE
+        FENCE -.- B0 --- B1 --- B2
+    end
+
+    style FENCE fill:#a05050,color:#fff
+    style I0 fill:#6b8cae,color:#fff
+    style A0 fill:#6b8cae,color:#fff
+    style B0 fill:#5b8a5b,color:#fff
+```
+
+---
+
+### File Three-Phase Download
+
+State machine for progressive file download phases:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Sequential: File::create()
+
+    Sequential --> GapFilling: Stream ends early\nor network error
+    Sequential --> Complete: All bytes received\ncommit(total_len)
+
+    GapFilling --> GapFilling: Range request\ncompletes a gap
+    GapFilling --> Complete: All gaps filled\ncoverage.is_complete()
+
+    Complete --> [*]
+
+    state Sequential {
+        [*] --> Streaming
+        Streaming: Writer pumps bytes\nfrom HTTP stream to StorageResource
+        Streaming --> Throttled: download_pos - read_pos > look_ahead_bytes
+        Throttled --> Streaming: Reader advances\nProgress::reader_advanced
+        Streaming --> StreamEnded: HTTP stream EOF
+    }
+
+    state GapFilling {
+        [*] --> FindGaps
+        FindGaps: coverage.next_gap(2MB)
+        FindGaps --> BatchFetch: Up to 4 gaps
+        BatchFetch: Parallel HTTP Range requests
+        BatchFetch --> CommitGap: Range downloaded
+        CommitGap: Mark coverage,\nflush to disk
+        CommitGap --> FindGaps: More gaps?
+    }
+```
+
+---
+
+### Seek Sequence (File)
+
+What happens when the consumer seeks during progressive download:
+
+```mermaid
+sequenceDiagram
+    participant App as Consumer
+    participant Audio as Audio<Stream<File>>
+    participant Worker as AudioWorker
+    participant Decoder as Symphonia
+    participant Stream as Stream<File>
+    participant Source as FileSource
+    participant Shared as SharedFileState
+    participant DL as FileDownloader
+    participant Net as HttpClient
+    participant SR as StorageResource
+
+    App->>Audio: seek(Duration)
+    Audio->>Audio: epoch += 1
+    Audio->>Worker: AudioCommand::Seek { position, epoch }
+
+    Worker->>Decoder: seek(position)
+    Decoder->>Stream: seek(SeekFrom::Start(byte_pos))
+    Stream->>Source: (updates reader pos)
+
+    Note over Source,DL: Next read triggers on-demand download
+
+    Worker->>Decoder: next_chunk()
+    Decoder->>Stream: read(buf)
+    Stream->>Source: wait_range(pos..pos+len)
+    Source->>Source: range beyond download_pos?
+
+    alt Data already available
+        Source->>SR: wait_range() -> Ready
+        SR-->>Source: data
+    else Data not downloaded yet
+        Source->>Shared: request_range(pos..pos+len)
+        Shared->>Shared: SegQueue.push(range)
+        Shared->>DL: reader_needs_data.notify()
+        DL->>DL: poll_demand() -> Some(range)
+        DL->>Net: get_range(url, range)
+        Net-->>DL: byte stream
+        DL->>SR: write_at(pos, bytes)
+        SR->>SR: notify_all() (Condvar)
+        Source->>SR: wait_range() -> Ready
+        SR-->>Source: data
+    end
+
+    Source-->>Stream: bytes
+    Stream-->>Decoder: bytes
+    Decoder-->>Worker: PcmChunk { epoch: new }
+    Worker-->>Audio: PcmChunk via kanal
+    Audio->>Audio: epoch matches -> accept
+    Audio-->>App: samples
+```
+
+---
+
+### HLS ABR Variant Switch
+
+Sequence when ABR decides to switch quality mid-stream:
+
+```mermaid
+sequenceDiagram
+    participant ABR as AbrController
+    participant DL as HlsDownloader
+    participant FM as FetchManager
+    participant Net as HttpClient
+    participant SI as SegmentIndex
+    participant Src as HlsSource
+    participant Dec as Decoder
+    participant Audio as Audio<Stream<Hls>>
+
+    Note over DL: plan() called for next batch
+
+    DL->>ABR: decide(now)
+    ABR->>ABR: estimate_bps() via dual EWMA
+    ABR-->>DL: AbrDecision { target: V1, changed: true, reason: UpSwitch }
+
+    DL->>DL: emit VariantApplied { from: V0, to: V1 }
+    DL->>DL: ensure_variant_ready(V1, seg_idx)
+
+    DL->>FM: HEAD requests for V1 segments
+    FM->>Net: head(seg_url) [parallel for all segments]
+    Net-->>FM: Content-Length per segment
+    FM-->>DL: segment metadata + total length
+
+    DL->>SI: fence_at(current_offset, keep_variant=V1)
+    Note over SI: Discard V0 segments after fence
+
+    DL->>FM: load_segment(V1, init + first_segment)
+    FM->>Net: GET init segment
+    Net-->>FM: init bytes
+    FM->>Net: GET media segment
+    Net-->>FM: segment bytes
+
+    DL->>SI: push(SegmentEntry { V1, byte_offset, init_len, meta })
+    DL->>SI: condvar.notify_all()
+
+    Note over Src,Dec: Decoder reads through the switch
+
+    Src->>SI: wait_range() -> Ready (new segment)
+    Src->>Src: detect variant change via media_info()
+    Src-->>Dec: format_change_segment_range()
+
+    Dec->>Dec: poll_format_change() -> Some(new MediaInfo)
+    Dec->>Dec: recreate decoder for new codec/container
+    Dec->>Src: clear_variant_fence()
+    Dec->>Src: read_at(new_segment_offset) -> init + media data
+
+    Dec-->>Audio: PcmChunk (new variant, seamless)
 ```
 
 ---
