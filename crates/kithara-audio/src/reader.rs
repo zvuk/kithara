@@ -102,7 +102,6 @@ impl<S: Source> Seek for SourceReader<S> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use std::ops::Range;
 
@@ -159,7 +158,7 @@ mod tests {
         }
     }
 
-    /// Source that returns Eof from wait_range for offsets beyond its data.
+    /// Source that returns Eof from `wait_range` for offsets beyond its data.
     struct EofSource {
         data: Vec<u8>,
     }
@@ -198,7 +197,7 @@ mod tests {
         }
     }
 
-    /// Source with unknown length (len() returns None).
+    /// Source with unknown length (`len()` returns None).
     struct UnknownLenSource;
 
     impl Source for UnknownLenSource {
@@ -293,7 +292,7 @@ mod tests {
 
         // Read 100 bytes to advance position
         let mut discard = vec![0u8; 100];
-        reader.read(&mut discard).unwrap();
+        reader.read_exact(&mut discard).unwrap();
         assert_eq!(reader.position(), 100);
 
         // Seek +50 from current (100 + 50 = 150)

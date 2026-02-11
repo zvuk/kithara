@@ -20,7 +20,6 @@ use std::{
 use crossbeam_queue::SegQueue;
 use mmap_io::MemoryMappedFile;
 use parking_lot::Mutex;
-use tracing::trace;
 
 use crate::{
     StorageError, StorageResult,
@@ -221,7 +220,6 @@ impl Driver for MmapDriver {
         };
 
         mmap.update_region(offset, data)?;
-        trace!(offset, len = data.len(), "MmapDriver: write_at");
         Ok(())
     }
 

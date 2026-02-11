@@ -4,13 +4,16 @@
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetStoreBuilder, Assets, AssetsBackend, CoverageIndex, asset_root_for_url};
+use kithara_assets::{
+    AssetStoreBuilder, Assets, AssetsBackend, CoverageIndex, ProcessChunkFn, asset_root_for_url,
+};
+use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_net::HttpClient;
 use kithara_stream::StreamType;
 use tokio::sync::broadcast;
 
 use crate::{
-    config::HlsConfig, error::HlsError, events::HlsEvent, fetch::FetchManager,
+    config::HlsConfig, error::HlsError, events::HlsEvent, fetch::FetchManager, keys::KeyManager,
     playlist::variant_info_from_master, source::build_pair,
 };
 
@@ -39,23 +42,47 @@ impl StreamType for Hls {
         let cancel = config.cancel.clone().unwrap_or_default();
         let net = HttpClient::new(config.net.clone());
 
-        // Build storage backend
+        // Build DRM process function for ProcessingAssets
+        let drm_process_fn: ProcessChunkFn<DecryptContext> =
+            Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
+                aes128_cbc_process_chunk(input, output, ctx, is_last)
+            });
+
+        // Build storage backend with DRM processing support
         let mut builder = AssetStoreBuilder::new()
+            .process_fn(drm_process_fn)
             .asset_root(Some(asset_root.as_str()))
             .cancel(cancel.clone())
             .root_dir(&config.store.cache_dir)
             .evict_config(config.store.to_evict_config())
             .ephemeral(config.ephemeral);
+        if let Some(ref pool) = config.pool {
+            builder = builder.pool(pool.clone());
+        }
         if let Some(cap) = config.store.cache_capacity {
             builder = builder.cache_capacity(cap);
         }
-        let backend = builder.build();
+        let backend: AssetsBackend<DecryptContext> = builder.build();
+
+        // Build KeyManager for DRM key resolution
+        let key_manager = Arc::new(KeyManager::from_options(
+            // We pass a temporary Arc; the real FetchManager will be used below.
+            // KeyManager needs its own FetchManager for key fetching.
+            // We'll set it up after creating the FetchManager.
+            Arc::new(
+                FetchManager::new(backend.clone(), net.clone(), cancel.clone())
+                    .with_master_url(config.url.clone())
+                    .with_base_url(config.base_url.clone()),
+            ),
+            config.keys.clone(),
+        ));
 
         // Build FetchManager (unified: fetch + playlist cache + Loader)
         let fetch_manager = Arc::new(
             FetchManager::new(backend, net, cancel.clone())
                 .with_master_url(config.url.clone())
-                .with_base_url(config.base_url.clone()),
+                .with_base_url(config.base_url.clone())
+                .with_key_manager(key_manager),
         );
 
         // Load master playlist

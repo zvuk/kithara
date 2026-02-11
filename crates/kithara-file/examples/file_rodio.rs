@@ -1,8 +1,8 @@
 //! Example: Play audio from an HTTP file using rodio.
 //!
 //! This demonstrates the Stream API:
-//! - Stream::<File>::new() creates a Read + Seek stream
-//! - rodio::Decoder handles audio decoding
+//! - `Stream::<File>::new()` creates a Read + Seek stream
+//! - `rodio::Decoder` handles audio decoding
 //!
 //! Run with:
 //! ```

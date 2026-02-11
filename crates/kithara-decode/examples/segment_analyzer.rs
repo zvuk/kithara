@@ -4,12 +4,18 @@
 //! saves PCM to WAV files, and analyzes boundaries between segments.
 //!
 //! Usage:
+//!
+//! ```text
 //!   cargo run -p kithara-decode --example segment_analyzer -- /tmp/hls_analysis
+//! ```
 //!
 //! Expected directory structure:
+//!
+//! ```text
 //!   /tmp/hls_analysis/
 //!     slq/init.mp4, slq/seg_1.m4s, slq/seg_2.m4s, ...
 //!     smq/init.mp4, smq/seg_1.m4s, ...
+//! ```
 
 use std::{env, fs, io::Cursor, path::Path};
 
@@ -17,7 +23,7 @@ use symphonia::{
     core::{
         codecs::{CodecParameters, audio::AudioDecoderOptions},
         formats::{FormatOptions, TrackType},
-        io::MediaSourceStream,
+        io::{MediaSourceStream, MediaSourceStreamOptions},
     },
     default::formats::IsoMp4Reader,
 };
@@ -245,7 +251,7 @@ struct BoundaryInfo {
 
 fn decode_fmp4(data: &[u8]) -> Result<DecodedSegment, String> {
     let cursor = Cursor::new(data.to_vec());
-    let mss = MediaSourceStream::new(Box::new(cursor), Default::default());
+    let mss = MediaSourceStream::new(Box::new(cursor), MediaSourceStreamOptions::default());
 
     let format_opts = FormatOptions {
         enable_gapless: true,
@@ -273,8 +279,7 @@ fn decode_fmp4(data: &[u8]) -> Result<DecodedSegment, String> {
     let channels = codec_params
         .channels
         .as_ref()
-        .map(|c| c.count() as u16)
-        .unwrap_or(2);
+        .map_or(2, |c| c.count() as u16);
 
     let decoder_opts = AudioDecoderOptions { verify: false };
     let mut decoder = symphonia::default::get_codecs()

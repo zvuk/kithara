@@ -10,6 +10,7 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use crossbeam_queue::SegQueue;
@@ -20,6 +21,7 @@ use kithara_stream::{AudioCodec, MediaInfo, Source, StreamError, StreamResult};
 use parking_lot::{Condvar, Mutex};
 use rangemap::RangeSet;
 use tokio::sync::{Notify, broadcast};
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 use url::Url;
 
@@ -191,10 +193,14 @@ pub(crate) struct SharedSegments {
     pub(crate) segment_requests: SegQueue<SegmentRequest>,
     /// Per-variant segment metadata for `byte_offset` → `segment_index` mapping.
     pub(crate) variant_metadata: Mutex<HashMap<usize, Vec<SegmentMetadata>>>,
+    /// Cancellation token for interrupting `wait_range`.
+    pub(crate) cancel: CancellationToken,
+    /// Downloader has exited (normally or with error).
+    pub(crate) stopped: AtomicBool,
 }
 
 impl SharedSegments {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(cancel: CancellationToken) -> Self {
         Self {
             segments: Mutex::new(SegmentIndex::new()),
             condvar: Condvar::new(),
@@ -203,6 +209,8 @@ impl SharedSegments {
             reader_advanced: Notify::new(),
             segment_requests: SegQueue::new(),
             variant_metadata: Mutex::new(HashMap::new()),
+            cancel,
+            stopped: AtomicBool::new(false),
         }
     }
 }
@@ -304,6 +312,28 @@ impl Source for HlsSource {
         // Wait until the range is covered by loaded segments or EOF.
         loop {
             let mut segments = self.shared.segments.lock();
+
+            // Check cancellation (mirrors kithara-storage driver.rs:261)
+            if self.shared.cancel.is_cancelled() {
+                return Err(StreamError::Source(HlsError::Cancelled));
+            }
+
+            // Check if downloader has exited (normally or abnormally).
+            // When stopped=true, no more data will be delivered.
+            // If the requested range is already loaded, fall through to normal checks.
+            // Otherwise, return Eof (past end) or Cancelled (gap / abnormal exit).
+            if self.shared.stopped.load(Ordering::Acquire)
+                && !segments.is_range_loaded(&range)
+                && segments.find_at_offset(range.start).is_none()
+            {
+                let eof = self.shared.eof.load(Ordering::Acquire);
+                let total = segments.total_bytes();
+                if eof && range.start >= total {
+                    return Ok(WaitOutcome::Eof);
+                }
+                return Err(StreamError::Source(HlsError::Cancelled));
+            }
+
             let eof = self.shared.eof.load(Ordering::Acquire);
             let total = segments.total_bytes();
 
@@ -376,8 +406,10 @@ impl Source for HlsSource {
                 self.shared.reader_advanced.notify_one();
             }
 
-            // Block until downloader pushes more segments
-            self.shared.condvar.wait(&mut segments);
+            // Wait with timeout (mirrors kithara-storage driver.rs:283)
+            self.shared
+                .condvar
+                .wait_for(&mut segments, Duration::from_millis(50));
         }
     }
 
@@ -476,8 +508,9 @@ pub fn build_pair(
     let mut abr_opts = config.abr.clone();
     abr_opts.variants = abr_variants;
 
+    let cancel = config.cancel.clone().unwrap_or_default();
     let abr = kithara_abr::AbrController::new(abr_opts);
-    let shared = Arc::new(SharedSegments::new());
+    let shared = Arc::new(SharedSegments::new(cancel));
 
     let downloader = HlsDownloader {
         io: HlsIo::new(Arc::clone(&fetch)),
@@ -516,12 +549,38 @@ impl HlsSource {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{sync::Arc, time::Duration};
 
+    use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
+    use kithara_drm::DecryptContext;
+    use kithara_net::{HttpClient, NetOptions};
     use kithara_stream::ContainerFormat;
 
     use super::*;
-    use crate::fetch::SegmentType;
+    use crate::fetch::{FetchManager, SegmentType};
+
+    /// Create a minimal `HlsSource` for testing `wait_range` behavior.
+    fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> HlsSource {
+        let noop_drm: ProcessChunkFn<DecryptContext> =
+            Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
+                output[..input.len()].copy_from_slice(input);
+                Ok(input.len())
+            });
+        let backend = AssetStoreBuilder::new()
+            .ephemeral(true)
+            .cancel(cancel.clone())
+            .process_fn(noop_drm)
+            .build();
+        let net = HttpClient::new(NetOptions::default());
+        let fetch = Arc::new(FetchManager::new(backend, net, cancel));
+        HlsSource {
+            fetch,
+            shared,
+            events_tx: None,
+            variant_fence: None,
+            _backend: None,
+        }
+    }
 
     fn make_entry(
         variant: usize,
@@ -719,5 +778,104 @@ mod tests {
         // V3 entry at higher offset
         index.push(make_entry(3, 5, 500, 100));
         assert_eq!(index.total_bytes(), 600);
+    }
+
+    // --- wait_range cancellation tests ---
+
+    #[tokio::test]
+    async fn test_wait_range_cancel_unblocks() {
+        // Cancel token should unblock wait_range within 100ms.
+        let cancel = CancellationToken::new();
+        let shared = Arc::new(SharedSegments::new(cancel.clone()));
+        let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+        let handle = tokio::task::spawn_blocking(move || source.wait_range(0..1024));
+
+        // Give wait_range time to enter the loop
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        cancel.cancel();
+
+        let result = tokio::time::timeout(Duration::from_millis(200), handle)
+            .await
+            .expect("task should complete within 200ms")
+            .expect("task should not panic");
+
+        assert!(result.is_err(), "wait_range should return Cancelled error");
+    }
+
+    #[tokio::test]
+    async fn test_wait_range_stopped_downloader_unblocks() {
+        // Downloader stop (via stopped flag + condvar) should unblock wait_range.
+        let cancel = CancellationToken::new();
+        let shared = Arc::new(SharedSegments::new(cancel.clone()));
+        let shared2 = Arc::clone(&shared);
+        let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+        let handle = tokio::task::spawn_blocking(move || source.wait_range(0..1024));
+
+        // Give wait_range time to enter the loop
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        // Simulate downloader drop
+        shared2.stopped.store(true, Ordering::Release);
+        shared2.condvar.notify_all();
+
+        let result = tokio::time::timeout(Duration::from_millis(200), handle)
+            .await
+            .expect("task should complete within 200ms")
+            .expect("task should not panic");
+
+        assert!(
+            result.is_err(),
+            "wait_range should return error when downloader stopped"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wait_range_returns_ready_when_data_pushed() {
+        // Normal scenario: push segment data, wait_range returns Ready.
+        let cancel = CancellationToken::new();
+        let shared = Arc::new(SharedSegments::new(cancel.clone()));
+        let shared2 = Arc::clone(&shared);
+        let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+        let handle = tokio::task::spawn_blocking(move || source.wait_range(0..100));
+
+        // Push a segment covering 0..100
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        {
+            let mut segments = shared2.segments.lock();
+            segments.push(make_entry(0, 0, 0, 100));
+        }
+        shared2.condvar.notify_all();
+
+        let result = tokio::time::timeout(Duration::from_millis(200), handle)
+            .await
+            .expect("task should complete within 200ms")
+            .expect("task should not panic");
+
+        assert!(matches!(result, Ok(WaitOutcome::Ready)));
+    }
+
+    #[tokio::test]
+    async fn test_wait_range_eof_when_stopped_and_past_end() {
+        // Downloader stopped + eof → wait_range at past-end offset returns Eof.
+        let cancel = CancellationToken::new();
+        let shared = Arc::new(SharedSegments::new(cancel.clone()));
+        let shared2 = Arc::clone(&shared);
+
+        // Push one segment
+        {
+            let mut segments = shared2.segments.lock();
+            segments.push(make_entry(0, 0, 0, 100));
+        }
+        // Mark eof + stopped
+        shared2.eof.store(true, Ordering::Release);
+        shared2.stopped.store(true, Ordering::Release);
+
+        let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+        let result = source.wait_range(100..200);
+        assert!(matches!(result, Ok(WaitOutcome::Eof)));
     }
 }

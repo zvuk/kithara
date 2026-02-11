@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![cfg_attr(test, allow(clippy::ignored_unit_patterns))]
 
 mod client;
 mod error;
@@ -10,12 +11,13 @@ mod types;
 #[cfg(any(test, feature = "test-utils"))]
 pub use unimock;
 
+#[doc(hidden)]
+pub use crate::timeout::TimeoutNet;
 #[cfg(any(test, feature = "test-utils"))]
 pub use crate::traits::NetMock;
 pub use crate::{
     client::HttpClient,
     error::{NetError, NetResult},
-    timeout::TimeoutNet,
     traits::{ByteStream, Net, NetExt},
     types::{Headers, NetOptions, RangeSpec, RetryPolicy},
 };

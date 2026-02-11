@@ -2,6 +2,17 @@
   <img src="logo.svg" alt="kithara" width="400">
 </div>
 
+<div align="center">
+
+[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/zvuk/kithara/branch/main/graph/badge.svg)](https://codecov.io/gh/zvuk/kithara)
+[![Crates.io](https://img.shields.io/crates/v/kithara.svg)](https://crates.io/crates/kithara)
+[![Downloads](https://img.shields.io/crates/d/kithara.svg)](https://crates.io/crates/kithara)
+[![docs.rs](https://docs.rs/kithara/badge.svg)](https://docs.rs/kithara)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
+
+</div>
+
 # kithara
 
 > Built with AI, tested by a human. Vibe-coded -- but with care.
@@ -16,27 +27,65 @@ Design goal: keep components modular so they can be reused independently and com
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
 graph TD
-    K[kithara] --> AU[kithara-audio]
-    AU --> DEC[kithara-decode]
-    DEC --> STR[kithara-stream]
-    STR --> STOR[kithara-storage]
+    kithara["kithara<br/><i>facade</i>"]
+    audio["kithara-audio<br/><i>pipeline, resampling</i>"]
+    decode["kithara-decode<br/><i>Symphonia, Apple, Android</i>"]
+    file["kithara-file<br/><i>progressive download</i>"]
+    hls["kithara-hls<br/><i>HLS VOD</i>"]
+    abr["kithara-abr<br/><i>adaptive bitrate</i>"]
+    drm["kithara-drm<br/><i>AES-128-CBC</i>"]
+    net["kithara-net<br/><i>HTTP + retry</i>"]
+    assets["kithara-assets<br/><i>cache, lease, evict</i>"]
+    stream["kithara-stream<br/><i>Source, Writer, Backend</i>"]
+    storage["kithara-storage<br/><i>mmap / mem</i>"]
+    bufpool["kithara-bufpool<br/><i>sharded pool</i>"]
 
-    subgraph Protocols
-        FILE[kithara-file]
-        HLS[kithara-hls]
-    end
+    kithara --> audio
+    kithara --> decode
+    kithara --> file
+    kithara --> hls
 
-    FILE --> NET[kithara-net]
-    FILE --> ASSETS[kithara-assets]
-    FILE --> STR
-    HLS --> NET
-    HLS --> ASSETS
-    HLS --> STR
-    HLS --> ABR[kithara-abr]
-    ASSETS --> STOR
+    audio --> decode
+    audio --> stream
+    audio --> file
+    audio --> hls
+    audio --> bufpool
+
+    decode --> stream
+    decode --> bufpool
+
+    file --> stream
+    file --> net
+    file --> assets
+    file --> storage
+
+    hls --> stream
+    hls --> net
+    hls --> assets
+    hls --> storage
+    hls --> abr
+    hls --> drm
+
+    assets --> storage
+    assets --> bufpool
+
+    stream --> storage
+    stream --> bufpool
+    stream --> net
+
+    style kithara fill:#4a6fa5,color:#fff
+    style audio fill:#6b8cae,color:#fff
+    style decode fill:#6b8cae,color:#fff
+    style file fill:#7ea87e,color:#fff
+    style hls fill:#7ea87e,color:#fff
+    style abr fill:#c4a35a,color:#fff
+    style drm fill:#c4a35a,color:#fff
+    style net fill:#b07a5b,color:#fff
+    style assets fill:#b07a5b,color:#fff
+    style stream fill:#8b6b8b,color:#fff
+    style storage fill:#8b6b8b,color:#fff
+    style bufpool fill:#8b6b8b,color:#fff
 ```
-
-`kithara-bufpool` -- cross-cutting: используется всеми крейтами для zero-allocation буферов.
 
 | Crate | Role |
 |-------|------|
@@ -50,6 +99,7 @@ graph TD
 | **kithara-net** | HTTP networking with retry, timeout, and streaming |
 | **kithara-assets** | Persistent disk cache with lease/pin semantics and eviction |
 | **kithara-storage** | Unified `StorageResource` backed by `mmap-io` |
+| **kithara-drm** | AES-128-CBC segment decryption for encrypted HLS |
 | **kithara-bufpool** | Sharded buffer pool for zero-allocation hot paths |
 
 ## Getting Started
@@ -81,7 +131,40 @@ Each crate has its own `README.md`:
 - [`kithara-assets`](crates/kithara-assets/README.md) -- disk cache
 - [`kithara-storage`](crates/kithara-storage/README.md) -- mmap storage
 - [`kithara-bufpool`](crates/kithara-bufpool/README.md) -- buffer pool
+- [`kithara-drm`](crates/kithara-drm/README.md) -- AES-128 decryption
+
+## Examples
+
+```bash
+# Play a file with rodio
+cargo run -p kithara --example resource_play --features rodio -- <URL_OR_PATH>
+
+# Play a file (audio crate)
+cargo run -p kithara-audio --example file_audio --features rodio,memprof -- <URL>
+
+# Play HLS stream
+cargo run -p kithara-audio --example hls_audio --features rodio,memprof -- <MASTER_PLAYLIST_URL>
+
+# Play encrypted HLS
+cargo run -p kithara-audio --example hls_drm_audio --features rodio,memprof -- <MASTER_PLAYLIST_URL>
+
+# Analyze ABR switch behavior
+cargo run -p kithara-decode --example abr_switch_simulator -- <HLS_DATA_DIR>
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding rules, and PR guidelines.
 
 ## Rules
 
 See [`AGENTS.md`](AGENTS.md) for coding rules enforced across the workspace.
+
+## License
+
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.

@@ -135,7 +135,7 @@ mod tests {
             channels: 2,
             sample_rate: 44100,
         };
-        let cloned = spec.clone();
+        let cloned = spec;
         assert_eq!(spec, cloned);
     }
 

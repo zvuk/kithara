@@ -3,6 +3,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bytes::Bytes;
 use tokio::time::sleep;
+use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 use unimock::unimock;
 use url::Url;
@@ -69,13 +70,15 @@ impl DefaultRetryPolicy {
 pub struct RetryNet<N, P> {
     inner: N,
     retry_policy: P,
+    cancel: CancellationToken,
 }
 
 impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
-    pub fn new(inner: N, retry_policy: P) -> Self {
+    pub fn new(inner: N, retry_policy: P, cancel: CancellationToken) -> Self {
         Self {
             inner,
             retry_policy,
+            cancel,
         }
     }
 }
@@ -96,7 +99,11 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
 
                     if attempt < self.retry_policy.max_attempts() {
                         let delay = self.retry_policy.delay_for_attempt(attempt);
-                        sleep(delay).await;
+                        tokio::select! {
+                            biased;
+                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
+                            () = sleep(delay) => {}
+                        }
                     }
                 }
             }
@@ -122,7 +129,11 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
 
                     if attempt < self.retry_policy.max_attempts() {
                         let delay = self.retry_policy.delay_for_attempt(attempt);
-                        sleep(delay).await;
+                        tokio::select! {
+                            biased;
+                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
+                            () = sleep(delay) => {}
+                        }
                     }
                 }
             }
@@ -157,7 +168,11 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
 
                     if attempt < self.retry_policy.max_attempts() {
                         let delay = self.retry_policy.delay_for_attempt(attempt);
-                        sleep(delay).await;
+                        tokio::select! {
+                            biased;
+                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
+                            () = sleep(delay) => {}
+                        }
                     }
                 }
             }
@@ -183,7 +198,11 @@ impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
 
                     if attempt < self.retry_policy.max_attempts() {
                         let delay = self.retry_policy.delay_for_attempt(attempt);
-                        sleep(delay).await;
+                        tokio::select! {
+                            biased;
+                            () = self.cancel.cancelled() => return Err(NetError::Cancelled),
+                            () = sleep(delay) => {}
+                        }
                     }
                 }
             }
@@ -235,7 +254,7 @@ mod tests {
 
     #[rstest]
     fn test_default_retry_classifier_default() {
-        let classifier = DefaultRetryClassifier::default();
+        let classifier = DefaultRetryClassifier;
         let _ = classifier;
     }
 
@@ -320,7 +339,11 @@ mod tests {
                 .returns(Ok(Bytes::from("success"))),
         );
         let policy = RetryPolicy::default();
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
+        let retry_net = RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://test.com").unwrap();
         let result = retry_net.get_bytes(url, None).await;
@@ -347,7 +370,11 @@ mod tests {
             max_delay: Duration::from_secs(1),
             max_retries: 3,
         };
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
+        let retry_net = RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://test.com").unwrap();
         let result = retry_net.get_bytes(url, None).await;
@@ -368,7 +395,11 @@ mod tests {
             max_delay: Duration::from_secs(1),
             max_retries: 2,
         };
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
+        let retry_net = RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://test.com").unwrap();
         let result = retry_net.get_bytes(url, None).await;
@@ -385,7 +416,11 @@ mod tests {
                 .returns(Err(NetError::Http("status: 404".to_string()))),
         );
         let policy = RetryPolicy::default();
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
+        let retry_net = RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://test.com").unwrap();
         let result = retry_net.get_bytes(url, None).await;
@@ -407,7 +442,11 @@ mod tests {
                 }),
         );
         let policy = RetryPolicy::default();
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
+        let retry_net = RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://test.com").unwrap();
         let result = retry_net.stream(url, None).await;
@@ -437,7 +476,11 @@ mod tests {
             max_delay: Duration::from_secs(1),
             max_retries: 3,
         };
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
+        let retry_net = RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://test.com").unwrap();
         let result = retry_net.stream(url, None).await;
@@ -457,7 +500,11 @@ mod tests {
             },
         ));
         let policy = RetryPolicy::default();
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
+        let retry_net = RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://test.com").unwrap();
         let range = RangeSpec::from_start(0);
@@ -488,7 +535,11 @@ mod tests {
             max_delay: Duration::from_secs(1),
             max_retries: 3,
         };
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
+        let retry_net = RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://test.com").unwrap();
         let range = RangeSpec::from_start(0);
@@ -508,7 +559,11 @@ mod tests {
                 .returns(Ok(Headers::new())),
         );
         let policy = RetryPolicy::default();
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
+        let retry_net = RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://test.com").unwrap();
         let result = retry_net.head(url, None).await;
@@ -535,7 +590,11 @@ mod tests {
             max_delay: Duration::from_secs(1),
             max_retries: 3,
         };
-        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy));
+        let retry_net = RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancellationToken::new(),
+        );
 
         let url = Url::parse("http://test.com").unwrap();
         let result = retry_net.head(url, None).await;
@@ -566,5 +625,36 @@ mod tests {
         let retry_policy = DefaultRetryPolicy::new(policy);
         assert_eq!(retry_policy.delay_for_attempt(0), Duration::ZERO);
         assert_eq!(retry_policy.delay_for_attempt(1), Duration::from_millis(50));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_retry_net_cancel_interrupts_sleep() {
+        let mock = Unimock::new(
+            NetMock::get_bytes
+                .each_call(matching!(_, _))
+                .returns(Err(NetError::Timeout)),
+        );
+        let policy = RetryPolicy {
+            base_delay: Duration::from_secs(10),
+            max_delay: Duration::from_secs(10),
+            max_retries: 3,
+        };
+        let cancel = CancellationToken::new();
+        let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy), cancel.clone());
+
+        let url = Url::parse("http://test.com").unwrap();
+        let handle = tokio::spawn(async move { retry_net.get_bytes(url, None).await });
+
+        // Give the first attempt time to fail and enter the retry sleep
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        cancel.cancel();
+
+        let result = tokio::time::timeout(Duration::from_millis(200), handle)
+            .await
+            .expect("task should complete within 200ms")
+            .expect("task should not panic");
+
+        assert!(matches!(result, Err(NetError::Cancelled)));
     }
 }

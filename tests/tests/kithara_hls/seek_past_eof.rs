@@ -154,9 +154,9 @@ async fn start_mismatch_server() -> Url {
 /// Seek to a position between HEAD-reported total and actual total must succeed.
 ///
 /// Reproduces the production "seek past EOF" bug:
-/// - HEAD total: 597_600 (3 × 199_200)
-/// - Actual total: 600_000 (3 × 200_000)
-/// - Seek to 598_000 is valid but fails if expected_total_length = HEAD total.
+/// - HEAD total: `597_600` (3 x `199_200`)
+/// - Actual total: `600_000` (3 x `200_000`)
+/// - Seek to `598_000` is valid but fails if `expected_total_length` = HEAD total.
 #[rstest]
 #[timeout(Duration::from_secs(15))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

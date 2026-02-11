@@ -20,7 +20,7 @@ const HLS_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 /// Stress test: 20 seconds of rapid seeking after ABR switch.
 ///
 /// Reproduces production bug: after ABR switch (V0 AAC → V3 FLAC),
-/// seek causes deadlock because detect_format_change picks wrong
+/// seek causes deadlock because `detect_format_change` picks wrong
 /// segment offset → decoder created at wrong position → "missing ftyp atom".
 #[rstest]
 #[timeout(Duration::from_secs(60))]

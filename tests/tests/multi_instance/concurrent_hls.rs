@@ -133,7 +133,7 @@ async fn create_hls_audio_abr(
         .expect("create Audio<Stream<Hls>> with ABR")
 }
 
-/// Generate WAV data for the test (total size = segments * segment_size).
+/// Generate WAV data for the test (total size = segments * `segment_size`).
 fn generate_wav_data() -> Arc<Vec<u8>> {
     let total_bytes = SEGMENT_COUNT * SEGMENT_SIZE;
     let bytes_per_frame = CHANNELS as usize * 2;

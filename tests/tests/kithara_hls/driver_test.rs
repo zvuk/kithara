@@ -28,7 +28,7 @@ use crate::common::fixtures::{cancel_token, temp_dir, tracing_setup};
 /// Scenario:
 /// 1. Load all 3 segments from playlist (variant 0, fixed ABR)
 /// 2. Read all data until EOF (segment stream finishes)
-/// 3. Seek back to segment 1 start (offset 200_000)
+/// 3. Seek back to segment 1 start (offset `200_000`)
 /// 4. Verify segment 1 data is readable
 ///
 /// EXPECTED: seek is processed, segment data is read correctly

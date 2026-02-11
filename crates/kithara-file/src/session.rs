@@ -300,7 +300,6 @@ impl kithara_stream::Source for FileSource {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use std::sync::Arc;
 
@@ -397,7 +396,7 @@ mod tests {
 
     // FileSource
 
-    /// Helper: create a committed AssetResource backed by a file with `data`.
+    /// Helper: create a committed `AssetResource` backed by a file with `data`.
     fn create_committed_resource(dir: &TempDir, data: &[u8]) -> AssetResource {
         let file_path = dir.path().join("test.dat");
         std::fs::write(&file_path, data).unwrap();

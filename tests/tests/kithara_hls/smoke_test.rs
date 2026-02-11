@@ -44,15 +44,12 @@ async fn test_hls_session_creation(
     // Spawn a task to consume events (prevent channel from filling up)
     let events_handle = tokio::spawn(async move {
         let mut event_count = 0;
-        loop {
-            match tokio::time::timeout(Duration::from_millis(100), events_rx.recv()).await {
-                Ok(Ok(event)) => {
-                    event_count += 1;
-                    if event_count <= 3 {
-                        info!("Event {}: {:?}", event_count, event);
-                    }
-                }
-                _ => break,
+        while let Ok(Ok(event)) =
+            tokio::time::timeout(Duration::from_millis(100), events_rx.recv()).await
+        {
+            event_count += 1;
+            if event_count <= 3 {
+                info!("Event {}: {:?}", event_count, event);
             }
         }
         event_count

@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Tests for SourceReader - sync Read+Seek adapter over sync Source.
+//! Tests for `SourceReader` - sync `Read`+`Seek` adapter over sync `Source`.
 
 use std::io::{Read, Seek, SeekFrom};
 
@@ -101,14 +101,14 @@ fn seek_operations(
 
     // Read initial 3 bytes to set position
     let mut buf = [0u8; 3];
-    reader.read(&mut buf).unwrap();
+    let _n = reader.read(&mut buf).unwrap();
 
     // Perform seek
     let pos = reader.seek(seek_from).unwrap();
     assert_eq!(pos, expected_pos);
 
     // Read and verify
-    reader.read(&mut buf).unwrap();
+    let _n = reader.read(&mut buf).unwrap();
     assert_eq!(&buf[..], &expected[..]);
 }
 
@@ -118,13 +118,13 @@ fn seek_current_negative(digits_source: MemorySource) {
     let mut reader = SourceReader::new(digits_source);
 
     let mut buf = [0u8; 5];
-    reader.read(&mut buf).unwrap();
+    let _n = reader.read(&mut buf).unwrap();
     assert_eq!(reader.position(), 5);
 
     let pos = reader.seek(SeekFrom::Current(-3)).unwrap();
     assert_eq!(pos, 2);
 
-    reader.read(&mut buf).unwrap();
+    let _n = reader.read(&mut buf).unwrap();
     assert_eq!(&buf, b"23456");
 }
 
@@ -135,13 +135,13 @@ fn seek_to_zero() {
     let mut reader = SourceReader::new(source);
 
     let mut buf = [0u8; 5];
-    reader.read(&mut buf).unwrap();
+    let _n = reader.read(&mut buf).unwrap();
     assert_eq!(reader.position(), 5);
 
     let pos = reader.seek(SeekFrom::Start(0)).unwrap();
     assert_eq!(pos, 0);
 
-    reader.read(&mut buf).unwrap();
+    let _n = reader.read(&mut buf).unwrap();
     assert_eq!(&buf, b"Hello");
 }
 
@@ -164,13 +164,13 @@ fn position_tracking(digits_source: MemorySource) {
     assert_eq!(reader.position(), 0);
 
     let mut buf = [0u8; 3];
-    reader.read(&mut buf).unwrap();
+    let _n = reader.read(&mut buf).unwrap();
     assert_eq!(reader.position(), 3);
 
     reader.seek(SeekFrom::Start(7)).unwrap();
     assert_eq!(reader.position(), 7);
 
-    reader.read(&mut buf).unwrap();
+    let _n = reader.read(&mut buf).unwrap();
     assert_eq!(reader.position(), 10);
 }
 
@@ -218,7 +218,7 @@ fn multiple_seeks_and_reads(alpha_source: MemorySource) {
 
     for (pos, expected) in test_cases {
         reader.seek(SeekFrom::Start(pos)).unwrap();
-        reader.read(&mut buf).unwrap();
+        let _n = reader.read(&mut buf).unwrap();
         assert_eq!(&buf, expected);
     }
 }

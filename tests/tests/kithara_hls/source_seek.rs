@@ -29,7 +29,7 @@ use crate::common::fixtures::{cancel_token, temp_dir, tracing_setup};
 // Test Data Helpers
 
 /// Segment size in bytes (test fixture pads to 200KB).
-#[allow(dead_code)]
+#[expect(dead_code, reason = "documents segment size for test reference")]
 const SEGMENT_SIZE: u64 = 200_000;
 
 // Stream<Hls> Seek + Read Tests
@@ -102,7 +102,8 @@ async fn hls_stream_seek_current(
     tokio::task::spawn_blocking(move || {
         // Read first 10 bytes
         let mut buf = [0u8; 10];
-        stream.read(&mut buf).unwrap();
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, 10);
 
         // Seek forward to position 29 (offset 3 within segment 0 prefix)
         // Position 29 is at byte 29 of segment 0 (still within the 0xFF padding)
@@ -145,19 +146,22 @@ async fn hls_stream_multiple_seeks(
     tokio::task::spawn_blocking(move || {
         // Read from start
         let mut buf = [0u8; 9];
-        stream.read(&mut buf).unwrap();
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, 9);
         assert_eq!(&buf, b"V0-SEG-0:");
 
         // Seek back to start
         stream.seek(SeekFrom::Start(0)).unwrap();
         let mut buf = [0u8; 9];
-        stream.read(&mut buf).unwrap();
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, 9);
         assert_eq!(&buf, b"V0-SEG-0:", "After seek to 0, should read segment 0");
 
         // Seek forward some amount within segment 0
         stream.seek(SeekFrom::Start(100)).unwrap();
         let mut buf = [0u8; 6];
-        stream.read(&mut buf).unwrap();
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, 6);
         // At position 100, we're past the 26-byte prefix, so we read 0xFF padding
         assert_eq!(&buf, &[0xFF; 6], "Position 100 should be padding bytes");
     })
@@ -252,7 +256,8 @@ async fn hls_with_manual_abr_uses_fixed_variant(
     tokio::task::spawn_blocking(move || {
         // Read first segment prefix
         let mut buf = [0u8; 9];
-        stream.read(&mut buf).unwrap();
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, 9);
 
         // Should be variant 1 data
         assert_eq!(&buf, b"V1-SEG-0:");
@@ -290,7 +295,8 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
 
         // Read from start
         let mut buf = [0u8; 9];
-        stream.read(&mut buf).unwrap();
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, 9);
         assert_eq!(&buf, b"V0-SEG-0:", "Start should be segment 0 prefix");
 
         // Seek to position 100 (within padding) and verify
@@ -303,7 +309,8 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
         // Seek back to start and verify again
         stream.seek(SeekFrom::Start(0)).unwrap();
         let mut buf = [0u8; 9];
-        stream.read(&mut buf).unwrap();
+        let n = stream.read(&mut buf).unwrap();
+        assert_eq!(n, 9);
         assert_eq!(
             &buf, b"V0-SEG-0:",
             "After seek back, should still be segment 0"
@@ -354,8 +361,10 @@ async fn hls_seek_different_variants_return_different_data(
         // Read initial data from both variants
         let mut buf_v0 = [0u8; 9];
         let mut buf_v1 = [0u8; 9];
-        stream_v0.read(&mut buf_v0).unwrap();
-        stream_v1.read(&mut buf_v1).unwrap();
+        let n0 = stream_v0.read(&mut buf_v0).unwrap();
+        let n1 = stream_v1.read(&mut buf_v1).unwrap();
+        assert_eq!(n0, 9);
+        assert_eq!(n1, 9);
 
         assert_eq!(&buf_v0, b"V0-SEG-0:");
         assert_eq!(&buf_v1, b"V1-SEG-0:");
@@ -370,8 +379,10 @@ async fn hls_seek_different_variants_return_different_data(
 
         let mut after_v0 = [0u8; 9];
         let mut after_v1 = [0u8; 9];
-        stream_v0.read(&mut after_v0).unwrap();
-        stream_v1.read(&mut after_v1).unwrap();
+        let n0 = stream_v0.read(&mut after_v0).unwrap();
+        let n1 = stream_v1.read(&mut after_v1).unwrap();
+        assert_eq!(n0, 9);
+        assert_eq!(n1, 9);
 
         assert_eq!(&after_v0, b"V0-SEG-0:", "Variant 0 data after seek");
         assert_eq!(&after_v1, b"V1-SEG-0:", "Variant 1 data after seek");

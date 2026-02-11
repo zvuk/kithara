@@ -2,6 +2,15 @@
   <img src="../../logo.svg" alt="kithara" width="300">
 </div>
 
+<div align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/kithara.svg)](https://crates.io/crates/kithara)
+[![Downloads](https://img.shields.io/crates/d/kithara.svg)](https://crates.io/crates/kithara)
+[![docs.rs](https://docs.rs/kithara/badge.svg)](https://docs.rs/kithara)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara
 
 Facade crate providing a unified API for audio streaming, decoding, and playback. Auto-detects source type from URL (`.m3u8` = HLS, everything else = progressive file) and exposes a type-erased `Resource` with a simple `read()`/`seek()` interface.
@@ -54,6 +63,20 @@ graph TD
 | `assets` | Re-export `kithara-assets` |
 | `net` | Re-export `kithara-net` |
 | `bufpool` | Re-export `kithara-bufpool` |
+
+## Key Types
+
+| Type | Role |
+|------|------|
+| `Resource` | Type-erased wrapper over `Box<dyn PcmReader>` — single entry point for PCM reading |
+| `ResourceConfig` | Builder holding URL/path, network, ABR, and cache options |
+| `ResourceSrc` | Source enum: `Url(Url)` or `Path(PathBuf)` |
+| `SourceType` | Auto-detection result: `RemoteFile`, `LocalFile`, or `HlsStream` |
+| `ResourceEvent` | Unified event enum aggregating all upstream events |
+
+## Re-exports
+
+The crate re-exports all sub-crates as public modules (`kithara::audio`, `kithara::decode`, `kithara::stream`, `kithara::file`, `kithara::hls`, `kithara::abr`, `kithara::net`, etc.) and provides a `prelude` module with the most commonly used types.
 
 ## Integration
 

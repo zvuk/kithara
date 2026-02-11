@@ -97,7 +97,7 @@ impl StoreOptions {
 pub type AssetStore<Ctx = ()> =
     CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
-/// Resource handle returned by [`AssetStore::open_resource`] or [`MemStore::open_resource`].
+/// Resource handle returned by `AssetStore::open_resource` or `MemStore::open_resource`.
 ///
 /// Wraps `StorageResource` with processing and lease semantics.
 /// Implements `ResourceExt` for read/write/commit operations.
@@ -166,10 +166,11 @@ impl AssetStoreBuilder<()> {
     /// Builder with defaults (no `root_dir`/`asset_root`/evict/cancel/process set).
     pub fn new() -> Self {
         // Default pass-through process_fn for () - just copies input to output
-        let dummy_process: ProcessChunkFn<()> = Arc::new(|input, output, _ctx, _is_last| {
-            output[..input.len()].copy_from_slice(input);
-            Ok(input.len())
-        });
+        let dummy_process: ProcessChunkFn<()> =
+            Arc::new(|input, output, _ctx: &mut (), _is_last| {
+                output[..input.len()].copy_from_slice(input);
+                Ok(input.len())
+            });
 
         Self {
             cache_capacity: None,
@@ -185,27 +186,27 @@ impl AssetStoreBuilder<()> {
             asset_root: None,
         }
     }
-
-    /// Build the storage backend.
-    ///
-    /// Returns `AssetsBackend::Disk` for persistent storage or
-    /// `AssetsBackend::Mem` when `ephemeral(true)` is set.
-    ///
-    /// # Panics
-    /// Panics if `process_fn` is not set for Ctx != ().
-    pub fn build(self) -> AssetsBackend {
-        if self.ephemeral {
-            self.build_ephemeral().into()
-        } else {
-            self.build_disk().into()
-        }
-    }
 }
 
 impl<Ctx> AssetStoreBuilder<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + std::fmt::Debug + 'static,
 {
+    /// Build the storage backend.
+    ///
+    /// Returns `AssetsBackend::Disk` for persistent storage or
+    /// `AssetsBackend::Mem` when `ephemeral(true)` is set.
+    ///
+    /// # Panics
+    /// Panics if `process_fn` is not set.
+    pub fn build(self) -> AssetsBackend<Ctx> {
+        if self.ephemeral {
+            self.build_ephemeral().into()
+        } else {
+            self.build_disk().into()
+        }
+    }
+
     /// Set the root directory for the asset store.
     pub fn root_dir<P: Into<PathBuf>>(mut self, root: P) -> Self {
         self.root_dir = Some(root.into());

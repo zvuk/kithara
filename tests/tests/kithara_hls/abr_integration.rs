@@ -167,6 +167,6 @@ async fn test_abr_controller_async_usage() {
     };
     let _controller = AbrController::new(config);
 
-    // Just verify it compiles and can be created in async context
-    assert!(true);
+    // Verify the controller was created successfully in async context
+    assert_eq!(_controller.decide(Instant::now()).target_variant_index, 0);
 }

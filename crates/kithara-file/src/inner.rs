@@ -539,19 +539,6 @@ impl Downloader for FileDownloader {
     }
 
     async fn step(&mut self) -> Result<StepResult<FileFetch>, FileDownloadError> {
-        // Check for on-demand range requests first (higher priority).
-        if let Some(range) = self.shared.pop_range_request() {
-            tracing::debug!(
-                start = range.start,
-                end = range.end,
-                "processing on-demand range request in step"
-            );
-            return Ok(StepResult::Item(FileFetch::Chunk {
-                offset: range.start,
-                len: range.end - range.start,
-            }));
-        }
-
         // If sequential ended, wait for on-demand or transition.
         if matches!(self.phase, FilePhase::GapFilling | FilePhase::Complete) {
             return Ok(StepResult::PhaseChange);

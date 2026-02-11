@@ -14,6 +14,10 @@ use super::{HlsResult, crypto::*};
 /// Test HTTP server for HLS content
 pub struct TestServer {
     base_url: String,
+    #[expect(
+        dead_code,
+        reason = "held for lifetime, used indirectly via middleware closure"
+    )]
     request_counts: Arc<std::sync::Mutex<HashMap<String, usize>>>,
 }
 
@@ -91,6 +95,10 @@ impl TestServer {
         }
     }
 
+    #[expect(
+        clippy::result_large_err,
+        reason = "test-only code, ergonomics over size"
+    )]
     pub fn url(&self, path: &str) -> HlsResult<Url> {
         format!("{}{}", self.base_url, path)
             .parse()
@@ -212,8 +220,7 @@ v0-encrypted.m3u8
 
 /// Media playlist with AES-128 encryption for testing
 pub fn test_media_playlist_encrypted(_variant: usize) -> String {
-    format!(
-        r#"#EXTM3U
+    r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-TARGETDURATION:4
 #EXT-X-MEDIA-SEQUENCE:0
@@ -223,5 +230,5 @@ pub fn test_media_playlist_encrypted(_variant: usize) -> String {
 ../aes/seg0.bin
 #EXT-X-ENDLIST
 "#
-    )
+    .to_string()
 }

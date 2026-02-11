@@ -1,8 +1,8 @@
 //! Example: Play audio from an HLS stream using rodio.
 //!
 //! This demonstrates the Stream API:
-//! - Stream::<Hls>::new() creates a Read + Seek stream
-//! - rodio::Decoder handles audio decoding
+//! - `Stream::<Hls>::new()` creates a Read + Seek stream
+//! - `rodio::Decoder` handles audio decoding
 //!
 //! Run with:
 //! ```

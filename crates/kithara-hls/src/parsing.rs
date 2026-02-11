@@ -276,11 +276,15 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
 
     let init_segment = hls_media.segments.iter().next().and_then(|(_, seg)| {
         seg.map.as_ref().map(|m| {
+            // hls_m3u8 may not associate #EXT-X-KEY with #EXT-X-MAP tags.
+            // Fall back to the playlist's current_key (the effective key at
+            // the point where the MAP tag appears).
             let map_key: Option<SegmentKey> = m
                 .keys()
                 .first()
                 .copied()
                 .and_then(keyinfo_from_decryption_key)
+                .or(current_key.clone())
                 .map(|ki| SegmentKey {
                     method: ki.method.clone(),
                     key_info: Some(ki),

@@ -274,7 +274,6 @@ mod tests {
         }
     }
 
-    #[expect(clippy::unwrap_used)]
     #[test]
     fn test_open_absolute_resource_readonly() {
         let dir = tempfile::tempdir().unwrap();

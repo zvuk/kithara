@@ -2,6 +2,15 @@
   <img src="../../logo.svg" alt="kithara" width="300">
 </div>
 
+<div align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/kithara-storage.svg)](https://crates.io/crates/kithara-storage)
+[![Downloads](https://img.shields.io/crates/d/kithara-storage.svg)](https://crates.io/crates/kithara-storage)
+[![docs.rs](https://docs.rs/kithara-storage/badge.svg)](https://docs.rs/kithara-storage)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-storage
 
 Storage primitives for kithara. Provides a unified `StorageResource` enum (`Mmap` | `Mem`) with random-access `read_at`/`write_at`, blocking `wait_range`, and convenience `read_into`/`write_all`. `MmapResource` is file-backed via `mmap-io`; `MemResource` is fully in-memory. `OpenMode` controls file access for mmap: `Auto` (default), `ReadWrite`, or `ReadOnly`.
@@ -26,28 +35,60 @@ let outcome = resource.wait_range(0..1024)?;
 
 ```mermaid
 sequenceDiagram
-    participant Writer as Async writer (tokio task)
+    participant DL as Downloader (async)
+    participant W as Writer
     participant SR as StorageResource
+    participant RS as RangeSet
     participant CV as Condvar
-    participant Reader as Sync reader (blocking)
+    participant R as Reader (sync)
 
-    Writer->>SR: write_at(0, chunk_1)
+    Note over DL,R: Async downloader and sync reader share StorageResource
+
+    DL->>W: poll next chunk from network
+    W->>SR: write_at(offset, bytes)
+    SR->>RS: insert(offset..offset+len)
     SR->>CV: notify_all()
 
-    Reader->>SR: wait_range(0..4096)
-    SR->>CV: wait (blocks)
-    Note over CV,Reader: thread blocked until range available
+    R->>SR: wait_range(pos..pos+len)
+    SR->>RS: check coverage
+    alt Range not ready
+        SR->>CV: wait(50ms timeout)
+        Note over SR,CV: Loop until ready, EOF, or cancelled
+        CV-->>SR: woken by notify_all
+        SR->>RS: re-check coverage
+    end
+    SR-->>R: WaitOutcome::Ready
 
-    Writer->>SR: write_at(1024, chunk_2)
-    SR->>CV: notify_all()
-
-    Writer->>SR: write_at(2048, chunk_3)
-    SR->>CV: notify_all()
-    CV-->>Reader: wakeup, range satisfied
-    SR-->>Reader: WaitOutcome::Satisfied
+    R->>SR: read_at(pos, buf)
+    SR-->>R: bytes read
 ```
 
 `wait_range` blocks the calling thread via `parking_lot::Condvar` until the requested byte range is fully written, or the resource reaches EOF/error/cancellation.
+
+## Key Types
+
+| Type | Role |
+|------|------|
+| `ResourceExt` (trait) | Consumer-facing API: `read_at`, `write_at`, `wait_range`, `commit`, `fail` |
+| `StorageResource` | Enum dispatching to `MmapResource` or `MemResource` |
+| `OpenMode` | Access mode: `Auto`, `ReadWrite`, or `ReadOnly` |
+| `ResourceStatus` | `Active`, `Committed { final_len }`, or `Failed(String)` |
+| `WaitOutcome` | `Ready` or `Eof` |
+| `Atomic<R>` | Decorator for crash-safe writes via write-temp-rename |
+| `Coverage` (trait) | Tracks downloaded byte ranges via `MemCoverage` |
+
+## Mmap vs Mem
+
+| Aspect | MmapDriver | MemDriver |
+|--------|-----------|-----------|
+| Backing | `mmap-io::MemoryMappedFile` | `Vec<u8>` behind `Mutex` |
+| Lock-free fast path | Yes (`SegQueue` for write notifications) | No |
+| Auto-resize | 2x growth on overflow | Extend on write |
+| `path()` | `Some` | `None` |
+
+## Synchronization
+
+Range tracking uses `RangeSet<u64>` (from `rangemap`) to record which byte ranges have been written. `wait_range` blocks via `parking_lot::Condvar` with a 50 ms timeout loop until the requested range is fully covered, or returns `Eof` when the resource is committed and the range starts beyond the final length. `CancellationToken` is checked at operation entry and during wait loops.
 
 ## Integration
 

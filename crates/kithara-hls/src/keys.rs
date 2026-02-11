@@ -166,7 +166,10 @@ impl KeyManager {
         self.decrypt(&key_url, Some(iv), bytes).await
     }
 
-    fn resolve_key_url(key_info: &crate::playlist::KeyInfo, segment_url: &Url) -> HlsResult<Url> {
+    pub(crate) fn resolve_key_url(
+        key_info: &crate::playlist::KeyInfo,
+        segment_url: &Url,
+    ) -> HlsResult<Url> {
         let key_uri = key_info
             .uri
             .as_ref()
@@ -181,7 +184,7 @@ impl KeyManager {
         }
     }
 
-    fn derive_iv(key_info: &crate::playlist::KeyInfo, sequence: u64) -> [u8; 16] {
+    pub(crate) fn derive_iv(key_info: &crate::playlist::KeyInfo, sequence: u64) -> [u8; 16] {
         if let Some(iv) = key_info.iv {
             return iv;
         }

@@ -22,6 +22,8 @@ pub enum NetError {
     },
     #[error("not implemented")]
     Unimplemented,
+    #[error("Cancelled")]
+    Cancelled,
 }
 
 impl NetError {
@@ -59,7 +61,7 @@ impl NetError {
                 // Retry on 5xx server errors and 429 Too Many Requests
                 *status >= 500 || *status == 429 || *status == 408
             }
-            Self::InvalidRange(_) | Self::Unimplemented => false,
+            Self::InvalidRange(_) | Self::Unimplemented | Self::Cancelled => false,
         }
     }
 }

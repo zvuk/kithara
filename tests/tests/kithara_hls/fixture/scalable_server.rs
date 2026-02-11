@@ -18,7 +18,12 @@
 
 use std::{sync::Arc, time::Duration};
 
+use aes::Aes128;
 use axum::{Router, extract::Path, routing::get};
+use cbc::{
+    Encryptor,
+    cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
+};
 use kithara_hls::HlsError;
 use tokio::net::TcpListener;
 use url::Url;
@@ -26,6 +31,14 @@ use url::Url;
 use super::HlsResult;
 
 // Config
+
+/// AES-128 encryption configuration for test server.
+pub struct EncryptionConfig {
+    /// 16-byte AES key.
+    pub key: [u8; 16],
+    /// 16-byte IV. When `None`, derived from segment sequence (standard HLS).
+    pub iv: Option<[u8; 16]>,
+}
 
 /// Configuration for [`HlsTestServer`].
 pub struct HlsTestServerConfig {
@@ -61,6 +74,9 @@ pub struct HlsTestServerConfig {
     ///
     /// Used to simulate slow segments and trigger ABR switches.
     pub segment_delay: Option<Arc<dyn Fn(usize, usize) -> Duration + Send + Sync>>,
+    /// AES-128 encryption config. When set, segments are served encrypted
+    /// and playlists include `#EXT-X-KEY` tag.
+    pub encryption: Option<EncryptionConfig>,
 }
 
 impl Default for HlsTestServerConfig {
@@ -75,6 +91,7 @@ impl Default for HlsTestServerConfig {
             init_data_per_variant: None,
             variant_bandwidths: None,
             segment_delay: None,
+            encryption: None,
         }
     }
 }
@@ -104,6 +121,7 @@ impl HlsTestServer {
         let cfg_media = Arc::clone(&config);
         let cfg_seg = Arc::clone(&config);
         let cfg_init = Arc::clone(&config);
+        let cfg_key = Arc::clone(&config);
 
         let app = Router::new()
             .route(
@@ -134,6 +152,13 @@ impl HlsTestServer {
                     let c = Arc::clone(&cfg_init);
                     async move { serve_init_segment(&c, &filename) }
                 }),
+            )
+            .route(
+                "/key.bin",
+                get(move || {
+                    let c = Arc::clone(&cfg_key);
+                    async move { serve_key(&c) }
+                }),
             );
 
         tokio::spawn(async move {
@@ -146,6 +171,10 @@ impl HlsTestServer {
     }
 
     /// Build a full URL from a path.
+    #[expect(
+        clippy::result_large_err,
+        reason = "test-only code, ergonomics over size"
+    )]
     pub fn url(&self, path: &str) -> HlsResult<Url> {
         format!("{}{}", self.base_url, path)
             .parse()
@@ -153,18 +182,33 @@ impl HlsTestServer {
     }
 
     /// Access the configuration.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "test utility reserved for future integration tests"
+    )]
     pub fn config(&self) -> &HlsTestServerConfig {
         &self.config
     }
 
-    /// Total bytes across all segments for one variant.
+    /// Init segment length for variant 0 (0 if no init data configured).
+    pub fn init_len(&self) -> u64 {
+        self.config
+            .init_data_per_variant
+            .as_ref()
+            .and_then(|d| d.first())
+            .map_or(0, |d| d.len() as u64)
+    }
+
+    /// Total bytes across all segments for one variant (including init segment).
     pub fn total_bytes(&self) -> u64 {
-        self.config.segments_per_variant as u64 * self.config.segment_size as u64
+        self.init_len() + self.config.segments_per_variant as u64 * self.config.segment_size as u64
     }
 
     /// Total duration in seconds for one variant.
-    #[allow(dead_code)]
+    #[expect(
+        dead_code,
+        reason = "test utility reserved for future integration tests"
+    )]
     pub fn total_duration_secs(&self) -> f64 {
         self.config.segments_per_variant as f64 * self.config.segment_duration_secs
     }
@@ -210,6 +254,13 @@ fn generate_media_playlist(config: &HlsTestServerConfig, variant: usize) -> Stri
     );
     if config.init_data_per_variant.is_some() {
         pl.push_str(&format!("#EXT-X-MAP:URI=\"../init/v{variant}_init.bin\"\n"));
+    }
+    if let Some(ref enc) = config.encryption {
+        pl.push_str("#EXT-X-KEY:METHOD=AES-128,URI=\"../key.bin\"");
+        if let Some(ref iv) = enc.iv {
+            pl.push_str(&format!(",IV=0x{}", hex::encode(iv)));
+        }
+        pl.push('\n');
     }
     for seg in 0..config.segments_per_variant {
         pl.push_str(&format!("#EXTINF:{dur:.1},\n../seg/v{variant}_{seg}.bin\n"));
@@ -263,50 +314,116 @@ async fn serve_segment(config: &HlsTestServerConfig, filename: &str) -> Vec<u8> 
         }
     }
 
-    if let Some(ref per_variant) = config.custom_data_per_variant {
+    let plaintext = if let Some(ref per_variant) = config.custom_data_per_variant {
         if let Some(data) = per_variant.get(variant) {
             let start = segment * config.segment_size;
             let end = (start + config.segment_size).min(data.len());
-            return data[start..end].to_vec();
+            data[start..end].to_vec()
+        } else {
+            generate_segment(variant, segment, config.segment_size)
         }
-    }
-
-    if let Some(data) = &config.custom_data {
+    } else if let Some(data) = &config.custom_data {
         let start = segment * config.segment_size;
         let end = (start + config.segment_size).min(data.len());
-        return data[start..end].to_vec();
-    }
+        data[start..end].to_vec()
+    } else {
+        generate_segment(variant, segment, config.segment_size)
+    };
 
-    generate_segment(variant, segment, config.segment_size)
+    if let Some(ref enc) = config.encryption {
+        let iv = derive_iv(enc, segment);
+        encrypt_aes128_cbc(&plaintext, &enc.key, &iv)
+    } else {
+        plaintext
+    }
 }
 
 fn serve_init_segment(config: &HlsTestServerConfig, filename: &str) -> Vec<u8> {
     let variant = parse_init_filename(filename).unwrap_or(0);
 
-    if let Some(ref init_data) = config.init_data_per_variant {
+    let plaintext = if let Some(ref init_data) = config.init_data_per_variant {
         if let Some(data) = init_data.get(variant) {
-            return data.as_ref().clone();
+            data.as_ref().clone()
+        } else {
+            return Vec::new();
         }
-    }
+    } else {
+        return Vec::new();
+    };
 
-    Vec::new()
+    if let Some(ref enc) = config.encryption {
+        // Init segments use sequence 0 for IV derivation.
+        let iv = derive_iv(enc, 0);
+        encrypt_aes128_cbc(&plaintext, &enc.key, &iv)
+    } else {
+        plaintext
+    }
+}
+
+fn serve_key(config: &HlsTestServerConfig) -> Vec<u8> {
+    config
+        .encryption
+        .as_ref()
+        .map(|enc| enc.key.to_vec())
+        .unwrap_or_default()
+}
+
+/// Derive IV for a segment. If fixed IV is configured, use it; otherwise
+/// derive from sequence number (standard HLS: `[0u8; 8] ++ sequence.to_be_bytes()`).
+fn derive_iv(enc: &EncryptionConfig, sequence: usize) -> [u8; 16] {
+    if let Some(iv) = enc.iv {
+        iv
+    } else {
+        let mut iv = [0u8; 16];
+        iv[8..16].copy_from_slice(&(sequence as u64).to_be_bytes());
+        iv
+    }
+}
+
+/// AES-128-CBC encryption with PKCS7 padding.
+fn encrypt_aes128_cbc(data: &[u8], key: &[u8; 16], iv: &[u8; 16]) -> Vec<u8> {
+    let encryptor = Encryptor::<Aes128>::new(key.into(), iv.into());
+    let padded_len = data.len() + (16 - data.len() % 16);
+    let mut buf = vec![0u8; padded_len];
+    buf[..data.len()].copy_from_slice(data);
+    let ct = encryptor
+        .encrypt_padded_mut::<Pkcs7>(&mut buf, data.len())
+        .expect("encrypt_padded_mut");
+    ct.to_vec()
 }
 
 /// Compute expected byte for verification (shared logic for server + tests).
+///
+/// When init data is present, the byte stream layout is:
+/// `[init_data][media_seg_0][media_seg_1]...[media_seg_N]`
+/// Verification works with plaintext — decryption happens on the client side.
 fn expected_byte_at_impl(config: &HlsTestServerConfig, variant: usize, offset: u64) -> u8 {
-    if let Some(ref per_variant) = config.custom_data_per_variant {
-        if let Some(data) = per_variant.get(variant) {
-            return data.get(offset as usize).copied().unwrap_or(0);
-        }
+    // Init data region
+    let init_len = config
+        .init_data_per_variant
+        .as_ref()
+        .and_then(|d| d.get(variant))
+        .map_or(0u64, |d| d.len() as u64);
+
+    if offset < init_len {
+        return config.init_data_per_variant.as_ref().unwrap()[variant][offset as usize];
+    }
+
+    let media_offset = offset - init_len;
+
+    if let Some(ref per_variant) = config.custom_data_per_variant
+        && let Some(data) = per_variant.get(variant)
+    {
+        return data.get(media_offset as usize).copied().unwrap_or(0);
     }
 
     if let Some(data) = &config.custom_data {
-        return data.get(offset as usize).copied().unwrap_or(0);
+        return data.get(media_offset as usize).copied().unwrap_or(0);
     }
 
     let segment_size = config.segment_size;
-    let seg_idx = (offset / segment_size as u64) as usize;
-    let off_in_seg = (offset % segment_size as u64) as usize;
+    let seg_idx = (media_offset / segment_size as u64) as usize;
+    let off_in_seg = (media_offset % segment_size as u64) as usize;
 
     let prefix = format!("V{variant}-SEG-{seg_idx}:TEST_SEGMENT_DATA");
     let prefix_bytes = prefix.as_bytes();

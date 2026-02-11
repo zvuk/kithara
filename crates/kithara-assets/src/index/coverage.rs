@@ -216,7 +216,6 @@ impl<R: ResourceExt> Drop for DiskCoverage<R> {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use std::time::Duration;
 

@@ -75,7 +75,7 @@ mod tests {
 
     #[test]
     fn test_decode_error_backend_wraps_any_error() {
-        let inner = io::Error::new(io::ErrorKind::Other, "symphonia error");
+        let inner = io::Error::other("symphonia error");
         let err = DecodeError::Backend(Box::new(inner));
         assert!(err.to_string().contains("Decoder error"));
     }

@@ -13,20 +13,10 @@
 //! ## Example
 //!
 //! ```
-//! use kithara_bufpool::{Pool, Reuse};
-//! use std::sync::OnceLock;
+//! use kithara_bufpool::pcm_pool;
 //!
-//! static POOL: OnceLock<&'static Pool<32, Vec<f32>>> = OnceLock::new();
-//!
-//! fn get_pool() -> &'static Pool<32, Vec<f32>> {
-//!     *POOL.get_or_init(|| {
-//!         let pool = Pool::<32, Vec<f32>>::new(1024, 128 * 1024);
-//!         Box::leak(Box::new(pool))
-//!     })
-//! }
-//!
-//! // Get buffer from pool
-//! let mut buf = get_pool().get();
+//! // Get buffer from the global PCM pool
+//! let mut buf = pcm_pool().get();
 //! buf.resize(1024, 0.0);
 //! // Use buf...
 //! // Automatically returned to pool on drop
@@ -39,7 +29,10 @@ mod pool;
 mod slice;
 
 pub use global::{BytePool, PcmBuf, PcmPool, byte_pool, pcm_pool};
+// Low-level pool internals (used by type aliases above; prefer BytePool/PcmPool/PcmBuf)
+#[doc(hidden)]
 pub use pool::{Pool, Pooled, PooledOwned, Reuse, SharedPool};
+#[doc(hidden)]
 pub use slice::{PooledSlice, PooledSliceOwned};
 
 #[cfg(test)]

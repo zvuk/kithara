@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Diagnostic test for sequential_read_across_segments_maintains_variant
+//! Diagnostic test for `sequential_read_across_segments_maintains_variant`
 
 use std::{io::Read, time::Duration};
 

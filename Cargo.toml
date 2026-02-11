@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/kithara",
     "crates/kithara-abr",
+    "crates/kithara-drm",
     "crates/kithara-net",
     "crates/kithara-file",
     "crates/kithara-hls",
@@ -59,6 +60,8 @@ license = "MIT OR Apache-2.0"
 description = "Networking + decoding building blocks for audio playback (not a full player)"
 keywords = ["audio", "streaming", "hls", "decoder", "playback"]
 categories = ["multimedia::audio"]
+repository = "https://github.com/zvuk/kithara"
+homepage = "https://github.com/zvuk/kithara"
 
 # Workspace-first dependency policy:
 # - Add all dependency versions here.
@@ -71,6 +74,7 @@ kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.1.0" }
 kithara-audio = { path = "crates/kithara-audio", version = "0.1.0" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
+kithara-drm = { path = "crates/kithara-drm", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }

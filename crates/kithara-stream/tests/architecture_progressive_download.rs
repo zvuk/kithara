@@ -8,10 +8,10 @@
 //! ## Core Problems
 //!
 //! 1. **Resource state ambiguity**: No way to distinguish "partial uncommitted" from "complete committed"
-//! 2. **Writer auto-commit confusion**: WriterItem::Completed implies commit, but shouldn't
-//! 3. **Downloader lifecycle**: step() returns false → exit, can't handle on-demand requests
-//! 4. **Source::len() semantics**: Should return expected total, not committed length
-//! 5. **wait_range() blocking**: Blocks forever for partial uncommitted ranges
+//! 2. **Writer auto-commit confusion**: `WriterItem::Completed` implies commit, but shouldn't
+//! 3. **Downloader lifecycle**: `step()` returns false → exit, can't handle on-demand requests
+//! 4. **`Source::len()` semantics**: Should return expected total, not committed length
+//! 5. **`wait_range()` blocking**: Blocks forever for partial uncommitted ranges
 //! 6. **On-demand request mechanism**: No standard way for Source to request Range fetch
 //!
 //! ## Test Scenarios from Stash
@@ -35,11 +35,11 @@
 
 // PROBLEM 1: Resource State Ambiguity
 
-/// Current ResourceExt API cannot distinguish:
+/// Current `ResourceExt` API cannot distinguish:
 /// - Partial uncommitted: 512KB downloaded, 1MB expected, still writing
 /// - Complete committed: 512KB total, fully written, committed
 ///
-/// Proposed: ResourceStatus should have additional states:
+/// Proposed: `ResourceStatus` should have additional states:
 ///
 /// ```ignore
 /// enum ResourceStatus {
@@ -80,7 +80,7 @@ fn test_resource_status_should_expose_partial_state() {
 
 // PROBLEM 2: Writer::Completed Should NOT Imply Commit
 
-/// Current WriterItem::Completed documentation says:
+/// Current `WriterItem::Completed` documentation says:
 /// "Download completed, resource committed."
 ///
 /// This is WRONG for progressive downloads. Stream ending ≠ file complete.
@@ -150,7 +150,7 @@ fn test_writer_completed_vs_committed_semantics() {
 /// 1. Sequential mode: download from start
 /// 2. On-demand mode: wait for Range requests from Source
 ///
-/// Implementation in FileDownloader::step():
+/// Implementation in `FileDownloader::step()`:
 /// ```ignore
 /// async fn step(&mut self) -> bool {
 ///     // Check for on-demand Range request
@@ -186,7 +186,7 @@ fn test_downloader_should_support_on_demand_mode() {
 
 // PROBLEM 4: Source::len() Semantics
 
-/// Current Source::len() returns:
+/// Current `Source::len()` returns:
 /// ```ignore
 /// fn len(&self) -> Option<u64> {
 ///     self.resource.len() // committed length
@@ -194,11 +194,11 @@ fn test_downloader_should_support_on_demand_mode() {
 /// ```
 ///
 /// For partial uncommitted file:
-/// - resource.len() = None
+/// - `resource.len()` = None
 /// - But decoder needs to know expected total!
 /// - Symphonia probe looks at file size to calculate duration
 ///
-/// Proposed: Source::len() should return expected total:
+/// Proposed: `Source::len()` should return expected total:
 /// ```ignore
 /// fn len(&self) -> Option<u64> {
 ///     // Priority: expected_total > committed_len
@@ -206,7 +206,7 @@ fn test_downloader_should_support_on_demand_mode() {
 /// }
 /// ```
 ///
-/// For partial: Source::len() = Some(1MB) even though only 512KB downloaded.
+/// For partial: `Source::len()` = `Some(1MB)` even though only 512KB downloaded.
 /// Decoder sees correct duration, seeks work correctly.
 #[test]
 fn test_source_len_should_return_expected_total() {
@@ -225,7 +225,7 @@ fn test_source_len_should_return_expected_total() {
 
 // PROBLEM 5: wait_range() For Partial Uncommitted
 
-/// Current wait_range() for partial uncommitted:
+/// Current `wait_range()` for partial uncommitted:
 /// ```ignore
 /// fn wait_range(&self, range: Range<u64>) -> WaitOutcome {
 ///     if range.start >= self.downloaded {
@@ -236,7 +236,7 @@ fn test_source_len_should_return_expected_total() {
 /// }
 /// ```
 ///
-/// Proposed: wait_range() should return a new outcome:
+/// Proposed: `wait_range()` should return a new outcome:
 /// ```ignore
 /// enum WaitOutcome {
 ///     Ready,
@@ -246,7 +246,7 @@ fn test_source_len_should_return_expected_total() {
 /// }
 /// ```
 ///
-/// Or: wait_range() should NOT be called for ranges beyond downloaded.
+/// Or: `wait_range()` should NOT be called for ranges beyond downloaded.
 /// Instead, Source checks and requests on-demand before waiting.
 #[test]
 fn test_wait_range_should_not_deadlock_on_partial() {
@@ -288,10 +288,10 @@ fn test_wait_range_should_not_deadlock_on_partial() {
 /// }
 /// ```
 ///
-/// Current stash uses option C - SharedState pattern.
+/// Current stash uses option C - `SharedState` pattern.
 /// This works but couples Source to implementation details.
 ///
-/// Better: Option A with trait method? Or accept SharedState as normal pattern?
+/// Better: Option A with trait method? Or accept `SharedState` as normal pattern?
 #[test]
 fn test_on_demand_request_should_be_explicit() {
     // Scenario: Source needs range [700KB..710KB]
@@ -316,11 +316,11 @@ fn test_on_demand_request_should_be_explicit() {
 /// 4. App reopens same URL
 /// 5. How to detect: "this is partial, expected 1MB, resume"?
 ///
-/// Current OpenMode::Auto:
+/// Current `OpenMode::Auto`:
 /// - Existing file → treat as committed
-/// - No way to store expected_total
+/// - No way to store `expected_total`
 ///
-/// Proposed: DownloadIndex (same pattern as PinsIndex/LruIndex):
+/// Proposed: `DownloadIndex` (same pattern as `PinsIndex`/`LruIndex`):
 /// ```ignore
 /// // kithara-assets: _index/downloads.bin (bincode)
 /// struct DownloadIndex {
@@ -350,10 +350,10 @@ fn test_on_demand_request_should_be_explicit() {
 /// ```
 ///
 /// Lifecycle:
-/// - Download start: insert(rel_path, expected_total, 0)
-/// - During download: update_downloaded(rel_path, pos)
-/// - On commit (complete): remove(rel_path) — committed files are complete
-/// - On reopen: load() → know expected_total for partial
+/// - Download start: `insert(rel_path, expected_total, 0)`
+/// - During download: `update_downloaded(rel_path, pos)`
+/// - On commit (complete): `remove(rel_path)` — committed files are complete
+/// - On reopen: `load()` → know `expected_total` for partial
 #[test]
 fn test_partial_download_resume_needs_download_index() {
     // Scenario: App crash at 512KB of 1MB
@@ -375,7 +375,7 @@ fn test_partial_download_resume_needs_download_index() {
 
 /// HLS-specific problem: Time-based seek requires knowing segment durations.
 ///
-/// Current SegmentEntry:
+/// Current `SegmentEntry`:
 /// ```ignore
 /// struct SegmentEntry {
 ///     url: String,
@@ -441,7 +441,7 @@ fn test_hls_time_seek_needs_duration_tracking() {
 ///    - Decoder seeks to byte 50000
 ///    - But segment 1 format doesn't match variant 3!
 ///
-/// Root cause: byte_range is physical, not virtual.
+/// Root cause: `byte_range` is physical, not virtual.
 ///
 /// Proposed: Virtual byte space where each segment has fixed virtual size:
 /// ```ignore
@@ -454,7 +454,7 @@ fn test_hls_time_seek_needs_duration_tracking() {
 /// ```
 ///
 /// Decoder sees: segment N always at bytes N*1MB..(N+1)*1MB regardless of variant.
-/// HLS maps: virtual byte → segment index → load segment → read from StorageResource.
+/// HLS maps: virtual byte → segment index → load segment → read from `StorageResource`.
 #[test]
 fn test_hls_abr_switch_needs_virtual_byte_space() {
     // Scenario: 3 segments variant 0, switch to variant 3, seek back
@@ -474,22 +474,22 @@ fn test_hls_abr_switch_needs_virtual_byte_space() {
 
 // PROBLEM 10: HLS Partial Segment Committed As Complete
 
-/// HLS uses Writer per segment (FetchManager.start_fetch()).
+/// HLS uses Writer per segment (`FetchManager.start_fetch()`).
 /// Same auto-commit bug as File, but manifestation is different:
 ///
 /// File: one Writer for whole file → partial commit = wrong total size
 /// HLS: one Writer per segment → partial commit = corrupt segment in index
 ///
 /// Scenario:
-/// 1. FetchManager starts Writer for segment (e.g., 200KB expected)
+/// 1. `FetchManager` starts Writer for segment (e.g., 200KB expected)
 /// 2. Network drops at 100KB
 /// 3. Writer auto-commits with offset=100KB
-/// 4. FetchManager sees WriterItem::Completed { total_bytes: 100KB }
-/// 5. HlsDownloader adds SegmentEntry with media_len=100KB
+/// 4. `FetchManager` sees `WriterItem::Completed` { `total_bytes`: 100KB }
+/// 5. `HlsDownloader` adds `SegmentEntry` with `media_len`=100KB
 /// 6. Reader reads segment → gets 100KB of 200KB data → corrupt audio
 ///
-/// Fix: Same as File — Writer yields StreamEnded, FetchManager checks
-/// total_bytes vs expected before committing and adding to SegmentIndex.
+/// Fix: Same as File — Writer yields `StreamEnded`, `FetchManager` checks
+/// `total_bytes` vs expected before committing and adding to `SegmentIndex`.
 #[test]
 fn test_hls_partial_segment_should_not_be_committed() {
     // Scenario: segment expected 200KB, network drops at 100KB
@@ -508,36 +508,36 @@ fn test_hls_partial_segment_should_not_be_committed() {
 
 /// Based on all scenarios, here are the trait changes needed:
 ///
-/// 1. **ResourceExt::status()** should expose:
+/// 1. **`ResourceExt::status()`** should expose:
 ///    - Downloaded bytes
 ///    - Expected total (from Content-Length or metadata)
 ///    - Not just Active/Committed/Failed
 ///
-/// 2. **WriterItem::Completed** should be renamed to:
-///    - WriterItem::StreamEnded (doesn't imply commit)
+/// 2. **`WriterItem::Completed`** should be renamed to:
+///    - `WriterItem::StreamEnded` (doesn't imply commit)
 ///
-/// 3. **Downloader::step()** should support:
+/// 3. **`Downloader::step()`** should support:
 ///    - Continuing after sequential stream ends
 ///    - Handling on-demand Range requests
 ///
-/// 4. **Source::len()** should return:
+/// 4. **`Source::len()`** should return:
 ///    - Expected total, not just committed length
 ///
-/// 5. **wait_range()** should either:
-///    - Return WaitOutcome::NeedsFetch for ranges beyond downloaded
-///    - Or: Source checks before calling wait_range()
+/// 5. **`wait_range()`** should either:
+///    - Return `WaitOutcome::NeedsFetch` for ranges beyond downloaded
+///    - Or: Source checks before calling `wait_range()`
 ///
 /// 6. **On-demand request mechanism**:
-///    - Accept SharedState pattern as standard approach
-///    - Or: Add Source::request_range() trait method
+///    - Accept `SharedState` pattern as standard approach
+///    - Or: Add `Source::request_range()` trait method
 ///
 /// 7. **Partial download metadata**:
-///    - Store .partial files with expected_total, downloaded, url, etag
-///    - OpenMode should detect and resume partial downloads
+///    - Store .partial files with `expected_total`, downloaded, url, etag
+///    - `OpenMode` should detect and resume partial downloads
 ///
-/// 8. **HLS SegmentEntry**:
-///    - Add duration and timestamp_start fields
-///    - Implement find_segment_by_time()
+/// 8. **HLS `SegmentEntry`**:
+///    - Add duration and `timestamp_start` fields
+///    - Implement `find_segment_by_time()`
 ///
 /// 9. **HLS virtual byte space**:
 ///    - Use fixed virtual size per segment

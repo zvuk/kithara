@@ -76,7 +76,7 @@ macro_rules! global_pool {
         static $static_name: std::sync::OnceLock<&'static $crate::Pool<$shards, $type>> =
             std::sync::OnceLock::new();
 
-        #[allow(dead_code)]
+        #[allow(clippy::allow_attributes, dead_code)]
         fn $fn_name() -> &'static $crate::Pool<$shards, $type> {
             $static_name.get_or_init(|| {
                 let pool = $crate::Pool::<$shards, $type>::new($max_buffers, $trim_capacity);

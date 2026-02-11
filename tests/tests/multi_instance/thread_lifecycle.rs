@@ -53,13 +53,12 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
 async fn assert_pool_threads_available(pool: &ThreadPool, expected_threads: usize) {
     let running = Arc::new(AtomicUsize::new(0));
     let max_concurrent = Arc::new(AtomicUsize::new(0));
-    let barrier = Arc::new(tokio::sync::Barrier::new(expected_threads));
+    let _barrier = Arc::new(tokio::sync::Barrier::new(expected_threads));
 
     let mut handles = Vec::new();
     for _ in 0..expected_threads {
         let running = Arc::clone(&running);
         let max_concurrent = Arc::clone(&max_concurrent);
-        let barrier = Arc::clone(&barrier);
 
         let (tx, rx) = tokio::sync::oneshot::channel::<usize>();
         pool.spawn(move || {
