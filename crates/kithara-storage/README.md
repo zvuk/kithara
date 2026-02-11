@@ -26,25 +26,32 @@ let outcome = resource.wait_range(0..1024)?;
 
 ```mermaid
 sequenceDiagram
-    participant Writer as Async writer (tokio task)
+    participant DL as Downloader (async)
+    participant W as Writer
     participant SR as StorageResource
+    participant RS as RangeSet
     participant CV as Condvar
-    participant Reader as Sync reader (blocking)
+    participant R as Reader (sync)
 
-    Writer->>SR: write_at(0, chunk_1)
+    Note over DL,R: Async downloader and sync reader share StorageResource
+
+    DL->>W: poll next chunk from network
+    W->>SR: write_at(offset, bytes)
+    SR->>RS: insert(offset..offset+len)
     SR->>CV: notify_all()
 
-    Reader->>SR: wait_range(0..4096)
-    SR->>CV: wait (blocks)
-    Note over CV,Reader: thread blocked until range available
+    R->>SR: wait_range(pos..pos+len)
+    SR->>RS: check coverage
+    alt Range not ready
+        SR->>CV: wait(50ms timeout)
+        Note over SR,CV: Loop until ready, EOF, or cancelled
+        CV-->>SR: woken by notify_all
+        SR->>RS: re-check coverage
+    end
+    SR-->>R: WaitOutcome::Ready
 
-    Writer->>SR: write_at(1024, chunk_2)
-    SR->>CV: notify_all()
-
-    Writer->>SR: write_at(2048, chunk_3)
-    SR->>CV: notify_all()
-    CV-->>Reader: wakeup, range satisfied
-    SR-->>Reader: WaitOutcome::Satisfied
+    R->>SR: read_at(pos, buf)
+    SR-->>R: bytes read
 ```
 
 `wait_range` blocks the calling thread via `parking_lot::Condvar` until the requested byte range is fully written, or the resource reaches EOF/error/cancellation.

@@ -21,29 +21,66 @@ Design goal: keep components modular so they can be reused independently and com
 ## Crate Architecture
 
 ```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
 graph TD
-    K[kithara] --> AU[kithara-audio]
-    AU --> DEC[kithara-decode]
-    DEC --> STR[kithara-stream]
-    STR --> STOR[kithara-storage]
+    kithara["kithara<br/><i>facade</i>"]
+    audio["kithara-audio<br/><i>pipeline, resampling</i>"]
+    decode["kithara-decode<br/><i>Symphonia, Apple, Android</i>"]
+    file["kithara-file<br/><i>progressive download</i>"]
+    hls["kithara-hls<br/><i>HLS VOD</i>"]
+    abr["kithara-abr<br/><i>adaptive bitrate</i>"]
+    drm["kithara-drm<br/><i>AES-128-CBC</i>"]
+    net["kithara-net<br/><i>HTTP + retry</i>"]
+    assets["kithara-assets<br/><i>cache, lease, evict</i>"]
+    stream["kithara-stream<br/><i>Source, Writer, Backend</i>"]
+    storage["kithara-storage<br/><i>mmap / mem</i>"]
+    bufpool["kithara-bufpool<br/><i>sharded pool</i>"]
 
-    subgraph Protocols
-        FILE[kithara-file]
-        HLS[kithara-hls]
-    end
+    kithara --> audio
+    kithara --> decode
+    kithara --> file
+    kithara --> hls
 
-    FILE --> NET[kithara-net]
-    FILE --> ASSETS[kithara-assets]
-    FILE --> STR
-    HLS --> NET
-    HLS --> ASSETS
-    HLS --> STR
-    HLS --> ABR[kithara-abr]
-    ASSETS --> STOR
+    audio --> decode
+    audio --> stream
+    audio --> file
+    audio --> hls
+    audio --> bufpool
+
+    decode --> stream
+    decode --> bufpool
+
+    file --> stream
+    file --> net
+    file --> assets
+    file --> storage
+
+    hls --> stream
+    hls --> net
+    hls --> assets
+    hls --> storage
+    hls --> abr
+    hls --> drm
+
+    assets --> storage
+    assets --> bufpool
+
+    stream --> storage
+    stream --> bufpool
+    stream --> net
+
+    style kithara fill:#4a6fa5,color:#fff
+    style audio fill:#6b8cae,color:#fff
+    style decode fill:#6b8cae,color:#fff
+    style file fill:#7ea87e,color:#fff
+    style hls fill:#7ea87e,color:#fff
+    style abr fill:#c4a35a,color:#fff
+    style drm fill:#c4a35a,color:#fff
+    style net fill:#b07a5b,color:#fff
+    style assets fill:#b07a5b,color:#fff
+    style stream fill:#8b6b8b,color:#fff
+    style storage fill:#8b6b8b,color:#fff
+    style bufpool fill:#8b6b8b,color:#fff
 ```
-
-`kithara-bufpool` -- cross-cutting: used by all crates for zero-allocation buffers.
 
 | Crate | Role |
 |-------|------|

@@ -19,32 +19,66 @@ let stream = Stream::<Hls>::new(config).await?;
 ## Segment download flow
 
 ```mermaid
-sequenceDiagram
-    participant ABR as AbrController
-    participant DL as HlsDownloader (tokio task)
-    participant FM as FetchManager
-    participant SI as SegmentIndex
-    participant S as Stream<Hls> (sync)
-
-    DL->>FM: load playlist
-    FM-->>DL: segments + variants
-    DL--)S: HlsEvent::VariantsDiscovered
-
-    loop Fetch segments
-        DL->>ABR: select variant
-        ABR-->>DL: variant index
-        DL->>FM: load_media_segment(variant, index)
-        FM-->>DL: segment bytes
-        DL->>SI: append(offset, len)
-        DL--)S: HlsEvent::SegmentComplete
-        DL->>DL: check backpressure
-        Note over DL,S: pause if download_pos - read_pos > look_ahead
+graph LR
+    subgraph Network
+        MasterPL["Master<br/>Playlist"]
+        MediaPL["Media<br/>Playlist"]
+        SegSrv["Segment<br/>Server"]
+        KeySrv["Key<br/>Server"]
     end
 
-    DL--)S: HlsEvent::EndOfStream
+    subgraph "Async (tokio)"
+        FM["FetchManager<br/><i>fetch + cache</i>"]
+        KM["KeyManager<br/><i>key resolution</i>"]
+        W["Writer<br/><i>byte pump</i>"]
+    end
 
-    S->>SI: lookup segment for offset
-    SI-->>S: segment data
+    subgraph "Downloader (rayon)"
+        DL["HlsDownloader<br/><i>plan, commit</i>"]
+        ABR["AbrController<br/><i>variant select</i>"]
+    end
+
+    subgraph "Assets"
+        AB["AssetsBackend<br/><i>Disk or Mem</i>"]
+        Proc["ProcessingAssets<br/><i>AES decrypt</i>"]
+    end
+
+    subgraph "Sync (rayon thread)"
+        HS["HlsSource<br/><i>Source impl</i>"]
+        SI["SegmentIndex<br/><i>virtual stream</i>"]
+        StreamH["Stream&lt;Hls&gt;"]
+    end
+
+    subgraph "Decode (rayon thread)"
+        Dec["Symphonia<br/><i>InnerDecoder</i>"]
+        PCM2["PcmChunk"]
+    end
+
+    subgraph "Consumer"
+        Audio2["Audio&lt;Stream&lt;Hls&gt;&gt;"]
+    end
+
+    MasterPL --> FM
+    MediaPL --> FM
+    SegSrv --> FM
+    KeySrv --> KM
+    KM --> FM
+    FM --> W
+    W --> AB
+    AB --> Proc
+    DL -- "plan()" --> FM
+    DL -- "commit()" --> SI
+    ABR -- "decide()" --> DL
+    DL -- "throughput sample" --> ABR
+    HS -- "wait on condvar" --> SI
+    HS -- "read_at()" --> AB
+    StreamH --> HS
+    Dec -- "Read + Seek" --> StreamH
+    Dec --> PCM2
+    PCM2 -- "kanal channel" --> Audio2
+
+    style SI fill:#d4a574,color:#000
+    style AB fill:#d4a574,color:#000
 ```
 
 - **ABR**: `AbrController` selects variant (quality) based on throughput estimation and buffer state. Emits `HlsEvent::VariantApplied` on quality switch.

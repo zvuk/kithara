@@ -21,22 +21,37 @@ let stream = Stream::<File>::new(config).await?;
 
 ```mermaid
 sequenceDiagram
-    participant DL as Downloader (tokio task)
+    participant DL as Downloader (async)
+    participant W as Writer
     participant SR as StorageResource
-    participant S as Stream<T> (sync Read+Seek)
-    participant Dec as Decoder (sync)
+    participant RS as RangeSet
+    participant CV as Condvar
+    participant R as Reader (sync)
 
-    DL->>SR: write_at(offset, bytes)
-    DL->>SR: write_at(offset+n, bytes)
+    Note over DL,R: Async downloader and sync reader share StorageResource
 
-    Dec->>S: read(&mut buf)
-    S->>SR: wait_range(offset..end)
-    Note over SR: blocks until bytes available
-    SR-->>S: data ready
-    S-->>Dec: filled buf
+    DL->>W: poll next chunk from network
+    W->>SR: write_at(offset, bytes)
+    SR->>RS: insert(offset..offset+len)
+    SR->>CV: notify_all()
 
-    Dec->>S: seek(SeekFrom::Start(pos))
-    S->>SR: read_at(pos, buf)
+    R->>SR: wait_range(pos..pos+len)
+    SR->>RS: check coverage
+    alt Range not ready
+        SR->>CV: wait(50ms timeout)
+        Note over SR,CV: Loop until ready, EOF, or cancelled
+        CV-->>SR: woken by notify_all
+        SR->>RS: re-check coverage
+    end
+    SR-->>R: WaitOutcome::Ready
+
+    R->>SR: read_at(pos, buf)
+    SR-->>R: bytes read
+
+    Note over DL,R: Backpressure via Progress atomics
+    DL->>DL: should_throttle()? (download_pos - read_pos > limit)
+    R->>R: set_read_pos(pos)
+    R-->>DL: Notify (reader advanced)
 ```
 
 - **tokio task** (`Backend`): spawns the `Downloader` which writes bytes to `StorageResource` asynchronously. Cancelled via `CancellationToken` on drop.

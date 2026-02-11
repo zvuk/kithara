@@ -29,29 +29,61 @@ while !audio.is_eof() {
 ## Threading model
 
 ```mermaid
-sequenceDiagram
-    participant Caller as Caller thread
-    participant Worker as OS thread (kithara-audio)
-    participant Decoder as Decoder (Symphonia)
-    participant Effects as Effects (resampler)
-    participant Events as Event forward (tokio)
-
-    Caller->>Worker: Audio::new() spawns thread
-
-    loop Worker loop
-        Worker->>Worker: drain seek commands
-        Worker->>Decoder: next_chunk()
-        Decoder-->>Worker: PcmChunk
-        Worker->>Effects: process(chunk)
-        Effects-->>Worker: resampled PcmChunk
-        Worker--)Caller: kanal send (bounded, backpressure)
+graph TB
+    subgraph "Main / Consumer Thread"
+        App["Application Code"]
+        Resource["Resource / Audio&lt;S&gt;<br/><i>PcmReader interface</i>"]
+        App -- "read(buf)" --> Resource
     end
 
-    Caller->>Worker: seek(position, epoch++)
-    Worker->>Decoder: seek + reset effects
-    Note over Worker,Caller: stale in-flight chunks filtered by epoch
+    subgraph "tokio Runtime (async tasks)"
+        NetTask["Network I/O<br/><i>reqwest + retry</i>"]
+        WriterTask["Writer&lt;E&gt;<br/><i>byte pump</i>"]
+        EventFwd["Event Forwarder<br/><i>broadcast relay</i>"]
+    end
 
-    Events--)Caller: AudioPipelineEvent (broadcast)
+    subgraph "rayon ThreadPool (blocking)"
+        DLLoop["Backend::run_downloader<br/><i>orchestration loop</i>"]
+        DecodeWorker["AudioWorker<br/><i>decode + effects</i>"]
+    end
+
+    subgraph "Shared State (lock-based)"
+        StorageRes["StorageResource<br/><i>Mutex + Condvar</i>"]
+        SegIdx["SegmentIndex / SharedSegments<br/><i>Mutex + Condvar</i>"]
+        Progress["Progress<br/><i>AtomicU64 + Notify</i>"]
+    end
+
+    subgraph "Channels"
+        PcmChan["kanal::bounded&lt;PcmChunk&gt;<br/><i>decode -> consumer</i>"]
+        CmdChan["kanal::bounded&lt;AudioCommand&gt;<br/><i>consumer -> worker</i>"]
+        EventChan["broadcast::channel&lt;Event&gt;<br/><i>all -> consumer</i>"]
+    end
+
+    DLLoop -- "plan + fetch" --> NetTask
+    NetTask -- "bytes" --> WriterTask
+    WriterTask -- "write_at()" --> StorageRes
+    DLLoop -- "commit()" --> SegIdx
+
+    DecodeWorker -- "wait_range() blocks" --> StorageRes
+    DecodeWorker -- "read_at()" --> StorageRes
+    DecodeWorker -- "PcmChunk" --> PcmChan
+    Resource -- "recv()" --> PcmChan
+
+    Resource -- "Seek cmd" --> CmdChan
+    CmdChan --> DecodeWorker
+
+    EventFwd -- "ResourceEvent" --> EventChan
+    EventChan --> App
+
+    DLLoop -- "should_throttle()" --> Progress
+    DecodeWorker -- "set_read_pos()" --> Progress
+
+    style StorageRes fill:#d4a574,color:#000
+    style SegIdx fill:#d4a574,color:#000
+    style Progress fill:#d4a574,color:#000
+    style PcmChan fill:#5b8a5b,color:#fff
+    style CmdChan fill:#5b8a5b,color:#fff
+    style EventChan fill:#5b8a5b,color:#fff
 ```
 
 - **OS thread** (`kithara-audio`): runs `run_audio_loop` -- drains seek commands, calls `Decoder::next_chunk`, applies effects (resampler), sends processed chunks through a bounded `kanal` channel with backpressure.

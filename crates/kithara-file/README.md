@@ -19,28 +19,55 @@ let stream = Stream::<File>::new(config).await?;
 ## Download flow
 
 ```mermaid
-sequenceDiagram
-    participant Net as HttpClient
-    participant DL as FileDownloader (tokio task)
-    participant SR as StorageResource
-    participant S as Stream<File> (sync)
-
-    DL->>Net: stream(url)
-    Net-->>DL: byte stream
-
-    loop Download chunks
-        DL->>SR: write_at(offset, chunk)
-        DL->>DL: check backpressure
-        Note over DL,S: pause if download_pos - read_pos > look_ahead_bytes
-        DL--)S: FileEvent::DownloadProgress
+graph LR
+    subgraph Network
+        HTTP["HTTP Server"]
     end
 
-    DL->>SR: commit(total_len)
-    DL--)S: FileEvent::DownloadComplete
+    subgraph "Async (tokio)"
+        HEAD["HEAD request<br/><i>Content-Length</i>"]
+        GET["GET stream<br/><i>byte stream</i>"]
+        Writer["Writer&lt;NetError&gt;<br/><i>byte pump</i>"]
+        RangeReq["GET Range<br/><i>gap filling</i>"]
+    end
 
-    S->>SR: wait_range(offset..end)
-    Note over SR: blocks until range written
-    SR-->>S: data
+    subgraph "Storage (shared)"
+        SR["StorageResource<br/><i>Mmap or Mem</i>"]
+        RS["RangeSet&lt;u64&gt;<br/><i>available ranges</i>"]
+    end
+
+    subgraph "Sync (rayon thread)"
+        FS["FileSource<br/><i>Source impl</i>"]
+        Reader["Reader&lt;FileSource&gt;<br/><i>Read + Seek</i>"]
+        StreamW["Stream&lt;File&gt;"]
+    end
+
+    subgraph "Decode (rayon thread)"
+        Decoder["Symphonia<br/><i>InnerDecoder</i>"]
+        PCM["PcmChunk<br/><i>f32 interleaved</i>"]
+    end
+
+    subgraph "Consumer"
+        Audio["Audio&lt;Stream&lt;File&gt;&gt;<br/><i>PcmReader</i>"]
+    end
+
+    HTTP --> HEAD
+    HTTP --> GET
+    HTTP --> RangeReq
+    GET --> Writer
+    RangeReq --> Writer
+    Writer -- "write_at(offset, bytes)" --> SR
+    SR -- "updates" --> RS
+    FS -- "wait_range()" --> SR
+    FS -- "read_at()" --> SR
+    Reader --> FS
+    StreamW --> Reader
+    Decoder -- "Read + Seek" --> StreamW
+    Decoder --> PCM
+    PCM -- "kanal channel" --> Audio
+
+    style SR fill:#d4a574,color:#000
+    style RS fill:#d4a574,color:#000
 ```
 
 - **Backpressure**: downloader pauses when too far ahead of the reader (configurable `look_ahead_bytes`). Resumes when reader advances (notified via `tokio::Notify`).

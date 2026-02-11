@@ -34,31 +34,54 @@ Requests flow through four layers (outermost to innermost):
 
 ```mermaid
 sequenceDiagram
-    participant C as Caller
-    participant Ca as CachedAssets
-    participant L as LeaseAssets
-    participant P as ProcessingAssets
-    participant E as EvictAssets
-    participant D as DiskAssetStore
+    participant Caller
+    participant Cache as CachedAssets
+    participant Lease as LeaseAssets
+    participant Proc as ProcessingAssets
+    participant Evict as EvictAssets
+    participant Disk as DiskAssetStore
+    participant FS as Filesystem
 
-    C->>Ca: open_resource(key)
-    Ca->>Ca: check LRU cache
+    Caller->>Cache: open_resource_with_ctx(key, ctx)
+    Cache->>Cache: check LRU cache
     alt Cache hit
-        Ca-->>C: cached resource
+        Cache-->>Caller: cached resource
     else Cache miss
-        Ca->>L: open_resource(key)
-        L->>L: pin(asset_root)
-        L->>P: open_resource(key)
-        P->>E: open_resource(key)
-        E->>E: check limits, evict if needed
-        E->>D: open_resource(key)
-        D-->>E: StorageResource
-        E-->>P: StorageResource
-        P-->>L: ProcessedResource
-        L-->>Ca: LeaseResource
-        Ca->>Ca: insert into cache
-        Ca-->>C: LeaseResource
+        Cache->>Lease: open_resource_with_ctx(key, ctx)
+        Lease->>Lease: pin(asset_root)
+        Lease->>Lease: persist _index/pins.bin
+        Lease->>Proc: open_resource_with_ctx(key, ctx)
+        Proc->>Evict: open_resource_with_ctx(key, ctx)
+        Evict->>Evict: first access? check LRU limits
+        alt Over limits
+            Evict->>Evict: evict oldest unpinned assets
+        end
+        Evict->>Disk: open_resource_with_ctx(key, ctx)
+        Disk->>FS: MmapResource::open(path, mode)
+        FS-->>Disk: StorageResource::Mmap
+        Disk-->>Evict: StorageResource
+        Evict-->>Proc: StorageResource
+        Proc->>Proc: wrap in ProcessedResource(res, ctx)
+        Proc-->>Lease: ProcessedResource
+        Lease->>Lease: wrap in LeaseResource(res, guard)
+        Lease-->>Cache: LeaseResource
+        Cache->>Cache: insert into LRU cache
+        Cache-->>Caller: LeaseResource
     end
+
+    Note over Caller: On commit():
+    Caller->>Proc: commit(final_len)
+    alt ctx is Some (encrypted)
+        Proc->>Proc: read 64KB chunks from disk
+        Proc->>Proc: aes128_cbc_process_chunk()
+        Proc->>Proc: write decrypted back to disk
+    end
+    Proc->>Disk: commit(actual_len)
+
+    Note over Caller: On drop(LeaseResource):
+    Caller->>Lease: drop LeaseGuard
+    Lease->>Lease: unpin(asset_root)
+    Lease->>Lease: persist _index/pins.bin
 ```
 
 ## Index Persistence
