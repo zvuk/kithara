@@ -29,6 +29,20 @@ let pcm = pcm_pool().get_with(|b| b.clear());
 | `BytePool` | `SharedPool<32, Vec<u8>>` | `byte_pool()` |
 | `PcmPool` | `SharedPool<32, Vec<f32>>` | `pcm_pool()` |
 
+## Allocation Flow
+
+1. **Get:** Lock home shard (determined by thread ID hash) and pop a buffer. If empty, try other shards (work-stealing). If all empty, allocate a new buffer via `T::default()`. Apply the initialization closure.
+2. **Return (drop):** Call `value.reuse(trim_capacity)` to clear and optionally shrink. If the shard is not full and reuse returns `true`, push back. Otherwise, drop silently.
+
+## Global Pools
+
+| Pool | Type | Max Buffers | Trim Capacity |
+|------|------|-------------|---------------|
+| `byte_pool()` | `SharedPool<32, Vec<u8>>` | 1024 | 64 KB |
+| `pcm_pool()` | `SharedPool<32, Vec<f32>>` | 64 | 200K |
+
+Additional global pools can be defined with the `global_pool!` macro.
+
 ## Integration
 
 Used across the entire kithara workspace to eliminate allocations on hot paths (segment reads, PCM decode/resample, network I/O). Global pools are lazy-initialized via `OnceLock`.

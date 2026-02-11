@@ -55,6 +55,20 @@ graph TD
 | `net` | Re-export `kithara-net` |
 | `bufpool` | Re-export `kithara-bufpool` |
 
+## Key Types
+
+| Type | Role |
+|------|------|
+| `Resource` | Type-erased wrapper over `Box<dyn PcmReader>` — single entry point for PCM reading |
+| `ResourceConfig` | Builder holding URL/path, network, ABR, and cache options |
+| `ResourceSrc` | Source enum: `Url(Url)` or `Path(PathBuf)` |
+| `SourceType` | Auto-detection result: `RemoteFile`, `LocalFile`, or `HlsStream` |
+| `ResourceEvent` | Unified event enum aggregating all upstream events |
+
+## Re-exports
+
+The crate re-exports all sub-crates as public modules (`kithara::audio`, `kithara::decode`, `kithara::stream`, `kithara::file`, `kithara::hls`, `kithara::abr`, `kithara::net`, etc.) and provides a `prelude` module with the most commonly used types.
+
 ## Integration
 
 Re-exports all sub-crates as modules. The `prelude` module aggregates the most common types: `Resource`, `ResourceConfig`, `Audio`, `AudioConfig`, `Stream`, `PcmReader`, etc.

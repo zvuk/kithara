@@ -60,6 +60,8 @@ license = "MIT OR Apache-2.0"
 description = "Networking + decoding building blocks for audio playback (not a full player)"
 keywords = ["audio", "streaming", "hls", "decoder", "playback"]
 categories = ["multimedia::audio"]
+repository = "https://github.com/zvuk/kithara"
+homepage = "https://github.com/zvuk/kithara"
 
 # Workspace-first dependency policy:
 # - Add all dependency versions here.

@@ -58,6 +58,40 @@ sequenceDiagram
 - **tokio task**: forwards stream events (ABR switch, progress) into a unified `AudioPipelineEvent` broadcast channel.
 - **Epoch-based invalidation**: after seek, stale in-flight chunks are filtered by epoch counter (`Arc<AtomicU64>`).
 
+## Pipeline Architecture
+
+```
+Stream<T> (Read + Seek)
+  → DecoderFactory creates Box<dyn InnerDecoder>
+    → StreamAudioSource (format change detection, effects chain)
+      → AudioWorker (blocking thread, command handling)
+        → kanal channel (bounded, backpressure)
+          → Audio<S> (consumer: PcmReader, Iterator, rodio::Source)
+```
+
+## Resampler Quality Levels
+
+| Quality | Algorithm | Use Case |
+|---------|-----------|----------|
+| Fast | Polynomial (cubic) | Low-power, previews |
+| Normal | 64-tap sinc, linear | Standard playback |
+| Good | 128-tap sinc, linear | Better quality |
+| High (default) | 256-tap sinc, cubic | Recommended for music |
+| Maximum | FFT-based | Offline / high-end |
+
+## Format Change Handling
+
+On ABR variant switch, `StreamAudioSource` detects the format change via `media_info()` polling, then:
+
+1. Uses the variant fence to prevent cross-variant reads.
+2. Seeks to the first segment of the new variant (where init data lives).
+3. Recreates the decoder via factory.
+4. Resets the effects chain to avoid audio artifacts.
+
+## Epoch-Based Seek
+
+On seek, epoch is incremented atomically. The worker tags each decoded chunk with the current epoch. The consumer discards stale chunks (old epoch), preventing leftover data from reaching output after a seek.
+
 ## Integration
 
 Sits between `kithara-decode` (synchronous Symphonia wrapper) and the consumer (rodio, cpal, custom). Depends on `kithara-stream` for `Stream<T>` and `kithara-bufpool` for zero-allocation PCM buffers.

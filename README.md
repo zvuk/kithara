@@ -2,6 +2,13 @@
   <img src="logo.svg" alt="kithara" width="400">
 </div>
 
+<div align="center">
+
+[![CI](https://github.com/zvuk/kithara/actions/workflows/ci.yml/badge.svg)](https://github.com/zvuk/kithara/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
+
+</div>
+
 # kithara
 
 > Built with AI, tested by a human. Vibe-coded -- but with care.
@@ -36,7 +43,7 @@ graph TD
     ASSETS --> STOR
 ```
 
-`kithara-bufpool` -- cross-cutting: используется всеми крейтами для zero-allocation буферов.
+`kithara-bufpool` -- cross-cutting: used by all crates for zero-allocation buffers.
 
 | Crate | Role |
 |-------|------|
@@ -81,7 +88,40 @@ Each crate has its own `README.md`:
 - [`kithara-assets`](crates/kithara-assets/README.md) -- disk cache
 - [`kithara-storage`](crates/kithara-storage/README.md) -- mmap storage
 - [`kithara-bufpool`](crates/kithara-bufpool/README.md) -- buffer pool
+- [`kithara-drm`](crates/kithara-drm/README.md) -- AES-128 decryption
+
+## Examples
+
+```bash
+# Play a file with rodio
+cargo run -p kithara --example resource_play --features rodio -- <URL_OR_PATH>
+
+# Play a file (audio crate)
+cargo run -p kithara-audio --example file_audio --features rodio,memprof -- <URL>
+
+# Play HLS stream
+cargo run -p kithara-audio --example hls_audio --features rodio,memprof -- <MASTER_PLAYLIST_URL>
+
+# Play encrypted HLS
+cargo run -p kithara-audio --example hls_drm_audio --features rodio,memprof -- <MASTER_PLAYLIST_URL>
+
+# Analyze ABR switch behavior
+cargo run -p kithara-decode --example abr_switch_simulator -- <HLS_DATA_DIR>
+```
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding rules, and PR guidelines.
 
 ## Rules
 
 See [`AGENTS.md`](AGENTS.md) for coding rules enforced across the workspace.
+
+## License
+
+Licensed under either of
+
+- [Apache License, Version 2.0](LICENSE-APACHE)
+- [MIT License](LICENSE-MIT)
+
+at your option.

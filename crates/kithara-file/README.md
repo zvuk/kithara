@@ -46,6 +46,22 @@ sequenceDiagram
 - **Backpressure**: downloader pauses when too far ahead of the reader (configurable `look_ahead_bytes`). Resumes when reader advances (notified via `tokio::Notify`).
 - **Lifecycle**: `Backend` task is leaked (`mem::forget`) and runs until cancellation or completion.
 
+## Three-Phase Download
+
+| Phase | Strategy |
+|-------|----------|
+| Sequential | Stream from file start via `Writer`; fast path for complete downloads |
+| Gap Filling | HTTP Range requests for missing chunks; batches up to 4 gaps, each up to 2 MB |
+| Complete | All data downloaded; resource committed |
+
+## Local File Handling
+
+When configured with a local path, the crate opens the file via `AssetStore` with an absolute `ResourceKey`, skips all network activity, and creates a fully-cached `FileSource` with no background downloader.
+
+## On-Demand Downloads
+
+When the reader seeks beyond the current download position, it pushes a range request via a lock-free `SegQueue`. The downloader picks up these requests with higher priority than sequential downloading, enabling responsive seek behavior during streaming.
+
 ## Integration
 
 Depends on `kithara-net` for HTTP and `kithara-assets` for caching. Composes with `kithara-audio` as `Audio<Stream<File>>` for full decode pipeline.

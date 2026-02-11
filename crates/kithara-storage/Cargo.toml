@@ -1,8 +1,10 @@
 [package]
 name = "kithara-storage"
 version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Unified storage resource backed by mmap with random-access I/O"
 
 [lints]
 workspace = true

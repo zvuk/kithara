@@ -1,8 +1,9 @@
 [package]
 name = "kithara-bufpool"
 version = "0.1.0"
-edition = "2024"
-license = "MIT OR Apache-2.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
 description = "Generic sharded buffer pool for zero-allocation hot paths"
 
 [dependencies]
