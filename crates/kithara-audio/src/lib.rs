@@ -5,9 +5,8 @@
 //! ## Architecture
 //!
 //! - [`Audio`] - Generic audio pipeline running in a separate thread
-//! - [`AudioGenerator`] - Trait for PCM audio sources
-//! - [`AudioEffect`] - Trait for audio processing effects
-//! - [`ResamplerProcessor`] - Sample rate conversion effect
+//! - [`AudioConfig`] - Pipeline configuration
+//! - [`ResamplerQuality`] - Sample rate conversion quality
 //! - [`AudioSyncReader`] - `rodio::Source` adapter (requires `rodio` feature)
 //!
 //! ## Target API
@@ -50,17 +49,23 @@ mod rodio;
 mod traits;
 mod types;
 
-// Re-export kithara-decode types for convenience
 // Public API exports
 pub use events::{AudioEvent, AudioPipelineEvent};
 pub use kithara_decode::{
-    AudioCodec, ContainerFormat, DecoderConfig, DecoderFactory, DecoderInput, InnerDecoder,
-    MediaInfo, PcmChunk, PcmSpec, TrackMetadata,
+    AudioCodec, ContainerFormat, MediaInfo, PcmChunk, PcmSpec, TrackMetadata,
 };
 pub use pipeline::{Audio, AudioConfig};
-pub use reader::SourceReader;
-pub use resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality};
+pub use resampler::ResamplerQuality;
 #[cfg(feature = "rodio")]
 pub use rodio::AudioSyncReader;
-pub use traits::{AudioEffect, AudioGenerator};
 pub use types::{DecodeError, DecodeResult, PcmReader};
+
+// Hidden re-exports (used by integration tests or advanced internal consumers)
+#[doc(hidden)]
+pub use kithara_decode::{DecoderConfig, DecoderFactory, DecoderInput, InnerDecoder};
+#[doc(hidden)]
+pub use reader::SourceReader;
+#[doc(hidden)]
+pub use resampler::{ResamplerParams, ResamplerProcessor};
+#[doc(hidden)]
+pub use traits::{AudioEffect, AudioGenerator};

@@ -20,7 +20,10 @@ mod inner;
 mod session;
 
 pub use config::{FileConfig, FileSrc};
-pub use error::SourceError;
 pub use events::FileEvent;
 pub use inner::File;
+
+#[doc(hidden)]
+pub use error::SourceError;
+#[doc(hidden)]
 pub use session::Progress;

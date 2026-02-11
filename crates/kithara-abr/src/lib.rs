@@ -44,8 +44,12 @@ mod controller;
 mod estimator;
 mod types;
 
-pub use controller::{AbrController, AbrDecision, AbrReason, DefaultAbrController};
-pub use estimator::{Estimator, ThroughputEstimator};
+#[doc(hidden)]
+pub use controller::DefaultAbrController;
+pub use controller::{AbrController, AbrDecision, AbrReason};
+#[doc(hidden)]
+pub use estimator::Estimator;
+pub use estimator::ThroughputEstimator;
 pub use types::{
     AbrMode, AbrOptions, ThroughputSample, ThroughputSampleSource, Variant, VariantInfo,
 };
