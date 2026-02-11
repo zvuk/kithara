@@ -19,6 +19,7 @@ let stream = Stream::<Hls>::new(config).await?;
 ## Segment download flow
 
 ```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
 graph LR
     subgraph Network
         MasterPL["Master<br/>Playlist"]

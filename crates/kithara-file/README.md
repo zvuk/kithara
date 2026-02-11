@@ -19,6 +19,7 @@ let stream = Stream::<File>::new(config).await?;
 ## Download flow
 
 ```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
 graph LR
     subgraph Network
         HTTP["HTTP Server"]

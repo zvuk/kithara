@@ -29,6 +29,7 @@ while !audio.is_eof() {
 ## Threading model
 
 ```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
 graph TB
     subgraph "Main / Consumer Thread"
         App["Application Code"]

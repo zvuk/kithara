@@ -21,6 +21,7 @@ Design goal: keep components modular so they can be reused independently and com
 ## Crate Architecture
 
 ```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
 graph TD
     kithara["kithara<br/><i>facade</i>"]
     audio["kithara-audio<br/><i>pipeline, resampling</i>"]
