@@ -99,6 +99,7 @@ graph TD
 | **kithara-net** | HTTP networking with retry, timeout, and streaming |
 | **kithara-assets** | Persistent disk cache with lease/pin semantics and eviction |
 | **kithara-storage** | Unified `StorageResource` backed by `mmap-io` |
+| **kithara-drm** | AES-128-CBC segment decryption for encrypted HLS |
 | **kithara-bufpool** | Sharded buffer pool for zero-allocation hot paths |
 
 ## Getting Started
