@@ -179,14 +179,6 @@ pub trait InnerDecoder: Send + 'static {
 
     /// Reset decoder state (called after seek).
     fn reset(&mut self) {}
-
-    /// Encoder delay from container metadata (elst/sgpd/sbgp/iTunSMPB).
-    ///
-    /// Parsed during decoder initialization from the init segment.
-    /// Returns `None` when no gapless metadata atoms are present.
-    fn encoder_delay(&self) -> Option<crate::EncoderDelayInfo> {
-        None
-    }
 }
 
 #[cfg(test)]

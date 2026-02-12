@@ -77,15 +77,6 @@ pub trait Source: Send + 'static {
     /// Called when the decoder is recreated after ABR switch.
     /// Default no-op for non-HLS sources.
     fn clear_variant_fence(&mut self) {}
-
-    /// Segment metadata at given byte offset.
-    ///
-    /// For segmented sources (HLS), returns segment index and variant
-    /// for the segment containing this offset.
-    /// For non-segmented sources (File), returns `None`.
-    fn segment_meta_at(&self, _offset: u64) -> Option<crate::SourceSegmentMeta> {
-        None
-    }
 }
 
 #[cfg(test)]
