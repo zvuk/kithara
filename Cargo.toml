@@ -136,7 +136,7 @@ cbc = "0.1.2"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10.9"
 tower = "0.5.3"
-tempfile = "3.24.0"
+tempfile = "3.25.0"
 
 # async traits
 async-trait = "0.1.89"
