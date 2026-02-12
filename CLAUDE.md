@@ -126,7 +126,7 @@ Protocol crates emit events via broadcast channel (`FileEvent`, `HlsEvent`). `De
 - `symphonia`
 - `hls_m3u8`
 
-Versions pinned in root `Cargo.toml`.
+Versions pinned in root `Cargo.toml`. MSRV is 1.85 (edition 2024).
 
 ## Cancellation
 

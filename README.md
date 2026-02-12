@@ -22,6 +22,17 @@ Rust library for networking and decoding. Provides transport primitives for prog
 
 Design goal: keep components modular so they can be reused independently and composed into a full engine/player.
 
+## Features
+
+- **Progressive file download** — stream MP3, AAC, FLAC and other formats over HTTP with disk caching and gap filling
+- **HLS VOD** — adaptive bitrate streaming with variant switching, encrypted segments (AES-128-CBC), and offline support
+- **Multi-backend decoding** — Symphonia (software, cross-platform) and Apple AudioToolbox (hardware, macOS/iOS)
+- **Audio pipeline** — sample rate conversion via rubato, effects chain, OS-thread worker with backpressure
+- **Persistent disk cache** — lease/pin semantics, LRU eviction, crash-safe writes
+- **Zero-allocation hot paths** — sharded buffer pool (`kithara-bufpool`) for decode and I/O loops
+- **Async-to-sync bridge** — `Read + Seek` interface over async HTTP streams for synchronous decoders
+- **Modular crate design** — use only what you need: networking, caching, decoding, or the full stack
+
 ## Crate Architecture
 
 ```mermaid
@@ -159,6 +170,10 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, coding rules, and 
 ## Rules
 
 See [`AGENTS.md`](AGENTS.md) for coding rules enforced across the workspace.
+
+## Minimum Supported Rust Version (MSRV)
+
+The current MSRV is **1.85** (Rust edition 2024). It is tested in CI and may be bumped in minor releases.
 
 ## License
 

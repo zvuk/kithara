@@ -246,7 +246,7 @@ impl<S> Audio<S> {
                 // Found new valid chunk - save it and stop draining
                 if !fetch.is_eof() {
                     let chunk = fetch.into_inner();
-                    self.spec = chunk.spec;
+                    self.spec = chunk.spec();
                     self.current_chunk = Some(chunk.pcm);
                     self.chunk_offset = 0;
                     trace!("seek: saved first valid chunk after drain");
@@ -313,10 +313,10 @@ impl<S> Audio<S> {
                     let chunk = fetch.into_inner();
                     trace!(
                         samples = chunk.pcm.len(),
-                        spec = ?chunk.spec,
+                        spec = ?chunk.spec(),
                         "Audio: received chunk"
                     );
-                    self.spec = chunk.spec;
+                    self.spec = chunk.spec();
                     // Old current_chunk auto-recycles via Drop on reassignment
                     self.current_chunk = Some(chunk.pcm);
                     self.chunk_offset = 0;
@@ -432,6 +432,9 @@ where
         // Create shared stream for format change detection
         let shared_stream = SharedStream::new(stream);
 
+        // Build stream context once — shared across all decoder instances.
+        let stream_ctx = shared_stream.build_stream_context();
+
         let pool = pool.get_or_insert_with(|| pcm_pool().clone());
 
         // Create initial decoder on the thread pool to avoid blocking tokio runtime.
@@ -439,6 +442,7 @@ where
         let decoder_config = kithara_decode::DecoderConfig {
             prefer_hardware,
             hint: hint.clone(),
+            stream_ctx: Some(Arc::clone(&stream_ctx)),
             ..Default::default()
         };
         let shared_stream_for_decoder = shared_stream.clone();
@@ -501,11 +505,16 @@ where
         // 1. create_from_media_info — uses codec/container from HLS metadata
         // 2. create_with_probe — uses extension hint for codec detection
         // 3. create_with_symphonia_probe — lets Symphonia detect format from data
+        let factory_stream_ctx = Arc::clone(&stream_ctx);
+        let factory_epoch = Arc::clone(&epoch);
         let decoder_factory: super::stream_source::DecoderFactory<T> =
             Box::new(move |stream, info, base_offset| {
+                let current_epoch = factory_epoch.load(Ordering::Acquire);
                 let reader = OffsetReader::new(stream.clone(), base_offset);
                 let config = kithara_decode::DecoderConfig {
                     prefer_hardware,
+                    stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
+                    epoch: current_epoch,
                     ..Default::default()
                 };
                 match kithara_decode::DecoderFactory::create_from_media_info(reader, info, config) {
@@ -518,6 +527,8 @@ where
                         let reader = OffsetReader::new(stream.clone(), base_offset);
                         let config = kithara_decode::DecoderConfig {
                             prefer_hardware,
+                            stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
+                            epoch: current_epoch,
                             ..Default::default()
                         };
                         match kithara_decode::DecoderFactory::create_with_probe(
@@ -532,6 +543,8 @@ where
                                 let reader = OffsetReader::new(stream, base_offset);
                                 let config = kithara_decode::DecoderConfig {
                                     prefer_hardware,
+                                    stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
+                                    epoch: current_epoch,
                                     ..Default::default()
                                 };
                                 match kithara_decode::DecoderFactory::create_with_symphonia_probe(

@@ -9,7 +9,7 @@ use std::sync::{
 
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool, pcm_pool};
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
 use rubato::{
     Async, Fft, FixedAsync, FixedSync, PolynomialDegree, Resampler as RubatoResampler,
     SincInterpolationParameters, SincInterpolationType, WindowFunction,
@@ -305,7 +305,13 @@ impl ResamplerProcessor {
                 }
 
                 let interleaved = self.interleave(&self.temp_output_all);
-                Some(PcmChunk::with_pooled(self.output_spec, interleaved))
+                Some(PcmChunk::new(
+                    PcmMeta {
+                        spec: self.output_spec,
+                        ..Default::default()
+                    },
+                    interleaved,
+                ))
             }
             Err(e) => {
                 trace!(err = %e, "Resampler flush error");
@@ -561,7 +567,13 @@ impl ResamplerProcessor {
         }
 
         let interleaved = self.interleave(&self.temp_output_all);
-        Some(PcmChunk::with_pooled(self.output_spec, interleaved))
+        Some(PcmChunk::new(
+            PcmMeta {
+                spec: self.output_spec,
+                ..Default::default()
+            },
+            interleaved,
+        ))
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -630,8 +642,8 @@ fn smallvec_new_vecs(channels: usize) -> SmallVec<[Vec<f32>; 8]> {
 impl AudioEffect for ResamplerProcessor {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn process(&mut self, chunk: PcmChunk) -> Option<PcmChunk> {
-        let chunk_rate = chunk.spec.sample_rate;
-        let chunk_channels = chunk.spec.channels as usize;
+        let chunk_rate = chunk.spec().sample_rate;
+        let chunk_channels = chunk.spec().channels as usize;
 
         // Handle source spec changes (ABR switch)
         if chunk_channels != self.channels {
@@ -674,7 +686,7 @@ impl AudioEffect for ResamplerProcessor {
             );
             // Passthrough: transfer ownership, just update spec
             let mut out = chunk;
-            out.spec = self.output_spec;
+            out.meta.spec = self.output_spec;
             return Some(out);
         }
 
@@ -705,7 +717,19 @@ impl AudioEffect for ResamplerProcessor {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::pcm_pool;
+
     use super::*;
+
+    fn test_chunk(spec: PcmSpec, pcm: Vec<f32>) -> PcmChunk {
+        PcmChunk::new(
+            PcmMeta {
+                spec,
+                ..Default::default()
+            },
+            pcm_pool().attach(pcm),
+        )
+    }
 
     fn make_host_rate(rate: u32) -> Arc<AtomicU32> {
         Arc::new(AtomicU32::new(rate))
@@ -746,7 +770,7 @@ mod tests {
     fn test_passthrough_processing() {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 44100, 2));
 
-        let chunk = PcmChunk::new(
+        let chunk = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 44100,
@@ -758,7 +782,7 @@ mod tests {
         assert!(result.is_some());
         let out = result.unwrap();
         assert_eq!(out.pcm, chunk.pcm);
-        assert_eq!(out.spec.sample_rate, 44100);
+        assert_eq!(out.spec().sample_rate, 44100);
     }
 
     #[test]
@@ -777,7 +801,7 @@ mod tests {
         // Change host sample rate dynamically
         host_sr.store(48000, Ordering::Relaxed);
 
-        let chunk = PcmChunk::new(
+        let chunk = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 44100,
@@ -793,7 +817,7 @@ mod tests {
     fn test_accumulates_small_chunks() {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
-        let small_chunk = PcmChunk::new(
+        let small_chunk = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 48000,
@@ -810,7 +834,7 @@ mod tests {
     fn test_processes_large_chunks() {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
-        let large_chunk = PcmChunk::new(
+        let large_chunk = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 48000,
@@ -827,7 +851,7 @@ mod tests {
     fn test_source_rate_change_updates_dynamically() {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
-        let chunk1 = PcmChunk::new(
+        let chunk1 = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 48000,
@@ -838,7 +862,7 @@ mod tests {
         assert_eq!(processor.source_rate, 48000);
 
         // Source rate changed (e.g. ABR switch) — resampler should update dynamically
-        let chunk2 = PcmChunk::new(
+        let chunk2 = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 44100,
@@ -859,7 +883,7 @@ mod tests {
         let mut total_output_frames = 0;
 
         for _ in 0..10 {
-            let chunk = PcmChunk::new(
+            let chunk = test_chunk(
                 PcmSpec {
                     channels: 2,
                     sample_rate: 48000,
@@ -888,7 +912,7 @@ mod tests {
     fn test_audio_effect_trait() {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 44100, 2));
 
-        let chunk = PcmChunk::new(
+        let chunk = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 44100,
@@ -917,7 +941,7 @@ mod tests {
         ));
         assert!(!processor.is_passthrough());
 
-        let chunk = PcmChunk::new(
+        let chunk = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 48000,
@@ -938,7 +962,7 @@ mod tests {
         ));
         assert!(!processor.is_passthrough());
 
-        let chunk = PcmChunk::new(
+        let chunk = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 48000,
@@ -959,7 +983,7 @@ mod tests {
         ));
         assert!(!processor.is_passthrough());
 
-        let chunk = PcmChunk::new(
+        let chunk = test_chunk(
             PcmSpec {
                 channels: 2,
                 sample_rate: 48000,

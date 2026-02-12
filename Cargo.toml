@@ -55,6 +55,7 @@ tools = { rustfmt = "rustfmt.toml", clippy = "clippy.toml", deny = "deny.toml" }
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 authors = ["kithara contributors"]
 license = "MIT OR Apache-2.0"
 description = "Networking + decoding building blocks for audio playback (not a full player)"

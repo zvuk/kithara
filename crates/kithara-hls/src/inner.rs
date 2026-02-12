@@ -2,19 +2,19 @@
 //!
 //! Provides `Hls` marker type implementing `StreamType` trait.
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicU64};
 
 use kithara_assets::{
     AssetStoreBuilder, Assets, AssetsBackend, CoverageIndex, ProcessChunkFn, asset_root_for_url,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_net::HttpClient;
-use kithara_stream::StreamType;
+use kithara_stream::{StreamContext, StreamType};
 use tokio::sync::broadcast;
 
 use crate::{
-    config::HlsConfig, error::HlsError, events::HlsEvent, fetch::FetchManager, keys::KeyManager,
-    playlist::variant_info_from_master, source::build_pair,
+    HlsStreamContext, config::HlsConfig, error::HlsError, events::HlsEvent, fetch::FetchManager,
+    keys::KeyManager, playlist::variant_info_from_master, source::build_pair,
 };
 
 /// Marker type for HLS streaming.
@@ -127,5 +127,16 @@ impl StreamType for Hls {
         source.set_backend(backend);
 
         Ok(source)
+    }
+
+    fn build_stream_context(
+        source: &Self::Source,
+        position: Arc<AtomicU64>,
+    ) -> Arc<dyn StreamContext> {
+        Arc::new(HlsStreamContext::new(
+            position,
+            source.segment_index_handle(),
+            source.variant_index_handle(),
+        ))
     }
 }

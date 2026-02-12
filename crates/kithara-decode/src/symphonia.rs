@@ -34,7 +34,7 @@ use std::{
     time::Duration,
 };
 
-use kithara_stream::ContainerFormat;
+use kithara_stream::{ContainerFormat, StreamContext};
 use symphonia::{
     core::{
         codecs::{
@@ -53,11 +53,11 @@ use symphonia::{
 use crate::{
     error::{DecodeError, DecodeResult},
     traits::{Aac, AudioDecoder, CodecType, DecoderInput, Flac, Mp3, Vorbis},
-    types::{PcmChunk, PcmSpec, TrackMetadata},
+    types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };
 
 /// Configuration for Symphonia-based decoders.
-#[derive(Debug, Clone, Default)]
+#[derive(Default)]
 pub struct SymphoniaConfig {
     /// Enable data verification (slower but safer).
     pub verify: bool,
@@ -86,6 +86,10 @@ pub struct SymphoniaConfig {
     /// match container header expectations (e.g., WAV `data_size` vs actual
     /// available data). Seek is re-enabled after successful initialization.
     pub probe_no_seek: bool,
+    /// Stream context for segment/variant metadata.
+    pub stream_ctx: Option<Arc<dyn StreamContext>>,
+    /// Epoch counter for decoder recreation tracking.
+    pub epoch: u64,
 }
 
 /// Inner implementation shared across all Symphonia codecs.
@@ -98,10 +102,15 @@ struct SymphoniaInner {
     track_id: u32,
     spec: PcmSpec,
     position: Duration,
+    frame_offset: u64,
     duration: Option<Duration>,
     metadata: TrackMetadata,
     /// Handle for dynamic byte length updates.
     byte_len_handle: Arc<AtomicU64>,
+    /// Stream context for segment/variant metadata.
+    stream_ctx: Option<Arc<dyn StreamContext>>,
+    /// Epoch counter for decoder recreation tracking.
+    epoch: u64,
 }
 
 impl SymphoniaInner {
@@ -359,9 +368,12 @@ impl SymphoniaInner {
             track_id,
             spec,
             position: Duration::ZERO,
+            frame_offset: 0,
             duration,
             metadata,
             byte_len_handle,
+            stream_ctx: config.stream_ctx.clone(),
+            epoch: config.epoch,
         })
     }
 
@@ -432,14 +444,24 @@ impl SymphoniaInner {
                 sample_rate: spec.rate(),
             };
 
-            let chunk = PcmChunk::with_pooled(pcm_spec, pooled);
+            let meta = PcmMeta {
+                spec: pcm_spec,
+                frame_offset: self.frame_offset,
+                timestamp: self.position,
+                segment_index: self.stream_ctx.as_ref().and_then(|ctx| ctx.segment_index()),
+                variant_index: self.stream_ctx.as_ref().and_then(|ctx| ctx.variant_index()),
+                epoch: self.epoch,
+            };
 
-            // Update position
+            let chunk = PcmChunk::new(meta, pooled);
+
+            // Update position and frame offset
             if self.spec.sample_rate > 0 {
                 let frames = chunk.frames();
                 let frame_duration =
                     Duration::from_secs_f64(frames as f64 / self.spec.sample_rate as f64);
                 self.position = self.position.saturating_add(frame_duration);
+                self.frame_offset += frames as u64;
             }
 
             return Ok(Some(chunk));
@@ -465,6 +487,7 @@ impl SymphoniaInner {
 
         self.decoder.reset();
         self.position = pos;
+        self.frame_offset = (pos.as_secs_f64() * self.spec.sample_rate as f64) as u64;
         Ok(())
     }
 
@@ -767,8 +790,8 @@ mod tests {
         assert!(chunk.is_some());
 
         let chunk = chunk.unwrap();
-        assert_eq!(chunk.spec.sample_rate, 44100);
-        assert_eq!(chunk.spec.channels, 2);
+        assert_eq!(chunk.spec().sample_rate, 44100);
+        assert_eq!(chunk.spec().channels, 2);
         assert!(!chunk.pcm.is_empty());
     }
 
@@ -898,6 +921,8 @@ mod tests {
             container: Some(ContainerFormat::Fmp4),
             hint: Some("mp4".to_string()),
             probe_no_seek: false,
+            stream_ctx: None,
+            epoch: 0,
         };
 
         assert!(config.verify);

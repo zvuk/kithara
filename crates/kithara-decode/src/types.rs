@@ -1,4 +1,4 @@
-use std::{fmt, sync::Arc};
+use std::{fmt, sync::Arc, time::Duration};
 
 use kithara_bufpool::{PcmBuf, pcm_pool};
 
@@ -28,6 +28,26 @@ impl fmt::Display for PcmSpec {
     }
 }
 
+/// Timeline metadata for a PCM chunk.
+///
+/// Combines audio format specification with position on the logical timeline.
+/// Each chunk gets unique timeline coordinates; `PcmSpec` is the static part.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PcmMeta {
+    /// Audio format (channels, sample rate).
+    pub spec: PcmSpec,
+    /// Absolute frame offset from the start of the track.
+    pub frame_offset: u64,
+    /// Timestamp of the first frame in this chunk.
+    pub timestamp: Duration,
+    /// Segment index within playlist (`None` for progressive files).
+    pub segment_index: Option<u32>,
+    /// Variant/quality level index (`None` for progressive files).
+    pub variant_index: Option<usize>,
+    /// Decoder generation — increments on each ABR switch / decoder recreation.
+    pub epoch: u64,
+}
+
 /// PCM chunk containing interleaved audio samples with automatic pool recycling.
 ///
 /// The `pcm` buffer is pool-backed via [`PcmBuf`]: when the chunk is dropped,
@@ -40,42 +60,34 @@ impl fmt::Display for PcmSpec {
 #[derive(Clone, Debug)]
 pub struct PcmChunk {
     pub pcm: PcmBuf,
-    pub spec: PcmSpec,
+    pub meta: PcmMeta,
 }
 
 impl Default for PcmChunk {
     fn default() -> Self {
         Self {
             pcm: pcm_pool().get(),
-            spec: PcmSpec::default(),
+            meta: PcmMeta::default(),
         }
     }
 }
 
 impl PcmChunk {
-    /// Create a new `PcmChunk` from a raw `Vec<f32>`.
-    ///
-    /// The Vec is attached to the global PCM pool for automatic recycling on drop.
-    pub fn new(spec: PcmSpec, pcm: Vec<f32>) -> Self {
-        Self {
-            pcm: pcm_pool().attach(pcm),
-            spec,
-        }
+    /// Create a new `PcmChunk` from a pool-backed buffer.
+    pub fn new(meta: PcmMeta, pcm: PcmBuf) -> Self {
+        Self { pcm, meta }
     }
 
-    /// Create a new `PcmChunk` from a pool-backed buffer (zero overhead).
-    ///
-    /// Use this when the buffer was already obtained from the pool
-    /// (e.g., via `pcm_pool().get_with()`).
-    pub fn with_pooled(spec: PcmSpec, pcm: PcmBuf) -> Self {
-        Self { pcm, spec }
+    /// Audio format specification.
+    pub fn spec(&self) -> PcmSpec {
+        self.meta.spec
     }
 
-    /// Number of audio frames in this chunk
+    /// Number of audio frames in this chunk.
     ///
-    /// A frame contains one sample per channel
+    /// A frame contains one sample per channel.
     pub fn frames(&self) -> usize {
-        let channels = self.spec.channels as usize;
+        let channels = self.meta.spec.channels as usize;
         if channels == 0 {
             0
         } else {
@@ -83,12 +95,12 @@ impl PcmChunk {
         }
     }
 
-    /// Duration of this chunk in seconds
+    /// Duration of this chunk in seconds.
     pub fn duration_secs(&self) -> f64 {
-        if self.spec.sample_rate == 0 {
+        if self.meta.spec.sample_rate == 0 {
             0.0
         } else {
-            self.frames() as f64 / self.spec.sample_rate as f64
+            self.frames() as f64 / self.meta.spec.sample_rate as f64
         }
     }
 
@@ -108,6 +120,16 @@ mod tests {
     use rstest::*;
 
     use super::*;
+
+    fn test_chunk(spec: PcmSpec, pcm: Vec<f32>) -> PcmChunk {
+        PcmChunk::new(
+            PcmMeta {
+                spec,
+                ..Default::default()
+            },
+            pcm_pool().attach(pcm),
+        )
+    }
 
     // PcmSpec Tests
 
@@ -187,6 +209,69 @@ mod tests {
         assert_eq!(spec, copied);
     }
 
+    // PcmMeta Tests
+
+    #[test]
+    fn test_pcm_meta_default() {
+        let meta = PcmMeta::default();
+        assert_eq!(meta.spec, PcmSpec::default());
+        assert_eq!(meta.frame_offset, 0);
+        assert_eq!(meta.timestamp, Duration::ZERO);
+        assert_eq!(meta.segment_index, None);
+        assert_eq!(meta.variant_index, None);
+        assert_eq!(meta.epoch, 0);
+    }
+
+    #[test]
+    fn test_pcm_meta_copy() {
+        let meta = PcmMeta {
+            spec: PcmSpec {
+                channels: 2,
+                sample_rate: 44100,
+            },
+            frame_offset: 1000,
+            timestamp: Duration::from_millis(22),
+            segment_index: Some(5),
+            variant_index: Some(2),
+            epoch: 3,
+        };
+        let copied = meta;
+        assert_eq!(meta, copied);
+    }
+
+    #[test]
+    fn test_pcm_meta_with_spec() {
+        let spec = PcmSpec {
+            channels: 2,
+            sample_rate: 48000,
+        };
+        let meta = PcmMeta {
+            spec,
+            ..Default::default()
+        };
+        assert_eq!(meta.spec, spec);
+        assert_eq!(meta.frame_offset, 0);
+    }
+
+    #[test]
+    fn test_pcm_meta_partial_eq() {
+        let a = PcmMeta {
+            spec: PcmSpec {
+                channels: 2,
+                sample_rate: 44100,
+            },
+            frame_offset: 100,
+            timestamp: Duration::from_millis(2),
+            segment_index: Some(1),
+            variant_index: Some(0),
+            epoch: 1,
+        };
+        let mut b = a;
+        assert_eq!(a, b);
+        b.frame_offset = 200;
+        assert_ne!(a, b);
+    }
+
     // PcmChunk Tests
 
     #[test]
@@ -196,9 +281,9 @@ mod tests {
             sample_rate: 44100,
         };
         let pcm = vec![0.1f32, 0.2, 0.3, 0.4];
-        let chunk = PcmChunk::new(spec, pcm.clone());
+        let chunk = test_chunk(spec, pcm.clone());
 
-        assert_eq!(chunk.spec, spec);
+        assert_eq!(chunk.spec(), spec);
         assert_eq!(chunk.samples(), &pcm[..]);
     }
 
@@ -217,7 +302,7 @@ mod tests {
             channels,
             sample_rate: 44100,
         };
-        let chunk = PcmChunk::new(spec, pcm);
+        let chunk = test_chunk(spec, pcm);
         assert_eq!(chunk.frames(), expected_frames);
     }
 
@@ -227,7 +312,7 @@ mod tests {
             channels: 0,
             sample_rate: 44100,
         };
-        let chunk = PcmChunk::new(spec, vec![0.0, 1.0, 2.0, 3.0]);
+        let chunk = test_chunk(spec, vec![0.0, 1.0, 2.0, 3.0]);
         assert_eq!(chunk.frames(), 0);
     }
 
@@ -247,7 +332,7 @@ mod tests {
             channels,
             sample_rate,
         };
-        let chunk = PcmChunk::new(spec, pcm);
+        let chunk = test_chunk(spec, pcm);
         let duration = chunk.duration_secs();
         assert!((duration - expected_duration).abs() < 1e-6);
     }
@@ -258,7 +343,7 @@ mod tests {
             channels: 2,
             sample_rate: 0,
         };
-        let chunk = PcmChunk::new(spec, vec![0.0, 1.0, 2.0, 3.0]);
+        let chunk = test_chunk(spec, vec![0.0, 1.0, 2.0, 3.0]);
         assert_eq!(chunk.duration_secs(), 0.0);
     }
 
@@ -269,7 +354,7 @@ mod tests {
             sample_rate: 44100,
         };
         let pcm = vec![0.1, 0.2, 0.3, 0.4];
-        let chunk = PcmChunk::new(spec, pcm.clone());
+        let chunk = test_chunk(spec, pcm.clone());
 
         let samples = chunk.samples();
         assert_eq!(samples.len(), 4);
@@ -283,7 +368,7 @@ mod tests {
             sample_rate: 44100,
         };
         let pcm = vec![0.1, 0.2, 0.3, 0.4];
-        let chunk = PcmChunk::new(spec, pcm.clone());
+        let chunk = test_chunk(spec, pcm.clone());
 
         let extracted = chunk.into_samples();
         assert_eq!(extracted.len(), 4);
@@ -297,10 +382,10 @@ mod tests {
             sample_rate: 44100,
         };
         let pcm = vec![0.1, 0.2, 0.3, 0.4];
-        let chunk = PcmChunk::new(spec, pcm);
+        let chunk = test_chunk(spec, pcm);
         let cloned = chunk.clone();
 
-        assert_eq!(cloned.spec, chunk.spec);
+        assert_eq!(cloned.spec(), chunk.spec());
         assert_eq!(cloned.pcm, chunk.pcm);
     }
 
@@ -311,7 +396,7 @@ mod tests {
             sample_rate: 44100,
         };
         let pcm = vec![0.1f32, 0.2];
-        let chunk = PcmChunk::new(spec, pcm);
+        let chunk = test_chunk(spec, pcm);
         let debug_str = format!("{:?}", chunk);
 
         assert!(debug_str.contains("PcmChunk"));

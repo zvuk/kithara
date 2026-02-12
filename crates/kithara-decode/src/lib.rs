@@ -77,6 +77,6 @@ pub use traits::InnerDecoderMock;
 #[doc(hidden)]
 pub use traits::{Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, Mp3, Vorbis};
 // Core types
-pub use types::{PcmChunk, PcmSpec, TrackMetadata};
+pub use types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 #[cfg(any(test, feature = "test-utils"))]
 pub use unimock;

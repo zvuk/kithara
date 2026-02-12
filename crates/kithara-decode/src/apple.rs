@@ -38,7 +38,7 @@ use tracing::{debug, trace, warn};
 use crate::{
     error::{DecodeError, DecodeResult},
     traits::{Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, InnerDecoder, Mp3},
-    types::{PcmChunk, PcmSpec, TrackMetadata},
+    types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata},
 };
 
 type OSStatus = i32;
@@ -375,6 +375,8 @@ struct AppleInner {
     spec: PcmSpec,
     /// Current playback position.
     position: Duration,
+    /// Absolute frame offset from the start of the track.
+    frame_offset: u64,
     /// Total duration if known.
     duration: Option<Duration>,
     /// Track metadata.
@@ -654,6 +656,7 @@ impl AppleInner {
             read_buffer,
             spec,
             position: Duration::ZERO,
+            frame_offset: 0,
             duration: None,
             metadata: TrackMetadata::default(),
             byte_len_handle,
@@ -752,8 +755,19 @@ impl AppleInner {
         let samples = frames * channels;
         let pcm = self.pcm_buffer[..samples].to_vec();
 
-        // Update position
+        let meta = PcmMeta {
+            spec: self.spec,
+            frame_offset: self.frame_offset,
+            timestamp: self.position,
+            segment_index: None,
+            variant_index: None,
+            epoch: 0,
+        };
+        let chunk = PcmChunk::new(meta, kithara_bufpool::pcm_pool().attach(pcm));
+
+        // Update position and frame offset
         self.frames_decoded += frames as u64;
+        self.frame_offset += frames as u64;
         self.position =
             Duration::from_secs_f64(self.frames_decoded as f64 / self.spec.sample_rate as f64);
 
@@ -764,7 +778,6 @@ impl AppleInner {
             "Apple decoder: decoded chunk"
         );
 
-        let chunk = PcmChunk::new(self.spec, pcm);
         Ok(Some(chunk))
     }
 
@@ -864,6 +877,7 @@ impl AppleInner {
         // Update position tracking
         self.position = pos;
         self.frames_decoded = target_frame;
+        self.frame_offset = target_frame;
 
         debug!(
             new_position = ?self.position,

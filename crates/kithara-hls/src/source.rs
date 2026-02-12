@@ -8,7 +8,7 @@ use std::{
     ops::Range,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -226,6 +226,10 @@ pub struct HlsSource {
     events_tx: Option<broadcast::Sender<HlsEvent>>,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
     variant_fence: Option<usize>,
+    /// Current segment index (updated on each `read_at`).
+    current_segment_index: Arc<AtomicU32>,
+    /// Current variant index (updated on each `read_at`).
+    current_variant_index: Arc<AtomicUsize>,
     /// Downloader backend. Dropped with this source, cancelling the downloader.
     _backend: Option<kithara_stream::Backend>,
 }
@@ -433,6 +437,11 @@ impl Source for HlsSource {
             return Ok(0);
         }
 
+        self.current_segment_index
+            .store(entry.segment_index() as u32, Ordering::Relaxed);
+        self.current_variant_index
+            .store(entry.meta.variant, Ordering::Relaxed);
+
         let bytes = self
             .read_from_entry(&entry, offset, buf)
             .map_err(StreamError::Source)?;
@@ -534,6 +543,8 @@ pub fn build_pair(
         shared,
         events_tx: config.events_tx.clone(),
         variant_fence: None,
+        current_segment_index: Arc::new(AtomicU32::new(0)),
+        current_variant_index: Arc::new(AtomicUsize::new(0)),
         _backend: None,
     };
 
@@ -544,6 +555,16 @@ impl HlsSource {
     /// Set the backend (called after downloader is spawned).
     pub(crate) fn set_backend(&mut self, backend: kithara_stream::Backend) {
         self._backend = Some(backend);
+    }
+
+    /// Handle to current segment index atomic.
+    pub fn segment_index_handle(&self) -> Arc<AtomicU32> {
+        Arc::clone(&self.current_segment_index)
+    }
+
+    /// Handle to current variant index atomic.
+    pub fn variant_index_handle(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.current_variant_index)
     }
 }
 
@@ -578,6 +599,8 @@ mod tests {
             shared,
             events_tx: None,
             variant_fence: None,
+            current_segment_index: Arc::new(AtomicU32::new(0)),
+            current_variant_index: Arc::new(AtomicUsize::new(0)),
             _backend: None,
         }
     }

@@ -1,212 +1,212 @@
-# Kithara — правила кодирования для автономных агентов
+# Kithara — coding rules for autonomous agents
 
-## 0.f) Запрет “на будущее” (no speculative code / no future-proofing)
-**Правило (нормативно):** агент **не должен** добавлять код “на будущее”, который не используется в рамках текущей задачи/чекбокса и не зафиксирован публичным контрактом.
+## 0.f) No speculative code / no future-proofing
+**Rule (normative):** agents **must not** add code "for the future" that is unused within the current task/checkbox and not part of a public contract.
 
-Запрещено:
-- добавлять неиспользуемые helper-функции/методы/поля “вдруг пригодится”;
-- добавлять “интроспекцию”, “debug helpers”, “возможные расширения”, если они не используются прямо сейчас;
-- оставлять “удобные” методы без тестов/использования;
-- добавлять альтернативные ветки/варианты поведения без явного требования задачи.
+Prohibited:
+- Adding unused helper functions/methods/fields "just in case";
+- Adding "introspection", "debug helpers", "potential extensions" unless used right now;
+- Leaving "convenience" methods without tests or usage;
+- Adding alternative branches/behavior variants without an explicit task requirement.
 
-## 0.d) Зависимости: не тащить дубликаты (dependency hygiene)
-**Правило:** агент **не должен** добавлять новую зависимость, если нужный функционал уже есть в workspace или в стандартной библиотеке.
+## 0.d) Dependency hygiene: no duplicates
+**Rule:** agents **must not** add a new dependency if the needed functionality already exists in the workspace or the standard library.
 
-Перед добавлением любого нового crate:
-1) проверить `kithara/Cargo.toml` (`[workspace.dependencies]`) — нет ли уже подходящей библиотеки;
-2) предпочесть уже существующую (например, для логирования используем `tracing`, не добавляем `log`);
-3) если аналог уже есть — **новую зависимость не добавлять**.
+Before adding any new crate:
+1) Check `kithara/Cargo.toml` (`[workspace.dependencies]`) — a suitable library may already be present;
+2) Prefer what already exists (e.g., use `tracing` for logging, do not add `log`);
+3) If an equivalent is already available — **do not add** a new dependency.
 
-Если новой зависимости избежать нельзя:
-- обосновать необходимость в описании задачи/PR (1–2 предложения, что именно не покрывается текущими зависимостями);
-- добавить её **сначала** в `[workspace.dependencies]`, затем подключить в целевом крейте как `{ workspace = true }`.
+If a new dependency is unavoidable:
+- Justify the need in the task/PR description (1-2 sentences explaining what current dependencies do not cover);
+- Add it **first** to `[workspace.dependencies]`, then reference it in the target crate as `{ workspace = true }`.
 
-## 0) Главные принципы
+## 0) Core principles
 
-- Минимум магии и скрытых зависимостей.
-- Предсказуемость, тестируемость, воспроизводимость.
-- Компоненты должны быть слабо связаны и заменяемы.
-- Код — источник истины. Длинные объяснения — в `README` соответствующего сабкрейта.
+- Minimal magic and hidden dependencies.
+- Predictability, testability, reproducibility.
+- Components must be loosely coupled and replaceable.
+- Code is the source of truth. Longer explanations go in the `README` of the corresponding subcrate.
 
-## 1) Управление зависимостями (workspace-first)
+## 1) Dependency management (workspace-first)
 
-**Правило:** все зависимости добавляются сначала в workspace, затем подключаются в конкретном крейте.
+**Rule:** all dependencies are added to the workspace first, then referenced in individual crates.
 
-### 1.1 Где объявлять версии
-- Версии зависимостей объявляются в корневом `Cargo.toml` workspace в секции:
+### 1.1 Where to declare versions
+- Dependency versions are declared in the root `Cargo.toml` workspace under:
   - `[workspace.dependencies]`
-- Это относится ко всем зависимостям:
-  - обычным (`dependencies`)
+- This applies to all dependency kinds:
+  - regular (`dependencies`)
   - dev (`dev-dependencies`)
   - build (`build-dependencies`)
 
-### 1.2 Как подключать в крейтах
-- В `Cargo.toml` конкретного крейта зависимости подключаются без версии:
+### 1.2 How to reference in crates
+- In a crate's `Cargo.toml`, reference dependencies without a version:
   - `dep = { workspace = true }`
-- Никаких версий в сабкрейтах. Если нужно изменить версию — меняем только в `[workspace.dependencies]`.
+- No versions in subcrates. To change a version, update only `[workspace.dependencies]`.
 
-### 1.3 Запреты
-- Не добавлять “временные” зависимости без реальной необходимости.
-- Не тянуть тяжёлые зависимости ради мелкой утилиты (сначала оцени стоимость).
-- Не дублировать одну и ту же зависимость с разными фичами в разных крейтах без явной причины.
-
----
-
-## 2) Стиль кода (коротко и стабильно)
-
-### 2.0 Импорты и короткие имена (no deep namespaces)
-**Правило:** избегать “трёхэтажных” путей вида `some_lib::some_mod::some_func` в коде.
-
-- Все `use`-импорты должны быть **в начале файла** (включая `use some_lib::some_mod;`) — **не размещать `use` внутри функций/методов/блоков**.
-- Предпочитать импорты в начале файла и короткие, читаемые имена в теле.
-- Допускаются полные пути только когда это **явно улучшает** читаемость (например, разрешение конфликтов имён или единичное использование).
-
-### 2.1 Имена
-- Выбирать как можно более простые и короткие имена для функций/методов/типов.
-- Предпочитать стандартные, очевидные слова (`open`, `new`, `get`, `put`, `read`, `write`, `seek`, `stream`, `send`, `recv`), если они точно отражают смысл.
-- Избегать “умных”/длинных имён, которые кодируют внутреннюю реализацию или историю рефакторингов.
-
-### 2.2 Комментарии и документация
-**Цель:** минимизировать устаревающие комментарии и держать объяснения рядом с интерфейсами.
-
-- Комментарии в коде — только короткие, однострочные.
-- Не добавлять “простыни” комментариев в начале файлов.
-- Не писать комментарии, которые повторяют код (очевидное).
-- Всё, что требует объяснения (контракты, инварианты, жизненный цикл, протоколы, схемы кэша), описывается в `README.md` соответствующего сабкрейта.
-
-### 2.3 Размер файлов и декомпозиция
-**Цель:** Rust файлы должны оставаться небольшими, чтобы упрощать навигацию и снижать стоимость ревью.
-
-- Не раздувать один `.rs` файл “до бесконечности”.
-- Если файл начинает превращаться в “свалку абстракций”, выносить:
-  - типы в отдельные файлы,
-  - имплементации в `mod.rs` + `*.rs`,
-  - политики/стратегии в отдельные модули.
-- Эвристики (что выносить):
-  - большие `enum`/`struct` + их `impl` блоки,
-  - подсистемы (например: `lru_index`, `fs_layout`, `atomic_write`, `url_canon`, `key_processor`).
-
-### Тесты и фикстуры: `src/` только для прод-кода
-**Правило:** `src/` должен содержать только код, который мы тестируем (prod-код). Тестовая инфраструктура не должна “просачиваться” в `src/`.
-
-- Если тест требует **существенных фикстур** (локальный сервер, большие плейлисты/сегменты, генераторы контента, счётчики запросов, сложные сценарии) — это **integration tests**:
-  - размещать в `crates/<crate>/tests/` (например `tests/fixture.rs`, `tests/integration_*.rs`);
-  - фикстуры можно выносить в `crates/<crate>/tests/fixture/` (подмодули), если их много.
-- В `src/` допускаются только:
-  - небольшие unit-тесты рядом с кодом,
-  - очень маленькие test helpers под `#[cfg(test)]`, которые не превращают `src/` в “склад фикстур”.
-- Запрещено добавлять “большие” фикстуры/серверы в `src/` даже под `#[cfg(test)]`.
-- Критерий “существенные фикстуры”: если это не помещается “компактно” в один unit-тест или требует отдельной структуры/протокола — значит это `tests/`.
-
+### 1.3 Prohibitions
+- Do not add "temporary" dependencies without real need.
+- Do not pull heavy dependencies for a small utility (evaluate cost first).
+- Do not duplicate the same dependency with different features across crates without a clear reason.
 
 ---
 
-## 3) Разработка через TDD
+## 2) Code style (short and stable)
 
-**Правило:** изменения делаются через тесты, описывающие желаемое поведение.
+### 2.0 Imports and short names (no deep namespaces)
+**Rule:** avoid "triple-nested" paths like `some_lib::some_mod::some_func` in code.
 
-### 4.1 Порядок работы
-1) Сформулировать поведение через тест(ы) (integration/unit — по месту).
-2) Запустить тесты и убедиться, что новый тест падает по ожидаемой причине.
-3) Реализовать минимальный код, чтобы тест прошёл.
-4) Рефакторить только после прохождения тестов.
+- All `use` imports must be **at the top of the file** (including `use some_lib::some_mod;`) — **do not place `use` inside functions/methods/blocks**.
+- Prefer top-of-file imports and short, readable names in the body.
+- Full paths are allowed only when they **clearly improve** readability (e.g., resolving name conflicts or single-use references).
 
-### 4.2 Требования к тестам
-- Тесты должны быть детерминированными.
-- Тесты не должны зависеть от внешней сети.
-- Тесты должны быть “умеренными” по объёму логов и данных (без чтения гигабайт и без шумных дампов).
-- Тесты фиксируют контракт, а не текущие случайные детали реализации.
+### 2.1 Naming
+- Choose the simplest and shortest names possible for functions/methods/types.
+- Prefer standard, obvious words (`open`, `new`, `get`, `put`, `read`, `write`, `seek`, `stream`, `send`, `recv`) when they accurately reflect the meaning.
+- Avoid "clever"/long names that encode internal implementation or refactoring history.
 
----
+### 2.2 Comments and documentation
+**Goal:** minimize stale comments; keep explanations close to interfaces.
 
-## 4) Обобщённое программирование (generics-first)
+- In-code comments — short, single-line only.
+- Do not add walls of comments at the top of files.
+- Do not write comments that restate the obvious.
+- Anything requiring explanation (contracts, invariants, lifecycle, protocols, cache schemes) goes in the `README.md` of the corresponding subcrate.
 
-**Правило:** расширяемость достигается через дженерики и абстракции, а не через копипасту и жёсткие связи.
+### 2.3 File size and decomposition
+**Goal:** Rust files should stay small to simplify navigation and reduce review cost.
 
-### 4.1 Предпочитать стандартные и tokio-абстракции
-**Цель:** меньше “велосипедов”, больше совместимости с экосистемой.
-- По возможности использовать стандартные и `tokio` трейты/типы и их идиомы:
-  - конвертации (`From`, `TryFrom`, `Into`, `AsRef`),
-  - ошибки (`std::error::Error`, `thiserror`),
-  - итераторы и адаптеры (`Iterator`, `IntoIterator`),
-  - I/O трейты (`Read`, `Seek`, `Write`, `AsyncRead`, `AsyncWrite` там, где уместно),
-  - каналы/синхронизация `tokio` (если компонент уже на tokio) вместо кастомных решений.
-- Если стандартный трейт подходит, не вводить новый “почти такой же” трейт.
+- Do not let a single `.rs` file grow indefinitely.
+- If a file starts becoming a "dump of abstractions", extract:
+  - types into separate files,
+  - implementations into `mod.rs` + `*.rs`,
+  - policies/strategies into separate modules.
+- Heuristics (what to extract):
+  - large `enum`/`struct` + their `impl` blocks,
+  - subsystems (e.g.: `lru_index`, `fs_layout`, `atomic_write`, `url_canon`, `key_processor`).
 
-### 4.2 Использование generics
-- Базовые структуры делаем обобщёнными по:
-  - типу события,
-  - типу источника/транспорта,
-  - типу кэша/хранилища,
-  - политике (ABR/eviction) и т.п.
-- Расширение поведения — через параметры типов, трейты и композицию.
+### Tests and fixtures: `src/` is for prod code only
+**Rule:** `src/` must contain only code being tested (prod code). Test infrastructure must not leak into `src/`.
 
-### 4.3 Запреты
-- Не плодить “почти одинаковые” структуры для HLS/MP3, если различия можно выразить через generic/trait.
-- Не делать “God traits” с десятками методов — лучше несколько маленьких.
+- If a test requires **substantial fixtures** (local server, large playlists/segments, content generators, request counters, complex scenarios) — these are **integration tests**:
+  - Place them in `crates/<crate>/tests/` (e.g., `tests/fixture.rs`, `tests/integration_*.rs`);
+  - Extract fixtures into `crates/<crate>/tests/fixture/` (submodules) if there are many.
+- `src/` may only contain:
+  - small unit tests next to the code,
+  - very small test helpers under `#[cfg(test)]` that do not turn `src/` into a "fixture warehouse".
+- Do not add "large" fixtures/servers to `src/` even under `#[cfg(test)]`.
+- Criterion for "substantial fixtures": if it does not fit compactly into a single unit test or requires a separate struct/protocol — it belongs in `tests/`.
 
----
-
-## 6) Слабая связанность и модульность
-
-**Цель:** компоненты должны быть независимыми блоками, которые можно собрать в систему.
-
-### 6.1 Разделение ответственности
-- Кэш — отдельный компонент.
-- Сеть/загрузка — отдельный компонент.
-- HLS orchestration — отдельный компонент.
-- Декодирование — отдельный компонент.
-
-### 6.2 Зависимости между крейтами
-- Избегать циклических зависимостей.
-- Зависимости направлены “вниз” к базовым абстракциям, но не обратно.
-- Facade-слой (если есть) агрегирует компоненты, но не должен содержать “умной” логики.
-
-### 6.3 Инкапсуляция
-- Внешний код не должен знать про внутренние детали кэша (пути/файлы/lease-формат).
-- Внешний код не должен зависеть от конкретного HTTP клиента, если это не часть контракта.
 
 ---
 
-## 7) Линтинг/форматирование и единые настройки
-**Цель:** единые правила форматирования и проверок во всём workspace.
+## 3) Test-driven development (TDD)
 
-- Агенты должны использовать и уважать workspace-конфиги:
+**Rule:** changes are driven by tests that describe desired behavior.
+
+### 4.1 Workflow
+1) Define behavior through test(s) (integration/unit — as appropriate).
+2) Run tests and verify the new test fails for the expected reason.
+3) Implement the minimal code to make the test pass.
+4) Refactor only after all tests pass.
+
+### 4.2 Test requirements
+- Tests must be deterministic.
+- Tests must not depend on external network.
+- Tests must be reasonable in log/data volume (no reading gigabytes, no noisy dumps).
+- Tests capture the contract, not accidental implementation details.
+
+---
+
+## 4) Generic programming (generics-first)
+
+**Rule:** extensibility is achieved through generics and abstractions, not copy-paste and tight coupling.
+
+### 4.1 Prefer standard and tokio abstractions
+**Goal:** fewer reinventions, more ecosystem compatibility.
+- Where possible, use standard and `tokio` traits/types and their idioms:
+  - conversions (`From`, `TryFrom`, `Into`, `AsRef`),
+  - errors (`std::error::Error`, `thiserror`),
+  - iterators and adapters (`Iterator`, `IntoIterator`),
+  - I/O traits (`Read`, `Seek`, `Write`, `AsyncRead`, `AsyncWrite` where appropriate),
+  - `tokio` channels/synchronization (if the component is already on tokio) instead of custom solutions.
+- If a standard trait fits, do not introduce a new "almost identical" trait.
+
+### 4.2 Using generics
+- Make base structures generic over:
+  - event type,
+  - source/transport type,
+  - cache/storage type,
+  - policy (ABR/eviction), etc.
+- Extend behavior through type parameters, traits, and composition.
+
+### 4.3 Prohibitions
+- Do not create "nearly identical" structs for HLS/MP3 when differences can be expressed via generic/trait.
+- Do not create "God traits" with dozens of methods — prefer several small ones.
+
+---
+
+## 6) Loose coupling and modularity
+
+**Goal:** components must be independent blocks that can be assembled into a system.
+
+### 6.1 Separation of concerns
+- Cache — separate component.
+- Network/download — separate component.
+- HLS orchestration — separate component.
+- Decoding — separate component.
+
+### 6.2 Inter-crate dependencies
+- Avoid circular dependencies.
+- Dependencies point "downward" toward base abstractions, never back up.
+- Facade layer (if present) aggregates components but must not contain "smart" logic.
+
+### 6.3 Encapsulation
+- External code must not know about internal cache details (paths/files/lease format).
+- External code must not depend on a specific HTTP client unless it is part of the contract.
+
+---
+
+## 7) Linting/formatting and unified settings
+**Goal:** uniform formatting and lint rules across the entire workspace.
+
+- Agents must use and respect workspace configs:
   - `rustfmt.toml`
   - `clippy.toml`
   - `deny.toml`
-- Если требуется изменить lint-политику:
-  - предпочитать изменения в этих файлах (единая точка правды),
-  - не настраивать "по месту" в отдельных крейтах без причины.
-- Если необходимо унифицировать настройки через `workspace.metadata`, это делается в корневом `Cargo.toml`, а не в сабкрейтах.
+- To change lint policy:
+  - prefer changes in these files (single source of truth),
+  - do not configure per-crate without a reason.
+- To unify settings via `workspace.metadata`, do so in the root `Cargo.toml`, not in subcrates.
 
 ### Code Style Rules (enforced by `scripts/lint-style.sh`)
-- **No separator comments** (`// ====...`, `// ────...`) — используйте обычные `//` заголовки секций.
-- **No inline qualified paths** — импортируйте всё в начале файла через `use`, не используйте `std::io::Error` в теле функций (пишите `io::Error`).
-- **Struct fields ordered**: `pub` (alphabetical) → `pub(crate)` (alphabetical) → private (alphabetical). Исключения: serde/bincode типы с позиционной сериализацией.
-- **`lib.rs`/`mod.rs`**: только `mod` объявления и `pub use` реэкспорты. Код и тесты — в отдельных файлах.
+- **No separator comments** (`// ====...`, `// ────...`) — use plain `//` section headers.
+- **No inline qualified paths** — import everything at the top of the file via `use`; do not use `std::io::Error` in function bodies (write `io::Error`).
+- **Struct fields ordered**: `pub` (alphabetical) → `pub(crate)` (alphabetical) → private (alphabetical). Exceptions: serde/bincode types with positional serialization.
+- **`lib.rs`/`mod.rs`**: only `mod` declarations and `pub use` re-exports. Code and tests go in separate files.
 
 ---
 
-## 8) Общие правила качества (коротко)
+## 8) General quality rules (brief)
 
-- Никаких `unwrap()`/`expect()` в прод-коде без очень веской причины.
-- Ошибки должны быть типизированы и содержать контекст (что делали, с каким ресурсом).
-- Логи — минимальные и полезные; не логировать секреты (ключи/токены/байты ключей).
-- **Логирование (нормативно):**
-  - вместо `println!` / `print!` / `dbg!` использовать `tracing` (`trace!`, `debug!`, `info!`, `warn!`, `error!`) с уровнем по смыслу;
-  - добавлять контекст через поля (например: `asset_id`, `url`, `resource`, `variant`, `segment_idx`, `bytes`, `attempt`, `timeout_ms`);
-  - в прод-коде не оставлять “временные” принты (в тестах допускается точечно, но предпочтительнее тоже `tracing`).
-- Любые изменения публичных API сопровождаются тестами, которые фиксируют контракт.
+- No `unwrap()`/`expect()` in prod code without a very strong justification.
+- Errors must be typed and include context (what was being done, with which resource).
+- Logs — minimal and useful; never log secrets (keys/tokens/key bytes).
+- **Logging (normative):**
+  - Use `tracing` (`trace!`, `debug!`, `info!`, `warn!`, `error!`) with appropriate levels instead of `println!` / `print!` / `dbg!`;
+  - Add context via fields (e.g.: `asset_id`, `url`, `resource`, `variant`, `segment_idx`, `bytes`, `attempt`, `timeout_ms`);
+  - Do not leave "temporary" prints in prod code (acceptable sparingly in tests, but `tracing` is still preferred).
+- Any changes to public APIs must be accompanied by tests that capture the contract.
 
-### Имена
-- Выбирать как можно более простые и короткие имена для функций/методов/типов.
-- Предпочитать стандартные, очевидные слова (`open`, `new`, `get`, `put`, `read`, `write`, `seek`, `stream`, `send`, `recv`), если они точно отражают смысл.
-- Избегать “умных”/длинных имён, которые кодируют внутреннюю реализацию или историю рефакторингов.
+### Naming
+- Choose the simplest and shortest names possible for functions/methods/types.
+- Prefer standard, obvious words (`open`, `new`, `get`, `put`, `read`, `write`, `seek`, `stream`, `send`, `recv`) when they accurately reflect the meaning.
+- Avoid "clever"/long names that encode internal implementation or refactoring history.
 
 ---
 
-## 9) Что делать, если правила конфликтуют
+## 9) Resolving rule conflicts
 
-- Если требование продукта противоречит правилам — сначала обсуждается компромисс и обновляется `AGENTS.md`.
-- Любой “вынужденный” обход правила должен быть объяснён в `README` соответствующего сабкрейта (кратко, по делу).
+- If a product requirement conflicts with these rules — discuss a compromise first and update `AGENTS.md`.
+- Any forced rule bypass must be explained in the `README` of the corresponding subcrate (brief, to the point).

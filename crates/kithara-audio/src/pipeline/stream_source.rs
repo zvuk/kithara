@@ -55,6 +55,12 @@ impl<T: StreamType> SharedStream<T> {
     fn clear_variant_fence(&self) {
         self.inner.lock().clear_variant_fence();
     }
+
+    /// Build a `StreamContext` from the inner stream's source.
+    pub(super) fn build_stream_context(&self) -> Arc<dyn kithara_stream::StreamContext> {
+        let stream = self.inner.lock();
+        T::build_stream_context(stream.source(), stream.position_handle())
+    }
 }
 
 impl<T: StreamType> Clone for SharedStream<T> {
@@ -319,21 +325,21 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     if self.chunks_decoded == 1
                         && let Some(ref emit) = self.emit
                     {
-                        emit(AudioEvent::FormatDetected { spec: chunk.spec });
-                        self.last_spec = Some(chunk.spec);
+                        emit(AudioEvent::FormatDetected { spec: chunk.spec() });
+                        self.last_spec = Some(chunk.spec());
                     }
 
                     // Detect spec change (e.g. after ABR switch)
                     if let Some(old_spec) = self.last_spec
-                        && old_spec != chunk.spec
+                        && old_spec != chunk.spec()
                     {
                         if let Some(ref emit) = self.emit {
                             emit(AudioEvent::FormatChanged {
                                 old: old_spec,
-                                new: chunk.spec,
+                                new: chunk.spec(),
                             });
                         }
-                        self.last_spec = Some(chunk.spec);
+                        self.last_spec = Some(chunk.spec());
                     }
 
                     self.detect_format_change();
@@ -342,7 +348,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                         trace!(
                             chunks = self.chunks_decoded,
                             samples = self.total_samples,
-                            spec = ?chunk.spec,
+                            spec = ?chunk.spec(),
                             epoch = current_epoch,
                             "decode progress"
                         );
@@ -520,7 +526,8 @@ mod tests {
         time::{Duration, Instant},
     };
 
-    use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
+    use kithara_bufpool::pcm_pool;
+    use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec};
     use kithara_storage::WaitOutcome;
     use kithara_stream::{MediaInfo, Source, Stream, StreamResult, StreamType};
     use parking_lot::Mutex;
@@ -623,7 +630,13 @@ mod tests {
             if self.stop.load(Ordering::Acquire) {
                 return Ok(None);
             }
-            Ok(Some(PcmChunk::new(self.spec, vec![0.5; 1024])))
+            Ok(Some(PcmChunk::new(
+                PcmMeta {
+                    spec: self.spec,
+                    ..Default::default()
+                },
+                pcm_pool().attach(vec![0.5; 1024]),
+            )))
         }
 
         fn spec(&self) -> PcmSpec {
@@ -786,12 +799,25 @@ mod tests {
                 rx
             }
         }
+
+        fn build_stream_context(
+            _source: &Self::Source,
+            position: Arc<AtomicU64>,
+        ) -> Arc<dyn kithara_stream::StreamContext> {
+            Arc::new(kithara_stream::NullStreamContext::new(position))
+        }
     }
 
     // Helpers
 
     fn make_chunk(spec: PcmSpec, num_samples: usize) -> PcmChunk {
-        PcmChunk::new(spec, vec![0.5; num_samples])
+        PcmChunk::new(
+            PcmMeta {
+                spec,
+                ..Default::default()
+            },
+            pcm_pool().attach(vec![0.5; num_samples]),
+        )
     }
 
     fn make_shared_stream(
@@ -985,7 +1011,7 @@ mod tests {
         // V0 decoder exhausted → EOF → apply_format_change → V3 decoder
         let fetch = source.fetch_next();
         assert!(!fetch.is_eof, "Should get V3 data after format change");
-        assert_eq!(fetch.data.spec, v3_spec());
+        assert_eq!(fetch.data.spec(), v3_spec());
     }
 
     #[test]
@@ -1471,7 +1497,13 @@ mod tests {
                         return if pcm.is_empty() {
                             Ok(None)
                         } else {
-                            Ok(Some(PcmChunk::new(self.spec, pcm)))
+                            Ok(Some(PcmChunk::new(
+                                PcmMeta {
+                                    spec: self.spec,
+                                    ..Default::default()
+                                },
+                                pcm_pool().attach(pcm),
+                            )))
                         };
                     }
                     Err(e) => return Err(DecodeError::Io(e)),
@@ -1515,7 +1547,13 @@ mod tests {
                 pcm.push(encode_pcm_sample(variant_segment, gsi as u32));
             }
 
-            Ok(Some(PcmChunk::new(self.spec, pcm)))
+            Ok(Some(PcmChunk::new(
+                PcmMeta {
+                    spec: self.spec,
+                    ..Default::default()
+                },
+                pcm_pool().attach(pcm),
+            )))
         }
 
         fn spec(&self) -> PcmSpec {

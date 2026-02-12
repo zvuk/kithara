@@ -36,6 +36,7 @@ pub mod playlist;
 #[doc(hidden)]
 pub use kithara_assets::AssetsBackend;
 
+mod context;
 mod downloader;
 mod inner;
 mod parsing;
@@ -44,6 +45,7 @@ mod source;
 // Public API re-exports
 
 pub use config::{HlsConfig, KeyContext, KeyOptions, KeyProcessor};
+pub use context::HlsStreamContext;
 pub use error::{HlsError, HlsResult};
 pub use events::HlsEvent;
 pub use inner::Hls;

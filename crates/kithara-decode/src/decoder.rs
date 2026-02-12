@@ -148,7 +148,7 @@ mod tests {
         assert!(chunk.is_some());
 
         let chunk = chunk.unwrap();
-        assert_eq!(chunk.spec.sample_rate, 44100);
+        assert_eq!(chunk.spec().sample_rate, 44100);
         assert!(!chunk.pcm.is_empty());
     }
 
