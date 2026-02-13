@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use fixture::*;
-use kithara_hls::{AssetsBackend, HlsResult, fetch::FetchManager, playlist::VariantId};
+use kithara_hls::{AssetsBackend, HlsResult, fetch::FetchManager, parsing::VariantId};
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
 

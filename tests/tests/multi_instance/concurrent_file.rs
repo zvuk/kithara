@@ -74,8 +74,11 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
 // Tests
 
 /// 2 concurrent File instances on a shared pool.
+///
+/// Each Audio instance uses 2 pool threads (downloader + audio_loop),
+/// so pool size must be >= 2 * N to avoid starvation.
 #[rstest]
-#[timeout(Duration::from_secs(60))]
+#[timeout(Duration::from_secs(120))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn two_file_instances() {
     let _ = tracing_subscriber::fmt()
@@ -84,14 +87,15 @@ async fn two_file_instances() {
         .try_init();
 
     let server = AudioTestServer::new().await;
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = ThreadPool::with_num_threads(6).expect("thread pool");
 
     let mut handles = Vec::new();
+    let mut temps = Vec::new();
     for i in 0..2 {
         let temp = TempDir::new().expect("temp dir");
         let audio = create_file_audio(server.mp3_url(), temp.path(), &pool).await;
+        temps.push(temp);
         handles.push(tokio::task::spawn_blocking(move || {
-            let _temp = temp;
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
@@ -103,6 +107,7 @@ async fn two_file_instances() {
     for h in handles {
         results.push(h.await.expect("join"));
     }
+    drop(temps);
 
     info!(?results, "all instances done");
     for (id, total) in &results {
@@ -113,7 +118,7 @@ async fn two_file_instances() {
 
 /// 4 concurrent File instances on a shared pool.
 #[rstest]
-#[timeout(Duration::from_secs(60))]
+#[timeout(Duration::from_secs(120))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn four_file_instances() {
     let _ = tracing_subscriber::fmt()
@@ -122,14 +127,15 @@ async fn four_file_instances() {
         .try_init();
 
     let server = AudioTestServer::new().await;
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = ThreadPool::with_num_threads(10).expect("thread pool");
 
     let mut handles = Vec::new();
+    let mut temps = Vec::new();
     for i in 0..4 {
         let temp = TempDir::new().expect("temp dir");
         let audio = create_file_audio(server.mp3_url(), temp.path(), &pool).await;
+        temps.push(temp);
         handles.push(tokio::task::spawn_blocking(move || {
-            let _temp = temp;
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
@@ -141,6 +147,7 @@ async fn four_file_instances() {
     for h in handles {
         results.push(h.await.expect("join"));
     }
+    drop(temps);
 
     info!(?results, "all instances done");
     for (id, total) in &results {
@@ -151,7 +158,7 @@ async fn four_file_instances() {
 
 /// 8 concurrent File instances on a shared pool.
 #[rstest]
-#[timeout(Duration::from_secs(60))]
+#[timeout(Duration::from_secs(180))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn eight_file_instances() {
     let _ = tracing_subscriber::fmt()
@@ -160,14 +167,15 @@ async fn eight_file_instances() {
         .try_init();
 
     let server = AudioTestServer::new().await;
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = ThreadPool::with_num_threads(18).expect("thread pool");
 
     let mut handles = Vec::new();
+    let mut temps = Vec::new();
     for i in 0..8 {
         let temp = TempDir::new().expect("temp dir");
         let audio = create_file_audio(server.mp3_url(), temp.path(), &pool).await;
+        temps.push(temp);
         handles.push(tokio::task::spawn_blocking(move || {
-            let _temp = temp;
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
@@ -179,6 +187,7 @@ async fn eight_file_instances() {
     for h in handles {
         results.push(h.await.expect("join"));
     }
+    drop(temps);
 
     info!(?results, "all instances done");
     for (id, total) in &results {

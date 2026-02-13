@@ -5,7 +5,13 @@
 //! `Reader<S>` implements `Read + Seek` by calling Source directly.
 //! No channels, no `block_on` — Source methods are sync.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::{
+    io::{Read, Seek, SeekFrom},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use kithara_storage::WaitOutcome;
 
@@ -16,19 +22,27 @@ use crate::{MediaInfo, source::Source};
 /// Calls `Source` methods directly for I/O.
 /// Implements `Read + Seek` for use with symphonia.
 pub struct Reader<S: Source> {
-    pos: u64,
+    pos: Arc<AtomicU64>,
     source: S,
 }
 
 impl<S: Source> Reader<S> {
     /// Create new reader.
     pub fn new(source: S) -> Self {
-        Self { pos: 0, source }
+        Self {
+            pos: Arc::new(AtomicU64::new(0)),
+            source,
+        }
+    }
+
+    /// Get handle to shared byte position (for `StreamContext`).
+    pub fn position_handle(&self) -> Arc<AtomicU64> {
+        Arc::clone(&self.pos)
     }
 
     /// Get current position.
     pub fn position(&self) -> u64 {
-        self.pos
+        self.pos.load(Ordering::Relaxed)
     }
 
     /// Get total length if known.
@@ -79,7 +93,8 @@ impl<S: Source> Read for Reader<S> {
             return Ok(0);
         }
 
-        let range = self.pos..self.pos.saturating_add(buf.len() as u64);
+        let pos = self.pos.load(Ordering::Relaxed);
+        let range = pos..pos.saturating_add(buf.len() as u64);
 
         // Wait for data to be available (blocking)
         match self
@@ -94,19 +109,21 @@ impl<S: Source> Read for Reader<S> {
         // Read data directly from source
         let n = self
             .source
-            .read_at(self.pos, buf)
+            .read_at(pos, buf)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
 
-        self.pos = self.pos.saturating_add(n as u64);
+        self.pos
+            .store(pos.saturating_add(n as u64), Ordering::Relaxed);
         Ok(n)
     }
 }
 
 impl<S: Source> Seek for Reader<S> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        let current = self.pos.load(Ordering::Relaxed);
         let new_pos: i128 = match pos {
             SeekFrom::Start(p) => p as i128,
-            SeekFrom::Current(delta) => (self.pos as i128).saturating_add(delta as i128),
+            SeekFrom::Current(delta) => (current as i128).saturating_add(delta as i128),
             SeekFrom::End(delta) => {
                 let Some(len) = self.source.len() else {
                     return Err(std::io::Error::new(
@@ -133,13 +150,12 @@ impl<S: Source> Seek for Reader<S> {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 format!(
-                    "seek past EOF: new_pos={new_pos} len={len} current_pos={} seek_from={pos:?}",
-                    self.pos
+                    "seek past EOF: new_pos={new_pos} len={len} current_pos={current} seek_from={pos:?}",
                 ),
             ));
         }
 
-        self.pos = new_pos;
+        self.pos.store(new_pos, Ordering::Relaxed);
         Ok(new_pos)
     }
 }

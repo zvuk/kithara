@@ -84,7 +84,7 @@ Tests buffer pool lock contention and work-stealing.
 Baselines are managed automatically via CI using `actions/cache`:
 
 - **Main branch pushes**: perf results are saved to cache as the new baseline
-- **Pull requests**: the latest cached baseline is restored and compared using `scripts/compare_perf.sh`
+- **Pull requests**: the latest cached baseline is restored and compared using `scripts/ci/compare-perf.sh`
 - Regression threshold: >10% slower triggers a warning in the PR comment
 
 ### Local Comparison
@@ -94,7 +94,7 @@ Baselines are managed automatically via CI using `actions/cache`:
 cargo test --features perf --release -- --ignored --nocapture 2>&1 | tee my-results.txt
 
 # Compare with a saved baseline
-./scripts/compare_perf.sh my-results.txt saved-baseline.txt 10
+./scripts/ci/compare-perf.sh my-results.txt saved-baseline.txt 10
 ```
 
 See `.github/workflows/perf.yml` for CI configuration.

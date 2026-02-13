@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Style linter for the kithara codebase.
 # Catches patterns that rustfmt/clippy cannot enforce.
-# Run: bash scripts/lint-style.sh
+# Run: bash scripts/ci/lint-style.sh
 
 set -euo pipefail
 

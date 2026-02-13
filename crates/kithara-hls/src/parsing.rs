@@ -6,6 +6,7 @@ use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,
     tags::VariantStream as HlsVariantStreamTag, types::DecryptionKey as HlsDecryptionKey,
 };
+use kithara_abr::VariantInfo;
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::HlsResult;
@@ -319,6 +320,25 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
     })
 }
 
+/// Extract extended variant metadata from master playlist.
+pub fn variant_info_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
+    master
+        .variants
+        .iter()
+        .map(|v| VariantInfo {
+            index: v.id.0,
+            bandwidth_bps: v.bandwidth,
+            name: v.name.clone(),
+            codecs: v.codec.as_ref().and_then(|c| c.codecs.clone()),
+            container: v
+                .codec
+                .as_ref()
+                .and_then(|c| c.container)
+                .map(|fmt| format!("{fmt:?}")),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use rstest::{fixture, rstest};
@@ -550,7 +570,7 @@ video.m3u8"
         #[case] bandwidth: Option<u64>,
         #[case] name: Option<String>,
     ) {
-        let variant = crate::playlist::VariantStream {
+        let variant = VariantStream {
             id: VariantId(id as usize),
             uri: uri.to_string(),
             bandwidth,
@@ -577,7 +597,7 @@ video.m3u8"
         #[case] uri: &str,
         #[case] duration_secs: f64,
     ) {
-        let segment = crate::playlist::MediaSegment {
+        let segment = MediaSegment {
             sequence,
             variant_id: VariantId(variant_id as usize),
             uri: uri.to_string(),

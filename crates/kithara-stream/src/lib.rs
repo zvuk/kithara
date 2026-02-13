@@ -11,6 +11,7 @@
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 mod backend;
+mod context;
 mod downloader;
 mod error;
 mod fetch;
@@ -22,6 +23,7 @@ mod stream;
 mod writer;
 
 pub use backend::Backend;
+pub use context::{NullStreamContext, StreamContext};
 pub use downloader::{Downloader, DownloaderIo, PlanOutcome, StepResult};
 #[doc(hidden)]
 pub use downloader::{NoDownload, NoDownloadError, NoIo};

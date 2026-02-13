@@ -1,0 +1,93 @@
+stages:
+  - lint
+  - test
+  - quality
+
+default:
+  image: rust:1.88
+  tags:
+    - cce-feature
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+
+cache: &cargo-cache
+  key:
+    files:
+      - Cargo.lock
+  paths:
+    - .cargo/bin/
+    - .cargo/registry/
+    - .cargo/git/
+    - target/
+
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+# --- lint stage ---
+
+lint:
+  stage: lint
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - rustup component add clippy
+    - rustup toolchain install nightly --component rustfmt
+  script:
+    - bash scripts/ci/lint.sh
+
+deny:
+  stage: lint
+  before_script:
+    - test -f "$CARGO_HOME/bin/cargo-deny" || cargo install cargo-deny --locked
+  script:
+    - cargo deny check
+
+# --- test stage ---
+
+test:
+  stage: test
+  needs: [lint]
+  timeout: 20 minutes
+  script:
+    - cargo test --workspace
+
+msrv:
+  stage: test
+  needs: [lint]
+  image: rust:1.88
+  script:
+    - cargo check --workspace
+
+# --- quality stage ---
+
+coverage:
+  stage: quality
+  needs: [test]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - test -f "$CARGO_HOME/bin/cargo-tarpaulin" || cargo install cargo-tarpaulin --locked
+  script:
+    - bash scripts/ci/coverage.sh
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage/cobertura.xml
+    expire_in: 30 days
+
+perf:
+  stage: quality
+  needs: [test]
+  script:
+    - bash scripts/ci/perf-test.sh
+  artifacts:
+    paths:
+      - perf-results.txt
+    expire_in: 30 days
+  rules:
+    - changes:
+        - crates/**/*
+        - tests/perf/**/*
+        - Cargo.toml
+        - Cargo.lock

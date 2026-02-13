@@ -72,8 +72,14 @@ pub trait Downloader: Send + 'static {
     fn plan(&mut self) -> impl Future<Output = PlanOutcome<Self::Plan>> + Send;
 
     /// Streaming step (when [`plan`](Self::plan) returned [`PlanOutcome::Step`]).
-    fn step(&mut self)
-    -> impl Future<Output = Result<StepResult<Self::Fetch>, Self::Error>> + Send;
+    ///
+    /// Only needed for downloaders that return [`PlanOutcome::Step`] from [`plan`](Self::plan).
+    /// Default: pends forever (never called if `plan` never returns `Step`).
+    fn step(
+        &mut self,
+    ) -> impl Future<Output = Result<StepResult<Self::Fetch>, Self::Error>> + Send {
+        std::future::pending()
+    }
 
     /// Commit a fetch result to storage/state.
     fn commit(&mut self, fetch: Self::Fetch);
@@ -131,10 +137,6 @@ impl Downloader for NoDownload {
     }
 
     async fn plan(&mut self) -> PlanOutcome<Self::Plan> {
-        std::future::pending().await
-    }
-
-    async fn step(&mut self) -> Result<StepResult<Self::Fetch>, Self::Error> {
         std::future::pending().await
     }
 

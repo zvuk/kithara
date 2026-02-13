@@ -23,6 +23,7 @@ use crate::{
         MasterPlaylist, MediaPlaylist, SegmentKey, VariantId, VariantStream, parse_master_playlist,
         parse_media_playlist,
     },
+    playlist::PlaylistState,
 };
 
 // Types
@@ -122,14 +123,12 @@ pub struct FetchManager<N> {
     num_variants_cache: Arc<RwLock<Option<usize>>>,
     // Init segment deduplication: first caller downloads, others wait on OnceCell
     init_segments: Arc<RwLock<HashMap<usize, Arc<OnceCell<SegmentMeta>>>>>,
+    // Parsed playlist state (populated in Hls::create after loading all media playlists)
+    playlist_state: Option<Arc<PlaylistState>>,
 }
 
 impl<N: Net> FetchManager<N> {
-    pub fn with_net(
-        backend: AssetsBackend<DecryptContext>,
-        net: N,
-        cancel: CancellationToken,
-    ) -> Self {
+    pub fn new(backend: AssetsBackend<DecryptContext>, net: N, cancel: CancellationToken) -> Self {
         Self {
             backend,
             key_manager: None,
@@ -141,6 +140,7 @@ impl<N: Net> FetchManager<N> {
             media: Arc::new(RwLock::new(HashMap::new())),
             num_variants_cache: Arc::new(RwLock::new(None)),
             init_segments: Arc::new(RwLock::new(HashMap::new())),
+            playlist_state: None,
         }
     }
 
@@ -160,6 +160,16 @@ impl<N: Net> FetchManager<N> {
     pub fn with_key_manager(mut self, km: Arc<crate::keys::KeyManager>) -> Self {
         self.key_manager = Some(km);
         self
+    }
+
+    /// Get the parsed playlist state (if set).
+    pub fn playlist_state(&self) -> Option<&Arc<PlaylistState>> {
+        self.playlist_state.as_ref()
+    }
+
+    /// Set the parsed playlist state.
+    pub fn set_playlist_state(&mut self, state: Arc<PlaylistState>) {
+        self.playlist_state = Some(state);
     }
 
     pub fn asset_root(&self) -> &str {
@@ -411,13 +421,12 @@ impl<N: Net> FetchManager<N> {
 
         let init_segment = playlist.init_segment.as_ref().ok_or_else(|| {
             HlsError::SegmentNotFound(format!(
-                "init segment not found in variant {} playlist",
-                variant
+                "init segment not found in variant {variant} playlist",
             ))
         })?;
 
         let init_url = media_url.join(&init_segment.uri).map_err(|e| {
-            HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {}", e))
+            HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {e}"))
         })?;
 
         let decrypt_ctx = self
@@ -504,7 +513,7 @@ impl<N: Net> FetchManager<N> {
         let variant_stream = master
             .variants
             .get(variant)
-            .ok_or_else(|| HlsError::VariantNotFound(format!("variant {}", variant)))?;
+            .ok_or_else(|| HlsError::VariantNotFound(format!("variant {variant}")))?;
 
         let media_url = self.resolve_url(master_url, &variant_stream.uri)?;
         let playlist = self.media_playlist(&media_url, VariantId(variant)).await?;
@@ -522,15 +531,13 @@ impl<N: Net> FetchManager<N> {
             .or_else(|| headers.get("Content-Length"))
             .ok_or_else(|| {
                 HlsError::InvalidUrl(format!(
-                    "No Content-Length header in HEAD response for {}",
-                    url
+                    "No Content-Length header in HEAD response for {url}",
                 ))
             })?;
 
         content_length.parse::<u64>().map_err(|e| {
             HlsError::InvalidUrl(format!(
-                "Invalid Content-Length '{}' for {}: {}",
-                content_length, url, e
+                "Invalid Content-Length '{content_length}' for {url}: {e}",
             ))
         })
     }
@@ -544,7 +551,7 @@ impl<N: Net> FetchManager<N> {
 
         let init_url = if let Some(ref init_segment) = playlist.init_segment {
             Some(media_url.join(&init_segment.uri).map_err(|e| {
-                HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {}", e))
+                HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {e}"))
             })?)
         } else {
             None
@@ -555,22 +562,12 @@ impl<N: Net> FetchManager<N> {
             .iter()
             .map(|segment| {
                 media_url.join(&segment.uri).map_err(|e| {
-                    HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e))
+                    HlsError::InvalidUrl(format!("Failed to resolve segment URL: {e}"))
                 })
             })
             .collect();
 
         Ok((init_url, media_urls?))
-    }
-}
-
-impl FetchManager<HttpClient> {
-    pub fn new(
-        backend: AssetsBackend<DecryptContext>,
-        net: HttpClient,
-        cancel: CancellationToken,
-    ) -> Self {
-        Self::with_net(backend, net, cancel)
     }
 }
 
@@ -594,14 +591,13 @@ impl<N: Net> Loader for FetchManager<N> {
 
         let segment = playlist.segments.get(segment_index).ok_or_else(|| {
             HlsError::SegmentNotFound(format!(
-                "segment {} not found in variant {} playlist",
-                segment_index, variant
+                "segment {segment_index} not found in variant {variant} playlist",
             ))
         })?;
 
         let segment_url = media_url
             .join(&segment.uri)
-            .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {}", e)))?;
+            .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {e}")))?;
 
         // Resolve DRM context for encrypted segments
         let decrypt_ctx = self
@@ -629,8 +625,7 @@ impl<N: Net> Loader for FetchManager<N> {
                 if total == 0 {
                     res.fail("segment: 0 bytes downloaded".to_string());
                     return Err(HlsError::SegmentNotFound(format!(
-                        "segment {} download yielded 0 bytes",
-                        segment_index
+                        "segment {segment_index} download yielded 0 bytes",
                     )));
                 }
                 // Commit — ProcessingAssets decrypts on commit if ctx was provided.
@@ -721,7 +716,7 @@ mod tests {
                 .returns(Ok(Bytes::from_static(playlist_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
 
         let result: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -747,7 +742,7 @@ mod tests {
                 .returns(Ok(Bytes::from_static(playlist_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
 
         let result1: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -775,7 +770,7 @@ mod tests {
                 .returns(Ok(Bytes::from(key_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
 
         let result: HlsResult<Bytes> = fetch_manager.fetch_key(&test_url, "key.bin", None).await;
 
@@ -799,7 +794,7 @@ mod tests {
                 .returns(Err(NetError::Timeout)),
         );
 
-        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
 
         let result: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -823,7 +818,7 @@ mod tests {
                 .returns(Ok(Bytes::from_static(media_content)));
         }));
 
-        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
 
         let master_url = Url::parse("http://example.com/master.m3u8").unwrap();
         let master: HlsResult<Bytes> = fetch_manager
@@ -849,7 +844,7 @@ mod tests {
                 .returns(Ok(Bytes::from_static(content))),
         );
 
-        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
 
         let url = Url::parse("http://cdn1.example.com/file.m3u8").unwrap();
         let result: HlsResult<Bytes> = fetch_manager.fetch_playlist(&url, "file.m3u8").await;
@@ -874,7 +869,7 @@ mod tests {
                 .returns(Ok(Bytes::from(key_content))),
         );
 
-        let fetch_manager = FetchManager::with_net(backend, mock_net, CancellationToken::new());
+        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
 
         let url = Url::parse("http://example.com/key.bin").unwrap();
         let mut headers_map = HashMap::new();
@@ -991,7 +986,7 @@ mod tests {
         ));
 
         let master_url = Url::parse("http://test.com/master.m3u8").unwrap();
-        let fetch = FetchManager::with_net(backend, mock_net, CancellationToken::new())
+        let fetch = FetchManager::new(backend, mock_net, CancellationToken::new())
             .with_master_url(master_url);
 
         let result = fetch.load_media_segment(0, 0).await;
@@ -1036,7 +1031,7 @@ mod tests {
         ));
 
         let master_url = Url::parse("http://test.com/master.m3u8").unwrap();
-        let fetch = FetchManager::with_net(backend, mock_net, CancellationToken::new())
+        let fetch = FetchManager::new(backend, mock_net, CancellationToken::new())
             .with_master_url(master_url);
 
         let result = fetch.load_media_segment(0, 0).await;

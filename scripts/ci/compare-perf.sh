@@ -2,7 +2,7 @@
 # Compare performance test results with baseline
 #
 # Usage:
-#   ./scripts/compare_perf.sh <current_results.txt> <baseline_results.txt> [threshold_percent]
+#   ./scripts/ci/compare-perf.sh <current_results.txt> <baseline_results.txt> [threshold_percent]
 #
 # Exit codes:
 #   0 - No significant regression

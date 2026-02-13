@@ -1,7 +1,7 @@
 # Rust / Cargo
 /target/
 **/target/
-/Cargo.lock
+# Note: Cargo.lock is tracked for reproducible builds in workspace with examples
 
 # Rustfmt / Clippy / IDE noise
 **/*.rs.bk

@@ -32,7 +32,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -50,16 +50,14 @@ jobs:
       - name: Restore perf baseline
         if: github.event_name == 'pull_request'
         id: restore-baseline
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: baseline-results.txt
           key: perf-baseline-will-not-match
           restore-keys: perf-baseline-
 
       - name: Run performance tests
-        run: |
-          cargo test -p kithara-integration-tests --features perf --release \
-            -- --ignored --test-threads=1 --nocapture 2>&1 | tee perf-results.txt
+        run: bash scripts/ci/perf-test.sh
 
       - name: Prepare baseline for caching
         if: github.ref == 'refs/heads/main'
@@ -67,7 +65,7 @@ jobs:
 
       - name: Save perf baseline
         if: github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: baseline-results.txt
           key: perf-baseline-${{ github.sha }}
@@ -76,7 +74,7 @@ jobs:
         if: github.event_name == 'pull_request' && steps.restore-baseline.outputs.cache-matched-key != ''
         id: compare
         run: |
-          result=$(bash scripts/compare_perf.sh perf-results.txt baseline-results.txt 10 2>&1) || true
+          result=$(bash scripts/ci/compare-perf.sh perf-results.txt baseline-results.txt 10 2>&1) || true
           echo "$result"
           {
             echo 'comparison<<EOF'
@@ -94,7 +92,7 @@ jobs:
 
       - name: Comment PR with results
         if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           BASELINE_HIT: ${{ steps.restore-baseline.outputs.cache-matched-key }}
           COMPARISON: ${{ steps.compare.outputs.comparison }}

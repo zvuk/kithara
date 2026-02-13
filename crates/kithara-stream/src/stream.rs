@@ -10,11 +10,12 @@
 use std::{
     future::Future,
     io::{Read, Seek, SeekFrom},
+    sync::{Arc, atomic::AtomicU64},
 };
 
 use tokio::sync::broadcast;
 
-use crate::{MediaInfo, reader::Reader, source::Source};
+use crate::{MediaInfo, StreamContext, reader::Reader, source::Source};
 
 /// Defines a stream type and how to create it.
 ///
@@ -47,6 +48,15 @@ pub trait StreamType: Send + 'static {
     /// Otherwise creates a new channel and sets it on the config.
     /// Called by `Stream::new()` before `create()`.
     fn ensure_events(config: &mut Self::Config) -> broadcast::Receiver<Self::Event>;
+
+    /// Build a `StreamContext` from the source and shared byte position.
+    ///
+    /// HLS returns `HlsStreamContext` with segment/variant atomics.
+    /// File returns `NullStreamContext` (no segment/variant).
+    fn build_stream_context(
+        source: &Self::Source,
+        position: Arc<AtomicU64>,
+    ) -> Arc<dyn StreamContext>;
 }
 
 /// Generic audio stream.
@@ -94,6 +104,16 @@ impl<T: StreamType> Stream<T> {
     /// Get current read position.
     pub fn position(&self) -> u64 {
         self.reader.position()
+    }
+
+    /// Get shared reference to inner source.
+    pub fn source(&self) -> &T::Source {
+        self.reader.source()
+    }
+
+    /// Get handle to shared byte position (for `StreamContext`).
+    pub fn position_handle(&self) -> Arc<AtomicU64> {
+        self.reader.position_handle()
     }
 
     /// Get current media info if known.

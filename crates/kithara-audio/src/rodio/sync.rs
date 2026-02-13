@@ -60,11 +60,11 @@ impl AudioSyncReader {
             Ok(chunk) => {
                 trace!(
                     samples = chunk.pcm.len(),
-                    spec = ?chunk.spec,
+                    spec = ?chunk.spec(),
                     "AudioSyncReader: received chunk"
                 );
                 // Update spec from chunk (handles dynamic format changes)
-                self.spec = chunk.spec;
+                self.spec = chunk.spec();
                 // Old current_chunk auto-recycles via Drop on reassignment
                 self.current_chunk = Some(chunk.pcm);
                 self.chunk_offset = 0;

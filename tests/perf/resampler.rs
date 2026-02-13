@@ -8,7 +8,7 @@ use std::sync::{Arc, atomic::AtomicU32};
 
 use kithara_audio::{AudioEffect, ResamplerParams, ResamplerQuality};
 use kithara_bufpool::pcm_pool;
-use kithara_decode::{PcmChunk, PcmSpec};
+use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
 
 /// Create a test PCM chunk with specified sample count.
 fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {
@@ -23,7 +23,13 @@ fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {
         }
     });
 
-    PcmChunk::new(spec, pcm.into_inner())
+    PcmChunk::new(
+        PcmMeta {
+            spec,
+            ..Default::default()
+        },
+        pcm,
+    )
 }
 
 #[hotpath::measure]

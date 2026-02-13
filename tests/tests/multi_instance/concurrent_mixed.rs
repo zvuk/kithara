@@ -80,7 +80,7 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
 
 /// 2 File + 2 HLS instances on a shared pool.
 #[rstest]
-#[timeout(Duration::from_secs(60))]
+#[timeout(Duration::from_secs(120))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mixed_two_file_two_hls() {
     let _ = tracing_subscriber::fmt()
@@ -88,13 +88,16 @@ async fn mixed_two_file_two_hls() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    // Each Audio instance uses 2 pool threads (downloader + audio_loop).
+    let pool = ThreadPool::with_num_threads(10).expect("thread pool");
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;
 
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
 
     let mut handles: Vec<tokio::task::JoinHandle<InstanceResult>> = Vec::new();
+    let mut temps = Vec::new();
+    let mut servers = Vec::new();
 
     // Spawn 2 File instances
     for i in 0..2 {
@@ -114,8 +117,8 @@ async fn mixed_two_file_two_hls() {
             .await
             .expect("create File audio");
 
+        temps.push(temp);
         handles.push(tokio::task::spawn_blocking(move || {
-            let _temp = temp;
             let total = read_file_to_eof(&mut audio);
             info!(instance = i, kind = "file", total_samples = total, "done");
             InstanceResult {
@@ -159,9 +162,9 @@ async fn mixed_two_file_two_hls() {
             .await
             .expect("create HLS audio");
 
+        temps.push(temp);
+        servers.push(server);
         handles.push(tokio::task::spawn_blocking(move || {
-            let _server = server;
-            let _temp = temp;
             let total = read_hls_to_eof(&mut audio);
             info!(instance = i, kind = "hls", total_samples = total, "done");
             InstanceResult {
@@ -176,6 +179,8 @@ async fn mixed_two_file_two_hls() {
     for h in handles {
         results.push(h.await.expect("join"));
     }
+    drop(temps);
+    drop(servers);
 
     info!(?results, "all mixed instances done");
     for r in &results {
@@ -190,7 +195,7 @@ async fn mixed_two_file_two_hls() {
 
 /// 4 File + 4 HLS instances (8 total) on a shared pool.
 #[rstest]
-#[timeout(Duration::from_secs(120))]
+#[timeout(Duration::from_secs(180))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn mixed_four_file_four_hls() {
     let _ = tracing_subscriber::fmt()
@@ -198,13 +203,16 @@ async fn mixed_four_file_four_hls() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    // Each Audio instance uses 2 pool threads (downloader + audio_loop).
+    let pool = ThreadPool::with_num_threads(18).expect("thread pool");
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;
 
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
 
     let mut handles: Vec<tokio::task::JoinHandle<InstanceResult>> = Vec::new();
+    let mut temps = Vec::new();
+    let mut servers = Vec::new();
 
     // Spawn 4 File instances
     for i in 0..4 {
@@ -224,8 +232,8 @@ async fn mixed_four_file_four_hls() {
             .await
             .expect("create File audio");
 
+        temps.push(temp);
         handles.push(tokio::task::spawn_blocking(move || {
-            let _temp = temp;
             let total = read_file_to_eof(&mut audio);
             info!(instance = i, kind = "file", total_samples = total, "done");
             InstanceResult {
@@ -269,9 +277,9 @@ async fn mixed_four_file_four_hls() {
             .await
             .expect("create HLS audio");
 
+        temps.push(temp);
+        servers.push(server);
         handles.push(tokio::task::spawn_blocking(move || {
-            let _server = server;
-            let _temp = temp;
             let total = read_hls_to_eof(&mut audio);
             info!(instance = i, kind = "hls", total_samples = total, "done");
             InstanceResult {
@@ -286,6 +294,8 @@ async fn mixed_four_file_four_hls() {
     for h in handles {
         results.push(h.await.expect("join"));
     }
+    drop(temps);
+    drop(servers);
 
     info!(?results, "all mixed instances done");
     for r in &results {

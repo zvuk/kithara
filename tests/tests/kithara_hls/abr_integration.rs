@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use kithara_abr::{AbrController, AbrMode, AbrOptions, AbrReason, Variant};
-use kithara_hls::playlist::{MasterPlaylist, parse_master_playlist};
+use kithara_hls::parsing::{MasterPlaylist, parse_master_playlist};
 use rstest::{fixture, rstest};
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
@@ -40,16 +40,14 @@ video/360p/playlist.m3u8
 }
 
 #[fixture]
-fn parsed_master_playlist(
-    test_master_playlist_data: &str,
-) -> kithara_hls::playlist::MasterPlaylist {
+fn parsed_master_playlist(test_master_playlist_data: &str) -> kithara_hls::parsing::MasterPlaylist {
     parse_master_playlist(test_master_playlist_data.as_bytes())
         .expect("Failed to parse master playlist")
 }
 
 #[fixture]
 fn variants_from_parsed_playlist(
-    parsed_master_playlist: kithara_hls::playlist::MasterPlaylist,
+    parsed_master_playlist: kithara_hls::parsing::MasterPlaylist,
 ) -> Vec<kithara_abr::Variant> {
     variants_from_master(&parsed_master_playlist)
 }
@@ -139,7 +137,7 @@ fn test_abr_decision_with_different_conditions(
 
 #[rstest]
 fn test_variants_from_master_structure(
-    parsed_master_playlist: kithara_hls::playlist::MasterPlaylist,
+    parsed_master_playlist: kithara_hls::parsing::MasterPlaylist,
 ) {
     let variants = variants_from_master(&parsed_master_playlist);
 

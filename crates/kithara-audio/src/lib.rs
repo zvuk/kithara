@@ -52,7 +52,7 @@ mod types;
 // Public API exports
 pub use events::{AudioEvent, AudioPipelineEvent};
 pub use kithara_decode::{
-    AudioCodec, ContainerFormat, MediaInfo, PcmChunk, PcmSpec, TrackMetadata,
+    AudioCodec, ContainerFormat, MediaInfo, PcmChunk, PcmMeta, PcmSpec, TrackMetadata,
 };
 // Hidden re-exports (used by integration tests or advanced internal consumers)
 #[doc(hidden)]

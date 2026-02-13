@@ -19,7 +19,7 @@ if ! cargo clippy --workspace -- -D warnings 2>/dev/null; then
 fi
 
 echo "pre-commit: running style linter..."
-if ! bash scripts/lint-style.sh; then
+if ! bash scripts/ci/lint-style.sh; then
     exit 1
 fi
 

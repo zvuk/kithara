@@ -3,7 +3,7 @@
 //! Provides `File` marker type implementing `StreamType` trait
 //! and `FileDownloader` implementing `Downloader` trait.
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicU64};
 
 use futures::StreamExt;
 use kithara_assets::{
@@ -12,7 +12,8 @@ use kithara_assets::{
 use kithara_net::{Headers, HttpClient};
 use kithara_storage::{Coverage, MemCoverage, MmapResource, ResourceExt, ResourceStatus};
 use kithara_stream::{
-    Backend, Downloader, DownloaderIo, PlanOutcome, StepResult, StreamType, Writer, WriterItem,
+    Backend, Downloader, DownloaderIo, NullStreamContext, PlanOutcome, StepResult, StreamContext,
+    StreamType, Writer, WriterItem,
 };
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
@@ -52,6 +53,13 @@ impl StreamType for File {
             FileSrc::Local(path) => Self::create_local(path, config, cancel),
             FileSrc::Remote(url) => Self::create_remote(url, config, cancel).await,
         }
+    }
+
+    fn build_stream_context(
+        _source: &Self::Source,
+        position: Arc<AtomicU64>,
+    ) -> Arc<dyn StreamContext> {
+        Arc::new(NullStreamContext::new(position))
     }
 }
 
@@ -510,9 +518,9 @@ impl Downloader for FileDownloader {
                     if self.coverage.is_complete() {
                         if let Err(e) = self.res.commit(self.total) {
                             tracing::error!(?e, "failed to commit resource after gap-filling");
-                            self.res.fail(format!("commit failed: {}", e));
+                            self.res.fail(format!("commit failed: {e}"));
                             let _ = self.events_tx.send(FileEvent::DownloadError {
-                                error: format!("commit failed: {}", e),
+                                error: format!("commit failed: {e}"),
                             });
                         } else if let Some(total) = self.total {
                             let _ = self
@@ -597,9 +605,9 @@ impl Downloader for FileDownloader {
                 if self.coverage.is_complete() {
                     if let Err(e) = self.res.commit(self.total) {
                         tracing::error!(?e, "failed to commit resource after range done");
-                        self.res.fail(format!("commit failed: {}", e));
+                        self.res.fail(format!("commit failed: {e}"));
                         let _ = self.events_tx.send(FileEvent::DownloadError {
-                            error: format!("commit failed: {}", e),
+                            error: format!("commit failed: {e}"),
                         });
                     } else if let Some(total) = self.total {
                         let _ = self
@@ -621,9 +629,9 @@ impl Downloader for FileDownloader {
                     // Complete download — commit resource.
                     if let Err(e) = self.res.commit(Some(total_bytes)) {
                         tracing::error!(?e, "failed to commit resource");
-                        self.res.fail(format!("commit failed: {}", e));
+                        self.res.fail(format!("commit failed: {e}"));
                         let _ = self.events_tx.send(FileEvent::DownloadError {
-                            error: format!("commit failed: {}", e),
+                            error: format!("commit failed: {e}"),
                         });
                     } else {
                         let _ = self

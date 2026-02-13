@@ -22,7 +22,7 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, StreamContext};
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 use crate::apple::{AppleAac, AppleAlac, AppleConfig, AppleFlac, AppleMp3};
@@ -59,7 +59,6 @@ pub struct ProbeHint {
 }
 
 /// Configuration for `DecoderFactory`.
-#[derive(Debug, Clone)]
 pub struct DecoderConfig {
     /// Prefer hardware decoder when available.
     pub prefer_hardware: bool,
@@ -71,6 +70,10 @@ pub struct DecoderConfig {
     ///
     /// Used when container format is not specified, as a hint for auto-detection.
     pub hint: Option<String>,
+    /// Stream context for segment/variant metadata.
+    pub stream_ctx: Option<Arc<dyn StreamContext>>,
+    /// Epoch counter for decoder recreation tracking.
+    pub epoch: u64,
 }
 
 impl Default for DecoderConfig {
@@ -80,6 +83,8 @@ impl Default for DecoderConfig {
             byte_len_handle: None,
             gapless: true,
             hint: None,
+            stream_ctx: None,
+            epoch: 0,
         }
     }
 }
@@ -158,6 +163,8 @@ impl DecoderFactory {
             byte_len_handle: config.byte_len_handle,
             container,
             hint: config.hint.clone(),
+            stream_ctx: config.stream_ctx.clone(),
+            epoch: config.epoch,
             ..Default::default()
         };
 
@@ -449,6 +456,8 @@ impl DecoderFactory {
             container: None,
             hint: config.hint,
             probe_no_seek: true,
+            stream_ctx: config.stream_ctx.clone(),
+            epoch: config.epoch,
         };
 
         // Use Pcm as a dummy codec marker — the actual codec is determined
@@ -529,6 +538,8 @@ mod tests {
             byte_len_handle: Some(Arc::clone(&handle)),
             gapless: false,
             hint: Some("mp3".to_string()),
+            stream_ctx: None,
+            epoch: 0,
         };
         assert!(config.prefer_hardware);
         assert!(config.byte_len_handle.is_some());

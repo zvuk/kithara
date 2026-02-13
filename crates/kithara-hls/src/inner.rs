@@ -2,19 +2,19 @@
 //!
 //! Provides `Hls` marker type implementing `StreamType` trait.
 
-use std::sync::Arc;
+use std::sync::{Arc, atomic::AtomicU64};
 
 use kithara_assets::{
     AssetStoreBuilder, Assets, AssetsBackend, CoverageIndex, ProcessChunkFn, asset_root_for_url,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_net::HttpClient;
-use kithara_stream::StreamType;
+use kithara_stream::{StreamContext, StreamType};
 use tokio::sync::broadcast;
 
 use crate::{
-    config::HlsConfig, error::HlsError, events::HlsEvent, fetch::FetchManager, keys::KeyManager,
-    playlist::variant_info_from_master, source::build_pair,
+    HlsStreamContext, config::HlsConfig, error::HlsError, events::HlsEvent, fetch::FetchManager,
+    keys::KeyManager, parsing::variant_info_from_master, source::build_pair,
 };
 
 /// Marker type for HLS streaming.
@@ -78,15 +78,31 @@ impl StreamType for Hls {
         ));
 
         // Build FetchManager (unified: fetch + playlist cache + Loader)
-        let fetch_manager = Arc::new(
-            FetchManager::new(backend, net, cancel.clone())
-                .with_master_url(config.url.clone())
-                .with_base_url(config.base_url.clone())
-                .with_key_manager(key_manager),
-        );
+        let mut fetch_manager = FetchManager::new(backend, net, cancel.clone())
+            .with_master_url(config.url.clone())
+            .with_base_url(config.base_url.clone())
+            .with_key_manager(key_manager);
 
         // Load master playlist
         let master = fetch_manager.master_playlist(&config.url).await?;
+
+        // Load all media playlists eagerly for PlaylistState
+        let mut media_playlists = Vec::new();
+        for variant in &master.variants {
+            let media_url = fetch_manager.resolve_url(&config.url, &variant.uri)?;
+            let playlist = fetch_manager
+                .media_playlist(&media_url, crate::parsing::VariantId(variant.id.0))
+                .await?;
+            media_playlists.push((media_url, playlist));
+        }
+
+        let playlist_state = Arc::new(crate::playlist::PlaylistState::from_parsed(
+            &master.variants,
+            &media_playlists,
+        ));
+        fetch_manager.set_playlist_state(playlist_state);
+
+        let fetch_manager = Arc::new(fetch_manager);
 
         // Determine initial variant
         let initial_variant = config.abr.initial_variant();
@@ -114,11 +130,16 @@ impl StreamType for Hls {
         };
 
         // Create HlsDownloader + HlsSource pair
+        let playlist_state = fetch_manager
+            .playlist_state()
+            .cloned()
+            .ok_or_else(|| HlsError::PlaylistParse("playlist state not initialized".to_string()))?;
         let (downloader, mut source) = build_pair(
             Arc::clone(&fetch_manager),
-            master.variants.clone(),
+            &master.variants,
             &config,
             coverage_index,
+            playlist_state,
         );
 
         // Spawn downloader on the thread pool.
@@ -127,5 +148,16 @@ impl StreamType for Hls {
         source.set_backend(backend);
 
         Ok(source)
+    }
+
+    fn build_stream_context(
+        source: &Self::Source,
+        position: Arc<AtomicU64>,
+    ) -> Arc<dyn StreamContext> {
+        Arc::new(HlsStreamContext::new(
+            position,
+            source.segment_index_handle(),
+            source.variant_index_handle(),
+        ))
     }
 }

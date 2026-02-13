@@ -126,7 +126,7 @@ Protocol crates emit events via broadcast channel (`FileEvent`, `HlsEvent`). `De
 - `symphonia`
 - `hls_m3u8`
 
-Versions pinned in root `Cargo.toml`.
+Versions pinned in root `Cargo.toml`. MSRV is 1.88 (edition 2024).
 
 ## Cancellation
 
@@ -139,7 +139,7 @@ All async operations accept `tokio_util::sync::CancellationToken`, forwarded thr
 
 ### Style check
 ```bash
-bash scripts/lint-style.sh
+bash scripts/ci/lint-style.sh
 ```
 
 ## Adding new crates

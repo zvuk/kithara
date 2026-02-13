@@ -77,7 +77,7 @@ pub use source_type::SourceType;
 
 pub mod prelude {
     pub use kithara_audio::{Audio, AudioConfig, PcmReader, ResamplerQuality};
-    pub use kithara_decode::{DecodeError, DecodeResult, PcmSpec, TrackMetadata};
+    pub use kithara_decode::{DecodeError, DecodeResult, PcmMeta, PcmSpec, TrackMetadata};
     #[cfg(feature = "file")]
     pub use kithara_file::{File, FileConfig};
     #[cfg(feature = "hls")]

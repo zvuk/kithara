@@ -30,20 +30,23 @@ pub mod fetch;
 #[doc(hidden)]
 pub mod keys;
 #[doc(hidden)]
-pub mod playlist;
+pub mod parsing;
 
 // Re-export from kithara-assets
 #[doc(hidden)]
 pub use kithara_assets::AssetsBackend;
 
+mod context;
+pub(crate) mod download_state;
 mod downloader;
 mod inner;
-mod parsing;
+pub(crate) mod playlist;
 mod source;
 
 // Public API re-exports
 
 pub use config::{HlsConfig, KeyContext, KeyOptions, KeyProcessor};
+pub use context::HlsStreamContext;
 pub use error::{HlsError, HlsResult};
 pub use events::HlsEvent;
 pub use inner::Hls;

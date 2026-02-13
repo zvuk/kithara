@@ -1,22 +1,12 @@
 use std::{collections::HashMap, sync::Arc};
 
-use aes::Aes128;
 use bytes::Bytes;
-use cbc::{
-    Decryptor,
-    cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7},
-};
 use kithara_assets::AssetsError;
 use kithara_net::Headers;
 use thiserror::Error;
 use url::Url;
 
-use crate::{
-    HlsError, HlsResult, KeyContext,
-    config::KeyProcessor,
-    fetch::DefaultFetchManager,
-    playlist::{EncryptionMethod, SegmentKey},
-};
+use crate::{HlsError, HlsResult, KeyContext, config::KeyProcessor, fetch::DefaultFetchManager};
 
 #[derive(Debug, Error)]
 pub enum KeyError {
@@ -91,30 +81,6 @@ impl KeyManager {
         Ok(processed_key)
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    pub async fn decrypt(
-        &self,
-        url: &Url,
-        iv: Option<[u8; 16]>,
-        ciphertext: Bytes,
-    ) -> HlsResult<Bytes> {
-        let iv = iv.unwrap_or([0u8; 16]);
-        let key = self.get_raw_key(url, Some(iv)).await?;
-        if key.len() != 16 {
-            return Err(HlsError::KeyProcessing(format!(
-                "invalid AES-128 key length: {}",
-                key.len()
-            )));
-        }
-
-        let mut buf = ciphertext.to_vec();
-        let decryptor = Decryptor::<Aes128>::new((&key[..16]).into(), (&iv).into());
-        let plain = decryptor
-            .decrypt_padded_mut::<Pkcs7>(&mut buf)
-            .map_err(|e| HlsError::KeyProcessing(format!("AES-128 decrypt failed: {e}")))?;
-        Ok(Bytes::copy_from_slice(plain))
-    }
-
     fn rel_path_from_url(url: &Url) -> String {
         let last = url
             .path_segments()
@@ -138,36 +104,8 @@ impl KeyManager {
         }
     }
 
-    /// Decrypt segment if encryption key is present.
-    /// Returns bytes unchanged if no encryption or unsupported method.
-    #[cfg_attr(feature = "perf", hotpath::measure)]
-    pub async fn decrypt_segment(
-        &self,
-        key: Option<&SegmentKey>,
-        segment_url: &Url,
-        sequence: u64,
-        bytes: Bytes,
-    ) -> HlsResult<Bytes> {
-        let Some(seg_key) = key else {
-            return Ok(bytes);
-        };
-
-        if !matches!(seg_key.method, EncryptionMethod::Aes128) {
-            return Ok(bytes);
-        }
-
-        let Some(ref key_info) = seg_key.key_info else {
-            return Ok(bytes);
-        };
-
-        let key_url = Self::resolve_key_url(key_info, segment_url)?;
-        let iv = Self::derive_iv(key_info, sequence);
-
-        self.decrypt(&key_url, Some(iv), bytes).await
-    }
-
     pub(crate) fn resolve_key_url(
-        key_info: &crate::playlist::KeyInfo,
+        key_info: &crate::parsing::KeyInfo,
         segment_url: &Url,
     ) -> HlsResult<Url> {
         let key_uri = key_info
@@ -184,7 +122,7 @@ impl KeyManager {
         }
     }
 
-    pub(crate) fn derive_iv(key_info: &crate::playlist::KeyInfo, sequence: u64) -> [u8; 16] {
+    pub(crate) fn derive_iv(key_info: &crate::parsing::KeyInfo, sequence: u64) -> [u8; 16] {
         if let Some(iv) = key_info.iv {
             return iv;
         }

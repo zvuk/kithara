@@ -1,7 +1,7 @@
 //! HLS downloader: fetches segments and maintains ABR state.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashSet,
     sync::{Arc, atomic::Ordering},
     time::{Duration, Instant},
 };
@@ -9,32 +9,19 @@ use std::{
 use kithara_abr::{AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource};
 use kithara_assets::{CoverageIndex, DiskCoverage, ResourceKey};
 use kithara_storage::{Coverage, MmapResource, ResourceExt, ResourceStatus};
-use kithara_stream::{ContainerFormat, Downloader, DownloaderIo, PlanOutcome, StepResult};
+use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
 use tokio::sync::broadcast;
 use tracing::debug;
 use url::Url;
 
 use crate::{
     HlsError,
+    download_state::{DownloadProgress, LoadedSegment},
     events::HlsEvent,
-    fetch::{DefaultFetchManager, Loader, SegmentMeta, SegmentType},
-    parsing::VariantStream,
-    source::{SegmentEntry, SharedSegments},
+    fetch::{DefaultFetchManager, Loader, SegmentMeta},
+    playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
+    source::SharedSegments,
 };
-
-/// Metadata for a single segment in a variant's theoretical stream.
-#[derive(Debug, Clone)]
-pub(crate) struct SegmentMetadata {
-    /// Segment index in playlist.
-    #[expect(dead_code)]
-    pub(crate) index: usize,
-    /// Byte offset in theoretical stream (cumulative from segment 0).
-    pub(crate) byte_offset: u64,
-    /// Total size (init + media) in bytes.
-    pub(crate) size: u64,
-}
-
-// HlsIo — pure I/O executor (Clone, no &mut self)
 
 /// Pure I/O executor for HLS segment fetching.
 #[derive(Clone)]
@@ -113,13 +100,11 @@ impl DownloaderIo for HlsIo {
     }
 }
 
-// HlsDownloader — mutable state (plan + commit)
-
 /// HLS downloader: fetches segments and maintains ABR state.
 pub struct HlsDownloader {
     pub(crate) io: HlsIo,
     pub(crate) fetch: Arc<DefaultFetchManager>,
-    pub(crate) variants: Vec<VariantStream>,
+    pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) current_segment_index: usize,
     pub(crate) sent_init_for_variant: HashSet<usize>,
     pub(crate) abr: AbrController<ThroughputEstimator>,
@@ -128,10 +113,6 @@ pub struct HlsDownloader {
     pub(crate) events_tx: Option<broadcast::Sender<HlsEvent>>,
     /// Backpressure threshold. None = no backpressure.
     pub(crate) look_ahead_bytes: Option<u64>,
-    /// Cache of `expected_total_length` per variant (`variant_index` → `total_bytes`).
-    pub(crate) variant_lengths: HashMap<usize, u64>,
-    /// True after a mid-stream variant switch. Subsequent segments use cumulative offsets.
-    pub(crate) had_midstream_switch: bool,
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
     /// Coverage index for crash-safe segment tracking.
@@ -145,61 +126,69 @@ impl HlsDownloader {
         }
     }
 
-    /// Calculate expected total length and per-segment metadata via HEAD requests.
-    ///
-    /// Returns `(total_length, metadata, init_url, init_len, media_urls)`.
-    async fn calculate_variant_metadata(
+    /// Calculate size map for a variant via HEAD requests and store in `PlaylistState`.
+    async fn calculate_size_map(
+        playlist_state: &PlaylistState,
         fetch: &Arc<DefaultFetchManager>,
         variant: usize,
-    ) -> Result<(u64, Vec<SegmentMetadata>, Option<Url>, u64, Vec<Url>), HlsError> {
-        let (init_url, media_urls) = fetch.get_segment_urls(variant).await?;
+    ) -> Result<(), HlsError> {
+        if playlist_state.has_size_map(variant) {
+            return Ok(());
+        }
 
-        // Fire all HEAD requests in parallel (init + all media segments).
-        let init_fut = async {
-            if let Some(ref url) = init_url {
-                fetch.get_content_length(url).await.unwrap_or(0)
-            } else {
-                0
-            }
+        let init_url = playlist_state.init_url(variant);
+        let num_segments = playlist_state.num_segments(variant).unwrap_or(0);
+
+        // HEAD for init
+        let init_size = if let Some(ref url) = init_url {
+            fetch.get_content_length(url).await.unwrap_or(0)
+        } else {
+            0
         };
 
+        // HEAD for all media segments in parallel
+        let media_urls: Vec<_> = (0..num_segments)
+            .filter_map(|i| playlist_state.segment_url(variant, i))
+            .collect();
         let media_futs: Vec<_> = media_urls
             .iter()
             .map(|url| fetch.get_content_length(url))
             .collect();
+        let media_lengths = futures::future::join_all(media_futs).await;
 
-        let (init_len, media_lengths) =
-            futures::future::join(init_fut, futures::future::join_all(media_futs)).await;
+        let mut offsets = Vec::with_capacity(num_segments);
+        let mut segment_sizes = Vec::with_capacity(num_segments);
+        let mut cumulative = 0u64;
 
-        let mut total = 0u64;
-        let mut metadata = Vec::new();
-        let mut byte_offset = 0u64;
-
-        for (index, result) in media_lengths.into_iter().enumerate() {
-            if let Ok(media_len) = result {
-                // Init segment included only once (first segment of variant)
-                let size = if index == 0 {
-                    init_len + media_len
-                } else {
-                    media_len
-                };
-                metadata.push(SegmentMetadata {
-                    index,
-                    byte_offset,
-                    size,
-                });
-                byte_offset += size;
-                total += size;
-            }
+        for (i, result) in media_lengths.into_iter().enumerate() {
+            let media_len = result.unwrap_or(0);
+            let total_seg = if i == 0 {
+                init_size + media_len
+            } else {
+                media_len
+            };
+            offsets.push(cumulative);
+            segment_sizes.push(total_seg);
+            cumulative += total_seg;
         }
 
         debug!(
             variant,
-            total,
-            num_segments = metadata.len(),
-            "calculated variant metadata"
+            total = cumulative,
+            num_segments = segment_sizes.len(),
+            "calculated variant size map"
         );
-        Ok((total, metadata, init_url, init_len, media_urls))
+
+        playlist_state.set_size_map(
+            variant,
+            VariantSizeMap {
+                init_size,
+                segment_sizes,
+                offsets,
+                total: cumulative,
+            },
+        );
+        Ok(())
     }
 
     /// Pre-populate segment index with segments already committed on disk.
@@ -212,16 +201,10 @@ impl HlsDownloader {
     /// Stops at the first uncached segment to maintain contiguous entries.
     ///
     /// Returns `(count, cumulative_byte_offset)` for caller to update downloader state.
-    #[expect(clippy::too_many_arguments)]
     fn populate_cached_segments(
         shared: &SharedSegments,
         fetch: &DefaultFetchManager,
         variant: usize,
-        metadata: &[SegmentMetadata],
-        init_url: &Option<Url>,
-        init_len: u64,
-        media_urls: &[Url],
-        variant_stream: &VariantStream,
         coverage_index: &Option<Arc<CoverageIndex<MmapResource>>>,
     ) -> (usize, u64) {
         // Ephemeral backend has no persistent cache to scan.
@@ -230,14 +213,13 @@ impl HlsDownloader {
         }
 
         let backend = fetch.backend();
-        let container = if init_url.is_some() {
-            Some(ContainerFormat::Fmp4)
-        } else {
-            Some(ContainerFormat::MpegTs)
-        };
+        let playlist_state = &shared.playlist_state;
+
+        let init_url = playlist_state.init_url(variant);
+        let num_segments = playlist_state.num_segments(variant).unwrap_or(0);
 
         // If init is required, verify it's cached on disk
-        if let Some(url) = init_url {
+        if let Some(ref url) = init_url {
             let init_key = ResourceKey::from_url(url);
             let init_cached = backend
                 .open_resource(&init_key)
@@ -248,14 +230,35 @@ impl HlsDownloader {
             }
         }
 
-        let variant_codec = variant_stream.codec.as_ref().and_then(|c| c.audio_codec);
+        // Get init_size from actual disk resource (size map was populated by calculate_size_map).
+        let init_len = if playlist_state.total_variant_size(variant).is_some() {
+            if let Some(ref url) = init_url {
+                let key = ResourceKey::from_url(url);
+                backend
+                    .open_resource(&key)
+                    .ok()
+                    .and_then(|r| match r.status() {
+                        ResourceStatus::Committed { final_len } => final_len,
+                        _ => None,
+                    })
+                    .unwrap_or(0)
+            } else {
+                0
+            }
+        } else {
+            0
+        };
 
         let mut segments = shared.segments.lock();
         let mut count = 0usize;
         let mut cumulative_offset = 0u64;
 
-        for (index, (_, segment_url)) in metadata.iter().zip(media_urls.iter()).enumerate() {
-            let key = ResourceKey::from_url(segment_url);
+        for index in 0..num_segments {
+            let Some(segment_url) = playlist_state.segment_url(variant, index) else {
+                break;
+            };
+
+            let key = ResourceKey::from_url(&segment_url);
             let Ok(resource) = backend.open_resource(&key) else {
                 break; // Stop on first uncached segment
             };
@@ -267,8 +270,8 @@ impl HlsDownloader {
                 }
 
                 // Validate against coverage if available.
-                // No entry → legacy file, treat as valid.
-                // Entry exists but incomplete → partially written, skip.
+                // No entry -> legacy file, treat as valid.
+                // Entry exists but incomplete -> partially written, skip.
                 if let Some(idx) = coverage_index {
                     let cov = DiskCoverage::open(Arc::clone(idx), segment_url.to_string());
                     if cov.total_size().is_some() && !cov.is_complete() {
@@ -279,25 +282,18 @@ impl HlsDownloader {
                 // Init only for the first segment (init-once layout matches metadata)
                 let actual_init_len = if count == 0 { init_len } else { 0 };
 
-                let entry = SegmentEntry {
+                let segment = LoadedSegment {
+                    variant,
+                    segment_index: index,
                     byte_offset: cumulative_offset,
-                    codec: variant_codec,
                     init_len: actual_init_len,
+                    media_len,
                     init_url: init_url.clone(),
-                    meta: SegmentMeta {
-                        variant,
-                        segment_type: SegmentType::Media(index),
-                        sequence: 0,
-                        url: segment_url.clone(),
-                        duration: None,
-                        key: None,
-                        len: media_len,
-                        container,
-                    },
+                    media_url: segment_url,
                 };
 
-                cumulative_offset = entry.end_offset();
-                segments.push(entry);
+                cumulative_offset = segment.end_offset();
+                segments.push(segment);
                 count += 1;
             } else {
                 break; // Not committed, stop
@@ -314,35 +310,6 @@ impl HlsDownloader {
         }
 
         (count, cumulative_offset)
-    }
-
-    /// Update variant metadata after a segment is committed with its actual size.
-    ///
-    /// For non-DRM streams, actual size equals the predicted size (from HEAD requests),
-    /// so this is effectively a no-op. For DRM (AES-128) streams, decrypted segments
-    /// are smaller than the encrypted Content-Length reported by HEAD (PKCS7 padding
-    /// removed). This method corrects the metadata so that subsequent `byte_offset`
-    /// lookups (used by on-demand/seek loads) reflect actual positions.
-    fn reconcile_metadata(&self, variant: usize, segment_index: usize, actual_size: u64) {
-        let mut metadata_map = self.shared.variant_metadata.lock();
-        let Some(metadata) = metadata_map.get_mut(&variant) else {
-            return;
-        };
-        let Some(entry) = metadata.get_mut(segment_index) else {
-            return;
-        };
-        if entry.size == actual_size {
-            return; // No drift — common path for non-DRM.
-        }
-
-        entry.size = actual_size;
-
-        // Recalculate byte_offsets for all subsequent segments.
-        let mut offset = entry.byte_offset + actual_size;
-        for subsequent in metadata.iter_mut().skip(segment_index + 1) {
-            subsequent.byte_offset = offset;
-            offset += subsequent.size;
-        }
     }
 
     /// Commit a downloaded segment to the segment index.
@@ -368,36 +335,31 @@ impl HlsDownloader {
             0
         };
 
-        let byte_offset = if is_midstream_switch || self.had_midstream_switch {
+        let had_midstream_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
+        let byte_offset = if is_midstream_switch || had_midstream_switch {
             // Variant switch: always use cumulative offset.
             self.byte_offset
         } else {
             // Use metadata offset for correct positioning of both sequential
             // and on-demand (seek) loads. Metadata is kept in sync with actual
             // sizes via reconcile_metadata() after each commit.
-            let metadata_map = self.shared.variant_metadata.lock();
-            let meta_off = metadata_map
-                .get(&dl.variant)
-                .and_then(|m| m.get(dl.segment_index))
-                .map(|seg| seg.byte_offset);
-            drop(metadata_map);
-            meta_off.unwrap_or(self.byte_offset)
+            self.playlist_state
+                .segment_byte_offset(dl.variant, dl.segment_index)
+                .unwrap_or(self.byte_offset)
         };
-
-        let variant_codec = self.variants[dl.variant]
-            .codec
-            .as_ref()
-            .and_then(|c| c.audio_codec);
 
         let media_len = dl.media.len;
         let actual_size = actual_init_len + media_len;
 
-        let entry = SegmentEntry {
+        let media_url = dl.media.url.clone();
+        let segment = LoadedSegment {
+            variant: dl.variant,
+            segment_index: dl.segment_index,
             byte_offset,
-            codec: variant_codec,
             init_len: actual_init_len,
+            media_len,
             init_url: dl.init_url,
-            meta: dl.media,
+            media_url: media_url.clone(),
         };
 
         let end = byte_offset + actual_size;
@@ -409,7 +371,29 @@ impl HlsDownloader {
         // byte_offsets using the actual (possibly decrypted) size. For non-DRM streams
         // this is a no-op (actual == predicted). For DRM streams, it corrects the drift
         // from PKCS7 padding removal so future lookups use accurate offsets.
-        self.reconcile_metadata(entry.meta.variant, dl.segment_index, actual_size);
+        let pre_total = self.playlist_state.total_variant_size(dl.variant);
+        self.playlist_state
+            .reconcile_segment_size(dl.variant, dl.segment_index, actual_size);
+        let post_total = self.playlist_state.total_variant_size(dl.variant);
+
+        // Update expected_total_length if reconciliation changed the variant total.
+        // This handles cases where actual sizes differ from HEAD predictions:
+        // - Larger: HTTP auto-decompression returns more bytes than Content-Length
+        // - Smaller: DRM decryption removes PKCS7 padding
+        // Uses delta-based adjustment so midstream switch offsets are preserved.
+        if let (Some(pre), Some(post)) = (pre_total, post_total)
+            && pre != post
+        {
+            let current = self.shared.expected_total_length.load(Ordering::Acquire);
+            let new_expected = if post > pre {
+                current.saturating_add(post - pre)
+            } else {
+                current.saturating_sub(pre - post)
+            };
+            self.shared
+                .expected_total_length
+                .store(new_expected, Ordering::Release);
+        }
 
         self.emit_event(HlsEvent::DownloadProgress {
             offset: self.byte_offset,
@@ -417,18 +401,17 @@ impl HlsDownloader {
         });
 
         // Mark segment coverage for crash-safe tracking via DiskCoverage.
-        let segment_url = entry.meta.url.clone();
         {
             let mut segments = self.shared.segments.lock();
             if is_variant_switch {
                 segments.fence_at(byte_offset, dl.variant);
             }
-            segments.push(entry);
+            segments.push(segment);
         }
         self.shared.condvar.notify_all();
 
         if let Some(ref idx) = self.coverage_index {
-            let mut cov = DiskCoverage::open(Arc::clone(idx), segment_url.to_string());
+            let mut cov = DiskCoverage::open(Arc::clone(idx), media_url.to_string());
             cov.set_total_size(media_len);
             cov.mark(0..media_len);
             // flush happens via Drop, or explicitly in commit()
@@ -447,39 +430,28 @@ impl HlsDownloader {
         let is_midstream_switch = is_variant_switch && segment_index > 0;
 
         if is_midstream_switch {
-            self.had_midstream_switch = true;
-            self.shared.segments.lock().had_midstream_switch = true;
+            self.shared
+                .had_midstream_switch
+                .store(true, Ordering::Release);
             while self.shared.segment_requests.pop().is_some() {}
         }
 
-        let current_length = self.shared.segments.lock().expected_total_length;
+        let current_length = self.shared.expected_total_length.load(Ordering::Acquire);
         if is_variant_switch || current_length == 0 {
-            let needs_calculation = {
-                let metadata_map = self.shared.variant_metadata.lock();
-                !metadata_map.contains_key(&variant)
-            };
+            let needs_calculation = !self.playlist_state.has_size_map(variant);
 
             if needs_calculation {
-                match Self::calculate_variant_metadata(&self.fetch, variant).await {
-                    Ok((total, metadata, init_url, init_len, media_urls)) => {
-                        debug!(
-                            variant,
-                            total,
-                            num_segments = metadata.len(),
-                            "calculated and caching variant metadata"
-                        );
+                match Self::calculate_size_map(&self.playlist_state, &self.fetch, variant).await {
+                    Ok(()) => {
+                        let total = self.playlist_state.total_variant_size(variant).unwrap_or(0);
+
+                        debug!(variant, total, "calculated and cached variant size map");
 
                         let (cached_count, cached_end_offset) = if !is_variant_switch {
-                            let vstream = &self.variants[variant];
                             Self::populate_cached_segments(
                                 &self.shared,
                                 &self.fetch,
                                 variant,
-                                &metadata,
-                                &init_url,
-                                init_len,
-                                &media_urls,
-                                vstream,
                                 &self.coverage_index,
                             )
                         } else {
@@ -498,8 +470,10 @@ impl HlsDownloader {
 
                         let effective_total = if is_midstream_switch {
                             let switch_byte = self.byte_offset;
-                            let switch_meta =
-                                metadata.get(segment_index).map_or(0, |s| s.byte_offset);
+                            let switch_meta = self
+                                .playlist_state
+                                .segment_byte_offset(variant, segment_index)
+                                .unwrap_or(0);
                             let result = total
                                 .saturating_sub(switch_meta)
                                 .saturating_add(switch_byte);
@@ -525,28 +499,25 @@ impl HlsDownloader {
                             result
                         };
 
-                        self.shared
-                            .variant_metadata
-                            .lock()
-                            .insert(variant, metadata);
-                        self.variant_lengths.insert(variant, effective_total);
-
                         if effective_total > 0 {
-                            self.shared.segments.lock().expected_total_length = effective_total;
+                            self.shared
+                                .expected_total_length
+                                .store(effective_total, Ordering::Release);
                         }
                     }
                     Err(e) => {
-                        debug!(?e, variant, "failed to calculate variant metadata");
+                        debug!(?e, variant, "failed to calculate variant size map");
                     }
                 }
-            } else if let Some(&cached_length) = self.variant_lengths.get(&variant) {
-                debug!(
-                    variant,
-                    total = cached_length,
-                    "using cached variant length"
-                );
-                if cached_length > 0 {
-                    self.shared.segments.lock().expected_total_length = cached_length;
+            } else {
+                // Size map already exists, use cached total
+                if let Some(cached_total) = self.playlist_state.total_variant_size(variant) {
+                    debug!(variant, total = cached_total, "using cached variant length");
+                    if cached_total > 0 {
+                        self.shared
+                            .expected_total_length
+                            .store(cached_total, Ordering::Release);
+                    }
                 }
             }
         }
@@ -670,7 +641,7 @@ impl Downloader for HlsDownloader {
         };
 
         // Skip stale segments from old variant after midstream switch.
-        if self.had_midstream_switch && !is_midstream_switch {
+        if self.shared.had_midstream_switch.load(Ordering::Acquire) && !is_midstream_switch {
             let current_variant = self.abr.get_current_variant_index();
             if req.variant != current_variant {
                 debug!(
@@ -772,7 +743,8 @@ impl Downloader for HlsDownloader {
             }
 
             // Skip stale segments from old variant after midstream switch.
-            if self.had_midstream_switch && !is_midstream_switch {
+            let had_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
+            if had_switch && !is_midstream_switch {
                 let current = self.abr.get_current_variant_index();
                 if variant != current {
                     continue;
@@ -802,17 +774,12 @@ impl Downloader for HlsDownloader {
         PlanOutcome::Batch(plans)
     }
 
-    async fn step(&mut self) -> Result<StepResult<HlsFetch>, HlsError> {
-        // HLS does not use streaming step — all work goes through plan/batch.
-        std::future::pending().await
-    }
-
     fn commit(&mut self, fetch: HlsFetch) {
         let is_variant_switch = !self.sent_init_for_variant.contains(&fetch.variant);
         let is_midstream_switch = is_variant_switch && fetch.segment_index > 0;
 
         // Only advance sequential position for the next expected segment.
-        // On-demand loads and out-of-order batch results must not jump past gaps —
+        // On-demand loads and out-of-order batch results must not jump past gaps --
         // plan() handles skipping loaded segments when building the next batch.
         if fetch.segment_index == self.current_segment_index {
             self.current_segment_index = fetch.segment_index + 1;
@@ -830,7 +797,7 @@ impl Downloader for HlsDownloader {
             .shared
             .reader_offset
             .load(std::sync::atomic::Ordering::Acquire);
-        let downloaded = self.shared.segments.lock().total_bytes();
+        let downloaded = self.shared.segments.lock().max_end_offset();
 
         downloaded.saturating_sub(reader_pos) > limit
     }
