@@ -8,7 +8,7 @@ use std::{env::args, error::Error};
 
 use kithara_audio::{Audio, AudioConfig};
 use kithara_file::{File, FileConfig};
-use kithara_stream::Stream;
+use kithara_stream::{Stream, ThreadPool};
 use tokio::sync::broadcast;
 use tracing::{info, metadata::LevelFilter, warn};
 use tracing_subscriber::EnvFilter;
@@ -42,7 +42,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let (events_tx, mut events_rx) = broadcast::channel(128);
     let hint = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
-    let mut config = AudioConfig::<File>::new(FileConfig::new(url.into()))
+    let pool = ThreadPool::with_num_threads(2)?;
+    let mut config = AudioConfig::<File>::new(FileConfig::new(url.into()).with_thread_pool(pool))
         .with_prefer_hardware(true)
         .with_events(events_tx);
     if let Some(ext) = hint {

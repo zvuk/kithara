@@ -11,8 +11,8 @@
 
 use std::{env::args, error::Error, time::Duration};
 
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_stream::Stream;
+use kithara_hls::{AbrMode, AbrOptions, EventBus, Hls, HlsConfig};
+use kithara_stream::{Stream, ThreadPool};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -40,10 +40,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Opening HLS stream: {}", url);
 
-    // Create events channel
-    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+    // Create event bus
+    let bus = EventBus::new(32);
+    let mut events_rx = bus.subscribe();
 
+    let pool = ThreadPool::with_num_threads(2)?;
     let config = HlsConfig::new(url)
+        .with_thread_pool(pool)
         .with_abr(AbrOptions {
             // Aggressive ABR for testing
             min_buffer_for_up_switch_secs: 0.0, // no buffer requirement
@@ -53,7 +56,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             up_hysteresis_ratio: 1.05,     // 5% headroom
             ..Default::default()
         })
-        .with_events(events_tx);
+        .with_events(bus);
     let stream = Stream::<Hls>::new(config).await?;
 
     // Log events

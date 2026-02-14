@@ -6,6 +6,20 @@ use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt
 use kithara_stream::{Writer, WriterError, WriterItem};
 use tokio_util::sync::CancellationToken;
 
+/// Run a writer to completion, returning total bytes written.
+async fn run_writer(
+    mut writer: Writer<std::io::Error>,
+) -> Result<u64, WriterError<std::io::Error>> {
+    while let Some(result) = writer.next().await {
+        match result {
+            Ok(WriterItem::ChunkWritten { .. }) => {}
+            Ok(WriterItem::StreamEnded { total_bytes }) => return Ok(total_bytes),
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(0)
+}
+
 /// Helper: open a fresh `MmapResource` backed by a temp file.
 #[expect(clippy::unwrap_used)]
 fn open_resource(dir: &tempfile::TempDir, name: &str, len: u64) -> MmapResource {
@@ -129,7 +143,7 @@ async fn writer_with_offset_zero_is_same_as_new() {
     ))]);
     let cancel_new = CancellationToken::new();
     let writer_new: Writer<std::io::Error> = Writer::new(source_new, res_new.clone(), cancel_new);
-    let total_new = writer_new.run(|_, _| {}).await.unwrap();
+    let total_new = run_writer(writer_new).await.unwrap();
 
     // --- Writer::with_offset(0) ---
     let res_offset = open_resource(&dir, "via_offset.bin", 512);
@@ -139,7 +153,7 @@ async fn writer_with_offset_zero_is_same_as_new() {
     let cancel_offset = CancellationToken::new();
     let writer_offset: Writer<std::io::Error> =
         Writer::with_offset(source_offset, res_offset.clone(), cancel_offset, 0);
-    let total_offset = writer_offset.run(|_, _| {}).await.unwrap();
+    let total_offset = run_writer(writer_offset).await.unwrap();
 
     assert_eq!(total_new, total_offset);
     assert_eq!(total_new, 256);

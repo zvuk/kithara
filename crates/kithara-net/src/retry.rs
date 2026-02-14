@@ -15,42 +15,13 @@ use crate::{
     types::{Headers, RangeSpec, RetryPolicy},
 };
 
-#[cfg_attr(test, unimock(api = RetryClassifierMock))]
-pub trait RetryClassifier {
-    fn should_retry(&self, error: &NetError) -> bool;
-}
-
-pub struct DefaultRetryClassifier;
-
-impl DefaultRetryClassifier {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for DefaultRetryClassifier {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl RetryClassifier for DefaultRetryClassifier {
-    fn should_retry(&self, error: &NetError) -> bool {
-        error.is_retryable()
-    }
-}
-
 pub struct DefaultRetryPolicy {
-    classifier: DefaultRetryClassifier,
     policy: RetryPolicy,
 }
 
 impl DefaultRetryPolicy {
     pub fn new(policy: RetryPolicy) -> Self {
-        Self {
-            classifier: DefaultRetryClassifier,
-            policy,
-        }
+        Self { policy }
     }
 
     pub fn should_retry(&self, error: &NetError, attempt: u32) -> bool {
@@ -58,7 +29,7 @@ impl DefaultRetryPolicy {
             return false;
         }
 
-        self.classifier.should_retry(error)
+        error.is_retryable()
     }
 
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
@@ -243,37 +214,6 @@ mod tests {
 
     use super::*;
     use crate::traits::NetMock;
-
-    // DefaultRetryClassifier Tests
-
-    #[rstest]
-    fn test_default_retry_classifier_new() {
-        let classifier = DefaultRetryClassifier::new();
-        let _ = classifier;
-    }
-
-    #[rstest]
-    fn test_default_retry_classifier_default() {
-        let classifier = DefaultRetryClassifier;
-        let _ = classifier;
-    }
-
-    #[rstest]
-    #[case(NetError::Timeout, true, "timeout should retry")]
-    #[case(NetError::Http("status: 500".to_string()), true, "500 should retry")]
-    #[case(NetError::Http("status: 503".to_string()), true, "503 should retry")]
-    #[case(NetError::Http("timeout occurred".to_string()), true, "timeout in message should retry")]
-    #[case(NetError::Http("connection error".to_string()), true, "connection error should retry")]
-    #[case(NetError::Http("status: 404".to_string()), false, "404 should not retry")]
-    #[case(NetError::Http("status: 400".to_string()), false, "400 should not retry")]
-    fn test_default_retry_classifier_should_retry(
-        #[case] error: NetError,
-        #[case] expected: bool,
-        #[case] _desc: &str,
-    ) {
-        let classifier = DefaultRetryClassifier::new();
-        assert_eq!(classifier.should_retry(&error), expected);
-    }
 
     // DefaultRetryPolicy Tests
 

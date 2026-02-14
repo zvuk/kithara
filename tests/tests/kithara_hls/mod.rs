@@ -12,6 +12,7 @@ mod playlist_integration;
 mod seek_past_eof;
 mod smoke_test;
 mod source_seek;
+mod stress_chunk_integrity;
 mod stress_seek_abr;
 mod stress_seek_abr_audio;
 mod stress_seek_audio;

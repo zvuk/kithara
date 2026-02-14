@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use kithara_bufpool::BytePool;
 use kithara_storage::{Atomic, ResourceExt};
 
 use crate::{base::Assets, error::AssetsResult};
@@ -29,26 +30,28 @@ struct PinsIndexFile {
 /// index lives by implementing [`Assets::open_pins_index_resource`].
 pub struct PinsIndex<R: ResourceExt> {
     res: Atomic<R>,
+    pool: BytePool,
 }
 
 impl<R: ResourceExt> PinsIndex<R> {
-    pub(crate) fn new(res: R) -> Self {
+    pub(crate) fn new(res: R, pool: BytePool) -> Self {
         Self {
             res: Atomic::new(res),
+            pool,
         }
     }
 
     /// Open a `PinsIndex` for the given base assets store.
-    pub fn open<A: Assets<IndexRes = R>>(assets: &A) -> AssetsResult<Self> {
+    pub fn open<A: Assets<IndexRes = R>>(assets: &A, pool: BytePool) -> AssetsResult<Self> {
         let res = assets.open_pins_index_resource()?;
-        Ok(Self::new(res))
+        Ok(Self::new(res, pool))
     }
 
     /// Load the pins set from storage.
     ///
     /// Empty, missing, or corrupted data is treated as an empty set (best-effort).
     pub fn load(&self) -> AssetsResult<HashSet<String>> {
-        let mut buf = crate::byte_pool().get();
+        let mut buf = self.pool.get();
         let n = self.res.read_into(&mut buf)?;
 
         if n == 0 {
@@ -110,7 +113,7 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let res = create_test_resource(&temp_dir);
 
-        let index = PinsIndex::new(res);
+        let index = PinsIndex::new(res, crate::byte_pool().clone());
 
         // Index created successfully, load should return empty set
         let pins = index.load().unwrap();
@@ -123,7 +126,7 @@ mod tests {
     fn test_load_empty_resource() {
         let temp_dir = TempDir::new().unwrap();
         let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res);
+        let index = PinsIndex::new(res, crate::byte_pool().clone());
 
         let pins = index.load().unwrap();
 
@@ -140,7 +143,7 @@ mod tests {
         // Write invalid JSON
         res.write_all(b"not valid json").unwrap();
 
-        let index = PinsIndex::new(res);
+        let index = PinsIndex::new(res, crate::byte_pool().clone());
         let pins = index.load().unwrap();
 
         // Should return empty set on invalid JSON (best-effort)
@@ -153,7 +156,7 @@ mod tests {
     fn test_store_and_load() {
         let temp_dir = TempDir::new().unwrap();
         let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res);
+        let index = PinsIndex::new(res, crate::byte_pool().clone());
 
         let mut pins = HashSet::new();
         pins.insert("asset1".to_string());
@@ -185,7 +188,7 @@ mod tests {
                 },
             )
             .unwrap();
-            let index = PinsIndex::new(res);
+            let index = PinsIndex::new(res, crate::byte_pool().clone());
 
             let mut pins = HashSet::new();
             pins.insert("persisted-asset".to_string());
@@ -203,7 +206,7 @@ mod tests {
                 },
             )
             .unwrap();
-            let index = PinsIndex::new(res);
+            let index = PinsIndex::new(res, crate::byte_pool().clone());
 
             let pins = index.load().unwrap();
             assert_eq!(pins.len(), 1);
@@ -217,7 +220,7 @@ mod tests {
     fn test_pins_index_file_format() {
         let temp_dir = TempDir::new().unwrap();
         let res = create_test_resource(&temp_dir);
-        let index = PinsIndex::new(res.clone());
+        let index = PinsIndex::new(res.clone(), crate::byte_pool().clone());
 
         let mut pins = HashSet::new();
         pins.insert("asset".to_string());

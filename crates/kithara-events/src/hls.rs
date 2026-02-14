@@ -1,4 +1,4 @@
-//! HLS events for monitoring and UI integration.
+#![forbid(unsafe_code)]
 
 use std::time::Duration;
 
@@ -24,13 +24,6 @@ pub enum HlsEvent {
         segment_index: usize,
         byte_offset: u64,
     },
-    /// Per-chunk progress within a segment.
-    SegmentProgress {
-        variant: usize,
-        segment_index: usize,
-        offset: u64,
-        len: usize,
-    },
     /// Segment download completed.
     SegmentComplete {
         variant: usize,
@@ -52,31 +45,4 @@ pub enum HlsEvent {
     Error { error: String, recoverable: bool },
     /// Stream ended.
     EndOfStream,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_event_creation() {
-        let event = HlsEvent::VariantApplied {
-            from_variant: 0,
-            to_variant: 1,
-            reason: AbrReason::UpSwitch,
-        };
-
-        match event {
-            HlsEvent::VariantApplied {
-                from_variant,
-                to_variant,
-                reason,
-            } => {
-                assert_eq!(from_variant, 0);
-                assert_eq!(to_variant, 1);
-                assert!(matches!(reason, AbrReason::UpSwitch));
-            }
-            _ => panic!("Unexpected event type"),
-        }
-    }
 }

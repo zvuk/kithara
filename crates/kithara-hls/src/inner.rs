@@ -8,13 +8,18 @@ use kithara_assets::{
     AssetStoreBuilder, Assets, AssetsBackend, CoverageIndex, ProcessChunkFn, asset_root_for_url,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
+use kithara_events::{EventBus, HlsEvent};
 use kithara_net::HttpClient;
-use kithara_stream::{StreamContext, StreamType};
-use tokio::sync::broadcast;
+use kithara_stream::{StreamContext, StreamType, ThreadPool};
 
 use crate::{
-    HlsStreamContext, config::HlsConfig, error::HlsError, events::HlsEvent, fetch::FetchManager,
-    keys::KeyManager, parsing::variant_info_from_master, source::build_pair,
+    HlsStreamContext,
+    config::HlsConfig,
+    error::HlsError,
+    fetch::FetchManager,
+    keys::KeyManager,
+    parsing::variant_info_from_master,
+    source::{HlsSource, build_pair},
 };
 
 /// Marker type for HLS streaming.
@@ -22,19 +27,12 @@ pub struct Hls;
 
 impl StreamType for Hls {
     type Config = HlsConfig;
-    type Source = crate::source::HlsSource;
+    type Source = HlsSource;
     type Error = HlsError;
     type Event = HlsEvent;
 
-    fn ensure_events(config: &mut Self::Config) -> broadcast::Receiver<Self::Event> {
-        if config.events_tx.is_none() {
-            let capacity = config.events_channel_capacity.max(1);
-            config.events_tx = Some(broadcast::channel(capacity).0);
-        }
-        match config.events_tx {
-            Some(ref tx) => tx.subscribe(),
-            None => broadcast::channel(1).1,
-        }
+    fn thread_pool(config: &Self::Config) -> ThreadPool {
+        config.thread_pool.clone()
     }
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
@@ -107,15 +105,15 @@ impl StreamType for Hls {
         // Determine initial variant
         let initial_variant = config.abr.initial_variant();
 
-        // events_tx is guaranteed to exist (ensure_events was called by Stream::new).
-        let events_tx = match config.events_tx {
-            Some(ref tx) => tx.clone(),
-            None => broadcast::channel(config.events_channel_capacity.max(1)).0,
-        };
+        // Create or reuse event bus.
+        let bus = config
+            .bus
+            .clone()
+            .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
         // Emit VariantsDiscovered event
         let variant_info = variant_info_from_master(&master);
-        let _ = events_tx.send(HlsEvent::VariantsDiscovered {
+        bus.publish(HlsEvent::VariantsDiscovered {
             variants: variant_info,
             initial_variant,
         });
@@ -140,6 +138,7 @@ impl StreamType for Hls {
             &config,
             coverage_index,
             playlist_state,
+            bus,
         );
 
         // Spawn downloader on the thread pool.

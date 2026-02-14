@@ -95,23 +95,9 @@ impl PcmChunk {
         }
     }
 
-    /// Duration of this chunk in seconds.
-    pub fn duration_secs(&self) -> f64 {
-        if self.meta.spec.sample_rate == 0 {
-            0.0
-        } else {
-            self.frames() as f64 / self.meta.spec.sample_rate as f64
-        }
-    }
-
     /// Get reference to raw samples.
     pub fn samples(&self) -> &[f32] {
         &self.pcm
-    }
-
-    /// Consume chunk and return the pooled buffer.
-    pub fn into_samples(self) -> PcmBuf {
-        self.pcm
     }
 }
 
@@ -316,37 +302,6 @@ mod tests {
         assert_eq!(chunk.frames(), 0);
     }
 
-    #[rstest]
-    #[case(vec![0.0; 44100 * 2], 44100, 2, 1.0)] // 1 second stereo
-    #[case(vec![0.0; 48000], 48000, 1, 1.0)] // 1 second mono
-    #[case(vec![0.0; 88200], 44100, 2, 1.0)] // 1 second stereo (88200 samples / 2 ch)
-    #[case(vec![0.0; 44100], 44100, 2, 0.5)] // 0.5 seconds stereo
-    #[case(vec![], 44100, 2, 0.0)] // Empty = 0 duration
-    fn test_duration_secs(
-        #[case] pcm: Vec<f32>,
-        #[case] sample_rate: u32,
-        #[case] channels: u16,
-        #[case] expected_duration: f64,
-    ) {
-        let spec = PcmSpec {
-            channels,
-            sample_rate,
-        };
-        let chunk = test_chunk(spec, pcm);
-        let duration = chunk.duration_secs();
-        assert!((duration - expected_duration).abs() < 1e-6);
-    }
-
-    #[test]
-    fn test_duration_secs_zero_sample_rate() {
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 0,
-        };
-        let chunk = test_chunk(spec, vec![0.0, 1.0, 2.0, 3.0]);
-        assert_eq!(chunk.duration_secs(), 0.0);
-    }
-
     #[test]
     fn test_samples_access() {
         let spec = PcmSpec {
@@ -359,20 +314,6 @@ mod tests {
         let samples = chunk.samples();
         assert_eq!(samples.len(), 4);
         assert_eq!(samples, &pcm[..]);
-    }
-
-    #[test]
-    fn test_into_samples() {
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
-        let pcm = vec![0.1, 0.2, 0.3, 0.4];
-        let chunk = test_chunk(spec, pcm.clone());
-
-        let extracted = chunk.into_samples();
-        assert_eq!(extracted.len(), 4);
-        assert_eq!(&extracted[..], &pcm[..]);
     }
 
     #[test]

@@ -312,8 +312,13 @@ where
             evict_cfg,
             cancel.clone(),
             self.evict_enabled,
+            pool.clone(),
         ));
-        let processing = Arc::new(ProcessingAssets::new(evict.clone(), process_fn, pool));
+        let processing = Arc::new(ProcessingAssets::new(
+            evict.clone(),
+            process_fn,
+            pool.clone(),
+        ));
 
         // LeaseAssets holds evict for byte recording
         let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> = if self.lease_enabled {
@@ -322,7 +327,7 @@ where
             None
         };
         let lease =
-            LeaseAssets::with_options(processing, cancel, byte_recorder, self.lease_enabled);
+            LeaseAssets::with_options(processing, cancel, byte_recorder, self.lease_enabled, pool);
 
         // CachedAssets on top to cache LeaseResource with guards
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
@@ -347,9 +352,10 @@ where
             EvictConfig::default(),
             cancel.clone(),
             false,
+            pool.clone(),
         ));
-        let processing = Arc::new(ProcessingAssets::new(evict, process_fn, pool));
-        let lease = LeaseAssets::with_options(processing, cancel, None, false);
+        let processing = Arc::new(ProcessingAssets::new(evict, process_fn, pool.clone()));
+        let lease = LeaseAssets::with_options(processing, cancel, None, false, pool);
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
         CachedAssets::with_options(Arc::new(lease), capacity, true, true)
     }

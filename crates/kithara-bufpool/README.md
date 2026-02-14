@@ -50,8 +50,6 @@ let pcm = pcm_pool().get_with(|b| b.clear());
 | `byte_pool()` | `SharedPool<32, Vec<u8>>` | 1024 | 64 KB |
 | `pcm_pool()` | `SharedPool<32, Vec<f32>>` | 64 | 200K |
 
-Additional global pools can be defined with the `global_pool!` macro.
-
 ## Integration
 
 Used across the entire kithara workspace to eliminate allocations on hot paths (segment reads, PCM decode/resample, network I/O). Global pools are lazy-initialized via `OnceLock`.

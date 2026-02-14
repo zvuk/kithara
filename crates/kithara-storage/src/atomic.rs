@@ -125,9 +125,6 @@ impl<R: ResourceExt> ResourceExt for Atomic<R> {
 /// Crash-safe mmap-backed resource.
 pub type AtomicMmap = Atomic<crate::MmapResource>;
 
-/// Crash-safe in-memory resource (delegation only).
-pub type AtomicMem = Atomic<crate::MemResource>;
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

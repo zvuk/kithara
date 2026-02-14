@@ -6,6 +6,7 @@ use std::{io::Read, time::Duration};
 
 use fixture::TestServer;
 use kithara_assets::StoreOptions;
+use kithara_events::EventBus;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_stream::Stream;
 use rstest::rstest;
@@ -31,8 +32,9 @@ async fn debug_sequential_read(
     let url = server.url("/master.m3u8").unwrap();
     info!("Test server URL: {}", url);
 
-    // Create events channel
-    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+    // Create event bus
+    let bus = EventBus::new(32);
+    let mut events_rx = bus.subscribe();
 
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
@@ -41,7 +43,7 @@ async fn debug_sequential_read(
             mode: AbrMode::Manual(1),
             ..AbrOptions::default()
         })
-        .with_events(events_tx);
+        .with_events(bus);
 
     info!("Opening HLS stream...");
     let mut stream = Stream::<Hls>::new(config).await.unwrap();

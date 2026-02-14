@@ -22,9 +22,9 @@ mod mmap;
 mod resource;
 mod unified;
 
-pub use atomic::{Atomic, AtomicMem, AtomicMmap};
+pub use atomic::{Atomic, AtomicMmap};
 pub use coverage::{Coverage, MemCoverage};
-pub use driver::{Driver, DriverState, Resource};
+pub use driver::{Driver, Resource};
 pub use error::{StorageError, StorageResult};
 pub use memory::{MemDriver, MemOptions, MemResource};
 pub use mmap::{MmapDriver, MmapOptions, MmapResource};

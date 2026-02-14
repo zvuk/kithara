@@ -12,11 +12,11 @@
 
 use std::{env::args, error::Error};
 
-use kithara::{Resource, ResourceConfig};
+use kithara::{Resource, ResourceConfig, ThreadPool};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 1)]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -42,7 +42,8 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Opening: {}", url);
 
-    let config = ResourceConfig::new(&url)?;
+    let pool = ThreadPool::with_num_threads(2)?;
+    let config = ResourceConfig::new(&url)?.with_thread_pool(pool);
     let resource = Resource::new(config).await?;
 
     info!(spec = ?resource.spec(), "Format detected");

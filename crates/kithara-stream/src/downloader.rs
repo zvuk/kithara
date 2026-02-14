@@ -7,7 +7,7 @@
 //! - [`Downloader`]: mutable planner/committer (plan + commit, no I/O)
 //! - Backend (in `backend.rs`): generic orchestrator (backpressure, demand, parallelism, yield)
 
-use std::{convert::Infallible, future::Future};
+use std::future::Future;
 
 /// Outcome of [`Downloader::plan`].
 pub enum PlanOutcome<P> {
@@ -89,64 +89,4 @@ pub trait Downloader: Send + 'static {
 
     /// Wait until throttle condition clears.
     fn wait_ready(&self) -> impl Future<Output = ()> + Send;
-}
-
-// NoDownload / NoIo — for sources that don't need background downloading.
-
-/// No-op I/O executor.
-#[derive(Clone)]
-pub struct NoIo;
-
-impl DownloaderIo for NoIo {
-    type Plan = Infallible;
-    type Fetch = Infallible;
-    type Error = NoDownloadError;
-
-    async fn fetch(&self, plan: Self::Plan) -> Result<Self::Fetch, Self::Error> {
-        match plan {}
-    }
-}
-
-/// No-op downloader for sources that manage downloads internally.
-pub struct NoDownload;
-
-/// Error type for [`NoDownload`] (never constructed).
-#[derive(Debug)]
-pub struct NoDownloadError;
-
-impl std::fmt::Display for NoDownloadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "no download")
-    }
-}
-
-impl std::error::Error for NoDownloadError {}
-
-impl Downloader for NoDownload {
-    type Plan = Infallible;
-    type Fetch = Infallible;
-    type Error = NoDownloadError;
-    type Io = NoIo;
-
-    fn io(&self) -> &Self::Io {
-        &NoIo
-    }
-
-    async fn poll_demand(&mut self) -> Option<Self::Plan> {
-        std::future::pending().await
-    }
-
-    async fn plan(&mut self) -> PlanOutcome<Self::Plan> {
-        std::future::pending().await
-    }
-
-    fn commit(&mut self, fetch: Self::Fetch) {
-        match fetch {}
-    }
-
-    fn should_throttle(&self) -> bool {
-        false
-    }
-
-    async fn wait_ready(&self) {}
 }

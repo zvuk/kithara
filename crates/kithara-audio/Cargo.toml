@@ -17,6 +17,7 @@ kithara-bufpool = { workspace = true }
 rubato = { workspace = true }
 audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
+fallible-iterator = { workspace = true }
 thiserror = { workspace = true }
 kanal = { workspace = true }
 tokio = { workspace = true }

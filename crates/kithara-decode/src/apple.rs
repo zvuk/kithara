@@ -32,6 +32,7 @@ use std::{
 trait ReadSeek: Read + Seek + Send {}
 impl<T: Read + Seek + Send> ReadSeek for T {}
 
+use kithara_bufpool::PcmPool;
 use kithara_stream::ContainerFormat;
 use tracing::{debug, trace, warn};
 
@@ -355,6 +356,10 @@ pub struct AppleConfig {
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Container format hint for file type detection.
     pub container: Option<ContainerFormat>,
+    /// Optional PCM buffer pool override.
+    ///
+    /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
+    pub pcm_pool: Option<PcmPool>,
 }
 
 /// Apple AudioToolbox streaming decoder inner state.
@@ -397,6 +402,8 @@ struct AppleInner {
     data_offset: u64,
     /// Codec-reported priming info (encoder delay).
     prime_info: Option<AudioConverterPrimeInfo>,
+    /// PCM buffer pool (resolved from config or global).
+    pool: PcmPool,
 }
 
 impl AppleInner {
@@ -630,6 +637,10 @@ impl AppleInner {
             sample_rate,
         };
         let byte_len_handle = config.byte_len_handle.clone().unwrap_or_default();
+        let pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
 
         // Allocate PCM buffer (1024 frames * channels)
         let buffer_frames = 1024;
@@ -667,6 +678,7 @@ impl AppleInner {
             source_byte_pos: total_parsed as u64,
             data_offset,
             prime_info,
+            pool,
         })
     }
 
@@ -763,7 +775,7 @@ impl AppleInner {
             variant_index: None,
             epoch: 0,
         };
-        let chunk = PcmChunk::new(meta, kithara_bufpool::pcm_pool().attach(pcm));
+        let chunk = PcmChunk::new(meta, self.pool.attach(pcm));
 
         // Update position and frame offset
         self.frames_decoded += frames as u64;
@@ -1295,12 +1307,14 @@ mod tests {
         let config = AppleConfig::default();
         assert!(config.byte_len_handle.is_none());
         assert!(config.container.is_none());
+        assert!(config.pcm_pool.is_none());
     }
 
     #[test]
     fn test_apple_config_with_container() {
         let config = AppleConfig {
             container: Some(ContainerFormat::Fmp4),
+            pcm_pool: None,
             ..Default::default()
         };
         assert_eq!(config.container, Some(ContainerFormat::Fmp4));

@@ -10,6 +10,7 @@ use std::{
 };
 
 use kithara_assets::StoreOptions;
+use kithara_events::{Event, EventBus};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig, HlsEvent};
 use kithara_stream::Stream;
 use rstest::rstest;
@@ -116,12 +117,13 @@ async fn test_driver_abr_seek_backward(
 
     let url = server.url("/master.m3u8").unwrap();
 
-    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+    let bus = EventBus::new(32);
+    let mut events_rx = bus.subscribe();
 
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_events(events_tx)
+        .with_events(bus)
         .with_abr(AbrOptions {
             down_switch_buffer_secs: 0.5,
             min_buffer_for_up_switch_secs: 1.0,
@@ -139,18 +141,18 @@ async fn test_driver_abr_seek_backward(
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             match ev {
-                HlsEvent::VariantApplied {
+                Event::Hls(HlsEvent::VariantApplied {
                     from_variant,
                     to_variant,
                     ..
-                } => {
+                }) => {
                     info!("Variant switch: {} -> {}", from_variant, to_variant);
                     switches_clone
                         .lock()
                         .unwrap()
                         .push((from_variant, to_variant));
                 }
-                HlsEvent::EndOfStream => break,
+                Event::Hls(HlsEvent::EndOfStream) => break,
                 _ => {}
             }
         }

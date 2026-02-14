@@ -17,6 +17,7 @@ kithara-bufpool = { workspace = true }
 kithara-audio = { workspace = true }
 kithara-decode = { workspace = true }
 kithara-drm = { workspace = true }
+kithara-events = { workspace = true, features = ["hls"] }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-net = { workspace = true }

@@ -10,12 +10,15 @@
 use std::{
     future::Future,
     io::{Read, Seek, SeekFrom},
-    sync::{Arc, atomic::AtomicU64},
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
-use tokio::sync::broadcast;
+use kithara_storage::WaitOutcome;
 
-use crate::{MediaInfo, StreamContext, reader::Reader, source::Source};
+use crate::{MediaInfo, StreamContext, ThreadPool, source::Source};
 
 /// Defines a stream type and how to create it.
 ///
@@ -31,23 +34,24 @@ pub trait StreamType: Send + 'static {
     /// Error type for stream creation.
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Event type emitted by this stream.
+    /// Event type emitted by this stream (legacy, will be removed).
     type Event: Clone + Send + 'static;
 
     /// Create the source from configuration.
     ///
-    /// The source will be wrapped in `Reader` by `Stream::new()`.
     /// May also start background tasks (downloader) internally.
     fn create(
         config: Self::Config,
     ) -> impl Future<Output = Result<Self::Source, Self::Error>> + Send;
 
-    /// Ensure an events channel exists in config and return a receiver.
+    /// Extract the thread pool from config.
     ///
-    /// If the config already has `events_tx`, subscribes to it.
-    /// Otherwise creates a new channel and sets it on the config.
-    /// Called by `Stream::new()` before `create()`.
-    fn ensure_events(config: &mut Self::Config) -> broadcast::Receiver<Self::Event>;
+    /// Default returns the global rayon pool. Override for stream types
+    /// that store a custom pool in their config.
+    fn thread_pool(config: &Self::Config) -> ThreadPool {
+        let _ = config;
+        ThreadPool::default()
+    }
 
     /// Build a `StreamContext` from the source and shared byte position.
     ///
@@ -59,103 +63,55 @@ pub trait StreamType: Send + 'static {
     ) -> Arc<dyn StreamContext>;
 }
 
-/// Generic audio stream.
+/// Generic audio stream with sync `Read + Seek`.
 ///
 /// `T` is a marker type defining the stream source (`Hls`, `File`, etc.).
-/// Stream holds a `Reader<T::Source>` which provides sync Read + Seek.
+/// Stream holds the source directly and implements `Read + Seek` by calling
+/// `Source::wait_range()` and `Source::read_at()`.
 pub struct Stream<T: StreamType> {
-    reader: Reader<T::Source>,
-    media_info: Option<MediaInfo>,
-    pending_format_change: Option<MediaInfo>,
-    events_rx: Option<broadcast::Receiver<T::Event>>,
+    source: T::Source,
+    pos: Arc<AtomicU64>,
 }
 
 impl<T: StreamType> Stream<T> {
     /// Create a new stream from configuration.
-    pub async fn new(mut config: T::Config) -> Result<Self, T::Error> {
-        let events_rx = T::ensure_events(&mut config);
+    pub async fn new(config: T::Config) -> Result<Self, T::Error> {
         let source = T::create(config).await?;
         Ok(Self {
-            reader: Reader::new(source),
-            media_info: None,
-            pending_format_change: None,
-            events_rx: Some(events_rx),
+            source,
+            pos: Arc::new(AtomicU64::new(0)),
         })
-    }
-
-    /// Create a stream from an existing source.
-    pub fn from_source(source: T::Source) -> Self {
-        Self {
-            reader: Reader::new(source),
-            media_info: None,
-            pending_format_change: None,
-            events_rx: None,
-        }
-    }
-
-    /// Take the stream events receiver.
-    ///
-    /// Returns `Some` on first call, `None` on subsequent calls.
-    /// Used by `Decoder` to forward stream events into the unified channel.
-    pub fn take_events_rx(&mut self) -> Option<broadcast::Receiver<T::Event>> {
-        self.events_rx.take()
     }
 
     /// Get current read position.
     pub fn position(&self) -> u64 {
-        self.reader.position()
-    }
-
-    /// Get shared reference to inner source.
-    pub fn source(&self) -> &T::Source {
-        self.reader.source()
+        self.pos.load(Ordering::Relaxed)
     }
 
     /// Get handle to shared byte position (for `StreamContext`).
     pub fn position_handle(&self) -> Arc<AtomicU64> {
-        self.reader.position_handle()
+        Arc::clone(&self.pos)
+    }
+
+    /// Get shared reference to inner source.
+    pub fn source(&self) -> &T::Source {
+        &self.source
     }
 
     /// Get current media info if known.
-    ///
-    /// First checks locally stored info, then delegates to source.
     pub fn media_info(&self) -> Option<MediaInfo> {
-        if let Some(ref info) = self.media_info {
-            return Some(info.clone());
-        }
-        self.reader.media_info()
-    }
-
-    /// Set media info.
-    pub fn set_media_info(&mut self, info: MediaInfo) {
-        self.media_info = Some(info);
-    }
-
-    /// Poll for format change.
-    ///
-    /// Returns `Some(MediaInfo)` if format has changed since last poll.
-    pub fn poll_format_change(&mut self) -> Option<MediaInfo> {
-        self.pending_format_change.take()
-    }
-
-    /// Signal a format change.
-    pub fn signal_format_change(&mut self, info: MediaInfo) {
-        self.pending_format_change = Some(info);
+        self.source.media_info()
     }
 
     /// Get total length if known.
+    #[expect(clippy::len_without_is_empty)]
     pub fn len(&self) -> Option<u64> {
-        self.reader.len()
-    }
-
-    /// Check if length is zero or unknown.
-    pub fn is_empty(&self) -> bool {
-        self.reader.is_empty()
+        self.source.len()
     }
 
     /// Get current segment byte range (for segmented sources like HLS).
     pub fn current_segment_range(&self) -> Option<std::ops::Range<u64>> {
-        self.reader.current_segment_range()
+        self.source.current_segment_range()
     }
 
     /// Get byte range of first segment with current format after ABR switch.
@@ -163,24 +119,85 @@ impl<T: StreamType> Stream<T> {
     /// For HLS: returns the first segment of the new variant which contains
     /// init data (ftyp/moov). This is where the decoder should be recreated.
     pub fn format_change_segment_range(&self) -> Option<std::ops::Range<u64>> {
-        self.reader.format_change_segment_range()
+        self.source.format_change_segment_range()
     }
 
     /// Clear variant fence, allowing reads from the next variant.
     pub fn clear_variant_fence(&mut self) {
-        self.reader.clear_variant_fence();
+        self.source.clear_variant_fence();
     }
 }
 
 impl<T: StreamType> Read for Stream<T> {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.reader.read(buf)
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        let pos = self.pos.load(Ordering::Relaxed);
+        let range = pos..pos.saturating_add(buf.len() as u64);
+
+        // Wait for data to be available (blocking)
+        match self
+            .source
+            .wait_range(range)
+            .map_err(|e| std::io::Error::other(e.to_string()))?
+        {
+            WaitOutcome::Ready => {}
+            WaitOutcome::Eof => return Ok(0),
+        }
+
+        // Read data directly from source
+        let n = self
+            .source
+            .read_at(pos, buf)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+
+        self.pos
+            .store(pos.saturating_add(n as u64), Ordering::Relaxed);
+        Ok(n)
     }
 }
 
 impl<T: StreamType> Seek for Stream<T> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        self.reader.seek(pos)
+        let current = self.pos.load(Ordering::Relaxed);
+        let new_pos: i128 = match pos {
+            SeekFrom::Start(p) => p as i128,
+            SeekFrom::Current(delta) => (current as i128).saturating_add(delta as i128),
+            SeekFrom::End(delta) => {
+                let Some(len) = self.source.len() else {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::Unsupported,
+                        "seek from end requires known length",
+                    ));
+                };
+                (len as i128).saturating_add(delta as i128)
+            }
+        };
+
+        if new_pos < 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "negative seek position",
+            ));
+        }
+
+        let new_pos = new_pos as u64;
+
+        if let Some(len) = self.source.len()
+            && new_pos > len
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "seek past EOF: new_pos={new_pos} len={len} current_pos={current} seek_from={pos:?}",
+                ),
+            ));
+        }
+
+        self.pos.store(new_pos, Ordering::Relaxed);
+        Ok(new_pos)
     }
 }

@@ -272,11 +272,6 @@ impl AbrController<ThroughputEstimator> {
     }
 }
 
-/// Type alias for backward compatibility.
-/// Use `AbrController<ThroughputEstimator>` or this alias for production code.
-/// Use `AbrController<MockEstimator>` in tests for isolated testing.
-pub type DefaultAbrController = AbrController<ThroughputEstimator>;
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;

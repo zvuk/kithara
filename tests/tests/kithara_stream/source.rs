@@ -5,10 +5,11 @@ use std::{
     time::Duration,
 };
 
-use kithara_stream::Reader;
 use rstest::{fixture, rstest};
 
-use crate::common::memory_source::{MemorySource, UnknownLenSource};
+use crate::common::memory_source::{
+    MemorySource, UnknownLenSource, memory_stream, unknown_len_stream,
+};
 
 // Fixtures
 
@@ -38,13 +39,13 @@ fn seek_start_reads_correct_bytes(
     #[case] expected: &[u8],
 ) {
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
-    let pos = reader.seek(SeekFrom::Start(seek_pos)).unwrap();
+    let pos = stream.seek(SeekFrom::Start(seek_pos)).unwrap();
     assert_eq!(pos, seek_pos);
 
     let mut buf = vec![0u8; expected.len()];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
 
     assert_eq!(n, expected.len());
     assert_eq!(&buf[..n], expected);
@@ -55,19 +56,19 @@ fn seek_start_reads_correct_bytes(
 #[test]
 fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
     // Read some bytes first
     let mut buf = [0u8; 10];
-    let _ = reader.read(&mut buf).unwrap();
+    let _ = stream.read(&mut buf).unwrap();
 
     // Seek back to start
-    let pos = reader.seek(SeekFrom::Start(0)).unwrap();
+    let pos = stream.seek(SeekFrom::Start(0)).unwrap();
     assert_eq!(pos, 0);
 
     // Read from beginning
     let mut buf = [0u8; 5];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
 
     assert_eq!(n, 5);
     assert_eq!(&buf[..n], b"ABCDE");
@@ -80,21 +81,21 @@ fn seek_start_zero_reads_from_beginning(test_data: Vec<u8>) {
 #[test]
 fn seek_current_forward(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
     // Read 5 bytes (position = 5)
     let mut buf = [0u8; 5];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
     assert_eq!(n, 5);
     assert_eq!(&buf, b"ABCDE");
 
     // Seek forward 5 bytes (position = 10)
-    let pos = reader.seek(SeekFrom::Current(5)).unwrap();
+    let pos = stream.seek(SeekFrom::Current(5)).unwrap();
     assert_eq!(pos, 10);
 
     // Read from position 10
     let mut buf = [0u8; 5];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
 
     assert_eq!(n, 5);
     assert_eq!(&buf[..n], b"KLMNO");
@@ -104,20 +105,20 @@ fn seek_current_forward(test_data: Vec<u8>) {
 #[test]
 fn seek_current_backward(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
     // Read 10 bytes (position = 10)
     let mut buf = [0u8; 10];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
     assert_eq!(n, 10);
 
     // Seek backward 5 bytes (position = 5)
-    let pos = reader.seek(SeekFrom::Current(-5)).unwrap();
+    let pos = stream.seek(SeekFrom::Current(-5)).unwrap();
     assert_eq!(pos, 5);
 
     // Read from position 5
     let mut buf = [0u8; 5];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
 
     assert_eq!(n, 5);
     assert_eq!(&buf[..n], b"FGHIJ");
@@ -128,15 +129,15 @@ fn seek_current_backward(test_data: Vec<u8>) {
 #[test]
 fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
     // Read 10 bytes
     let mut buf = [0u8; 10];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
     assert_eq!(n, 10);
 
     // Seek 0 should stay at current position — use stream_position()
-    let pos = reader.stream_position().unwrap();
+    let pos = stream.stream_position().unwrap();
     assert_eq!(pos, 10);
 }
 
@@ -151,15 +152,15 @@ fn seek_current_zero_stays_at_position(test_data: Vec<u8>) {
 fn seek_end_reads_correct_bytes(test_data: Vec<u8>, #[case] offset: i64, #[case] expected: &[u8]) {
     let data_len = test_data.len();
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
     let expected_pos = (data_len as i64 + offset) as u64;
 
-    let pos = reader.seek(SeekFrom::End(offset)).unwrap();
+    let pos = stream.seek(SeekFrom::End(offset)).unwrap();
     assert_eq!(pos, expected_pos);
 
     let mut buf = vec![0u8; expected.len()];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
 
     assert_eq!(n, expected.len());
     assert_eq!(&buf[..n], expected);
@@ -171,14 +172,14 @@ fn seek_end_reads_correct_bytes(test_data: Vec<u8>, #[case] offset: i64, #[case]
 fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
-    let pos = reader.seek(SeekFrom::End(0)).unwrap();
+    let pos = stream.seek(SeekFrom::End(0)).unwrap();
     assert_eq!(pos, data_len);
 
     // Read should return 0 (EOF)
     let mut buf = [0u8; 5];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
     assert_eq!(n, 0);
 }
 
@@ -187,9 +188,9 @@ fn seek_end_zero_seeks_to_eof(test_data: Vec<u8>) {
 #[test]
 fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
     let source = UnknownLenSource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = unknown_len_stream(source);
 
-    let result = reader.seek(SeekFrom::End(-5));
+    let result = stream.seek(SeekFrom::End(-5));
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -204,9 +205,9 @@ fn seek_end_fails_without_known_length(test_data: Vec<u8>) {
 fn seek_past_eof_fails(test_data: Vec<u8>) {
     let data_len = test_data.len() as u64;
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
-    let result = reader.seek(SeekFrom::Start(data_len + 10));
+    let result = stream.seek(SeekFrom::Start(data_len + 10));
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -218,9 +219,9 @@ fn seek_past_eof_fails(test_data: Vec<u8>) {
 #[test]
 fn seek_negative_position_fails(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
-    let result = reader.seek(SeekFrom::Current(-100));
+    let result = stream.seek(SeekFrom::Current(-100));
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -232,9 +233,9 @@ fn seek_negative_position_fails(test_data: Vec<u8>) {
 #[test]
 fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
-    let result = reader.seek(SeekFrom::End(10));
+    let result = stream.seek(SeekFrom::End(10));
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -248,31 +249,31 @@ fn seek_end_positive_offset_past_eof_fails(test_data: Vec<u8>) {
 #[test]
 fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
     let mut results = Vec::new();
 
     // Seek to position 10
-    reader.seek(SeekFrom::Start(10)).unwrap();
+    stream.seek(SeekFrom::Start(10)).unwrap();
     let mut buf = [0u8; 1];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
     assert_eq!(n, 1);
     results.push(buf[0]);
 
     // Seek back to 5
-    reader.seek(SeekFrom::Start(5)).unwrap();
-    let n = reader.read(&mut buf).unwrap();
+    stream.seek(SeekFrom::Start(5)).unwrap();
+    let n = stream.read(&mut buf).unwrap();
     assert_eq!(n, 1);
     results.push(buf[0]);
 
     // Seek forward from current (+10)
-    reader.seek(SeekFrom::Current(10)).unwrap();
-    let n = reader.read(&mut buf).unwrap();
+    stream.seek(SeekFrom::Current(10)).unwrap();
+    let n = stream.read(&mut buf).unwrap();
     assert_eq!(n, 1);
     results.push(buf[0]);
 
     // Seek from end (-3)
-    reader.seek(SeekFrom::End(-3)).unwrap();
-    let n = reader.read(&mut buf).unwrap();
+    stream.seek(SeekFrom::End(-3)).unwrap();
+    let n = stream.read(&mut buf).unwrap();
     assert_eq!(n, 1);
     results.push(buf[0]);
 
@@ -287,26 +288,26 @@ fn multiple_seeks_work_correctly(test_data: Vec<u8>) {
 #[test]
 fn position_tracks_correctly(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
     let mut positions = Vec::new();
 
-    positions.push(reader.position());
+    positions.push(stream.position());
 
     // Read 5 bytes
     let mut buf = [0u8; 5];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
     assert_eq!(n, 5);
-    positions.push(reader.position());
+    positions.push(stream.position());
 
     // Seek to 15
-    reader.seek(SeekFrom::Start(15)).unwrap();
-    positions.push(reader.position());
+    stream.seek(SeekFrom::Start(15)).unwrap();
+    positions.push(stream.position());
 
     // Read 3 more bytes
     let mut buf = [0u8; 3];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
     assert_eq!(n, 3);
-    positions.push(reader.position());
+    positions.push(stream.position());
 
     assert_eq!(positions[0], 0);
     assert_eq!(positions[1], 5);
@@ -321,16 +322,16 @@ fn position_tracks_correctly(test_data: Vec<u8>) {
 #[test]
 fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
     let source = MemorySource::new(test_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
-    reader.seek(SeekFrom::Start(10)).unwrap();
+    stream.seek(SeekFrom::Start(10)).unwrap();
 
     // Read with empty buffer
     let mut buf = [];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
 
     // Position should not change
-    let pos = reader.position();
+    let pos = stream.position();
 
     assert_eq!(n, 0);
     assert_eq!(pos, 10);
@@ -342,14 +343,14 @@ fn seek_and_read_empty_buffer(test_data: Vec<u8>) {
 fn seek_exact_to_last_byte(small_data: Vec<u8>) {
     let len = small_data.len() as u64;
     let source = MemorySource::new(small_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
     // Seek to last byte
-    let pos = reader.seek(SeekFrom::Start(len - 1)).unwrap();
+    let pos = stream.seek(SeekFrom::Start(len - 1)).unwrap();
     assert_eq!(pos, len - 1);
 
     let mut buf = [0u8; 1];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
 
     assert_eq!(n, 1);
     assert_eq!(buf[0], b'o'); // "Hello" -> last byte is 'o'
@@ -361,14 +362,14 @@ fn seek_exact_to_last_byte(small_data: Vec<u8>) {
 fn seek_to_exact_eof_returns_zero_on_read(small_data: Vec<u8>) {
     let len = small_data.len() as u64;
     let source = MemorySource::new(small_data);
-    let mut reader = Reader::new(source);
+    let mut stream = memory_stream(source);
 
     // Seek to exactly EOF
-    let pos = reader.seek(SeekFrom::Start(len)).unwrap();
+    let pos = stream.seek(SeekFrom::Start(len)).unwrap();
     assert_eq!(pos, len);
 
     let mut buf = [0u8; 10];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
 
     assert_eq!(n, 0);
 }

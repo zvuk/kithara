@@ -9,19 +9,18 @@ use futures::StreamExt;
 use kithara_assets::{
     AssetStoreBuilder, Assets, CoverageIndex, DiskCoverage, ResourceKey, asset_root_for_url,
 };
+use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient};
 use kithara_storage::{Coverage, MemCoverage, MmapResource, ResourceExt, ResourceStatus};
 use kithara_stream::{
     Backend, Downloader, DownloaderIo, NullStreamContext, PlanOutcome, StepResult, StreamContext,
-    StreamType, Writer, WriterItem,
+    StreamType, ThreadPool, Writer, WriterItem,
 };
-use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::{FileConfig, FileSrc},
     error::SourceError,
-    events::FileEvent,
     session::{FileSource, FileStreamState, Progress, SharedFileState},
 };
 
@@ -34,15 +33,8 @@ impl StreamType for File {
     type Error = SourceError;
     type Event = FileEvent;
 
-    fn ensure_events(config: &mut Self::Config) -> broadcast::Receiver<Self::Event> {
-        if config.events_tx.is_none() {
-            let capacity = config.events_channel_capacity.max(1);
-            config.events_tx = Some(broadcast::channel(capacity).0);
-        }
-        match config.events_tx {
-            Some(ref tx) => tx.subscribe(),
-            None => broadcast::channel(1).1,
-        }
+    fn thread_pool(config: &Self::Config) -> ThreadPool {
+        config.thread_pool.clone()
     }
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
@@ -92,17 +84,17 @@ impl File {
         let res = store.open_resource(&key).map_err(SourceError::Assets)?;
         let len = res.len();
 
-        let events = config
-            .events_tx
-            .unwrap_or_else(|| broadcast::channel(config.events_channel_capacity.max(1)).0);
+        let bus = config
+            .bus
+            .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
         let progress = Arc::new(Progress::new());
         // Local file is fully available — mark download as complete.
         let total = len.unwrap_or(0);
         progress.set_download_pos(total);
-        let _ = events.send(FileEvent::DownloadComplete { total_bytes: total });
+        bus.publish(FileEvent::DownloadComplete { total_bytes: total });
 
-        Ok(FileSource::new(res, progress, events, len))
+        Ok(FileSource::new(res, progress, bus, len))
     }
 
     /// Create a source for a remote file (HTTP/HTTPS).
@@ -137,8 +129,8 @@ impl File {
             &net_client,
             url,
             cancel.clone(),
-            config.events_tx.clone(),
-            config.events_channel_capacity,
+            config.bus.clone(),
+            config.event_channel_capacity,
         )
         .await?;
 
@@ -162,9 +154,9 @@ impl File {
             tracing::debug!("file already cached, skipping download");
             let total = state.len().unwrap_or(0);
             progress.set_download_pos(total);
-            let _ = state
-                .events()
-                .send(FileEvent::DownloadComplete { total_bytes: total });
+            state
+                .bus()
+                .publish(FileEvent::DownloadComplete { total_bytes: total });
         } else {
             if is_partial {
                 // Partial cache: reactivate resource for continued writing.
@@ -179,7 +171,7 @@ impl File {
                 &net_client,
                 state.clone(),
                 progress.clone(),
-                state.events().clone(),
+                state.bus().clone(),
                 config.look_ahead_bytes,
                 shared.clone(),
                 coverage_index,
@@ -194,7 +186,7 @@ impl File {
             let source = FileSource::with_shared(
                 state.res().clone(),
                 progress,
-                state.events().clone(),
+                state.bus().clone(),
                 state.len(),
                 shared,
                 backend,
@@ -207,7 +199,7 @@ impl File {
         let source = FileSource::new(
             state.res().clone(),
             progress,
-            state.events().clone(),
+            state.bus().clone(),
             state.len(),
         );
 
@@ -383,7 +375,7 @@ pub struct FileDownloader {
     writer: Writer,
     res: kithara_assets::AssetResource,
     progress: Arc<Progress>,
-    events_tx: broadcast::Sender<FileEvent>,
+    bus: EventBus,
     total: Option<u64>,
     /// Backpressure threshold. None = no backpressure.
     look_ahead_bytes: Option<u64>,
@@ -399,7 +391,7 @@ impl FileDownloader {
         net_client: &HttpClient,
         state: Arc<FileStreamState>,
         progress: Arc<Progress>,
-        events_tx: broadcast::Sender<FileEvent>,
+        bus: EventBus,
         look_ahead_bytes: Option<u64>,
         shared: Arc<SharedFileState>,
         coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
@@ -414,7 +406,7 @@ impl FileDownloader {
             Err(e) => {
                 tracing::warn!("failed to open stream: {}", e);
                 res.fail(e.to_string());
-                let _ = events_tx.send(FileEvent::DownloadError {
+                bus.publish(FileEvent::DownloadError {
                     error: e.to_string(),
                 });
                 // Return a writer from an empty stream so step() returns error immediately
@@ -465,7 +457,7 @@ impl FileDownloader {
             writer,
             res,
             progress,
-            events_tx,
+            bus,
             total,
             look_ahead_bytes,
             shared,
@@ -519,13 +511,12 @@ impl Downloader for FileDownloader {
                         if let Err(e) = self.res.commit(self.total) {
                             tracing::error!(?e, "failed to commit resource after gap-filling");
                             self.res.fail(format!("commit failed: {e}"));
-                            let _ = self.events_tx.send(FileEvent::DownloadError {
+                            self.bus.publish(FileEvent::DownloadError {
                                 error: format!("commit failed: {e}"),
                             });
                         } else if let Some(total) = self.total {
-                            let _ = self
-                                .events_tx
-                                .send(FileEvent::DownloadComplete { total_bytes: total });
+                            self.bus
+                                .publish(FileEvent::DownloadComplete { total_bytes: total });
                         }
                         self.phase = FilePhase::Complete;
                         PlanOutcome::Complete
@@ -572,7 +563,7 @@ impl Downloader for FileDownloader {
             }
             Err(e) => {
                 tracing::warn!("download failed: {}", e);
-                let _ = self.events_tx.send(FileEvent::DownloadError {
+                self.bus.publish(FileEvent::DownloadError {
                     error: e.to_string(),
                 });
                 // Transition to gap-filling on error.
@@ -592,7 +583,7 @@ impl Downloader for FileDownloader {
                 let download_offset = offset + len;
                 self.coverage.mark(offset..download_offset);
                 self.progress.set_download_pos(download_offset);
-                let _ = self.events_tx.send(FileEvent::DownloadProgress {
+                self.bus.publish(FileEvent::DownloadProgress {
                     offset: download_offset,
                     total: self.total,
                 });
@@ -606,13 +597,12 @@ impl Downloader for FileDownloader {
                     if let Err(e) = self.res.commit(self.total) {
                         tracing::error!(?e, "failed to commit resource after range done");
                         self.res.fail(format!("commit failed: {e}"));
-                        let _ = self.events_tx.send(FileEvent::DownloadError {
+                        self.bus.publish(FileEvent::DownloadError {
                             error: format!("commit failed: {e}"),
                         });
                     } else if let Some(total) = self.total {
-                        let _ = self
-                            .events_tx
-                            .send(FileEvent::DownloadComplete { total_bytes: total });
+                        self.bus
+                            .publish(FileEvent::DownloadComplete { total_bytes: total });
                     }
                     self.phase = FilePhase::Complete;
                 }
@@ -630,13 +620,12 @@ impl Downloader for FileDownloader {
                     if let Err(e) = self.res.commit(Some(total_bytes)) {
                         tracing::error!(?e, "failed to commit resource");
                         self.res.fail(format!("commit failed: {e}"));
-                        let _ = self.events_tx.send(FileEvent::DownloadError {
+                        self.bus.publish(FileEvent::DownloadError {
                             error: format!("commit failed: {e}"),
                         });
                     } else {
-                        let _ = self
-                            .events_tx
-                            .send(FileEvent::DownloadComplete { total_bytes });
+                        self.bus
+                            .publish(FileEvent::DownloadComplete { total_bytes });
                     }
                     self.phase = FilePhase::Complete;
                 } else {
@@ -648,7 +637,7 @@ impl Downloader for FileDownloader {
                         expected = ?self.total,
                         "stream ended early — switching to gap-filling"
                     );
-                    let _ = self.events_tx.send(FileEvent::DownloadProgress {
+                    self.bus.publish(FileEvent::DownloadProgress {
                         offset: total_bytes,
                         total: self.total,
                     });

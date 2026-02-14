@@ -8,7 +8,8 @@ use std::{
     },
 };
 
-use kithara_decode::{InnerDecoder, PcmChunk, PcmSpec};
+use fallible_iterator::FallibleIterator;
+use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
 use kithara_stream::{Fetch, MediaInfo, Stream, StreamType};
 use parking_lot::Mutex;
 use tracing::{debug, trace, warn};
@@ -260,6 +261,70 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.recreate_decoder(&new_info, target_offset)
     }
 
+    /// Track chunk statistics and emit format events.
+    fn track_chunk(&mut self, chunk: &PcmChunk) {
+        self.chunks_decoded += 1;
+        self.total_samples += chunk.pcm.len() as u64;
+
+        // Emit FormatDetected on first chunk
+        if self.chunks_decoded == 1
+            && let Some(ref emit) = self.emit
+        {
+            emit(AudioEvent::FormatDetected { spec: chunk.spec() });
+            self.last_spec = Some(chunk.spec());
+        }
+
+        // Detect spec change (e.g. after ABR switch)
+        if let Some(old_spec) = self.last_spec
+            && old_spec != chunk.spec()
+        {
+            self.emit_event(AudioEvent::FormatChanged {
+                old: old_spec,
+                new: chunk.spec(),
+            });
+            self.last_spec = Some(chunk.spec());
+        }
+    }
+
+    /// Emit an audio event if the callback is set.
+    fn emit_event(&self, event: AudioEvent) {
+        if let Some(ref emit) = self.emit {
+            emit(event);
+        }
+    }
+
+    /// Check if decode error occurred near a format boundary and recover.
+    ///
+    /// Returns true if the decoder was recreated at the boundary.
+    fn try_recover_at_boundary(&mut self) -> bool {
+        if let Some((_, target_offset)) = &self.pending_format_change {
+            let current_pos = self.shared_stream.position();
+            let remaining = target_offset.saturating_sub(current_pos);
+
+            if remaining < 1024 * 1024 {
+                debug!(
+                    chunks = self.chunks_decoded,
+                    samples = self.total_samples,
+                    current_pos,
+                    target_offset = *target_offset,
+                    remaining,
+                    "Decoder error at format boundary, recreating decoder"
+                );
+                if self.apply_format_change() {
+                    return true;
+                }
+            } else {
+                debug!(
+                    current_pos,
+                    target_offset = *target_offset,
+                    remaining,
+                    "Decoder error far from format boundary, not switching"
+                );
+            }
+        }
+        false
+    }
+
     /// Recreate decoder with new `MediaInfo` via factory.
     ///
     /// The factory handles `OffsetReader` creation and decoder instantiation.
@@ -302,13 +367,11 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 }
 
-impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
-    type Chunk = PcmChunk;
-    type Command = AudioCommand;
+impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
+    type Item = PcmChunk;
+    type Error = DecodeError;
 
-    fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
-        let current_epoch = self.epoch.load(Ordering::Acquire);
-
+    fn next(&mut self) -> DecodeResult<Option<PcmChunk>> {
         loop {
             self.detect_format_change();
 
@@ -318,30 +381,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                         continue;
                     }
 
-                    self.chunks_decoded += 1;
-                    self.total_samples += chunk.pcm.len() as u64;
-
-                    // Emit FormatDetected on first chunk
-                    if self.chunks_decoded == 1
-                        && let Some(ref emit) = self.emit
-                    {
-                        emit(AudioEvent::FormatDetected { spec: chunk.spec() });
-                        self.last_spec = Some(chunk.spec());
-                    }
-
-                    // Detect spec change (e.g. after ABR switch)
-                    if let Some(old_spec) = self.last_spec
-                        && old_spec != chunk.spec()
-                    {
-                        if let Some(ref emit) = self.emit {
-                            emit(AudioEvent::FormatChanged {
-                                old: old_spec,
-                                new: chunk.spec(),
-                            });
-                        }
-                        self.last_spec = Some(chunk.spec());
-                    }
-
+                    self.track_chunk(&chunk);
                     self.detect_format_change();
 
                     if self.chunks_decoded.is_multiple_of(100) {
@@ -349,16 +389,12 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                             chunks = self.chunks_decoded,
                             samples = self.total_samples,
                             spec = ?chunk.spec(),
-                            epoch = current_epoch,
                             "decode progress"
                         );
                     }
 
-                    // Apply effects chain
                     match apply_effects(&mut self.effects, chunk) {
-                        Some(processed) => {
-                            return Fetch::new(processed, false, current_epoch);
-                        }
+                        Some(processed) => return Ok(Some(processed)),
                         None => continue,
                     }
                 }
@@ -373,9 +409,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                             "Decoder EOF at format boundary, recreating decoder"
                         );
                         if self.apply_format_change() {
-                            // Reset effects to discard residual data from old codec.
-                            // Without this, the resampler mixes old buffered samples
-                            // with new decoder output → audible click.
                             reset_effects(&mut self.effects);
                             continue;
                         }
@@ -385,22 +418,16 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                         chunks = self.chunks_decoded,
                         samples = self.total_samples,
                         pos_at_eof,
-                        epoch = current_epoch,
                         "decode complete (true EOF)"
                     );
 
-                    // Flush effects at end of stream
                     if let Some(flushed) = flush_effects(&mut self.effects) {
-                        if let Some(ref emit) = self.emit {
-                            emit(AudioEvent::EndOfStream);
-                        }
-                        return Fetch::new(flushed, false, current_epoch);
+                        self.emit_event(AudioEvent::EndOfStream);
+                        return Ok(Some(flushed));
                     }
 
-                    if let Some(ref emit) = self.emit {
-                        emit(AudioEvent::EndOfStream);
-                    }
-                    return Fetch::new(PcmChunk::default(), true, current_epoch);
+                    self.emit_event(AudioEvent::EndOfStream);
+                    return Ok(None);
                 }
                 Err(e) => {
                     // Check if error is due to format boundary (variant fence EOF).
@@ -412,39 +439,28 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     // DRM data), not fence-induced. Applying it prematurely would skip
                     // large portions of the current variant's audio.
                     self.detect_format_change();
-                    if let Some((_, target_offset)) = &self.pending_format_change {
-                        let current_pos = self.shared_stream.position();
-                        let remaining = target_offset.saturating_sub(current_pos);
-
-                        if remaining < 1024 * 1024 {
-                            debug!(
-                                ?e,
-                                chunks = self.chunks_decoded,
-                                samples = self.total_samples,
-                                current_pos,
-                                target_offset = *target_offset,
-                                remaining,
-                                "Decoder error at format boundary, recreating decoder"
-                            );
-                            if self.apply_format_change() {
-                                reset_effects(&mut self.effects);
-                                continue;
-                            }
-                        } else {
-                            debug!(
-                                ?e,
-                                current_pos,
-                                target_offset = *target_offset,
-                                remaining,
-                                "Decoder error far from format boundary, not switching"
-                            );
-                        }
+                    if self.try_recover_at_boundary() {
+                        reset_effects(&mut self.effects);
+                        continue;
                     }
 
                     warn!(?e, "decode error, signaling EOF");
-                    return Fetch::new(PcmChunk::default(), true, current_epoch);
+                    return Err(e);
                 }
             }
+        }
+    }
+}
+
+impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
+    type Chunk = PcmChunk;
+    type Command = AudioCommand;
+
+    fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
+        let current_epoch = self.epoch.load(Ordering::Acquire);
+        match FallibleIterator::next(self) {
+            Ok(Some(chunk)) => Fetch::new(chunk, false, current_epoch),
+            Ok(None) | Err(_) => Fetch::new(PcmChunk::default(), true, current_epoch),
         }
     }
 
@@ -531,7 +547,6 @@ mod tests {
     use kithara_storage::WaitOutcome;
     use kithara_stream::{MediaInfo, Source, Stream, StreamResult, StreamType};
     use parking_lot::Mutex;
-    use tokio::sync::broadcast;
 
     use super::*;
 
@@ -698,7 +713,6 @@ mod tests {
     }
 
     impl Source for TestSource {
-        type Item = u8;
         type Error = std::io::Error;
 
         fn wait_range(&mut self, _range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
@@ -773,7 +787,6 @@ mod tests {
     #[derive(Default)]
     struct TestConfig {
         source: Option<TestSource>,
-        events_tx: Option<broadcast::Sender<()>>,
     }
 
     struct TestStream;
@@ -788,16 +801,6 @@ mod tests {
             config
                 .source
                 .ok_or_else(|| std::io::Error::other("no source"))
-        }
-
-        fn ensure_events(config: &mut Self::Config) -> broadcast::Receiver<()> {
-            if let Some(ref tx) = config.events_tx {
-                tx.subscribe()
-            } else {
-                let (tx, rx) = broadcast::channel(16);
-                config.events_tx = Some(tx);
-                rx
-            }
         }
 
         fn build_stream_context(
@@ -820,13 +823,23 @@ mod tests {
         )
     }
 
+    fn test_stream_from_source(source: TestSource) -> Stream<TestStream> {
+        let config = TestConfig {
+            source: Some(source),
+        };
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(Stream::new(config))
+            .unwrap()
+    }
+
     fn make_shared_stream(
         data: Vec<u8>,
         len: Option<u64>,
     ) -> (SharedStream<TestStream>, Arc<Mutex<TestSourceState>>) {
         let source = TestSource::new(data, len);
         let state = source.state_handle();
-        let stream = Stream::<TestStream>::from_source(source);
+        let stream = test_stream_from_source(source);
         (SharedStream::new(stream), state)
     }
 
@@ -1341,7 +1354,7 @@ mod tests {
             s.variant_map = vec![(0..1000, 0), (1000..2000, 3)];
         }
 
-        let stream = Stream::<TestStream>::from_source(source);
+        let stream = test_stream_from_source(source);
         let mut shared = SharedStream::new(stream);
 
         // Read from V0 region — fence auto-detects V0
@@ -1641,7 +1654,7 @@ mod tests {
                 (v0_bytes as u64..total_bytes as u64, 1),
             ];
         }
-        let stream = Stream::<TestStream>::from_source(source);
+        let stream = test_stream_from_source(source);
         let shared = SharedStream::new(stream);
 
         // Initial decoder: V0 (4 bytes/sample)

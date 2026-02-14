@@ -34,6 +34,7 @@ use std::{
     time::Duration,
 };
 
+use kithara_bufpool::PcmPool;
 use kithara_stream::{ContainerFormat, StreamContext};
 use symphonia::{
     core::{
@@ -57,6 +58,7 @@ use crate::{
 };
 
 /// Configuration for Symphonia-based decoders.
+#[doc(hidden)]
 #[derive(Default)]
 pub struct SymphoniaConfig {
     /// Enable data verification (slower but safer).
@@ -90,6 +92,10 @@ pub struct SymphoniaConfig {
     pub stream_ctx: Option<Arc<dyn StreamContext>>,
     /// Epoch counter for decoder recreation tracking.
     pub epoch: u64,
+    /// Optional PCM buffer pool override.
+    ///
+    /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
+    pub pcm_pool: Option<PcmPool>,
 }
 
 /// Inner implementation shared across all Symphonia codecs.
@@ -111,6 +117,8 @@ struct SymphoniaInner {
     stream_ctx: Option<Arc<dyn StreamContext>>,
     /// Epoch counter for decoder recreation tracking.
     epoch: u64,
+    /// PCM buffer pool (resolved from config or global).
+    pool: PcmPool,
 }
 
 impl SymphoniaInner {
@@ -362,6 +370,11 @@ impl SymphoniaInner {
         // Extract metadata (will be populated from format_reader later if available)
         let metadata = TrackMetadata::default();
 
+        let pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| kithara_bufpool::pcm_pool().clone());
+
         Ok(Self {
             format_reader,
             decoder,
@@ -374,6 +387,7 @@ impl SymphoniaInner {
             byte_len_handle,
             stream_ctx: config.stream_ctx.clone(),
             epoch: config.epoch,
+            pool,
         })
     }
 
@@ -436,7 +450,7 @@ impl SymphoniaInner {
 
             // Convert to f32 interleaved (pool-backed to reduce allocations).
             // The PooledOwned buffer flows through PcmChunk and auto-recycles on drop.
-            let mut pooled = kithara_bufpool::pcm_pool().get_with(|v| v.resize(num_samples, 0.0));
+            let mut pooled = self.pool.get_with(|v| v.resize(num_samples, 0.0));
             decoded.copy_to_slice_interleaved(&mut *pooled);
 
             let pcm_spec = PcmSpec {
@@ -550,10 +564,6 @@ impl<C: CodecType> AudioDecoder for Symphonia<C> {
         self.inner.seek(pos)
     }
 
-    fn position(&self) -> Duration {
-        self.inner.position
-    }
-
     fn duration(&self) -> Option<Duration> {
         self.inner.duration
     }
@@ -584,10 +594,6 @@ impl<C: CodecType> InnerDecoder for Symphonia<C> {
 
     fn metadata(&self) -> TrackMetadata {
         self.inner.metadata.clone()
-    }
-
-    fn reset(&mut self) {
-        self.inner.decoder.reset();
     }
 }
 
@@ -838,26 +844,6 @@ mod tests {
     }
 
     #[test]
-    fn test_position_updates() {
-        let wav_data = create_test_wav(44100, 44100, 2); // 1 second of audio
-        let cursor = Cursor::new(wav_data);
-
-        let config = SymphoniaConfig {
-            container: Some(ContainerFormat::Wav),
-            ..Default::default()
-        };
-        let mut decoder = SymphoniaPcm::create(Box::new(cursor), config).unwrap();
-
-        assert_eq!(AudioDecoder::position(&decoder), Duration::ZERO);
-
-        // Read a chunk
-        let _ = AudioDecoder::next_chunk(&mut decoder).unwrap();
-
-        // Position should have advanced
-        assert!(AudioDecoder::position(&decoder) > Duration::ZERO);
-    }
-
-    #[test]
     fn test_duration_available() {
         let wav_data = create_test_wav(44100, 44100, 2); // 1 second of audio
         let cursor = Cursor::new(wav_data);
@@ -923,6 +909,7 @@ mod tests {
             probe_no_seek: false,
             stream_ctx: None,
             epoch: 0,
+            pcm_pool: None,
         };
 
         assert!(config.verify);

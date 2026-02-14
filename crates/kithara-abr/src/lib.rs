@@ -44,8 +44,6 @@ mod controller;
 mod estimator;
 mod types;
 
-#[doc(hidden)]
-pub use controller::DefaultAbrController;
 pub use controller::{AbrController, AbrDecision, AbrReason};
 #[doc(hidden)]
 pub use estimator::Estimator;

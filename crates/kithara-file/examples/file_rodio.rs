@@ -11,8 +11,8 @@
 
 use std::{env::args, error::Error};
 
-use kithara_file::{File, FileConfig};
-use kithara_stream::Stream;
+use kithara_file::{EventBus, File, FileConfig};
+use kithara_stream::{Stream, ThreadPool};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
@@ -41,10 +41,14 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Opening file: {}", url);
 
-    // Create events channel
-    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+    // Create event bus
+    let bus = EventBus::new(32);
+    let mut events_rx = bus.subscribe();
 
-    let config = FileConfig::new(url.into()).with_events(events_tx);
+    let pool = ThreadPool::with_num_threads(2)?;
+    let config = FileConfig::new(url.into())
+        .with_thread_pool(pool)
+        .with_events(bus);
     let stream = Stream::<File>::new(config).await?;
 
     // Log events

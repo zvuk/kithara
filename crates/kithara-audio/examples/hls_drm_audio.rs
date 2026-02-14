@@ -8,7 +8,7 @@ use std::{env::args, error::Error, time::Duration};
 
 use kithara_audio::{Audio, AudioConfig};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_stream::Stream;
+use kithara_stream::{Stream, ThreadPool};
 use tokio::sync::broadcast;
 use tracing::{info, metadata::LevelFilter, warn};
 use tracing_subscriber::EnvFilter;
@@ -37,14 +37,13 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     info!("Opening encrypted HLS stream: {url}");
 
     let (events_tx, mut events_rx) = broadcast::channel(128);
-    let hls_config = HlsConfig::new(url).with_abr(AbrOptions {
-        min_buffer_for_up_switch_secs: 2.0,
-        min_switch_interval: Duration::from_secs(5),
-        mode: AbrMode::Auto(Some(0)),
-        throughput_safety_factor: 1.2,
-        up_hysteresis_ratio: 1.1,
-        ..Default::default()
-    });
+    let pool = ThreadPool::with_num_threads(2)?;
+    let hls_config = HlsConfig::new(url)
+        .with_thread_pool(pool)
+        .with_abr(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..Default::default()
+        });
     let config = AudioConfig::<Hls>::new(hls_config)
         .with_prefer_hardware(true)
         .with_events(events_tx);

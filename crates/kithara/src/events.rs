@@ -142,10 +142,6 @@ impl From<kithara_hls::HlsEvent> for ResourceEvent {
                 segment_index,
                 byte_offset,
             },
-            kithara_hls::HlsEvent::SegmentProgress { offset, .. } => Self::DownloadProgress {
-                offset,
-                total: None,
-            },
             kithara_hls::HlsEvent::SegmentComplete {
                 variant,
                 segment_index,

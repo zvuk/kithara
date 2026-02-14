@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use kithara_bufpool::BytePool;
 use kithara_storage::{Atomic, ResourceExt};
 
 use crate::error::AssetsResult;
@@ -40,12 +41,14 @@ pub struct EvictConfig {
 /// - It does not know about pinning; the eviction decorator combines this with a pins index.
 pub struct LruIndex<R: ResourceExt> {
     res: Atomic<R>,
+    pool: BytePool,
 }
 
 impl<R: ResourceExt> LruIndex<R> {
-    pub(crate) fn new(res: R) -> Self {
+    pub(crate) fn new(res: R, pool: BytePool) -> Self {
         Self {
             res: Atomic::new(res),
+            pool,
         }
     }
 
@@ -54,7 +57,7 @@ impl<R: ResourceExt> LruIndex<R> {
     /// Missing/empty file is treated as an empty index.
     /// Invalid or corrupted data is treated as an empty index (best-effort).
     pub fn load(&self) -> AssetsResult<LruState> {
-        let mut buf = crate::byte_pool().get();
+        let mut buf = self.pool.get();
         let n = self.res.read_into(&mut buf)?;
 
         if n == 0 {
