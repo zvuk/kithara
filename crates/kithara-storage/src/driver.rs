@@ -328,9 +328,14 @@ impl<D: Driver> ResourceExt for Resource<D> {
                 return Ok(WaitOutcome::Ready);
             }
 
+            // On wasm32, parking_lot's wait_for() calls std::time::Instant::now()
+            // which panics ("time not implemented"). Use untimed wait() instead.
+            #[cfg(not(target_arch = "wasm32"))]
             self.inner
                 .condvar
                 .wait_for(&mut state, std::time::Duration::from_millis(50));
+            #[cfg(target_arch = "wasm32")]
+            self.inner.condvar.wait(&mut state);
         }
     }
 

@@ -100,7 +100,10 @@ impl<E: Estimator> AbrController<E> {
     }
 
     /// Make ABR decision using variants from configuration.
-    #[expect(clippy::cognitive_complexity)]
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "ABR decision logic with multiple branches"
+    )]
     pub fn decide(&self, now: Instant) -> AbrDecision {
         let current = self.current_variant.load(Ordering::Acquire);
 

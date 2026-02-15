@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Kithara HLS Player</title>
+    <link data-trunk rel="copy-file" href="pcm-processor.js" />
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -53,7 +54,7 @@
     <div class="row">
         <input type="text" id="url-input"
                placeholder="HLS playlist URL (.m3u8)"
-               value="">
+               value="https://stream.silvercomet.top/hls/master.m3u8">
         <button id="load-btn" disabled>Load</button>
     </div>
 
@@ -73,14 +74,77 @@
 
     <div id="event-log"></div>
 
+    <script>
+        console.log('[kithara] hello from inline script');
+        window.onerror = (msg, src, line, col, err) => console.error('[kithara] onerror:', msg, src, line, col, err);
+        window.onunhandledrejection = (e) => console.error('[kithara] unhandled rejection:', e.reason);
+
+        // Track all Web Workers so we can terminate them on page unload.
+        const _allWorkers = [];
+        const _OrigWorker = Worker;
+        window.Worker = function(...args) {
+            const w = new _OrigWorker(...args);
+            _allWorkers.push(w);
+            console.log('[kithara] Worker created, total:', _allWorkers.length);
+            return w;
+        };
+        window.Worker.prototype = _OrigWorker.prototype;
+
+        window.addEventListener('beforeunload', () => {
+            console.log('[kithara] beforeunload: terminating', _allWorkers.length, 'workers');
+            for (const w of _allWorkers) {
+                w.terminate();
+                console.log('[kithara] worker terminated');
+            }
+        });
+        window.addEventListener('unload', () => {
+            for (const w of _allWorkers) w.terminate();
+        });
+        window.addEventListener('pagehide', () => {
+            for (const w of _allWorkers) w.terminate();
+        });
+    </script>
     <script type="module">
-        import init, { WasmPlayer, wasm_memory, initThreadPool } from './pkg/kithara_wasm.js';
+        console.log('[kithara] module script start');
 
-        let player = null;
-        let audioCtx = null;
-        let workletNode = null;
-        let fillRAF = null;
+        // Step 1: just import the module, don't call anything
+        console.log('[kithara] importing kithara-wasm.js...');
+        const wasm = await import('/kithara-wasm.js');
+        console.log('[kithara] import done, exports:', Object.keys(wasm));
 
+        document.getElementById('status').textContent = 'Module loaded OK';
+
+        // Step 2: init WASM
+        console.log('[kithara] calling init()...');
+        await wasm.default();
+        console.log('[kithara] init() done');
+
+        // Step 3: setup
+        wasm.setup();
+        console.log('[kithara] setup() done');
+
+        // Step 4: initialize rayon thread pool via Web Workers.
+        // Required for Audio::new() which uses thread_pool.spawn_async() for
+        // probe and decoder creation — without this, rayon::spawn() has no workers.
+        console.log('[kithara] initThreadPool(1)...');
+        document.getElementById('status').textContent = 'Initializing thread pool...';
+        try {
+            await wasm.initThreadPool(1);
+            console.log('[kithara] initThreadPool done');
+        } catch (e) {
+            console.error('[kithara] initThreadPool FAILED:', e);
+            document.getElementById('status').textContent =
+                `Thread pool init failed: ${e.message || e}. Try reloading the page.`;
+            throw e;
+        }
+
+        // Step 5: create player
+        const player = new wasm.WasmPlayer();
+        console.log('[kithara] player created');
+
+        document.getElementById('status').textContent = 'Ready \u2014 enter HLS URL and click Load';
+
+        // --- UI wiring ---
         const urlInput = document.getElementById('url-input');
         const loadBtn = document.getElementById('load-btn');
         const playBtn = document.getElementById('play-btn');
@@ -108,77 +172,25 @@
             return `${min}:${String(sec).padStart(2, '0')}`;
         }
 
-        async function setupAudioWorklet() {
-            if (audioCtx) {
-                await audioCtx.close();
-            }
-
-            audioCtx = new AudioContext({ sampleRate: player.sample_rate() });
-            await audioCtx.audioWorklet.addModule('pcm-processor.js');
-
-            workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor', {
-                outputChannelCount: [player.channels()],
-            });
-
-            // wasm_memory() returns WebAssembly.Memory; .buffer is SharedArrayBuffer
-            // when built with atomics (wasm-bindgen-rayon).
-            const memory = wasm_memory().buffer;
-
-            workletNode.port.postMessage({
-                type: 'init',
-                memory: memory,
-                bufByteOffset: player.ring_buf_ptr(),
-                capacity: player.ring_capacity(),
-                writeHeadByteOffset: player.ring_write_head_ptr(),
-                readHeadByteOffset: player.ring_read_head_ptr(),
-                channels: player.channels(),
-            });
-
-            workletNode.connect(audioCtx.destination);
-            log('AudioWorklet connected (SharedArrayBuffer)', 'info');
-        }
-
-        async function initialize() {
-            try {
-                log('Loading WASM module...', 'info');
-                await init();
-
-                log('Initializing thread pool...', 'info');
-                const threads = navigator.hardwareConcurrency || 4;
-                await initThreadPool(threads);
-                log(`Thread pool ready (${threads} workers)`, 'info');
-
-                player = new WasmPlayer();
-                log('Player ready', 'info');
-
-                statusEl.textContent = 'Ready \u2014 enter HLS URL and click Load';
-                loadBtn.disabled = false;
-            } catch (e) {
-                log(`Init error: ${e}`, 'error');
-                statusEl.textContent = `Init failed: ${e}`;
-            }
-        }
+        log('Player ready', 'info');
+        loadBtn.disabled = false;
 
         loadBtn.onclick = async () => {
             const url = urlInput.value.trim();
             if (!url) return;
-
             loadBtn.disabled = true;
-            playBtn.disabled = true;
             statusEl.textContent = 'Loading...';
             log(`Loading: ${url}`, 'info');
-
             try {
-                await player.load(url);
-
-                log(`Format: ${player.sample_rate()}Hz, ${player.channels()}ch`, 'info');
-                const dur = player.get_duration_ms();
-                if (dur > 0) {
-                    log(`Duration: ${formatTime(dur)}`, 'info');
-                    seekSlider.max = dur;
-                    durationEl.textContent = formatTime(dur);
+                const info = await wasm.load_hls(url);
+                const [channels, sampleRate, durMs] = info;
+                player.update_ring(channels, sampleRate);
+                log(`Format: ${sampleRate}Hz, ${channels}ch`, 'info');
+                if (durMs > 0) {
+                    log(`Duration: ${formatTime(durMs)}`, 'info');
+                    seekSlider.max = durMs;
+                    durationEl.textContent = formatTime(durMs);
                 }
-
                 statusEl.textContent = 'Loaded \u2014 click Play';
                 playBtn.disabled = false;
                 loadBtn.disabled = false;
@@ -189,12 +201,30 @@
             }
         };
 
+        let audioCtx = null;
+        let workletNode = null;
+        let fillRAF = null;
+
         playBtn.onclick = async () => {
             try {
-                await setupAudioWorklet();
-                if (audioCtx.state === 'suspended') {
-                    await audioCtx.resume();
-                }
+                if (audioCtx) await audioCtx.close();
+                audioCtx = new AudioContext({ sampleRate: player.sample_rate() });
+                await audioCtx.audioWorklet.addModule('pcm-processor.js');
+                workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor', {
+                    outputChannelCount: [player.channels()],
+                });
+                const memory = wasm.wasm_memory().buffer;
+                workletNode.port.postMessage({
+                    type: 'init',
+                    memory: memory,
+                    bufByteOffset: player.ring_buf_ptr(),
+                    capacity: player.ring_capacity(),
+                    writeHeadByteOffset: player.ring_write_head_ptr(),
+                    readHeadByteOffset: player.ring_read_head_ptr(),
+                    channels: player.channels(),
+                });
+                workletNode.connect(audioCtx.destination);
+                if (audioCtx.state === 'suspended') await audioCtx.resume();
                 player.play();
                 startFillLoop();
                 log('Playback started', 'info');
@@ -237,10 +267,7 @@
         };
 
         function fillLoop() {
-            if (!player || !player.is_playing()) {
-                updatePosition();
-                return;
-            }
+            if (!player || !player.is_playing()) { updatePosition(); return; }
             player.fill_buffer();
             updatePosition();
             fillRAF = requestAnimationFrame(fillLoop);
@@ -250,9 +277,7 @@
             const pos = player.get_position_ms();
             positionEl.textContent = formatTime(pos);
             const dur = player.get_duration_ms();
-            if (dur > 0 && !seekSlider.matches(':active')) {
-                seekSlider.value = pos;
-            }
+            if (dur > 0 && !seekSlider.matches(':active')) seekSlider.value = pos;
             if (player.is_eof() && player.is_playing()) {
                 log('End of stream', 'info');
                 statusEl.textContent = 'Finished';
@@ -262,19 +287,9 @@
             }
         }
 
-        function startFillLoop() {
-            stopFillLoop();
-            fillRAF = requestAnimationFrame(fillLoop);
-        }
-
-        function stopFillLoop() {
-            if (fillRAF) {
-                cancelAnimationFrame(fillRAF);
-                fillRAF = null;
-            }
-        }
-
-        initialize();
+        function startFillLoop() { stopFillLoop(); fillRAF = requestAnimationFrame(fillLoop); }
+        function stopFillLoop() { if (fillRAF) { cancelAnimationFrame(fillRAF); fillRAF = null; } }
     </script>
+
 </body>
 </html>

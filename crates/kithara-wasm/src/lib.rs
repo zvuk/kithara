@@ -4,7 +4,16 @@
 mod player;
 
 #[cfg(target_arch = "wasm32")]
-pub use player::WasmPlayer;
+pub use player::{WasmPlayer, load_hls};
+
+// Set up panic hook and tracing. Called from JS main thread
+// before any other player operations.
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn setup() {
+    console_error_panic_hook::set_once();
+    tracing_wasm::set_as_global_default();
+}
 
 // Re-export wasm_memory for JS to access SharedArrayBuffer.
 #[cfg(target_arch = "wasm32")]

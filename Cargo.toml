@@ -120,7 +120,7 @@ bytes = "1.11.1"
 ringbuf = "0.4.8"
 slice_ring_buf = "0.3"
 async-stream = "0.3.6"
-parking_lot = "0.12"
+parking_lot = { version = "0.12", features = ["nightly"] }
 crossbeam-queue = "0.3"
 
 # http/url

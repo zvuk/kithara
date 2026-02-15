@@ -313,8 +313,15 @@ impl<S> Audio<S> {
         }
 
         loop {
-            let result = if self.preloaded {
-                // Non-blocking mode after preload
+            // On wasm32, blocking recv is forbidden (Atomics.wait cannot run
+            // on the browser main thread). Always use non-blocking try_recv.
+            #[cfg(target_arch = "wasm32")]
+            let use_nonblocking = true;
+            #[cfg(not(target_arch = "wasm32"))]
+            let use_nonblocking = self.preloaded;
+
+            let result = if use_nonblocking {
+                // Non-blocking mode
                 match self.pcm_rx.try_recv() {
                     Ok(Some(fetch)) => Ok(fetch),
                     Ok(None) => return None, // No data available
@@ -325,7 +332,7 @@ impl<S> Audio<S> {
                     }
                 }
             } else {
-                // Blocking mode before preload (for tests/backward compat)
+                // Blocking mode before preload (native only, for tests/backward compat)
                 self.pcm_rx.recv().map_err(|_| ())
             };
 
@@ -400,6 +407,10 @@ where
     /// let audio = Audio::new(config).await?;
     /// sink.append(audio);
     /// ```
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "pipeline setup with debug tracing"
+    )]
     pub async fn new(config: AudioConfig<T>) -> Result<Self, DecodeError> {
         let cancel = CancellationToken::new();
 
@@ -430,14 +441,17 @@ where
             .unwrap_or_else(|| EventBus::new(DEFAULT_EVENT_CAPACITY));
 
         // Create stream.
+        debug!("Audio::new — creating Stream...");
         let stream = Stream::<T>::new(stream_config)
             .await
             .map_err(|e| DecodeError::Io(std::io::Error::other(e.to_string())))?;
+        debug!("Audio::new — Stream created");
 
         // Resolve byte pool: config overrides global.
         let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::byte_pool().clone());
 
         // Trigger first segment load to get MediaInfo for proper decoder creation.
+        debug!("Audio::new — spawning probe task on thread pool...");
         let stream = thread_pool
             .spawn_async(move || {
                 let mut stream = stream;
@@ -450,6 +464,7 @@ where
             .map_err(|e| {
                 DecodeError::Io(std::io::Error::other(format!("probe task panicked: {e}")))
             })??;
+        debug!("Audio::new — probe task done");
 
         // Get initial MediaInfo.
         // For decoder creation: user-provided overrides stream-detected.
@@ -469,6 +484,7 @@ where
 
         // Create initial decoder on the thread pool to avoid blocking tokio runtime.
         // Symphonia probe() does blocking IO which would deadlock the async downloader.
+        debug!("Audio::new — spawning decoder creation on thread pool...");
         let decoder_config = kithara_decode::DecoderConfig {
             prefer_hardware,
             hint: hint.clone(),
@@ -499,6 +515,7 @@ where
             .map_err(|e| {
                 DecodeError::Io(std::io::Error::other(format!("decoder task panicked: {e}")))
             })??;
+        debug!("Audio::new — decoder created");
 
         let initial_spec = decoder.spec();
         let total_duration = decoder.duration();

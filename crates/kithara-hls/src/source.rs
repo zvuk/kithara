@@ -3,6 +3,8 @@
 //! `HlsSource` implements `Source` — provides random-access reading from loaded segments.
 //! Shared state with `HlsDownloader` (in `downloader.rs`) via `SharedSegments`.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 use std::{
     collections::HashSet,
     ops::Range,
@@ -10,7 +12,6 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 
 use crossbeam_queue::SegQueue;
@@ -272,10 +273,16 @@ impl Source for HlsSource {
                 self.shared.reader_advanced.notify_one();
             }
 
-            // Wait with timeout (mirrors kithara-storage driver.rs:283)
+            // Wait for new data. On native, use a 50ms timeout as a safety net
+            // against missed notifications. On wasm32, parking_lot's wait_for()
+            // internally calls std::time::Instant::now() which panics, so we use
+            // untimed wait() — notifications from the downloader are reliable.
+            #[cfg(not(target_arch = "wasm32"))]
             self.shared
                 .condvar
                 .wait_for(&mut segments, Duration::from_millis(50));
+            #[cfg(target_arch = "wasm32")]
+            self.shared.condvar.wait(&mut segments);
         }
     }
 
