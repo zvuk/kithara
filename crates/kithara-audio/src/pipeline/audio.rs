@@ -13,6 +13,7 @@ use std::{
 use kanal::Receiver;
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
+use kithara_events::{AudioEvent, EventBus};
 use kithara_stream::{EpochValidator, Fetch, Stream, StreamType};
 use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -23,10 +24,10 @@ use super::{
     stream_source::{OffsetReader, SharedStream, StreamAudioSource},
     worker::{AudioCommand, run_audio_loop},
 };
-use crate::{
-    events::{AudioEvent, AudioPipelineEvent},
-    types::{DecodeError, DecodeResult, PcmReader},
-};
+use crate::types::{DecodeError, DecodeResult, PcmReader};
+
+/// Default capacity for broadcast event channels.
+const DEFAULT_EVENT_CAPACITY: usize = 64;
 
 /// Generic audio pipeline running in a separate thread.
 ///
@@ -92,12 +93,11 @@ pub struct Audio<S> {
     /// Track metadata (title, artist, album, artwork).
     metadata: TrackMetadata,
 
-    /// Audio events channel.
+    /// Audio events channel (for `decode_events()` backward compat).
     audio_events_tx: broadcast::Sender<AudioEvent>,
 
-    /// Unified events sender for `Audio<Stream<T>>`.
-    /// Holds `broadcast::Sender<AudioPipelineEvent<T::Event>>` type-erased.
-    unified_events: Option<Box<dyn std::any::Any + Send + Sync>>,
+    /// Unified event bus.
+    bus: EventBus,
 
     /// Cancellation token for graceful shutdown.
     cancel: Option<CancellationToken>,
@@ -352,7 +352,7 @@ impl<S> Audio<S> {
 /// Uses `StreamAudioSource` for automatic format change detection on ABR switch.
 impl<T> Audio<Stream<T>>
 where
-    T: StreamType,
+    T: StreamType<Events = EventBus>,
 {
     /// Create audio pipeline from `AudioConfig`.
     ///
@@ -373,7 +373,6 @@ where
         let AudioConfig {
             byte_pool,
             command_channel_capacity,
-            event_channel_capacity,
             hint,
             host_sample_rate: config_host_sr,
             media_info: user_media_info,
@@ -384,16 +383,17 @@ where
             resampler_quality,
             stream: stream_config,
             thread_pool,
-            events_tx,
+            bus: config_bus,
         } = config;
 
         // Resolve thread pool: AudioConfig overrides stream config, which overrides global.
         let thread_pool = thread_pool.unwrap_or_else(|| T::thread_pool(&stream_config));
 
-        let event_capacity = event_channel_capacity.max(1);
-
-        // Create unified events channel (or use the one from config).
-        let unified_tx = events_tx.unwrap_or_else(|| broadcast::channel(event_capacity).0);
+        // Create event bus: prefer stream config bus (HlsConfig/FileConfig),
+        // fall back to AudioConfig bus, or create a new one.
+        let bus = T::event_bus(&stream_config)
+            .or(config_bus)
+            .unwrap_or_else(|| EventBus::new(DEFAULT_EVENT_CAPACITY));
 
         // Create stream.
         let stream = Stream::<T>::new(stream_config)
@@ -475,7 +475,7 @@ where
         let (data_tx, data_rx) = kanal::bounded(pcm_buffer_chunks.max(1));
 
         let epoch = Arc::new(AtomicU64::new(0));
-        let (audio_events_tx, _) = broadcast::channel(event_capacity);
+        let (audio_events_tx, _) = broadcast::channel(DEFAULT_EVENT_CAPACITY);
         let host_sample_rate = Arc::new(AtomicU32::new(config_host_sr.map_or(0, NonZeroU32::get)));
 
         let output_spec = expected_output_spec(initial_spec, &host_sample_rate);
@@ -493,12 +493,12 @@ where
             "Audio pipeline created"
         );
 
-        // Emit closure sends AudioEvent to both raw and unified channels.
+        // Emit closure sends AudioEvent to both the EventBus and the raw channel.
+        let emit_bus = bus.clone();
         let emit_raw_tx = audio_events_tx.clone();
-        let emit_unified_tx = unified_tx.clone();
         let emit = Box::new(move |event: AudioEvent| {
-            let _ = emit_raw_tx.send(event.clone());
-            let _ = emit_unified_tx.send(AudioPipelineEvent::Audio(event));
+            emit_bus.publish(event.clone());
+            let _ = emit_raw_tx.send(event);
         });
 
         // Factory for creating decoders after ABR switch.
@@ -616,7 +616,7 @@ where
             total_duration,
             metadata,
             audio_events_tx,
-            unified_events: Some(Box::new(unified_tx)),
+            bus,
             cancel: Some(cancel),
             pcm_pool: pool.clone(),
             host_sample_rate,
@@ -626,18 +626,18 @@ where
         })
     }
 
-    /// Subscribe to unified events (stream + audio).
+    /// Subscribe to unified events via the `EventBus`.
     ///
-    /// # Panics
+    /// Returns a receiver for all events published to the bus.
+    pub fn events(&self) -> broadcast::Receiver<kithara_events::Event> {
+        self.bus.subscribe()
+    }
+
+    /// Get a reference to the underlying `EventBus`.
     ///
-    /// Panics if the internal unified events channel is not set (should never
-    /// happen for `Audio<Stream<T>>` created via `new`).
-    pub fn events(&self) -> broadcast::Receiver<AudioPipelineEvent<T::Event>> {
-        self.unified_events
-            .as_ref()
-            .and_then(|any| any.downcast_ref::<broadcast::Sender<AudioPipelineEvent<T::Event>>>())
-            .expect("unified_events always set for Stream-based audio")
-            .subscribe()
+    /// Useful for passing to downstream components that also publish events.
+    pub fn event_bus(&self) -> &EventBus {
+        &self.bus
     }
 }
 

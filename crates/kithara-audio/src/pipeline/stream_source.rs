@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use tracing::{debug, trace, warn};
 
 use super::worker::{AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects};
-use crate::{events::AudioEvent, traits::AudioEffect};
+use crate::{AudioEvent, traits::AudioEffect};
 
 /// Shared stream wrapper for format change detection.
 ///
@@ -795,7 +795,7 @@ mod tests {
         type Config = TestConfig;
         type Source = TestSource;
         type Error = std::io::Error;
-        type Event = ();
+        type Events = ();
 
         async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
             config

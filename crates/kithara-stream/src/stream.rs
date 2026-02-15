@@ -34,9 +34,6 @@ pub trait StreamType: Send + 'static {
     /// Error type for stream creation.
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Event type emitted by this stream (legacy, will be removed).
-    type Event: Clone + Send + 'static;
-
     /// Create the source from configuration.
     ///
     /// May also start background tasks (downloader) internally.
@@ -51,6 +48,21 @@ pub trait StreamType: Send + 'static {
     fn thread_pool(config: &Self::Config) -> ThreadPool {
         let _ = config;
         ThreadPool::default()
+    }
+
+    /// Event bus type carried by the stream config.
+    ///
+    /// Concrete stream types set this to `kithara_events::EventBus`.
+    /// `Audio::new()` constrains `T::Events = EventBus` to extract it.
+    type Events: Clone + Send + Sync + 'static;
+
+    /// Extract the event bus from config (if set).
+    ///
+    /// Used by `Audio::new()` to share a single bus across the stream
+    /// and the audio pipeline.
+    fn event_bus(config: &Self::Config) -> Option<Self::Events> {
+        let _ = config;
+        None
     }
 
     /// Build a `StreamContext` from the source and shared byte position.

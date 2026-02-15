@@ -17,6 +17,7 @@ use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main(flavor = "current_thread")]
+#[cfg_attr(feature = "perf", hotpath::main)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(

@@ -7,11 +7,10 @@ use std::{
 
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::PcmSpec;
+use kithara_events::EventBus;
 use kithara_stream::{StreamType, ThreadPool};
-use tokio::sync::broadcast;
 
 use crate::{
-    events::AudioPipelineEvent,
     resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
     traits::AudioEffect,
 };
@@ -25,8 +24,6 @@ pub struct AudioConfig<T: StreamType> {
     pub byte_pool: Option<BytePool>,
     /// Command channel capacity.
     pub command_channel_capacity: usize,
-    /// Broadcast event channel capacity.
-    pub event_channel_capacity: usize,
     /// Optional format hint (file extension like "mp3", "wav")
     pub hint: Option<String>,
     /// Target sample rate of the audio host (for resampling).
@@ -53,8 +50,8 @@ pub struct AudioConfig<T: StreamType> {
     /// When `None`, inherits from the stream config via `StreamType::thread_pool()`.
     /// When `Some`, overrides the stream config pool.
     pub thread_pool: Option<ThreadPool>,
-    /// Unified events sender (optional — if not provided, one is created internally).
-    pub(super) events_tx: Option<broadcast::Sender<AudioPipelineEvent<T::Event>>>,
+    /// Unified event bus (optional — if not provided, one is created internally).
+    pub(super) bus: Option<EventBus>,
 }
 
 impl<T: StreamType> AudioConfig<T> {
@@ -63,7 +60,6 @@ impl<T: StreamType> AudioConfig<T> {
         Self {
             byte_pool: None,
             command_channel_capacity: 4,
-            event_channel_capacity: 64,
             hint: None,
             host_sample_rate: None,
             media_info: None,
@@ -74,7 +70,7 @@ impl<T: StreamType> AudioConfig<T> {
             resampler_quality: ResamplerQuality::default(),
             stream,
             thread_pool: None,
-            events_tx: None,
+            bus: None,
         }
     }
 
@@ -129,15 +125,12 @@ impl<T: StreamType> AudioConfig<T> {
         self
     }
 
-    /// Set unified events channel.
+    /// Set unified event bus.
     ///
-    /// Stream events and audio events are forwarded as `AudioPipelineEvent::Stream(e)`
-    /// and `AudioPipelineEvent::Audio(e)` respectively.
-    pub fn with_events(
-        mut self,
-        events_tx: broadcast::Sender<AudioPipelineEvent<T::Event>>,
-    ) -> Self {
-        self.events_tx = Some(events_tx);
+    /// All audio events are published to the bus. The bus capacity is set
+    /// at creation by the caller.
+    pub fn with_events(mut self, bus: EventBus) -> Self {
+        self.bus = Some(bus);
         self
     }
 

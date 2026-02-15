@@ -26,7 +26,6 @@ crossbeam-queue = { workspace = true }
 dhat = { workspace = true, optional = true }
 
 [dev-dependencies]
-# Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
 axum = { workspace = true }
 rodio = { workspace = true }
 rstest = { workspace = true }

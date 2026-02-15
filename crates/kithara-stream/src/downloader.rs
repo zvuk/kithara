@@ -89,4 +89,19 @@ pub trait Downloader: Send + 'static {
 
     /// Wait until throttle condition clears.
     fn wait_ready(&self) -> impl Future<Output = ()> + Send;
+
+    /// Signal that on-demand data is needed (e.g. reader seek).
+    ///
+    /// Returns a future that resolves when demand is available.
+    /// Used by Backend to interrupt a blocked [`step`](Self::step) call
+    /// so that [`poll_demand`](Self::poll_demand) can be checked promptly.
+    ///
+    /// `use<Self>` ensures the returned future does not capture the `&self`
+    /// lifetime, allowing Backend to hold it alongside `step(&mut self)`
+    /// in the same `tokio::select!`.
+    ///
+    /// Default: never resolves (no demand signaling).
+    fn demand_signal(&self) -> impl Future<Output = ()> + Send + use<Self> {
+        std::future::pending()
+    }
 }

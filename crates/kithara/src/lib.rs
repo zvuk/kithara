@@ -71,7 +71,9 @@ mod rodio_impl;
 mod source_type;
 
 pub use config::{ResourceConfig, ResourceSrc};
-pub use events::ResourceEvent;
+#[cfg(feature = "hls")]
+pub use events::HlsEvent;
+pub use events::{AudioEvent, Event, EventBus, FileEvent};
 pub use resource::Resource;
 pub use source_type::SourceType;
 
@@ -86,5 +88,5 @@ pub mod prelude {
         AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType, ThreadPool,
     };
 
-    pub use crate::{Resource, ResourceConfig, ResourceEvent};
+    pub use crate::{Event, EventBus, Resource, ResourceConfig};
 }

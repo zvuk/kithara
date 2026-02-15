@@ -171,6 +171,11 @@ impl Backend {
                             debug!("Downloader cancelled during step");
                             return;
                         }
+                        () = dl.demand_signal() => {
+                            // Demand arrived while step was blocked.
+                            // Re-enter loop to drain demand before continuing.
+                            continue;
+                        }
                         result = dl.step() => result,
                     };
 
@@ -255,5 +260,144 @@ impl Backend {
 impl Drop for Backend {
     fn drop(&mut self) {
         self.cancel.cancel();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{Arc, Mutex},
+        time::Duration,
+    };
+
+    use rstest::rstest;
+    use tokio::sync::Notify;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+    use crate::pool::ThreadPool;
+
+    // -- Mock infrastructure --
+
+    #[derive(Debug)]
+    struct MockError;
+
+    impl std::fmt::Display for MockError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "mock error")
+        }
+    }
+
+    impl std::error::Error for MockError {}
+
+    /// Mock I/O executor that signals when a demand fetch completes.
+    #[derive(Clone)]
+    struct MockIo {
+        demand_fetched: Arc<Notify>,
+    }
+
+    impl DownloaderIo for MockIo {
+        type Plan = u64;
+        type Fetch = u64;
+        type Error = MockError;
+
+        async fn fetch(&self, plan: u64) -> Result<u64, MockError> {
+            self.demand_fetched.notify_one();
+            Ok(plan)
+        }
+    }
+
+    /// Mock downloader with a slow `step()` that blocks for 30 seconds,
+    /// simulating a stalled sequential HTTP stream.
+    struct SlowStepDownloader {
+        io: MockIo,
+        demand_queue: Arc<Mutex<Vec<u64>>>,
+        demand_notify: Arc<Notify>,
+        step_entered: Arc<Notify>,
+    }
+
+    impl Downloader for SlowStepDownloader {
+        type Plan = u64;
+        type Fetch = u64;
+        type Error = MockError;
+        type Io = MockIo;
+
+        fn io(&self) -> &MockIo {
+            &self.io
+        }
+
+        async fn poll_demand(&mut self) -> Option<u64> {
+            self.demand_queue.lock().unwrap().pop()
+        }
+
+        async fn plan(&mut self) -> PlanOutcome<u64> {
+            PlanOutcome::Step
+        }
+
+        async fn step(&mut self) -> Result<StepResult<u64>, MockError> {
+            self.step_entered.notify_one();
+            // Simulate slow/stalled HTTP stream — 30s between chunks.
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            Ok(StepResult::Item(0))
+        }
+
+        fn commit(&mut self, _fetch: u64) {}
+
+        fn should_throttle(&self) -> bool {
+            false
+        }
+
+        fn wait_ready(&self) -> impl std::future::Future<Output = ()> + Send {
+            std::future::pending()
+        }
+
+        fn demand_signal(&self) -> impl std::future::Future<Output = ()> + Send + use<> {
+            let notify = Arc::clone(&self.demand_notify);
+            async move {
+                notify.notified().await;
+            }
+        }
+    }
+
+    /// Demand (on-demand range request) must be processed promptly even when
+    /// `step()` is blocked on a slow sequential HTTP stream.
+    ///
+    /// Scenario: sequential download stalls (slow server), user seeks forward.
+    /// The reader queues a demand. The downloader should process it immediately,
+    /// not wait for the current step() to finish.
+    ///
+    /// Timeout: 2s — step() blocks for 30s, so if demand waits for step,
+    /// the test will be killed by rstest timeout.
+    #[rstest]
+    #[timeout(Duration::from_secs(2))]
+    #[tokio::test]
+    async fn demand_must_not_wait_for_step() {
+        let demand_queue = Arc::new(Mutex::new(Vec::new()));
+        let demand_notify = Arc::new(Notify::new());
+        let step_entered = Arc::new(Notify::new());
+        let demand_fetched = Arc::new(Notify::new());
+
+        let downloader = SlowStepDownloader {
+            io: MockIo {
+                demand_fetched: demand_fetched.clone(),
+            },
+            demand_queue: demand_queue.clone(),
+            demand_notify: demand_notify.clone(),
+            step_entered: step_entered.clone(),
+        };
+
+        let cancel = CancellationToken::new();
+        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let _backend = Backend::new(downloader, &cancel, &pool);
+
+        // Wait for the downloader to enter step() (blocked on slow stream).
+        step_entered.notified().await;
+
+        // Queue demand while step() is blocked (simulates reader seek).
+        demand_queue.lock().unwrap().push(42);
+        demand_notify.notify_one();
+
+        // Must resolve promptly — if step() blocks demand, the 2s timeout fires.
+        demand_fetched.notified().await;
     }
 }

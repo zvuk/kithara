@@ -29,10 +29,14 @@ impl StreamType for Hls {
     type Config = HlsConfig;
     type Source = HlsSource;
     type Error = HlsError;
-    type Event = HlsEvent;
+    type Events = EventBus;
 
     fn thread_pool(config: &Self::Config) -> ThreadPool {
         config.thread_pool.clone()
+    }
+
+    fn event_bus(config: &Self::Config) -> Option<Self::Events> {
+        config.bus.clone()
     }
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {

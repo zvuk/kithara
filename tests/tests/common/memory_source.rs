@@ -104,7 +104,7 @@ impl StreamType for MemStream {
     type Config = MemStreamConfig;
     type Source = MemorySource;
     type Error = std::io::Error;
-    type Event = ();
+    type Events = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         config
@@ -132,7 +132,7 @@ impl StreamType for UnknownLenStream {
     type Config = UnknownLenStreamConfig;
     type Source = UnknownLenSource;
     type Error = std::io::Error;
-    type Event = ();
+    type Events = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         config

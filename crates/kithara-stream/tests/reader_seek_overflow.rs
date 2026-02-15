@@ -90,7 +90,7 @@ impl StreamType for MockStream {
     type Config = MockStreamConfig;
     type Source = MockSource;
     type Error = std::io::Error;
-    type Event = ();
+    type Events = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
         config
