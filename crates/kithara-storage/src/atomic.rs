@@ -148,7 +148,7 @@ mod tests {
     }
 
     fn create_mem_resource() -> MemResource {
-        Resource::open(CancellationToken::new(), MemOptions { initial_data: None }).unwrap()
+        Resource::open(CancellationToken::new(), MemOptions::default()).unwrap()
     }
 
     #[rstest]
