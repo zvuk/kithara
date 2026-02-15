@@ -1635,6 +1635,7 @@ dependencies = [
  "fallible-iterator",
  "fast-interleave",
  "hotpath",
+ "js-sys",
  "kanal",
  "kithara-assets",
  "kithara-bufpool",
@@ -1659,6 +1660,8 @@ dependencies = [
  "tracing-subscriber",
  "unimock",
  "url",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -1844,10 +1847,12 @@ name = "kithara-storage"
 version = "0.1.0"
 dependencies = [
  "crossbeam-queue",
+ "kithara-bufpool",
  "mmap-io",
  "parking_lot",
  "rangemap",
  "rstest",
+ "slice_ring_buf",
  "tempfile",
  "thiserror 2.0.18",
  "tokio-util",
@@ -1889,12 +1894,21 @@ dependencies = [
  "console_error_panic_hook",
  "js-sys",
  "kithara-abr",
+ "kithara-audio",
+ "kithara-bufpool",
+ "kithara-decode",
+ "kithara-events",
+ "kithara-hls",
+ "kithara-storage",
+ "kithara-stream",
+ "rayon",
  "symphonia 0.6.0",
  "tracing",
  "tracing-subscriber",
  "tracing-wasm",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-bindgen-rayon",
  "web-sys",
  "web-time",
 ]
@@ -2583,6 +2597,7 @@ checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
 dependencies = [
  "either",
  "rayon-core",
+ "wasm_sync",
 ]
 
 [[package]]
@@ -2593,6 +2608,7 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+ "wasm_sync",
 ]
 
 [[package]]
@@ -3128,6 +3144,12 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "slice_ring_buf"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cd6db7fe3939155b6a220cca745c2558254c21bca0e461394fe2d081253fc33"
 
 [[package]]
 name = "smallvec"
@@ -4124,6 +4146,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-bindgen-rayon"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a16c60a56c81e4dc3b9c43d76ba5633e1c0278211d59a9cb07d61b6cd1c6583"
+dependencies = [
+ "crossbeam-channel",
+ "js-sys",
+ "rayon",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "wasm-bindgen-shared"
 version = "0.2.108"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4142,6 +4176,17 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "wasm_sync"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cff360cade7fec41ff0e9d2cda57fe58258c5f16def0e21302394659e6bbb0ea"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
  "web-sys",
 ]
 
