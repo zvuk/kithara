@@ -1,2 +1,8 @@
 // WASM HLS player library entry point.
-// Modules will be added in subsequent phases.
+
+#[cfg(target_arch = "wasm32")]
+mod player;
+
+// Re-export for wasm-bindgen.
+#[cfg(target_arch = "wasm32")]
+pub use player::WasmPlayer;

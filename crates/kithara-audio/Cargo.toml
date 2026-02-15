@@ -21,8 +21,8 @@ smallvec = { workspace = true }
 fallible-iterator = { workspace = true }
 thiserror = { workspace = true }
 kanal = { workspace = true }
-tokio = { workspace = true, features = ["full"] }
-tokio-util = { workspace = true, features = ["full"] }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
 rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
@@ -42,6 +42,10 @@ memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
 apple = ["kithara-decode/apple"]
 # Enable WASM AudioWorklet audio output
 web-audio = []
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["full"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = { workspace = true }

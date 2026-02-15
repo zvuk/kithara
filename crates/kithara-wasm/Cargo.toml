@@ -22,7 +22,12 @@ kithara-decode = { workspace = true }
 symphonia = { workspace = true }
 tracing = { workspace = true }
 web-time = { workspace = true }
-rayon = { workspace = true }
+rayon = { workspace = true, optional = true }
+
+[features]
+default = []
+# Enable wasm-bindgen-rayon thread pool (requires atomics + bulk-memory target features).
+threads = ["dep:rayon", "dep:wasm-bindgen-rayon"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tracing-subscriber = { workspace = true }
@@ -32,7 +37,7 @@ tracing-wasm = { workspace = true }
 console_error_panic_hook = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
-wasm-bindgen-rayon = { workspace = true }
+wasm-bindgen-rayon = { workspace = true, optional = true }
 js-sys = { workspace = true }
 web-sys = { workspace = true }
 
