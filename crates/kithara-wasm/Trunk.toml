@@ -1,0 +1,11 @@
+[build]
+target = "index.html"
+dist = "dist"
+
+[serve]
+port = 8080
+
+# Required for SharedArrayBuffer (needed by wasm-bindgen-rayon).
+[[headers]]
+uri = "*"
+headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder-Policy" = "require-corp" }
