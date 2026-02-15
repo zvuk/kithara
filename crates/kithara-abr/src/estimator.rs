@@ -150,9 +150,10 @@ impl Ewma {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use std::time::Duration;
 
     use rstest::rstest;
+    use web_time::Instant;
 
     use super::*;
 

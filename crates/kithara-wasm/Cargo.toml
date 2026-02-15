@@ -1,0 +1,23 @@
+[package]
+name = "kithara-wasm"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "WASM examples for kithara audio streaming library"
+publish = false
+
+[dependencies]
+kithara-abr = { workspace = true }
+tracing = { workspace = true }
+web-time = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tracing-subscriber = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+tracing-wasm = { workspace = true }
+console_error_panic_hook = { workspace = true }
+
+[lints]
+workspace = true

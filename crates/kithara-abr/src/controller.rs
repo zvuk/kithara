@@ -3,8 +3,10 @@ use std::{
         Arc,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
-    time::{Duration, Instant},
+    time::Duration,
 };
+
+use web_time::Instant;
 
 use super::{AbrMode, AbrOptions, Estimator, ThroughputEstimator, ThroughputSample};
 

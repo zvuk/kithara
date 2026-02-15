@@ -14,6 +14,7 @@ members = [
     "crates/kithara-storage",
     "crates/kithara-assets",
     "crates/kithara-bufpool",
+    "crates/kithara-wasm",
     "tests",
 ]
 
@@ -127,6 +128,9 @@ smallvec = "1"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
+tracing-wasm = "0.2"
+web-time = "1.1"
+console_error_panic_hook = "0.1"
 
 # serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -167,3 +171,9 @@ core-foundation = "0.10"
 core-foundation-sys = "0.8"
 
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1

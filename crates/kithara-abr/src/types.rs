@@ -1,4 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 /// ABR mode selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
