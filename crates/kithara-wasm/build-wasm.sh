@@ -5,12 +5,7 @@
 #   - Nightly Rust toolchain: rustup toolchain install nightly
 #   - wasm32 target: rustup target add wasm32-unknown-unknown --toolchain nightly
 #   - Trunk: cargo install trunk
-#
-# For multi-threading (SharedArrayBuffer):
-#   RUSTUP_TOOLCHAIN=nightly trunk serve --config crates/kithara-wasm/Trunk.toml
-#
-# Without multi-threading (simpler, for initial testing):
-#   trunk serve --config crates/kithara-wasm/Trunk.toml
+#   - rust-src: rustup component add rust-src --toolchain nightly
 
 set -euo pipefail
 
@@ -22,9 +17,10 @@ if ! command -v trunk &> /dev/null; then
     exit 1
 fi
 
-# Build with trunk (uses Trunk.toml for config).
 cd "$(dirname "$0")"
-trunk build --release
+
+# Use nightly for wasm32 target (needed for -Z build-std and atomics).
+RUSTUP_TOOLCHAIN=nightly trunk build --release --config Trunk.toml
 
 echo "Build complete. Output in dist/"
-echo "To serve: trunk serve"
+echo "To serve: RUSTUP_TOOLCHAIN=nightly trunk serve --config Trunk.toml"

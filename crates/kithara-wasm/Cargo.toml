@@ -22,10 +22,12 @@ kithara-decode = { workspace = true }
 symphonia = { workspace = true }
 tracing = { workspace = true }
 web-time = { workspace = true }
+url = { workspace = true }
+tokio = { workspace = true }
 rayon = { workspace = true, optional = true }
 
 [features]
-default = []
+default = ["threads"]
 # Enable wasm-bindgen-rayon thread pool (requires atomics + bulk-memory target features).
 threads = ["dep:rayon", "dep:wasm-bindgen-rayon"]
 
@@ -40,10 +42,6 @@ wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-rayon = { workspace = true, optional = true }
 js-sys = { workspace = true }
 web-sys = { workspace = true }
-
-[[bin]]
-name = "decode_demo"
-path = "src/decode_demo.rs"
 
 [lints]
 workspace = true

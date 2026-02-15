@@ -1,9 +1,16 @@
 [build]
 target = "index.html"
 dist = "dist"
+filehash = false
 
 [serve]
 port = 8080
+
+# Copy pcm-processor.js to dist.
+[[hooks]]
+stage = "post_build"
+command = "cp"
+command_args = ["pcm-processor.js", "dist/"]
 
 # Required for SharedArrayBuffer (needed by wasm-bindgen-rayon).
 [[headers]]
