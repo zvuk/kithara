@@ -128,6 +128,18 @@ impl<S> Audio<S> {
         &self.pcm_rx
     }
 
+    /// Enable non-blocking mode for `read()`.
+    ///
+    /// After calling this, `read()` returns immediately from buffered data
+    /// without blocking. Must be called after construction so that
+    /// `fill_buffer()` calls from JS (via `requestAnimationFrame`) don't hang.
+    pub fn preload(&mut self) {
+        self.preloaded = true;
+        if self.current_chunk.is_none() && !self.eof {
+            self.fill_buffer();
+        }
+    }
+
     /// Subscribe to audio events.
     ///
     /// For `Audio<Stream<T>>`, prefer `events()` which provides unified
