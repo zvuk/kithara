@@ -412,7 +412,7 @@ mod tests {
         }
     }
 
-    // --- DiskCoverage tests ---
+    // DiskCoverage tests
 
     #[rstest]
     #[timeout(Duration::from_secs(2))]

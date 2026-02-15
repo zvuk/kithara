@@ -172,7 +172,7 @@ async fn stress_seek_abr_audio() {
         }))
         .try_init();
 
-    // --- Generate WAV data for two variants ---
+    // Generate WAV data for two variants
     let init_segment = Arc::new(create_wav_init_segment());
     let v0_pcm = Arc::new(create_pcm_segments(ascending_sample));
     let v1_pcm = Arc::new(create_pcm_segments(descending_sample));
@@ -185,7 +185,7 @@ async fn stress_seek_abr_audio() {
         "Generated WAV data for two variants"
     );
 
-    // --- Spawn HLS server ---
+    // Spawn HLS server
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
@@ -210,7 +210,7 @@ async fn stress_seek_abr_audio() {
     let url = server.url("/master.m3u8").expect("url");
     info!(%url, "HLS server ready with 2 variants");
 
-    // --- Create Audio<Stream<Hls>> with Auto ABR starting on V0 ---
+    // Create Audio<Stream<Hls>> with Auto ABR starting on V0
     let temp_dir = TempDir::new().expect("temp dir");
     let cancel = CancellationToken::new();
 
@@ -239,7 +239,7 @@ async fn stress_seek_abr_audio() {
         "Audio pipeline created"
     );
 
-    // --- Run test phases in blocking thread ---
+    // Run test phases in blocking thread
     let result = tokio::task::spawn_blocking(move || {
         let channels = spec.channels as usize;
         let chunk_duration_secs = 0.05;

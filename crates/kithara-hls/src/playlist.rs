@@ -12,7 +12,7 @@ use url::Url;
 
 use crate::parsing::SegmentKey;
 
-// ---- Types ----
+// Types
 
 /// Per-segment parsed data (from media playlist).
 #[derive(Debug, Clone)]
@@ -64,7 +64,7 @@ pub struct VariantState {
     pub size_map: Option<VariantSizeMap>,
 }
 
-// ---- PlaylistState ----
+// PlaylistState
 
 /// Holds all parsed playlist data with interior mutability for size map updates.
 pub struct PlaylistState {
@@ -183,7 +183,7 @@ impl PlaylistState {
     }
 }
 
-// ---- PlaylistAccess trait ----
+// PlaylistAccess trait
 
 /// Read-only access to parsed playlist data.
 #[cfg_attr(test, unimock::unimock(api = PlaylistAccessMock))]
@@ -367,7 +367,7 @@ mod tests {
         }
     }
 
-    // ---- Test 1: basic access ----
+    // Test 1: basic access
 
     #[test]
     fn test_playlist_state_basic_access() {
@@ -382,7 +382,7 @@ mod tests {
         assert_eq!(state.num_segments(99), None);
     }
 
-    // ---- Test 2: variant info ----
+    // Test 2: variant info
 
     #[test]
     fn test_playlist_state_variant_info() {
@@ -412,7 +412,7 @@ mod tests {
         assert_eq!(state.init_url(5), None);
     }
 
-    // ---- Test 3: size map not set ----
+    // Test 3: size map not set
 
     #[test]
     fn test_size_map_not_set() {
@@ -424,7 +424,7 @@ mod tests {
         assert_eq!(state.find_segment_at_offset(0, 0), None);
     }
 
-    // ---- Test 4: size map set and query ----
+    // Test 4: size map set and query
 
     #[test]
     fn test_size_map_set_and_query() {
@@ -458,7 +458,7 @@ mod tests {
         assert_eq!(state.find_segment_at_offset(0, 1499), Some(3)); // last byte
     }
 
-    // ---- Test 5: reconcile segment size ----
+    // Test 5: reconcile segment size
 
     #[test]
     fn test_reconcile_segment_size() {
@@ -487,7 +487,7 @@ mod tests {
         assert_eq!(state.find_segment_at_offset(0, 550), Some(2));
     }
 
-    // ---- Test 6: find_segment_at_offset edge cases ----
+    // Test 6: find_segment_at_offset edge cases
 
     #[test]
     fn test_find_segment_at_offset_edge_cases() {
@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(state.find_segment_at_offset(99, 50), None);
     }
 
-    // ---- Test 7: from_parsed builder ----
+    // Test 7: from_parsed builder
 
     #[test]
     fn test_from_parsed_basic() {

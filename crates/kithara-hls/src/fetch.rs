@@ -176,7 +176,7 @@ impl<N: Net> FetchManager<N> {
         &self.backend
     }
 
-    // ---- Low-level fetch ----
+    // Low-level fetch
 
     pub async fn fetch_playlist(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
         self.fetch_atomic_internal(url, rel_path, None, "playlist")
@@ -278,7 +278,7 @@ impl<N: Net> FetchManager<N> {
         Ok(FetchResult::Active(writer, res))
     }
 
-    // ---- Playlist management ----
+    // Playlist management
 
     pub async fn master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
         let master = self
@@ -344,7 +344,7 @@ impl<N: Net> FetchManager<N> {
         parse(&bytes)
     }
 
-    // ---- DRM helpers ----
+    // DRM helpers
 
     /// Resolve decryption context for a segment.
     ///
@@ -399,7 +399,7 @@ impl<N: Net> FetchManager<N> {
         Ok(Some(DecryptContext::new(key_bytes, iv)))
     }
 
-    // ---- Init segment (OnceCell-deduped) ----
+    // Init segment (OnceCell-deduped)
 
     /// Download init segment for a variant. No race recovery needed — `OnceCell`
     /// guarantees exactly one caller performs the download.
@@ -490,7 +490,7 @@ impl<N: Net> FetchManager<N> {
         Ok(meta.clone())
     }
 
-    // ---- Loader helpers ----
+    // Loader helpers
 
     fn master_url(&self) -> HlsResult<&Url> {
         self.master_url
@@ -664,7 +664,7 @@ mod tests {
             .build()
     }
 
-    // ---- FetchManager tests ----
+    // FetchManager tests
 
     #[tokio::test]
     async fn test_fetch_playlist_with_mock_net() {
@@ -845,7 +845,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // ---- Loader tests ----
+    // Loader tests
 
     fn create_test_meta(variant: usize, segment_index: usize, len: u64) -> SegmentMeta {
         SegmentMeta {
@@ -910,7 +910,7 @@ mod tests {
         assert_eq!(meta2.len, 300_000);
     }
 
-    // ---- Partial segment tests ----
+    // Partial segment tests
 
     #[tokio::test]
     async fn test_load_media_segment_stream_error_returns_err() {

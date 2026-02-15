@@ -8,11 +8,19 @@ set -euo pipefail
 errors=0
 warnings=0
 
-# 1. No separator comments (// ====... or // ────... or // ----...)
+# 1. No separator comments
+#    Catches: // ====..., // ----..., // ────..., // --- Title ---, // === Title ===
+#    Also:    # ===..., # ---..., #===..., #---... (in .toml files)
+#    Minimum 3 repeated chars to avoid false positives on markdown/doc links.
 while IFS= read -r line; do
     echo "ERROR: separator comment: $line"
     errors=$((errors + 1))
-done < <(grep -rn '// [=─-]\{10,\}' --include='*.rs' crates/ tests/ || true)
+done < <(grep -rn '// *[=─-]\{3,\}' --include='*.rs' crates/ tests/ || true)
+
+while IFS= read -r line; do
+    echo "ERROR: separator comment: $line"
+    errors=$((errors + 1))
+done < <(grep -rn '# *[=─-]\{3,\}' --include='*.toml' crates/ Cargo.toml || true)
 
 # 2. No inline std:: qualified paths in function bodies (advisory)
 #    Excludes: use statements, macro_rules!, comments, derive attributes

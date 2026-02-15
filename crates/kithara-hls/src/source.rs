@@ -664,7 +664,7 @@ mod tests {
         assert_eq!(state.max_end_offset(), 600);
     }
 
-    // --- wait_range cancellation tests ---
+    // wait_range cancellation tests
 
     #[tokio::test]
     async fn test_wait_range_cancel_unblocks() {

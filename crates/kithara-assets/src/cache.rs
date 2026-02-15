@@ -365,7 +365,7 @@ mod tests {
         assert_eq!(res1.path(), res2.path());
     }
 
-    // ---- remove_on_evict tests ----
+    // remove_on_evict tests
 
     fn make_mem_cached(
         capacity: NonZeroUsize,
