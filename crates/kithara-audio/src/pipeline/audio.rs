@@ -754,10 +754,7 @@ impl<S: Send> PcmReader for Audio<S> {
     }
 
     fn preload(&mut self) {
-        self.preloaded = true;
-        if self.current_chunk.is_none() && !self.eof {
-            self.fill_buffer();
-        }
+        Self::preload(self);
     }
 
     fn next_chunk(&mut self) -> Option<PcmChunk> {

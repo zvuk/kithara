@@ -110,7 +110,7 @@
 
         async function setupAudioWorklet() {
             if (audioCtx) {
-                audioCtx.close();
+                await audioCtx.close();
             }
 
             audioCtx = new AudioContext({ sampleRate: player.sample_rate() });
