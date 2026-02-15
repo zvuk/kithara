@@ -1872,10 +1872,15 @@ name = "kithara-wasm"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "js-sys",
  "kithara-abr",
+ "symphonia 0.6.0",
  "tracing",
  "tracing-subscriber",
  "tracing-wasm",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
  "web-time",
 ]
 
