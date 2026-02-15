@@ -13,6 +13,7 @@
 use std::{env, error::Error, io::Read as _, time::Duration};
 
 use kithara_assets::StoreOptions;
+use kithara_events::{Event, EventBus};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig, HlsEvent};
 use kithara_stream::Stream;
 use rstest::rstest;
@@ -71,13 +72,14 @@ async fn test_abr_variant_switch_no_byte_glitches(
     // Create cancellation token
     let cancel_token = CancellationToken::new();
 
-    // Create events channel for tracking variant switches
-    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+    // Create event bus for tracking variant switches
+    let bus = EventBus::new(32);
+    let mut events_rx = bus.subscribe();
 
     // Configure HLS with ABR that will trigger switch due to slow variant 0
     let config = HlsConfig::new(url.clone())
         .with_cancel(cancel_token.clone())
-        .with_events(events_tx)
+        .with_events(bus)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_abr(AbrOptions {
             down_switch_buffer_secs: 0.5,
@@ -99,11 +101,11 @@ async fn test_abr_variant_switch_no_byte_glitches(
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             match ev {
-                HlsEvent::VariantApplied {
+                Event::Hls(HlsEvent::VariantApplied {
                     from_variant,
                     to_variant,
                     ..
-                } => {
+                }) => {
                     info!(
                         "Variant switch detected: {} -> {}",
                         from_variant, to_variant
@@ -113,7 +115,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
                         .unwrap()
                         .push((from_variant, to_variant));
                 }
-                HlsEvent::EndOfStream => break,
+                Event::Hls(HlsEvent::EndOfStream) => break,
                 _ => {}
             }
         }
@@ -285,12 +287,13 @@ async fn test_abr_variant_switch_with_seek_backward(
     let url = server.url("/master.m3u8")?;
     let cancel_token = CancellationToken::new();
 
-    // Create events channel for tracking variant switches
-    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+    // Create event bus for tracking variant switches
+    let bus = EventBus::new(32);
+    let mut events_rx = bus.subscribe();
 
     let config = HlsConfig::new(url)
         .with_cancel(cancel_token.clone())
-        .with_events(events_tx)
+        .with_events(bus)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_abr(AbrOptions {
             down_switch_buffer_secs: 0.5,
@@ -309,11 +312,11 @@ async fn test_abr_variant_switch_with_seek_backward(
 
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
-            if let HlsEvent::VariantApplied {
+            if let Event::Hls(HlsEvent::VariantApplied {
                 from_variant,
                 to_variant,
                 ..
-            } = ev
+            }) = ev
             {
                 println!("Variant switch: {} -> {}", from_variant, to_variant);
                 variant_switches_clone

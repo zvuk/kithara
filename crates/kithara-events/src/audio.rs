@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-//! Audio pipeline events for monitoring.
-
 use std::time::Duration;
 
 use kithara_decode::PcmSpec;
@@ -17,15 +15,4 @@ pub enum AudioEvent {
     SeekComplete { position: Duration },
     /// Decoding finished (EOF).
     EndOfStream,
-}
-
-/// Unified audio pipeline event stream.
-///
-/// `E` is the stream event type (`HlsEvent`, `FileEvent`).
-#[derive(Debug, Clone)]
-pub enum AudioPipelineEvent<E> {
-    /// Event from the underlying stream.
-    Stream(E),
-    /// Event from the audio pipeline.
-    Audio(AudioEvent),
 }

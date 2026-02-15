@@ -81,6 +81,7 @@ impl Net for HttpClient {
         resp.bytes().await.map_err(NetError::from)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn stream(
         &self,
         url: Url,
@@ -106,6 +107,7 @@ impl Net for HttpClient {
         Ok(Box::pin(stream))
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn get_range(
         &self,
         url: Url,
@@ -134,6 +136,7 @@ impl Net for HttpClient {
         Ok(Box::pin(stream))
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
         let req = self.inner.head(url.clone());
         let req = Self::apply_headers(req, headers);

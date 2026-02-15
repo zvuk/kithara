@@ -2,7 +2,7 @@ use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
 // Re-export for convenience
 pub use kithara_decode::{DecodeError, DecodeResult};
-use kithara_decode::{PcmSpec, TrackMetadata};
+use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use tokio::sync::Notify;
 
 /// Primary PCM interface for reading decoded audio.
@@ -69,4 +69,14 @@ pub trait PcmReader: Send {
     /// After calling this, subsequent `read_available()` / `read_planar_available()`
     /// will return immediately from buffered data without blocking.
     fn preload(&mut self) {}
+
+    /// Read the next decoded chunk with full metadata.
+    ///
+    /// Returns `None` on EOF or channel close.
+    /// Discards any partially-consumed chunk from previous [`PcmReader::read`] calls.
+    ///
+    /// Use this for chunk-level inspection and stream integrity verification.
+    fn next_chunk(&mut self) -> Option<PcmChunk> {
+        None
+    }
 }

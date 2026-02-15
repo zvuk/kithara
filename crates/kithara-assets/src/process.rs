@@ -98,11 +98,6 @@ where
             processed: Arc::new(Mutex::new(false)),
         }
     }
-
-    #[expect(dead_code)]
-    pub(crate) fn inner(&self) -> &R {
-        &self.inner
-    }
 }
 
 impl<R, Ctx> ProcessedResource<R, Ctx>

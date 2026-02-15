@@ -8,16 +8,15 @@ use std::{
 
 use kithara_abr::{AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource};
 use kithara_assets::{CoverageIndex, DiskCoverage, ResourceKey};
+use kithara_events::{EventBus, HlsEvent};
 use kithara_storage::{Coverage, MmapResource, ResourceExt, ResourceStatus};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
-use tokio::sync::broadcast;
 use tracing::debug;
 use url::Url;
 
 use crate::{
     HlsError,
     download_state::{DownloadProgress, LoadedSegment},
-    events::HlsEvent,
     fetch::{DefaultFetchManager, Loader, SegmentMeta},
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
     source::SharedSegments,
@@ -110,7 +109,7 @@ pub struct HlsDownloader {
     pub(crate) abr: AbrController<ThroughputEstimator>,
     pub(crate) byte_offset: u64,
     pub(crate) shared: Arc<SharedSegments>,
-    pub(crate) events_tx: Option<broadcast::Sender<HlsEvent>>,
+    pub(crate) bus: EventBus,
     /// Backpressure threshold. None = no backpressure.
     pub(crate) look_ahead_bytes: Option<u64>,
     /// Max segments to download in parallel per batch.
@@ -120,12 +119,6 @@ pub struct HlsDownloader {
 }
 
 impl HlsDownloader {
-    fn emit_event(&self, event: HlsEvent) {
-        if let Some(ref tx) = self.events_tx {
-            let _ = tx.send(event);
-        }
-    }
-
     /// Calculate size map for a variant via HEAD requests and store in `PlaylistState`.
     async fn calculate_size_map(
         playlist_state: &PlaylistState,
@@ -318,7 +311,7 @@ impl HlsDownloader {
     fn commit_segment(&mut self, dl: HlsFetch, is_variant_switch: bool, is_midstream_switch: bool) {
         self.record_throughput(dl.media.len, dl.duration, dl.media.duration);
 
-        self.emit_event(HlsEvent::SegmentComplete {
+        self.bus.publish(HlsEvent::SegmentComplete {
             variant: dl.variant,
             segment_index: dl.segment_index,
             bytes_transferred: dl.media.len,
@@ -395,7 +388,7 @@ impl HlsDownloader {
                 .store(new_expected, Ordering::Release);
         }
 
-        self.emit_event(HlsEvent::DownloadProgress {
+        self.bus.publish(HlsEvent::DownloadProgress {
             offset: self.byte_offset,
             total: None,
         });
@@ -567,7 +560,8 @@ impl HlsDownloader {
         } else {
             0.0
         };
-        self.emit_event(HlsEvent::ThroughputSample { bytes_per_second });
+        self.bus
+            .publish(HlsEvent::ThroughputSample { bytes_per_second });
     }
 }
 
@@ -633,7 +627,7 @@ impl Downloader for HlsDownloader {
             Err(e) => {
                 debug!(?e, "variant preparation error in poll_demand");
                 self.shared.condvar.notify_all();
-                self.emit_event(HlsEvent::DownloadError {
+                self.bus.publish(HlsEvent::DownloadError {
                     error: e.to_string(),
                 });
                 return None;
@@ -671,7 +665,7 @@ impl Downloader for HlsDownloader {
             return None;
         }
 
-        self.emit_event(HlsEvent::SegmentStart {
+        self.bus.publish(HlsEvent::SegmentStart {
             variant: req.variant,
             segment_index: req.segment_index,
             byte_offset: self.byte_offset,
@@ -693,7 +687,7 @@ impl Downloader for HlsDownloader {
 
         if self.current_segment_index >= num_segments {
             debug!("reached end of playlist, stopping downloader");
-            self.emit_event(HlsEvent::EndOfStream);
+            self.bus.publish(HlsEvent::EndOfStream);
             self.shared
                 .eof
                 .store(true, std::sync::atomic::Ordering::Release);
@@ -702,7 +696,7 @@ impl Downloader for HlsDownloader {
         }
 
         if decision.changed {
-            self.emit_event(HlsEvent::VariantApplied {
+            self.bus.publish(HlsEvent::VariantApplied {
                 from_variant: old_variant,
                 to_variant: variant,
                 reason: decision.reason,
@@ -718,7 +712,7 @@ impl Downloader for HlsDownloader {
             Err(e) => {
                 self.shared.condvar.notify_all();
                 debug!(?e, "variant preparation error");
-                self.emit_event(HlsEvent::DownloadError {
+                self.bus.publish(HlsEvent::DownloadError {
                     error: e.to_string(),
                 });
                 return PlanOutcome::Complete;
@@ -751,7 +745,7 @@ impl Downloader for HlsDownloader {
                 }
             }
 
-            self.emit_event(HlsEvent::SegmentStart {
+            self.bus.publish(HlsEvent::SegmentStart {
                 variant,
                 segment_index: seg_idx,
                 byte_offset: self.byte_offset,

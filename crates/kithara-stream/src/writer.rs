@@ -31,9 +31,6 @@ where
     OffsetOverflow,
 }
 
-/// Type alias for network-based writer (most common case).
-pub type NetWriter = Writer<NetError>;
-
 /// Item yielded by Writer stream.
 #[derive(Debug, Clone)]
 pub enum WriterItem {
@@ -63,16 +60,15 @@ pub enum WriterItem {
 ///
 /// ### Network download (default)
 /// ```no_run
-/// # use kithara_stream::{Writer, NetWriter};
-/// # use kithara_net::Net;
+/// # use kithara_stream::Writer;
+/// # use kithara_net::{Net, NetError};
 /// # use kithara_storage::StorageResource;
 /// # use tokio_util::sync::CancellationToken;
 /// # use url::Url;
 /// # async fn example(net: impl Net, res: StorageResource, cancel: CancellationToken) {
 /// let url = Url::parse("https://example.com/file.mp3").unwrap();
 /// let stream = net.stream(url, None).await.unwrap();
-/// let writer: NetWriter = Writer::new(stream, res, cancel);
-/// // NetWriter is alias for Writer<NetError>
+/// let writer: Writer<NetError> = Writer::new(stream, res, cancel);
 /// # }
 /// ```
 ///
@@ -218,35 +214,6 @@ where
                 }
             }
         }
-    }
-}
-
-impl<E> Writer<E>
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
-    /// Run writer to completion, calling `on_chunk` for each written chunk.
-    ///
-    /// Returns total bytes written on success.
-    pub async fn run<F>(mut self, mut on_chunk: F) -> Result<u64, WriterError<E>>
-    where
-        F: FnMut(u64, usize),
-    {
-        use futures::StreamExt as _;
-        while let Some(result) = self.next().await {
-            match result {
-                Ok(WriterItem::ChunkWritten { offset, len }) => {
-                    on_chunk(offset, len);
-                }
-                Ok(WriterItem::StreamEnded { total_bytes }) => {
-                    return Ok(total_bytes);
-                }
-                Err(e) => {
-                    return Err(e);
-                }
-            }
-        }
-        Ok(0)
     }
 }
 

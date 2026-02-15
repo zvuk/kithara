@@ -21,9 +21,6 @@ pub enum StorageError {
     #[error("invalid range: start {start} >= end {end}")]
     InvalidRange { start: u64, end: u64 },
 
-    #[error("resource not committed")]
-    NotCommitted,
-
     #[error("resource failed: {0}")]
     Failed(String),
 

@@ -1,13 +1,14 @@
-//! Integration tests for HLS events and broadcast channel.
+//! Integration tests for unified event bus.
 
+use kithara_events::{Event, EventBus};
 use kithara_hls::HlsEvent;
-use tokio::sync::broadcast;
 
 #[test]
-fn test_broadcast_channel() {
-    let (tx, mut rx) = broadcast::channel::<HlsEvent>(32);
-    let _ = tx.send(HlsEvent::EndOfStream);
+fn test_event_bus_publish_subscribe() {
+    let bus = EventBus::new(32);
+    let mut rx = bus.subscribe();
+    bus.publish(HlsEvent::EndOfStream);
 
     let event = rx.try_recv().ok();
-    assert!(matches!(event, Some(HlsEvent::EndOfStream)));
+    assert!(matches!(event, Some(Event::Hls(HlsEvent::EndOfStream))));
 }

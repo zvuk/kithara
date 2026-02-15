@@ -49,7 +49,6 @@ graph TB
     subgraph "tokio Runtime (async tasks)"
         NetTask["Network I/O<br/><i>reqwest + retry</i>"]
         WriterTask["Writer&lt;E&gt;<br/><i>byte pump</i>"]
-        EventFwd["Event Forwarder<br/><i>broadcast relay</i>"]
     end
 
     subgraph "rayon ThreadPool (blocking)"
@@ -66,7 +65,7 @@ graph TB
     subgraph "Channels"
         PcmChan["kanal::bounded&lt;PcmChunk&gt;<br/><i>decode -> consumer</i>"]
         CmdChan["kanal::bounded&lt;AudioCommand&gt;<br/><i>consumer -> worker</i>"]
-        EventChan["broadcast::channel&lt;Event&gt;<br/><i>all -> consumer</i>"]
+        EventChan["EventBus&lt;Event&gt;<br/><i>all -> consumer</i>"]
     end
 
     DLLoop -- "plan + fetch" --> NetTask
@@ -82,7 +81,8 @@ graph TB
     Resource -- "Seek cmd" --> CmdChan
     CmdChan --> DecodeWorker
 
-    EventFwd -- "ResourceEvent" --> EventChan
+    DecodeWorker -- "AudioEvent" --> EventChan
+    DLLoop -- "HlsEvent / FileEvent" --> EventChan
     EventChan --> App
 
     DLLoop -- "should_throttle()" --> Progress
@@ -97,7 +97,7 @@ graph TB
 ```
 
 - **OS thread** (`kithara-audio`): runs `run_audio_loop` -- drains seek commands, calls `Decoder::next_chunk`, applies effects (resampler), sends processed chunks through a bounded `kanal` channel with backpressure.
-- **tokio task**: forwards stream events (ABR switch, progress) into a unified `AudioPipelineEvent` broadcast channel.
+- **tokio task**: publishes events (ABR switch, progress, decode) to a unified `EventBus`.
 - **Epoch-based invalidation**: after seek, stale in-flight chunks are filtered by epoch counter (`Arc<AtomicU64>`).
 
 ## Pipeline Architecture

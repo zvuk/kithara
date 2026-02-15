@@ -22,7 +22,6 @@
 // Public modules
 pub mod config;
 pub mod error;
-pub mod events;
 
 // Internal modules (exposed for testing, use with caution)
 #[doc(hidden)]
@@ -48,9 +47,6 @@ mod source;
 pub use config::{HlsConfig, KeyContext, KeyOptions, KeyProcessor};
 pub use context::HlsStreamContext;
 pub use error::{HlsError, HlsResult};
-pub use events::HlsEvent;
 pub use inner::Hls;
-pub use kithara_abr::{
-    AbrDecision, AbrMode, AbrOptions, AbrReason, ThroughputSample, Variant, VariantInfo,
-};
-pub use kithara_stream::ContainerFormat;
+pub use kithara_abr::{AbrMode, AbrOptions};
+pub use kithara_events::{EventBus, HlsEvent};

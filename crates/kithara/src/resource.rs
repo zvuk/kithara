@@ -4,11 +4,12 @@
 
 use std::{num::NonZeroU32, time::Duration};
 
-use kithara_audio::{Audio, AudioConfig, AudioEvent, AudioPipelineEvent, PcmReader};
+use kithara_audio::{Audio, AudioConfig, PcmReader};
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+use kithara_events::{Event, EventBus};
 use tokio::sync::broadcast;
 
-use crate::{config::ResourceConfig, events::ResourceEvent, source_type::SourceType};
+use crate::{config::ResourceConfig, source_type::SourceType};
 
 // -- Resource -----------------------------------------------------------------
 
@@ -34,7 +35,7 @@ use crate::{config::ResourceConfig, events::ResourceEvent, source_type::SourceTy
 /// ```
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
-    events_tx: broadcast::Sender<ResourceEvent>,
+    bus: EventBus,
 }
 
 impl Resource {
@@ -61,18 +62,28 @@ impl Resource {
 
     /// Create a resource from any `PcmReader`.
     ///
-    /// Only audio events are forwarded. Use this for custom sources.
+    /// Audio events from the reader are forwarded to the bus as `Event::Audio`.
+    /// Use this for custom sources.
     #[cfg_attr(not(test), expect(dead_code))]
     pub(crate) fn from_reader(reader: impl PcmReader + 'static) -> Self {
-        let (events_tx, _) = broadcast::channel(64);
+        let bus = EventBus::new(64);
 
-        let forward_tx = events_tx.clone();
-        let decode_rx = reader.decode_events();
-        Self::spawn_audio_forward(decode_rx, forward_tx);
+        // Forward AudioEvents from the generic PcmReader into the unified EventBus.
+        let forward_bus = bus.clone();
+        let mut decode_rx = reader.decode_events();
+        tokio::spawn(async move {
+            loop {
+                match decode_rx.recv().await {
+                    Ok(event) => forward_bus.publish(event),
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
 
         Self {
             inner: Box::new(reader),
-            events_tx,
+            bus,
         }
     }
 
@@ -81,17 +92,24 @@ impl Resource {
     /// Use this when you need to customize `FileConfig` or `AudioConfig`
     /// beyond what `Resource::new()` provides.
     #[cfg(feature = "file")]
-    pub(crate) async fn from_file(config: AudioConfig<kithara_file::File>) -> DecodeResult<Self> {
+    pub(crate) async fn from_file(
+        mut config: AudioConfig<kithara_file::File>,
+    ) -> DecodeResult<Self> {
         use kithara_stream::Stream;
 
+        // Extract existing bus from stream config, or create a new one.
+        let bus = config
+            .stream
+            .bus
+            .clone()
+            .unwrap_or_else(|| EventBus::new(64));
+        // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
+        config.stream.bus = Some(bus.clone());
+
         let audio = Audio::<Stream<kithara_file::File>>::new(config).await?;
-
-        let (events_tx, _) = broadcast::channel(64);
-        Self::spawn_typed_forward(audio.events(), events_tx.clone());
-
         Ok(Self {
             inner: Box::new(audio),
-            events_tx,
+            bus,
         })
     }
 
@@ -99,23 +117,38 @@ impl Resource {
     ///
     /// Use this when you need to customize `HlsConfig`, ABR, keys, etc.
     #[cfg(feature = "hls")]
-    pub(crate) async fn from_hls(config: AudioConfig<kithara_hls::Hls>) -> DecodeResult<Self> {
+    pub(crate) async fn from_hls(mut config: AudioConfig<kithara_hls::Hls>) -> DecodeResult<Self> {
         use kithara_stream::Stream;
 
+        // Extract existing bus from stream config, or create a new one.
+        let bus = config
+            .stream
+            .bus
+            .clone()
+            .unwrap_or_else(|| EventBus::new(64));
+        // Inject bus into stream config — Audio::new() reads it via StreamType::event_bus().
+        config.stream.bus = Some(bus.clone());
+
         let audio = Audio::<Stream<kithara_hls::Hls>>::new(config).await?;
-
-        let (events_tx, _) = broadcast::channel(64);
-        Self::spawn_typed_forward(audio.events(), events_tx.clone());
-
         Ok(Self {
             inner: Box::new(audio),
-            events_tx,
+            bus,
         })
     }
 
-    /// Subscribe to unified resource events.
-    pub fn subscribe(&self) -> broadcast::Receiver<ResourceEvent> {
-        self.events_tx.subscribe()
+    /// Subscribe to unified events.
+    ///
+    /// Returns a receiver for all events published to the bus,
+    /// including audio, file, and HLS events.
+    pub fn subscribe(&self) -> broadcast::Receiver<Event> {
+        self.bus.subscribe()
+    }
+
+    /// Get a reference to the underlying `EventBus`.
+    ///
+    /// Useful for passing to downstream components that also publish events.
+    pub fn event_bus(&self) -> &EventBus {
+        &self.bus
     }
 
     /// Read interleaved PCM samples.
@@ -176,45 +209,6 @@ impl Resource {
         }
         self.inner.preload();
     }
-
-    // -- Internal helpers -----------------------------------------------------
-
-    fn spawn_audio_forward(
-        mut audio_rx: broadcast::Receiver<AudioEvent>,
-        forward_tx: broadcast::Sender<ResourceEvent>,
-    ) {
-        tokio::spawn(async move {
-            loop {
-                match audio_rx.recv().await {
-                    Ok(event) => {
-                        let _ = forward_tx.send(event.into());
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        });
-    }
-
-    fn spawn_typed_forward<E>(
-        mut typed_rx: broadcast::Receiver<AudioPipelineEvent<E>>,
-        forward_tx: broadcast::Sender<ResourceEvent>,
-    ) where
-        E: Clone + Send + 'static,
-        ResourceEvent: From<AudioPipelineEvent<E>>,
-    {
-        tokio::spawn(async move {
-            loop {
-                match typed_rx.recv().await {
-                    Ok(event) => {
-                        let _ = forward_tx.send(event.into());
-                    }
-                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        });
-    }
 }
 
 #[cfg(test)]
@@ -223,6 +217,7 @@ mod tests {
 
     use kithara_audio::{AudioEvent, PcmReader};
     use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+    use kithara_events::Event;
     use tokio::sync::broadcast;
 
     use super::Resource;
@@ -451,7 +446,7 @@ mod tests {
         let mut rx = resource.subscribe();
 
         // Send an AudioEvent through the mock's broadcast channel.
-        // The Resource's spawn_audio_forward task converts it to ResourceEvent.
+        // The Resource's forwarding task converts it to Event::Audio.
         let spec = mock_spec();
         sender.send(AudioEvent::FormatDetected { spec }).unwrap();
 
@@ -463,9 +458,7 @@ mod tests {
             .unwrap()
             .unwrap();
 
-        assert!(
-            matches!(event, crate::events::ResourceEvent::FormatDetected { spec: s } if s == spec)
-        );
+        assert!(matches!(event, Event::Audio(AudioEvent::FormatDetected { spec: s }) if s == spec));
     }
 
     #[tokio::test]

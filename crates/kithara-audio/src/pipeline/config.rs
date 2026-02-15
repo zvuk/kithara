@@ -5,13 +5,12 @@ use std::{
     sync::{Arc, atomic::AtomicU32},
 };
 
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::PcmSpec;
+use kithara_events::EventBus;
 use kithara_stream::{StreamType, ThreadPool};
-use tokio::sync::broadcast;
 
 use crate::{
-    events::AudioPipelineEvent,
     resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
     traits::AudioEffect,
 };
@@ -21,10 +20,10 @@ use crate::{
 /// Generic over `StreamType` to include stream-specific configuration.
 /// Combines stream config and audio pipeline settings into a single builder.
 pub struct AudioConfig<T: StreamType> {
+    /// Shared byte pool for temporary buffers (probe, etc.).
+    pub byte_pool: Option<BytePool>,
     /// Command channel capacity.
     pub command_channel_capacity: usize,
-    /// Broadcast event channel capacity.
-    pub event_channel_capacity: usize,
     /// Optional format hint (file extension like "mp3", "wav")
     pub hint: Option<String>,
     /// Target sample rate of the audio host (for resampling).
@@ -48,18 +47,19 @@ pub struct AudioConfig<T: StreamType> {
     pub stream: T::Config,
     /// Thread pool for blocking work (decode, probe).
     ///
-    /// Shared across all components. Defaults to the global rayon pool.
-    pub thread_pool: ThreadPool,
-    /// Unified events sender (optional — if not provided, one is created internally).
-    pub(super) events_tx: Option<broadcast::Sender<AudioPipelineEvent<T::Event>>>,
+    /// When `None`, inherits from the stream config via `StreamType::thread_pool()`.
+    /// When `Some`, overrides the stream config pool.
+    pub thread_pool: Option<ThreadPool>,
+    /// Unified event bus (optional — if not provided, one is created internally).
+    pub(super) bus: Option<EventBus>,
 }
 
 impl<T: StreamType> AudioConfig<T> {
     /// Create config with stream config and default audio settings.
     pub fn new(stream: T::Config) -> Self {
         Self {
+            byte_pool: None,
             command_channel_capacity: 4,
-            event_channel_capacity: 64,
             hint: None,
             host_sample_rate: None,
             media_info: None,
@@ -69,15 +69,9 @@ impl<T: StreamType> AudioConfig<T> {
             preload_chunks: 3,
             resampler_quality: ResamplerQuality::default(),
             stream,
-            thread_pool: ThreadPool::default(),
-            events_tx: None,
+            thread_pool: None,
+            bus: None,
         }
-    }
-
-    /// Set event broadcast channel capacity.
-    pub fn with_event_channel_capacity(mut self, capacity: usize) -> Self {
-        self.event_channel_capacity = capacity;
-        self
     }
 
     /// Set format hint.
@@ -89,6 +83,12 @@ impl<T: StreamType> AudioConfig<T> {
     /// Set media info.
     pub fn with_media_info(mut self, info: kithara_stream::MediaInfo) -> Self {
         self.media_info = Some(info);
+        self
+    }
+
+    /// Set shared byte pool for temporary buffers (probe, etc.).
+    pub fn with_byte_pool(mut self, pool: BytePool) -> Self {
+        self.byte_pool = Some(pool);
         self
     }
 
@@ -125,23 +125,21 @@ impl<T: StreamType> AudioConfig<T> {
         self
     }
 
-    /// Set unified events channel.
+    /// Set unified event bus.
     ///
-    /// Stream events and audio events are forwarded as `AudioPipelineEvent::Stream(e)`
-    /// and `AudioPipelineEvent::Audio(e)` respectively.
-    pub fn with_events(
-        mut self,
-        events_tx: broadcast::Sender<AudioPipelineEvent<T::Event>>,
-    ) -> Self {
-        self.events_tx = Some(events_tx);
+    /// All audio events are published to the bus. The bus capacity is set
+    /// at creation by the caller.
+    pub fn with_events(mut self, bus: EventBus) -> Self {
+        self.bus = Some(bus);
         self
     }
 
     /// Set thread pool for blocking work (decode, probe).
     ///
-    /// The pool is shared across all components. Defaults to the global rayon pool.
+    /// Overrides the pool from stream config. When not set, the pool is
+    /// inherited from the stream config via `StreamType::thread_pool()`.
     pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = pool;
+        self.thread_pool = Some(pool);
         self
     }
 }
@@ -167,13 +165,15 @@ pub(super) fn create_effects(
     initial_spec: PcmSpec,
     host_sample_rate: &Arc<AtomicU32>,
     quality: ResamplerQuality,
+    pool: Option<PcmPool>,
 ) -> Vec<Box<dyn AudioEffect>> {
     let params = ResamplerParams::new(
         Arc::clone(host_sample_rate),
         initial_spec.sample_rate,
         initial_spec.channels as usize,
     )
-    .with_quality(quality);
+    .with_quality(quality)
+    .with_pool(pool);
 
     vec![Box::new(ResamplerProcessor::new(params))]
 }

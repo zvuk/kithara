@@ -7,7 +7,7 @@
 //! - [`Downloader`]: mutable planner/committer (plan + commit, no I/O)
 //! - Backend (in `backend.rs`): generic orchestrator (backpressure, demand, parallelism, yield)
 
-use std::{convert::Infallible, future::Future};
+use std::future::Future;
 
 /// Outcome of [`Downloader::plan`].
 pub enum PlanOutcome<P> {
@@ -89,64 +89,19 @@ pub trait Downloader: Send + 'static {
 
     /// Wait until throttle condition clears.
     fn wait_ready(&self) -> impl Future<Output = ()> + Send;
-}
 
-// NoDownload / NoIo — for sources that don't need background downloading.
-
-/// No-op I/O executor.
-#[derive(Clone)]
-pub struct NoIo;
-
-impl DownloaderIo for NoIo {
-    type Plan = Infallible;
-    type Fetch = Infallible;
-    type Error = NoDownloadError;
-
-    async fn fetch(&self, plan: Self::Plan) -> Result<Self::Fetch, Self::Error> {
-        match plan {}
+    /// Signal that on-demand data is needed (e.g. reader seek).
+    ///
+    /// Returns a future that resolves when demand is available.
+    /// Used by Backend to interrupt a blocked [`step`](Self::step) call
+    /// so that [`poll_demand`](Self::poll_demand) can be checked promptly.
+    ///
+    /// `use<Self>` ensures the returned future does not capture the `&self`
+    /// lifetime, allowing Backend to hold it alongside `step(&mut self)`
+    /// in the same `tokio::select!`.
+    ///
+    /// Default: never resolves (no demand signaling).
+    fn demand_signal(&self) -> impl Future<Output = ()> + Send + use<Self> {
+        std::future::pending()
     }
-}
-
-/// No-op downloader for sources that manage downloads internally.
-pub struct NoDownload;
-
-/// Error type for [`NoDownload`] (never constructed).
-#[derive(Debug)]
-pub struct NoDownloadError;
-
-impl std::fmt::Display for NoDownloadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "no download")
-    }
-}
-
-impl std::error::Error for NoDownloadError {}
-
-impl Downloader for NoDownload {
-    type Plan = Infallible;
-    type Fetch = Infallible;
-    type Error = NoDownloadError;
-    type Io = NoIo;
-
-    fn io(&self) -> &Self::Io {
-        &NoIo
-    }
-
-    async fn poll_demand(&mut self) -> Option<Self::Plan> {
-        std::future::pending().await
-    }
-
-    async fn plan(&mut self) -> PlanOutcome<Self::Plan> {
-        std::future::pending().await
-    }
-
-    fn commit(&mut self, fetch: Self::Fetch) {
-        match fetch {}
-    }
-
-    fn should_throttle(&self) -> bool {
-        false
-    }
-
-    async fn wait_ready(&self) {}
 }

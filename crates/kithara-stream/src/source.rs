@@ -20,11 +20,9 @@ use crate::{error::StreamResult, media::MediaInfo};
 ///
 /// Methods take `&mut self` to allow sources to maintain internal state
 /// (e.g., progress tracking, segment index updates).
-#[cfg_attr(any(test, feature = "test-utils"), unimock(api = SourceMock, type Item = u8; type Error = std::io::Error;))]
+#[cfg_attr(any(test, feature = "test-utils"), unimock(api = SourceMock, type Error = std::io::Error;))]
+#[expect(clippy::len_without_is_empty)]
 pub trait Source: Send + 'static {
-    /// Item type (bytes for raw streams, samples for decoded audio).
-    type Item: Send;
-
     /// Error type.
     type Error: std::error::Error + Send + Sync + 'static;
 
@@ -42,11 +40,6 @@ pub trait Source: Send + 'static {
 
     /// Total length if known.
     fn len(&self) -> Option<u64>;
-
-    /// Check if source is empty.
-    fn is_empty(&self) -> bool {
-        self.len() == Some(0)
-    }
 
     /// Get media info if available.
     fn media_info(&self) -> Option<MediaInfo> {

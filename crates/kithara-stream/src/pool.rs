@@ -40,10 +40,6 @@ use std::{fmt, sync::Arc};
 ///
 /// // Fire-and-forget
 /// pool.spawn(|| { /* CPU work */ });
-///
-/// // Run on pool, block until done
-/// let result = pool.install(|| 42);
-/// assert_eq!(result, 42);
 /// ```
 #[derive(Clone)]
 pub struct ThreadPool {
@@ -81,8 +77,8 @@ impl ThreadPool {
 
     /// Spawn a closure on the pool (fire-and-forget).
     ///
-    /// The closure runs on a pool thread. There is no way to wait for
-    /// completion or retrieve a result — use [`install`](Self::install) for that.
+    /// The closure runs on a pool thread. Use [`spawn_async`](Self::spawn_async)
+    /// to get a future that resolves when the closure completes.
     pub fn spawn<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
@@ -90,21 +86,6 @@ impl ThreadPool {
         match self.inner {
             Some(ref pool) => pool.spawn(f),
             None => rayon::spawn(f),
-        }
-    }
-
-    /// Run a closure on the pool and block the calling thread until it returns.
-    ///
-    /// The calling thread participates in work-stealing while waiting.
-    /// Use from non-async contexts (e.g., within another pool task).
-    pub fn install<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce() -> R + Send,
-        R: Send,
-    {
-        match self.inner {
-            Some(ref pool) => pool.install(f),
-            None => f(),
         }
     }
 
@@ -178,20 +159,6 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 42);
     }
 
-    #[test]
-    fn test_install_returns_value() {
-        let pool = ThreadPool::with_num_threads(2).unwrap();
-        let result = pool.install(|| 42);
-        assert_eq!(result, 42);
-    }
-
-    #[test]
-    fn test_install_global() {
-        let pool = ThreadPool::global();
-        let result = pool.install(|| 42);
-        assert_eq!(result, 42);
-    }
-
     #[tokio::test]
     async fn test_spawn_async() {
         let pool = ThreadPool::with_num_threads(2).unwrap();
@@ -211,10 +178,16 @@ mod tests {
         let pool = ThreadPool::with_num_threads(2).unwrap();
         let pool2 = pool.clone();
 
-        let result1 = pool.install(|| 1);
-        let result2 = pool2.install(|| 2);
-        assert_eq!(result1, 1);
-        assert_eq!(result2, 2);
+        let (tx1, rx1) = std::sync::mpsc::channel();
+        let (tx2, rx2) = std::sync::mpsc::channel();
+        pool.spawn(move || {
+            let _ = tx1.send(1);
+        });
+        pool2.spawn(move || {
+            let _ = tx2.send(2);
+        });
+        assert_eq!(rx1.recv().unwrap(), 1);
+        assert_eq!(rx2.recv().unwrap(), 2);
     }
 
     #[test]

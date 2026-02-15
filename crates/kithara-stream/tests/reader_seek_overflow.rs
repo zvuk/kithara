@@ -28,10 +28,11 @@
 use std::{
     io::{Read, Seek, SeekFrom},
     ops::Range,
+    sync::{Arc, atomic::AtomicU64},
 };
 
 use kithara_storage::WaitOutcome;
-use kithara_stream::{Reader, Source, StreamResult};
+use kithara_stream::{NullStreamContext, Source, Stream, StreamContext, StreamResult, StreamType};
 
 /// Minimal mock source with known length.
 struct MockSource {
@@ -60,7 +61,6 @@ impl MockSource {
 }
 
 impl Source for MockSource {
-    type Item = u8;
     type Error = std::io::Error;
 
     fn wait_range(&mut self, _range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
@@ -83,12 +83,51 @@ impl Source for MockSource {
     }
 }
 
+/// StreamType marker for MockSource.
+struct MockStream;
+
+impl StreamType for MockStream {
+    type Config = MockStreamConfig;
+    type Source = MockSource;
+    type Error = std::io::Error;
+    type Events = ();
+
+    async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
+        config
+            .source
+            .ok_or_else(|| std::io::Error::other("no source"))
+    }
+
+    fn build_stream_context(
+        _source: &Self::Source,
+        position: Arc<AtomicU64>,
+    ) -> Arc<dyn StreamContext> {
+        Arc::new(NullStreamContext::new(position))
+    }
+}
+
+#[derive(Default)]
+struct MockStreamConfig {
+    source: Option<MockSource>,
+}
+
+fn mock_stream(source: MockSource) -> Stream<MockStream> {
+    let config = MockStreamConfig {
+        source: Some(source),
+    };
+    // Uses a simple blocking wrapper since MockStream::create is trivial.
+    tokio::runtime::Runtime::new()
+        .unwrap()
+        .block_on(Stream::new(config))
+        .unwrap()
+}
+
 // Regression tests — document the seek bug from production (2026-02-01)
 //
 // Fixed: `probe_byte_len()` in `kithara-decode/src/decoder.rs` makes
 // adapters report `byte_len() -> Some(len)`, so symphonia computes
 // correct deltas. These tests replay the corrupted deltas that symphonia
-// produced *before* the fix — they can't turn green at the Reader level.
+// produced *before* the fix — they can't turn green at the Stream level.
 
 /// Reproduction of epoch 10 seek failure from production log.
 ///
@@ -104,12 +143,12 @@ fn seek_epoch_10_corrupted_delta() {
     const SYMPHONIA_DELTA: i64 = 9_223_372_036_854_115_238;
 
     let source = MockSource::new(STREAM_LEN);
-    let mut reader = Reader::new(source);
-    reader.seek(SeekFrom::Start(CURRENT_POS)).unwrap();
+    let mut stream = mock_stream(source);
+    stream.seek(SeekFrom::Start(CURRENT_POS)).unwrap();
 
     // Symphonia sends this delta when seeking to ~80.9s in a 220s fMP4 stream.
     // The delta is wrong because byte_len() returned None.
-    let result = reader.seek(SeekFrom::Current(SYMPHONIA_DELTA));
+    let result = stream.seek(SeekFrom::Current(SYMPHONIA_DELTA));
 
     // EXPECTED: seek should succeed (once byte_len() is fixed, symphonia
     //           will send a correct small delta to a position within the stream).
@@ -135,10 +174,10 @@ fn seek_epoch_11_corrupted_delta() {
     const SYMPHONIA_DELTA: i64 = 9_223_372_036_854_233_317;
 
     let source = MockSource::new(STREAM_LEN);
-    let mut reader = Reader::new(source);
-    reader.seek(SeekFrom::Start(CURRENT_POS)).unwrap();
+    let mut stream = mock_stream(source);
+    stream.seek(SeekFrom::Start(CURRENT_POS)).unwrap();
 
-    let result = reader.seek(SeekFrom::Current(SYMPHONIA_DELTA));
+    let result = stream.seek(SeekFrom::Current(SYMPHONIA_DELTA));
 
     assert!(
         result.is_ok(),
@@ -153,11 +192,11 @@ fn seek_epoch_11_corrupted_delta() {
 #[test]
 fn seek_current_normal_backward() {
     let source = MockSource::new(1_000_000);
-    let mut reader = Reader::new(source);
+    let mut stream = mock_stream(source);
 
-    reader.seek(SeekFrom::Start(500_000)).unwrap();
+    stream.seek(SeekFrom::Start(500_000)).unwrap();
 
-    let result = reader.seek(SeekFrom::Current(-100_000));
+    let result = stream.seek(SeekFrom::Current(-100_000));
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), 400_000);
 }
@@ -166,11 +205,11 @@ fn seek_current_normal_backward() {
 #[test]
 fn seek_current_normal_forward() {
     let source = MockSource::new(1_000_000);
-    let mut reader = Reader::new(source);
+    let mut stream = mock_stream(source);
 
-    reader.seek(SeekFrom::Start(100_000)).unwrap();
+    stream.seek(SeekFrom::Start(100_000)).unwrap();
 
-    let result = reader.seek(SeekFrom::Current(200_000));
+    let result = stream.seek(SeekFrom::Current(200_000));
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), 300_000);
 }
@@ -179,9 +218,9 @@ fn seek_current_normal_forward() {
 #[test]
 fn seek_past_eof_still_rejected() {
     let source = MockSource::new(1_000);
-    let mut reader = Reader::new(source);
+    let mut stream = mock_stream(source);
 
-    let result = reader.seek(SeekFrom::Start(2_000));
+    let result = stream.seek(SeekFrom::Start(2_000));
     assert!(result.is_err(), "seek past EOF should return Err");
     let err = result.unwrap_err();
     assert!(
@@ -194,9 +233,9 @@ fn seek_past_eof_still_rejected() {
 #[test]
 fn seek_from_end_backward() {
     let source = MockSource::new(1_000_000);
-    let mut reader = Reader::new(source);
+    let mut stream = mock_stream(source);
 
-    let result = reader.seek(SeekFrom::End(-100));
+    let result = stream.seek(SeekFrom::End(-100));
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), 999_900);
 }
@@ -214,7 +253,7 @@ fn seek_from_end_backward() {
 //   7. Stale AAC bytes are interpreted as fMP4 atom header → garbage
 //      atom.size ≈ 3.5 GB
 //   8. ignore_bytes(3_528_752_481) → SeekFrom::Current(3_528_752_481)
-//   9. Reader panics: new_pos = 3_529_918_251 >> len = 27_229_109
+//   9. Stream error: new_pos = 3_529_918_251 >> len = 27_229_109
 //
 // Root cause: decoder recreation is not synchronized with the stream's
 // segment layout. After variant switch, old variant's segment data
@@ -226,19 +265,19 @@ fn seek_from_end_backward() {
 /// Symphonia parses stale variant 0 data as an fMP4 atom header,
 /// gets a garbage size (~3.5 GB), and issues a seek that overflows.
 /// With `fence_at()` removing stale entries, this shouldn't happen in
-/// production. But if it does, Reader returns Err instead of crashing.
+/// production. But if it does, Stream returns Err instead of crashing.
 #[test]
 fn variant_switch_stale_atoms_produce_garbage_seek() {
     // Production values — no large allocation needed, only len matters
     let source = MockSource::with_reported_len(27_229_109);
-    let mut reader = Reader::new(source);
+    let mut stream = mock_stream(source);
 
-    // Reader position after decoding part of variant 3's first segment
-    reader.seek(SeekFrom::Start(1_165_770)).unwrap();
+    // Stream position after decoding part of variant 3's first segment
+    stream.seek(SeekFrom::Start(1_165_770)).unwrap();
 
     // Symphonia's AtomIterator reads old variant 0 bytes as atom header,
     // gets atom.size ≈ 3.5 GB, calls ignore_bytes → this seek:
-    let result = reader.seek(SeekFrom::Current(3_528_752_481));
+    let result = stream.seek(SeekFrom::Current(3_528_752_481));
     // → new_pos = 1_165_770 + 3_528_752_481 = 3_529_918_251
     // → 3_529_918_251 > 27_229_109 → Err (graceful)
     assert!(result.is_err(), "garbage seek should return Err, not crash");
@@ -248,11 +287,11 @@ fn variant_switch_stale_atoms_produce_garbage_seek() {
 #[test]
 fn read_after_seek() {
     let source = MockSource::new(1_000);
-    let mut reader = Reader::new(source);
+    let mut stream = mock_stream(source);
 
-    reader.seek(SeekFrom::Start(500)).unwrap();
+    stream.seek(SeekFrom::Start(500)).unwrap();
     let mut buf = [0u8; 16];
-    let n = reader.read(&mut buf).unwrap();
+    let n = stream.read(&mut buf).unwrap();
     assert!(n > 0);
     assert_eq!(&buf[..n], &vec![0xAA; n][..]);
 }

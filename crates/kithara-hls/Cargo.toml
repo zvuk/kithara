@@ -12,6 +12,7 @@ workspace = true
 [dependencies]
 kithara-abr = { workspace = true }
 kithara-assets = { workspace = true }
+kithara-events = { workspace = true, features = ["hls"] }
 kithara-drm = { workspace = true }
 kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
@@ -34,7 +35,7 @@ hotpath = { workspace = true, optional = true }
 
 [features]
 default = []
-perf = ["dep:hotpath", "hotpath/hotpath"]
+perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
 
 [dev-dependencies]
 kithara-net = { workspace = true, features = ["test-utils"] }
