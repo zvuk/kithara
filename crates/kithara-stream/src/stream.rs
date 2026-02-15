@@ -16,7 +16,7 @@ use std::{
     },
 };
 
-use kithara_storage::WaitOutcome;
+use kithara_storage::{MaybeSend, MaybeSync, WaitOutcome};
 
 use crate::{MediaInfo, StreamContext, ThreadPool, source::Source};
 
@@ -24,9 +24,11 @@ use crate::{MediaInfo, StreamContext, ThreadPool, source::Source};
 ///
 /// This trait is implemented by marker types (`Hls`, `File`) in their respective crates.
 /// The implementation provides the config type and source type.
-pub trait StreamType: Send + 'static {
+///
+/// On wasm32, `Send`/`Sync` bounds are relaxed via [`MaybeSend`]/[`MaybeSync`].
+pub trait StreamType: MaybeSend + 'static {
     /// Configuration for this stream type.
-    type Config: Default + Send;
+    type Config: Default + MaybeSend;
 
     /// Source implementing `Source`.
     type Source: Source;
@@ -37,9 +39,7 @@ pub trait StreamType: Send + 'static {
     /// Create the source from configuration.
     ///
     /// May also start background tasks (downloader) internally.
-    fn create(
-        config: Self::Config,
-    ) -> impl Future<Output = Result<Self::Source, Self::Error>> + Send;
+    fn create(config: Self::Config) -> impl Future<Output = Result<Self::Source, Self::Error>>;
 
     /// Extract the thread pool from config.
     ///
@@ -54,7 +54,7 @@ pub trait StreamType: Send + 'static {
     ///
     /// Concrete stream types set this to `kithara_events::EventBus`.
     /// `Audio::new()` constrains `T::Events = EventBus` to extract it.
-    type Events: Clone + Send + Sync + 'static;
+    type Events: Clone + MaybeSend + MaybeSync + 'static;
 
     /// Extract the event bus from config (if set).
     ///

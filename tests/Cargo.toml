@@ -25,8 +25,8 @@ kithara-storage = { workspace = true }
 kithara-stream = { workspace = true }
 
 # Async runtime
-tokio = { workspace = true }
-tokio-util = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
 futures = { workspace = true }
 
@@ -35,7 +35,7 @@ kanal = { workspace = true }
 bytes = { workspace = true }
 
 # HTTP/URL
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["rustls", "stream"] }
 url = { workspace = true }
 axum = { workspace = true }
 tower = { workspace = true }

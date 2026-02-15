@@ -21,8 +21,8 @@ smallvec = { workspace = true }
 fallible-iterator = { workspace = true }
 thiserror = { workspace = true }
 kanal = { workspace = true }
-tokio = { workspace = true }
-tokio-util = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["full"] }
 rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
@@ -46,7 +46,7 @@ tokio = { workspace = true }
 tokio-util = { workspace = true }
 axum = { workspace = true }
 bytes = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["rustls", "stream"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }

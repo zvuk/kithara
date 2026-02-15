@@ -6,8 +6,10 @@ use kithara_bufpool::BytePool;
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::base::delete_asset_dir;
 use crate::{
-    base::{Assets, delete_asset_dir},
+    base::Assets,
     error::AssetsResult,
     index::{EvictConfig, LruIndex, PinsIndex},
     key::ResourceKey,
@@ -173,6 +175,7 @@ where
             }
 
             tracing::debug!(asset_root = %cand, "Attempting to delete asset");
+            #[cfg(not(target_arch = "wasm32"))]
             if delete_asset_dir(self.inner.root_dir(), &cand).is_ok() {
                 tracing::debug!(asset_root = %cand, "Asset deleted successfully");
                 let _ = lru.remove(&cand);
@@ -233,6 +236,7 @@ where
                 continue;
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             if delete_asset_dir(self.inner.root_dir(), &cand).is_ok() {
                 let _ = lru.remove(&cand);
             }

@@ -367,7 +367,9 @@ pub fn build_pair(
     fetch: Arc<DefaultFetchManager>,
     variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
-    coverage_index: Option<Arc<kithara_assets::CoverageIndex<kithara_storage::MmapResource>>>,
+    #[cfg(not(target_arch = "wasm32"))] coverage_index: Option<
+        Arc<kithara_assets::CoverageIndex<kithara_storage::MmapResource>>,
+    >,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
 ) -> (HlsDownloader, HlsSource) {
@@ -398,6 +400,7 @@ pub fn build_pair(
         bus: bus.clone(),
         look_ahead_bytes: config.look_ahead_bytes,
         prefetch_count: config.download_batch_size.max(1),
+        #[cfg(not(target_arch = "wasm32"))]
         coverage_index,
     };
 

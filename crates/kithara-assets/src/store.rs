@@ -4,6 +4,7 @@ use std::{hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
 use kithara_bufpool::{BytePool, byte_pool};
 use kithara_storage::StorageResource;
+#[cfg(not(target_arch = "wasm32"))]
 use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
@@ -13,9 +14,10 @@ const DEFAULT_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(5) {
     None => unreachable!(),
 };
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::base::DiskAssetStore;
 use crate::{
     backend::AssetsBackend,
-    base::DiskAssetStore,
     cache::CachedAssets,
     evict::EvictAssets,
     index::EvictConfig,
@@ -43,7 +45,10 @@ pub struct StoreOptions {
 impl Default for StoreOptions {
     fn default() -> Self {
         Self {
+            #[cfg(not(target_arch = "wasm32"))]
             cache_dir: std::env::temp_dir().join("kithara"),
+            #[cfg(target_arch = "wasm32")]
+            cache_dir: std::path::PathBuf::from("/kithara"),
             cache_capacity: None,
             max_assets: None,
             max_bytes: None,
@@ -97,6 +102,7 @@ impl StoreOptions {
 ///
 /// Generic parameter `Ctx` is the context type for processing.
 /// Use `()` (default) for no processing (`ProcessingAssets` will pass through unchanged).
+#[cfg(not(target_arch = "wasm32"))]
 pub type AssetStore<Ctx = ()> =
     CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
@@ -205,10 +211,17 @@ where
     /// Panics if `process_fn` is not set.
     #[must_use]
     pub fn build(self) -> AssetsBackend<Ctx> {
-        if self.ephemeral {
+        #[cfg(target_arch = "wasm32")]
+        {
             self.build_ephemeral().into()
-        } else {
-            self.build_disk().into()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.ephemeral {
+                self.build_ephemeral().into()
+            } else {
+                self.build_disk().into()
+            }
         }
     }
 
@@ -301,6 +314,7 @@ where
     ///
     /// # Panics
     /// Panics if `process_fn` is not set for Ctx != ().
+    #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
     pub fn build_disk(self) -> AssetStore<Ctx> {
         let root_dir = self.root_dir.unwrap_or_else(|| {
@@ -350,9 +364,16 @@ where
 
     /// Build ephemeral (in-memory) asset store with auto-eviction.
     fn build_ephemeral(self) -> MemStore<Ctx> {
-        let root_dir = self
-            .root_dir
-            .unwrap_or_else(|| std::env::temp_dir().join("kithara-ephemeral"));
+        let root_dir = self.root_dir.unwrap_or_else(|| {
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                std::env::temp_dir().join("kithara-ephemeral")
+            }
+            #[cfg(target_arch = "wasm32")]
+            {
+                std::path::PathBuf::from("/kithara-ephemeral")
+            }
+        });
         let asset_root = self.asset_root.unwrap_or_default();
         let cancel = self.cancel.unwrap_or_default();
         let process_fn = self

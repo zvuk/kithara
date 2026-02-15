@@ -67,6 +67,12 @@ wasm:
   script:
     - cargo build -p kithara-wasm --target wasm32-unknown-unknown
     - cargo build -p kithara-wasm --target wasm32-unknown-unknown --bin decode_demo
+    - cargo check -p kithara-storage --target wasm32-unknown-unknown
+    - cargo check -p kithara-net --target wasm32-unknown-unknown
+    - cargo check -p kithara-stream --target wasm32-unknown-unknown
+    - cargo check -p kithara-assets --target wasm32-unknown-unknown
+    - cargo check -p kithara-hls --target wasm32-unknown-unknown
+    - cargo check -p kithara-decode --target wasm32-unknown-unknown
 
 # --- quality stage ---
 

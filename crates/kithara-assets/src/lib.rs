@@ -48,7 +48,11 @@ mod store;
 
 // Public API - used by other crates
 pub use backend::AssetsBackend;
+#[cfg(target_arch = "wasm32")]
+#[doc(hidden)]
+pub use base::Assets;
 // Hidden re-exports (needed by type aliases or cross-crate internals, not end-user API)
+#[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub use base::{Assets, DiskAssetStore};
 #[doc(hidden)]
@@ -73,4 +77,7 @@ pub use mem_store::MemAssetStore;
 pub use process::ProcessChunkFn;
 #[doc(hidden)]
 pub use process::{ProcessedResource, ProcessingAssets};
+#[cfg(not(target_arch = "wasm32"))]
 pub use store::{AssetResource, AssetStore, AssetStoreBuilder, MemStore, StoreOptions};
+#[cfg(target_arch = "wasm32")]
+pub use store::{AssetResource, AssetStoreBuilder, MemStore, StoreOptions};

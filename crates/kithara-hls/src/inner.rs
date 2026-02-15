@@ -4,8 +4,10 @@
 
 use std::sync::{Arc, atomic::AtomicU64};
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_assets::CoverageIndex;
 use kithara_assets::{
-    AssetStoreBuilder, Assets, AssetsBackend, CoverageIndex, ProcessChunkFn, asset_root_for_url,
+    AssetStoreBuilder, Assets, AssetsBackend, ProcessChunkFn, asset_root_for_url,
 };
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
@@ -123,6 +125,7 @@ impl StreamType for Hls {
         });
 
         // Create coverage index for crash-safe segment tracking (disk only).
+        #[cfg(not(target_arch = "wasm32"))]
         let coverage_index = match fetch_manager.backend() {
             AssetsBackend::Disk(store) => store
                 .open_coverage_index_resource()
@@ -140,6 +143,7 @@ impl StreamType for Hls {
             Arc::clone(&fetch_manager),
             &master.variants,
             &config,
+            #[cfg(not(target_arch = "wasm32"))]
             coverage_index,
             playlist_state,
             bus,

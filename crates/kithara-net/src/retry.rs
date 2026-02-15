@@ -2,7 +2,14 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio::time::sleep;
+
+#[cfg(target_arch = "wasm32")]
+async fn sleep(_duration: Duration) {
+    // No-op on wasm32: browser fetch has its own retry/timeout mechanisms.
+    // Avoids Send issues with gloo_timers (Rc-based, not Send).
+}
 use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 use unimock::unimock;
@@ -54,7 +61,8 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let mut last_error = None;
