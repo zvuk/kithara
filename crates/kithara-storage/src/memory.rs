@@ -1,11 +1,17 @@
 #![forbid(unsafe_code)]
 
-//! In-memory storage driver for platforms without filesystem access.
+//! In-memory storage driver backed by a ring buffer.
 //!
-//! [`MemDriver`] implements [`Driver`](crate::Driver) backed by a `Vec<u8>`
-//! instead of mmap. Intended for WASM (wasm32 + atomics) where mmap is unavailable.
+//! [`MemDriver`] implements [`Driver`](crate::Driver) using a power-of-2 ring
+//! buffer with bitmask indexing for O(1) wrap-around. Intended for WASM
+//! (wasm32 + atomics) where mmap is unavailable.
+//!
+//! When writes wrap around and evict old data, the `available` `RangeSet` in
+//! `CommonState` is updated (via [`Driver::valid_window`]) to remove evicted
+//! ranges. This allows `wait_range()` to detect gaps and trigger re-fetches
+//! on seek.
 
-use std::path::Path;
+use std::{ops::Range, path::Path};
 
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -15,26 +21,53 @@ use crate::{
     driver::{Driver, DriverState, Resource},
 };
 
+/// Default ring buffer capacity (1 mebibyte, power of 2).
+const DEFAULT_RING_CAPACITY: usize = 1 << 20;
+
 /// Options for creating a [`MemResource`].
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct MemOptions {
     /// Pre-fill the resource with this data (committed on creation).
     pub initial_data: Option<Vec<u8>>,
+    /// Ring buffer capacity in bytes. Must be power of 2.
+    /// Defaults to 1 mebibyte. Rounded up to next power of 2 if not already.
+    pub capacity: usize,
 }
 
-/// In-memory storage driver.
+impl Default for MemOptions {
+    fn default() -> Self {
+        Self {
+            initial_data: None,
+            capacity: DEFAULT_RING_CAPACITY,
+        }
+    }
+}
+
+/// Internal state of the ring buffer driver.
+struct RingState {
+    /// Buffer data (power-of-2 sized).
+    buf: Vec<u8>,
+    /// Start of valid data window (absolute byte offset).
+    /// Data before this offset has been evicted by ring wrap-around.
+    window_start: u64,
+    /// Capacity (always power of 2).
+    capacity: usize,
+}
+
+/// In-memory storage driver backed by a ring buffer.
 ///
-/// All data lives in a `Vec<u8>` protected by a `Mutex`.
+/// Uses power-of-2 bitmask indexing for O(1) wrap-around.
 /// `path()` returns `None`.
 pub struct MemDriver {
-    buf: Mutex<Vec<u8>>,
+    state: Mutex<RingState>,
 }
 
 impl std::fmt::Debug for MemDriver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let buf = self.buf.lock();
+        let state = self.state.lock();
         f.debug_struct("MemDriver")
-            .field("len", &buf.len())
+            .field("capacity", &state.capacity)
+            .field("window_start", &state.window_start)
             .finish()
     }
 }
@@ -43,43 +76,79 @@ impl Driver for MemDriver {
     type Options = MemOptions;
 
     fn open(opts: MemOptions) -> StorageResult<(Self, DriverState)> {
-        let (buf, init) = opts.initial_data.map_or_else(
-            || (Vec::new(), DriverState::default()),
-            |data| {
-                let len = data.len() as u64;
-                let mut available = rangemap::RangeSet::new();
-                if len > 0 {
-                    available.insert(0..len);
-                }
-                (
-                    data,
-                    DriverState {
-                        available,
-                        committed: true,
-                        final_len: Some(len),
-                    },
-                )
-            },
-        );
+        let (ring, init) = if let Some(data) = opts.initial_data {
+            let len = data.len() as u64;
+            let mut available = rangemap::RangeSet::new();
+            if len > 0 {
+                available.insert(0..len);
+            }
+            // For pre-filled data: capacity must be at least data.len().
+            let actual_capacity = opts.capacity.max(data.len()).next_power_of_two();
+            let mut buf = vec![0u8; actual_capacity];
+            buf[..data.len()].copy_from_slice(&data);
+            (
+                RingState {
+                    buf,
+                    window_start: 0,
+                    capacity: actual_capacity,
+                },
+                DriverState {
+                    available,
+                    committed: true,
+                    final_len: Some(len),
+                },
+            )
+        } else {
+            let capacity = opts.capacity.next_power_of_two();
+            let buf = vec![0u8; capacity];
+            (
+                RingState {
+                    buf,
+                    window_start: 0,
+                    capacity,
+                },
+                DriverState::default(),
+            )
+        };
 
         let driver = Self {
-            buf: Mutex::new(buf),
+            state: Mutex::new(ring),
         };
 
         Ok((driver, init))
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
-        let data = self.buf.lock();
-        #[expect(clippy::cast_possible_truncation)] // byte offset within allocated buffer
-        let start = offset as usize;
-        if start >= data.len() {
+        let ring = self.state.lock();
+        let window_end = ring.window_start + ring.capacity as u64;
+
+        // Check offset is within the valid window.
+        if offset < ring.window_start || offset >= window_end {
             return Ok(0);
         }
-        let available = data.len() - start;
+
+        // Clamp read length to not exceed window end.
+        #[expect(clippy::cast_possible_truncation)] // within ring capacity
+        let available = (window_end - offset) as usize;
         let to_read = buf.len().min(available);
-        buf[..to_read].copy_from_slice(&data[start..start + to_read]);
-        drop(data);
+
+        let mask = ring.capacity - 1;
+        #[expect(clippy::cast_possible_truncation)] // bitmask index within capacity
+        let start_idx = (offset as usize) & mask;
+
+        // Check if read wraps around the ring buffer.
+        let first_part = ring.capacity - start_idx;
+        if to_read <= first_part {
+            // No wrap: single copy.
+            buf[..to_read].copy_from_slice(&ring.buf[start_idx..start_idx + to_read]);
+        } else {
+            // Wrap: two copies.
+            buf[..first_part].copy_from_slice(&ring.buf[start_idx..]);
+            let second_part = to_read - first_part;
+            buf[first_part..to_read].copy_from_slice(&ring.buf[..second_part]);
+        }
+        drop(ring);
+
         Ok(to_read)
     }
 
@@ -90,32 +159,42 @@ impl Driver for MemDriver {
             ));
         }
 
-        #[expect(clippy::cast_possible_truncation)] // byte offset within allocated buffer
-        let start = offset as usize;
-        let end = start + data.len();
-        let mut buf = self.buf.lock();
-        if buf.len() < end {
-            buf.resize(end, 0);
+        let mut ring = self.state.lock();
+        let mask = ring.capacity - 1;
+
+        #[expect(clippy::cast_possible_truncation)] // bitmask index within capacity
+        let start_idx = (offset as usize) & mask;
+
+        // Copy with wrap-around.
+        let first_part = ring.capacity - start_idx;
+        if data.len() <= first_part {
+            // No wrap: single copy.
+            ring.buf[start_idx..start_idx + data.len()].copy_from_slice(data);
+        } else {
+            // Wrap: two copies.
+            ring.buf[start_idx..].copy_from_slice(&data[..first_part]);
+            let second_part = data.len() - first_part;
+            ring.buf[..second_part].copy_from_slice(&data[first_part..]);
         }
-        buf[start..end].copy_from_slice(data);
-        drop(buf);
+
+        // Advance window_start if write extends past current window end.
+        let write_end = offset + data.len() as u64;
+        let window_end = ring.window_start + ring.capacity as u64;
+        if write_end > window_end {
+            ring.window_start = write_end - ring.capacity as u64;
+        }
+        drop(ring);
+
         Ok(())
     }
 
-    fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        if let Some(len) = final_len {
-            #[expect(clippy::cast_possible_truncation)] // buffer size fits in memory
-            let len_usize = len as usize;
-            let mut buf = self.buf.lock();
-            if buf.len() > len_usize {
-                buf.truncate(len_usize);
-            }
-        }
+    fn commit(&self, _final_len: Option<u64>) -> StorageResult<()> {
+        // Ring buffer does not truncate.
         Ok(())
     }
 
     fn reactivate(&self) -> StorageResult<()> {
-        // Buffer data preserved — nothing to do for in-memory driver.
+        // Buffer data preserved.
         Ok(())
     }
 
@@ -124,8 +203,13 @@ impl Driver for MemDriver {
     }
 
     fn storage_len(&self) -> u64 {
-        let buf = self.buf.lock();
-        buf.len() as u64
+        let ring = self.state.lock();
+        ring.window_start + ring.capacity as u64
+    }
+
+    fn valid_window(&self) -> Option<Range<u64>> {
+        let ring = self.state.lock();
+        Some(ring.window_start..ring.window_start + ring.capacity as u64)
     }
 }
 
@@ -159,6 +243,7 @@ impl MemResource {
             cancel,
             MemOptions {
                 initial_data: Some(data.to_vec()),
+                ..MemOptions::default()
             },
         )
         .expect("MemDriver::open with initial_data should never fail")

@@ -96,6 +96,15 @@ pub trait Driver: Send + Sync + 'static {
     /// Called by [`Resource<D>::write_at`] after a successful driver write,
     /// before updating state + condvar.
     fn notify_write(&self, _range: &Range<u64>) {}
+
+    /// Returns the valid data window for ring buffer drivers.
+    ///
+    /// When `Some(window)`, any ranges before `window.start` have been evicted
+    /// and should be removed from the available set. Returns `None` for
+    /// linear drivers where all written data is retained.
+    fn valid_window(&self) -> Option<Range<u64>> {
+        None
+    }
 }
 
 /// Initial state returned by [`Driver::open`] to populate [`Resource<D>`].
@@ -263,6 +272,14 @@ impl<D: Driver> ResourceExt for Resource<D> {
         {
             let mut state = self.inner.state.lock();
             state.available.insert(range);
+
+            // Invalidate evicted ranges for ring buffer drivers.
+            if let Some(window) = self.inner.driver.valid_window() {
+                let evict_end = window.start;
+                if evict_end > 0 {
+                    state.available.remove(0..evict_end);
+                }
+            }
         }
         self.inner.condvar.notify_all();
 
