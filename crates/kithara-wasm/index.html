@@ -3,30 +3,235 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kithara Decode Demo</title>
+    <title>Kithara HLS Player</title>
     <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            max-width: 600px;
+            max-width: 700px;
             margin: 40px auto;
             padding: 0 20px;
             background: #1a1a2e;
             color: #eee;
         }
-        h1 { color: #e94560; }
-        p { color: #aaa; line-height: 1.6; }
-        #audio-file-input {
-            display: block;
-            margin: 20px 0;
-            padding: 12px;
-            font-size: 16px;
+        h1 { color: #e94560; margin-bottom: 8px; }
+        .subtitle { color: #666; font-size: 14px; margin-bottom: 24px; }
+        .row { display: flex; gap: 8px; margin: 12px 0; align-items: center; }
+        input[type="text"] {
+            flex: 1; padding: 8px 12px; font-size: 14px;
+            background: #16213e; border: 1px solid #333; color: #eee;
+            border-radius: 4px; outline: none;
         }
+        input[type="text"]:focus { border-color: #e94560; }
+        button {
+            padding: 8px 16px; font-size: 14px; cursor: pointer;
+            background: #e94560; color: white; border: none; border-radius: 4px;
+            transition: background 0.2s;
+        }
+        button:hover { background: #c73652; }
+        button:disabled { background: #555; cursor: not-allowed; }
+        input[type="range"] { flex: 1; accent-color: #e94560; }
+        .time { font-size: 13px; font-family: monospace; color: #aaa; min-width: 40px; }
+        .status {
+            font-size: 13px; color: #888; margin: 8px 0;
+            font-family: monospace;
+        }
+        #event-log {
+            background: #0f0f23; border: 1px solid #333; border-radius: 4px;
+            padding: 12px; font-size: 12px; font-family: monospace;
+            height: 200px; overflow-y: auto; margin-top: 16px;
+            color: #8892b0;
+        }
+        #event-log .error { color: #e94560; }
+        #event-log .info { color: #64ffda; }
     </style>
 </head>
 <body>
-    <h1>Kithara Decode Demo</h1>
-    <p>Select an audio file to decode with Symphonia in WebAssembly.
-       Open the browser console to see decode results.</p>
-    <input type="file" id="audio-file-input" accept="audio/*">
+    <h1>Kithara HLS Player</h1>
+    <p class="subtitle">Full HLS audio player running in WebAssembly</p>
+
+    <div class="row">
+        <input type="text" id="url-input"
+               placeholder="HLS playlist URL (.m3u8)"
+               value="">
+        <button id="load-btn" disabled>Load</button>
+    </div>
+
+    <div class="row">
+        <button id="play-btn" disabled>Play</button>
+        <button id="pause-btn" disabled>Pause</button>
+        <button id="stop-btn" disabled>Stop</button>
+    </div>
+
+    <div class="row">
+        <span class="time" id="position">0:00</span>
+        <input type="range" id="seek-slider" min="0" max="100" value="0" step="0.1" disabled>
+        <span class="time" id="duration">0:00</span>
+    </div>
+
+    <div class="status" id="status">Initializing WASM...</div>
+
+    <div id="event-log"></div>
+
+    <script type="module">
+        import init, { WasmPlayer } from './pkg/kithara_wasm.js';
+
+        let player = null;
+        let audioCtx = null;
+        let workletNode = null;
+        let fillInterval = null;
+
+        const urlInput = document.getElementById('url-input');
+        const loadBtn = document.getElementById('load-btn');
+        const playBtn = document.getElementById('play-btn');
+        const pauseBtn = document.getElementById('pause-btn');
+        const stopBtn = document.getElementById('stop-btn');
+        const seekSlider = document.getElementById('seek-slider');
+        const positionEl = document.getElementById('position');
+        const durationEl = document.getElementById('duration');
+        const statusEl = document.getElementById('status');
+        const logEl = document.getElementById('event-log');
+
+        function log(msg, cls = '') {
+            const line = document.createElement('div');
+            if (cls) line.className = cls;
+            const ts = new Date().toISOString().substring(11, 23);
+            line.textContent = `[${ts}] ${msg}`;
+            logEl.appendChild(line);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function formatTime(ms) {
+            const totalSec = Math.floor(ms / 1000);
+            const min = Math.floor(totalSec / 60);
+            const sec = totalSec % 60;
+            return `${min}:${String(sec).padStart(2, '0')}`;
+        }
+
+        async function setupAudioWorklet() {
+            if (audioCtx) return;
+
+            audioCtx = new AudioContext({ sampleRate: player.sample_rate() });
+            await audioCtx.audioWorklet.addModule('pcm-processor.js');
+
+            workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor', {
+                outputChannelCount: [player.channels()],
+            });
+
+            // Get WASM linear memory as SharedArrayBuffer.
+            const wasmMemory = init.__wbindgen_wasm_module
+                ? new WebAssembly.Memory({ initial: 0 }).buffer
+                : null;
+
+            // The actual shared memory comes from wasm_bindgen::memory().
+            // For now, we access it through the wasm instance's memory.
+            const memory = (await init).__wbindgen_wasm_instance
+                ? (await init).__wbindgen_wasm_instance.exports.memory.buffer
+                : null;
+
+            // TODO: Get actual WASM memory buffer.
+            // With wasm-bindgen-rayon, wasm linear memory IS a SharedArrayBuffer.
+            // For now, use a workaround: access memory from the wasm-bindgen exports.
+
+            // Send ring buffer layout to the worklet.
+            workletNode.port.postMessage({
+                type: 'init',
+                memory: memory, // SharedArrayBuffer (WASM linear memory)
+                bufByteOffset: player.ring_buf_ptr(),
+                capacity: player.ring_capacity(),
+                writeHeadByteOffset: player.ring_write_head_ptr(),
+                readHeadByteOffset: player.ring_read_head_ptr(),
+                channels: player.channels(),
+            });
+
+            workletNode.connect(audioCtx.destination);
+            log('AudioWorklet connected', 'info');
+        }
+
+        async function initialize() {
+            try {
+                log('Loading WASM module...', 'info');
+                await init();
+
+                player = new WasmPlayer();
+                log('Player ready', 'info');
+
+                statusEl.textContent = 'Ready — click Play for test tone';
+                loadBtn.disabled = false;
+                playBtn.disabled = false;
+            } catch (e) {
+                log(`Init error: ${e}`, 'error');
+                statusEl.textContent = `Init failed: ${e}`;
+            }
+        }
+
+        playBtn.onclick = async () => {
+            try {
+                await setupAudioWorklet();
+
+                if (audioCtx.state === 'suspended') {
+                    await audioCtx.resume();
+                }
+
+                player.play();
+                startFillLoop();
+                log('Playback started', 'info');
+                statusEl.textContent = 'Playing (test tone 440 Hz)';
+                playBtn.disabled = true;
+                pauseBtn.disabled = false;
+                stopBtn.disabled = false;
+            } catch (e) {
+                log(`Play error: ${e}`, 'error');
+            }
+        };
+
+        pauseBtn.onclick = () => {
+            player.pause();
+            stopFillLoop();
+            log('Paused', 'info');
+            statusEl.textContent = 'Paused';
+            playBtn.disabled = false;
+            pauseBtn.disabled = true;
+        };
+
+        stopBtn.onclick = () => {
+            player.pause();
+            player.seek(0);
+            stopFillLoop();
+            seekSlider.value = 0;
+            positionEl.textContent = '0:00';
+            log('Stopped', 'info');
+            statusEl.textContent = 'Stopped';
+            playBtn.disabled = false;
+            pauseBtn.disabled = true;
+            stopBtn.disabled = true;
+        };
+
+        seekSlider.oninput = () => {
+            const pos = parseFloat(seekSlider.value);
+            player.seek(pos);
+            positionEl.textContent = formatTime(pos);
+        };
+
+        function fillLoop() {
+            if (!player || !player.is_playing()) return;
+            player.fill_buffer();
+            fillInterval = requestAnimationFrame(fillLoop);
+        }
+
+        function startFillLoop() {
+            stopFillLoop();
+            fillInterval = requestAnimationFrame(fillLoop);
+        }
+
+        function stopFillLoop() {
+            if (fillInterval) {
+                cancelAnimationFrame(fillInterval);
+                fillInterval = null;
+            }
+        }
+
+        initialize();
+    </script>
 </body>
 </html>
