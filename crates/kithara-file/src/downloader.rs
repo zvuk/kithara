@@ -485,7 +485,7 @@ impl Downloader for FileDownloader {
         download_pos.saturating_sub(reader_pos) > limit
     }
 
-    fn wait_ready(&self) -> impl std::future::Future<Output = ()> + Send {
+    fn wait_ready(&self) -> impl std::future::Future<Output = ()> {
         // Extract Arc references to avoid capturing &self (which is not Send
         // because Writer contains a non-Sync dyn Stream).
         let progress = Arc::clone(&self.progress);
@@ -498,7 +498,7 @@ impl Downloader for FileDownloader {
         }
     }
 
-    fn demand_signal(&self) -> impl std::future::Future<Output = ()> + Send + use<> {
+    fn demand_signal(&self) -> impl std::future::Future<Output = ()> + use<> {
         let shared = Arc::clone(&self.shared);
         async move {
             shared.reader_needs_data.notified().await;

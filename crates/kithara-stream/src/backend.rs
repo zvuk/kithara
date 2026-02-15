@@ -53,10 +53,19 @@ impl Backend {
         let child_cancel = cancel.child_token();
         let task_cancel = child_cancel.clone();
 
-        let handle = tokio::runtime::Handle::current();
-        pool.spawn(move || {
-            handle.block_on(Self::run_downloader(downloader, task_cancel));
-        });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let handle = tokio::runtime::Handle::current();
+            pool.spawn(move || {
+                handle.block_on(Self::run_downloader(downloader, task_cancel));
+            });
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = pool; // suppress unused warning
+            wasm_bindgen_futures::spawn_local(Self::run_downloader(downloader, task_cancel));
+        }
 
         Self {
             cancel: child_cancel,
@@ -347,11 +356,11 @@ mod tests {
             false
         }
 
-        fn wait_ready(&self) -> impl std::future::Future<Output = ()> + Send {
+        fn wait_ready(&self) -> impl std::future::Future<Output = ()> {
             std::future::pending()
         }
 
-        fn demand_signal(&self) -> impl std::future::Future<Output = ()> + Send + use<> {
+        fn demand_signal(&self) -> impl std::future::Future<Output = ()> + use<> {
             let notify = Arc::clone(&self.demand_notify);
             async move {
                 notify.notified().await;

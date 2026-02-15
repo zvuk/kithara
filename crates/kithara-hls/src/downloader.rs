@@ -3,16 +3,21 @@
 use std::{
     collections::HashSet,
     sync::{Arc, atomic::Ordering},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use kithara_abr::{AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource};
-use kithara_assets::{CoverageIndex, DiskCoverage, ResourceKey};
+use kithara_assets::ResourceKey;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_assets::{CoverageIndex, DiskCoverage};
 use kithara_events::{EventBus, HlsEvent};
-use kithara_storage::{Coverage, MmapResource, ResourceExt, ResourceStatus};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_storage::{Coverage, MmapResource};
+use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
 use tracing::debug;
 use url::Url;
+use web_time::Instant;
 
 use crate::{
     HlsError,
@@ -115,6 +120,7 @@ pub struct HlsDownloader {
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
     /// Coverage index for crash-safe segment tracking.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
 }
 
@@ -198,7 +204,9 @@ impl HlsDownloader {
         shared: &SharedSegments,
         fetch: &DefaultFetchManager,
         variant: usize,
-        coverage_index: &Option<Arc<CoverageIndex<MmapResource>>>,
+        #[cfg(not(target_arch = "wasm32"))] coverage_index: &Option<
+            Arc<CoverageIndex<MmapResource>>,
+        >,
     ) -> (usize, u64) {
         // Ephemeral backend has no persistent cache to scan.
         if fetch.backend().is_ephemeral() {
@@ -265,6 +273,7 @@ impl HlsDownloader {
                 // Validate against coverage if available.
                 // No entry -> legacy file, treat as valid.
                 // Entry exists but incomplete -> partially written, skip.
+                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(idx) = coverage_index {
                     let cov = DiskCoverage::open(Arc::clone(idx), segment_url.to_string());
                     if cov.total_size().is_some() && !cov.is_complete() {
@@ -403,6 +412,7 @@ impl HlsDownloader {
         }
         self.shared.condvar.notify_all();
 
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref idx) = self.coverage_index {
             let mut cov = DiskCoverage::open(Arc::clone(idx), media_url.to_string());
             cov.set_total_size(media_len);
@@ -445,6 +455,7 @@ impl HlsDownloader {
                                 &self.shared,
                                 &self.fetch,
                                 variant,
+                                #[cfg(not(target_arch = "wasm32"))]
                                 &self.coverage_index,
                             )
                         } else {

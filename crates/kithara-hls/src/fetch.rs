@@ -9,7 +9,7 @@ use futures::StreamExt;
 use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, HttpClient, Net};
-use kithara_storage::{ResourceExt, ResourceStatus};
+use kithara_storage::{MaybeSend, MaybeSync, ResourceExt, ResourceStatus};
 use kithara_stream::{ContainerFormat, Writer, WriterItem};
 use parking_lot::RwLock;
 use tokio::sync::OnceCell;
@@ -74,7 +74,7 @@ pub enum FetchResult {
 /// Generic segment loader.
 #[expect(async_fn_in_trait)]
 #[cfg_attr(test, unimock::unimock(api = LoaderMock))]
-pub trait Loader: Send + Sync {
+pub trait Loader: MaybeSend + MaybeSync {
     /// Load media segment and return metadata with real size (after processing).
     async fn load_media_segment(
         &self,

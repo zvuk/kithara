@@ -32,10 +32,15 @@ parking_lot = { workspace = true }
 crossbeam-queue = { workspace = true }
 rangemap = { workspace = true }
 hotpath = { workspace = true, optional = true }
+web-time = { workspace = true }
 
 [features]
 default = []
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 kithara-net = { workspace = true, features = ["test-utils"] }

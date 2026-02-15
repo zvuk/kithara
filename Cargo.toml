@@ -89,8 +89,8 @@ serial_test = "3.3.1"
 unimock = { version = "0.6", features = ["std"] }
 
 # async/runtime
-tokio = { version = "1.49.0", features = ["full"] }
-tokio-util = { version = "0.7.18", features = ["full"] }
+tokio = { version = "1.49.0", default-features = false, features = ["sync", "macros", "rt"] }
+tokio-util = { version = "0.7.18", default-features = false }
 tokio-stream = "0.1.18"
 futures = "0.3.31"
 
@@ -106,7 +106,7 @@ parking_lot = "0.12"
 crossbeam-queue = "0.3"
 
 # http/url
-reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "stream"] }
+reqwest = { version = "0.13.2", default-features = false }
 url = "2.5.8"
 axum = "0.8.8"
 
@@ -130,6 +130,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
 tracing-wasm = "0.2"
 web-time = "1.1"
+gloo-timers = { version = "0.3", features = ["futures"] }
 console_error_panic_hook = "0.1"
 
 # wasm bindings

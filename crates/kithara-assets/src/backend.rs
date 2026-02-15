@@ -4,11 +4,13 @@
 
 use std::{fmt::Debug, hash::Hash};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::store::AssetStore;
 use crate::{
     base::Assets,
     error::AssetsResult,
     key::ResourceKey,
-    store::{AssetResource, AssetStore, MemStore},
+    store::{AssetResource, MemStore},
 };
 
 /// Storage backend: disk or memory asset store.
@@ -24,6 +26,7 @@ where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
     /// File-backed storage with mmap resources.
+    #[cfg(not(target_arch = "wasm32"))]
     Disk(AssetStore<Ctx>),
     /// In-memory storage (ephemeral, no disk artifacts).
     Mem(MemStore<Ctx>),
@@ -36,6 +39,7 @@ where
     /// Open a resource by key (no processing context).
     pub fn open_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource<Ctx>> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Disk(s) => s.open_resource(key),
             Self::Mem(s) => s.open_resource(key),
         }
@@ -51,6 +55,7 @@ where
         ctx: Option<Ctx>,
     ) -> AssetsResult<AssetResource<Ctx>> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Disk(s) => s.open_resource_with_ctx(key, ctx),
             Self::Mem(s) => s.open_resource_with_ctx(key, ctx),
         }
@@ -59,6 +64,7 @@ where
     /// Return the asset root identifier.
     pub fn asset_root(&self) -> &str {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Disk(s) => s.asset_root(),
             Self::Mem(s) => s.asset_root(),
         }
@@ -75,6 +81,7 @@ where
     /// `DiskStore`: no-op (default impl in `Assets` trait).
     pub fn remove_resource(&self, key: &ResourceKey) {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Disk(s) => {
                 let _ = s.remove_resource(key);
             }
@@ -85,6 +92,7 @@ where
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl<Ctx> From<AssetStore<Ctx>> for AssetsBackend<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,

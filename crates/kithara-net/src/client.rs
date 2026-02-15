@@ -21,10 +21,10 @@ impl HttpClient {
     ///
     /// Panics if the `reqwest::Client` builder fails to build.
     pub fn new(options: NetOptions) -> Self {
-        let inner = Client::builder()
-            .pool_max_idle_per_host(options.pool_max_idle_per_host)
-            .build()
-            .expect("failed to build reqwest client");
+        let builder = Client::builder();
+        #[cfg(not(target_arch = "wasm32"))]
+        let builder = builder.pool_max_idle_per_host(options.pool_max_idle_per_host);
+        let inner = builder.build().expect("failed to build reqwest client");
         Self { inner, options }
     }
 
@@ -56,9 +56,20 @@ impl HttpClient {
     ) -> NetResult<crate::ByteStream> {
         <Self as Net>::get_range(self, url, range, headers).await
     }
+
+    /// Convert a reqwest Response to a `ByteStream`.
+    ///
+    /// Uses `bytes_stream()` on both platforms:
+    /// - Native: streaming via tokio-util
+    /// - wasm32: streaming via wasm-streams (reqwest `stream` feature)
+    fn response_to_stream(resp: reqwest::Response) -> crate::ByteStream {
+        let stream = resp.bytes_stream().map_err(NetError::from);
+        Box::pin(stream)
+    }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl Net for HttpClient {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
@@ -103,8 +114,7 @@ impl Net for HttpClient {
             });
         }
 
-        let stream = resp.bytes_stream().map_err(NetError::from);
-        Ok(Box::pin(stream))
+        Ok(Self::response_to_stream(resp))
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
@@ -132,8 +142,7 @@ impl Net for HttpClient {
             });
         }
 
-        let stream = resp.bytes_stream().map_err(NetError::from);
-        Ok(Box::pin(stream))
+        Ok(Self::response_to_stream(resp))
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]

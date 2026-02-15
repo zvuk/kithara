@@ -95,9 +95,100 @@ pub struct Writer<E = NetError>
 where
     E: std::error::Error + 'static,
 {
+    #[cfg(not(target_arch = "wasm32"))]
     inner: Pin<Box<dyn Stream<Item = Result<WriterItem, WriterError<E>>> + Send>>,
+    #[cfg(target_arch = "wasm32")]
+    inner: Pin<Box<dyn Stream<Item = Result<WriterItem, WriterError<E>>>>>,
 }
 
+/// Shared implementation: the `async_stream` body is target-independent.
+///
+/// Auto-trait leaking means the concrete type IS Send when S + R are Send,
+/// allowing coercion to `dyn Stream + Send` on native.
+fn create_writer_stream<S, R, E>(
+    mut stream: S,
+    res: R,
+    cancel: CancellationToken,
+    start_offset: u64,
+) -> impl Stream<Item = Result<WriterItem, WriterError<E>>>
+where
+    S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
+    R: ResourceExt + Clone + std::fmt::Debug + 'static,
+    E: std::error::Error + 'static,
+{
+    async_stream::stream! {
+        let mut offset: u64 = start_offset;
+        let mut first_chunk = true;
+
+        loop {
+            tokio::select! {
+                biased;
+
+                () = cancel.cancelled() => {
+                    debug!(offset, "writer cancelled");
+                    return;
+                }
+
+                next = stream.next() => {
+                    let Some(next) = next else {
+                        // Stream ended — do NOT commit.
+                        // Caller decides whether to commit based on context.
+                        debug!(offset, "writer stream ended");
+                        yield Ok(WriterItem::StreamEnded { total_bytes: offset });
+                        return;
+                    };
+
+                    let bytes = match next {
+                        Ok(b) => b,
+                        Err(e) => {
+                            res.fail(e.to_string());
+                            yield Err(WriterError::SourceStream(e));
+                            return;
+                        }
+                    };
+
+                    if bytes.is_empty() {
+                        warn!(offset, "writer received empty net chunk");
+                        continue;
+                    }
+
+                    if let Err(e) = res.write_at(offset, &bytes) {
+                        // Don't mark as failed if another concurrent writer
+                        // already committed the resource — the data is valid.
+                        if !matches!(res.status(), ResourceStatus::Committed { .. }) {
+                            res.fail(e.to_string());
+                        }
+                        yield Err(WriterError::SinkWrite(e));
+                        return;
+                    }
+
+                    let chunk_len = bytes.len();
+                    let start = offset;
+                    match offset.checked_add(chunk_len as u64) {
+                        Some(new_offset) => offset = new_offset,
+                        None => {
+                            res.fail("offset overflow".to_string());
+                            yield Err(WriterError::OffsetOverflow);
+                            return;
+                        }
+                    }
+
+                    if first_chunk {
+                        debug!(offset, "writer first chunk written");
+                        first_chunk = false;
+                    }
+
+                    yield Ok(WriterItem::ChunkWritten {
+                        offset: start,
+                        len: chunk_len,
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 impl<E> Writer<E>
 where
     E: std::error::Error + Send + Sync + 'static,
@@ -130,90 +221,36 @@ where
         S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
         R: ResourceExt + Clone + Send + Sync + std::fmt::Debug + 'static,
     {
-        let inner = Box::pin(Self::create_stream(stream, res, cancel, start_offset));
+        let inner = Box::pin(create_writer_stream(stream, res, cancel, start_offset));
         Self { inner }
     }
+}
 
-    fn create_stream<S, R>(
-        mut stream: S,
+#[cfg(target_arch = "wasm32")]
+impl<E> Writer<E>
+where
+    E: std::error::Error + 'static,
+{
+    pub fn new<S, R>(stream: S, res: R, cancel: CancellationToken) -> Self
+    where
+        S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
+        R: ResourceExt + Clone + std::fmt::Debug + 'static,
+    {
+        Self::with_offset(stream, res, cancel, 0)
+    }
+
+    pub fn with_offset<S, R>(
+        stream: S,
         res: R,
         cancel: CancellationToken,
         start_offset: u64,
-    ) -> impl Stream<Item = Result<WriterItem, WriterError<E>>> + Send
+    ) -> Self
     where
-        S: Stream<Item = Result<Bytes, E>> + Send + Unpin + 'static,
-        R: ResourceExt + Clone + Send + Sync + std::fmt::Debug + 'static,
+        S: Stream<Item = Result<Bytes, E>> + Unpin + 'static,
+        R: ResourceExt + Clone + std::fmt::Debug + 'static,
     {
-        async_stream::stream! {
-            let mut offset: u64 = start_offset;
-            let mut first_chunk = true;
-
-            loop {
-                tokio::select! {
-                    biased;
-
-                    () = cancel.cancelled() => {
-                        debug!(offset, "writer cancelled");
-                        return;
-                    }
-
-                    next = stream.next() => {
-                        let Some(next) = next else {
-                            // Stream ended — do NOT commit.
-                            // Caller decides whether to commit based on context.
-                            debug!(offset, "writer stream ended");
-                            yield Ok(WriterItem::StreamEnded { total_bytes: offset });
-                            return;
-                        };
-
-                        let bytes = match next {
-                            Ok(b) => b,
-                            Err(e) => {
-                                res.fail(e.to_string());
-                                yield Err(WriterError::SourceStream(e));
-                                return;
-                            }
-                        };
-
-                        if bytes.is_empty() {
-                            warn!(offset, "writer received empty net chunk");
-                            continue;
-                        }
-
-                        if let Err(e) = res.write_at(offset, &bytes) {
-                            // Don't mark as failed if another concurrent writer
-                            // already committed the resource — the data is valid.
-                            if !matches!(res.status(), ResourceStatus::Committed { .. }) {
-                                res.fail(e.to_string());
-                            }
-                            yield Err(WriterError::SinkWrite(e));
-                            return;
-                        }
-
-                        let chunk_len = bytes.len();
-                        let start = offset;
-                        match offset.checked_add(chunk_len as u64) {
-                            Some(new_offset) => offset = new_offset,
-                            None => {
-                                res.fail("offset overflow".to_string());
-                                yield Err(WriterError::OffsetOverflow);
-                                return;
-                            }
-                        }
-
-                        if first_chunk {
-                            debug!(offset, "writer first chunk written");
-                            first_chunk = false;
-                        }
-
-                        yield Ok(WriterItem::ChunkWritten {
-                            offset: start,
-                            len: chunk_len,
-                        });
-                    }
-                }
-            }
-        }
+        let inner = Box::pin(create_writer_stream(stream, res, cancel, start_offset));
+        Self { inner }
     }
 }
 

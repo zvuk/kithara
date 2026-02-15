@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+#[cfg(not(target_arch = "wasm32"))]
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, StorageResource};
 use tokio_util::sync::CancellationToken;
 
@@ -78,6 +79,7 @@ pub trait Assets: Clone + Send + Sync + 'static {
 ///
 /// Maps [`ResourceKey`] to disk paths under a root directory.
 /// Each `DiskAssetStore` is scoped to a single `asset_root`.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Debug)]
 pub struct DiskAssetStore {
     root_dir: PathBuf,
@@ -85,6 +87,7 @@ pub struct DiskAssetStore {
     cancel: CancellationToken,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl DiskAssetStore {
     /// Create a store rooted at `root_dir` for a specific `asset_root`.
     pub fn new<P: Into<PathBuf>, S: Into<String>>(
@@ -163,6 +166,7 @@ impl DiskAssetStore {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Assets for DiskAssetStore {
     type Res = StorageResource;
     type Context = ();
@@ -210,6 +214,7 @@ impl Assets for DiskAssetStore {
 }
 
 /// Delete an asset directory by `asset_root` directly via filesystem.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn delete_asset_dir(root_dir: &Path, asset_root: &str) -> std::io::Result<()> {
     let safe = sanitize_rel(asset_root).map_err(|()| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid asset_root")
@@ -230,7 +235,7 @@ pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
     Ok(s)
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use kithara_storage::{ResourceExt, ResourceStatus};
     use rstest::rstest;
