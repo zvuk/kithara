@@ -59,6 +59,14 @@ msrv:
   script:
     - cargo check --workspace
 
+wasm:
+  stage: test
+  needs: [lint]
+  before_script:
+    - rustup target add wasm32-unknown-unknown
+  script:
+    - cargo build -p kithara-wasm --target wasm32-unknown-unknown
+
 # --- quality stage ---
 
 coverage:
