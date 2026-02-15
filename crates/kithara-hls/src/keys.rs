@@ -35,6 +35,7 @@ pub struct KeyManager {
 }
 
 impl KeyManager {
+    #[must_use]
     pub fn new(
         fetch: Arc<DefaultFetchManager>,
         key_processor: Option<KeyProcessor>,
@@ -50,6 +51,7 @@ impl KeyManager {
     }
 
     /// Create from `KeyOptions` and a shared fetch manager.
+    #[must_use]
     pub fn from_options(
         fetch: Arc<DefaultFetchManager>,
         options: crate::config::KeyOptions,

@@ -44,13 +44,6 @@ pub enum ResamplerQuality {
 impl ResamplerQuality {
     fn sinc_params(self) -> SincInterpolationParameters {
         match self {
-            Self::Normal => SincInterpolationParameters {
-                sinc_len: 64,
-                f_cutoff: 0.95,
-                interpolation: SincInterpolationType::Linear,
-                oversampling_factor: 128,
-                window: WindowFunction::BlackmanHarris2,
-            },
             Self::Good => SincInterpolationParameters {
                 sinc_len: 128,
                 f_cutoff: 0.95,
@@ -65,8 +58,9 @@ impl ResamplerQuality {
                 oversampling_factor: 256,
                 window: WindowFunction::BlackmanHarris2,
             },
-            // Fast and Maximum don't use sinc — unreachable from normal flow
-            _ => SincInterpolationParameters {
+            // Normal, Fast and Maximum share the same default sinc params.
+            // Fast and Maximum don't use sinc — unreachable from normal flow.
+            Self::Normal | Self::Fast | Self::Maximum => SincInterpolationParameters {
                 sinc_len: 64,
                 f_cutoff: 0.95,
                 interpolation: SincInterpolationType::Linear,
@@ -110,32 +104,30 @@ impl ResamplerKind {
             })?;
 
         match self {
-            Self::Poly(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
-            Self::Sinc(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
+            Self::Poly(r) | Self::Sinc(r) => {
+                r.process_into_buffer(&input_adapter, &mut output_adapter, None)
+            }
             Self::Fft(r) => r.process_into_buffer(&input_adapter, &mut output_adapter, None),
         }
     }
 
     fn input_frames_next(&self) -> usize {
         match self {
-            Self::Poly(r) => r.input_frames_next(),
-            Self::Sinc(r) => r.input_frames_next(),
+            Self::Poly(r) | Self::Sinc(r) => r.input_frames_next(),
             Self::Fft(r) => r.input_frames_next(),
         }
     }
 
     fn output_frames_next(&self) -> usize {
         match self {
-            Self::Poly(r) => r.output_frames_next(),
-            Self::Sinc(r) => r.output_frames_next(),
+            Self::Poly(r) | Self::Sinc(r) => r.output_frames_next(),
             Self::Fft(r) => r.output_frames_next(),
         }
     }
 
     fn set_resample_ratio(&mut self, ratio: f64, ramp: bool) -> Result<(), rubato::ResampleError> {
         match self {
-            Self::Poly(r) => r.set_resample_ratio(ratio, ramp),
-            Self::Sinc(r) => r.set_resample_ratio(ratio, ramp),
+            Self::Poly(r) | Self::Sinc(r) => r.set_resample_ratio(ratio, ramp),
             Self::Fft(r) => r.set_resample_ratio(ratio, ramp),
         }
     }
@@ -173,12 +165,14 @@ impl ResamplerParams {
     }
 
     /// Set shared PCM pool for output buffers.
+    #[must_use]
     pub fn with_pool(mut self, pool: Option<PcmPool>) -> Self {
         self.pool = pool;
         self
     }
 
     /// Set resampling quality preset.
+    #[must_use]
     pub fn with_quality(mut self, quality: ResamplerQuality) -> Self {
         self.quality = quality;
         self
@@ -216,6 +210,10 @@ impl ResamplerProcessor {
         let channels = params.channels;
         let host_sr = params.host_sample_rate.load(Ordering::Relaxed);
         let target_rate = if host_sr == 0 { source_rate } else { host_sr };
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "channel count is always small"
+        )]
         let output_spec = PcmSpec {
             channels: channels as u16,
             sample_rate: target_rate,
@@ -293,6 +291,12 @@ impl ResamplerProcessor {
                     buf.clear();
                 }
 
+                #[expect(
+                    clippy::cast_precision_loss,
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "audio buffer size calculation: always positive and within usize range"
+                )]
                 let actual_output_frames = ((buffered as f64) * self.current_ratio).ceil() as usize;
                 let frames_to_use = actual_output_frames.min(out_len);
 
@@ -376,6 +380,10 @@ impl ResamplerProcessor {
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "resampler reconfiguration with multiple checks"
+    )]
     fn update_resampler_if_needed(&mut self) {
         let host_sr = self.host_sample_rate.load(Ordering::Relaxed);
         let target_rate = if host_sr == 0 {
@@ -391,7 +399,7 @@ impl ResamplerProcessor {
         let currently_pt = self.is_passthrough();
 
         let new_ratio = if self.source_rate > 0 {
-            target_rate as f64 / self.source_rate as f64
+            f64::from(target_rate) / f64::from(self.source_rate)
         } else {
             1.0
         };
@@ -664,7 +672,12 @@ impl AudioEffect for ResamplerProcessor {
             self.temp_output_bufs = smallvec_new_vecs(chunk_channels);
             self.temp_output_all = smallvec_new_vecs(chunk_channels);
             self.temp_deinterleave = smallvec_new_vecs(chunk_channels);
-            self.output_spec.channels = chunk_channels as u16;
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "channel count is always small"
+            )]
+            let channels_u16 = chunk_channels as u16;
+            self.output_spec.channels = channels_u16;
             self.resampler = None;
         } else if chunk_rate != self.source_rate {
             debug!(

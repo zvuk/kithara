@@ -148,9 +148,11 @@ impl Driver for MmapDriver {
     }
 
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
-        let mmap_guard = self.mmap.lock();
-        if let Some(mmap) = mmap_guard.as_readable() {
-            mmap.read_into(offset, buf)?;
+        {
+            let mmap_guard = self.mmap.lock();
+            if let Some(mmap) = mmap_guard.as_readable() {
+                mmap.read_into(offset, buf)?;
+            }
         }
         Ok(buf.len())
     }
@@ -176,12 +178,9 @@ impl Driver for MmapDriver {
                     let rw = MemoryMappedFile::open_rw(&self.path)?;
                     *mmap_guard = MmapState::Active(rw);
                 }
-                (MmapState::Active(_), _) => {
-                    // Already active — ok to write regardless of mode.
-                }
-                (MmapState::Empty, OpenMode::Auto | OpenMode::ReadWrite) => {
-                    // Zero-length committed resource — no data to protect.
-                    // Fall through to creation logic below.
+                (MmapState::Active(_), _)
+                | (MmapState::Empty, OpenMode::Auto | OpenMode::ReadWrite) => {
+                    // Already active or zero-length committed — ok to proceed.
                 }
                 _ => {
                     return Err(StorageError::Failed(
@@ -223,6 +222,7 @@ impl Driver for MmapDriver {
         Ok(())
     }
 
+    #[expect(clippy::significant_drop_tightening)] // lock guards mmap state transitions throughout
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         let mut mmap_guard = self.mmap.lock();
 
@@ -279,6 +279,7 @@ impl Driver for MmapDriver {
         Ok(())
     }
 
+    #[expect(clippy::significant_drop_tightening)] // lock guards mmap state transition
     fn reactivate(&self) -> StorageResult<()> {
         let mut mmap_guard = self.mmap.lock();
 

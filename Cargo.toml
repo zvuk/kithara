@@ -22,8 +22,11 @@ members = [
 broken_intra_doc_links = "deny"
 
 [workspace.lints.clippy]
+# === Hard deny ===
 unwrap_used = "deny"
 allow_attributes = "deny"
+
+# === Style & idioms ===
 doc_markdown = "warn"
 default_trait_access = "warn"
 ignored_unit_patterns = "warn"
@@ -31,20 +34,45 @@ semicolon_if_nothing_returned = "warn"
 missing_fields_in_debug = "warn"
 use_self = "warn"
 impl_trait_in_params = "warn"
-missing_panics_doc = "warn"
 explicit_iter_loop = "warn"
 explicit_into_iter_loop = "warn"
 redundant_closure_for_method_calls = "warn"
 cloned_instead_of_copied = "warn"
 flat_map_option = "warn"
 manual_let_else = "warn"
-needless_pass_by_value = "warn"
-trivially_copy_pass_by_ref = "warn"
 inconsistent_struct_constructor = "warn"
 map_unwrap_or = "warn"
 mut_mut = "warn"
 needless_for_each = "warn"
 match_wildcard_for_single_variants = "warn"
+redundant_else = "warn"
+items_after_statements = "warn"
+single_match_else = "warn"
+
+# === Semantics & duplication ===
+match_same_arms = "warn"
+needless_pass_by_value = "warn"
+trivially_copy_pass_by_ref = "warn"
+unused_self = "warn"
+unnecessary_wraps = "warn"
+option_if_let_else = "warn"
+or_fun_call = "warn"
+
+# === Documentation ===
+missing_panics_doc = "warn"
+missing_errors_doc = "warn"
+must_use_candidate = "warn"
+
+# === Type safety & casts ===
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_precision_loss = "warn"
+
+# === Correctness ===
+derive_partial_eq_without_eq = "warn"
+significant_drop_tightening = "warn"
+cognitive_complexity = "warn"
 
 [workspace.metadata.kithara]
 # Single place to document workspace-wide tool expectations.

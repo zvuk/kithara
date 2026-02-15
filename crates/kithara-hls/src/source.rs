@@ -126,6 +126,10 @@ impl HlsSource {
             let read_end = (local_offset + buf.len() as u64).min(seg.init_len);
             resource.wait_range(local_offset..read_end)?;
 
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "init segment fits in memory"
+            )]
             let available = (seg.init_len - local_offset) as usize;
             let to_read = buf.len().min(available);
             let bytes_from_init = resource.read_at(local_offset, &mut buf[..to_read])?;
@@ -163,6 +167,10 @@ impl HlsSource {
 impl Source for HlsSource {
     type Error = HlsError;
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "lock must be held for condvar wait"
+    )]
     fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
         let mut on_demand_requested = false;
 
@@ -291,6 +299,7 @@ impl Source for HlsSource {
             return Ok(0);
         }
 
+        #[expect(clippy::cast_possible_truncation, reason = "segment index fits in u32")]
         self.shared
             .current_segment_index
             .store(seg.segment_index as u32, Ordering::Relaxed);
@@ -323,11 +332,14 @@ impl Source for HlsSource {
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        let segments = self.shared.segments.lock();
-        let last = segments.last()?;
-        let codec = self.playlist_state.variant_codec(last.variant);
-        let container = self.playlist_state.variant_container(last.variant);
-        Some(MediaInfo::new(codec, container).with_variant_index(last.variant as u32))
+        let variant = {
+            let segments = self.shared.segments.lock();
+            segments.last()?.variant
+        };
+        let codec = self.playlist_state.variant_codec(variant);
+        let container = self.playlist_state.variant_container(variant);
+        #[expect(clippy::cast_possible_truncation, reason = "variant index fits in u32")]
+        Some(MediaInfo::new(codec, container).with_variant_index(variant as u32))
     }
 
     fn current_segment_range(&self) -> Option<Range<u64>> {

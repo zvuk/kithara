@@ -63,6 +63,9 @@ impl Backend {
         }
     }
 
+    // Core event loop coordinating backpressure, demand, batch/step execution, and
+    // periodic yield. Splitting would fragment the control flow and hurt readability.
+    #[expect(clippy::cognitive_complexity)]
     async fn run_downloader<D: Downloader>(mut dl: D, cancel: CancellationToken) {
         debug!("Downloader task started");
         let yield_interval = DEFAULT_YIELD_INTERVAL;

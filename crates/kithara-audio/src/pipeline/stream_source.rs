@@ -340,17 +340,16 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.cached_media_info = Some(new_info.clone());
         self.base_offset = base_offset;
 
-        match (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset) {
-            Some(new_decoder) => {
-                let new_duration = new_decoder.duration();
-                self.decoder = new_decoder;
-                debug!(?new_duration, base_offset, "Decoder recreated successfully");
-                true
-            }
-            None => {
-                warn!(base_offset, "Failed to recreate decoder");
-                false
-            }
+        if let Some(new_decoder) =
+            (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset)
+        {
+            let new_duration = new_decoder.duration();
+            self.decoder = new_decoder;
+            debug!(?new_duration, base_offset, "Decoder recreated successfully");
+            true
+        } else {
+            warn!(base_offset, "Failed to recreate decoder");
+            false
         }
     }
 }
@@ -464,6 +463,10 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "command dispatch with multiple variants"
+    )]
     fn handle_command(&mut self, cmd: Self::Command) {
         match cmd {
             AudioCommand::Seek { position, epoch } => {

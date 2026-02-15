@@ -32,10 +32,9 @@ struct CoverageData {
 
 impl CoverageData {
     fn to_mem_coverage(&self) -> MemCoverage {
-        let mut mc = match self.total_size {
-            Some(size) => MemCoverage::with_total_size(size),
-            None => MemCoverage::new(),
-        };
+        let mut mc = self
+            .total_size
+            .map_or_else(MemCoverage::new, MemCoverage::with_total_size);
         for range in self.ranges.iter() {
             mc.mark(range.clone());
         }

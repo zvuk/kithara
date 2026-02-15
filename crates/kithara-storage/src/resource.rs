@@ -66,20 +66,39 @@ pub trait ResourceExt: Send + Sync + 'static {
     /// Read data at the given offset into `buf`.
     ///
     /// Returns the number of bytes read.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the resource is cancelled, failed, or the read fails.
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
 
     /// Write data at the given offset.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the resource is cancelled, failed, committed (and
+    /// the backend does not support post-commit writes), or the write fails.
     fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
 
     /// Wait until the given byte range is available.
     ///
     /// Blocks the calling thread using `Condvar` until data is written
     /// or the resource reaches EOF / error / cancellation.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the range is invalid, the resource is cancelled,
+    /// or the resource has failed.
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
 
     /// Mark the resource as fully written.
     ///
     /// If `final_len` is provided, the backing storage may be truncated to that size.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the resource is cancelled, failed, or the backend
+    /// cannot finalize (e.g. file truncation or reopen fails).
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
 
     /// Mark the resource as failed.
@@ -103,7 +122,7 @@ pub trait ResourceExt: Send + Sync + 'static {
 
     /// Reactivate a committed resource for continued writing.
     ///
-    /// Transitions Committed → Active: reopens the backing store for writing,
+    /// Transitions Committed -> Active: reopens the backing store for writing,
     /// resets committed flag, and clears `final_len`. Existing data remains
     /// available for reading. New data can be written at any offset.
     ///
@@ -111,12 +130,21 @@ pub trait ResourceExt: Send + Sync + 'static {
     /// than the expected total.
     ///
     /// No-op if the resource is already Active.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the resource is cancelled, failed, or the backend
+    /// cannot reopen for writing.
     fn reactivate(&self) -> StorageResult<()>;
 
     /// Read the entire resource contents into a caller-provided buffer.
     ///
     /// The buffer is resized to fit the data. Returns the number of bytes read.
     /// Returns `0` if resource has no data.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the resource is cancelled, failed, or the read fails.
     fn read_into(&self, buf: &mut Vec<u8>) -> StorageResult<usize> {
         let Some(len) = self.len() else {
             // Probe via read_at to detect error state (cancelled/failed).
@@ -128,6 +156,7 @@ pub trait ResourceExt: Send + Sync + 'static {
             buf.clear();
             return Ok(0);
         }
+        #[expect(clippy::cast_possible_truncation)] // resource length fits in memory
         buf.resize(len as usize, 0);
         let n = self.read_at(0, buf)?;
         buf.truncate(n);
@@ -135,6 +164,10 @@ pub trait ResourceExt: Send + Sync + 'static {
     }
 
     /// Write entire contents and commit atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the write or commit fails.
     fn write_all(&self, data: &[u8]) -> StorageResult<()> {
         self.write_at(0, data)?;
         self.commit(Some(data.len() as u64))

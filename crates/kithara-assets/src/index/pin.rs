@@ -42,6 +42,10 @@ impl<R: ResourceExt> PinsIndex<R> {
     }
 
     /// Open a `PinsIndex` for the given base assets store.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the pins index resource cannot be opened.
     pub fn open<A: Assets<IndexRes = R>>(assets: &A, pool: BytePool) -> AssetsResult<Self> {
         let res = assets.open_pins_index_resource()?;
         Ok(Self::new(res, pool))
@@ -50,6 +54,10 @@ impl<R: ResourceExt> PinsIndex<R> {
     /// Load the pins set from storage.
     ///
     /// Empty, missing, or corrupted data is treated as an empty set (best-effort).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if reading from the underlying storage resource fails.
     pub fn load(&self) -> AssetsResult<HashSet<String>> {
         let mut buf = self.pool.get();
         let n = self.res.read_into(&mut buf)?;
@@ -68,6 +76,10 @@ impl<R: ResourceExt> PinsIndex<R> {
     }
 
     /// Persist the given set to storage (crash-safe via atomic write-rename).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if serialization or writing to storage fails.
     pub fn store(&self, pins: &HashSet<String>) -> AssetsResult<()> {
         // Stored as a list for stable serialization; treated as a set by higher layers.
         let file = PinsIndexFile {

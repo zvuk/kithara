@@ -39,6 +39,7 @@ pub enum SegmentType {
 
 impl SegmentType {
     /// Get media segment index, or None for init segment.
+    #[must_use]
     pub fn media_index(self) -> Option<usize> {
         match self {
             Self::Media(idx) => Some(idx),

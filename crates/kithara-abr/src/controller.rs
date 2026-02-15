@@ -55,6 +55,8 @@ impl<E: Estimator> AbrController<E> {
     }
 
     /// Convert Instant to nanos since reference. Returns at least 1 to distinguish from `NO_SWITCH`.
+    #[expect(clippy::cast_possible_truncation)]
+    // elapsed nanos fit u64 for any practical time span (585 years)
     fn instant_to_nanos(&self, instant: Instant) -> u64 {
         let nanos = instant
             .saturating_duration_since(self.reference_instant)
@@ -98,6 +100,10 @@ impl<E: Estimator> AbrController<E> {
     }
 
     /// Make ABR decision using variants from configuration.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "ABR decision evaluates multiple conditions"
+    )]
     pub fn decide(&self, now: Instant) -> AbrDecision {
         let current = self.current_variant.load(Ordering::Acquire);
 
@@ -161,6 +167,7 @@ impl<E: Estimator> AbrController<E> {
         variants.sort_by_key(|(_, bw)| *bw);
 
         // Adjust throughput by safety factor (divide, not multiply!)
+        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
         let adjusted_bps = (estimate_bps as f64 / self.cfg.throughput_safety_factor).max(0.0);
 
         tracing::debug!(
@@ -177,6 +184,7 @@ impl<E: Estimator> AbrController<E> {
         );
 
         // Best candidate not exceeding adjusted throughput, otherwise lowest
+        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
         let best_under = variants
             .iter()
             .filter(|(_, bw)| (*bw as f64) <= adjusted_bps)
@@ -203,14 +211,17 @@ impl<E: Estimator> AbrController<E> {
         if candidate_bw > current_bw {
             let buffer_ok = self.cfg.min_buffer_for_up_switch_secs <= 0.0
                 || buffer_level_secs >= self.cfg.min_buffer_for_up_switch_secs;
+            #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
             let headroom_ok = adjusted_bps >= (candidate_bw as f64) * self.cfg.up_hysteresis_ratio;
+            #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
+            let required_bps = (candidate_bw as f64) * self.cfg.up_hysteresis_ratio;
             tracing::debug!(
                 buffer_ok,
                 headroom_ok,
                 buffer_level_secs,
                 min_buffer = self.cfg.min_buffer_for_up_switch_secs,
                 adjusted_bps,
-                required_bps = (candidate_bw as f64) * self.cfg.up_hysteresis_ratio,
+                required_bps,
                 "ABR decide: up-switch check"
             );
             if buffer_ok && headroom_ok {
@@ -231,6 +242,7 @@ impl<E: Estimator> AbrController<E> {
         // Down-switch path
         if candidate_bw < current_bw {
             let urgent_down = buffer_level_secs <= self.cfg.down_switch_buffer_secs;
+            #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
             let margin_ok = adjusted_bps <= (current_bw as f64) * self.cfg.down_hysteresis_ratio;
             if urgent_down || margin_ok {
                 self.record_switch(now);
@@ -268,6 +280,7 @@ impl<E: Estimator> AbrController<E> {
 
 // Backward compatibility: Default AbrController with ThroughputEstimator
 impl AbrController<ThroughputEstimator> {
+    #[must_use]
     pub fn new(cfg: AbrOptions) -> Self {
         let estimator = ThroughputEstimator::new(&cfg);
         Self::with_estimator(cfg, estimator)

@@ -20,6 +20,7 @@ impl HttpClient {
     /// # Panics
     ///
     /// Panics if the `reqwest::Client` builder fails to build.
+    #[must_use]
     pub fn new(options: NetOptions) -> Self {
         let inner = Client::builder()
             .pool_max_idle_per_host(options.pool_max_idle_per_host)
@@ -40,14 +41,23 @@ impl HttpClient {
         req
     }
 
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure, timeout, or network error.
     pub async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> NetResult<Bytes> {
         <Self as Net>::get_bytes(self, url, headers).await
     }
 
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure or network error.
     pub async fn stream(&self, url: Url, headers: Option<Headers>) -> NetResult<crate::ByteStream> {
         <Self as Net>::stream(self, url, headers).await
     }
 
+    /// # Errors
+    ///
+    /// Returns [`NetError`] on HTTP failure or network error.
     pub async fn get_range(
         &self,
         url: Url,

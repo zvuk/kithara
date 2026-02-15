@@ -7,6 +7,10 @@ use kithara_abr::{
 use tracing::info;
 use web_time::Instant;
 
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "demo function with linear flow"
+)]
 fn main() {
     init_tracing();
 
@@ -44,6 +48,10 @@ fn main() {
 }
 
 /// Demonstrate throughput-based variant switching.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "demo function with linear flow"
+)]
 fn demo_throughput_switching(variants: &[Variant]) {
     info!("--- Demo 1: Throughput-based switching ---");
 
@@ -86,6 +94,10 @@ fn demo_throughput_switching(variants: &[Variant]) {
 }
 
 /// Demonstrate buffer-level awareness in up-switch decisions.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "demo function with linear flow"
+)]
 fn demo_buffer_awareness(variants: &[Variant]) {
     info!("--- Demo 2: Buffer-aware switching ---");
 

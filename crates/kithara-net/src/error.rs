@@ -26,11 +26,13 @@ pub enum NetError {
 
 impl NetError {
     /// Creates a timeout error
+    #[must_use]
     pub fn timeout() -> Self {
         Self::Timeout
     }
 
     /// Checks if this error is considered retryable
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         match self {
             Self::Http(http_err_str) => {
@@ -49,12 +51,11 @@ impl NetError {
                 http_err_str.contains("body") // Body read errors
             }
             Self::Timeout => true,
-            Self::RetryExhausted { .. } => false,
             Self::HttpError { status, .. } => {
                 // Retry on 5xx server errors and 429 Too Many Requests
                 *status >= 500 || *status == 429 || *status == 408
             }
-            Self::Unimplemented | Self::Cancelled => false,
+            Self::RetryExhausted { .. } | Self::Unimplemented | Self::Cancelled => false,
         }
     }
 }

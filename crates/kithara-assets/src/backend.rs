@@ -34,6 +34,11 @@ where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
     /// Open a resource by key (no processing context).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource key is invalid or the underlying
+    /// storage cannot be opened.
     pub fn open_resource(&self, key: &ResourceKey) -> AssetsResult<AssetResource<Ctx>> {
         match self {
             Self::Disk(s) => s.open_resource(key),
@@ -45,6 +50,11 @@ where
     ///
     /// When `ctx` is `Some`, the resource will be processed on commit
     /// (e.g. AES-128-CBC decryption). When `None`, data passes through unchanged.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource key is invalid or the underlying
+    /// storage cannot be opened.
     pub fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
@@ -57,6 +67,7 @@ where
     }
 
     /// Return the asset root identifier.
+    #[must_use]
     pub fn asset_root(&self) -> &str {
         match self {
             Self::Disk(s) => s.asset_root(),
@@ -65,6 +76,7 @@ where
     }
 
     /// Whether this backend is ephemeral (in-memory).
+    #[must_use]
     pub fn is_ephemeral(&self) -> bool {
         matches!(self, Self::Mem(_))
     }

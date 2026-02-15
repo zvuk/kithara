@@ -18,6 +18,7 @@ pub struct EventBus {
 
 impl EventBus {
     /// Create a new event bus with the given channel capacity.
+    #[must_use]
     pub fn new(capacity: usize) -> Self {
         let (tx, _) = broadcast::channel(capacity.max(1));
         Self { tx }
@@ -37,6 +38,7 @@ impl EventBus {
     ///
     /// Each subscriber gets an independent receiver. Slow subscribers
     /// receive `RecvError::Lagged(n)` instead of blocking producers.
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.tx.subscribe()
     }

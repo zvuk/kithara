@@ -63,18 +63,21 @@ impl StoreOptions {
     }
 
     /// Set maximum number of assets to keep.
+    #[must_use]
     pub fn with_max_assets(mut self, max: usize) -> Self {
         self.max_assets = Some(max);
         self
     }
 
     /// Set maximum bytes to store.
+    #[must_use]
     pub fn with_max_bytes(mut self, max: u64) -> Self {
         self.max_bytes = Some(max);
         self
     }
 
     /// Convert to internal `EvictConfig`.
+    #[must_use]
     pub fn to_evict_config(&self) -> EvictConfig {
         EvictConfig {
             max_assets: self.max_assets,
@@ -164,6 +167,7 @@ impl Default for AssetStoreBuilder<()> {
 
 impl AssetStoreBuilder<()> {
     /// Builder with defaults (no `root_dir`/`asset_root`/evict/cancel/process set).
+    #[must_use]
     pub fn new() -> Self {
         // Default pass-through process_fn for () - just copies input to output
         let dummy_process: ProcessChunkFn<()> =
@@ -199,6 +203,7 @@ where
     ///
     /// # Panics
     /// Panics if `process_fn` is not set.
+    #[must_use]
     pub fn build(self) -> AssetsBackend<Ctx> {
         if self.ephemeral {
             self.build_ephemeral().into()
@@ -223,23 +228,27 @@ where
         self
     }
 
+    #[must_use]
     pub fn evict_config(mut self, cfg: EvictConfig) -> Self {
         self.evict_config = Some(cfg);
         self
     }
 
+    #[must_use]
     pub fn cancel(mut self, cancel: CancellationToken) -> Self {
         self.cancel = Some(cancel);
         self
     }
 
     /// Set the in-memory LRU cache capacity for opened resources.
+    #[must_use]
     pub fn cache_capacity(mut self, capacity: NonZeroUsize) -> Self {
         self.cache_capacity = Some(capacity);
         self
     }
 
     /// Set the buffer pool (created at application startup and shared).
+    #[must_use]
     pub fn pool(mut self, pool: BytePool) -> Self {
         self.pool = Some(pool);
         self
@@ -249,6 +258,7 @@ where
     ///
     /// When disabled, `CachedAssets` delegates directly to the inner layer.
     /// Default: `true`.
+    #[must_use]
     pub fn cache_enabled(mut self, enabled: bool) -> Self {
         self.cache_enabled = enabled;
         self
@@ -259,6 +269,7 @@ where
     /// When disabled, `EvictAssets` delegates directly to the inner layer
     /// (no LRU tracking, no eviction).
     /// Default: `true`.
+    #[must_use]
     pub fn evict_enabled(mut self, enabled: bool) -> Self {
         self.evict_enabled = enabled;
         self
@@ -269,6 +280,7 @@ where
     /// When disabled, `LeaseAssets` delegates directly to the inner layer
     /// (no pinning, no byte recording, no persistence).
     /// Default: `true`.
+    #[must_use]
     pub fn lease_enabled(mut self, enabled: bool) -> Self {
         self.lease_enabled = enabled;
         self
@@ -279,6 +291,7 @@ where
     /// When `true`, `build()` returns `AssetsBackend::Mem` with auto-eviction
     /// (LRU cache removes underlying data on eviction).
     /// Default: `false`.
+    #[must_use]
     pub fn ephemeral(mut self, ephemeral: bool) -> Self {
         self.ephemeral = ephemeral;
         self
@@ -288,6 +301,7 @@ where
     ///
     /// # Panics
     /// Panics if `process_fn` is not set for Ctx != ().
+    #[must_use]
     pub fn build_disk(self) -> AssetStore<Ctx> {
         let root_dir = self.root_dir.unwrap_or_else(|| {
             tempdir()

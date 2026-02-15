@@ -87,6 +87,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn inner(&self) -> &A {
         &self.inner
     }
@@ -160,6 +161,7 @@ where
 
         let res = self.inner.open_pins_index_resource()?;
         cache.put(CacheKey::PinsIndex, CacheEntry::Index(res.clone()));
+        drop(cache);
 
         Ok(res)
     }
@@ -177,6 +179,7 @@ where
 
         let res = self.inner.open_lru_index_resource()?;
         cache.put(CacheKey::LruIndex, CacheEntry::Index(res.clone()));
+        drop(cache);
 
         Ok(res)
     }
@@ -194,6 +197,7 @@ where
 
         let res = self.inner.open_coverage_index_resource()?;
         cache.put(CacheKey::CoverageIndex, CacheEntry::Index(res.clone()));
+        drop(cache);
 
         Ok(res)
     }

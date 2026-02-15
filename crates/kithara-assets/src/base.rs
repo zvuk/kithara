@@ -35,6 +35,11 @@ pub trait Assets: Clone + Send + Sync + 'static {
     type IndexRes: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
 
     /// Open a resource with optional context (main method).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource key is invalid or the underlying
+    /// storage cannot be opened (e.g. I/O failure, cancellation).
     fn open_resource_with_ctx(
         &self,
         key: &ResourceKey,
@@ -42,20 +47,42 @@ pub trait Assets: Clone + Send + Sync + 'static {
     ) -> AssetsResult<Self::Res>;
 
     /// Convenience method - open a resource without context.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource key is invalid or the underlying
+    /// storage cannot be opened.
     fn open_resource(&self, key: &ResourceKey) -> AssetsResult<Self::Res> {
         self.open_resource_with_ctx(key, None)
     }
 
     /// Open the resource used for persisting the pins index.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the index resource cannot be opened (I/O or storage error).
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
     /// Open the resource used for persisting the LRU index.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the index resource cannot be opened (I/O or storage error).
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
     /// Open the resource used for persisting the coverage index.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the index resource cannot be opened (I/O or storage error).
     fn open_coverage_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
     /// Delete the entire asset (all resources under this store's `asset_root`).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the asset directory cannot be removed (I/O error
+    /// or cancellation).
     fn delete_asset(&self) -> AssetsResult<()>;
 
     /// Remove a single resource by key.
@@ -63,6 +90,10 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// Default implementation is a no-op (suitable for disk stores where
     /// resources are managed by filesystem eviction). In-memory stores
     /// override this to free memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the resource cannot be removed from the store.
     fn remove_resource(&self, _key: &ResourceKey) -> AssetsResult<()> {
         Ok(())
     }
@@ -99,10 +130,12 @@ impl DiskAssetStore {
         }
     }
 
+    #[must_use]
     pub fn root_dir(&self) -> &Path {
         &self.root_dir
     }
 
+    #[must_use]
     pub fn asset_root(&self) -> &str {
         &self.asset_root
     }

@@ -224,24 +224,20 @@ impl FileDownloader {
             }
         };
 
-        let mut coverage: FileCoverage = match coverage_index {
-            Some(idx) => {
+        let mut coverage: FileCoverage = coverage_index.map_or_else(
+            || {
+                let mc = total.map_or_else(MemCoverage::new, MemCoverage::with_total_size);
+                FileCoverage::Memory(mc)
+            },
+            |idx| {
                 let key = url.to_string();
                 let mut dc = DiskCoverage::open(idx, key);
                 if let Some(size) = total {
                     dc.set_total_size(size);
                 }
                 FileCoverage::Disk(dc)
-            }
-            None => {
-                let mc = if let Some(size) = total {
-                    MemCoverage::with_total_size(size)
-                } else {
-                    MemCoverage::new()
-                };
-                FileCoverage::Memory(mc)
-            }
-        };
+            },
+        );
 
         // If resource already has some data (partial cache) and coverage
         // doesn't know about it yet, mark it. This handles legacy files

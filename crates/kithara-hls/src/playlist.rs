@@ -152,6 +152,10 @@ impl PlaylistState {
     ///
     /// Updates the segment's size and recalculates all subsequent offsets.
     /// This handles the case where decrypted size differs from encrypted size.
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "write guard borrows size_map mutably"
+    )]
     pub fn reconcile_segment_size(&self, variant: usize, segment_index: usize, actual_total: u64) {
         let Some(lock) = self.variants.get(variant) else {
             return;
@@ -265,6 +269,10 @@ impl PlaylistAccess for PlaylistState {
         state.size_map.as_ref().map(|sm| sm.total)
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "size_map borrows the read guard"
+    )]
     fn segment_byte_offset(&self, variant: usize, index: usize) -> Option<u64> {
         let lock = self.variants.get(variant)?;
         let state = lock.read();
@@ -272,6 +280,10 @@ impl PlaylistAccess for PlaylistState {
         size_map.offsets.get(index).copied()
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "size_map borrows the read guard"
+    )]
     fn find_segment_at_offset(&self, variant: usize, offset: u64) -> Option<usize> {
         let lock = self.variants.get(variant)?;
         let state = lock.read();

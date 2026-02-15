@@ -192,13 +192,10 @@ where
 
                         let chunk_len = bytes.len();
                         let start = offset;
-                        match offset.checked_add(chunk_len as u64) {
-                            Some(new_offset) => offset = new_offset,
-                            None => {
-                                res.fail("offset overflow".to_string());
-                                yield Err(WriterError::OffsetOverflow);
-                                return;
-                            }
+                        if let Some(new_offset) = offset.checked_add(chunk_len as u64) { offset = new_offset } else {
+                            res.fail("offset overflow".to_string());
+                            yield Err(WriterError::OffsetOverflow);
+                            return;
                         }
 
                         if first_chunk {

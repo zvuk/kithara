@@ -143,24 +143,21 @@ impl LruState {
     pub fn touch(&mut self, asset_root: &str, bytes_hint: Option<u64>) -> bool {
         self.clock = self.clock.saturating_add(1);
 
-        match self.by_root.get_mut(asset_root) {
-            Some(e) => {
-                e.last_touch = self.clock;
-                if let Some(b) = bytes_hint {
-                    e.bytes = Some(b);
-                }
-                false
+        if let Some(e) = self.by_root.get_mut(asset_root) {
+            e.last_touch = self.clock;
+            if let Some(b) = bytes_hint {
+                e.bytes = Some(b);
             }
-            None => {
-                self.by_root.insert(
-                    asset_root.to_string(),
-                    LruEntry {
-                        last_touch: self.clock,
-                        bytes: bytes_hint,
-                    },
-                );
-                true
-            }
+            false
+        } else {
+            self.by_root.insert(
+                asset_root.to_string(),
+                LruEntry {
+                    last_touch: self.clock,
+                    bytes: bytes_hint,
+                },
+            );
+            true
         }
     }
 

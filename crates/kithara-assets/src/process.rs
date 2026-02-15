@@ -127,6 +127,10 @@ where
         let mut write_offset = 0u64;
 
         while read_offset < final_len {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "remaining is bounded by chunk_size (64KB) via min() on next line"
+            )]
             let remaining = (final_len - read_offset) as usize;
             let to_read = remaining.min(chunk_size);
             let is_last = read_offset + to_read as u64 >= final_len;
@@ -242,6 +246,7 @@ where
         }
     }
 
+    #[must_use]
     pub fn inner(&self) -> &A {
         &self.inner
     }

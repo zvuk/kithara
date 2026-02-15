@@ -87,6 +87,10 @@ where
     }
 
     /// Record asset size for byte-based eviction (best-effort).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the LRU index cannot be opened or updated.
     pub fn record_asset_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<()> {
         if !self.enabled {
             return Ok(());
@@ -99,6 +103,10 @@ where
     }
 
     /// Check if byte limit is exceeded and run eviction if needed.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "eviction logic evaluates multiple conditions"
+    )]
     pub fn check_and_evict_if_over_limit(&self) {
         if !self.enabled || self.cancel.is_cancelled() || self.cfg.max_bytes.is_none() {
             return;

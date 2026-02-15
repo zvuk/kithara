@@ -36,6 +36,7 @@ impl ThroughputEstimator {
     const MIN_CHUNK_BYTES: u64 = 16_000;
     const MIN_DURATION_MS: f64 = 0.5;
 
+    #[must_use]
     pub fn new(_cfg: &AbrOptions) -> Self {
         Self {
             buffered_content_secs: 0.0,
@@ -46,6 +47,9 @@ impl ThroughputEstimator {
         }
     }
 
+    #[must_use]
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    // bandwidth in bits/sec is always positive and within u64 range
     pub fn estimate_bps(&self) -> Option<u64> {
         let est = self
             .fast_ewma
@@ -80,6 +84,7 @@ impl ThroughputEstimator {
         }
 
         let dur_ms = (sample.duration.as_secs_f64() * 1000.0).max(Self::MIN_DURATION_MS);
+        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible
         let bps = (sample.bytes as f64) * 8000.0 / dur_ms;
         let weight_secs = dur_ms / 1000.0;
 
@@ -88,6 +93,7 @@ impl ThroughputEstimator {
         self.bytes_sampled = self.bytes_sampled.saturating_add(sample.bytes);
     }
 
+    #[must_use]
     pub fn buffer_level_secs(&self) -> f64 {
         self.buffered_content_secs
     }

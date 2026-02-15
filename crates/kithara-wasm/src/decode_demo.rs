@@ -10,6 +10,10 @@ use symphonia::core::{
 use tracing::info;
 
 /// Decode audio file bytes and log PCM info.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "demo function with linear flow"
+)]
 fn decode_file(data: Vec<u8>, filename: &str) {
     let data_len = data.len();
     info!(filename, bytes = data_len, "Starting decode");
@@ -38,30 +42,29 @@ fn decode_file(data: Vec<u8>, filename: &str) {
         };
 
     // Find the audio track.
-    let track = match format_reader.default_track(TrackType::Audio) {
-        Some(t) => t.clone(),
-        None => {
-            tracing::error!("No audio track found");
-            return;
-        }
+    let track = if let Some(t) = format_reader.default_track(TrackType::Audio) {
+        t.clone()
+    } else {
+        tracing::error!("No audio track found");
+        return;
     };
 
     let track_id = track.id;
 
     // Extract codec parameters.
-    let codec_params = match &track.codec_params {
-        Some(CodecParameters::Audio(params)) => params.clone(),
-        _ => {
-            tracing::error!("No audio codec parameters");
-            return;
-        }
+    let codec_params = if let Some(CodecParameters::Audio(params)) = &track.codec_params {
+        params.clone()
+    } else {
+        tracing::error!("No audio codec parameters");
+        return;
     };
 
     let sample_rate = codec_params.sample_rate.unwrap_or(0);
-    let channels = codec_params
-        .channels
-        .as_ref()
-        .map_or(0, |c| c.count() as u16);
+    let channels = codec_params.channels.as_ref().map_or(0, |c| {
+        #[expect(clippy::cast_possible_truncation)] // channel count fits u16
+        let ch = c.count() as u16;
+        ch
+    });
     let codec_name = format!("{:?}", codec_params.codec);
 
     info!(codec = %codec_name, sample_rate, channels, "Audio track found");
@@ -125,8 +128,9 @@ fn decode_file(data: Vec<u8>, filename: &str) {
         }
     }
 
+    #[expect(clippy::cast_precision_loss)] // frame count precision loss is negligible for duration
     let duration_secs = if sample_rate > 0 {
-        total_frames as f64 / sample_rate as f64
+        total_frames as f64 / f64::from(sample_rate)
     } else {
         0.0
     };

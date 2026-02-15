@@ -51,6 +51,7 @@ pub struct EpochValidator {
 
 impl EpochValidator {
     /// Create a new epoch validator.
+    #[must_use]
     pub fn new() -> Self {
         Self { epoch: 0 }
     }

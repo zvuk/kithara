@@ -82,6 +82,7 @@ pub struct Progress {
 }
 
 impl Progress {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             read_pos: std::sync::atomic::AtomicU64::new(0),

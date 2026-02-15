@@ -80,11 +80,11 @@ impl std::fmt::Debug for AbrOptions {
 
 impl AbrOptions {
     /// Get initial variant index based on mode.
+    #[must_use]
     pub fn initial_variant(&self) -> usize {
         match self.mode {
-            AbrMode::Auto(Some(idx)) => idx,
+            AbrMode::Auto(Some(idx)) | AbrMode::Manual(idx) => idx,
             AbrMode::Auto(None) => 0,
-            AbrMode::Manual(idx) => idx,
         }
     }
 }

@@ -43,23 +43,24 @@ impl Driver for MemDriver {
     type Options = MemOptions;
 
     fn open(opts: MemOptions) -> StorageResult<(Self, DriverState)> {
-        let (buf, init) = if let Some(data) = opts.initial_data {
-            let len = data.len() as u64;
-            let mut available = rangemap::RangeSet::new();
-            if len > 0 {
-                available.insert(0..len);
-            }
-            (
-                data,
-                DriverState {
-                    available,
-                    committed: true,
-                    final_len: Some(len),
-                },
-            )
-        } else {
-            (Vec::new(), DriverState::default())
-        };
+        let (buf, init) = opts.initial_data.map_or_else(
+            || (Vec::new(), DriverState::default()),
+            |data| {
+                let len = data.len() as u64;
+                let mut available = rangemap::RangeSet::new();
+                if len > 0 {
+                    available.insert(0..len);
+                }
+                (
+                    data,
+                    DriverState {
+                        available,
+                        committed: true,
+                        final_len: Some(len),
+                    },
+                )
+            },
+        );
 
         let driver = Self {
             buf: Mutex::new(buf),
@@ -70,6 +71,7 @@ impl Driver for MemDriver {
 
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         let data = self.buf.lock();
+        #[expect(clippy::cast_possible_truncation)] // byte offset within allocated buffer
         let start = offset as usize;
         if start >= data.len() {
             return Ok(0);
@@ -77,6 +79,7 @@ impl Driver for MemDriver {
         let available = data.len() - start;
         let to_read = buf.len().min(available);
         buf[..to_read].copy_from_slice(&data[start..start + to_read]);
+        drop(data);
         Ok(to_read)
     }
 
@@ -87,18 +90,21 @@ impl Driver for MemDriver {
             ));
         }
 
-        let end = offset as usize + data.len();
+        #[expect(clippy::cast_possible_truncation)] // byte offset within allocated buffer
+        let start = offset as usize;
+        let end = start + data.len();
         let mut buf = self.buf.lock();
         if buf.len() < end {
             buf.resize(end, 0);
         }
-        let start = offset as usize;
         buf[start..end].copy_from_slice(data);
+        drop(buf);
         Ok(())
     }
 
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         if let Some(len) = final_len {
+            #[expect(clippy::cast_possible_truncation)] // buffer size fits in memory
             let len_usize = len as usize;
             let mut buf = self.buf.lock();
             if buf.len() > len_usize {
@@ -135,6 +141,7 @@ impl MemResource {
     /// # Panics
     ///
     /// Panics if `MemDriver::open` fails (should never happen with default options).
+    #[must_use]
     pub fn new(cancel: CancellationToken) -> Self {
         // MemDriver::open with default opts never fails.
         Self::open(cancel, MemOptions::default())
@@ -146,6 +153,7 @@ impl MemResource {
     /// # Panics
     ///
     /// Panics if `MemDriver::open` fails (should never happen with initial data).
+    #[must_use]
     pub fn from_bytes(data: &[u8], cancel: CancellationToken) -> Self {
         Self::open(
             cancel,

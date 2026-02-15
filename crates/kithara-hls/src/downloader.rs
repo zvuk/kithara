@@ -224,6 +224,10 @@ impl HlsDownloader {
         }
 
         // Get init_size from actual disk resource (size map was populated by calculate_size_map).
+        #[expect(
+            clippy::option_if_let_else,
+            reason = "nested conditionals are clearer with if-let"
+        )]
         let init_len = if playlist_state.total_variant_size(variant).is_some() {
             if let Some(ref url) = init_url {
                 let key = ResourceKey::from_url(url);
@@ -414,6 +418,10 @@ impl HlsDownloader {
     /// Prepare variant for download: detect switches, calculate metadata, populate cache.
     ///
     /// Returns `(is_variant_switch, is_midstream_switch)`.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "variant switch detection with multiple conditions"
+    )]
     async fn ensure_variant_ready(
         &mut self,
         variant: usize,
@@ -555,6 +563,10 @@ impl HlsDownloader {
 
         self.abr.push_throughput_sample(sample);
 
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "throughput estimation tolerates f64 precision"
+        )]
         let bytes_per_second = if duration.as_secs_f64() > 0.0 {
             bytes as f64 / duration.as_secs_f64()
         } else {
@@ -582,6 +594,10 @@ impl Downloader for HlsDownloader {
         &self.io
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "on-demand segment resolution is inherently complex"
+    )]
     async fn poll_demand(&mut self) -> Option<HlsPlan> {
         let req = self.shared.segment_requests.pop()?;
 
