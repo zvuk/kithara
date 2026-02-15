@@ -493,4 +493,149 @@ mod tests {
         assert_eq!(n, 4);
         assert_eq!(&zero_buf, &[0, 0, 0, 0]);
     }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_ring_wrap_around_evicts_old_data() {
+        // Small ring buffer (256 bytes) to test wrap-around.
+        let res = MemResource::open(
+            CancellationToken::new(),
+            MemOptions {
+                capacity: 256,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Write 200 bytes at offset 0.
+        res.write_at(0, &vec![0xAA; 200]).unwrap();
+
+        // Verify data is readable.
+        let mut buf = [0u8; 10];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 10);
+        assert_eq!(&buf, &[0xAA; 10]);
+
+        // Write 200 bytes at offset 200 — this wraps, evicting first 144 bytes.
+        // window_start advances to (200+200) - 256 = 144
+        res.write_at(200, &vec![0xBB; 200]).unwrap();
+
+        // Offset 0..144 is evicted — read returns 0 bytes.
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 0, "evicted data should not be readable");
+
+        // Offset 144..200 should still have 0xAA data.
+        let n = res.read_at(144, &mut buf).unwrap();
+        assert!(n > 0, "data within window should be readable");
+        assert_eq!(&buf[..n], &vec![0xAA; n][..]);
+
+        // Offset 200..400 should have 0xBB data.
+        let n = res.read_at(200, &mut buf).unwrap();
+        assert_eq!(n, 10);
+        assert_eq!(&buf, &[0xBB; 10]);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(2))]
+    #[test]
+    fn test_ring_eviction_invalidates_coverage() {
+        // Small ring to force eviction.
+        let res = MemResource::open(
+            CancellationToken::new(),
+            MemOptions {
+                capacity: 256,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Write 0..200 — should be available.
+        res.write_at(0, &vec![0xAA; 200]).unwrap();
+        assert_eq!(res.wait_range(0..200).unwrap(), WaitOutcome::Ready);
+
+        // Write 200..400 — evicts 0..144.
+        res.write_at(200, &vec![0xBB; 200]).unwrap();
+
+        // 144..400 should still be available.
+        assert_eq!(res.wait_range(144..400).unwrap(), WaitOutcome::Ready);
+
+        // 0..144 has been evicted from the available set.
+        // We can't easily test wait_range(0..144) because it would block.
+        // Instead, verify read returns 0 for evicted offset.
+        let mut buf = [0u8; 1];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 0, "evicted offset should return 0 bytes");
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_ring_multiple_wraps() {
+        let res = MemResource::open(
+            CancellationToken::new(),
+            MemOptions {
+                capacity: 128,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Write 3 rounds of 128 bytes each.
+        for round in 0u8..3 {
+            let offset = u64::from(round) * 128;
+            res.write_at(offset, &vec![round; 128]).unwrap();
+        }
+
+        // Only the last 128 bytes (offset 256..384) should be readable.
+        let mut buf = [0u8; 10];
+
+        // Offset 0 — evicted.
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 0);
+
+        // Offset 128 — evicted.
+        let n = res.read_at(128, &mut buf).unwrap();
+        assert_eq!(n, 0);
+
+        // Offset 256 — current window.
+        let n = res.read_at(256, &mut buf).unwrap();
+        assert_eq!(n, 10);
+        assert_eq!(&buf, &[2u8; 10]);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_ring_from_bytes_readable() {
+        // from_bytes creates a committed resource — the data should be readable.
+        let data = b"hello ring buffer world";
+        let res = MemResource::from_bytes(data, CancellationToken::new());
+
+        let mut buf = vec![0u8; data.len()];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, data.len());
+        assert_eq!(&buf, data);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(1))]
+    #[test]
+    fn test_ring_capacity_power_of_two() {
+        // Non-power-of-2 capacity should be rounded up.
+        let res = MemResource::open(
+            CancellationToken::new(),
+            MemOptions {
+                capacity: 100,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        // Write 128 bytes (the rounded-up capacity).
+        res.write_at(0, &vec![0xFF; 128]).unwrap();
+        let mut buf = [0u8; 128];
+        let n = res.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 128);
+    }
 }
