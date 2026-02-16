@@ -1,4 +1,6 @@
-//! Platform-aware synchronization primitives.
+//! Platform-aware primitives for native and wasm32 targets.
+//!
+//! # Synchronization
 //!
 //! On native targets, re-exports [`parking_lot`] types directly.
 //!
@@ -6,20 +8,22 @@
 //! instead of blocking `lock()`. This avoids `Atomics.wait()` panics on
 //! the browser main thread where `Atomics.wait` is forbidden.
 //!
-//! # Background
+//! # Conditional trait bounds
 //!
-//! `parking_lot` compiled with the `nightly` feature on `wasm32-unknown-unknown`
-//! uses `Atomics.wait()` for contended locks. Web Workers can call
-//! `Atomics.wait`, but the **browser main thread cannot** — it throws
-//! `RuntimeError: Atomics.wait cannot be called in this context`.
+//! [`MaybeSend`] and [`MaybeSync`] are conditional trait bounds:
+//! on native they equal `Send`/`Sync`, on wasm32 they are blanket-implemented
+//! for all types. Use in trait bounds to avoid duplicating trait definitions
+//! with `#[cfg]` gates.
 //!
-//! In Kithara's WASM build the HLS downloader runs on the main thread
-//! (async I/O needs the browser event loop) while the decoder runs on a
-//! rayon Web Worker. Any `parking_lot::Mutex::lock()` on the main thread
-//! that contends with the worker will panic.
+//! # Async utilities
 //!
-//! The wasm32 wrappers use `try_lock()` in a spin loop. The rayon worker
-//! holds locks for microseconds, so spins resolve quickly.
+//! [`sleep`] delegates to `tokio::time::sleep` on native and is a no-op on
+//! wasm32 (browser fetch has its own retry/timeout mechanisms).
+
+mod maybe_send;
+pub mod time;
+
+pub use maybe_send::{MaybeSend, MaybeSync};
 
 // On native: re-export parking_lot types directly (zero overhead).
 #[cfg(not(target_arch = "wasm32"))]

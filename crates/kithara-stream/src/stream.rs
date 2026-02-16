@@ -16,7 +16,8 @@ use std::{
     },
 };
 
-use kithara_storage::{MaybeSend, MaybeSync, WaitOutcome};
+use kithara_platform::{MaybeSend, MaybeSync};
+use kithara_storage::WaitOutcome;
 
 use crate::{MediaInfo, StreamContext, ThreadPool, source::Source};
 

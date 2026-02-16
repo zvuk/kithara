@@ -1845,6 +1845,7 @@ dependencies = [
  "gloo-timers",
  "hotpath",
  "kithara-assets",
+ "kithara-platform",
  "memory-stats",
  "reqwest",
  "rstest",
@@ -1861,6 +1862,7 @@ name = "kithara-platform"
 version = "0.1.0"
 dependencies = [
  "parking_lot",
+ "tokio",
 ]
 
 [[package]]
@@ -1892,6 +1894,7 @@ dependencies = [
  "hotpath",
  "kithara-assets",
  "kithara-net",
+ "kithara-platform",
  "kithara-storage",
  "memory-stats",
  "rayon",

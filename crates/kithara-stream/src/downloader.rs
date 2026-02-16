@@ -13,7 +13,7 @@
 
 use std::future::Future;
 
-use kithara_storage::MaybeSend;
+use kithara_platform::MaybeSend;
 
 /// Outcome of [`Downloader::plan`].
 pub enum PlanOutcome<P> {

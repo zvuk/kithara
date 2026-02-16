@@ -211,16 +211,24 @@ impl Condvar {
         self.0.wait(&mut guard.0);
     }
 
-    /// Block until notified or timeout elapses.
+    /// Block until notified (timeout ignored on wasm32).
     ///
-    /// Returns `true` if notified before timeout.
+    /// On wasm32, `parking_lot::Condvar::wait_for` internally calls
+    /// `std::time::Instant::now()` which panics ("time not implemented").
+    /// We delegate to untimed `wait()` instead — notifications from the
+    /// downloader are reliable, and the timeout is only a safety net on
+    /// native.
+    ///
+    /// Always returns `true` (not timed out) since we don't track elapsed
+    /// time.
     #[inline]
     pub fn wait_for<T: ?Sized>(
         &self,
         guard: &mut MutexGuard<'_, T>,
-        timeout: std::time::Duration,
+        _timeout: std::time::Duration,
     ) -> bool {
-        !self.0.wait_for(&mut guard.0, timeout).timed_out()
+        self.0.wait(&mut guard.0);
+        true
     }
 
     /// Wake one waiting thread.

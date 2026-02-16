@@ -15,6 +15,7 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
 kithara-assets = { workspace = true }
+kithara-platform = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }

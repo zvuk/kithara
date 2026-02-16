@@ -2,14 +2,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-#[cfg(not(target_arch = "wasm32"))]
-use tokio::time::sleep;
-
-#[cfg(target_arch = "wasm32")]
-async fn sleep(_duration: Duration) {
-    // No-op on wasm32: browser fetch has its own retry/timeout mechanisms.
-    // Avoids Send issues with gloo_timers (Rc-based, not Send).
-}
+use kithara_platform::time::sleep;
 use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 use unimock::unimock;

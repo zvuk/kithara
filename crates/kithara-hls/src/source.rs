@@ -273,16 +273,13 @@ impl Source for HlsSource {
                 self.shared.reader_advanced.notify_one();
             }
 
-            // Wait for new data. On native, use a 50ms timeout as a safety net
-            // against missed notifications. On wasm32, parking_lot's wait_for()
-            // internally calls std::time::Instant::now() which panics, so we use
-            // untimed wait() — notifications from the downloader are reliable.
-            #[cfg(not(target_arch = "wasm32"))]
+            // Wait for new data with a 50ms timeout as a safety net against
+            // missed notifications. On wasm32 the timeout is ignored by the
+            // platform Condvar (Instant::now panics), but notifications from
+            // the downloader are reliable.
             self.shared
                 .condvar
                 .wait_for(&mut segments, Duration::from_millis(50));
-            #[cfg(target_arch = "wasm32")]
-            self.shared.condvar.wait(&mut segments);
         }
     }
 
