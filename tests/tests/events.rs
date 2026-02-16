@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for unified event bus.
 
 use kithara_events::{Event, EventBus};

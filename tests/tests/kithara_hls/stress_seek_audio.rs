@@ -11,7 +11,7 @@
 //! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
 //! No external network required.
 
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
@@ -74,9 +74,11 @@ fn phase_distance(a: usize, b: usize) -> usize {
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 6. Final seek near end → read to EOF
 #[rstest]
+#[case::mmap(false)]
+#[case::ephemeral(true)]
 #[timeout(Duration::from_secs(120))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn stress_seek_audio_hls_wav() {
+async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
@@ -113,13 +115,23 @@ async fn stress_seek_audio_hls_wav() {
     let temp_dir = TempDir::new().expect("temp dir");
     let cancel = CancellationToken::new();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
+    let mut store = StoreOptions::new(temp_dir.path());
+    if ephemeral {
+        // Ephemeral mode auto-evicts MemResources from LRU cache.
+        // Increase capacity so all segments remain accessible for random seeks.
+        store.cache_capacity = Some(NonZeroUsize::new(SEGMENT_COUNT + 10).expect("nonzero"));
+    }
+
+    let mut hls_config = HlsConfig::new(url)
+        .with_store(store)
         .with_cancel(cancel)
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });
+    if ephemeral {
+        hls_config = hls_config.with_ephemeral(true);
+    }
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);

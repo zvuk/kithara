@@ -134,6 +134,12 @@ impl PcmRingBuffer {
         let read = self.read_head.load(Ordering::Acquire);
         write.wrapping_sub(read)
     }
+
+    /// Number of samples that can be written before the buffer is full.
+    #[must_use]
+    pub fn space_available(&self) -> u32 {
+        (self.mask + 1) - self.available()
+    }
 }
 
 #[cfg(test)]
@@ -227,6 +233,22 @@ mod tests {
         let written = ring.write(&[]);
         assert_eq!(written, 0);
         assert_eq!(ring.available(), 0);
+    }
+
+    #[test]
+    fn space_available_tracks_free_capacity() {
+        let mut ring = PcmRingBuffer::new(1024, 2, 44100);
+        assert_eq!(ring.space_available(), 1024);
+
+        ring.write(&[0.1f32; 300]);
+        assert_eq!(ring.space_available(), 724);
+
+        ring.write(&[0.2f32; 724]);
+        assert_eq!(ring.space_available(), 0);
+
+        // Simulate consumer reading 100 samples.
+        ring.read_head.store(100, Ordering::Release);
+        assert_eq!(ring.space_available(), 100);
     }
 
     #[test]

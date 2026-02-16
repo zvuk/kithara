@@ -101,6 +101,7 @@ kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
+kithara-wasm = { path = "crates/kithara-wasm" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.3.1"
 unimock = { version = "0.6", features = ["std"] }
@@ -155,6 +156,7 @@ console_error_panic_hook = "0.1"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 wasm-bindgen-rayon = "1.2"
+wasm-bindgen-test = "0.3"
 js-sys = "0.3"
 web-sys = { version = "0.3", features = ["Blob", "Document", "Element", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "Window"] }
 
@@ -171,6 +173,7 @@ cbc = "0.1.2"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10.9"
 tower = "0.5.3"
+tower-http = { version = "0.6", features = ["cors"] }
 tempfile = "3.25.0"
 
 # async traits

@@ -7,6 +7,7 @@ mod basic_playback;
 mod deferred_abr;
 mod deferred_abr_debug;
 mod driver_test;
+mod ephemeral;
 mod keys_integration;
 mod playlist_integration;
 mod seek_past_eof;

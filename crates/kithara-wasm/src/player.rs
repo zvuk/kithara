@@ -79,18 +79,30 @@ impl WasmPlayer {
     /// Fill the PCM ring buffer with decoded samples.
     ///
     /// Called from JS in a loop (via `requestAnimationFrame`).
-    /// Returns the number of samples written, or 0 if paused/EOF.
+    /// Returns the number of samples written, or 0 if paused/EOF/ring full.
+    ///
+    /// Backpressure: reads from the decoder only as many samples as the ring
+    /// buffer can accept. This prevents `position()` from racing ahead of
+    /// actual audio output.
     pub fn fill_buffer(&mut self) -> u32 {
         if !self.playing {
             return 0;
         }
+
+        // Backpressure: don't read more than the ring can accept.
+        let space = self.ring.space_available() as usize;
+        if space == 0 {
+            return 0;
+        }
+        let read_len = space.min(self.pcm_buf.len());
+
         AUDIO.with(|a| {
             let mut a = a.borrow_mut();
             let Some(ref mut audio) = *a else {
                 return 0;
             };
 
-            let n = audio.read(&mut self.pcm_buf);
+            let n = audio.read(&mut self.pcm_buf[..read_len]);
             if n == 0 {
                 if audio.is_eof() {
                     info!("End of stream");
