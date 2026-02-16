@@ -255,7 +255,18 @@ impl<S> Audio<S> {
         // and making it pass the consumer's epoch filter.
         let new_epoch = self.validator.next_epoch();
 
-        // Send seek command to worker with new epoch
+        // Send seek command to worker with new epoch.
+        // On wasm32 main thread, `Atomics.wait` is forbidden, so use `try_send()`
+        // to avoid blocking.  The command channel should always have capacity
+        // (bounded(1+) and the worker consumes commands promptly).
+        #[cfg(target_arch = "wasm32")]
+        self.cmd_tx
+            .try_send(AudioCommand::Seek {
+                position,
+                epoch: new_epoch,
+            })
+            .map_err(|_| DecodeError::SeekError("channel closed or full".to_string()))?;
+        #[cfg(not(target_arch = "wasm32"))]
         self.cmd_tx
             .send(AudioCommand::Seek {
                 position,

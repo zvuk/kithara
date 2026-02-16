@@ -362,7 +362,12 @@ where
         CachedAssets::with_options(Arc::new(lease), capacity, self.cache_enabled, false)
     }
 
-    /// Build ephemeral (in-memory) asset store with auto-eviction.
+    /// Build ephemeral (in-memory) asset store.
+    ///
+    /// Uses `remove_on_evict=false` so that resources evicted from the LRU
+    /// cache remain in the underlying `DashMap`. This prevents data loss
+    /// when the number of resources exceeds cache capacity (e.g. HLS with
+    /// 37+ segments and default cache capacity of 5).
     fn build_ephemeral(self) -> MemStore<Ctx> {
         let root_dir = self.root_dir.unwrap_or_else(|| {
             #[cfg(not(target_arch = "wasm32"))]
@@ -392,7 +397,7 @@ where
         let processing = Arc::new(ProcessingAssets::new(evict, process_fn, pool.clone()));
         let lease = LeaseAssets::with_options(processing, cancel, None, false, pool);
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::with_options(Arc::new(lease), capacity, true, true)
+        CachedAssets::with_options(Arc::new(lease), capacity, true, false)
     }
 }
 
@@ -539,14 +544,15 @@ mod tests {
 
     #[rstest]
     #[timeout(Duration::from_secs(5))]
-    fn ephemeral_auto_evicts_on_capacity() {
+    fn ephemeral_retains_data_after_cache_eviction() {
         let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
             .cache_capacity(NonZeroUsize::new(3).unwrap())
             .ephemeral(true)
             .build();
 
-        // Open 4 resources — first should be auto-evicted
+        // Open 4 resources — first is evicted from LRU cache but data
+        // must persist in the underlying DashMap (remove_on_evict=false).
         let keys: Vec<ResourceKey> = (0..4)
             .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
             .collect();
@@ -557,10 +563,18 @@ mod tests {
             res.commit(Some(4)).unwrap();
         }
 
-        // First resource should have been evicted (removed from MemStore).
-        // Re-opening gives a fresh empty resource.
+        // First resource was evicted from LRU cache, but re-opening
+        // must return the SAME committed resource with data intact.
         let reopened = backend.open_resource(&keys[0]).unwrap();
-        assert_eq!(reopened.len(), None, "evicted resource should be gone");
+        assert_eq!(
+            reopened.len(),
+            Some(4),
+            "evicted resource must retain data in ephemeral mode"
+        );
+        let mut buf = [0u8; 4];
+        let n = reopened.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 4);
+        assert_eq!(&buf, b"data");
     }
 
     #[rstest]

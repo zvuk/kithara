@@ -12,8 +12,8 @@ use std::{
 };
 
 use kithara_bufpool::BytePool;
+use kithara_platform::Mutex;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
-use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{

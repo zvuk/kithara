@@ -10,8 +10,8 @@ use std::{
 
 use fallible_iterator::FallibleIterator;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
+use kithara_platform::Mutex;
 use kithara_stream::{Fetch, MediaInfo, Stream, StreamType};
-use parking_lot::Mutex;
 use tracing::{debug, trace, warn};
 
 use super::worker::{AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects};
@@ -547,9 +547,9 @@ mod tests {
 
     use kithara_bufpool::pcm_pool;
     use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec};
+    use kithara_platform::Mutex;
     use kithara_storage::WaitOutcome;
     use kithara_stream::{MediaInfo, Source, Stream, StreamResult, StreamType};
-    use parking_lot::Mutex;
 
     use super::*;
 

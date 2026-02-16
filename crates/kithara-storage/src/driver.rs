@@ -8,7 +8,7 @@
 
 use std::{fmt::Debug, ops::Range, path::Path, sync::Arc};
 
-use parking_lot::{Condvar, Mutex};
+use kithara_platform::{Condvar, Mutex};
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
 

@@ -15,6 +15,7 @@ members = [
     "crates/kithara-assets",
     "crates/kithara-bufpool",
     "crates/kithara-wasm",
+    "crates/kithara-platform",
     "tests",
 ]
 
@@ -99,6 +100,7 @@ kithara-events = { path = "crates/kithara-events", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
+kithara-platform = { path = "crates/kithara-platform", version = "0.1.0" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
 kithara-wasm = { path = "crates/kithara-wasm" }

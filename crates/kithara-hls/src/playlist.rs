@@ -6,8 +6,8 @@
 
 use std::time::Duration;
 
+use kithara_platform::RwLock;
 use kithara_stream::{AudioCodec, ContainerFormat};
-use parking_lot::RwLock;
 use url::Url;
 
 use crate::parsing::SegmentKey;

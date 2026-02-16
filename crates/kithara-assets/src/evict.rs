@@ -3,7 +3,7 @@
 use std::{collections::HashSet, path::Path, sync::Arc};
 
 use kithara_bufpool::BytePool;
-use parking_lot::Mutex;
+use kithara_platform::Mutex;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(not(target_arch = "wasm32"))]

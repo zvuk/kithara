@@ -2,8 +2,8 @@
 
 use std::{num::NonZeroUsize, path::Path, sync::Arc};
 
+use kithara_platform::Mutex;
 use lru::LruCache;
-use parking_lot::Mutex;
 
 use crate::{base::Assets, error::AssetsResult, key::ResourceKey};
 

@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use parking_lot::Mutex;
+use kithara_platform::Mutex;
 
 /// Trait for types that can be reused in a pool.
 ///

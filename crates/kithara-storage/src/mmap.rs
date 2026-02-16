@@ -18,8 +18,8 @@ use std::{
 };
 
 use crossbeam_queue::SegQueue;
+use kithara_platform::Mutex;
 use mmap_io::MemoryMappedFile;
-use parking_lot::Mutex;
 
 use crate::{
     StorageError, StorageResult,

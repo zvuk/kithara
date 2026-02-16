@@ -8,8 +8,8 @@
 use std::{fmt::Debug, hash::Hash, ops::Range, path::Path, sync::Arc};
 
 use kithara_bufpool::BytePool;
+use kithara_platform::Mutex;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageError, StorageResult, WaitOutcome};
-use parking_lot::Mutex;
 
 use crate::{AssetsResult, ResourceKey, base::Assets};
 

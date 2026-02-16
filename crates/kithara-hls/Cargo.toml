@@ -28,7 +28,7 @@ url = { workspace = true }
 async-stream = { workspace = true }
 tracing = { workspace = true }
 dashmap = { workspace = true }
-parking_lot = { workspace = true }
+kithara-platform = { workspace = true }
 crossbeam-queue = { workspace = true }
 rangemap = { workspace = true }
 hotpath = { workspace = true, optional = true }

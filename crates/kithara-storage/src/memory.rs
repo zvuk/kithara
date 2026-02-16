@@ -13,7 +13,7 @@
 
 use std::{ops::Range, path::Path};
 
-use parking_lot::Mutex;
+use kithara_platform::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{

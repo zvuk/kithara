@@ -49,7 +49,7 @@
 </head>
 <body>
     <h1>Kithara HLS Player</h1>
-    <p class="subtitle">Full HLS audio player running in WebAssembly</p>
+    <p class="subtitle">Full HLS audio player running in WebAssembly <span id="build-info" style="color:#555"></span></p>
 
     <div class="row">
         <input type="text" id="url-input"
@@ -122,6 +122,11 @@
         // Step 3: setup
         wasm.setup();
         console.log('[kithara] setup() done');
+
+        // Show build revision on page
+        const bi = wasm.build_info();
+        console.log('[kithara] build:', bi);
+        document.getElementById('build-info').textContent = `(${bi})`;
 
         // Step 4: initialize rayon thread pool via Web Workers.
         // Required for Audio::new() which uses thread_pool.spawn_async() for
@@ -260,10 +265,18 @@
             stopBtn.disabled = true;
         };
 
+        // Show position while dragging, but only seek on release.
+        // oninput fires per-pixel — flooding the bounded(1) command channel
+        // causes seek commands to be silently dropped, desynchronizing epochs.
         seekSlider.oninput = () => {
+            positionEl.textContent = formatTime(parseFloat(seekSlider.value));
+        };
+        seekSlider.onchange = () => {
+            stopFillLoop();
             const posMs = parseFloat(seekSlider.value);
             player.seek(posMs);
             positionEl.textContent = formatTime(posMs);
+            if (player.is_playing()) startFillLoop();
         };
 
         function fillLoop() {

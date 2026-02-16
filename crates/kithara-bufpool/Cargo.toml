@@ -7,7 +7,7 @@ license.workspace = true
 description = "Generic sharded buffer pool for zero-allocation hot paths"
 
 [dependencies]
-parking_lot = { workspace = true }
+kithara-platform = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]

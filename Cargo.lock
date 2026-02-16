@@ -1614,9 +1614,9 @@ dependencies = [
  "hex",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-platform",
  "kithara-storage",
  "lru",
- "parking_lot",
  "rangemap",
  "rstest",
  "serde",
@@ -1650,9 +1650,9 @@ dependencies = [
  "kithara-file",
  "kithara-hls",
  "kithara-net",
+ "kithara-platform",
  "kithara-storage",
  "kithara-stream",
- "parking_lot",
  "reqwest",
  "rodio",
  "rstest",
@@ -1675,7 +1675,7 @@ name = "kithara-bufpool"
 version = "0.1.0"
 dependencies = [
  "hotpath",
- "parking_lot",
+ "kithara-platform",
 ]
 
 [[package]]
@@ -1761,9 +1761,9 @@ dependencies = [
  "kithara-drm",
  "kithara-events",
  "kithara-net",
+ "kithara-platform",
  "kithara-storage",
  "kithara-stream",
- "parking_lot",
  "rangemap",
  "rodio",
  "rstest",
@@ -1857,13 +1857,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-platform"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+]
+
+[[package]]
 name = "kithara-storage"
 version = "0.1.0"
 dependencies = [
  "crossbeam-queue",
  "kithara-bufpool",
+ "kithara-platform",
  "mmap-io",
- "parking_lot",
  "rangemap",
  "rstest",
  "slice_ring_buf",
@@ -1887,7 +1894,6 @@ dependencies = [
  "kithara-net",
  "kithara-storage",
  "memory-stats",
- "parking_lot",
  "rayon",
  "rstest",
  "tempfile",

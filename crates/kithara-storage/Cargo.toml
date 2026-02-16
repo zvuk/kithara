@@ -21,7 +21,7 @@ kithara-bufpool = { workspace = true }
 
 # range tracking + sync primitives (wasm32-compatible)
 rangemap = { workspace = true }
-parking_lot = { workspace = true }
+kithara-platform = { workspace = true }
 crossbeam-queue = { workspace = true }
 
 # mock support (optional)
