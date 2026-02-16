@@ -4,7 +4,7 @@
 mod player;
 
 #[cfg(target_arch = "wasm32")]
-pub use player::{WasmPlayer, load_hls};
+pub use player::{WasmPlayer, load_hls, load_hls_with_media_info};
 
 // Set up panic hook and tracing. Called from JS main thread
 // before any other player operations.

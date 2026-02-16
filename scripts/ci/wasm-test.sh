@@ -2,8 +2,8 @@
 # Run WASM stress tests in headless Chrome with rayon thread pool.
 #
 # Prerequisites:
-#   - wasm-pack: cargo install wasm-pack
-#   - Chrome or Chromium installed
+#   - wasm-bindgen-cli: cargo install wasm-bindgen-cli
+#   - chromedriver installed and in PATH (or set CHROMEDRIVER env var)
 #   - Nightly Rust toolchain (for build-std)
 #
 # Usage:
@@ -43,7 +43,10 @@ for i in $(seq 1 30); do
 done
 
 echo "=== Running WASM stress tests ==="
+CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
 HLS_TEST_URL="${FIXTURE_URL}" \
-    wasm-pack test --headless --chrome tests/
+WASM_BINDGEN_TEST_TIMEOUT=300 \
+cargo test --target wasm32-unknown-unknown \
+    -p kithara-integration-tests --test integration
 
 echo "=== WASM tests passed ==="

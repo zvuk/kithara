@@ -196,6 +196,22 @@ impl WasmPlayer {
 /// which breaks with shared memory. Returns `[channels, sample_rate, duration_ms]`.
 #[wasm_bindgen]
 pub async fn load_hls(url: String) -> Result<Box<[f64]>, JsValue> {
+    load_hls_inner(url, None).await
+}
+
+/// Load HLS with explicit media info hint (for test fixtures that use
+/// formats not auto-detectable from HLS playlist metadata, e.g. WAV).
+pub async fn load_hls_with_media_info(
+    url: String,
+    media_info: kithara_stream::MediaInfo,
+) -> Result<Box<[f64]>, JsValue> {
+    load_hls_inner(url, Some(media_info)).await
+}
+
+async fn load_hls_inner(
+    url: String,
+    media_info: Option<kithara_stream::MediaInfo>,
+) -> Result<Box<[f64]>, JsValue> {
     info!(url = %url, "Loading HLS stream");
 
     let parsed_url: Url = url
@@ -214,7 +230,10 @@ pub async fn load_hls(url: String) -> Result<Box<[f64]>, JsValue> {
             ..Default::default()
         });
 
-    let config = AudioConfig::<Hls>::new(hls_config);
+    let mut config = AudioConfig::<Hls>::new(hls_config);
+    if let Some(info) = media_info {
+        config = config.with_media_info(info);
+    }
 
     info!("Creating Audio pipeline (Audio::new)...");
     let mut audio = Audio::<Stream<Hls>>::new(config)

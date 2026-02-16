@@ -242,7 +242,7 @@ impl Driver for MmapDriver {
                     // Truncate file to final size via ftruncate (no mmap involved).
                     // After atomic rename, the file already has the correct size
                     // so this branch is skipped.
-                    let file_len = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
+                    let file_len = std::fs::metadata(&self.path).map_or(0, |m| m.len());
                     if file_len > len {
                         let f = std::fs::OpenOptions::new()
                             .write(true)
@@ -265,11 +265,7 @@ impl Driver for MmapDriver {
             let is_active = matches!(*mmap_guard, MmapState::Active(_));
             if is_active {
                 *mmap_guard = MmapState::Empty;
-                if self.path.exists()
-                    && std::fs::metadata(&self.path)
-                        .map(|m| m.len() > 0)
-                        .unwrap_or(false)
-                {
+                if self.path.exists() && std::fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
                     let ro = MemoryMappedFile::open_ro(&self.path)?;
                     *mmap_guard = MmapState::Committed(ro);
                 }
@@ -287,11 +283,7 @@ impl Driver for MmapDriver {
             MmapState::Active(_) => {}
             MmapState::Committed(_) | MmapState::Empty => {
                 *mmap_guard = MmapState::Empty;
-                if self.path.exists()
-                    && std::fs::metadata(&self.path)
-                        .map(|m| m.len() > 0)
-                        .unwrap_or(false)
-                {
+                if self.path.exists() && std::fs::metadata(&self.path).is_ok_and(|m| m.len() > 0) {
                     let rw = MemoryMappedFile::open_rw(&self.path)?;
                     *mmap_guard = MmapState::Active(rw);
                 }

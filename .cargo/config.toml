@@ -1,5 +1,5 @@
 [target.wasm32-unknown-unknown]
-runner = "wasm-server-runner"
+runner = "wasm-bindgen-test-runner"
 rustflags = [
     "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
     "-C", "link-arg=--shared-memory",

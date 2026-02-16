@@ -224,8 +224,7 @@ impl HlsDownloader {
             let init_key = ResourceKey::from_url(url);
             let init_cached = backend
                 .open_resource(&init_key)
-                .map(|r| matches!(r.status(), ResourceStatus::Committed { .. }))
-                .unwrap_or(false);
+                .is_ok_and(|r| matches!(r.status(), ResourceStatus::Committed { .. }));
             if !init_cached {
                 return (0, 0);
             }

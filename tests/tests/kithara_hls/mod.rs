@@ -17,5 +17,6 @@ mod stress_chunk_integrity;
 mod stress_seek_abr;
 mod stress_seek_abr_audio;
 mod stress_seek_audio;
+mod stress_seek_lifecycle;
 mod stress_seek_random;
 mod sync_reader_hls_test;

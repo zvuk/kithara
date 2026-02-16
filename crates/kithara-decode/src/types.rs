@@ -91,11 +91,7 @@ impl PcmChunk {
     #[must_use]
     pub fn frames(&self) -> usize {
         let channels = self.meta.spec.channels as usize;
-        if channels == 0 {
-            0
-        } else {
-            self.pcm.len() / channels
-        }
+        self.pcm.len().checked_div(channels).unwrap_or(0)
     }
 
     /// Get reference to raw samples.
