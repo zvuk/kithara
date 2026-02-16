@@ -42,11 +42,11 @@ for i in $(seq 1 30); do
     sleep 1
 done
 
-echo "=== Running WASM stress tests ==="
+echo "=== Running WASM stress tests (nightly, build-std) ==="
 CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
 HLS_TEST_URL="${FIXTURE_URL}" \
 WASM_BINDGEN_TEST_TIMEOUT=300 \
-cargo test --target wasm32-unknown-unknown \
+cargo +nightly test --target wasm32-unknown-unknown \
     -p kithara-integration-tests --test integration
 
 echo "=== WASM tests passed ==="
