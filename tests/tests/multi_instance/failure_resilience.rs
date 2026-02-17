@@ -118,7 +118,7 @@ async fn healthy_instances_survive_cancelled_peers() {
 
     let mut handles: Vec<tokio::task::JoinHandle<Outcome>> = Vec::new();
 
-    // --- Healthy instances (0, 1) ---
+    // Healthy instances (0, 1)
     for i in 0..2 {
         let server = create_server(&wav_data).await;
         let temp = TempDir::new().expect("temp dir");
@@ -139,7 +139,7 @@ async fn healthy_instances_survive_cancelled_peers() {
         }));
     }
 
-    // --- Cancelled instances (2, 3) ---
+    // Cancelled instances (2, 3)
     // These get a cancel token that fires after 500ms, killing the download
     // mid-stream. The audio pipeline should terminate cleanly.
     for i in 2..4 {
@@ -226,7 +226,7 @@ async fn eight_instances_half_cancelled() {
 
     let mut handles: Vec<tokio::task::JoinHandle<Outcome>> = Vec::new();
 
-    // --- 4 healthy instances ---
+    // 4 healthy instances
     for i in 0..4 {
         let server = create_server(&wav_data).await;
         let temp = TempDir::new().expect("temp dir");
@@ -247,7 +247,7 @@ async fn eight_instances_half_cancelled() {
         }));
     }
 
-    // --- 4 cancelled instances ---
+    // 4 cancelled instances
     for i in 4..8 {
         let server = create_server(&wav_data).await;
         let temp = TempDir::new().expect("temp dir");

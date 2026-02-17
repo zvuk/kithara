@@ -26,7 +26,7 @@ tokio-util = { workspace = true }
 rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
 bytes = { workspace = true }
-parking_lot = { workspace = true }
+kithara-platform = { workspace = true }
 fast-interleave = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
@@ -40,13 +40,27 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
 # Enable Apple AudioToolbox hardware decoder (macOS/iOS)
 apple = ["kithara-decode/apple"]
+# Enable WASM AudioWorklet audio output
+web-audio = []
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["full"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true }
+js-sys = { workspace = true }
+web-sys = { workspace = true, features = [
+    "AudioContext", "AudioWorkletNode", "AudioWorkletNodeOptions",
+    "BaseAudioContext", "MessagePort"
+] }
 
 [dev-dependencies]
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 axum = { workspace = true }
 bytes = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["rustls", "stream"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 url = { workspace = true }

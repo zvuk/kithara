@@ -10,8 +10,8 @@ use std::{
 
 use fallible_iterator::FallibleIterator;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
+use kithara_platform::Mutex;
 use kithara_stream::{Fetch, MediaInfo, Stream, StreamType};
-use parking_lot::Mutex;
 use tracing::{debug, trace, warn};
 
 use super::worker::{AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects};
@@ -101,7 +101,7 @@ impl<T: StreamType> OffsetReader<T> {
         // the correct location. This is critical when multiple fallback attempts
         // share the same underlying stream — each one may leave the position
         // in an arbitrary state.
-        let _ = shared.seek(std::io::SeekFrom::Start(base_offset));
+        let _ = shared.seek(SeekFrom::Start(base_offset));
         Self {
             shared,
             base_offset,
@@ -340,17 +340,16 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.cached_media_info = Some(new_info.clone());
         self.base_offset = base_offset;
 
-        match (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset) {
-            Some(new_decoder) => {
-                let new_duration = new_decoder.duration();
-                self.decoder = new_decoder;
-                debug!(?new_duration, base_offset, "Decoder recreated successfully");
-                true
-            }
-            None => {
-                warn!(base_offset, "Failed to recreate decoder");
-                false
-            }
+        if let Some(new_decoder) =
+            (self.decoder_factory)(self.shared_stream.clone(), new_info, base_offset)
+        {
+            let new_duration = new_decoder.duration();
+            self.decoder = new_decoder;
+            debug!(?new_duration, base_offset, "Decoder recreated successfully");
+            true
+        } else {
+            warn!(base_offset, "Failed to recreate decoder");
+            false
         }
     }
 }
@@ -464,11 +463,40 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         }
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "command dispatch with multiple variants"
+    )]
     fn handle_command(&mut self, cmd: Self::Command) {
         match cmd {
             AudioCommand::Seek { position, epoch } => {
                 let stream_pos = self.shared_stream.position();
                 let segment_range = self.shared_stream.current_segment_range();
+
+                // Seek to beginning after ABR switch: reset decoder to offset 0
+                // so V0 segments are accessible. Format change detection will
+                // naturally handle V0→V1 transition at the variant boundary.
+                if position.is_zero() && self.base_offset > 0 {
+                    debug!(
+                        base_offset = self.base_offset,
+                        "seek to start: resetting decoder to offset 0"
+                    );
+                    self.shared_stream.clear_variant_fence();
+                    let probe_info = MediaInfo::new(None, None);
+                    if let Some(new_decoder) =
+                        (self.decoder_factory)(self.shared_stream.clone(), &probe_info, 0)
+                    {
+                        self.decoder = new_decoder;
+                        self.base_offset = 0;
+                        self.cached_media_info = None;
+                        self.pending_format_change = None;
+                        self.epoch.store(epoch, Ordering::Release);
+                        reset_effects(&mut self.effects);
+                        self.emit_event(AudioEvent::SeekComplete { position });
+                        return;
+                    }
+                    warn!("Failed to reset decoder to offset 0, falling through to normal seek");
+                }
 
                 // Only update byte_len for original decoder (no ABR switch).
                 // After ABR switch (base_offset > 0), byte_len is intentionally 0
@@ -544,9 +572,9 @@ mod tests {
 
     use kithara_bufpool::pcm_pool;
     use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec};
+    use kithara_platform::Mutex;
     use kithara_storage::WaitOutcome;
     use kithara_stream::{MediaInfo, Source, Stream, StreamResult, StreamType};
-    use parking_lot::Mutex;
 
     use super::*;
 
@@ -1120,6 +1148,65 @@ mod tests {
 
         let fetch = source.fetch_next();
         assert!(!fetch.is_eof, "Should produce data after seek recovery");
+    }
+
+    /// Seek to 0 after ABR switch resets decoder to offset 0.
+    ///
+    /// After ABR switch (base_offset > 0), seeking to time=0 should:
+    /// 1. Clear variant fence
+    /// 2. Recreate decoder at offset 0 (not base_offset)
+    /// 3. Reset cached_media_info so format change detection picks up V0→V1
+    /// 4. Reset base_offset to 0
+    ///
+    /// Without this, OffsetReader translates seek(0) to base_offset, making
+    /// V0 segments unreachable — the flaky test root cause.
+    #[test]
+    fn seek_to_zero_after_abr_switch_resets_to_full_track() {
+        let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+
+        // Current decoder: V3 at base_offset 863137
+        let v3_chunks = vec![make_chunk(v3_spec(), 2048); 3];
+        let v3_decoder = MockDecoder::new(v3_spec(), v3_chunks);
+
+        // Factory: V0 decoder at offset 0
+        let v0_chunks = vec![make_chunk(v0_spec(), 1024); 5];
+        let v0_decoder = MockDecoder::new(v0_spec(), v0_chunks);
+        let (factory, factory_offsets) = make_tracking_factory(vec![Box::new(v0_decoder)]);
+
+        let epoch = Arc::new(AtomicU64::new(0));
+        let mut source = StreamAudioSource::new(
+            shared,
+            Box::new(v3_decoder),
+            factory,
+            Some(v3_info()),
+            Arc::clone(&epoch),
+            vec![],
+        );
+
+        // Simulate that ABR switch already happened
+        source.base_offset = 863137;
+        source.cached_media_info = Some(v3_info());
+
+        // Seek to 0 — should reset decoder to offset 0
+        source.handle_command(AudioCommand::Seek {
+            position: Duration::ZERO,
+            epoch: 1,
+        });
+
+        assert_eq!(
+            source.current_base_offset(),
+            0,
+            "base_offset should be reset to 0 after seek-to-zero"
+        );
+        assert_eq!(epoch.load(Ordering::Acquire), 1);
+
+        let offsets = factory_offsets.lock();
+        assert_eq!(offsets.len(), 1, "Factory should be called once");
+        assert_eq!(offsets[0], 0, "Factory should be called with offset 0");
+
+        // Should be able to produce data from V0 decoder
+        let fetch = source.fetch_next();
+        assert!(!fetch.is_eof, "Should produce V0 data after reset");
     }
 
     /// **BASELINE TEST** — reproduces the exact production bug.

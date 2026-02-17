@@ -15,4 +15,7 @@ cargo clippy --workspace -- -D warnings
 echo "==> running style linter..."
 bash "$SCRIPT_DIR/lint-style.sh"
 
+echo "==> checking architecture constraints..."
+bash "$SCRIPT_DIR/check-arch.sh"
+
 echo "==> all lint checks passed."

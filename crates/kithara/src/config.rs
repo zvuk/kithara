@@ -114,6 +114,11 @@ impl ResourceConfig {
     ///
     /// Parses the input as a URL first. If parsing fails, treats it as a local
     /// file path (must be absolute). A `file://` URL is normalized to a `Path`.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError::InvalidData` if the input is an invalid `file://` URL
+    /// or a non-absolute file path.
     pub fn new<S: AsRef<str>>(input: S) -> Result<Self, DecodeError> {
         let trimmed = input.as_ref().trim();
 
@@ -171,6 +176,7 @@ impl ResourceConfig {
     }
 
     /// Set cancellation token.
+    #[must_use]
     pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
         self.cancel = Some(cancel);
         self
@@ -183,6 +189,7 @@ impl ResourceConfig {
     }
 
     /// Set shared byte pool for temporary buffers (probe, etc.).
+    #[must_use]
     pub fn with_byte_pool(mut self, pool: BytePool) -> Self {
         self.byte_pool = Some(pool);
         self
@@ -192,24 +199,28 @@ impl ResourceConfig {
     ///
     /// The pool is shared across the entire audio chain, eliminating
     /// per-call allocations in `read_planar` and internal decode buffers.
+    #[must_use]
     pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
         self.pcm_pool = Some(pool);
         self
     }
 
     /// Set target sample rate of the audio host (for resampling).
+    #[must_use]
     pub fn with_host_sample_rate(mut self, sample_rate: NonZeroU32) -> Self {
         self.host_sample_rate = Some(sample_rate);
         self
     }
 
     /// Set resampling quality preset.
+    #[must_use]
     pub fn with_resampler_quality(mut self, quality: ResamplerQuality) -> Self {
         self.resampler_quality = quality;
         self
     }
 
     /// Set number of chunks to buffer before signaling preload readiness.
+    #[must_use]
     pub fn with_preload_chunks(mut self, chunks: usize) -> Self {
         self.preload_chunks = chunks.max(1);
         self
@@ -219,6 +230,7 @@ impl ResourceConfig {
     ///
     /// - `Some(n)` — enable backpressure, pause when ahead by n bytes
     /// - `None` — disable backpressure, download as fast as possible
+    #[must_use]
     pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
         self.look_ahead_bytes = bytes;
         self
@@ -226,6 +238,7 @@ impl ResourceConfig {
 
     /// Set storage options.
     #[cfg(any(feature = "file", feature = "hls"))]
+    #[must_use]
     pub fn with_store(mut self, store: StoreOptions) -> Self {
         self.store = store;
         self
@@ -233,6 +246,7 @@ impl ResourceConfig {
 
     /// Set network options.
     #[cfg(any(feature = "file", feature = "hls"))]
+    #[must_use]
     pub fn with_net(mut self, net: NetOptions) -> Self {
         self.net = net;
         self
@@ -240,6 +254,7 @@ impl ResourceConfig {
 
     /// Set ABR options.
     #[cfg(feature = "hls")]
+    #[must_use]
     pub fn with_abr(mut self, abr: kithara_abr::AbrOptions) -> Self {
         self.abr = abr;
         self
@@ -247,6 +262,7 @@ impl ResourceConfig {
 
     /// Set encryption key options.
     #[cfg(feature = "hls")]
+    #[must_use]
     pub fn with_keys(mut self, keys: kithara_hls::KeyOptions) -> Self {
         self.keys = keys;
         self
@@ -254,6 +270,7 @@ impl ResourceConfig {
 
     /// Set base URL for resolving relative HLS URLs.
     #[cfg(feature = "hls")]
+    #[must_use]
     pub fn with_hls_base_url(mut self, base_url: Url) -> Self {
         self.hls_base_url = Some(base_url);
         self
@@ -262,6 +279,7 @@ impl ResourceConfig {
     /// Set thread pool for background work (decode, probe, downloads).
     ///
     /// The pool is shared across all components. Defaults to the global rayon pool.
+    #[must_use]
     pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
         self.thread_pool = pool;
         self

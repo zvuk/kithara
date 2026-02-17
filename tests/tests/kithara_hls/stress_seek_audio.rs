@@ -11,7 +11,7 @@
 //! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
 //! No external network required.
 
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
@@ -74,9 +74,11 @@ fn phase_distance(a: usize, b: usize) -> usize {
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 6. Final seek near end → read to EOF
 #[rstest]
+#[case::mmap(false)]
+#[case::ephemeral(true)]
 #[timeout(Duration::from_secs(120))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn stress_seek_audio_hls_wav() {
+async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
@@ -86,7 +88,7 @@ async fn stress_seek_audio_hls_wav() {
         }))
         .try_init();
 
-    // --- Step 1: Generate WAV ---
+    // Step 1: Generate WAV
     let wav_data = create_saw_wav(TOTAL_BYTES);
     let expected_dur = expected_duration_secs();
     info!(
@@ -95,7 +97,7 @@ async fn stress_seek_audio_hls_wav() {
         "Generated saw-tooth WAV"
     );
 
-    // --- Step 2: Spawn HLS server with custom WAV data ---
+    // Step 2: Spawn HLS server with custom WAV data
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
     let server = HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: SEGMENT_COUNT,
@@ -109,17 +111,27 @@ async fn stress_seek_audio_hls_wav() {
     let url = server.url("/master.m3u8").expect("url");
     info!(%url, segments = SEGMENT_COUNT, "HLS server ready");
 
-    // --- Step 3: Create Audio<Stream<Hls>> ---
+    // Step 3: Create Audio<Stream<Hls>>
     let temp_dir = TempDir::new().expect("temp dir");
     let cancel = CancellationToken::new();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
+    let mut store = StoreOptions::new(temp_dir.path());
+    if ephemeral {
+        // Ephemeral mode auto-evicts MemResources from LRU cache.
+        // Increase capacity so all segments remain accessible for random seeks.
+        store.cache_capacity = Some(NonZeroUsize::new(SEGMENT_COUNT + 10).expect("nonzero"));
+    }
+
+    let mut hls_config = HlsConfig::new(url)
+        .with_store(store)
         .with_cancel(cancel)
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });
+    if ephemeral {
+        hls_config = hls_config.with_ephemeral(true);
+    }
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
@@ -127,7 +139,7 @@ async fn stress_seek_audio_hls_wav() {
         .await
         .expect("create Audio<Stream<Hls>> pipeline");
 
-    // --- Step 4: Verify duration ---
+    // Step 4: Verify duration
     let total_duration = audio.duration().expect("WAV should report known duration");
     let total_secs = total_duration.as_secs_f64();
     info!(total_secs, expected_dur, "Stream duration");
@@ -144,7 +156,7 @@ async fn stress_seek_audio_hls_wav() {
         "Audio spec"
     );
 
-    // --- Steps 5-6 in blocking thread ---
+    // Steps 5-6 in blocking thread
     let result = tokio::task::spawn_blocking(move || {
         // Compute chunk size: ~50ms of audio
         let chunk_duration_secs = 0.05;
@@ -195,7 +207,7 @@ async fn stress_seek_audio_hls_wav() {
 
             let frames = n / channels;
 
-            // === Level 1: Integrity ===
+            // Level 1: Integrity
             for (j, &sample) in buf[..n].iter().enumerate() {
                 assert!(
                     sample.is_finite() && (-1.0..=1.0).contains(&sample),
@@ -217,7 +229,7 @@ async fn stress_seek_audio_hls_wav() {
                 }
             }
 
-            // === Level 2: Continuity ===
+            // Level 2: Continuity
             // Consecutive frames should differ by exactly 1 step in the saw-tooth,
             // or wrap from max to min.
             if frames >= 2 {
@@ -242,7 +254,7 @@ async fn stress_seek_audio_hls_wav() {
                 }
             }
 
-            // === Level 3: Position ===
+            // Level 3: Position
             // First decoded sample should correspond to the seek position.
             //
             // Symphonia's WAV reader returns packets of 1152 frames.

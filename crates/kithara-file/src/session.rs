@@ -82,6 +82,7 @@ pub struct Progress {
 }
 
 impl Progress {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             read_pos: std::sync::atomic::AtomicU64::new(0),
@@ -225,7 +226,7 @@ impl kithara_stream::Source for FileSource {
 
     fn wait_range(
         &mut self,
-        range: std::ops::Range<u64>,
+        range: Range<u64>,
     ) -> kithara_stream::StreamResult<WaitOutcome, SourceError> {
         use kithara_stream::StreamError;
 

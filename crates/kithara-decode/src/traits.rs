@@ -23,7 +23,7 @@ use crate::{
 /// that can be used as a trait object (`Box<dyn DecoderInput>`).
 ///
 /// A blanket implementation is provided for all types satisfying the bounds.
-pub trait DecoderInput: Read + Seek + Send + Sync {}
+pub(crate) trait DecoderInput: Read + Seek + Send + Sync {}
 
 impl<T: Read + Seek + Send + Sync> DecoderInput for T {}
 
@@ -55,7 +55,7 @@ impl CodecType for Flac {
 }
 
 /// ALAC codec marker.
-pub struct Alac;
+pub(crate) struct Alac;
 impl CodecType for Alac {
     const CODEC: AudioCodec = AudioCodec::Alac;
 }
@@ -78,7 +78,7 @@ impl CodecType for Vorbis {
     any(test, feature = "test-utils"),
     unimock(api = AudioDecoderMock, type Config = (); type Source = Box<dyn DecoderInput>;)
 )]
-pub trait AudioDecoder: Send + 'static {
+pub(crate) trait AudioDecoder: Send + 'static {
     /// Configuration type specific to this decoder implementation.
     type Config: Default + Send;
 
@@ -147,12 +147,21 @@ pub trait InnerDecoder: Send + 'static {
     /// Decode the next chunk of PCM data.
     ///
     /// Returns `Ok(Some(chunk))` with PCM data, or `Ok(None)` at end of stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::DecodeError`] if decoding fails.
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>>;
 
     /// Get the PCM output specification.
     fn spec(&self) -> PcmSpec;
 
     /// Seek to a time position.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::DecodeError::SeekFailed`] if seeking is not supported
+    /// or the position is invalid.
     fn seek(&mut self, pos: Duration) -> DecodeResult<()>;
 
     /// Update the byte length reported to the underlying media source.

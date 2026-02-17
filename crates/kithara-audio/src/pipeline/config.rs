@@ -51,7 +51,7 @@ pub struct AudioConfig<T: StreamType> {
     /// When `Some`, overrides the stream config pool.
     pub thread_pool: Option<ThreadPool>,
     /// Unified event bus (optional — if not provided, one is created internally).
-    pub(super) bus: Option<EventBus>,
+    pub bus: Option<EventBus>,
 }
 
 impl<T: StreamType> AudioConfig<T> {

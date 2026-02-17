@@ -18,6 +18,7 @@ pub struct DecryptContext {
 
 impl DecryptContext {
     /// Create a new decryption context.
+    #[must_use]
     pub fn new(key: [u8; 16], iv: [u8; 16]) -> Self {
         Self { key, iv }
     }

@@ -37,6 +37,7 @@ impl ResourceKey {
     }
 
     /// Extracts the relative path (last path segment) from a URL.
+    #[must_use]
     pub fn from_url(url: &Url) -> Self {
         let rel_path = url
             .path_segments()
@@ -48,11 +49,13 @@ impl ResourceKey {
     }
 
     /// Returns true if this is an absolute path key.
+    #[must_use]
     pub fn is_absolute(&self) -> bool {
         matches!(self, Self::Absolute(_))
     }
 
     /// Returns the absolute path if this is an Absolute key.
+    #[must_use]
     pub fn as_absolute_path(&self) -> Option<&Path> {
         match self {
             Self::Absolute(p) => Some(p),
@@ -74,6 +77,7 @@ impl ResourceKey {
 /// with the same canonical URL but different names produce distinct roots.
 /// This is useful when URLs differ only in query parameters (which are
 /// stripped during canonicalization).
+#[must_use]
 pub fn asset_root_for_url(url: &Url, name: Option<&str>) -> String {
     // Use canonical form for consistent hashing.
     // Fall back to raw URL if canonicalization fails (e.g., file:// URLs).
@@ -95,6 +99,10 @@ pub fn asset_root_for_url(url: &Url, name: Option<&str>) -> String {
 /// - Removes query parameters and fragments
 /// - Normalizes scheme and host to lowercase
 /// - Removes default ports (80 for HTTP, 443 for HTTPS)
+///
+/// # Errors
+///
+/// Returns `AssetsError::MissingComponent` if the URL lacks a scheme or host.
 pub fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
     // Validate that URL has required components for asset identification
     if url.scheme().is_empty() {

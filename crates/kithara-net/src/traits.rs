@@ -15,8 +15,20 @@ use crate::{
     types::{Headers, RangeSpec, RetryPolicy},
 };
 
+/// Byte stream type alias.
+///
+/// On native: requires `Send` (multi-threaded tokio runtime).
+/// On wasm32: no `Send` bound (JsValue-based streams are `!Send`).
+#[cfg(not(target_arch = "wasm32"))]
 pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>> + Send>>;
+#[cfg(target_arch = "wasm32")]
+pub type ByteStream = Pin<Box<dyn Stream<Item = Result<Bytes, NetError>>>>;
 
+/// HTTP networking trait.
+///
+/// On native: requires `Send + Sync`, async methods produce `Send` futures.
+/// On wasm32: no `Send + Sync` bounds (reqwest types contain `JsValue` which is `!Send`).
+#[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(any(test, feature = "test-utils"), unimock(api = NetMock))]
 #[async_trait]
 pub trait Net: Send + Sync {
@@ -38,6 +50,20 @@ pub trait Net: Send + Sync {
     ///
     /// This is intended for lightweight metadata probes (e.g. `Content-Length`,
     /// `Accept-Ranges`, `Content-Type`). Implementations should return response headers.
+    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError>;
+}
+
+#[cfg(target_arch = "wasm32")]
+#[async_trait(?Send)]
+pub trait Net {
+    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError>;
+    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError>;
+    async fn get_range(
+        &self,
+        url: Url,
+        range: RangeSpec,
+        headers: Option<Headers>,
+    ) -> Result<ByteStream, NetError>;
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError>;
 }
 

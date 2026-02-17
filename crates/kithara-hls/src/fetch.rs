@@ -9,9 +9,9 @@ use futures::StreamExt;
 use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, HttpClient, Net};
+use kithara_platform::{MaybeSend, MaybeSync, RwLock};
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{ContainerFormat, Writer, WriterItem};
-use parking_lot::RwLock;
 use tokio::sync::OnceCell;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
@@ -39,6 +39,7 @@ pub enum SegmentType {
 
 impl SegmentType {
     /// Get media segment index, or None for init segment.
+    #[must_use]
     pub fn media_index(self) -> Option<usize> {
         match self {
             Self::Media(idx) => Some(idx),
@@ -74,7 +75,7 @@ pub enum FetchResult {
 /// Generic segment loader.
 #[expect(async_fn_in_trait)]
 #[cfg_attr(test, unimock::unimock(api = LoaderMock))]
-pub trait Loader: Send + Sync {
+pub trait Loader: MaybeSend + MaybeSync {
     /// Load media segment and return metadata with real size (after processing).
     async fn load_media_segment(
         &self,
@@ -175,7 +176,7 @@ impl<N: Net> FetchManager<N> {
         &self.backend
     }
 
-    // ---- Low-level fetch ----
+    // Low-level fetch
 
     pub async fn fetch_playlist(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
         self.fetch_atomic_internal(url, rel_path, None, "playlist")
@@ -277,7 +278,7 @@ impl<N: Net> FetchManager<N> {
         Ok(FetchResult::Active(writer, res))
     }
 
-    // ---- Playlist management ----
+    // Playlist management
 
     pub async fn master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
         let master = self
@@ -343,7 +344,7 @@ impl<N: Net> FetchManager<N> {
         parse(&bytes)
     }
 
-    // ---- DRM helpers ----
+    // DRM helpers
 
     /// Resolve decryption context for a segment.
     ///
@@ -351,7 +352,7 @@ impl<N: Net> FetchManager<N> {
     /// `None` for unencrypted segments or unsupported methods.
     async fn resolve_decrypt_context(
         &self,
-        key: Option<&crate::parsing::SegmentKey>,
+        key: Option<&SegmentKey>,
         segment_url: &Url,
         sequence: u64,
     ) -> HlsResult<Option<DecryptContext>> {
@@ -398,7 +399,7 @@ impl<N: Net> FetchManager<N> {
         Ok(Some(DecryptContext::new(key_bytes, iv)))
     }
 
-    // ---- Init segment (OnceCell-deduped) ----
+    // Init segment (OnceCell-deduped)
 
     /// Download init segment for a variant. No race recovery needed — `OnceCell`
     /// guarantees exactly one caller performs the download.
@@ -489,7 +490,7 @@ impl<N: Net> FetchManager<N> {
         Ok(meta.clone())
     }
 
-    // ---- Loader helpers ----
+    // Loader helpers
 
     fn master_url(&self) -> HlsResult<&Url> {
         self.master_url
@@ -663,7 +664,7 @@ mod tests {
             .build()
     }
 
-    // ---- FetchManager tests ----
+    // FetchManager tests
 
     #[tokio::test]
     async fn test_fetch_playlist_with_mock_net() {
@@ -844,7 +845,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    // ---- Loader tests ----
+    // Loader tests
 
     fn create_test_meta(variant: usize, segment_index: usize, len: u64) -> SegmentMeta {
         SegmentMeta {
@@ -909,7 +910,7 @@ mod tests {
         assert_eq!(meta2.len, 300_000);
     }
 
-    // ---- Partial segment tests ----
+    // Partial segment tests
 
     #[tokio::test]
     async fn test_load_media_segment_stream_error_returns_err() {

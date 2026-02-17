@@ -268,8 +268,7 @@ impl DecoderFactory {
             "flac" => Some(AudioCodec::Flac),
             "ogg" | "oga" => Some(AudioCodec::Vorbis),
             "opus" => Some(AudioCodec::Opus),
-            "wav" | "wave" => Some(AudioCodec::Pcm),
-            "aiff" | "aif" => Some(AudioCodec::Pcm),
+            "wav" | "wave" | "aiff" | "aif" => Some(AudioCodec::Pcm),
             "caf" => Some(AudioCodec::Alac),
             _ => None,
         }
@@ -313,11 +312,12 @@ impl DecoderFactory {
     fn codec_from_container(container: ContainerFormat) -> Option<AudioCodec> {
         match container {
             ContainerFormat::MpegAudio => Some(AudioCodec::Mp3),
-            ContainerFormat::Adts => Some(AudioCodec::AacLc),
+            ContainerFormat::Adts | ContainerFormat::Fmp4 | ContainerFormat::MpegTs => {
+                Some(AudioCodec::AacLc)
+            }
             ContainerFormat::Flac => Some(AudioCodec::Flac),
             ContainerFormat::Ogg => Some(AudioCodec::Vorbis),
             ContainerFormat::Wav => Some(AudioCodec::Pcm),
-            ContainerFormat::Fmp4 | ContainerFormat::MpegTs => Some(AudioCodec::AacLc),
             ContainerFormat::Caf => Some(AudioCodec::Alac),
             ContainerFormat::Mkv => None, // Could be anything
         }
@@ -332,6 +332,14 @@ impl DecoderFactory {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
+        use crate::traits::CodecType;
+
+        /// PCM codec marker for WAV files.
+        struct Pcm;
+        impl CodecType for Pcm {
+            const CODEC: AudioCodec = AudioCodec::Pcm;
+        }
+
         let source: Box<dyn crate::traits::DecoderInput> = Box::new(source);
         match codec {
             AudioCodec::Mp3 => {
@@ -354,18 +362,11 @@ impl DecoderFactory {
                 let decoder = Symphonia::<Alac>::create(source, config)?;
                 Ok(Box::new(decoder))
             }
-            AudioCodec::Opus => Err(DecodeError::UnsupportedCodec(codec)),
             AudioCodec::Pcm => {
-                // Use PCM marker type for WAV files
-                use crate::traits::CodecType;
-                struct Pcm;
-                impl CodecType for Pcm {
-                    const CODEC: AudioCodec = AudioCodec::Pcm;
-                }
                 let decoder = Symphonia::<Pcm>::create(source, config)?;
                 Ok(Box::new(decoder))
             }
-            AudioCodec::Adpcm => Err(DecodeError::UnsupportedCodec(codec)),
+            AudioCodec::Opus | AudioCodec::Adpcm => Err(DecodeError::UnsupportedCodec(codec)),
         }
     }
 
@@ -450,6 +451,11 @@ impl DecoderFactory {
     /// delegates entirely to Symphonia's format detection. Useful after ABR
     /// variant switches when the container format reported by HLS metadata
     /// doesn't match the actual data (e.g., WAV served via HLS).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if Symphonia's probe fails to detect the format or
+    /// decoder creation fails.
     pub fn create_with_symphonia_probe<R>(
         source: R,
         config: DecoderConfig,
@@ -457,6 +463,13 @@ impl DecoderFactory {
     where
         R: Read + Seek + Send + Sync + 'static,
     {
+        // Dummy codec marker — actual codec is determined by Symphonia's probe.
+        use crate::traits::CodecType;
+        struct ProbeAny;
+        impl CodecType for ProbeAny {
+            const CODEC: AudioCodec = AudioCodec::Pcm;
+        }
+
         tracing::debug!("Attempting Symphonia native probe (no codec hints)");
 
         let symphonia_config = SymphoniaConfig {
@@ -471,13 +484,6 @@ impl DecoderFactory {
             pcm_pool: config.pcm_pool,
         };
 
-        // Use Pcm as a dummy codec marker — the actual codec is determined
-        // by Symphonia's probe from the data itself.
-        use crate::traits::CodecType;
-        struct ProbeAny;
-        impl CodecType for ProbeAny {
-            const CODEC: AudioCodec = AudioCodec::Pcm;
-        }
         let source: Box<dyn crate::traits::DecoderInput> = Box::new(source);
         let decoder = Symphonia::<ProbeAny>::create(source, symphonia_config)?;
         Ok(Box::new(decoder))

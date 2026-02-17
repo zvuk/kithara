@@ -44,6 +44,11 @@ impl Resource {
     /// Auto-detects the stream type from the URL:
     /// - URLs ending with `.m3u8` -> HLS stream
     /// - All other URLs -> progressive file download
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if source type detection fails, or if the underlying
+    /// audio stream cannot be created (network failure, invalid format, etc.).
     pub async fn new(config: ResourceConfig) -> DecodeResult<Self> {
         let source_type = SourceType::detect(&config.src)?;
         match source_type {
@@ -140,6 +145,7 @@ impl Resource {
     ///
     /// Returns a receiver for all events published to the bus,
     /// including audio, file, and HLS events.
+    #[must_use]
     pub fn subscribe(&self) -> broadcast::Receiver<Event> {
         self.bus.subscribe()
     }
@@ -147,6 +153,7 @@ impl Resource {
     /// Get a reference to the underlying `EventBus`.
     ///
     /// Useful for passing to downstream components that also publish events.
+    #[must_use]
     pub fn event_bus(&self) -> &EventBus {
         &self.bus
     }
@@ -162,31 +169,41 @@ impl Resource {
     }
 
     /// Seek to position.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the seek position is out of range or the underlying
+    /// stream does not support seeking.
     pub fn seek(&mut self, position: Duration) -> DecodeResult<()> {
         self.inner.seek(position)
     }
 
     /// Get current PCM specification.
+    #[must_use]
     pub fn spec(&self) -> PcmSpec {
         self.inner.spec()
     }
 
     /// Check if end of stream has been reached.
+    #[must_use]
     pub fn is_eof(&self) -> bool {
         self.inner.is_eof()
     }
 
     /// Get current playback position.
+    #[must_use]
     pub fn position(&self) -> Duration {
         self.inner.position()
     }
 
     /// Get total duration (if known).
+    #[must_use]
     pub fn duration(&self) -> Option<Duration> {
         self.inner.duration()
     }
 
     /// Get track metadata.
+    #[must_use]
     pub fn metadata(&self) -> &TrackMetadata {
         self.inner.metadata()
     }

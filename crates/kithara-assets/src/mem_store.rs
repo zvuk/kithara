@@ -79,7 +79,7 @@ impl Assets for MemAssetStore {
             return Err(AssetsError::InvalidKey);
         }
 
-        let mem = Resource::open(self.cancel.clone(), MemOptions { initial_data: None })
+        let mem = Resource::open(self.cancel.clone(), MemOptions::default())
             .map_err(AssetsError::Storage)?;
         self.resources.insert(key.clone(), mem.clone());
         Ok(StorageResource::Mem(mem))

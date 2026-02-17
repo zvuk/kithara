@@ -14,13 +14,21 @@ members = [
     "crates/kithara-storage",
     "crates/kithara-assets",
     "crates/kithara-bufpool",
+    "crates/kithara-wasm",
+    "crates/kithara-platform",
+    "crates/kithara-play",
     "tests",
 ]
+
+[workspace.lints.rust]
+unreachable_pub = "warn"
+unused_qualifications = "warn"
 
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 
 [workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
 unwrap_used = "deny"
 allow_attributes = "deny"
 doc_markdown = "warn"
@@ -30,20 +38,37 @@ semicolon_if_nothing_returned = "warn"
 missing_fields_in_debug = "warn"
 use_self = "warn"
 impl_trait_in_params = "warn"
-missing_panics_doc = "warn"
 explicit_iter_loop = "warn"
 explicit_into_iter_loop = "warn"
 redundant_closure_for_method_calls = "warn"
 cloned_instead_of_copied = "warn"
 flat_map_option = "warn"
 manual_let_else = "warn"
-needless_pass_by_value = "warn"
-trivially_copy_pass_by_ref = "warn"
 inconsistent_struct_constructor = "warn"
 map_unwrap_or = "warn"
 mut_mut = "warn"
 needless_for_each = "warn"
 match_wildcard_for_single_variants = "warn"
+redundant_else = "warn"
+items_after_statements = "warn"
+single_match_else = "warn"
+match_same_arms = "warn"
+needless_pass_by_value = "warn"
+trivially_copy_pass_by_ref = "warn"
+unused_self = "warn"
+unnecessary_wraps = "warn"
+option_if_let_else = "warn"
+or_fun_call = "warn"
+missing_panics_doc = "warn"
+missing_errors_doc = "warn"
+must_use_candidate = "warn"
+cast_lossless = "warn"
+cast_possible_truncation = "warn"
+cast_sign_loss = "warn"
+cast_precision_loss = "warn"
+derive_partial_eq_without_eq = "warn"
+significant_drop_tightening = "warn"
+cognitive_complexity = "warn"
 
 [workspace.metadata.kithara]
 # Single place to document workspace-wide tool expectations.
@@ -81,31 +106,35 @@ kithara-events = { path = "crates/kithara-events", version = "0.1.0" }
 kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
+kithara-platform = { path = "crates/kithara-platform", version = "0.1.0" }
+kithara-play = { path = "crates/kithara-play", version = "0.1.0" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
+kithara-wasm = { path = "crates/kithara-wasm" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.3.1"
 unimock = { version = "0.6", features = ["std"] }
 
 # async/runtime
-tokio = { version = "1.49.0", features = ["full"] }
-tokio-util = { version = "0.7.18", features = ["full"] }
+tokio = { version = "1.49.0", default-features = false, features = ["sync", "macros", "rt"] }
+tokio-util = { version = "0.7.18", default-features = false }
 tokio-stream = "0.1.18"
 futures = "0.3.31"
 
 # thread pool
-rayon = "1.10"
+rayon = { version = "1.10", features = ["web_spin_lock"] }
 
 # channels/buffers
 kanal = "0.1.1"
 bytes = "1.11.1"
 ringbuf = "0.4.8"
+slice_ring_buf = "0.3"
 async-stream = "0.3.6"
-parking_lot = "0.12"
+parking_lot = { version = "0.12", features = ["nightly"] }
 crossbeam-queue = "0.3"
 
 # http/url
-reqwest = { version = "0.13.2", default-features = false, features = ["rustls", "stream"] }
+reqwest = { version = "0.13.2", default-features = false }
 url = "2.5.8"
 axum = "0.8.8"
 
@@ -127,6 +156,18 @@ smallvec = "1"
 thiserror = "2.0.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt"] }
+tracing-wasm = "0.2"
+web-time = "1.1"
+gloo-timers = { version = "0.3", features = ["futures"] }
+console_error_panic_hook = "0.1"
+
+# wasm bindings
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+wasm-bindgen-rayon = { version = "1.2", features = ["no-bundler"] }
+wasm-bindgen-test = "0.3"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Blob", "Document", "Element", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "Window"] }
 
 # serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -141,6 +182,7 @@ cbc = "0.1.2"
 uuid = { version = "1", features = ["v4"] }
 sha2 = "0.10.9"
 tower = "0.5.3"
+tower-http = { version = "0.6", features = ["cors"] }
 tempfile = "3.25.0"
 
 # async traits
@@ -167,3 +209,9 @@ core-foundation = "0.10"
 core-foundation-sys = "0.8"
 
 # Optional: unify lint settings later via workspace.metadata or deny.toml.
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "z"
+lto = "fat"
+codegen-units = 1

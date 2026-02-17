@@ -14,48 +14,48 @@ use rangemap::RangeSet;
 use tracing::debug;
 use url::Url;
 
-// ---- LoadedSegment ----
+// LoadedSegment
 
 /// A segment that has been downloaded and placed in the virtual byte stream.
 #[derive(Debug, Clone)]
-pub struct LoadedSegment {
+pub(crate) struct LoadedSegment {
     /// Variant index in the master playlist.
-    pub variant: usize,
+    pub(crate) variant: usize,
     /// Segment index within the variant's media playlist.
-    pub segment_index: usize,
+    pub(crate) segment_index: usize,
     /// Byte offset of this segment in the virtual stream.
-    pub byte_offset: u64,
+    pub(crate) byte_offset: u64,
     /// Size of the init segment in bytes (0 if no init).
-    pub init_len: u64,
+    pub(crate) init_len: u64,
     /// Size of the media segment in bytes.
-    pub media_len: u64,
+    pub(crate) media_len: u64,
     /// Absolute URL of the init segment (fMP4 only).
-    pub init_url: Option<Url>,
+    pub(crate) init_url: Option<Url>,
     /// Absolute URL of the media segment.
-    pub media_url: Url,
+    pub(crate) media_url: Url,
 }
 
 impl LoadedSegment {
     /// Total size of this segment (init + media).
-    pub fn total_len(&self) -> u64 {
+    pub(crate) fn total_len(&self) -> u64 {
         self.init_len + self.media_len
     }
 
     /// Byte offset just past the end of this segment.
-    pub fn end_offset(&self) -> u64 {
+    pub(crate) fn end_offset(&self) -> u64 {
         self.byte_offset + self.total_len()
     }
 
     /// Whether the given byte offset falls within this segment.
-    pub fn contains(&self, offset: u64) -> bool {
+    pub(crate) fn contains(&self, offset: u64) -> bool {
         offset >= self.byte_offset && offset < self.end_offset()
     }
 }
 
-// ---- DownloadState ----
+// DownloadState
 
 /// Index of loaded segments, ordered by byte offset for O(log n) lookups.
-pub struct DownloadState {
+pub(crate) struct DownloadState {
     /// `byte_offset` -> segment (ordered, O(log n) lookup).
     entries: BTreeMap<u64, LoadedSegment>,
     /// (variant, `segment_index`) for O(1) "is loaded?" checks.
@@ -68,7 +68,7 @@ pub struct DownloadState {
 
 impl DownloadState {
     /// Create an empty download state.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             entries: BTreeMap::new(),
             loaded_keys: HashSet::new(),
@@ -78,7 +78,7 @@ impl DownloadState {
     }
 
     /// Add a loaded segment to the index.
-    pub fn push(&mut self, segment: LoadedSegment) {
+    pub(crate) fn push(&mut self, segment: LoadedSegment) {
         let offset = segment.byte_offset;
         let end = segment.end_offset();
 
@@ -101,7 +101,7 @@ impl DownloadState {
     ///
     /// Uses `BTreeMap::range(..=offset)` to find the last entry at or before
     /// the offset, then checks if the offset falls within that segment.
-    pub fn find_at_offset(&self, offset: u64) -> Option<&LoadedSegment> {
+    pub(crate) fn find_at_offset(&self, offset: u64) -> Option<&LoadedSegment> {
         self.entries
             .range(..=offset)
             .next_back()
@@ -110,7 +110,7 @@ impl DownloadState {
     }
 
     /// The most recently pushed segment.
-    pub fn last(&self) -> Option<&LoadedSegment> {
+    pub(crate) fn last(&self) -> Option<&LoadedSegment> {
         self.last_offset
             .and_then(|offset| self.entries.get(&offset))
     }
@@ -119,12 +119,12 @@ impl DownloadState {
     ///
     /// Used to find the start of a new variant after ABR switch -- this is where
     /// init data (ftyp/moov) lives for the new variant.
-    pub fn first_segment_of_variant(&self, variant: usize) -> Option<&LoadedSegment> {
+    pub(crate) fn first_segment_of_variant(&self, variant: usize) -> Option<&LoadedSegment> {
         self.entries.values().find(|seg| seg.variant == variant)
     }
 
     /// Number of loaded segments.
-    pub fn num_entries(&self) -> usize {
+    pub(crate) fn num_entries(&self) -> usize {
         self.entries.len()
     }
 
@@ -132,7 +132,7 @@ impl DownloadState {
     ///
     /// This is the "watermark" — the furthest byte position in the virtual stream.
     /// Used for throttling and EOF detection (replaces old `SegmentIndex::total_bytes()`).
-    pub fn max_end_offset(&self) -> u64 {
+    pub(crate) fn max_end_offset(&self) -> u64 {
         self.entries
             .values()
             .next_back()
@@ -144,7 +144,7 @@ impl DownloadState {
     /// Keeps all entries of `keep_variant` regardless of offset, and all entries
     /// from other variants that are strictly before the fence. Rebuilds
     /// `loaded_keys` and `loaded_ranges` from remaining entries.
-    pub fn fence_at(&mut self, offset: u64, keep_variant: usize) {
+    pub(crate) fn fence_at(&mut self, offset: u64, keep_variant: usize) {
         self.entries
             .retain(|_, seg| seg.byte_offset < offset || seg.variant == keep_variant);
 
@@ -169,11 +169,11 @@ impl DownloadState {
     }
 }
 
-// ---- DownloadProgress trait ----
+// DownloadProgress trait
 
 /// Read-only interface for querying download progress.
 #[cfg_attr(test, unimock::unimock(api = DownloadProgressMock))]
-pub trait DownloadProgress: Send + Sync {
+pub(crate) trait DownloadProgress: Send + Sync {
     /// Whether a specific segment has been loaded.
     fn is_segment_loaded(&self, variant: usize, segment_index: usize) -> bool;
 
@@ -233,7 +233,7 @@ mod tests {
         }
     }
 
-    // ---- Test 1: push and find ----
+    // Test 1: push and find
 
     #[test]
     fn test_push_and_find() {
@@ -278,7 +278,7 @@ mod tests {
         assert!(state.find_at_offset(1000).is_none());
     }
 
-    // ---- Test 2: is_range_loaded ----
+    // Test 2: is_range_loaded
 
     #[test]
     fn test_is_range_loaded() {
@@ -306,7 +306,7 @@ mod tests {
         assert!(!state.is_range_loaded(&(500..600)));
     }
 
-    // ---- Test 3: is_segment_loaded ----
+    // Test 3: is_segment_loaded
 
     #[test]
     fn test_is_segment_loaded() {
@@ -328,7 +328,7 @@ mod tests {
         assert!(!state.is_segment_loaded(99, 0));
     }
 
-    // ---- Test 4: last ----
+    // Test 4: last
 
     #[test]
     fn test_last() {
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(last.init_len, 50);
     }
 
-    // ---- Test 5: fence_at ----
+    // Test 5: fence_at
 
     #[test]
     fn test_fence_at() {
@@ -400,7 +400,7 @@ mod tests {
         assert_eq!(state.total_loaded_bytes(), 300); // 200 (V0) + 100 (V3)
     }
 
-    // ---- Test 6: first_segment_of_variant ----
+    // Test 6: first_segment_of_variant
 
     #[test]
     fn test_first_segment_of_variant() {
@@ -428,7 +428,7 @@ mod tests {
         assert!(state.first_segment_of_variant(99).is_none());
     }
 
-    // ---- Test 7: find_at_offset BTreeMap performance ----
+    // Test 7: find_at_offset BTreeMap performance
 
     #[test]
     fn test_find_at_offset_btree_performance() {
@@ -474,7 +474,7 @@ mod tests {
         assert_eq!(seg.segment_index, 789);
     }
 
-    // ---- Test 8: total_loaded_bytes ----
+    // Test 8: total_loaded_bytes
 
     #[test]
     fn test_total_loaded_bytes() {
@@ -489,7 +489,7 @@ mod tests {
         assert_eq!(state.total_loaded_bytes(), 300); // 100 + (50 + 150)
     }
 
-    // ---- Test 9: LoadedSegment methods ----
+    // Test 9: LoadedSegment methods
 
     #[test]
     fn test_loaded_segment_methods() {

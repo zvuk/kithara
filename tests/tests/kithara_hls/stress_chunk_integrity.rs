@@ -11,7 +11,7 @@
 //! 3. **Random seeks**: 200 seek + 5 chunk reads with continuity + saw-tooth checks
 //! 4. **EOF**: seek near end, drain to EOF
 
-use std::{sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
 use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig, PcmReader};
@@ -167,9 +167,11 @@ fn intra_chunk_breaks(chunk: &PcmChunk) -> usize {
 // Stress Test
 
 #[rstest]
+#[case::mmap(false)]
+#[case::ephemeral(true)]
 #[timeout(Duration::from_secs(120))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn stress_chunk_integrity() {
+async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
@@ -179,7 +181,7 @@ async fn stress_chunk_integrity() {
         }))
         .try_init();
 
-    // --- Generate WAV data for two variants ---
+    // Generate WAV data for two variants
     let init_segment = Arc::new(create_wav_init_segment());
     let v0_pcm = Arc::new(create_pcm_segments(ascending_sample));
     let v1_pcm = Arc::new(create_pcm_segments(descending_sample));
@@ -192,7 +194,7 @@ async fn stress_chunk_integrity() {
         "Generated WAV data for two variants"
     );
 
-    // --- Spawn HLS server ---
+    // Spawn HLS server
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
 
     let server = HlsTestServer::new(HlsTestServerConfig {
@@ -217,12 +219,19 @@ async fn stress_chunk_integrity() {
     let url = server.url("/master.m3u8").expect("url");
     info!(%url, "HLS server ready with 2 variants");
 
-    // --- Create Audio<Stream<Hls>> with Auto ABR starting on V0 ---
+    // Create Audio<Stream<Hls>> with Auto ABR starting on V0
     let temp_dir = TempDir::new().expect("temp dir");
     let cancel = CancellationToken::new();
 
-    let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
+    let mut store = StoreOptions::new(temp_dir.path());
+    if ephemeral {
+        // Ephemeral mode auto-evicts MemResources from LRU cache.
+        // 2 variants × SEGMENT_COUNT segments + headroom.
+        store.cache_capacity = Some(NonZeroUsize::new(SEGMENT_COUNT * 2 + 10).expect("nonzero"));
+    }
+
+    let mut hls_config = HlsConfig::new(url)
+        .with_store(store)
         .with_cancel(cancel)
         .with_abr(AbrOptions {
             down_switch_buffer_secs: 0.0,
@@ -232,6 +241,9 @@ async fn stress_chunk_integrity() {
             throughput_safety_factor: 1.0,
             ..AbrOptions::default()
         });
+    if ephemeral {
+        hls_config = hls_config.with_ephemeral(true);
+    }
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
@@ -246,7 +258,7 @@ async fn stress_chunk_integrity() {
         "Audio pipeline created"
     );
 
-    // --- Run test phases in blocking thread ---
+    // Run test phases in blocking thread
     let result = tokio::task::spawn_blocking(move || {
         // Phase 1: Warmup + ABR switch detection
         info!("Phase 1: waiting for ABR switch (ascending -> descending) via chunks...");

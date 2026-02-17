@@ -83,6 +83,7 @@ impl Default for FileConfig {
 
 impl FileConfig {
     /// Create new file config with source.
+    #[must_use]
     pub fn new(src: FileSrc) -> Self {
         Self {
             cancel: None,
@@ -108,30 +109,35 @@ impl FileConfig {
     }
 
     /// Set storage options.
+    #[must_use]
     pub fn with_store(mut self, store: StoreOptions) -> Self {
         self.store = store;
         self
     }
 
     /// Set network options.
+    #[must_use]
     pub fn with_net(mut self, net: NetOptions) -> Self {
         self.net = net;
         self
     }
 
     /// Set cancellation token.
+    #[must_use]
     pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
         self.cancel = Some(cancel);
         self
     }
 
     /// Set event bus for subscribing to file events.
+    #[must_use]
     pub fn with_events(mut self, bus: EventBus) -> Self {
         self.bus = Some(bus);
         self
     }
 
     /// Set event bus channel capacity.
+    #[must_use]
     pub fn with_event_channel_capacity(mut self, capacity: usize) -> Self {
         self.event_channel_capacity = capacity;
         self
@@ -141,6 +147,7 @@ impl FileConfig {
     ///
     /// - `Some(n)` — enable backpressure, pause when ahead by n bytes
     /// - `None` — disable backpressure, download as fast as possible
+    #[must_use]
     pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
         self.look_ahead_bytes = bytes;
         self
@@ -149,6 +156,7 @@ impl FileConfig {
     /// Set thread pool for background work.
     ///
     /// The pool is shared across all components. Defaults to the global rayon pool.
+    #[must_use]
     pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
         self.thread_pool = pool;
         self

@@ -34,6 +34,10 @@ pub trait PcmReader: Send {
     fn read_planar(&mut self, output: &mut [&mut [f32]]) -> usize;
 
     /// Seek to the given position.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError`] if the seek operation fails.
     fn seek(&mut self, position: Duration) -> DecodeResult<()>;
 
     /// Get the current PCM specification.

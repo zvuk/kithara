@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 /// Events emitted by file streams.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FileEvent {
     /// Bytes written to local storage by the downloader.
     DownloadProgress { offset: u64, total: Option<u64> },

@@ -51,6 +51,7 @@ impl ThreadPool {
     ///
     /// The global pool is created lazily on first use with `num_cpus` threads.
     /// This is the default.
+    #[must_use]
     pub fn global() -> Self {
         Self { inner: None }
     }
@@ -59,6 +60,7 @@ impl ThreadPool {
     ///
     /// When the last clone of `ThreadPool` is dropped and no tasks are running,
     /// the underlying rayon pool is destroyed and its threads exit.
+    #[must_use]
     pub fn custom(pool: rayon::ThreadPool) -> Self {
         Self {
             inner: Some(Arc::new(pool)),

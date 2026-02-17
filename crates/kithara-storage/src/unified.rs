@@ -4,8 +4,10 @@
 
 use std::{ops::Range, path::Path};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::MmapResource;
 use crate::{
-    MemResource, MmapResource, StorageResult,
+    MemResource, StorageResult,
     resource::{ResourceExt, ResourceStatus, WaitOutcome},
 };
 
@@ -16,11 +18,13 @@ use crate::{
 #[derive(Clone, Debug)]
 pub enum StorageResource {
     /// File-backed mmap resource.
+    #[cfg(not(target_arch = "wasm32"))]
     Mmap(MmapResource),
     /// In-memory resource.
     Mem(MemResource),
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl From<MmapResource> for StorageResource {
     fn from(r: MmapResource) -> Self {
         Self::Mmap(r)
@@ -36,6 +40,7 @@ impl From<MemResource> for StorageResource {
 impl ResourceExt for StorageResource {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.read_at(offset, buf),
             Self::Mem(r) => r.read_at(offset, buf),
         }
@@ -43,6 +48,7 @@ impl ResourceExt for StorageResource {
 
     fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.write_at(offset, data),
             Self::Mem(r) => r.write_at(offset, data),
         }
@@ -50,6 +56,7 @@ impl ResourceExt for StorageResource {
 
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.wait_range(range),
             Self::Mem(r) => r.wait_range(range),
         }
@@ -57,6 +64,7 @@ impl ResourceExt for StorageResource {
 
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.commit(final_len),
             Self::Mem(r) => r.commit(final_len),
         }
@@ -64,6 +72,7 @@ impl ResourceExt for StorageResource {
 
     fn fail(&self, reason: String) {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.fail(reason),
             Self::Mem(r) => r.fail(reason),
         }
@@ -71,6 +80,7 @@ impl ResourceExt for StorageResource {
 
     fn path(&self) -> Option<&Path> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.path(),
             Self::Mem(r) => r.path(),
         }
@@ -78,6 +88,7 @@ impl ResourceExt for StorageResource {
 
     fn len(&self) -> Option<u64> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.len(),
             Self::Mem(r) => r.len(),
         }
@@ -85,6 +96,7 @@ impl ResourceExt for StorageResource {
 
     fn reactivate(&self) -> StorageResult<()> {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.reactivate(),
             Self::Mem(r) => r.reactivate(),
         }
@@ -92,6 +104,7 @@ impl ResourceExt for StorageResource {
 
     fn status(&self) -> ResourceStatus {
         match self {
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Mmap(r) => r.status(),
             Self::Mem(r) => r.status(),
         }

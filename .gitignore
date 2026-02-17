@@ -47,3 +47,4 @@ target/hotpath-*.json
 hotpath-*.json
 .worktrees/
 log*.txt
+crates/kithara-wasm/dist

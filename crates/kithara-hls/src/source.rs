@@ -3,6 +3,8 @@
 //! `HlsSource` implements `Source` — provides random-access reading from loaded segments.
 //! Shared state with `HlsDownloader` (in `downloader.rs`) via `SharedSegments`.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 use std::{
     collections::HashSet,
     ops::Range,
@@ -10,16 +12,15 @@ use std::{
         Arc,
         atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
     },
-    time::Duration,
 };
 
 use crossbeam_queue::SegQueue;
 use kithara_abr::Variant;
 use kithara_assets::ResourceKey;
 use kithara_events::{EventBus, HlsEvent};
+use kithara_platform::{Condvar, Mutex};
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{MediaInfo, Source, StreamError, StreamResult};
-use parking_lot::{Condvar, Mutex};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -126,6 +127,10 @@ impl HlsSource {
             let read_end = (local_offset + buf.len() as u64).min(seg.init_len);
             resource.wait_range(local_offset..read_end)?;
 
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "init segment fits in memory"
+            )]
             let available = (seg.init_len - local_offset) as usize;
             let to_read = buf.len().min(available);
             let bytes_from_init = resource.read_at(local_offset, &mut buf[..to_read])?;
@@ -163,6 +168,10 @@ impl HlsSource {
 impl Source for HlsSource {
     type Error = HlsError;
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "lock must be held for condvar wait"
+    )]
     fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
         let mut on_demand_requested = false;
 
@@ -264,7 +273,10 @@ impl Source for HlsSource {
                 self.shared.reader_advanced.notify_one();
             }
 
-            // Wait with timeout (mirrors kithara-storage driver.rs:283)
+            // Wait for new data with a 50ms timeout as a safety net against
+            // missed notifications. On wasm32 the timeout is ignored by the
+            // platform Condvar (Instant::now panics), but notifications from
+            // the downloader are reliable.
             self.shared
                 .condvar
                 .wait_for(&mut segments, Duration::from_millis(50));
@@ -291,6 +303,7 @@ impl Source for HlsSource {
             return Ok(0);
         }
 
+        #[expect(clippy::cast_possible_truncation, reason = "segment index fits in u32")]
         self.shared
             .current_segment_index
             .store(seg.segment_index as u32, Ordering::Relaxed);
@@ -323,11 +336,14 @@ impl Source for HlsSource {
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        let segments = self.shared.segments.lock();
-        let last = segments.last()?;
-        let codec = self.playlist_state.variant_codec(last.variant);
-        let container = self.playlist_state.variant_container(last.variant);
-        Some(MediaInfo::new(codec, container).with_variant_index(last.variant as u32))
+        let variant = {
+            let segments = self.shared.segments.lock();
+            segments.last()?.variant
+        };
+        let codec = self.playlist_state.variant_codec(variant);
+        let container = self.playlist_state.variant_container(variant);
+        #[expect(clippy::cast_possible_truncation, reason = "variant index fits in u32")]
+        Some(MediaInfo::new(codec, container).with_variant_index(variant as u32))
     }
 
     fn current_segment_range(&self) -> Option<Range<u64>> {
@@ -351,11 +367,13 @@ impl Source for HlsSource {
 }
 
 /// Build an `HlsDownloader` + `HlsSource` pair from config.
-pub fn build_pair(
+pub(crate) fn build_pair(
     fetch: Arc<DefaultFetchManager>,
     variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
-    coverage_index: Option<Arc<kithara_assets::CoverageIndex<kithara_storage::MmapResource>>>,
+    #[cfg(not(target_arch = "wasm32"))] coverage_index: Option<
+        Arc<kithara_assets::CoverageIndex<kithara_storage::MmapResource>>,
+    >,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
 ) -> (HlsDownloader, HlsSource) {
@@ -386,6 +404,7 @@ pub fn build_pair(
         bus: bus.clone(),
         look_ahead_bytes: config.look_ahead_bytes,
         prefetch_count: config.download_batch_size.max(1),
+        #[cfg(not(target_arch = "wasm32"))]
         coverage_index,
     };
 
@@ -652,7 +671,7 @@ mod tests {
         assert_eq!(state.max_end_offset(), 600);
     }
 
-    // --- wait_range cancellation tests ---
+    // wait_range cancellation tests
 
     #[tokio::test]
     async fn test_wait_range_cancel_unblocks() {

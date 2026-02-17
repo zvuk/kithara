@@ -46,7 +46,7 @@ async fn stress_random_seek_read_synthetic_wav() {
         }))
         .try_init();
 
-    // --- Step 1: Create synthetic WAV ---
+    // Step 1: Create synthetic WAV
     let wav_data = create_test_wav(SAMPLE_COUNT, 44100, 2);
     let wav_size_mb = wav_data.len() as f64 / 1_000_000.0;
     info!(
@@ -63,14 +63,14 @@ async fn stress_random_seek_read_synthetic_wav() {
     )
     .expect("write WAV data");
 
-    // --- Step 2: Create Audio pipeline (mock decoder = real decoder on synthetic data) ---
+    // Step 2: Create Audio pipeline (mock decoder = real decoder on synthetic data)
     let file_config = FileConfig::new(FileSrc::Local(tmp.path().to_path_buf()));
     let config = AudioConfig::<File>::new(file_config).with_hint("wav");
     let mut audio = Audio::<Stream<File>>::new(config)
         .await
         .expect("create audio pipeline");
 
-    // --- Step 3: Query duration ---
+    // Step 3: Query duration
     let total_duration = audio.duration().expect("WAV should report known duration");
     let total_secs = total_duration.as_secs_f64();
     info!(total_secs, "Stream duration");
@@ -87,14 +87,14 @@ async fn stress_random_seek_read_synthetic_wav() {
         "Audio spec"
     );
 
-    // --- Step 4: Compute optimal chunk size ---
+    // Step 4: Compute optimal chunk size
     // ~0.5% of total duration, clamped to [0.05s, 0.5s].
     let chunk_duration_secs = (total_secs * 0.005).clamp(0.05, 0.5);
     let chunk_samples =
         (chunk_duration_secs * spec.sample_rate as f64 * spec.channels as f64) as usize;
     info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
-    // --- Steps 5-7: Run seek+read loop in blocking thread ---
+    // Steps 5-7: Run seek+read loop in blocking thread
     let result = tokio::task::spawn_blocking(move || {
         let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
         let mut buf = vec![0.0f32; chunk_samples];

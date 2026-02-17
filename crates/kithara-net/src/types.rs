@@ -1,11 +1,12 @@
 use std::{cmp::min, collections::HashMap, time::Duration};
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Headers {
     inner: HashMap<String, String>,
 }
 
 impl Headers {
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: HashMap::new(),
@@ -24,6 +25,7 @@ impl Headers {
         self.inner.iter().map(|(k, v)| (k.as_str(), v.as_str()))
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.inner.is_empty()
     }
@@ -41,27 +43,29 @@ impl From<HashMap<String, String>> for Headers {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RangeSpec {
     pub end: Option<u64>,
     pub start: u64,
 }
 
 impl RangeSpec {
+    #[must_use]
     pub fn new(start: u64, end: Option<u64>) -> Self {
         Self { end, start }
     }
 
+    #[must_use]
     pub fn from_start(start: u64) -> Self {
         Self { end: None, start }
     }
 
+    #[must_use]
     pub fn to_header_value(&self) -> String {
-        if let Some(end) = self.end {
-            format!("bytes={}-{}", self.start, end)
-        } else {
-            format!("bytes={}-", self.start)
-        }
+        self.end.map_or_else(
+            || format!("bytes={}-", self.start),
+            |end| format!("bytes={}-{}", self.start, end),
+        )
     }
 }
 
@@ -83,6 +87,7 @@ impl Default for RetryPolicy {
 }
 
 impl RetryPolicy {
+    #[must_use]
     pub fn new(max_retries: u32, base_delay: Duration, max_delay: Duration) -> Self {
         Self {
             base_delay,
@@ -91,6 +96,7 @@ impl RetryPolicy {
         }
     }
 
+    #[must_use]
     pub fn delay_for_attempt(&self, attempt: u32) -> Duration {
         if attempt == 0 {
             return Duration::ZERO;

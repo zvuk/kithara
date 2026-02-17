@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash(git commit)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'cd \"$PROJECT_DIR\" && cargo check --workspace 2>&1 | tail -20 && cargo clippy --workspace -- -D warnings 2>&1 | tail -20'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c 'for f in $MODIFIED_FILES; do [[ \"$f\" == *.rs ]] && rustfmt --edition 2024 \"$f\" 2>/dev/null; done; true'"
+          }
+        ]
+      }
+    ]
+  }
+}

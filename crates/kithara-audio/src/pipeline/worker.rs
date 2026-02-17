@@ -12,7 +12,7 @@ use crate::traits::AudioEffect;
 
 /// Command for audio worker.
 #[derive(Debug)]
-pub enum AudioCommand {
+pub(crate) enum AudioCommand {
     /// Seek to position with new epoch.
     Seek { position: Duration, epoch: u64 },
 }
@@ -82,6 +82,10 @@ fn send_with_backpressure<S: AudioWorkerSource>(
 /// fires. This ensures the channel has enough data for non-blocking reads.
 ///
 /// `cancel` token signals graceful shutdown when Audio is dropped.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "audio event loop with multiple states"
+)]
 pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     mut source: S,
     cmd_rx: &kanal::Receiver<S::Command>,

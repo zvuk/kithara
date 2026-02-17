@@ -76,6 +76,7 @@ pub struct MediaInfo {
 
 impl MediaInfo {
     /// Create `MediaInfo` with optional codec and container.
+    #[must_use]
     pub fn new(codec: Option<AudioCodec>, container: Option<ContainerFormat>) -> Self {
         Self {
             channels: None,
@@ -87,24 +88,28 @@ impl MediaInfo {
     }
 
     /// Set container format.
+    #[must_use]
     pub fn with_container(mut self, container: ContainerFormat) -> Self {
         self.container = Some(container);
         self
     }
 
     /// Set sample rate.
+    #[must_use]
     pub fn with_sample_rate(mut self, sample_rate: u32) -> Self {
         self.sample_rate = Some(sample_rate);
         self
     }
 
     /// Set channel count.
+    #[must_use]
     pub fn with_channels(mut self, channels: u16) -> Self {
         self.channels = Some(channels);
         self
     }
 
     /// Set variant index (for ABR streams).
+    #[must_use]
     pub fn with_variant_index(mut self, variant_index: u32) -> Self {
         self.variant_index = Some(variant_index);
         self
@@ -120,6 +125,7 @@ impl AudioCodec {
     /// - `mp4a.40.29` -> `AacHeV2`
     /// - `mp4a.40.34` -> `Mp3`
     /// - `mp4a.69` or `mp4a.6B` -> `Mp3`
+    #[must_use]
     pub fn from_hls_codec(codec: &str) -> Option<Self> {
         let codec_lower = codec.to_lowercase();
 

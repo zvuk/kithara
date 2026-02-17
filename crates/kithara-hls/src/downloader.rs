@@ -3,16 +3,21 @@
 use std::{
     collections::HashSet,
     sync::{Arc, atomic::Ordering},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use kithara_abr::{AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource};
-use kithara_assets::{CoverageIndex, DiskCoverage, ResourceKey};
+use kithara_assets::ResourceKey;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_assets::{CoverageIndex, DiskCoverage};
 use kithara_events::{EventBus, HlsEvent};
-use kithara_storage::{Coverage, MmapResource, ResourceExt, ResourceStatus};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_storage::{Coverage, MmapResource};
+use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
 use tracing::debug;
 use url::Url;
+use web_time::Instant;
 
 use crate::{
     HlsError,
@@ -24,7 +29,7 @@ use crate::{
 
 /// Pure I/O executor for HLS segment fetching.
 #[derive(Clone)]
-pub struct HlsIo {
+pub(crate) struct HlsIo {
     fetch: Arc<DefaultFetchManager>,
 }
 
@@ -35,14 +40,14 @@ impl HlsIo {
 }
 
 /// Plan for downloading a single HLS segment.
-pub struct HlsPlan {
+pub(crate) struct HlsPlan {
     pub(crate) variant: usize,
     pub(crate) segment_index: usize,
     pub(crate) need_init: bool,
 }
 
 /// Result of downloading a single HLS segment.
-pub struct HlsFetch {
+pub(crate) struct HlsFetch {
     pub(crate) init_len: u64,
     pub(crate) init_url: Option<Url>,
     pub(crate) media: SegmentMeta,
@@ -100,7 +105,7 @@ impl DownloaderIo for HlsIo {
 }
 
 /// HLS downloader: fetches segments and maintains ABR state.
-pub struct HlsDownloader {
+pub(crate) struct HlsDownloader {
     pub(crate) io: HlsIo,
     pub(crate) fetch: Arc<DefaultFetchManager>,
     pub(crate) playlist_state: Arc<PlaylistState>,
@@ -115,6 +120,7 @@ pub struct HlsDownloader {
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
     /// Coverage index for crash-safe segment tracking.
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
 }
 
@@ -198,7 +204,9 @@ impl HlsDownloader {
         shared: &SharedSegments,
         fetch: &DefaultFetchManager,
         variant: usize,
-        coverage_index: &Option<Arc<CoverageIndex<MmapResource>>>,
+        #[cfg(not(target_arch = "wasm32"))] coverage_index: &Option<
+            Arc<CoverageIndex<MmapResource>>,
+        >,
     ) -> (usize, u64) {
         // Ephemeral backend has no persistent cache to scan.
         if fetch.backend().is_ephemeral() {
@@ -216,14 +224,17 @@ impl HlsDownloader {
             let init_key = ResourceKey::from_url(url);
             let init_cached = backend
                 .open_resource(&init_key)
-                .map(|r| matches!(r.status(), ResourceStatus::Committed { .. }))
-                .unwrap_or(false);
+                .is_ok_and(|r| matches!(r.status(), ResourceStatus::Committed { .. }));
             if !init_cached {
                 return (0, 0);
             }
         }
 
         // Get init_size from actual disk resource (size map was populated by calculate_size_map).
+        #[expect(
+            clippy::option_if_let_else,
+            reason = "nested conditionals are clearer with if-let"
+        )]
         let init_len = if playlist_state.total_variant_size(variant).is_some() {
             if let Some(ref url) = init_url {
                 let key = ResourceKey::from_url(url);
@@ -265,6 +276,7 @@ impl HlsDownloader {
                 // Validate against coverage if available.
                 // No entry -> legacy file, treat as valid.
                 // Entry exists but incomplete -> partially written, skip.
+                #[cfg(not(target_arch = "wasm32"))]
                 if let Some(idx) = coverage_index {
                     let cov = DiskCoverage::open(Arc::clone(idx), segment_url.to_string());
                     if cov.total_size().is_some() && !cov.is_complete() {
@@ -403,6 +415,7 @@ impl HlsDownloader {
         }
         self.shared.condvar.notify_all();
 
+        #[cfg(not(target_arch = "wasm32"))]
         if let Some(ref idx) = self.coverage_index {
             let mut cov = DiskCoverage::open(Arc::clone(idx), media_url.to_string());
             cov.set_total_size(media_len);
@@ -414,6 +427,10 @@ impl HlsDownloader {
     /// Prepare variant for download: detect switches, calculate metadata, populate cache.
     ///
     /// Returns `(is_variant_switch, is_midstream_switch)`.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "variant switch detection with multiple conditions"
+    )]
     async fn ensure_variant_ready(
         &mut self,
         variant: usize,
@@ -445,6 +462,7 @@ impl HlsDownloader {
                                 &self.shared,
                                 &self.fetch,
                                 variant,
+                                #[cfg(not(target_arch = "wasm32"))]
                                 &self.coverage_index,
                             )
                         } else {
@@ -555,6 +573,10 @@ impl HlsDownloader {
 
         self.abr.push_throughput_sample(sample);
 
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "throughput estimation tolerates f64 precision"
+        )]
         let bytes_per_second = if duration.as_secs_f64() > 0.0 {
             bytes as f64 / duration.as_secs_f64()
         } else {
@@ -582,6 +604,10 @@ impl Downloader for HlsDownloader {
         &self.io
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "on-demand segment resolution is inherently complex"
+    )]
     async fn poll_demand(&mut self) -> Option<HlsPlan> {
         let req = self.shared.segment_requests.pop()?;
 
@@ -688,9 +714,7 @@ impl Downloader for HlsDownloader {
         if self.current_segment_index >= num_segments {
             debug!("reached end of playlist, stopping downloader");
             self.bus.publish(HlsEvent::EndOfStream);
-            self.shared
-                .eof
-                .store(true, std::sync::atomic::Ordering::Release);
+            self.shared.eof.store(true, Ordering::Release);
             self.shared.condvar.notify_all();
             return PlanOutcome::Complete;
         }
@@ -787,10 +811,7 @@ impl Downloader for HlsDownloader {
             return false;
         };
 
-        let reader_pos = self
-            .shared
-            .reader_offset
-            .load(std::sync::atomic::Ordering::Acquire);
+        let reader_pos = self.shared.reader_offset.load(Ordering::Acquire);
         let downloaded = self.shared.segments.lock().max_end_offset();
 
         downloaded.saturating_sub(reader_pos) > limit

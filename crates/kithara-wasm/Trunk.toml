@@ -1,0 +1,15 @@
+[build]
+target = "index.html"
+dist = "dist"
+filehash = false
+
+[serve]
+port = 8080
+# Required for SharedArrayBuffer (needed by wasm-bindgen-rayon).
+headers = { "Cross-Origin-Opener-Policy" = "same-origin", "Cross-Origin-Embedder-Policy" = "require-corp" }
+
+# Strip integrity/crossorigin attrs that break under COEP require-corp.
+[[hooks]]
+stage = "post_build"
+command = "bash"
+command_arguments = ["post-build.sh"]

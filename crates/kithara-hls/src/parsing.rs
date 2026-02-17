@@ -160,14 +160,10 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
             let (uri, bandwidth, codecs_str) = match vs {
                 HlsVariantStreamTag::ExtXStreamInf {
                     uri, stream_data, ..
-                } => {
-                    let bw = stream_data.bandwidth();
-                    let codecs = stream_data.codecs().map(std::string::ToString::to_string);
-                    (uri.to_string(), Some(bw), codecs)
                 }
-                HlsVariantStreamTag::ExtXIFrame { uri, stream_data } => {
+                | HlsVariantStreamTag::ExtXIFrame { uri, stream_data } => {
                     let bw = stream_data.bandwidth();
-                    let codecs = stream_data.codecs().map(std::string::ToString::to_string);
+                    let codecs = stream_data.codecs().map(ToString::to_string);
                     (uri.to_string(), Some(bw), codecs)
                 }
             };
@@ -205,20 +201,6 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
 
 /// Parses a media playlist (M3U8) into [`MediaPlaylist`].
 pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<MediaPlaylist> {
-    let input =
-        std::str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
-    let hls_media = HlsMediaPlaylist::try_from(input)
-        .map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?
-        .into_owned();
-
-    // Treat `#EXT-X-ENDLIST` as the only reliable end-of-stream marker.
-    let end_list = input.contains("#EXT-X-ENDLIST");
-
-    // HLS v3 `#EXT-X-ALLOW-CACHE:NO` (deprecated in v7, but still used by servers).
-    let allow_cache = !input.contains("#EXT-X-ALLOW-CACHE:NO");
-    let target_duration = Some(hls_media.target_duration);
-    let media_sequence = hls_media.media_sequence as u64;
-
     fn map_encryption_method(m: hls_m3u8::types::EncryptionMethod) -> EncryptionMethod {
         match m {
             hls_m3u8::types::EncryptionMethod::Aes128 => EncryptionMethod::Aes128,
@@ -239,10 +221,24 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
             method,
             uri: Some(uri.to_string()),
             iv: k.iv.to_slice(),
-            key_format: k.format.as_ref().map(std::string::ToString::to_string),
-            key_format_versions: k.versions.as_ref().map(std::string::ToString::to_string),
+            key_format: k.format.as_ref().map(ToString::to_string),
+            key_format_versions: k.versions.as_ref().map(ToString::to_string),
         })
     }
+
+    let input =
+        std::str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
+    let hls_media = HlsMediaPlaylist::try_from(input)
+        .map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?
+        .into_owned();
+
+    // Treat `#EXT-X-ENDLIST` as the only reliable end-of-stream marker.
+    let end_list = input.contains("#EXT-X-ENDLIST");
+
+    // HLS v3 `#EXT-X-ALLOW-CACHE:NO` (deprecated in v7, but still used by servers).
+    let allow_cache = !input.contains("#EXT-X-ALLOW-CACHE:NO");
+    let target_duration = Some(hls_media.target_duration);
+    let media_sequence = hls_media.media_sequence as u64;
 
     let current_key: Option<KeyInfo> = hls_media
         .segments
@@ -285,7 +281,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
                 .first()
                 .copied()
                 .and_then(keyinfo_from_decryption_key)
-                .or(current_key.clone())
+                .or_else(|| current_key.clone())
                 .map(|ki| SegmentKey {
                     method: ki.method.clone(),
                     key_info: Some(ki),
@@ -321,6 +317,7 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
 }
 
 /// Extract extended variant metadata from master playlist.
+#[must_use]
 pub fn variant_info_from_master(master: &MasterPlaylist) -> Vec<VariantInfo> {
     master
         .variants

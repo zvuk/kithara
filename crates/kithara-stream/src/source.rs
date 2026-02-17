@@ -31,11 +31,19 @@ pub trait Source: Send + 'static {
     /// Blocks until data is available or EOF is reached.
     /// Returns `WaitOutcome::Ready` when range is available,
     /// `WaitOutcome::Eof` if EOF reached before range end.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the wait is cancelled or the underlying storage fails.
     fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>;
 
     /// Read data at offset into buffer.
     ///
     /// Returns number of bytes read. May return less than `buf.len()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the read fails or the source is in an invalid state.
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error>;
 
     /// Total length if known.

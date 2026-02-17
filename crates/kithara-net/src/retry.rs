@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use tokio::time::sleep;
+use kithara_platform::time::sleep;
 use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 use unimock::unimock;
@@ -54,7 +54,8 @@ impl<N: Net, P: RetryPolicyTrait> RetryNet<N, P> {
     }
 }
 
-#[async_trait]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 impl<N: Net, P: RetryPolicyTrait> Net for RetryNet<N, P> {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         let mut last_error = None;

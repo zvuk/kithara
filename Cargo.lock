@@ -394,6 +394,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 
 [[package]]
+name = "cast"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
+
+[[package]]
 name = "cbc"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -520,6 +526,16 @@ checksum = "ba5a308b75df32fe02788e748662718f03fde005016435c444eea572398219fd"
 dependencies = [
  "bytes",
  "memchr",
+]
+
+[[package]]
+name = "console_error_panic_hook"
+version = "0.1.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a06aeb73f470f66dcdbf7223caeebb85984942f22f1adb2a088cf9668146bbbc"
+dependencies = [
+ "cfg-if",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -1085,6 +1101,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
+name = "gloo-timers"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
+dependencies = [
+ "futures-channel",
+ "futures-core",
+ "js-sys",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.14.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1573,6 +1601,7 @@ dependencies = [
  "rstest",
  "tracing",
  "unimock",
+ "web-time",
 ]
 
 [[package]]
@@ -1585,9 +1614,9 @@ dependencies = [
  "hex",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-platform",
  "kithara-storage",
  "lru",
- "parking_lot",
  "rangemap",
  "rstest",
  "serde",
@@ -1612,6 +1641,7 @@ dependencies = [
  "fallible-iterator",
  "fast-interleave",
  "hotpath",
+ "js-sys",
  "kanal",
  "kithara-assets",
  "kithara-bufpool",
@@ -1620,9 +1650,9 @@ dependencies = [
  "kithara-file",
  "kithara-hls",
  "kithara-net",
+ "kithara-platform",
  "kithara-storage",
  "kithara-stream",
- "parking_lot",
  "reqwest",
  "rodio",
  "rstest",
@@ -1636,6 +1666,8 @@ dependencies = [
  "tracing-subscriber",
  "unimock",
  "url",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -1643,7 +1675,7 @@ name = "kithara-bufpool"
 version = "0.1.0"
 dependencies = [
  "hotpath",
- "parking_lot",
+ "kithara-platform",
 ]
 
 [[package]]
@@ -1729,9 +1761,9 @@ dependencies = [
  "kithara-drm",
  "kithara-events",
  "kithara-net",
+ "kithara-platform",
  "kithara-storage",
  "kithara-stream",
- "parking_lot",
  "rangemap",
  "rodio",
  "rstest",
@@ -1743,6 +1775,7 @@ dependencies = [
  "tracing-subscriber",
  "unimock",
  "url",
+ "web-time",
 ]
 
 [[package]]
@@ -1755,8 +1788,10 @@ dependencies = [
  "bincode",
  "bytes",
  "cbc",
+ "console_error_panic_hook",
  "dashmap",
  "futures",
+ "gloo-timers",
  "hex",
  "hls_m3u8",
  "hotpath",
@@ -1773,6 +1808,7 @@ dependencies = [
  "kithara-net",
  "kithara-storage",
  "kithara-stream",
+ "kithara-wasm",
  "mmap-io",
  "reqwest",
  "rodio",
@@ -1787,10 +1823,15 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tower",
+ "tower-http",
  "tracing",
  "tracing-subscriber",
+ "tracing-wasm",
  "url",
  "uuid",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -1801,8 +1842,10 @@ dependencies = [
  "axum",
  "bytes",
  "futures",
+ "gloo-timers",
  "hotpath",
  "kithara-assets",
+ "kithara-platform",
  "memory-stats",
  "reqwest",
  "rstest",
@@ -1815,14 +1858,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-platform"
+version = "0.1.0"
+dependencies = [
+ "parking_lot",
+ "tokio",
+]
+
+[[package]]
+name = "kithara-play"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "tokio",
+ "unimock",
+ "url",
+]
+
+[[package]]
 name = "kithara-storage"
 version = "0.1.0"
 dependencies = [
  "crossbeam-queue",
+ "kithara-bufpool",
+ "kithara-platform",
  "mmap-io",
- "parking_lot",
  "rangemap",
  "rstest",
+ "slice_ring_buf",
  "tempfile",
  "thiserror 2.0.18",
  "tokio-util",
@@ -1841,9 +1904,9 @@ dependencies = [
  "hotpath",
  "kithara-assets",
  "kithara-net",
+ "kithara-platform",
  "kithara-storage",
  "memory-stats",
- "parking_lot",
  "rayon",
  "rstest",
  "tempfile",
@@ -1854,6 +1917,25 @@ dependencies = [
  "tracing",
  "unimock",
  "url",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "kithara-wasm"
+version = "0.1.0"
+dependencies = [
+ "console_error_panic_hook",
+ "kithara-audio",
+ "kithara-hls",
+ "kithara-stream",
+ "rayon",
+ "tokio",
+ "tracing",
+ "tracing-wasm",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-rayon",
 ]
 
 [[package]]
@@ -1867,6 +1949,12 @@ name = "libc"
 version = "0.2.180"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bcc35a38544a891a5f7c865aca548a982ccb3b8650a5b06d0fd33a10283c56fc"
+
+[[package]]
+name = "libm"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b6d2cec3eae94f9f509c767b45932f1ada8350c4bdb85af2fcab4a3c14807981"
 
 [[package]]
 name = "libredox"
@@ -1996,6 +2084,16 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "minicov"
+version = "0.3.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4869b6a491569605d66d3952bcdf03df789e5b536e5f0cf7758a7f08a55ae24d"
+dependencies = [
+ "cc",
+ "walkdir",
+]
 
 [[package]]
 name = "miniz_oxide"
@@ -2145,6 +2243,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
 dependencies = [
  "autocfg",
+ "libm",
 ]
 
 [[package]]
@@ -2261,6 +2360,12 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
+
+[[package]]
+name = "oorandom"
+version = "11.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "openssl-probe"
@@ -2540,6 +2645,7 @@ checksum = "368f01d005bf8fd9b1206fb6fa653e6c4a81ceb1466406b81792d87c5677a58f"
 dependencies = [
  "either",
  "rayon-core",
+ "wasm_sync",
 ]
 
 [[package]]
@@ -2550,6 +2656,7 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+ "wasm_sync",
 ]
 
 [[package]]
@@ -3085,6 +3192,12 @@ name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
+
+[[package]]
+name = "slice_ring_buf"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3cd6db7fe3939155b6a220cca745c2558254c21bca0e461394fe2d081253fc33"
 
 [[package]]
 name = "smallvec"
@@ -3847,6 +3960,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tracing-wasm"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4575c663a174420fa2d78f4108ff68f65bf2fbb7dd89f33749b6e826b3626e07"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "transpose"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4070,6 +4194,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-bindgen-rayon"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9a16c60a56c81e4dc3b9c43d76ba5633e1c0278211d59a9cb07d61b6cd1c6583"
+dependencies = [
+ "crossbeam-channel",
+ "js-sys",
+ "rayon",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "wasm-bindgen-shared"
 version = "0.2.108"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4077,6 +4213,45 @@ checksum = "1f01b580c9ac74c8d8f0c0e4afb04eeef2acf145458e52c03845ee9cd23e3d12"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "wasm-bindgen-test"
+version = "0.3.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "45649196a53b0b7a15101d845d44d2dda7374fc1b5b5e2bbf58b7577ff4b346d"
+dependencies = [
+ "async-trait",
+ "cast",
+ "js-sys",
+ "libm",
+ "minicov",
+ "nu-ansi-term",
+ "num-traits",
+ "oorandom",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-test-macro",
+ "wasm-bindgen-test-shared",
+]
+
+[[package]]
+name = "wasm-bindgen-test-macro"
+version = "0.3.58"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f579cdd0123ac74b94e1a4a72bd963cf30ebac343f2df347da0b8df24cdebed2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.114",
+]
+
+[[package]]
+name = "wasm-bindgen-test-shared"
+version = "0.2.108"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a8145dd1593bf0fb137dbfa85b8be79ec560a447298955877804640e40c2d6ea"
 
 [[package]]
 name = "wasm-streams"
@@ -4088,6 +4263,17 @@ dependencies = [
  "js-sys",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "wasm_sync"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cff360cade7fec41ff0e9d2cda57fe58258c5f16def0e21302394659e6bbb0ea"
+dependencies = [
+ "js-sys",
+ "wasm-bindgen",
  "web-sys",
 ]
 

@@ -6,8 +6,14 @@
 //! - [`DownloaderIo`]: pure I/O executor (Clone + Send, no mutable state)
 //! - [`Downloader`]: mutable planner/committer (plan + commit, no I/O)
 //! - Backend (in `backend.rs`): generic orchestrator (backpressure, demand, parallelism, yield)
+//!
+//! On wasm32, `Send` bounds are relaxed via [`MaybeSend`] — a conditional trait
+//! that equals `Send` on native and is a no-op on wasm32. This eliminates
+//! the need for duplicate trait definitions.
 
 use std::future::Future;
+
+use kithara_platform::MaybeSend;
 
 /// Outcome of [`Downloader::plan`].
 pub enum PlanOutcome<P> {
@@ -30,19 +36,18 @@ pub enum StepResult<F> {
 /// Pure I/O executor. Clone + Send, no mutable state.
 ///
 /// Allows Backend to run multiple fetches in parallel via `tokio::join!`.
-pub trait DownloaderIo: Clone + Send + 'static {
+///
+/// On wasm32, `Send` bounds are relaxed via [`MaybeSend`].
+pub trait DownloaderIo: Clone + MaybeSend + 'static {
     /// Plan descriptor consumed by [`fetch`](Self::fetch).
-    type Plan: Send;
+    type Plan: MaybeSend;
     /// Fetch result passed to [`Downloader::commit`].
-    type Fetch: Send;
+    type Fetch: MaybeSend;
     /// Error type.
     type Error: std::error::Error + Send + Sync + 'static;
 
     /// Execute a single fetch (network I/O).
-    fn fetch(
-        &self,
-        plan: Self::Plan,
-    ) -> impl Future<Output = Result<Self::Fetch, Self::Error>> + Send;
+    fn fetch(&self, plan: Self::Plan) -> impl Future<Output = Result<Self::Fetch, Self::Error>>;
 }
 
 /// Background downloader driven by Backend's orchestration loop.
@@ -50,11 +55,13 @@ pub trait DownloaderIo: Clone + Send + 'static {
 /// Implementations provide planning (what to download), streaming steps,
 /// and commit logic. Backend handles backpressure, demand priority,
 /// parallelism, yield, and cancellation generically.
-pub trait Downloader: Send + 'static {
+///
+/// On wasm32, `Send` bounds are relaxed via [`MaybeSend`].
+pub trait Downloader: MaybeSend + 'static {
     /// Plan descriptor.
-    type Plan: Send;
+    type Plan: MaybeSend;
     /// Fetch result.
-    type Fetch: Send;
+    type Fetch: MaybeSend;
     /// Error type.
     type Error: std::error::Error + Send + Sync + 'static;
     /// I/O executor type.
@@ -66,18 +73,16 @@ pub trait Downloader: Send + 'static {
     /// Check for on-demand requests (e.g. seek).
     ///
     /// Returns a plan for immediate execution, bypassing backpressure.
-    fn poll_demand(&mut self) -> impl Future<Output = Option<Self::Plan>> + Send;
+    fn poll_demand(&mut self) -> impl Future<Output = Option<Self::Plan>>;
 
     /// Plan next work batch.
-    fn plan(&mut self) -> impl Future<Output = PlanOutcome<Self::Plan>> + Send;
+    fn plan(&mut self) -> impl Future<Output = PlanOutcome<Self::Plan>>;
 
     /// Streaming step (when [`plan`](Self::plan) returned [`PlanOutcome::Step`]).
     ///
     /// Only needed for downloaders that return [`PlanOutcome::Step`] from [`plan`](Self::plan).
     /// Default: pends forever (never called if `plan` never returns `Step`).
-    fn step(
-        &mut self,
-    ) -> impl Future<Output = Result<StepResult<Self::Fetch>, Self::Error>> + Send {
+    fn step(&mut self) -> impl Future<Output = Result<StepResult<Self::Fetch>, Self::Error>> {
         std::future::pending()
     }
 
@@ -88,7 +93,7 @@ pub trait Downloader: Send + 'static {
     fn should_throttle(&self) -> bool;
 
     /// Wait until throttle condition clears.
-    fn wait_ready(&self) -> impl Future<Output = ()> + Send;
+    fn wait_ready(&self) -> impl Future<Output = ()>;
 
     /// Signal that on-demand data is needed (e.g. reader seek).
     ///
@@ -101,7 +106,7 @@ pub trait Downloader: Send + 'static {
     /// in the same `tokio::select!`.
     ///
     /// Default: never resolves (no demand signaling).
-    fn demand_signal(&self) -> impl Future<Output = ()> + Send + use<Self> {
+    fn demand_signal(&self) -> impl Future<Output = ()> + use<Self> {
         std::future::pending()
     }
 }

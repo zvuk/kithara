@@ -28,6 +28,10 @@ impl SourceType {
     /// - `ResourceSrc::Path` -> local file
     /// - URL ending with `.m3u8` -> HLS
     /// - Other URLs -> progressive file download
+    ///
+    /// # Errors
+    ///
+    /// Returns `DecodeError` if no suitable feature is enabled for the given source.
     pub fn detect(src: &ResourceSrc) -> Result<Self, kithara_decode::DecodeError> {
         match src {
             #[cfg(feature = "file")]

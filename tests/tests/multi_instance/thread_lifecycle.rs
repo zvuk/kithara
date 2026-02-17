@@ -127,7 +127,7 @@ fn read_partial_and_drop_hls(audio: Audio<Stream<Hls>>, samples_to_read: usize) 
     );
 }
 
-// === Tests ===
+// Tests
 
 /// Drop a File instance mid-stream, then verify all pool threads are free.
 #[rstest]
@@ -352,7 +352,7 @@ async fn pool_recovers_after_saturation() {
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
     let server = AudioTestServer::new().await;
 
-    // --- Phase 1: saturate the pool with 2 instances (File + HLS) ---
+    // Phase 1: saturate the pool with 2 instances (File + HLS)
     info!("phase 1: saturating pool");
 
     let temp1 = TempDir::new().expect("temp dir");
@@ -410,11 +410,11 @@ async fn pool_recovers_after_saturation() {
     info!("phase 1 done: both instances dropped");
     tokio::time::sleep(Duration::from_millis(500)).await;
 
-    // --- Phase 2: verify full recovery ---
+    // Phase 2: verify full recovery
     info!("phase 2: verifying pool recovery");
     assert_pool_threads_available(&pool, 4).await;
 
-    // --- Phase 3: create new instances on the recovered pool ---
+    // Phase 3: create new instances on the recovered pool
     info!("phase 3: creating new instances on recovered pool");
 
     let temp3 = TempDir::new().expect("temp dir");

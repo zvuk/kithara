@@ -4,7 +4,7 @@ use std::{
     sync::Arc,
 };
 
-use parking_lot::Mutex;
+use kithara_platform::Mutex;
 
 /// Trait for types that can be reused in a pool.
 ///
@@ -102,6 +102,10 @@ where
 {
     /// Determine shard index for current thread.
     #[inline]
+    #[expect(
+        clippy::unused_self,
+        reason = "method on Pool for API consistency; may use self in future for per-pool salt"
+    )]
     pub(crate) fn shard_index(&self) -> usize {
         let thread_id = std::thread::current().id();
         let hash = {
@@ -110,7 +114,12 @@ where
             thread_id.hash(&mut hasher);
             hasher.finish()
         };
-        (hash as usize) % SHARDS
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "modulo SHARDS guarantees result fits in usize"
+        )]
+        let idx = (hash as usize) % SHARDS;
+        idx
     }
 
     /// Return a buffer to the pool.
@@ -162,6 +171,7 @@ where
     /// // Pool for Vec<u8> with 1024 max buffers, trim to 128KB
     /// let pool = Pool::<32, Vec<u8>>::new(1024, 128 * 1024);
     /// ```
+    #[must_use]
     pub fn new(max_buffers: usize, trim_capacity: usize) -> Self {
         assert!(SHARDS > 0, "Pool must have at least 1 shard");
         let buffers_per_shard = max_buffers / SHARDS;
@@ -409,11 +419,13 @@ where
     T: Reuse + Default,
 {
     /// Create a new shared pool.
+    #[must_use]
     pub fn new(max_buffers: usize, trim_capacity: usize) -> Self {
         Self(Arc::new(Pool::new(max_buffers, trim_capacity)))
     }
 
     /// Get a buffer from the shared pool.
+    #[must_use]
     pub fn get(&self) -> PooledOwned<SHARDS, T> {
         self.get_with(|_| {})
     }

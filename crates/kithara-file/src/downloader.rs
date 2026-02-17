@@ -3,7 +3,7 @@
 //! Contains `FileDownloader` implementing `Downloader` trait,
 //! `FileIo` implementing `DownloaderIo`, and supporting types.
 
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use futures::StreamExt;
 use kithara_assets::{AssetResource, CoverageIndex, DiskCoverage};
@@ -19,7 +19,7 @@ use crate::session::{FileStreamState, Progress, SharedFileState};
 
 /// Pure I/O executor for file range fetching.
 #[derive(Clone)]
-pub struct FileIo {
+pub(crate) struct FileIo {
     net_client: HttpClient,
     url: url::Url,
     res: AssetResource,
@@ -27,12 +27,12 @@ pub struct FileIo {
 }
 
 /// Plan for downloading a file range.
-pub struct FilePlan {
+pub(crate) struct FilePlan {
     pub(crate) range: std::ops::Range<u64>,
 }
 
 /// Result of a file download operation.
-pub enum FileFetch {
+pub(crate) enum FileFetch {
     /// A chunk was written during sequential streaming.
     Chunk { offset: u64, len: u64 },
     /// A range request completed.
@@ -43,7 +43,7 @@ pub enum FileFetch {
 
 /// File download error.
 #[derive(Debug)]
-pub struct FileDownloadError {
+pub(crate) struct FileDownloadError {
     msg: String,
 }
 
@@ -178,7 +178,7 @@ enum FilePhase {
 /// - Sequential: initial download from start (streaming step mode)
 /// - `GapFilling`: fill holes via HTTP Range requests (batch mode)
 /// - Complete: all data downloaded
-pub struct FileDownloader {
+pub(crate) struct FileDownloader {
     io: FileIo,
     writer: Writer,
     res: AssetResource,
@@ -224,24 +224,20 @@ impl FileDownloader {
             }
         };
 
-        let mut coverage: FileCoverage = match coverage_index {
-            Some(idx) => {
+        let mut coverage: FileCoverage = coverage_index.map_or_else(
+            || {
+                let mc = total.map_or_else(MemCoverage::new, MemCoverage::with_total_size);
+                FileCoverage::Memory(mc)
+            },
+            |idx| {
                 let key = url.to_string();
                 let mut dc = DiskCoverage::open(idx, key);
                 if let Some(size) = total {
                     dc.set_total_size(size);
                 }
                 FileCoverage::Disk(dc)
-            }
-            None => {
-                let mc = if let Some(size) = total {
-                    MemCoverage::with_total_size(size)
-                } else {
-                    MemCoverage::new()
-                };
-                FileCoverage::Memory(mc)
-            }
-        };
+            },
+        );
 
         // If resource already has some data (partial cache) and coverage
         // doesn't know about it yet, mark it. This handles legacy files
@@ -485,7 +481,7 @@ impl Downloader for FileDownloader {
         download_pos.saturating_sub(reader_pos) > limit
     }
 
-    fn wait_ready(&self) -> impl std::future::Future<Output = ()> + Send {
+    fn wait_ready(&self) -> impl Future<Output = ()> {
         // Extract Arc references to avoid capturing &self (which is not Send
         // because Writer contains a non-Sync dyn Stream).
         let progress = Arc::clone(&self.progress);
@@ -498,7 +494,7 @@ impl Downloader for FileDownloader {
         }
     }
 
-    fn demand_signal(&self) -> impl std::future::Future<Output = ()> + Send + use<> {
+    fn demand_signal(&self) -> impl Future<Output = ()> + use<> {
         let shared = Arc::clone(&self.shared);
         async move {
             shared.reader_needs_data.notified().await;

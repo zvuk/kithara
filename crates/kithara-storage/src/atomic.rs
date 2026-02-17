@@ -84,45 +84,43 @@ impl<R: ResourceExt> ResourceExt for Atomic<R> {
     }
 
     fn write_all(&self, data: &[u8]) -> StorageResult<()> {
-        match self.inner.path() {
-            Some(path) => {
-                let path = path.to_path_buf();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(path) = self.inner.path() {
+            let path = path.to_path_buf();
 
-                // Parent directory for temp file (same filesystem = rename is atomic).
-                let parent = path.parent().ok_or_else(|| {
-                    crate::StorageError::Failed("atomic write: no parent dir".to_string())
-                })?;
-                let _ = std::fs::create_dir_all(parent);
+            // Parent directory for temp file (same filesystem = rename is atomic).
+            let parent = path.parent().ok_or_else(|| {
+                crate::StorageError::Failed("atomic write: no parent dir".to_string())
+            })?;
+            let _ = std::fs::create_dir_all(parent);
 
-                // 1. Create unique temp file via `tempfile` crate.
-                let mut tmp = tempfile::NamedTempFile::new_in(parent).map_err(|e| {
-                    crate::StorageError::Failed(format!("atomic write tmpfile: {e}"))
-                })?;
+            // 1. Create unique temp file via `tempfile` crate.
+            let mut tmp = tempfile::NamedTempFile::new_in(parent)
+                .map_err(|e| crate::StorageError::Failed(format!("atomic write tmpfile: {e}")))?;
 
-                // 2. Write data to temp file.
-                std::io::Write::write_all(&mut tmp, data)
-                    .map_err(|e| crate::StorageError::Failed(format!("atomic write: {e}")))?;
+            // 2. Write data to temp file.
+            std::io::Write::write_all(&mut tmp, data)
+                .map_err(|e| crate::StorageError::Failed(format!("atomic write: {e}")))?;
 
-                // 3. Atomic rename (POSIX guarantees atomicity).
-                //    `persist()` does `rename(tmp, target)` and disarms the
-                //    auto-delete on drop.
-                tmp.persist(&path)
-                    .map_err(|e| crate::StorageError::Failed(format!("atomic rename: {e}")))?;
+            // 3. Atomic rename (POSIX guarantees atomicity).
+            //    `persist()` does `rename(tmp, target)` and disarms the
+            //    auto-delete on drop.
+            tmp.persist(&path)
+                .map_err(|e| crate::StorageError::Failed(format!("atomic rename: {e}")))?;
 
-                // 4. Re-open by path — sees new data after rename.
-                //    commit() drops the old mmap (now stale) and opens the
-                //    renamed file as read-only.
-                self.inner.commit(Some(data.len() as u64))
-            }
-            None => {
-                // In-memory: delegate directly.
-                self.inner.write_all(data)
-            }
+            // 4. Re-open by path — sees new data after rename.
+            //    commit() drops the old mmap (now stale) and opens the
+            //    renamed file as read-only.
+            return self.inner.commit(Some(data.len() as u64));
         }
+
+        // In-memory or wasm32: delegate directly.
+        self.inner.write_all(data)
     }
 }
 
 /// Crash-safe mmap-backed resource.
+#[cfg(not(target_arch = "wasm32"))]
 pub type AtomicMmap = Atomic<crate::MmapResource>;
 
 #[cfg(test)]
@@ -150,7 +148,7 @@ mod tests {
     }
 
     fn create_mem_resource() -> MemResource {
-        Resource::open(CancellationToken::new(), MemOptions { initial_data: None }).unwrap()
+        Resource::open(CancellationToken::new(), MemOptions::default()).unwrap()
     }
 
     #[rstest]

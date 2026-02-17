@@ -15,6 +15,7 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
 kithara-assets = { workspace = true }
+kithara-platform = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 reqwest = { workspace = true }
@@ -25,6 +26,15 @@ url = { workspace = true }
 async-trait = { workspace = true }
 unimock = { workspace = true, optional = true }
 hotpath = { workspace = true, optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+reqwest = { workspace = true, features = ["rustls", "stream"] }
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["full"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+reqwest = { workspace = true, features = ["stream"] }
+gloo-timers = { workspace = true }
 
 [dev-dependencies]
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
