@@ -2,7 +2,7 @@
 //!
 //! Graph topology (per slot):
 //! ```text
-//! PlayerNode[slotN] -> VolPanNode[slotN] -> GraphOut
+//! PlayerNode[slotN] -> VolPanNode[slotN] -> MasterVolPanNode -> GraphOut
 //! ```
 //!
 //! `FirewheelCtx` is `!Send`, so it lives on a dedicated rayon pool thread.
@@ -56,11 +56,16 @@ impl Default for EngineConfig {
 enum Cmd {
     Start {
         sample_rate: u32,
+        master_volume: f32,
     },
     Stop,
     AllocateSlot,
     ReleaseSlot {
         slot: SlotId,
+    },
+    /// Update the master volume node in the audio graph.
+    SetMasterVolume {
+        volume: f32,
     },
     /// Query the actual sample rate from `StreamInfo`.
     QuerySampleRate,
@@ -211,6 +216,7 @@ impl Engine for EngineImpl {
 
         self.call_ok(Cmd::Start {
             sample_rate: self.config.sample_rate,
+            master_volume: self.master_volume.load(Ordering::Relaxed),
         })?;
 
         self.running.store(true, Ordering::Release);
@@ -322,7 +328,9 @@ impl Engine for EngineImpl {
     fn set_master_volume(&self, volume: f32) {
         let clamped = volume.clamp(0.0, 1.0);
         self.master_volume.store(clamped, Ordering::Relaxed);
-        // TODO(task-9): send Cmd to engine thread to update VolPanNode in graph
+        if self.running.load(Ordering::Acquire) {
+            let _ = self.call(Cmd::SetMasterVolume { volume: clamped });
+        }
         self.emit(EngineEvent::MasterVolumeChanged { volume: clamped });
     }
 
@@ -379,6 +387,10 @@ struct EngineThreadState {
     slot_nodes: Vec<SlotNodes>,
     next_slot_id: u64,
     max_slots: usize,
+    /// Node ID of the master volume/pan node in the audio graph.
+    master_vol_pan_id: Option<firewheel::node::NodeID>,
+    /// Memo for diffing master volume changes and sending patches.
+    master_vol_pan_memo: Option<firewheel::diff::Memo<firewheel::nodes::volume_pan::VolumePanNode>>,
 }
 
 /// The dedicated rayon pool thread that owns the `FirewheelCtx`.
@@ -388,14 +400,20 @@ fn engine_thread(cmd_rx: &kanal::Receiver<Cmd>, reply_tx: &kanal::Sender<Reply>,
         slot_nodes: Vec::new(),
         next_slot_id: 1,
         max_slots,
+        master_vol_pan_id: None,
+        master_vol_pan_memo: None,
     };
 
     while let Ok(cmd) = cmd_rx.recv() {
         let reply = match cmd {
-            Cmd::Start { sample_rate } => handle_start(&mut state, sample_rate),
+            Cmd::Start {
+                sample_rate,
+                master_volume,
+            } => handle_start(&mut state, sample_rate, master_volume),
             Cmd::Stop => handle_stop(&mut state),
             Cmd::AllocateSlot => handle_allocate_slot(&mut state),
             Cmd::ReleaseSlot { slot } => handle_release_slot(&mut state, slot),
+            Cmd::SetMasterVolume { volume } => handle_set_master_volume(&mut state, volume),
             Cmd::QuerySampleRate => handle_query_sample_rate(&state),
             Cmd::Shutdown => {
                 if let Some(ref mut fw_ctx) = state.ctx {
@@ -408,8 +426,10 @@ fn engine_thread(cmd_rx: &kanal::Receiver<Cmd>, reply_tx: &kanal::Sender<Reply>,
     }
 }
 
-fn handle_start(state: &mut EngineThreadState, sample_rate: u32) -> Reply {
-    use firewheel::{FirewheelConfig, cpal::CpalBackend};
+fn handle_start(state: &mut EngineThreadState, sample_rate: u32, master_volume: f32) -> Reply {
+    use firewheel::{
+        FirewheelConfig, Volume, cpal::CpalBackend, diff::Memo, nodes::volume_pan::VolumePanNode,
+    };
 
     if state.ctx.is_some() {
         return Reply::Err("already started".into());
@@ -432,6 +452,22 @@ fn handle_start(state: &mut EngineThreadState, sample_rate: u32) -> Reply {
 
     match fw_ctx.start_stream(cpal_config) {
         Ok(()) => {
+            // Create a master volume node and connect it to the graph output.
+            let master_node = VolumePanNode::from_volume(Volume::Linear(master_volume));
+            let master_memo = Memo::new(master_node.clone());
+            let master_id = fw_ctx.add_node(master_node, None);
+
+            let graph_out = fw_ctx.graph_out_node_id();
+            if let Err(e) = fw_ctx.connect(master_id, graph_out, &[(0, 0), (1, 1)], false) {
+                return Reply::Err(format!("connect master_vol->graph_out failed: {e}"));
+            }
+
+            if let Err(e) = fw_ctx.update() {
+                warn!("graph update after master vol_pan creation failed: {e:?}");
+            }
+
+            state.master_vol_pan_id = Some(master_id);
+            state.master_vol_pan_memo = Some(master_memo);
             state.ctx = Some(fw_ctx);
             state.slot_nodes.clear();
             Reply::Ok
@@ -446,6 +482,8 @@ fn handle_stop(state: &mut EngineThreadState) -> Reply {
     }
     state.ctx = None;
     state.slot_nodes.clear();
+    state.master_vol_pan_id = None;
+    state.master_vol_pan_memo = None;
     Reply::Ok
 }
 
@@ -477,9 +515,12 @@ fn handle_allocate_slot(state: &mut EngineThreadState) -> Reply {
         return Reply::Err(format!("connect player->volpan failed: {e}"));
     }
 
-    let graph_out = fw_ctx.graph_out_node_id();
-    if let Err(e) = fw_ctx.connect(vol_pan_node_id, graph_out, &[(0, 0), (1, 1)], false) {
-        return Reply::Err(format!("connect volpan->graph_out failed: {e}"));
+    // Connect per-slot volume node to the master volume node.
+    let Some(master_id) = state.master_vol_pan_id else {
+        return Reply::Err("master volume node not initialised".into());
+    };
+    if let Err(e) = fw_ctx.connect(vol_pan_node_id, master_id, &[(0, 0), (1, 1)], false) {
+        return Reply::Err(format!("connect volpan->master_vol failed: {e}"));
     }
 
     if let Err(e) = fw_ctx.update() {
@@ -515,6 +556,34 @@ fn handle_release_slot(state: &mut EngineThreadState, slot: SlotId) -> Reply {
 
     if let Err(e) = fw_ctx.update() {
         warn!(?slot, "graph update after release_slot failed: {e:?}");
+    }
+
+    Reply::Ok
+}
+
+fn handle_set_master_volume(state: &mut EngineThreadState, volume: f32) -> Reply {
+    use firewheel::Volume;
+
+    let Some(ref mut fw_ctx) = state.ctx else {
+        return Reply::Err("engine not running".into());
+    };
+
+    let Some(master_id) = state.master_vol_pan_id else {
+        return Reply::Err("master volume node not initialised".into());
+    };
+
+    let Some(ref mut memo) = state.master_vol_pan_memo else {
+        return Reply::Err("master volume memo not initialised".into());
+    };
+
+    memo.volume = Volume::Linear(volume);
+    {
+        let mut queue = fw_ctx.event_queue(master_id);
+        memo.update_memo(&mut queue);
+    }
+
+    if let Err(e) = fw_ctx.update() {
+        warn!("graph update after set_master_volume failed: {e:?}");
     }
 
     Reply::Ok
