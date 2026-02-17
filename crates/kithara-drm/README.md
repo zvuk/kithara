@@ -15,6 +15,21 @@
 
 AES-128-CBC segment decryption for encrypted HLS streams. Provides a single processing function that integrates with `kithara-assets`' `ProcessingAssets` layer for transparent decryption on commit.
 
+## Usage
+
+```rust
+use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
+
+let key = [0u8; 16]; // AES-128 key from #EXT-X-KEY
+let iv = [0u8; 16];  // IV from playlist or derived from sequence number
+let mut ctx = DecryptContext::new(key, iv);
+
+let encrypted: &[u8] = &ciphertext;
+let mut output = vec![0u8; encrypted.len()];
+let len = aes128_cbc_process_chunk(encrypted, &mut output, &mut ctx, true)?;
+let decrypted = &output[..len];
+```
+
 ## Key Types
 
 | Type | Role |

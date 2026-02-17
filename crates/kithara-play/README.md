@@ -1,50 +1,81 @@
+<div align="center">
+  <img src="../../logo.svg" alt="kithara" width="300">
+</div>
+
+<div align="center">
+
+[![Crates.io](https://img.shields.io/crates/v/kithara-play.svg)](https://crates.io/crates/kithara-play)
+[![Downloads](https://img.shields.io/crates/d/kithara-play.svg)](https://crates.io/crates/kithara-play)
+[![docs.rs](https://docs.rs/kithara-play/badge.svg)](https://docs.rs/kithara-play)
+[![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
+
+</div>
+
 # kithara-play
 
-Trait-based player architecture mirroring Apple AVPlayer API with DJ engine capabilities.
+Trait-based player architecture mirroring Apple AVPlayer API with DJ engine capabilities. Defines **traits only** (no implementations). All traits are independently mockable via `unimock` (behind `test-utils` feature) unless noted otherwise.
 
-## Public contract
+## Usage
 
-The crate defines **traits only** (no implementations). All traits are independently
-mockable via `unimock` (behind `test-utils` feature) unless noted otherwise.
+```rust
+use kithara_play::{Engine, Player, PlayerItem, CrossfadeConfig, PlayError};
 
-## Architecture overview
+// Engine lifecycle
+engine.start()?;
+let slot_a = engine.allocate_slot()?;
 
-```
-                   ┌─────────────────────────────────────────────┐
-                   │                  Engine                      │
-                   │  (singleton — arena of slots, audio output)  │
-                   │                                              │
-                   │  ┌─────────┐  ┌─────────┐  ┌─────────┐     │
-                   │  │ Slot 0  │  │ Slot 1  │  │ Slot N  │     │
-                   │  │ Player  │  │ Player  │  │ Player  │     │
-                   │  │  Item   │  │  Item   │  │  Item   │     │
-                   │  │  Asset  │  │  Asset  │  │  Asset  │     │
-                   │  └────┬────┘  └────┬────┘  └────┬────┘     │
-                   │       │            │            │           │
-                   │       ▼            ▼            ▼           │
-                   │  ┌──────────────────────────────────────┐   │
-                   │  │              Mixer                    │   │
-                   │  │  gain · pan · mute · solo · EQ       │   │
-                   │  │  per-channel + master bus             │   │
-                   │  │  hardware-style crossfader            │   │
-                   │  └────────────────┬─────────────────────┘   │
-                   │                   │                          │
-                   │  ┌────────────────▼─────────────────────┐   │
-                   │  │         DJ subsystem                  │   │
-                   │  │  CrossfadeController · BpmAnalyzer    │   │
-                   │  │  BpmSync · Equalizer · DjEffect       │   │
-                   │  └──────────────────────────────────────┘   │
-                   │                                              │
-                   │  ┌──────────────────────────────────────┐   │
-                   │  │          AudioSession                 │   │
-                   │  │  category · mode · route · latency    │   │
-                   │  └──────────────────────────────────────┘   │
-                   └─────────────────────────────────────────────┘
+// Attach player to slot, load media
+player.replace_current_item(Some(item));
+player.play();
+
+// Time observation
+let id = player.add_periodic_time_observer(interval, Box::new(|time| {
+    println!("position: {:?}", time);
+}));
+
+// Crossfade between two slots
+let slot_b = engine.allocate_slot()?;
+engine.crossfade(slot_a, slot_b, CrossfadeConfig::default())?;
+
+// Cleanup
+engine.release_slot(slot_a)?;
+engine.stop()?;
 ```
 
-## Trait catalogue
+## Architecture
 
-### AVPlayer API surface (no unimock — high-level consumer API)
+```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+graph TD
+    subgraph Engine ["Engine (singleton -- arena of slots, audio output)"]
+        S0["Slot 0<br/><i>Player · Item · Asset</i>"]
+        S1["Slot 1<br/><i>Player · Item · Asset</i>"]
+        SN["Slot N<br/><i>Player · Item · Asset</i>"]
+
+        MX["Mixer<br/><i>gain · pan · mute · solo · EQ</i><br/><i>per-channel + master bus</i><br/><i>hardware-style crossfader</i>"]
+
+        DJ["DJ subsystem<br/><i>CrossfadeController · BpmAnalyzer</i><br/><i>BpmSync · Equalizer · DjEffect</i>"]
+
+        AS["AudioSession<br/><i>category · mode · route · latency</i>"]
+
+        S0 --> MX
+        S1 --> MX
+        SN --> MX
+        MX --> DJ
+        DJ ~~~ AS
+    end
+
+    style S0 fill:#7ea87e,color:#fff
+    style S1 fill:#7ea87e,color:#fff
+    style SN fill:#7ea87e,color:#fff
+    style MX fill:#6b8cae,color:#fff
+    style DJ fill:#c4a35a,color:#fff
+    style AS fill:#8b6b8b,color:#fff
+```
+
+## Key Types
+
+### AVPlayer API surface
 
 | Trait | AVPlayer equivalent | Key methods |
 |-------|-------------------|-------------|
@@ -54,21 +85,16 @@ mockable via `unimock` (behind `test-utils` feature) unless noted otherwise.
 | `QueuePlayer` | `AVQueuePlayer` | `items`, `advance_to_next_item`, `insert`, `remove` |
 | `AudioSession` | `AVAudioSession` | `category`, `mode`, `set_active`, `output_volume`, `current_route` |
 
-`Player` and `QueuePlayer` use `Box<dyn Fn>` callbacks for time observers, which
-makes them unsuitable for unimock's matching ergonomics. They are tested through
-integration tests.
+`Player` and `QueuePlayer` use `Box<dyn Fn>` callbacks for time observers, which makes them unsuitable for unimock's matching ergonomics. They are tested through integration tests.
 
-`Asset` has unimock support (simple return types).
-`AudioSession` has unimock support.
-
-### Engine & mixing (unimock-enabled)
+### Engine and mixing
 
 | Trait | Role |
 |-------|------|
 | `Engine` | Singleton lifecycle, arena slot management, master output, crossfade delegation |
 | `Mixer` | Per-channel gain/pan/mute/solo, master bus, per-channel 3-band EQ, hardware crossfader |
 
-### DJ subsystem (unimock-enabled)
+### DJ subsystem
 
 | Trait | Role |
 |-------|------|
@@ -78,46 +104,42 @@ integration tests.
 | `Equalizer` | Per-slot 3-band EQ with kill switches, configurable frequencies |
 | `DjEffect` | Pluggable effects (filter, echo, reverb, flanger, brake, etc.) |
 
-## Key types
+### Identity and time
 
-### Identity
-
-- `SlotId` — arena position in the engine (opaque, `Copy`)
-- `ObserverId` — time observer handle (opaque, `Copy`)
-
-### Time
-
-- `MediaTime` — high-precision time with value/timescale (mirrors `CMTime`), supports arithmetic and `Ord`
+| Type | Role |
+|------|------|
+| `SlotId` | Arena position in the engine (opaque, `Copy`) |
+| `ObserverId` | Time observer handle (opaque, `Copy`) |
+| `MediaTime` | High-precision time with value/timescale (mirrors `CMTime`), supports arithmetic and `Ord` |
 
 ### Status enums
 
-- `PlayerStatus` — `Unknown | ReadyToPlay | Failed`
-- `TimeControlStatus` — `Paused | WaitingToPlay | Playing`
-- `ItemStatus` — `Unknown | ReadyToPlay | Failed`
-- `WaitingReason` — why playback is stalled
-- `ActionAtItemEnd` — `Advance | Pause | None`
+- `PlayerStatus` -- `Unknown | ReadyToPlay | Failed`
+- `TimeControlStatus` -- `Paused | WaitingToPlay | Playing`
+- `ItemStatus` -- `Unknown | ReadyToPlay | Failed`
+- `WaitingReason` -- why playback is stalled
+- `ActionAtItemEnd` -- `Advance | Pause | None`
 
-### Audio session
+### Audio session types
 
-- `SessionCategory` — `Ambient | SoloAmbient | Playback | Record | PlayAndRecord | MultiRoute`
-- `SessionMode` — `Default | VoiceChat | VideoChat | GameChat | Measurement | MoviePlayback | SpokenAudio`
-- `SessionOptions` — mix/duck/bluetooth/airplay flags
-- `PortType`, `PortDescription`, `RouteDescription` — audio routing
+- `SessionCategory` -- `Ambient | SoloAmbient | Playback | Record | PlayAndRecord | MultiRoute`
+- `SessionMode` -- `Default | VoiceChat | VideoChat | GameChat | Measurement | MoviePlayback | SpokenAudio`
+- `SessionOptions` -- mix/duck/bluetooth/airplay flags
+- `PortType`, `PortDescription`, `RouteDescription` -- audio routing
 
 ### DJ types
 
-- `CrossfadeCurve` — `EqualPower | Linear | SCurve | ConstantPower | FastFadeIn | FastFadeOut`
-- `CrossfadeConfig` — duration, curve, beat-aligned flag, cut points
-- `BpmInfo` — detected BPM, confidence, first beat offset
-- `BeatGrid` — BPM, offset, beats per bar
-- `EqBand` — `Low | Mid | High`
-- `EqConfig` — frequency and Q per band
-- `DjEffectKind` — `Filter | Echo | Reverb | Flanger | Phaser | Brake | Spinback | Backspin | Gate | BitCrusher`
+- `CrossfadeCurve` -- `EqualPower | Linear | SCurve | ConstantPower | FastFadeIn | FastFadeOut`
+- `CrossfadeConfig` -- duration, curve, beat-aligned flag, cut points
+- `BpmInfo` -- detected BPM, confidence, first beat offset
+- `BeatGrid` -- BPM, offset, beats per bar
+- `EqBand` -- `Low | Mid | High`
+- `EqConfig` -- frequency and Q per band
+- `DjEffectKind` -- `Filter | Echo | Reverb | Flanger | Phaser | Brake | Spinback | Backspin | Gate | BitCrusher`
 
-## Event system
+## Event System
 
-Events use `tokio::sync::broadcast`. Subscribe via `player.subscribe()` or
-`engine.subscribe()`.
+Events use `tokio::sync::broadcast`. Subscribe via `player.subscribe()` or `engine.subscribe()`.
 
 | Enum | Scope |
 |------|-------|
@@ -127,31 +149,37 @@ Events use `tokio::sync::broadcast`. Subscribe via `player.subscribe()` or
 | `SessionEvent` | Interruption, route change, media services |
 | `DjEvent` | BPM detection, beat tick, sync engage/disengage |
 
-## Engine lifecycle
+## Engine Lifecycle
 
-1. `Engine::start()` — activate audio output
-2. `Engine::allocate_slot()` → `SlotId` — reserve arena position
+1. `Engine::start()` -- activate audio output
+2. `Engine::allocate_slot()` -> `SlotId` -- reserve arena position
 3. Attach a `Player` to the slot (player holds `slot_id()`)
-4. `Player::replace_current_item(Some(item))` — load media
-5. `Player::play()` — engine begins pulling PCM from slot
+4. `Player::replace_current_item(Some(item))` -- load media
+5. `Player::play()` -- engine begins pulling PCM from slot
 6. For crossfade: allocate second slot, load second player, call `Engine::crossfade(from, to, config)`
-7. `Engine::release_slot(id)` — return arena position
-8. `Engine::stop()` — deactivate audio output
+7. `Engine::release_slot(id)` -- return arena position
+8. `Engine::stop()` -- deactivate audio output
 
-## Crossfade flow
+## Crossfade Flow
 
+```mermaid
+gantt
+    title Crossfade Timeline
+    dateFormat X
+    axisFormat %s
+
+    section Slot A
+        Full volume   :a1, 0, 6
+        Fade out      :a2, 6, 10
+
+    section Slot B
+        Fade in       :b1, 6, 10
+        Full volume   :b2, 10, 16
 ```
-Slot A: ████████████▓▓▓▓▓▓░░░░ (fade out)
-Slot B:             ░░░░▓▓▓▓▓▓████████████ (fade in)
-        ↑                      ↑
-        crossfade start        crossfade end
-```
 
-`CrossfadeController::start(a, b, config)` initiates the transition.
-When `beat_aligned: true`, the controller waits for the next beat boundary
-before starting the fade.
+`CrossfadeController::start(a, b, config)` initiates the transition. When `beat_aligned: true`, the controller waits for the next beat boundary before starting the fade.
 
-## DJ mixing flow
+## DJ Mixing Flow
 
 1. Analyze both tracks: `BpmAnalyzer::analyze(slot_a)`, `BpmAnalyzer::analyze(slot_b)`
 2. Sync tempos: `BpmSync::sync(follower: slot_b, leader: slot_a)`
@@ -160,6 +188,12 @@ before starting the fade.
 5. Crossfade: `CrossfadeController::start(slot_a, slot_b, config)`
 6. During transition: gradually restore bass on incoming, cut bass on outgoing
 7. Cleanup: `BpmSync::unsync(slot_b)`, release slot A
+
+## Feature Flags
+
+| Feature | Effect |
+|---------|--------|
+| `test-utils` | Mock trait generation via `unimock` |
 
 ## Invariants
 
@@ -170,7 +204,6 @@ before starting the fade.
 - All `#[non_exhaustive]` enums and structs require builder or constructor
 - `MediaTime::INVALID` has `timescale == 0`; all arithmetic on invalid times returns invalid
 
-## Error handling
+## Integration
 
-`PlayError` covers all failure modes. No `unwrap()`/`expect()` in production code.
-Implementations must propagate errors via `Result<T, PlayError>`.
+Defines the public player API consumed by higher-level crates. All traits are `Send + Sync + 'static`. `PlayError` covers all failure modes. No `unwrap()`/`expect()` in production code -- implementations must propagate errors via `Result<T, PlayError>`.

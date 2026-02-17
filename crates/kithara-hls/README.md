@@ -99,14 +99,23 @@ graph LR
 
 Segments are logically stitched into a contiguous byte stream:
 
+```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+graph LR
+    subgraph "Single variant"
+        I[Init] --> S0[Seg0] --> S1[Seg1] --> S2[Seg2] --> M1[...]
+    end
 ```
-Single variant:
-  [Init] [Seg0] [Seg1] [Seg2] ...
-  0──────┬──────┬──────┬──────┤
 
-Mid-stream ABR switch (V0 → V1):
-  [V0 Seg0] [V0 Seg1] (fence) [V1 Init] [V1 Seg2] [V1 Seg3] ...
-  0─────────┬─────────┬────────┬─────────┬──────────┤
+```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+graph LR
+    subgraph "Mid-stream ABR switch (V0 → V1)"
+        V0S0["V0 Seg0"] --> V0S1["V0 Seg1"] --> F["⛔ fence"]
+        F --> V1I["V1 Init"] --> V1S2["V1 Seg2"] --> V1S3["V1 Seg3"] --> M2[...]
+    end
+
+    style F fill:#c44,color:#fff
 ```
 
 `SegmentIndex` maintains a mapping of `(variant, segment_index) → SegmentEntry` plus a `RangeSet<u64>` for loaded byte ranges. On ABR switch, `fence_at()` discards old variant segments.

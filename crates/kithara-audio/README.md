@@ -102,13 +102,24 @@ graph TB
 
 ## Pipeline Architecture
 
-```
-Stream<T> (Read + Seek)
-  → DecoderFactory creates Box<dyn InnerDecoder>
-    → StreamAudioSource (format change detection, effects chain)
-      → AudioWorker (blocking thread, command handling)
-        → kanal channel (bounded, backpressure)
-          → Audio<S> (consumer: PcmReader, Iterator, rodio::Source)
+```mermaid
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+graph LR
+    ST["Stream&lt;T&gt;<br/><i>Read + Seek</i>"]
+    DF["DecoderFactory<br/><i>Box&lt;dyn InnerDecoder&gt;</i>"]
+    SAS["StreamAudioSource<br/><i>format change, effects</i>"]
+    AW["AudioWorker<br/><i>blocking thread, commands</i>"]
+    KC["kanal channel<br/><i>bounded, backpressure</i>"]
+    A["Audio&lt;S&gt;<br/><i>PcmReader, Iterator, rodio::Source</i>"]
+
+    ST --> DF --> SAS --> AW --> KC --> A
+
+    style ST fill:#8b6b8b,color:#fff
+    style DF fill:#6b8cae,color:#fff
+    style SAS fill:#6b8cae,color:#fff
+    style AW fill:#6b8cae,color:#fff
+    style KC fill:#5b8a5b,color:#fff
+    style A fill:#4a6fa5,color:#fff
 ```
 
 ## Resampler Quality Levels
