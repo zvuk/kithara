@@ -8,9 +8,10 @@
 
 use std::time::Duration;
 
-use kithara_audio::{Audio, AudioConfig, web_audio::PcmRingBuffer};
+use kithara_audio::{Audio, AudioConfig};
 use kithara_file::{FileConfig, FileSrc};
 use kithara_stream::Stream;
+use kithara_wasm::ring_buffer::PcmRingBuffer;
 use rstest::rstest;
 
 use crate::common::wav::create_test_wav;

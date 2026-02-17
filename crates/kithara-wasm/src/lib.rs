@@ -1,5 +1,7 @@
 // WASM HLS player library entry point.
 
+pub mod ring_buffer;
+
 #[cfg(target_arch = "wasm32")]
 mod player;
 

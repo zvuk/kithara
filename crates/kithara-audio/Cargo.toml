@@ -43,8 +43,6 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
 # Enable Apple AudioToolbox hardware decoder (macOS/iOS)
 apple = ["kithara-decode/apple"]
-# Enable WASM AudioWorklet audio output
-web-audio = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["full"] }

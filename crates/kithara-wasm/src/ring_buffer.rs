@@ -1,7 +1,8 @@
-//! WASM audio output via `AudioWorklet`.
+//! PCM ring buffer for `AudioWorklet` consumption.
 //!
-//! Provides a PCM ring buffer that bridges Rust decode output to a JS
-//! `AudioWorklet` processor via `SharedArrayBuffer` (WASM linear memory).
+//! Single-producer (Rust decode loop), single-consumer (JS `AudioWorklet`).
+//! Synchronization via two [`AtomicU32`] counters and `SharedArrayBuffer`
+//! (WASM linear memory).
 
 use std::sync::atomic::{AtomicU32, Ordering};
 

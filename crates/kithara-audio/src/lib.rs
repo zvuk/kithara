@@ -38,17 +38,14 @@
 
 // Internal modules
 pub mod effects;
+#[cfg(any(test, feature = "test-utils"))]
+pub mod mock;
 mod pipeline;
 mod resampler;
 #[cfg(feature = "rodio")]
 mod rodio;
 mod traits;
 mod types;
-#[cfg(feature = "web-audio")]
-pub mod web_audio;
-
-#[cfg(any(test, feature = "test-utils"))]
-pub mod mock;
 
 // Public API exports
 pub use effects::eq::{EqBandConfig, EqEffect, generate_log_spaced_bands};

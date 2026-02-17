@@ -6,7 +6,9 @@
 
 use std::{cell::RefCell, time::Duration};
 
-use kithara_audio::{Audio, AudioConfig, EventBus, web_audio::PcmRingBuffer};
+use kithara_audio::{Audio, AudioConfig, EventBus};
+
+use crate::ring_buffer::PcmRingBuffer;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_platform::ThreadPool;
 use kithara_stream::Stream;
