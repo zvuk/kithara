@@ -1,3 +1,5 @@
+pub use unimock;
+
 pub use crate::traits::asset::AssetMock;
 pub use crate::traits::dj::bpm::{BpmAnalyzerMock, BpmSyncMock};
 pub use crate::traits::dj::crossfade::CrossfadeControllerMock;
