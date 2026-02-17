@@ -45,7 +45,6 @@ mod resampler;
 #[cfg(feature = "rodio")]
 mod rodio;
 mod traits;
-mod types;
 
 // Public API exports
 pub use effects::eq::{EqBandConfig, EqEffect, generate_log_spaced_bands};
@@ -56,4 +55,4 @@ pub use resampler::ResamplerQuality;
 pub use resampler::{ResamplerParams, ResamplerProcessor};
 #[doc(hidden)]
 pub use traits::AudioEffect;
-pub use types::{DecodeError, DecodeResult, PcmReader};
+pub use traits::{DecodeError, DecodeResult, PcmReader};

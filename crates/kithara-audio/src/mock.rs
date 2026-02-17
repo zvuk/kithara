@@ -1,3 +1,3 @@
 pub use unimock;
 
-pub use crate::traits::AudioEffectMock;
+pub use crate::traits::{AudioEffectMock, PcmReaderMock};

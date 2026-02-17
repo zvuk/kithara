@@ -411,7 +411,7 @@ mod tests {
             n
         }
 
-        fn read_planar(&mut self, output: &mut [&mut [f32]]) -> usize {
+        fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
             if self.eof || output.is_empty() {
                 return 0;
             }
