@@ -60,7 +60,7 @@ use crate::{
 /// Configuration for Symphonia-based decoders.
 #[doc(hidden)]
 #[derive(Default)]
-pub struct SymphoniaConfig {
+pub(crate) struct SymphoniaConfig {
     /// Enable data verification (slower but safer).
     pub verify: bool,
     /// Enable gapless playback.

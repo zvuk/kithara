@@ -242,7 +242,7 @@ impl Assets for DiskAssetStore {
         if self.cancel.is_cancelled() {
             return Err(kithara_storage::StorageError::Cancelled.into());
         }
-        delete_asset_dir(&self.root_dir, &self.asset_root).map_err(std::convert::Into::into)
+        delete_asset_dir(&self.root_dir, &self.asset_root).map_err(Into::into)
     }
 }
 

@@ -43,14 +43,31 @@ deny:
   script:
     - cargo deny check
 
+machete:
+  stage: lint
+  before_script:
+    - test -f "$CARGO_HOME/bin/cargo-machete" || cargo install cargo-machete --locked
+  script:
+    - cargo machete
+  allow_failure: true
+
+arch:
+  stage: lint
+  before_script: []
+  script:
+    - bash scripts/ci/check-arch.sh
+
 # --- test stage ---
 
 test:
   stage: test
   needs: [lint]
   timeout: 20 minutes
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - test -f "$CARGO_HOME/bin/cargo-nextest" || cargo install cargo-nextest --locked
   script:
-    - cargo test --workspace
+    - cargo nextest run --workspace
 
 msrv:
   stage: test
@@ -72,6 +89,32 @@ wasm:
     - cargo check -p kithara-assets --target wasm32-unknown-unknown
     - cargo check -p kithara-hls --target wasm32-unknown-unknown
     - cargo check -p kithara-decode --target wasm32-unknown-unknown
+
+hack:
+  stage: test
+  needs: [lint]
+  timeout: 30 minutes
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - test -f "$CARGO_HOME/bin/cargo-hack" || cargo install cargo-hack --locked
+  script:
+    - cargo hack check --feature-powerset --no-dev-deps --depth 2 --workspace
+      --exclude kithara-wasm
+  allow_failure: true
+
+semver:
+  stage: test
+  needs: [lint]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - test -f "$CARGO_HOME/bin/cargo-semver-checks" || cargo install cargo-semver-checks --locked
+  script:
+    - cargo semver-checks check-release --workspace
+  allow_failure: true
+  rules:
+    - changes:
+        - crates/*/src/**/*
+        - crates/*/Cargo.toml
 
 # --- quality stage ---
 

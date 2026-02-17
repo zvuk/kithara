@@ -777,7 +777,7 @@ impl<S: Send> PcmReader for Audio<S> {
             .store(sample_rate.get(), Ordering::Relaxed);
     }
 
-    fn preload_notify(&self) -> Option<Arc<tokio::sync::Notify>> {
+    fn preload_notify(&self) -> Option<Arc<Notify>> {
         Some(self.preload_notify.clone())
     }
 

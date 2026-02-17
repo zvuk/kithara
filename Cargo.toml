@@ -19,10 +19,15 @@ members = [
     "tests",
 ]
 
+[workspace.lints.rust]
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+
 [workspace.lints.rustdoc]
 broken_intra_doc_links = "deny"
 
 [workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
 unwrap_used = "deny"
 allow_attributes = "deny"
 doc_markdown = "warn"

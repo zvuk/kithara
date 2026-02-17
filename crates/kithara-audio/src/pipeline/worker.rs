@@ -12,7 +12,7 @@ use crate::traits::AudioEffect;
 
 /// Command for audio worker.
 #[derive(Debug)]
-pub enum AudioCommand {
+pub(crate) enum AudioCommand {
     /// Seek to position with new epoch.
     Seek { position: Duration, epoch: u64 },
 }
