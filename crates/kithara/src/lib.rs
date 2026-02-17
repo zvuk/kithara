@@ -60,6 +60,11 @@ pub mod abr {
 }
 
 #[cfg(feature = "hls")]
+pub mod drm {
+    pub use kithara_drm::*;
+}
+
+#[cfg(feature = "hls")]
 pub mod hls {
     pub use kithara_hls::*;
 }

@@ -1,4 +1,6 @@
 #![forbid(unsafe_code)]
+// unimock macro generates code triggering ignored_unit_patterns
+#![allow(clippy::ignored_unit_patterns)]
 
 //! Source trait for sync random-access data.
 //!

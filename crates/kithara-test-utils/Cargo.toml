@@ -1,0 +1,21 @@
+[package]
+name = "kithara-test-utils"
+version = "0.1.0"
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Shared test utilities for kithara workspace"
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+kithara-stream = { workspace = true }
+kithara-storage = { workspace = true }
+rstest = { workspace = true }
+tempfile = { workspace = true }
+tokio-util = { workspace = true }
+tracing-subscriber = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }

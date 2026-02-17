@@ -6,16 +6,16 @@
 
 use std::time::Duration;
 
-use kithara_assets::StoreOptions;
-use kithara_audio::{Audio, AudioConfig};
-use kithara_events::{AudioEvent, EventBus};
-use kithara_file::{File, FileConfig};
-use kithara_stream::Stream;
+use kithara::assets::StoreOptions;
+use kithara::audio::{Audio, AudioConfig};
+use kithara::events::{AudioEvent, EventBus};
+use kithara::file::{File, FileConfig};
+use kithara::stream::Stream;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
 use super::fixture::AudioTestServer;
-use crate::common::fixtures::temp_dir;
+use kithara_test_utils::temp_dir;
 
 #[fixture]
 async fn server() -> AudioTestServer {
@@ -266,8 +266,8 @@ async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_
     let mut got_seek = false;
     while let Ok(ev) = events_rx.try_recv() {
         match ev {
-            kithara_events::Event::Audio(AudioEvent::FormatDetected { .. }) => got_format = true,
-            kithara_events::Event::Audio(AudioEvent::SeekComplete { .. }) => got_seek = true,
+            kithara::events::Event::Audio(AudioEvent::FormatDetected { .. }) => got_format = true,
+            kithara::events::Event::Audio(AudioEvent::SeekComplete { .. }) => got_seek = true,
             _ => {}
         }
     }

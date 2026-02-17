@@ -6,9 +6,9 @@
 
 use std::sync::{Arc, atomic::AtomicU32};
 
-use kithara_audio::{AudioEffect, ResamplerParams, ResamplerQuality};
-use kithara_bufpool::pcm_pool;
-use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara::audio::{AudioEffect, ResamplerParams, ResamplerQuality};
+use kithara::bufpool::pcm_pool;
+use kithara::decode::{PcmChunk, PcmMeta, PcmSpec};
 
 /// Create a test PCM chunk with specified sample count.
 fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {
@@ -33,7 +33,7 @@ fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {
 }
 
 #[hotpath::measure]
-fn resampler_process_single(resampler: &mut kithara_audio::ResamplerProcessor, chunk: &PcmChunk) {
+fn resampler_process_single(resampler: &mut kithara::audio::ResamplerProcessor, chunk: &PcmChunk) {
     let _ = resampler.process(chunk.clone());
 }
 
@@ -65,7 +65,7 @@ fn perf_resampler_quality_comparison() {
             input_spec.channels as usize,
         )
         .with_quality(quality);
-        let mut resampler = kithara_audio::ResamplerProcessor::new(params);
+        let mut resampler = kithara::audio::ResamplerProcessor::new(params);
 
         let chunk = create_test_chunk(test_frames, input_spec);
 
@@ -88,7 +88,7 @@ fn perf_resampler_quality_comparison() {
 
 #[hotpath::measure]
 fn resampler_passthrough_process(
-    resampler: &mut kithara_audio::ResamplerProcessor,
+    resampler: &mut kithara::audio::ResamplerProcessor,
     chunk: &PcmChunk,
 ) {
     let _ = resampler.process(chunk.clone());
@@ -107,7 +107,7 @@ fn perf_resampler_passthrough_detection() {
     let host_rate = Arc::new(AtomicU32::new(spec.sample_rate));
     let params = ResamplerParams::new(host_rate, spec.sample_rate, spec.channels as usize)
         .with_quality(ResamplerQuality::Good);
-    let mut resampler = kithara_audio::ResamplerProcessor::new(params);
+    let mut resampler = kithara::audio::ResamplerProcessor::new(params);
 
     let chunk = create_test_chunk(2048, spec);
 
@@ -173,7 +173,7 @@ fn perf_resampler_deinterleave_overhead() {
 /// Measures: process overhead, actual resampling work, buffer management.
 #[hotpath::measure]
 fn resampler_full_process_cycle(
-    resampler: &mut kithara_audio::ResamplerProcessor,
+    resampler: &mut kithara::audio::ResamplerProcessor,
     chunk: &PcmChunk,
 ) -> Option<PcmChunk> {
     resampler.process(chunk.clone())
@@ -198,7 +198,7 @@ fn perf_resampler_detailed_breakdown() {
         input_spec.channels as usize,
     )
     .with_quality(ResamplerQuality::High);
-    let mut resampler = kithara_audio::ResamplerProcessor::new(params);
+    let mut resampler = kithara::audio::ResamplerProcessor::new(params);
 
     // Different chunk sizes to see buffer management overhead
     let chunk_sizes = [512, 1024, 2048, 4096];

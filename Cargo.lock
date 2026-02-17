@@ -2159,6 +2159,7 @@ dependencies = [
  "kithara-audio",
  "kithara-bufpool",
  "kithara-decode",
+ "kithara-drm",
  "kithara-events",
  "kithara-file",
  "kithara-hls",
@@ -2236,6 +2237,7 @@ dependencies = [
  "kithara-platform",
  "kithara-storage",
  "kithara-stream",
+ "kithara-test-utils",
  "reqwest",
  "rodio",
  "rstest",
@@ -2270,6 +2272,7 @@ dependencies = [
  "hotpath",
  "kithara-bufpool",
  "kithara-stream",
+ "kithara-test-utils",
  "rstest",
  "symphonia 0.6.0",
  "thiserror 2.0.18",
@@ -2380,19 +2383,9 @@ dependencies = [
  "hls_m3u8",
  "hotpath",
  "kanal",
- "kithara-abr",
+ "kithara",
  "kithara-assets",
- "kithara-audio",
- "kithara-bufpool",
- "kithara-decode",
- "kithara-drm",
- "kithara-events",
- "kithara-file",
- "kithara-hls",
- "kithara-net",
- "kithara-platform",
- "kithara-storage",
- "kithara-stream",
+ "kithara-test-utils",
  "kithara-wasm",
  "mmap-io",
  "reqwest",
@@ -2524,6 +2517,20 @@ dependencies = [
  "unimock",
  "url",
  "wasm-bindgen-futures",
+]
+
+[[package]]
+name = "kithara-test-utils"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "kithara-storage",
+ "kithara-stream",
+ "rstest",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio-util",
+ "tracing-subscriber",
 ]
 
 [[package]]

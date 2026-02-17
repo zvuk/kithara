@@ -6,8 +6,6 @@
 
 // Native-only test modules
 #[cfg(not(target_arch = "wasm32"))]
-mod common;
-#[cfg(not(target_arch = "wasm32"))]
 mod kithara_assets;
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_audio;

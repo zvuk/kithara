@@ -9,18 +9,18 @@
 
 use std::{sync::Arc, time::Duration};
 
-use kithara_assets::{AssetStoreBuilder, StoreOptions};
-use kithara_audio::{Audio, AudioConfig};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_storage::ResourceExt;
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
+use kithara::assets::{AssetStoreBuilder, StoreOptions};
+use kithara::audio::{Audio, AudioConfig};
+use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
+use kithara::storage::ResourceExt;
+use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture::{HlsTestServer, HlsTestServerConfig};
-use crate::common::wav::create_saw_wav;
+use kithara_test_utils::wav::create_saw_wav;
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
@@ -30,7 +30,7 @@ fn ephemeral_backend_creates_mem_resource() {
         .asset_root(Some("test"))
         .build();
 
-    let key = kithara_assets::ResourceKey::new("seg_0.m4s");
+    let key = kithara::assets::ResourceKey::new("seg_0.m4s");
     let res = backend
         .open_resource(&key)
         .expect("open ephemeral resource");
@@ -50,7 +50,7 @@ fn disk_backend_creates_mmap_resource() {
         .ephemeral(false)
         .build();
 
-    let key = kithara_assets::ResourceKey::new("seg_0.m4s");
+    let key = kithara::assets::ResourceKey::new("seg_0.m4s");
     let res = backend.open_resource(&key).expect("open disk resource");
     assert!(
         res.path().is_some(),

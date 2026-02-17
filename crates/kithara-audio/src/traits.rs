@@ -1,3 +1,6 @@
+// unimock macro generates code triggering ignored_unit_patterns
+#![allow(clippy::ignored_unit_patterns)]
+
 //! Audio pipeline traits.
 
 use std::{num::NonZeroU32, sync::Arc, time::Duration};

@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 //! Integration tests for unified event bus.
 
-use kithara_events::{Event, EventBus, HlsEvent};
+use kithara::events::{Event, EventBus, HlsEvent};
 
 #[test]
 fn test_event_bus_publish_subscribe() {

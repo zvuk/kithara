@@ -1,3 +1,5 @@
+//! Common rstest fixtures for integration tests.
+
 use std::path::PathBuf;
 
 use rstest::*;

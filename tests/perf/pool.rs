@@ -6,7 +6,7 @@
 
 use std::{sync::Arc, thread};
 
-use kithara_bufpool::{PcmPool, pcm_pool};
+use kithara::bufpool::{PcmPool, pcm_pool};
 
 #[hotpath::measure]
 fn pool_get_put_cycle(pool: &PcmPool) {

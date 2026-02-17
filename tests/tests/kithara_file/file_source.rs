@@ -7,14 +7,14 @@ use std::{
 
 use axum::{Router, extract::Request, response::Response, routing::get};
 use bytes::Bytes;
-use kithara_assets::StoreOptions;
-use kithara_file::{File, FileConfig};
-use kithara_stream::Stream;
+use kithara::assets::StoreOptions;
+use kithara::file::{File, FileConfig};
+use kithara::stream::Stream;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio::net::TcpListener;
 
-use crate::common::fixtures::temp_dir;
+use kithara_test_utils::temp_dir;
 
 // Test Server Fixtures
 

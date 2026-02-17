@@ -3,7 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use fixture::*;
-use kithara_hls::{AssetsBackend, HlsResult, fetch::FetchManager, keys::KeyManager};
+use kithara::hls::{AssetsBackend, HlsResult, fetch::FetchManager, keys::KeyManager};
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
 
@@ -24,7 +24,7 @@ async fn test_server() -> TestServer {
 async fn fetch_and_cache_key(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
@@ -51,13 +51,13 @@ async fn fetch_and_cache_key(
 async fn key_processor_applied(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let processor = Arc::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
+    let processor = Arc::new(|key: bytes::Bytes, _context: kithara::hls::KeyContext| {
         // Simple processor that just adds a prefix
         let mut processed = Vec::new();
         processed.extend_from_slice(b"processed:");
@@ -85,14 +85,14 @@ async fn key_processor_applied(
 async fn key_manager_with_different_processors(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
     // Test with uppercase processor
-    let uppercase_processor = Arc::new(|key: bytes::Bytes, _context: kithara_hls::KeyContext| {
+    let uppercase_processor = Arc::new(|key: bytes::Bytes, _context: kithara::hls::KeyContext| {
         let upper = key.to_ascii_uppercase();
         Ok(bytes::Bytes::from(upper))
     });
@@ -116,7 +116,7 @@ async fn key_manager_with_different_processors(
 #[tokio::test]
 async fn key_manager_error_handling(
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
@@ -131,7 +131,7 @@ async fn key_manager_error_handling(
     // Try to get key from invalid URL
     let invalid_url =
         url::Url::parse("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")
-            .map_err(|e| kithara_hls::HlsError::InvalidUrl(e.to_string()))?;
+            .map_err(|e| kithara::hls::HlsError::InvalidUrl(e.to_string()))?;
 
     let result = key_manager.get_raw_key(&invalid_url, None).await;
 
@@ -147,7 +147,7 @@ async fn key_manager_error_handling(
 async fn key_manager_caching_behavior(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
@@ -179,13 +179,13 @@ async fn key_manager_caching_behavior(
 async fn key_manager_with_context(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
 
-    let processor = Arc::new(|key: bytes::Bytes, context: kithara_hls::KeyContext| {
+    let processor = Arc::new(|key: bytes::Bytes, context: kithara::hls::KeyContext| {
         // Use context to modify key
         let mut processed = Vec::new();
         processed.extend_from_slice(b"ctx:");
@@ -224,7 +224,7 @@ async fn key_manager_with_context(
 async fn aes128_key_decrypts_ciphertext(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
@@ -248,10 +248,10 @@ async fn aes128_key_decrypts_ciphertext(
 
     // Decrypt ciphertext through kithara-drm (the production decrypt path)
     let cipher = net.get_bytes(cipher_url, None).await?;
-    let mut ctx = kithara_drm::DecryptContext::new(key, iv);
+    let mut ctx = kithara::drm::DecryptContext::new(key, iv);
     let mut output = vec![0u8; cipher.len()];
-    let written = kithara_drm::aes128_cbc_process_chunk(&cipher, &mut output, &mut ctx, true)
-        .map_err(kithara_hls::HlsError::KeyProcessing)?;
+    let written = kithara::drm::aes128_cbc_process_chunk(&cipher, &mut output, &mut ctx, true)
+        .map_err(kithara::hls::HlsError::KeyProcessing)?;
 
     assert!(output[..written].starts_with(fixture::aes128_plaintext_segment().as_slice()));
 

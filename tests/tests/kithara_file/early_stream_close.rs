@@ -24,9 +24,9 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use kithara_assets::StoreOptions;
-use kithara_file::{File, FileConfig, FileSrc};
-use kithara_stream::Stream;
+use kithara::assets::StoreOptions;
+use kithara::file::{File, FileConfig, FileSrc};
+use kithara::stream::Stream;
 use tempfile::TempDir;
 use tokio::{net::TcpListener, sync::oneshot};
 use tokio_util::sync::CancellationToken;

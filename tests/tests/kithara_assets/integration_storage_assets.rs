@@ -2,12 +2,12 @@
 
 use std::time::Duration;
 
-use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
-use kithara_bufpool::byte_pool;
-use kithara_storage::ResourceExt;
+use kithara::assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
+use kithara::bufpool::byte_pool;
+use kithara::storage::ResourceExt;
 use rstest::rstest;
 
-use crate::common::fixtures::temp_dir;
+use kithara_test_utils::temp_dir;
 
 /// Helper to read bytes from resource into a pooled buffer
 fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {

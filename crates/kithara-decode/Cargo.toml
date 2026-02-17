@@ -30,5 +30,6 @@ android = []
 test-utils = ["unimock"]
 
 [dev-dependencies]
+kithara-test-utils = { workspace = true }
 rstest = { workspace = true }
 unimock = { workspace = true }

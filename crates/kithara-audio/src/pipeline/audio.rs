@@ -801,8 +801,8 @@ impl<S: Send> PcmReader for Audio<S> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_decode::test_support::create_test_wav;
     use kithara_stream::Stream;
+    use kithara_test_utils::create_test_wav;
 
     use super::*;
 
