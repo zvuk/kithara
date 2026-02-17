@@ -80,17 +80,12 @@ pub mod storage {
 }
 
 // Mock module — re-exports mocks from all subcrates with test-utils.
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(feature = "test-utils")]
 pub mod mock {
-    pub use kithara_audio::mock::unimock;
-
-    pub use kithara_audio::mock::{AudioEffectMock, PcmReaderMock};
-    pub use kithara_decode::mock::InnerDecoderMock;
-    pub use kithara_play::mock::{
-        AssetMock, AudioSessionMock, BpmAnalyzerMock, BpmSyncMock, CrossfadeControllerMock,
-        DjEffectMock, EngineMock, EqualizerMock, MixerMock,
-    };
-    pub use kithara_stream::mock::SourceMock;
+    pub use kithara_audio::mock::*;
+    pub use kithara_decode::mock::*;
+    pub use kithara_play::mock::*;
+    pub use kithara_stream::mock::*;
 }
 
 /// Prelude — flat imports for common types.
