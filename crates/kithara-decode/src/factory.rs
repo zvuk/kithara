@@ -6,13 +6,14 @@
 //! # Example
 //!
 //! ```ignore
-//! use kithara_decode::{DecoderFactory, CodecSelector, DecoderConfig};
-//! use kithara_stream::AudioCodec;
+//! use kithara_decode::{DecoderFactory, DecoderConfig};
+//! use kithara_stream::{AudioCodec, MediaInfo};
 //!
 //! let file = std::fs::File::open("audio.mp3")?;
-//! let decoder = DecoderFactory::create(
+//! let media_info = MediaInfo { codec: Some(AudioCodec::Mp3), ..Default::default() };
+//! let decoder = DecoderFactory::create_from_media_info(
 //!     file,
-//!     CodecSelector::Exact(AudioCodec::Mp3),
+//!     &media_info,
 //!     DecoderConfig::default(),
 //! )?;
 //! ```
@@ -22,6 +23,7 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
+use kithara_bufpool::PcmPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, StreamContext};
 
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
@@ -36,7 +38,8 @@ use crate::{
 
 /// Selector for choosing how to detect/specify the codec.
 #[derive(Debug, Clone)]
-pub enum CodecSelector {
+#[cfg_attr(not(test), expect(dead_code))]
+pub(crate) enum CodecSelector {
     /// Known codec - no probing needed.
     Exact(AudioCodec),
     /// Probe with hints.
@@ -47,7 +50,7 @@ pub enum CodecSelector {
 
 /// Hints for codec probing.
 #[derive(Debug, Clone, Default)]
-pub struct ProbeHint {
+pub(crate) struct ProbeHint {
     /// Known codec (highest priority).
     pub codec: Option<AudioCodec>,
     /// Container format hint.
@@ -74,6 +77,10 @@ pub struct DecoderConfig {
     pub stream_ctx: Option<Arc<dyn StreamContext>>,
     /// Epoch counter for decoder recreation tracking.
     pub epoch: u64,
+    /// Optional PCM buffer pool override.
+    ///
+    /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
+    pub pcm_pool: Option<PcmPool>,
 }
 
 impl Default for DecoderConfig {
@@ -85,6 +92,7 @@ impl Default for DecoderConfig {
             hint: None,
             stream_ctx: None,
             epoch: 0,
+            pcm_pool: None,
         }
     }
 }
@@ -119,7 +127,7 @@ impl DecoderFactory {
     ///
     /// Returns [`DecodeError::ProbeFailed`] if codec cannot be determined.
     /// Returns [`DecodeError::UnsupportedCodec`] if the codec is not supported.
-    pub fn create<R>(
+    pub(crate) fn create<R>(
         source: R,
         selector: &CodecSelector,
         config: DecoderConfig,
@@ -165,6 +173,7 @@ impl DecoderFactory {
             hint: config.hint.clone(),
             stream_ctx: config.stream_ctx.clone(),
             epoch: config.epoch,
+            pcm_pool: config.pcm_pool.clone(),
             ..Default::default()
         };
 
@@ -185,6 +194,7 @@ impl DecoderFactory {
         let apple_config = AppleConfig {
             byte_len_handle: config.byte_len_handle.clone(),
             container,
+            pcm_pool: config.pcm_pool.clone(),
         };
 
         let source: Box<dyn crate::traits::DecoderInput> = Box::new(source);
@@ -458,6 +468,7 @@ impl DecoderFactory {
             probe_no_seek: true,
             stream_ctx: config.stream_ctx.clone(),
             epoch: config.epoch,
+            pcm_pool: config.pcm_pool,
         };
 
         // Use Pcm as a dummy codec marker — the actual codec is determined
@@ -540,6 +551,7 @@ mod tests {
             hint: Some("mp3".to_string()),
             stream_ctx: None,
             epoch: 0,
+            pcm_pool: None,
         };
         assert!(config.prefer_hardware);
         assert!(config.byte_len_handle.is_some());

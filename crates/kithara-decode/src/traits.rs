@@ -126,9 +126,6 @@ pub trait AudioDecoder: Send + 'static {
     /// or the position is invalid.
     fn seek(&mut self, pos: Duration) -> DecodeResult<()>;
 
-    /// Get current playback position.
-    fn position(&self) -> Duration;
-
     /// Get total duration if known.
     ///
     /// Returns `None` if the duration cannot be determined (e.g., for
@@ -176,9 +173,6 @@ pub trait InnerDecoder: Send + 'static {
     fn metadata(&self) -> TrackMetadata {
         TrackMetadata::default()
     }
-
-    /// Reset decoder state (called after seek).
-    fn reset(&mut self) {}
 }
 
 #[cfg(test)]

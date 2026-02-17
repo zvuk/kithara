@@ -7,7 +7,7 @@
 use std::time::Duration;
 
 use kithara_assets::StoreOptions;
-use kithara_audio::{Audio, AudioConfig, AudioEvent, AudioPipelineEvent};
+use kithara_audio::{Audio, AudioConfig, AudioEvent, EventBus};
 use kithara_file::{File, FileConfig};
 use kithara_stream::Stream;
 use rstest::{fixture, rstest};
@@ -233,15 +233,15 @@ async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_
     let server = server.await;
     let url = server.mp3_url();
 
-    let (events_tx, mut events_rx) =
-        tokio::sync::broadcast::channel::<AudioPipelineEvent<kithara_file::FileEvent>>(64);
+    let bus = EventBus::new(64);
+    let mut events_rx = bus.subscribe();
 
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_look_ahead_bytes(None);
     let config = AudioConfig::<File>::new(file_config)
         .with_hint("mp3")
-        .with_events(events_tx);
+        .with_events(bus);
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
     // Read + seek in blocking thread.
@@ -265,8 +265,8 @@ async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_
     let mut got_seek = false;
     while let Ok(ev) = events_rx.try_recv() {
         match ev {
-            AudioPipelineEvent::Audio(AudioEvent::FormatDetected { .. }) => got_format = true,
-            AudioPipelineEvent::Audio(AudioEvent::SeekComplete { .. }) => got_seek = true,
+            kithara_events::Event::Audio(AudioEvent::FormatDetected { .. }) => got_format = true,
+            kithara_events::Event::Audio(AudioEvent::SeekComplete { .. }) => got_seek = true,
             _ => {}
         }
     }

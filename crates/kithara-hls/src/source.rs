@@ -16,10 +16,11 @@ use std::{
 use crossbeam_queue::SegQueue;
 use kithara_abr::Variant;
 use kithara_assets::ResourceKey;
+use kithara_events::{EventBus, HlsEvent};
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{MediaInfo, Source, StreamError, StreamResult};
 use parking_lot::{Condvar, Mutex};
-use tokio::sync::{Notify, broadcast};
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -27,7 +28,6 @@ use crate::{
     HlsError,
     download_state::{DownloadProgress, DownloadState, LoadedSegment},
     downloader::{HlsDownloader, HlsIo},
-    events::HlsEvent,
     fetch::DefaultFetchManager,
     playlist::{PlaylistAccess, PlaylistState},
 };
@@ -98,7 +98,7 @@ pub struct HlsSource {
     fetch: Arc<DefaultFetchManager>,
     shared: Arc<SharedSegments>,
     playlist_state: Arc<PlaylistState>,
-    events_tx: Option<broadcast::Sender<HlsEvent>>,
+    bus: EventBus,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
     variant_fence: Option<usize>,
     /// Downloader backend. Dropped with this source, cancelling the downloader.
@@ -106,12 +106,6 @@ pub struct HlsSource {
 }
 
 impl HlsSource {
-    fn emit_event(&self, event: HlsEvent) {
-        if let Some(ref tx) = self.events_tx {
-            let _ = tx.send(event);
-        }
-    }
-
     /// Read from a loaded segment.
     fn read_from_entry(
         &self,
@@ -167,7 +161,6 @@ impl HlsSource {
 }
 
 impl Source for HlsSource {
-    type Item = u8;
     type Error = HlsError;
 
     fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
@@ -315,7 +308,7 @@ impl Source for HlsSource {
             self.shared.reader_advanced.notify_one();
 
             let total = self.shared.segments.lock().max_end_offset();
-            self.emit_event(HlsEvent::PlaybackProgress {
+            self.bus.publish(HlsEvent::PlaybackProgress {
                 position: new_pos,
                 total: Some(total),
             });
@@ -364,6 +357,7 @@ pub fn build_pair(
     config: &crate::config::HlsConfig,
     coverage_index: Option<Arc<kithara_assets::CoverageIndex<kithara_storage::MmapResource>>>,
     playlist_state: Arc<PlaylistState>,
+    bus: EventBus,
 ) -> (HlsDownloader, HlsSource) {
     let abr_variants: Vec<Variant> = variants
         .iter()
@@ -389,7 +383,7 @@ pub fn build_pair(
         abr,
         byte_offset: 0,
         shared: Arc::clone(&shared),
-        events_tx: config.events_tx.clone(),
+        bus: bus.clone(),
         look_ahead_bytes: config.look_ahead_bytes,
         prefetch_count: config.download_batch_size.max(1),
         coverage_index,
@@ -399,7 +393,7 @@ pub fn build_pair(
         fetch,
         shared,
         playlist_state,
-        events_tx: config.events_tx.clone(),
+        bus,
         variant_fence: None,
         _backend: None,
     };
@@ -460,7 +454,7 @@ mod tests {
             fetch,
             shared,
             playlist_state,
-            events_tx: None,
+            bus: EventBus::new(16),
             variant_fence: None,
             _backend: None,
         }

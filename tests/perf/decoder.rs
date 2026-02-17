@@ -6,7 +6,9 @@
 
 use std::io::Cursor;
 
-use kithara_decode::{AudioCodec, CodecType, ContainerFormat, Decoder, Symphonia, SymphoniaConfig};
+use kithara_decode::{
+    AudioCodec, AudioDecoder, CodecType, ContainerFormat, Symphonia, SymphoniaConfig,
+};
 
 /// PCM codec marker for WAV files.
 struct Pcm;
@@ -14,7 +16,7 @@ impl CodecType for Pcm {
     const CODEC: AudioCodec = AudioCodec::Pcm;
 }
 
-type WavDecoder = Decoder<Symphonia<Pcm>>;
+type WavDecoder = Symphonia<Pcm>;
 
 fn wav_config() -> SymphoniaConfig {
     SymphoniaConfig {
@@ -78,7 +80,7 @@ fn perf_decoder_wav_decode_loop() {
     let wav_data = create_test_wav(44100);
     let cursor = Cursor::new(wav_data);
 
-    let mut decoder = WavDecoder::new(Box::new(cursor), wav_config()).unwrap();
+    let mut decoder = WavDecoder::create(Box::new(cursor), wav_config()).unwrap();
 
     let mut chunk_count = 0;
 
@@ -95,7 +97,7 @@ fn perf_decoder_wav_decode_loop() {
 #[hotpath::measure]
 fn decoder_probe_single(wav_data: &[u8]) {
     let cursor = Cursor::new(wav_data.to_vec());
-    let _decoder = WavDecoder::new(Box::new(cursor), wav_config()).unwrap();
+    let _decoder = WavDecoder::create(Box::new(cursor), wav_config()).unwrap();
 }
 
 #[test]
@@ -129,7 +131,7 @@ fn perf_decoder_f32_conversion() {
     let _guard = hotpath::FunctionsGuardBuilder::new("decoder_f32_conversion").build();
     let wav_data = create_test_wav(44100);
     let cursor = Cursor::new(wav_data);
-    let mut decoder = WavDecoder::new(Box::new(cursor), wav_config()).unwrap();
+    let mut decoder = WavDecoder::create(Box::new(cursor), wav_config()).unwrap();
 
     let mut chunk_count = 0;
     while decoder_chunk_process(&mut decoder).is_some() {
@@ -151,7 +153,7 @@ fn perf_decoder_throughput() {
     // Create 5 seconds of audio
     let wav_data = create_test_wav(44100 * 5);
     let cursor = Cursor::new(wav_data);
-    let mut decoder = WavDecoder::new(Box::new(cursor), wav_config()).unwrap();
+    let mut decoder = WavDecoder::create(Box::new(cursor), wav_config()).unwrap();
 
     let start = std::time::Instant::now();
     let mut total_samples = 0;

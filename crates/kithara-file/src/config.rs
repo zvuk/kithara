@@ -1,13 +1,11 @@
 use std::path::PathBuf;
 
 use kithara_assets::StoreOptions;
+use kithara_events::EventBus;
 use kithara_net::NetOptions;
 use kithara_stream::ThreadPool;
-use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
-
-use crate::FileEvent;
 
 /// Source of a file stream: either a remote URL or a local path.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,10 +35,10 @@ impl From<PathBuf> for FileSrc {
 pub struct FileConfig {
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// Events broadcast channel capacity (used when `events_tx` is not provided).
-    pub events_channel_capacity: usize,
-    /// Events broadcast sender (optional - if not provided, events are not sent).
-    pub events_tx: Option<broadcast::Sender<FileEvent>>,
+    /// Event bus channel capacity (used when `bus` is not provided).
+    pub event_channel_capacity: usize,
+    /// Event bus (optional - if not provided, one is created internally).
+    pub bus: Option<EventBus>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     ///
     /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
@@ -69,8 +67,8 @@ impl Default for FileConfig {
         Self {
             cancel: None,
 
-            events_channel_capacity: 16,
-            events_tx: None,
+            event_channel_capacity: 16,
+            bus: None,
             look_ahead_bytes: None,
             name: None,
             net: NetOptions::default(),
@@ -89,8 +87,8 @@ impl FileConfig {
         Self {
             cancel: None,
 
-            events_channel_capacity: 16,
-            events_tx: None,
+            event_channel_capacity: 16,
+            bus: None,
             look_ahead_bytes: None,
             name: None,
             net: NetOptions::default(),
@@ -127,15 +125,15 @@ impl FileConfig {
         self
     }
 
-    /// Set events sender for subscribing to file events.
-    pub fn with_events(mut self, events_tx: broadcast::Sender<FileEvent>) -> Self {
-        self.events_tx = Some(events_tx);
+    /// Set event bus for subscribing to file events.
+    pub fn with_events(mut self, bus: EventBus) -> Self {
+        self.bus = Some(bus);
         self
     }
 
-    /// Set events broadcast channel capacity.
-    pub fn with_events_channel_capacity(mut self, capacity: usize) -> Self {
-        self.events_channel_capacity = capacity;
+    /// Set event bus channel capacity.
+    pub fn with_event_channel_capacity(mut self, capacity: usize) -> Self {
+        self.event_channel_capacity = capacity;
         self
     }
 
@@ -174,7 +172,7 @@ mod tests {
         assert!(
             matches!(&config.src, FileSrc::Remote(url) if url.as_str() == "http://example.com/audio.mp3")
         );
-        assert!(config.events_tx.is_none());
+        assert!(config.bus.is_none());
         assert!(config.cancel.is_none());
     }
 
@@ -190,7 +188,7 @@ mod tests {
         let store = StoreOptions::default();
         let config = FileConfig::new(test_src()).with_store(store);
 
-        assert!(config.events_tx.is_none());
+        assert!(config.bus.is_none());
     }
 
     #[test]
@@ -198,7 +196,7 @@ mod tests {
         let net = NetOptions::default();
         let config = FileConfig::new(test_src()).with_net(net);
 
-        assert!(config.events_tx.is_none());
+        assert!(config.bus.is_none());
     }
 
     #[test]
@@ -211,10 +209,10 @@ mod tests {
 
     #[test]
     fn test_with_events() {
-        let (events_tx, _events_rx) = broadcast::channel(32);
-        let config = FileConfig::new(test_src()).with_events(events_tx);
+        let bus = EventBus::new(32);
+        let config = FileConfig::new(test_src()).with_events(bus);
 
-        assert!(config.events_tx.is_some());
+        assert!(config.bus.is_some());
     }
 
     #[test]
@@ -222,16 +220,16 @@ mod tests {
         let store = StoreOptions::default();
         let net = NetOptions::default();
         let cancel = CancellationToken::new();
-        let (events_tx, _) = broadcast::channel(32);
+        let bus = EventBus::new(32);
 
         let config = FileConfig::new(test_src())
             .with_store(store)
             .with_net(net)
             .with_cancel(cancel.clone())
-            .with_events(events_tx);
+            .with_events(bus);
 
         assert!(config.cancel.is_some());
-        assert!(config.events_tx.is_some());
+        assert!(config.bus.is_some());
     }
 
     #[test]
@@ -244,11 +242,11 @@ mod tests {
 
     #[test]
     fn test_clone() {
-        let (events_tx, _) = broadcast::channel(32);
-        let config = FileConfig::new(test_src()).with_events(events_tx);
+        let bus = EventBus::new(32);
+        let config = FileConfig::new(test_src()).with_events(bus);
 
         let cloned = config.clone();
 
-        assert!(cloned.events_tx.is_some());
+        assert!(cloned.bus.is_some());
     }
 }

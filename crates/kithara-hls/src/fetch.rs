@@ -45,11 +45,6 @@ impl SegmentType {
             Self::Init => None,
         }
     }
-
-    /// Check if this is an init segment.
-    pub fn is_init(self) -> bool {
-        matches!(self, Self::Init)
-    }
 }
 
 /// Segment metadata (data is on disk, not in memory).
@@ -178,10 +173,6 @@ impl<N: Net> FetchManager<N> {
 
     pub fn backend(&self) -> &AssetsBackend<DecryptContext> {
         &self.backend
-    }
-
-    pub fn key_manager(&self) -> Option<&Arc<crate::keys::KeyManager>> {
-        self.key_manager.as_ref()
     }
 
     // ---- Low-level fetch ----
@@ -540,34 +531,6 @@ impl<N: Net> FetchManager<N> {
                 "Invalid Content-Length '{content_length}' for {url}: {e}",
             ))
         })
-    }
-
-    /// Get URLs for all segments in a variant (init + media segments).
-    ///
-    /// Returns (`init_url`, `media_urls`) where `init_url` is None for TS streams.
-    /// Does NOT download segments — only resolves URLs from playlist.
-    pub async fn get_segment_urls(&self, variant: usize) -> HlsResult<(Option<Url>, Vec<Url>)> {
-        let (media_url, playlist) = self.load_media_playlist(variant).await?;
-
-        let init_url = if let Some(ref init_segment) = playlist.init_segment {
-            Some(media_url.join(&init_segment.uri).map_err(|e| {
-                HlsError::InvalidUrl(format!("Failed to resolve init segment URL: {e}"))
-            })?)
-        } else {
-            None
-        };
-
-        let media_urls: Result<Vec<Url>, HlsError> = playlist
-            .segments
-            .iter()
-            .map(|segment| {
-                media_url.join(&segment.uri).map_err(|e| {
-                    HlsError::InvalidUrl(format!("Failed to resolve segment URL: {e}"))
-                })
-            })
-            .collect();
-
-        Ok((init_url, media_urls?))
     }
 }
 

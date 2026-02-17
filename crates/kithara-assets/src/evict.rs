@@ -2,6 +2,7 @@
 
 use std::{collections::HashSet, path::Path, sync::Arc};
 
+use kithara_bufpool::BytePool;
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -34,7 +35,7 @@ pub trait ByteRecorder: Send + Sync {
 /// - Byte accounting is best-effort and must be explicitly updated via
 ///   `touch_asset_bytes`; the evictor does NOT walk the filesystem.
 /// - When `enabled` is `false`, all operations delegate directly to the inner layer.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct EvictAssets<A>
 where
     A: Assets,
@@ -44,6 +45,16 @@ where
     seen: Arc<Mutex<HashSet<String>>>,
     cancel: CancellationToken,
     enabled: bool,
+    pool: BytePool,
+}
+
+impl<A: Assets> std::fmt::Debug for EvictAssets<A> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EvictAssets")
+            .field("cfg", &self.cfg)
+            .field("enabled", &self.enabled)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<A> EvictAssets<A>
@@ -59,6 +70,7 @@ where
         cfg: EvictConfig,
         cancel: CancellationToken,
         enabled: bool,
+        pool: BytePool,
     ) -> Self {
         Self {
             inner,
@@ -66,6 +78,7 @@ where
             seen: Arc::new(Mutex::new(HashSet::new())),
             cancel,
             enabled,
+            pool,
         }
     }
 
@@ -163,11 +176,11 @@ where
 
     fn open_lru(&self) -> AssetsResult<LruIndex<A::IndexRes>> {
         let res = self.inner.open_lru_index_resource()?;
-        Ok(LruIndex::new(res))
+        Ok(LruIndex::new(res, self.pool.clone()))
     }
 
     fn open_pins(&self) -> AssetsResult<PinsIndex<A::IndexRes>> {
-        PinsIndex::open(self.inner())
+        PinsIndex::open(self.inner(), self.pool.clone())
     }
 
     fn mark_seen(&self, asset_root: &str) -> bool {

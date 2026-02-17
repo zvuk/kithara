@@ -8,8 +8,6 @@ pub type NetResult<T> = Result<T, NetError>;
 pub enum NetError {
     #[error("HTTP request failed: {0}")]
     Http(String),
-    #[error("Invalid range header: {0}")]
-    InvalidRange(String),
     #[error("Timeout")]
     Timeout,
     #[error("Request failed after {max_retries} retries: {source}")]
@@ -30,11 +28,6 @@ impl NetError {
     /// Creates a timeout error
     pub fn timeout() -> Self {
         Self::Timeout
-    }
-
-    /// Creates an HTTP error from a generic string
-    pub fn http<S: Into<String>>(msg: S) -> Self {
-        Self::Http(msg.into())
     }
 
     /// Checks if this error is considered retryable
@@ -61,7 +54,7 @@ impl NetError {
                 // Retry on 5xx server errors and 429 Too Many Requests
                 *status >= 500 || *status == 429 || *status == 408
             }
-            Self::InvalidRange(_) | Self::Unimplemented | Self::Cancelled => false,
+            Self::Unimplemented | Self::Cancelled => false,
         }
     }
 }
@@ -86,7 +79,6 @@ mod tests {
     // Test error creation methods
     #[rstest]
     #[case::timeout_error(NetError::timeout(), NetError::Timeout)]
-    #[case::http_from_string(NetError::http("test error"), NetError::Http("test error".to_string()))]
     #[tokio::test]
     async fn test_error_creation_methods(
         #[case] created_error: NetError,
@@ -94,7 +86,6 @@ mod tests {
     ) {
         match (created_error, expected_error) {
             (NetError::Timeout, NetError::Timeout) => (),
-            (NetError::Http(a), NetError::Http(b)) => assert_eq!(a, b),
             _ => panic!("Errors don't match"),
         }
     }
@@ -105,7 +96,6 @@ mod tests {
     #[case::http_500(NetError::HttpError { status: 500, url: Url::parse("http://example.com").unwrap(), body: None }, true)]
     #[case::http_429(NetError::HttpError { status: 429, url: Url::parse("http://example.com").unwrap(), body: None }, true)]
     #[case::http_404(NetError::HttpError { status: 404, url: Url::parse("http://example.com").unwrap(), body: None }, false)]
-    #[case::invalid_range(NetError::InvalidRange("test".to_string()), false)]
     #[case::unimplemented(NetError::Unimplemented, false)]
     #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) }, false)]
     #[tokio::test]
@@ -118,10 +108,6 @@ mod tests {
     #[case::http_error(
         NetError::Http("connection failed".to_string()),
         "HTTP request failed: connection failed"
-    )]
-    #[case::invalid_range(
-        NetError::InvalidRange("invalid byte range".to_string()),
-        "Invalid range header: invalid byte range"
     )]
     #[case::timeout(NetError::Timeout, "Timeout")]
     #[case::unimplemented(NetError::Unimplemented, "not implemented")]
@@ -158,7 +144,6 @@ mod tests {
     #[rstest]
     #[case::timeout(NetError::Timeout)]
     #[case::http_error(NetError::HttpError { status: 500, url: Url::parse("http://example.com").unwrap(), body: None })]
-    #[case::invalid_range(NetError::InvalidRange("test".to_string()))]
     #[case::unimplemented(NetError::Unimplemented)]
     #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) })]
     #[tokio::test]

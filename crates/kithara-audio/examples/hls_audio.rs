@@ -4,18 +4,17 @@
 //! cargo run -p kithara-audio --example hls_audio --features rodio [URL]
 //! ```
 
-use std::{env::args, error::Error, time::Duration};
+use std::{env::args, error::Error};
 
-use kithara_audio::{Audio, AudioConfig};
+use kithara_audio::{Audio, AudioConfig, EventBus};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_stream::Stream;
-use tokio::sync::broadcast;
+use kithara_stream::{Stream, ThreadPool};
 use tracing::{info, metadata::LevelFilter, warn};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
 #[tokio::main(flavor = "current_thread")]
-#[hotpath::main]
+#[cfg_attr(feature = "perf", hotpath::main)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -36,14 +35,17 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     info!("Opening HLS stream: {url}");
 
-    let (events_tx, mut events_rx) = broadcast::channel(128);
-    let hls_config = HlsConfig::new(url).with_abr(AbrOptions {
-        mode: AbrMode::Auto(Some(0)),
-        ..Default::default()
-    });
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_prefer_hardware(true)
-        .with_events(events_tx);
+    let bus = EventBus::new(128);
+    let mut events_rx = bus.subscribe();
+    let pool = ThreadPool::with_num_threads(2)?;
+    let hls_config = HlsConfig::new(url)
+        .with_thread_pool(pool)
+        .with_events(bus)
+        .with_abr(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..Default::default()
+        });
+    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(true);
     let audio = Audio::<Stream<Hls>>::new(config).await?;
 
     info!("Starting playback... (Press Ctrl+C to stop)");
@@ -73,7 +75,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             recv = events_rx.recv() => {
                 match recv {
                     Ok(ev) => info!(?ev),
-                    Err(broadcast::error::RecvError::Lagged(n)) => warn!(n, "events lagged"),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => warn!(n, "events lagged"),
                     Err(_) => break,
                 }
             }

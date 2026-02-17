@@ -3,22 +3,23 @@
 use std::{ops::Range, sync::Arc};
 
 use crossbeam_queue::SegQueue;
-use kithara_assets::{AssetResource, AssetsBackend};
+use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
+use kithara_events::{EventBus, FileEvent};
 use kithara_net::{HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
-use tokio::sync::{Notify, broadcast};
+use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
 use url::Url;
 
-use crate::{error::SourceError, events::FileEvent};
+use crate::error::SourceError;
 
 #[derive(Debug, Clone)]
 pub(crate) struct FileStreamState {
     pub(crate) url: Url,
     pub(crate) cancel: CancellationToken,
     pub(crate) res: AssetResource,
-    pub(crate) events: broadcast::Sender<FileEvent>,
+    pub(crate) bus: EventBus,
     pub(crate) len: Option<u64>,
 }
 
@@ -28,8 +29,8 @@ impl FileStreamState {
         net_client: &HttpClient,
         url: Url,
         cancel: CancellationToken,
-        events_tx: Option<broadcast::Sender<FileEvent>>,
-        events_channel_capacity: usize,
+        bus: Option<EventBus>,
+        event_channel_capacity: usize,
     ) -> Result<Arc<Self>, SourceError> {
         let headers = net_client.head(url.clone(), None).await?;
         let len = headers
@@ -37,17 +38,16 @@ impl FileStreamState {
             .or_else(|| headers.get("Content-Length"))
             .and_then(|v| v.parse::<u64>().ok());
 
-        let key = (&url).into();
+        let key = ResourceKey::from_url(&url);
         let res = assets.open_resource(&key).map_err(SourceError::Assets)?;
 
-        let events =
-            events_tx.unwrap_or_else(|| broadcast::channel(events_channel_capacity.max(1)).0);
+        let bus = bus.unwrap_or_else(|| EventBus::new(event_channel_capacity));
 
         Ok(Arc::new(Self {
             url,
             cancel,
             res,
-            events,
+            bus,
             len,
         }))
     }
@@ -60,8 +60,8 @@ impl FileStreamState {
         &self.res
     }
 
-    pub(crate) fn events(&self) -> &broadcast::Sender<FileEvent> {
-        &self.events
+    pub(crate) fn bus(&self) -> &EventBus {
+        &self.bus
     }
 
     pub(crate) fn len(&self) -> Option<u64> {
@@ -175,7 +175,7 @@ impl SharedFileState {
 pub struct FileSource {
     res: AssetResource,
     progress: Arc<Progress>,
-    events_tx: broadcast::Sender<FileEvent>,
+    bus: EventBus,
     len: Option<u64>,
     shared: Option<Arc<SharedFileState>>,
     /// Downloader backend. Dropped with this source, cancelling the downloader.
@@ -187,13 +187,13 @@ impl FileSource {
     pub(crate) fn new(
         res: AssetResource,
         progress: Arc<Progress>,
-        events_tx: broadcast::Sender<FileEvent>,
+        bus: EventBus,
         len: Option<u64>,
     ) -> Self {
         Self {
             res,
             progress,
-            events_tx,
+            bus,
             len,
             shared: None,
             _backend: None,
@@ -204,7 +204,7 @@ impl FileSource {
     pub(crate) fn with_shared(
         res: AssetResource,
         progress: Arc<Progress>,
-        events_tx: broadcast::Sender<FileEvent>,
+        bus: EventBus,
         len: Option<u64>,
         shared: Arc<SharedFileState>,
         backend: kithara_stream::Backend,
@@ -212,7 +212,7 @@ impl FileSource {
         Self {
             res,
             progress,
-            events_tx,
+            bus,
             len,
             shared: Some(shared),
             _backend: Some(backend),
@@ -221,7 +221,6 @@ impl FileSource {
 }
 
 impl kithara_stream::Source for FileSource {
-    type Item = u8;
     type Error = SourceError;
 
     fn wait_range(
@@ -280,7 +279,7 @@ impl kithara_stream::Source for FileSource {
             let new_pos = offset.saturating_add(n as u64);
             self.progress.set_read_pos(new_pos);
 
-            let _ = self.events_tx.send(FileEvent::PlaybackProgress {
+            self.bus.publish(FileEvent::PlaybackProgress {
                 position: new_pos,
                 total: self.len,
             });
@@ -305,7 +304,6 @@ mod tests {
 
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use tempfile::TempDir;
-    use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
@@ -423,14 +421,9 @@ mod tests {
         let res = create_committed_resource(&dir, data);
 
         let progress = Arc::new(Progress::new());
-        let (events_tx, _rx) = broadcast::channel(16);
+        let bus = EventBus::new(16);
 
-        let mut source = FileSource::new(
-            res,
-            Arc::clone(&progress),
-            events_tx,
-            Some(data.len() as u64),
-        );
+        let mut source = FileSource::new(res, Arc::clone(&progress), bus, Some(data.len() as u64));
 
         let mut buf = [0u8; 11];
         let n = source.read_at(0, &mut buf).unwrap();
@@ -454,9 +447,9 @@ mod tests {
         let res = create_committed_resource(&dir, b"abc");
 
         let progress = Arc::new(Progress::new());
-        let (events_tx, _rx) = broadcast::channel(16);
+        let bus = EventBus::new(16);
 
-        let source = FileSource::new(res, progress, events_tx, Some(12345));
+        let source = FileSource::new(res, progress, bus, Some(12345));
 
         // len() should return the explicit value provided at construction.
         use kithara_stream::Source;

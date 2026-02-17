@@ -47,14 +47,6 @@ impl ResourceKey {
         Self::Relative(rel_path)
     }
 
-    /// Returns the relative path if this is a Relative key.
-    pub fn rel_path(&self) -> Option<&str> {
-        match self {
-            Self::Relative(s) => Some(s),
-            Self::Absolute(_) => None,
-        }
-    }
-
     /// Returns true if this is an absolute path key.
     pub fn is_absolute(&self) -> bool {
         matches!(self, Self::Absolute(_))
@@ -66,24 +58,6 @@ impl ResourceKey {
             Self::Absolute(p) => Some(p),
             Self::Relative(_) => None,
         }
-    }
-}
-
-impl From<&Url> for ResourceKey {
-    fn from(url: &Url) -> Self {
-        Self::from_url(url)
-    }
-}
-
-impl From<&str> for ResourceKey {
-    fn from(s: &str) -> Self {
-        Self::new(s)
-    }
-}
-
-impl From<String> for ResourceKey {
-    fn from(s: String) -> Self {
-        Self::new(s)
     }
 }
 

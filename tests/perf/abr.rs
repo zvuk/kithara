@@ -7,8 +7,8 @@
 use std::time::{Duration, Instant};
 
 use kithara_abr::{
-    AbrDecision, AbrMode, AbrOptions, DefaultAbrController as AbrController, ThroughputSample,
-    ThroughputSampleSource, Variant,
+    AbrController, AbrDecision, AbrMode, AbrOptions, ThroughputSample, ThroughputSampleSource,
+    Variant,
 };
 
 /// Helper to create variants from bitrates.

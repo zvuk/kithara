@@ -113,8 +113,6 @@ pub trait ResourceExt: Send + Sync + 'static {
     /// No-op if the resource is already Active.
     fn reactivate(&self) -> StorageResult<()>;
 
-    // ---- Convenience methods (atomic-style) ----
-
     /// Read the entire resource contents into a caller-provided buffer.
     ///
     /// The buffer is resized to fit the data. Returns the number of bytes read.

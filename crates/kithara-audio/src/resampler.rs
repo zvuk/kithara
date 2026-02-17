@@ -151,6 +151,8 @@ pub struct ResamplerParams {
     pub chunk_size: usize,
     /// Shared atomic for dynamic host sample rate tracking.
     pub host_sample_rate: Arc<AtomicU32>,
+    /// Shared PCM pool for output buffers.
+    pub pool: Option<PcmPool>,
     /// Quality preset controlling resampling algorithm.
     pub quality: ResamplerQuality,
     /// Initial source sample rate.
@@ -164,20 +166,21 @@ impl ResamplerParams {
             channels,
             chunk_size: 4096,
             host_sample_rate,
+            pool: None,
             quality: ResamplerQuality::default(),
             source_sample_rate,
         }
     }
 
-    /// Set resampling quality preset.
-    pub fn with_quality(mut self, quality: ResamplerQuality) -> Self {
-        self.quality = quality;
+    /// Set shared PCM pool for output buffers.
+    pub fn with_pool(mut self, pool: Option<PcmPool>) -> Self {
+        self.pool = pool;
         self
     }
 
-    /// Set the number of input frames per resampler processing block.
-    pub fn with_chunk_size(mut self, chunk_size: usize) -> Self {
-        self.chunk_size = chunk_size;
+    /// Set resampling quality preset.
+    pub fn with_quality(mut self, quality: ResamplerQuality) -> Self {
+        self.quality = quality;
         self
     }
 }
@@ -225,7 +228,7 @@ impl ResamplerProcessor {
             host_sample_rate: params.host_sample_rate,
             input_buffer: smallvec_new_vecs(channels),
             output_spec,
-            pool: pcm_pool().clone(),
+            pool: params.pool.unwrap_or_else(|| pcm_pool().clone()),
             quality: params.quality,
             resampler: None,
             source_rate,

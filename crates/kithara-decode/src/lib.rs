@@ -12,21 +12,13 @@
 //!
 //! ## Usage
 //!
-//! For static type selection:
+//! Use [`DecoderFactory`] for runtime codec selection:
 //! ```ignore
-//! use kithara_decode::{Decoder, SymphoniaAac, SymphoniaConfig};
+//! use kithara_decode::{DecoderFactory, DecoderConfig};
 //!
-//! let decoder = Decoder::<SymphoniaAac>::new(file, SymphoniaConfig::default())?;
-//! ```
-//!
-//! For runtime selection:
-//! ```ignore
-//! use kithara_decode::{DecoderFactory, CodecSelector, DecoderConfig};
-//!
-//! let decoder = DecoderFactory::create(file, CodecSelector::Auto, DecoderConfig::default())?;
+//! let decoder = DecoderFactory::create_from_media_info(source, &media_info, config)?;
 //! ```
 
-mod decoder;
 mod error;
 mod factory;
 mod symphonia;
@@ -50,32 +42,17 @@ pub use android::{Android, AndroidAac, AndroidAlac, AndroidConfig, AndroidFlac, 
 #[doc(hidden)]
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 pub use apple::{Apple, AppleAac, AppleAlac, AppleConfig, AppleFlac, AppleMp3};
-// Generic wrapper
-#[doc(hidden)]
-pub use decoder::Decoder;
 // Error types
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
-#[doc(hidden)]
-pub use factory::{CodecSelector, ProbeHint};
 pub use factory::{DecoderConfig, DecoderFactory};
-// Re-export types from kithara-stream for convenience
-pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo};
 // Symphonia backend
 #[doc(hidden)]
-pub use symphonia::{
-    Symphonia, SymphoniaAac, SymphoniaConfig, SymphoniaFlac, SymphoniaMp3, SymphoniaVorbis,
-};
-// Test utilities
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::AudioDecoderMock;
+pub use symphonia::{Symphonia, SymphoniaAac, SymphoniaFlac, SymphoniaMp3, SymphoniaVorbis};
 // Public traits
 pub use traits::InnerDecoder;
 #[cfg(any(test, feature = "test-utils"))]
 pub use traits::InnerDecoderMock;
-// Internal traits and codec markers
-#[doc(hidden)]
-pub use traits::{Aac, Alac, AudioDecoder, CodecType, DecoderInput, Flac, Mp3, Vorbis};
 // Core types
 pub use types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 #[cfg(any(test, feature = "test-utils"))]

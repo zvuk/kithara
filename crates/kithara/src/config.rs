@@ -7,7 +7,7 @@ use std::{num::NonZeroU32, path::PathBuf};
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
 use kithara_audio::{AudioConfig, ResamplerQuality};
-use kithara_bufpool::PcmPool;
+use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::DecodeError;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::NetOptions;
@@ -61,6 +61,8 @@ pub struct ResourceConfig {
     /// ABR (Adaptive Bitrate) configuration.
     #[cfg(feature = "hls")]
     pub abr: kithara_abr::AbrOptions,
+    /// Shared byte pool for temporary buffers (probe, etc.).
+    pub byte_pool: Option<BytePool>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Optional format hint (file extension like "mp3", "wav").
@@ -137,6 +139,7 @@ impl ResourceConfig {
         Ok(Self {
             #[cfg(feature = "hls")]
             abr: kithara_abr::AbrOptions::default(),
+            byte_pool: None,
             cancel: None,
             hint: None,
             #[cfg(feature = "hls")]
@@ -176,6 +179,12 @@ impl ResourceConfig {
     /// Set format hint (file extension like "mp3", "wav").
     pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
         self.hint = Some(hint.into());
+        self
+    }
+
+    /// Set shared byte pool for temporary buffers (probe, etc.).
+    pub fn with_byte_pool(mut self, pool: BytePool) -> Self {
+        self.byte_pool = Some(pool);
         self
     }
 
@@ -291,14 +300,16 @@ impl ResourceConfig {
             file_config = file_config.with_cancel(cancel);
         }
 
-        let mut config =
-            AudioConfig::<kithara_file::File>::new(file_config).with_thread_pool(self.thread_pool);
+        let mut config = AudioConfig::<kithara_file::File>::new(file_config);
 
         // Apply audio settings from ResourceConfig.
         if let Some(h) = self.hint {
             config = config.with_hint(h);
         } else if let Some(ext) = hint {
             config = config.with_hint(ext);
+        }
+        if let Some(pool) = self.byte_pool {
+            config = config.with_byte_pool(pool);
         }
         if let Some(pool) = self.pcm_pool {
             config = config.with_pcm_pool(pool);
@@ -344,12 +355,14 @@ impl ResourceConfig {
             hls_config = hls_config.with_cancel(cancel);
         }
 
-        let mut config =
-            AudioConfig::<kithara_hls::Hls>::new(hls_config).with_thread_pool(self.thread_pool);
+        let mut config = AudioConfig::<kithara_hls::Hls>::new(hls_config);
 
         // Apply audio settings from ResourceConfig.
         if let Some(h) = self.hint {
             config = config.with_hint(h);
+        }
+        if let Some(pool) = self.byte_pool {
+            config = config.with_byte_pool(pool);
         }
         if let Some(pool) = self.pcm_pool {
             config = config.with_pcm_pool(pool);

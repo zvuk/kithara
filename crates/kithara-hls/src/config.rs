@@ -4,9 +4,9 @@ use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
 use kithara_assets::{BytePool, StoreOptions};
+use kithara_events::EventBus;
 use kithara_net::NetOptions;
 use kithara_stream::ThreadPool;
-use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -84,14 +84,10 @@ pub struct HlsConfig {
     pub base_url: Option<Url>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
-    /// Capacity of the chunk/data channel.
-    pub chunk_channel_capacity: usize,
-    /// Capacity of the command channel.
-    pub command_channel_capacity: usize,
-    /// Capacity of the events broadcast channel (used when `events_tx` is not provided).
-    pub events_channel_capacity: usize,
-    /// Events broadcast sender (optional - if not provided, one is created internally).
-    pub events_tx: Option<broadcast::Sender<crate::HlsEvent>>,
+    /// Capacity of the event bus channel (used when `bus` is not provided).
+    pub event_channel_capacity: usize,
+    /// Event bus (optional - if not provided, one is created internally).
+    pub bus: Option<EventBus>,
     /// Encryption key handling configuration.
     pub keys: KeyOptions,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
@@ -136,11 +132,8 @@ impl Default for HlsConfig {
             abr: AbrOptions::default(),
             base_url: None,
             cancel: None,
-            chunk_channel_capacity: 8,
-            command_channel_capacity: 16,
-
-            events_channel_capacity: 32,
-            events_tx: None,
+            event_channel_capacity: 32,
+            bus: None,
             keys: KeyOptions::default(),
             look_ahead_bytes: None,
             name: None,
@@ -162,11 +155,8 @@ impl HlsConfig {
             abr: AbrOptions::default(),
             base_url: None,
             cancel: None,
-            chunk_channel_capacity: 8,
-            command_channel_capacity: 16,
-
-            events_channel_capacity: 32,
-            events_tx: None,
+            event_channel_capacity: 32,
+            bus: None,
             keys: KeyOptions::default(),
             look_ahead_bytes: None,
             name: None,
@@ -225,27 +215,15 @@ impl HlsConfig {
         self
     }
 
-    /// Set events broadcast sender.
-    pub fn with_events(mut self, events_tx: broadcast::Sender<crate::HlsEvent>) -> Self {
-        self.events_tx = Some(events_tx);
+    /// Set event bus for subscribing to HLS events.
+    pub fn with_events(mut self, bus: EventBus) -> Self {
+        self.bus = Some(bus);
         self
     }
 
-    /// Set command channel capacity.
-    pub fn with_command_channel_capacity(mut self, capacity: usize) -> Self {
-        self.command_channel_capacity = capacity;
-        self
-    }
-
-    /// Set chunk/data channel capacity.
-    pub fn with_chunk_channel_capacity(mut self, capacity: usize) -> Self {
-        self.chunk_channel_capacity = capacity;
-        self
-    }
-
-    /// Set events broadcast channel capacity.
-    pub fn with_events_channel_capacity(mut self, capacity: usize) -> Self {
-        self.events_channel_capacity = capacity;
+    /// Set event bus channel capacity.
+    pub fn with_event_channel_capacity(mut self, capacity: usize) -> Self {
+        self.event_channel_capacity = capacity;
         self
     }
 

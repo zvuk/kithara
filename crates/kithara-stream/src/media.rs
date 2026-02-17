@@ -92,12 +92,6 @@ impl MediaInfo {
         self
     }
 
-    /// Set audio codec.
-    pub fn with_codec(mut self, codec: AudioCodec) -> Self {
-        self.codec = Some(codec);
-        self
-    }
-
     /// Set sample rate.
     pub fn with_sample_rate(mut self, sample_rate: u32) -> Self {
         self.sample_rate = Some(sample_rate);
@@ -223,25 +217,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case(AudioCodec::AacLc)]
-    #[case(AudioCodec::AacHe)]
-    #[case(AudioCodec::AacHeV2)]
-    #[case(AudioCodec::Mp3)]
-    #[case(AudioCodec::Flac)]
-    #[case(AudioCodec::Vorbis)]
-    #[case(AudioCodec::Opus)]
-    #[case(AudioCodec::Alac)]
-    #[case(AudioCodec::Pcm)]
-    #[case(AudioCodec::Adpcm)]
-    fn test_media_info_with_codec(#[case] codec: AudioCodec) {
-        let info = MediaInfo::default().with_codec(codec);
-        assert_eq!(info.container, None);
-        assert_eq!(info.codec, Some(codec));
-        assert_eq!(info.sample_rate, None);
-        assert_eq!(info.channels, None);
-    }
-
-    #[rstest]
     #[case(44100)]
     #[case(48000)]
     #[case(88200)]
@@ -270,11 +245,11 @@ mod tests {
 
     #[test]
     fn test_media_info_builder_chain() {
-        let info = MediaInfo::default()
+        let mut info = MediaInfo::default()
             .with_container(ContainerFormat::Fmp4)
-            .with_codec(AudioCodec::AacLc)
             .with_sample_rate(44100)
             .with_channels(2);
+        info.codec = Some(AudioCodec::AacLc);
 
         assert_eq!(info.container, Some(ContainerFormat::Fmp4));
         assert_eq!(info.codec, Some(AudioCodec::AacLc));
@@ -284,9 +259,8 @@ mod tests {
 
     #[test]
     fn test_media_info_partial_builder() {
-        let info = MediaInfo::default()
-            .with_codec(AudioCodec::Mp3)
-            .with_sample_rate(48000);
+        let mut info = MediaInfo::default().with_sample_rate(48000);
+        info.codec = Some(AudioCodec::Mp3);
 
         assert_eq!(info.container, None);
         assert_eq!(info.codec, Some(AudioCodec::Mp3));
@@ -310,9 +284,8 @@ mod tests {
 
     #[test]
     fn test_media_info_clone() {
-        let info = MediaInfo::default()
-            .with_container(ContainerFormat::Fmp4)
-            .with_codec(AudioCodec::AacLc);
+        let mut info = MediaInfo::default().with_container(ContainerFormat::Fmp4);
+        info.codec = Some(AudioCodec::AacLc);
 
         let cloned = info.clone();
         assert_eq!(info, cloned);
@@ -320,9 +293,18 @@ mod tests {
 
     #[test]
     fn test_media_info_partial_eq() {
-        let info1 = MediaInfo::default().with_codec(AudioCodec::AacLc);
-        let info2 = MediaInfo::default().with_codec(AudioCodec::AacLc);
-        let info3 = MediaInfo::default().with_codec(AudioCodec::Mp3);
+        let info1 = MediaInfo {
+            codec: Some(AudioCodec::AacLc),
+            ..Default::default()
+        };
+        let info2 = MediaInfo {
+            codec: Some(AudioCodec::AacLc),
+            ..Default::default()
+        };
+        let info3 = MediaInfo {
+            codec: Some(AudioCodec::Mp3),
+            ..Default::default()
+        };
 
         assert_eq!(info1, info2);
         assert_ne!(info1, info3);

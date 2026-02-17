@@ -46,12 +46,12 @@ graph TD
 
     PR -->|"read / seek"| APP[Application]
 
-    AH -. "AudioPipelineEvent‹HlsEvent›" .-> EV[ResourceEvent<br/>broadcast]
-    AF -. "AudioPipelineEvent‹FileEvent›" .-> EV
+    AH -. "Event (Audio + Hls)" .-> EV[EventBus<br/>broadcast]
+    AF -. "Event (Audio + File)" .-> EV
     EV -.-> APP
 ```
 
-`Resource` wraps `Box<dyn PcmReader>` and spawns tokio tasks to forward typed `AudioPipelineEvent<E>` into unified `ResourceEvent` broadcast channel.
+`Resource` wraps `Box<dyn PcmReader>` with a shared `EventBus` for all events (audio, stream, HLS).
 
 ## Features
 
@@ -72,7 +72,8 @@ graph TD
 | `ResourceConfig` | Builder holding URL/path, network, ABR, and cache options |
 | `ResourceSrc` | Source enum: `Url(Url)` or `Path(PathBuf)` |
 | `SourceType` | Auto-detection result: `RemoteFile`, `LocalFile`, or `HlsStream` |
-| `ResourceEvent` | Unified event enum aggregating all upstream events |
+| `Event` | Unified event enum: `Audio(AudioEvent)`, `File(FileEvent)`, `Hls(HlsEvent)` |
+| `EventBus` | Clonable event publisher -- publish any event type, subscribe for unified `Event` stream |
 
 ## Re-exports
 

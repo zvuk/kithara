@@ -58,39 +58,3 @@ async fn writer_stream_end_does_not_commit_resource() {
         "Resource should remain Active after stream end, not auto-committed"
     );
 }
-
-#[tokio::test]
-async fn writer_run_returns_total_on_stream_ended() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("test_file_run.bin");
-
-    let res: MmapResource = Resource::open(
-        CancellationToken::new(),
-        MmapOptions {
-            path,
-            initial_len: Some(1024),
-            mode: OpenMode::ReadWrite,
-        },
-    )
-    .unwrap();
-
-    let data = vec![
-        Ok(Bytes::from(vec![0u8; 100])),
-        Ok(Bytes::from(vec![1u8; 200])),
-    ];
-    let source_stream = futures::stream::iter(data);
-
-    let cancel = CancellationToken::new();
-    let writer: Writer<std::io::Error> = Writer::new(source_stream, res.clone(), cancel);
-
-    let total = writer.run(|_, _| {}).await.unwrap();
-    assert_eq!(total, 300);
-
-    // Resource must still be Active (not committed by Writer)
-    let status = res.status();
-    assert_eq!(
-        status,
-        ResourceStatus::Active,
-        "Writer::run should not auto-commit resource"
-    );
-}

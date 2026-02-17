@@ -7,7 +7,7 @@
 //! - [`Audio`] - Generic audio pipeline running in a separate thread
 //! - [`AudioConfig`] - Pipeline configuration
 //! - [`ResamplerQuality`] - Sample rate conversion quality
-//! - `AudioSyncReader` - `rodio::Source` adapter (requires `rodio` feature)
+//! - `Audio` also implements `rodio::Source` directly (requires `rodio` feature)
 //!
 //! ## Target API
 //!
@@ -26,13 +26,10 @@
 //!     play_audio(chunk);
 //! }
 //!
-//! // Events
-//! let mut events = audio.events();
+//! // Events via decode_events()
+//! let mut events = audio.decode_events();
 //! while let Ok(event) = events.recv().await {
-//!     match event {
-//!         AudioPipelineEvent::Stream(e) => println!("Stream: {:?}", e),
-//!         AudioPipelineEvent::Audio(e) => println!("Audio: {:?}", e),
-//!     }
+//!     println!("Audio: {:?}", event);
 //! }
 //! ```
 
@@ -40,9 +37,7 @@
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 // Internal modules
-mod events;
 mod pipeline;
-mod reader;
 mod resampler;
 #[cfg(feature = "rodio")]
 mod rodio;
@@ -50,21 +45,11 @@ mod traits;
 mod types;
 
 // Public API exports
-pub use events::{AudioEvent, AudioPipelineEvent};
-pub use kithara_decode::{
-    AudioCodec, ContainerFormat, MediaInfo, PcmChunk, PcmMeta, PcmSpec, TrackMetadata,
-};
-// Hidden re-exports (used by integration tests or advanced internal consumers)
-#[doc(hidden)]
-pub use kithara_decode::{DecoderConfig, DecoderFactory, DecoderInput, InnerDecoder};
+pub use kithara_events::{AudioEvent, EventBus};
 pub use pipeline::{Audio, AudioConfig};
-#[doc(hidden)]
-pub use reader::SourceReader;
 pub use resampler::ResamplerQuality;
 #[doc(hidden)]
 pub use resampler::{ResamplerParams, ResamplerProcessor};
-#[cfg(feature = "rodio")]
-pub use rodio::AudioSyncReader;
 #[doc(hidden)]
-pub use traits::{AudioEffect, AudioGenerator};
+pub use traits::AudioEffect;
 pub use types::{DecodeError, DecodeResult, PcmReader};

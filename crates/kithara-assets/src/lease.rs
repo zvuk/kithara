@@ -11,6 +11,7 @@ use std::{
     },
 };
 
+use kithara_bufpool::BytePool;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -42,13 +43,14 @@ where
     enabled: bool,
     inner: Arc<A>,
     pins: Arc<Mutex<HashSet<String>>>,
+    pool: BytePool,
 }
 
 impl<A> LeaseAssets<A>
 where
     A: Assets,
 {
-    pub fn new(inner: Arc<A>, cancel: CancellationToken) -> Self {
+    pub fn new(inner: Arc<A>, cancel: CancellationToken, pool: BytePool) -> Self {
         Self {
             byte_recorder: None,
             cancel,
@@ -56,22 +58,7 @@ where
             enabled: true,
             inner,
             pins: Arc::new(Mutex::new(HashSet::new())),
-        }
-    }
-
-    /// Create with byte recorder for eviction tracking.
-    pub fn with_byte_recorder(
-        inner: Arc<A>,
-        cancel: CancellationToken,
-        byte_recorder: Arc<dyn ByteRecorder>,
-    ) -> Self {
-        Self {
-            byte_recorder: Some(byte_recorder),
-            cancel,
-            dirty: Arc::new(AtomicBool::new(false)),
-            enabled: true,
-            inner,
-            pins: Arc::new(Mutex::new(HashSet::new())),
+            pool,
         }
     }
 
@@ -81,6 +68,7 @@ where
         cancel: CancellationToken,
         byte_recorder: Option<Arc<dyn ByteRecorder>>,
         enabled: bool,
+        pool: BytePool,
     ) -> Self {
         Self {
             byte_recorder,
@@ -89,6 +77,7 @@ where
             enabled,
             inner,
             pins: Arc::new(Mutex::new(HashSet::new())),
+            pool,
         }
     }
 
@@ -97,7 +86,7 @@ where
     }
 
     fn open_index(&self) -> AssetsResult<PinsIndex<A::IndexRes>> {
-        PinsIndex::open(self.inner())
+        PinsIndex::open(self.inner(), self.pool.clone())
     }
 
     fn persist_pins_best_effort(&self, pins: &HashSet<String>) -> AssetsResult<()> {
@@ -370,7 +359,7 @@ mod tests {
             "test_asset",
             CancellationToken::new(),
         ));
-        LeaseAssets::new(disk, CancellationToken::new())
+        LeaseAssets::new(disk, CancellationToken::new(), crate::byte_pool().clone())
     }
 
     fn make_lease_disabled(dir: &Path) -> LeaseAssets<DiskAssetStore> {
@@ -379,12 +368,18 @@ mod tests {
             "test_asset",
             CancellationToken::new(),
         ));
-        LeaseAssets::with_options(disk, CancellationToken::new(), None, false)
+        LeaseAssets::with_options(
+            disk,
+            CancellationToken::new(),
+            None,
+            false,
+            crate::byte_pool().clone(),
+        )
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {
         let disk = DiskAssetStore::new(dir, "test_asset", CancellationToken::new());
-        match PinsIndex::open(&disk) {
+        match PinsIndex::open(&disk, crate::byte_pool().clone()) {
             Ok(idx) => idx.load().unwrap_or_default(),
             Err(_) => HashSet::new(),
         }

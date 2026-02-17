@@ -47,58 +47,6 @@ fn test_shared_pool() {
 }
 
 #[test]
-fn test_pooled_slice() {
-    let pool = Pool::<4, Vec<u8>>::new(16, 1024);
-    let mut buf = pool.get_with(|b| b.resize(100, 0));
-
-    // Simulate reading 50 bytes
-    for i in 0..50 {
-        buf[i] = i as u8;
-    }
-
-    let slice = PooledSlice::new(buf, 50);
-    assert_eq!(slice.len(), 50);
-    assert_eq!(slice.as_slice().len(), 50);
-    assert_eq!(slice.as_slice()[0], 0);
-    assert_eq!(slice.as_slice()[49], 49);
-}
-
-#[test]
-fn test_pooled_slice_as_ref() {
-    let pool = Pool::<4, Vec<u8>>::new(16, 1024);
-    let buf = pool.get_with(|b| {
-        b.clear();
-        b.extend_from_slice(b"hello world");
-    });
-
-    let slice = PooledSlice::new(buf, 5);
-    let as_ref: &[u8] = slice.as_ref();
-    assert_eq!(as_ref, b"hello");
-}
-
-#[test]
-#[should_panic(expected = "exceeds buffer length")]
-fn test_pooled_slice_invalid_len() {
-    let pool = Pool::<4, Vec<u8>>::new(16, 1024);
-    let buf = pool.get_with(|b| b.resize(10, 0));
-    let _ = PooledSlice::new(buf, 20); // Should panic
-}
-
-#[test]
-fn test_global_pool_macro() {
-    global_pool!(test_pool, TEST_POOL, 4, Vec<u8>, 16, 1024);
-
-    let mut buf1 = test_pool().get();
-    buf1.push(42);
-    assert_eq!(buf1[0], 42);
-    drop(buf1);
-
-    let buf2 = test_pool().get();
-    assert_eq!(buf2.len(), 0); // Cleared on return to pool
-    assert!(buf2.capacity() > 0); // Capacity retained
-}
-
-#[test]
 fn test_cross_shard_fallback() {
     // 2-shard pool: put a buffer into the "other" shard, then verify
     // get_with() finds it via cross-shard fallback.

@@ -4,6 +4,7 @@ use std::{error::Error, io::Read, time::Duration};
 
 use fixture::TestServer;
 use kithara_assets::StoreOptions;
+use kithara_events::EventBus;
 use kithara_hls::{Hls, HlsConfig};
 use kithara_stream::Stream;
 use rstest::{fixture, rstest};
@@ -52,15 +53,16 @@ async fn test_basic_hls_playback(
     let test_stream_url = server.url("/master.m3u8")?;
     info!("Starting HLS playback test with URL: {}", test_stream_url);
 
-    // Create events channel
-    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+    // Create event bus
+    let bus = EventBus::new(32);
+    let mut events_rx = bus.subscribe();
 
     // 1. Test: Open HLS source
     info!("Opening HLS source...");
     let config = HlsConfig::new(test_stream_url.clone())
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_events(events_tx);
+        .with_events(bus);
 
     let stream = Stream::<Hls>::new(config).await?;
     info!("HLS source opened successfully");
@@ -110,14 +112,15 @@ async fn test_hls_session_creation(
     let server = TestServer::new().await;
     let test_stream_url = server.url("/master.m3u8")?;
 
-    // Create events channel
-    let (events_tx, mut events_rx) = tokio::sync::broadcast::channel(32);
+    // Create event bus
+    let bus = EventBus::new(32);
+    let mut events_rx = bus.subscribe();
 
     // Test source creation
     let config = HlsConfig::new(test_stream_url)
         .with_store(StoreOptions::new(temp_dir.path()))
         .with_cancel(cancel_token)
-        .with_events(events_tx);
+        .with_events(bus);
 
     let _stream = Stream::<Hls>::new(config).await?;
 
