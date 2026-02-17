@@ -1,4 +1,4 @@
-//! Common in-memory Source implementation for testing.
+//! In-memory Source implementation for testing.
 
 use std::{
     ops::Range,
@@ -21,6 +21,7 @@ pub struct MemorySource {
 }
 
 impl MemorySource {
+    #[must_use]
     pub fn new(data: Vec<u8>) -> Self {
         Self { data }
     }
@@ -63,6 +64,7 @@ pub struct UnknownLenSource {
 }
 
 impl UnknownLenSource {
+    #[must_use]
     pub fn new(data: Vec<u8>) -> Self {
         Self { data }
     }
@@ -97,7 +99,7 @@ impl Source for UnknownLenSource {
 
 // StreamType markers for testing Read+Seek behavior with Stream<T>.
 
-/// StreamType using `MemorySource` (known length).
+/// `StreamType` using `MemorySource` (known length).
 pub struct MemStream;
 
 impl StreamType for MemStream {
@@ -125,7 +127,7 @@ pub struct MemStreamConfig {
     pub source: Option<MemorySource>,
 }
 
-/// StreamType using `UnknownLenSource` (unknown length).
+/// `StreamType` using `UnknownLenSource` (unknown length).
 pub struct UnknownLenStream;
 
 impl StreamType for UnknownLenStream {
@@ -154,6 +156,7 @@ pub struct UnknownLenStreamConfig {
 }
 
 /// Create a `Stream` from a `MemorySource`.
+#[must_use]
 pub fn memory_stream(source: MemorySource) -> Stream<MemStream> {
     let config = MemStreamConfig {
         source: Some(source),
@@ -162,6 +165,7 @@ pub fn memory_stream(source: MemorySource) -> Stream<MemStream> {
 }
 
 /// Create a `Stream` from an `UnknownLenSource`.
+#[must_use]
 pub fn unknown_len_stream(source: UnknownLenSource) -> Stream<UnknownLenStream> {
     let config = UnknownLenStreamConfig {
         source: Some(source),

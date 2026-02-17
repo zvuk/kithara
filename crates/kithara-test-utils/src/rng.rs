@@ -6,6 +6,7 @@
 pub struct Xorshift64(u64);
 
 impl Xorshift64 {
+    #[must_use]
     pub fn new(seed: u64) -> Self {
         Self(seed)
     }

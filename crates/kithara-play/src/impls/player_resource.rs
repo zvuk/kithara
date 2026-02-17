@@ -197,8 +197,9 @@ impl PlayerResource {
 mod tests {
     use std::time::Duration;
 
-    use kithara_audio::{AudioEvent, PcmReader};
+    use kithara_audio::PcmReader;
     use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+    use kithara_events::AudioEvent;
     use tokio::sync::broadcast;
 
     use super::*;
@@ -264,7 +265,7 @@ mod tests {
             to_write
         }
 
-        fn read_planar(&mut self, output: &mut [&mut [f32]]) -> usize {
+        fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
             if self.eof || output.is_empty() {
                 return 0;
             }

@@ -643,7 +643,7 @@ mod tests {
     use bytes::Bytes;
     use kithara_assets::{AssetStoreBuilder, AssetsBackend, ProcessChunkFn};
     use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
-    use kithara_net::NetMock;
+    use kithara_net::mock::NetMock;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
     use unimock::{MockFn, Unimock, matching};

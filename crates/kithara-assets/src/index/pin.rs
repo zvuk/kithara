@@ -28,6 +28,7 @@ struct PinsIndexFile {
 /// ## Key selection
 /// `PinsIndex` does **not** form keys. The concrete [`Assets`] implementation decides where this
 /// index lives by implementing [`Assets::open_pins_index_resource`].
+#[cfg_attr(not(feature = "internal"), expect(unreachable_pub))]
 pub struct PinsIndex<R: ResourceExt> {
     res: Atomic<R>,
     pool: BytePool,
@@ -46,6 +47,7 @@ impl<R: ResourceExt> PinsIndex<R> {
     /// # Errors
     ///
     /// Returns `AssetsError` if the pins index resource cannot be opened.
+    #[cfg_attr(not(feature = "internal"), expect(unreachable_pub))]
     pub fn open<A: Assets<IndexRes = R>>(assets: &A, pool: BytePool) -> AssetsResult<Self> {
         let res = assets.open_pins_index_resource()?;
         Ok(Self::new(res, pool))
@@ -58,6 +60,7 @@ impl<R: ResourceExt> PinsIndex<R> {
     /// # Errors
     ///
     /// Returns `AssetsError` if reading from the underlying storage resource fails.
+    #[cfg_attr(not(feature = "internal"), expect(unreachable_pub))]
     pub fn load(&self) -> AssetsResult<HashSet<String>> {
         let mut buf = self.pool.get();
         let n = self.res.read_into(&mut buf)?;
@@ -80,6 +83,7 @@ impl<R: ResourceExt> PinsIndex<R> {
     /// # Errors
     ///
     /// Returns `AssetsError` if serialization or writing to storage fails.
+    #[cfg_attr(not(feature = "internal"), expect(unreachable_pub))]
     pub fn store(&self, pins: &HashSet<String>) -> AssetsResult<()> {
         // Stored as a list for stable serialization; treated as a set by higher layers.
         let file = PinsIndexFile {

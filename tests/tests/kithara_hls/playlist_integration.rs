@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use fixture::*;
-use kithara_hls::{AssetsBackend, HlsResult, fetch::FetchManager, parsing::VariantId};
+use kithara::hls::{AssetsBackend, HlsResult, fetch::FetchManager, parsing::VariantId};
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
 
@@ -22,7 +22,7 @@ fn assets_fixture() -> TestAssets {
 }
 
 #[fixture]
-fn net_fixture() -> kithara_net::HttpClient {
+fn net_fixture() -> kithara::net::HttpClient {
     create_test_net()
 }
 
@@ -44,7 +44,7 @@ fn variant_id_1() -> VariantId {
 async fn fetch_master_playlist_from_network(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
@@ -65,7 +65,7 @@ async fn fetch_master_playlist_from_network(
 async fn fetch_media_playlist_from_network(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
     variant_id_0: VariantId,
 ) -> HlsResult<()> {
     let server = test_server.await;
@@ -91,7 +91,7 @@ async fn fetch_media_playlist_from_network(
 async fn resolve_url_with_base_override(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
@@ -120,7 +120,7 @@ async fn resolve_url_with_base_override(
 async fn fetch_media_playlist_for_different_variants(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
     variant_id_0: VariantId,
     variant_id_1: VariantId,
 ) -> HlsResult<()> {
@@ -154,7 +154,7 @@ async fn fetch_media_playlist_for_different_variants(
 async fn fetch_manager_caching_behavior(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
@@ -183,7 +183,7 @@ async fn fetch_manager_caching_behavior(
 #[tokio::test]
 async fn fetch_manager_error_handling_invalid_url(
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let assets = assets_fixture.assets().clone();
     let net = net_fixture;
@@ -194,7 +194,7 @@ async fn fetch_manager_error_handling_invalid_url(
     // Try to fetch from invalid URL
     let invalid_url =
         url::Url::parse("http://invalid-domain-that-does-not-exist-12345.com/master.m3u8")
-            .map_err(|e| kithara_hls::HlsError::InvalidUrl(e.to_string()))?;
+            .map_err(|e| kithara::hls::HlsError::InvalidUrl(e.to_string()))?;
 
     let result = fetch_manager.master_playlist(&invalid_url).await;
 
@@ -210,7 +210,7 @@ async fn fetch_manager_error_handling_invalid_url(
 async fn resolve_multiple_relative_urls(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();
@@ -249,7 +249,7 @@ async fn resolve_multiple_relative_urls(
 async fn fetch_manager_with_different_base_urls(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
-    net_fixture: kithara_net::HttpClient,
+    net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
     let assets = assets_fixture.assets().clone();

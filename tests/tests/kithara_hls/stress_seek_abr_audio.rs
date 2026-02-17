@@ -12,17 +12,17 @@
 
 use std::{sync::Arc, time::Duration};
 
-use kithara_assets::StoreOptions;
-use kithara_audio::{Audio, AudioConfig};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
+use kithara::assets::StoreOptions;
+use kithara::audio::{Audio, AudioConfig};
+use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
+use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture::{HlsTestServer, HlsTestServerConfig};
-use crate::common::Xorshift64;
+use kithara_test_utils::Xorshift64;
 
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 2;

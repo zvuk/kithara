@@ -583,8 +583,9 @@ mod tests {
     fn create_mock_player_resource(src: &str) -> Arc<Mutex<PlayerResource>> {
         use std::time::Duration;
 
-        use kithara_audio::{AudioEvent, PcmReader};
+        use kithara_audio::PcmReader;
         use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+        use kithara_events::AudioEvent;
         use tokio::sync::broadcast;
 
         use crate::impls::resource::Resource;
@@ -601,7 +602,7 @@ mod tests {
                 buf.len()
             }
 
-            fn read_planar(&mut self, output: &mut [&mut [f32]]) -> usize {
+            fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
                 if output.is_empty() {
                     return 0;
                 }

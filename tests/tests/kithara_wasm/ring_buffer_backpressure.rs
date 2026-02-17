@@ -8,21 +8,22 @@
 
 use std::time::Duration;
 
-use kithara_audio::{Audio, AudioConfig, web_audio::PcmRingBuffer};
-use kithara_file::{FileConfig, FileSrc};
-use kithara_stream::Stream;
+use kithara::audio::{Audio, AudioConfig};
+use kithara::file::{FileConfig, FileSrc};
+use kithara::stream::Stream;
+use kithara_wasm::ring_buffer::PcmRingBuffer;
 use rstest::rstest;
 
-use crate::common::wav::create_test_wav;
+use kithara_test_utils::wav::create_test_wav;
 
 /// Create an `Audio<Stream<File>>` pipeline from a WAV file.
 ///
 /// Does NOT call `preload()` — reads block until data is available,
 /// making the test deterministic (no timing dependency on decode worker).
-async fn audio_from_wav(path: &std::path::Path) -> Audio<Stream<kithara_file::File>> {
+async fn audio_from_wav(path: &std::path::Path) -> Audio<Stream<kithara::file::File>> {
     let file_config = FileConfig::new(FileSrc::Local(path.to_path_buf()));
-    let config = AudioConfig::<kithara_file::File>::new(file_config).with_hint("wav");
-    Audio::<Stream<kithara_file::File>>::new(config)
+    let config = AudioConfig::<kithara::file::File>::new(file_config).with_hint("wav");
+    Audio::<Stream<kithara::file::File>>::new(config)
         .await
         .unwrap()
 }
@@ -35,7 +36,7 @@ async fn audio_from_wav(path: &std::path::Path) -> Audio<Stream<kithara_file::Fi
 ///
 /// Returns `(decoded_samples, samples_to_ring)`.
 fn fill_buffer_with_backpressure(
-    audio: &mut Audio<Stream<kithara_file::File>>,
+    audio: &mut Audio<Stream<kithara::file::File>>,
     ring: &mut PcmRingBuffer,
     pcm_buf: &mut [f32],
 ) -> (usize, usize) {

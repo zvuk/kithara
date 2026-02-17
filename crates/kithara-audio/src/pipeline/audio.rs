@@ -24,7 +24,7 @@ use super::{
     stream_source::{OffsetReader, SharedStream, StreamAudioSource},
     worker::{AudioCommand, run_audio_loop},
 };
-use crate::types::{DecodeError, DecodeResult, PcmReader};
+use crate::traits::{DecodeError, DecodeResult, PcmReader};
 
 /// Default capacity for broadcast event channels.
 const DEFAULT_EVENT_CAPACITY: usize = 64;
@@ -725,7 +725,7 @@ impl<S: Send> PcmReader for Audio<S> {
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    fn read_planar(&mut self, output: &mut [&mut [f32]]) -> usize {
+    fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
         let channels = output.len();
         if channels == 0 {
             return 0;
@@ -801,8 +801,8 @@ impl<S: Send> PcmReader for Audio<S> {
 
 #[cfg(test)]
 mod tests {
-    use kithara_decode::test_support::create_test_wav;
     use kithara_stream::Stream;
+    use kithara_test_utils::create_test_wav;
 
     use super::*;
 

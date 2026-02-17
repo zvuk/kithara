@@ -1,7 +1,7 @@
 // StreamingResource tests (merged from edge cases)
 use std::time::Duration;
 
-use kithara_storage::{
+use kithara::storage::{
     MmapOptions, MmapResource, OpenMode, Resource, ResourceExt, ResourceStatus, StorageError,
     WaitOutcome,
 };
@@ -9,7 +9,7 @@ use rstest::*;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-use crate::common::fixtures::{cancel_token, temp_dir};
+use kithara_test_utils::{cancel_token, temp_dir};
 
 /// Helper to read bytes from resource into a new Vec
 fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {

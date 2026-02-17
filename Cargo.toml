@@ -17,6 +17,7 @@ members = [
     "crates/kithara-wasm",
     "crates/kithara-platform",
     "crates/kithara-play",
+    "crates/kithara-test-utils",
     "tests",
 ]
 
@@ -110,6 +111,7 @@ kithara-platform = { path = "crates/kithara-platform", version = "0.1.0" }
 kithara-play = { path = "crates/kithara-play", version = "0.1.0" }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
+kithara-test-utils = { path = "crates/kithara-test-utils" }
 kithara-wasm = { path = "crates/kithara-wasm" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
 serial_test = "3.3.1"

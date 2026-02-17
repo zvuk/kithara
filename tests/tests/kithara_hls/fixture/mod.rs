@@ -16,7 +16,7 @@ pub mod server;
 pub use assets::*;
 pub use crypto::*;
 // Common types
-use kithara_hls::HlsError;
+use kithara::hls::HlsError;
 pub use scalable_server::*;
 pub use server::*;
 

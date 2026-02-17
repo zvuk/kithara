@@ -23,6 +23,7 @@ kithara-storage = { workspace = true, optional = true }
 kithara-net = { workspace = true, optional = true }
 kithara-abr = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
+kithara-drm = { workspace = true, optional = true }
 rodio = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["full"] }
@@ -31,10 +32,16 @@ url = { workspace = true }
 [features]
 default = ["file", "hls"]
 file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net", "kithara-play/file"]
-hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net", "kithara-play/hls"]
+hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net", "dep:kithara-drm", "kithara-play/hls"]
 assets = ["dep:kithara-assets", "dep:kithara-storage"]
 net = ["dep:kithara-net"]
 bufpool = []
+test-utils = [
+    "kithara-audio/test-utils",
+    "kithara-decode/test-utils",
+    "kithara-stream/test-utils",
+    "kithara-play/test-utils",
+]
 rodio = ["dep:rodio", "kithara-audio/rodio", "kithara-play/rodio"]
 perf = [
     "kithara-audio/perf",
@@ -52,7 +59,28 @@ rstest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 rodio = { workspace = true }
+url = { workspace = true }
 
 [[example]]
-name = "resource_play"
+name = "resource_rodio"
+required-features = ["rodio"]
+
+[[example]]
+name = "file_audio"
+required-features = ["rodio"]
+
+[[example]]
+name = "hls_audio"
+required-features = ["rodio"]
+
+[[example]]
+name = "hls_drm_audio"
+required-features = ["rodio"]
+
+[[example]]
+name = "file_rodio"
+required-features = ["rodio"]
+
+[[example]]
+name = "hls_rodio"
 required-features = ["rodio"]

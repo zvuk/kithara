@@ -7,11 +7,11 @@
 
 use std::time::Duration;
 
-use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
-use kithara_storage::ResourceExt;
+use kithara::assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
+use kithara::storage::ResourceExt;
 use rstest::rstest;
 
-use crate::common::fixtures::temp_dir;
+use kithara_test_utils::temp_dir;
 
 #[derive(serde::Deserialize)]
 #[expect(dead_code, reason = "fields deserialized from binary")]

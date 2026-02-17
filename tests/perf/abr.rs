@@ -6,7 +6,7 @@
 
 use std::time::{Duration, Instant};
 
-use kithara_abr::{
+use kithara::abr::{
     AbrController, AbrDecision, AbrMode, AbrOptions, ThroughputSample, ThroughputSampleSource,
     Variant,
 };

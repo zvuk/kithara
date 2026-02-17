@@ -15,7 +15,9 @@ use kithara_stream::{Fetch, MediaInfo, Stream, StreamType};
 use tracing::{debug, trace, warn};
 
 use super::worker::{AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects};
-use crate::{AudioEvent, traits::AudioEffect};
+use kithara_events::AudioEvent;
+
+use crate::traits::AudioEffect;
 
 /// Shared stream wrapper for format change detection.
 ///

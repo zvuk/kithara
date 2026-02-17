@@ -5,7 +5,7 @@
 use std::time::Duration;
 
 use axum::{Router, routing::get};
-use kithara_hls::HlsError;
+use kithara::hls::HlsError;
 use rstest::fixture;
 use tokio::net::TcpListener;
 use url::Url;

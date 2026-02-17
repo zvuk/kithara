@@ -105,10 +105,7 @@ where
     }
 
     /// Check if byte limit is exceeded and run eviction if needed.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "eviction logic evaluates multiple conditions"
-    )]
+    #[cfg_attr(feature = "internal", expect(clippy::cognitive_complexity))]
     pub fn check_and_evict_if_over_limit(&self) {
         if !self.enabled || self.cancel.is_cancelled() || self.cfg.max_bytes.is_none() {
             return;

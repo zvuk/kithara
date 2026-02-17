@@ -3,10 +3,10 @@
 use std::time::Duration;
 
 use fixture::TestServer;
-use kithara_assets::StoreOptions;
-use kithara_events::EventBus;
-use kithara_hls::{Hls, HlsConfig};
-use kithara_stream::Stream;
+use kithara::assets::StoreOptions;
+use kithara::events::EventBus;
+use kithara::hls::{Hls, HlsConfig};
+use kithara::stream::Stream;
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -14,7 +14,7 @@ use tracing::info;
 use url::Url;
 
 use super::fixture;
-use crate::common::fixtures::{temp_dir, tracing_setup};
+use kithara_test_utils::{temp_dir, tracing_setup};
 
 // Test Cases
 

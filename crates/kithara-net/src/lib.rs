@@ -9,12 +9,10 @@ mod traits;
 mod types;
 
 #[cfg(any(test, feature = "test-utils"))]
-pub use unimock;
+pub mod mock;
 
 #[doc(hidden)]
 pub use crate::timeout::TimeoutNet;
-#[cfg(any(test, feature = "test-utils"))]
-pub use crate::traits::NetMock;
 pub use crate::{
     client::HttpClient,
     error::{NetError, NetResult},

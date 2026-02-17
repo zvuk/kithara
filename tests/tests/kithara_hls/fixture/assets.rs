@@ -4,9 +4,9 @@
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetStore, AssetStoreBuilder, EvictConfig, ProcessChunkFn};
-use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
-use kithara_net::{HttpClient, NetOptions};
+use kithara::assets::{AssetStore, AssetStoreBuilder, EvictConfig, ProcessChunkFn};
+use kithara::drm::{DecryptContext, aes128_cbc_process_chunk};
+use kithara::net::{HttpClient, NetOptions};
 use rstest::fixture;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;

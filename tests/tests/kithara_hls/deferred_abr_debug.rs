@@ -5,17 +5,17 @@
 use std::{io::Read, time::Duration};
 
 use fixture::TestServer;
-use kithara_assets::StoreOptions;
-use kithara_events::EventBus;
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_stream::Stream;
+use kithara::assets::StoreOptions;
+use kithara::events::EventBus;
+use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
+use kithara::stream::Stream;
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture;
-use crate::common::fixtures::{cancel_token, debug_tracing_setup, temp_dir};
+use kithara_test_utils::{cancel_token, debug_tracing_setup, temp_dir};
 
 /// Diagnostic version with detailed logging and safety limits
 #[rstest]

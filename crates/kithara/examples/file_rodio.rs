@@ -1,36 +1,29 @@
-//! Example: Play audio using Resource with auto-detection.
+//! Play audio from an HTTP file using rodio decoder.
 //!
-//! Demonstrates the top-level `Resource` API:
-//! - `ResourceConfig::new(url)` parses URL and applies defaults
-//! - `Resource::new(config)` auto-detects file vs HLS and creates the decoder
-//! - `Resource` implements `rodio::Source` for direct playback
+//! This demonstrates the Stream API:
+//! - `Stream::<File>::new()` creates a Read + Seek stream
+//! - `rodio::Decoder` handles audio decoding
 //!
 //! Run with:
 //! ```
-//! cargo run -p kithara --example resource_play --features rodio [URL]
+//! cargo run -p kithara --example file_rodio --features rodio [URL]
 //! ```
 
 use std::{env::args, error::Error};
 
-use kithara::{
-    Resource,
-    prelude::{ResourceConfig, ThreadPool},
-};
+use kithara::prelude::*;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
+use url::Url;
 
 #[tokio::main(flavor = "current_thread")]
-#[cfg_attr(feature = "perf", hotpath::main)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::default()
-                .add_directive("kithara=info".parse()?)
-                .add_directive("kithara_decode=info".parse()?)
                 .add_directive("kithara_file=info".parse()?)
-                .add_directive("kithara_hls=info".parse()?)
                 .add_directive("kithara_stream=info".parse()?)
-                .add_directive("kithara_net=warn".parse()?)
+                .add_directive("kithara_net=info".parse()?)
                 .add_directive("symphonia_format_isomp4=warn".parse()?)
                 .add_directive(LevelFilter::INFO.into()),
         )
@@ -43,19 +36,21 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
          6 - Movement 2 Un poco andante.MP3"
             .to_string()
     });
+    let url: Url = url.parse()?;
 
-    info!("Opening: {}", url);
+    info!("Opening file: {}", url);
+
+    let bus = EventBus::new(32);
+    let mut events_rx = bus.subscribe();
 
     let pool = ThreadPool::with_num_threads(2)?;
-    let config = ResourceConfig::new(&url)?.with_thread_pool(pool);
-    let resource = Resource::new(config).await?;
+    let config = FileConfig::new(url.into())
+        .with_thread_pool(pool)
+        .with_events(bus);
+    let stream = Stream::<File>::new(config).await?;
 
-    info!(spec = ?resource.spec(), "Format detected");
-
-    // Subscribe to events
-    let mut events = resource.subscribe();
     tokio::spawn(async move {
-        while let Ok(ev) = events.recv().await {
+        while let Ok(ev) = events_rx.recv().await {
             info!(?ev);
         }
     });
@@ -66,7 +61,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
         let sink = rodio::Sink::connect_new(stream_handle.mixer());
         sink.set_volume(1.0);
-        sink.append(resource);
+        sink.append(rodio::Decoder::new(stream)?);
 
         info!("Playing...");
         sink.sleep_until_end();
