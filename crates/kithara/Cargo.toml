@@ -35,6 +35,12 @@ hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-
 assets = ["dep:kithara-assets", "dep:kithara-storage"]
 net = ["dep:kithara-net"]
 bufpool = []
+test-utils = [
+    "kithara-audio/test-utils",
+    "kithara-decode/test-utils",
+    "kithara-stream/test-utils",
+    "kithara-play/test-utils",
+]
 rodio = ["dep:rodio", "kithara-audio/rodio", "kithara-play/rodio"]
 perf = [
     "kithara-audio/perf",

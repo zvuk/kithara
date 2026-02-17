@@ -19,14 +19,26 @@
 //! resource.read(&mut buf);
 //! ```
 
-// Re-export sub-crates
+// Virtual modules — namespaced access to all subcrates.
 
 pub mod audio {
     pub use kithara_audio::*;
 }
 
+pub mod bufpool {
+    pub use kithara_bufpool::*;
+}
+
 pub mod decode {
     pub use kithara_decode::*;
+}
+
+pub mod events {
+    pub use kithara_events::*;
+}
+
+pub mod platform {
+    pub use kithara_platform::*;
 }
 
 pub mod play {
@@ -43,50 +55,76 @@ pub mod file {
 }
 
 #[cfg(feature = "hls")]
-pub mod hls {
-    pub use kithara_hls::*;
-}
-
-#[cfg(feature = "hls")]
 pub mod abr {
     pub use kithara_abr::*;
 }
 
-#[cfg(feature = "assets")]
+#[cfg(feature = "hls")]
+pub mod hls {
+    pub use kithara_hls::*;
+}
+
+#[cfg(any(feature = "file", feature = "hls", feature = "assets"))]
 pub mod assets {
     pub use kithara_assets::*;
 }
 
-#[cfg(feature = "net")]
+#[cfg(any(feature = "file", feature = "hls", feature = "net"))]
 pub mod net {
     pub use kithara_net::*;
 }
 
-#[cfg(feature = "bufpool")]
-pub mod bufpool {
-    pub use kithara_bufpool::*;
+#[cfg(feature = "assets")]
+pub mod storage {
+    pub use kithara_storage::*;
 }
 
-// Events
-#[cfg(feature = "hls")]
-pub use kithara_events::HlsEvent;
-pub use kithara_events::{AudioEvent, Event, EventBus, FileEvent};
-pub use kithara_play::{
-    EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
-    SourceType,
-};
+// Mock module — re-exports mocks from all subcrates with test-utils.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod mock {
+    pub use kithara_audio::mock::unimock;
 
+    pub use kithara_audio::mock::{AudioEffectMock, PcmReaderMock};
+    pub use kithara_decode::mock::InnerDecoderMock;
+    pub use kithara_play::mock::{
+        AssetMock, AudioSessionMock, BpmAnalyzerMock, BpmSyncMock, CrossfadeControllerMock,
+        DjEffectMock, EngineMock, EqualizerMock, MixerMock,
+    };
+    pub use kithara_stream::mock::SourceMock;
+}
+
+/// Prelude — flat imports for common types.
 pub mod prelude {
-    #[cfg(feature = "hls")]
-    pub use kithara_abr::{AbrMode, AbrOptions};
+    // Audio pipeline
     pub use kithara_audio::{Audio, AudioConfig, PcmReader, ResamplerQuality};
+
+    // Decode
     pub use kithara_decode::{DecodeError, DecodeResult, PcmMeta, PcmSpec, TrackMetadata};
-    #[cfg(feature = "file")]
-    pub use kithara_file::{File, FileConfig};
+
+    // Events
     #[cfg(feature = "hls")]
-    pub use kithara_hls::{Hls, HlsConfig};
+    pub use kithara_events::HlsEvent;
+    pub use kithara_events::{AudioEvent, Event, EventBus, FileEvent};
+
+    // Platform
     pub use kithara_platform::ThreadPool;
+
+    // Play
+    pub use kithara_play::{
+        EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
+        SourceType,
+    };
+
+    // Stream
     pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
 
-    pub use crate::{Event, EventBus, PlayerConfig, PlayerImpl, Resource, ResourceConfig};
+    // File (optional)
+    #[cfg(feature = "file")]
+    pub use kithara_file::{File, FileConfig};
+
+    // HLS (optional)
+    #[cfg(feature = "hls")]
+    pub use kithara_abr::{AbrMode, AbrOptions};
+    #[cfg(feature = "hls")]
+    pub use kithara_hls::{Hls, HlsConfig};
 }
