@@ -80,16 +80,17 @@ block-beta
     style storage fill:#8b6b8b,color:#fff
 ```
 
-| Layer | Crates | Role |
-|-------|--------|------|
-| **Facade** | `kithara` | Unified `Resource` API with auto-detection (file / HLS) |
-| **Player** | `kithara-play` | AVPlayer-style traits: Engine, Player, Mixer, DJ subsystem |
-| **Pipeline** | `kithara-audio`, `kithara-decode`, `kithara-events` | Threaded decode + effects + resampling, event bus |
-| **Protocols** | `kithara-file`, `kithara-hls`, `kithara-abr`, `kithara-drm` | HTTP progressive, HLS VOD with ABR, AES-128 decryption |
-| **I/O** | `kithara-stream`, `kithara-net` | Async-to-sync bridge (`Read + Seek`), HTTP with retry |
-| **Storage** | `kithara-assets`, `kithara-storage` | Disk cache with eviction, mmap/mem resources |
-| **Primitives** | `kithara-bufpool`, `kithara-platform` | Zero-alloc buffer pool, cross-platform sync types |
-| **Browser** | `kithara-wasm` | WASM player with AudioWorklet integration |
+<table>
+<tr><th>Layer</th><th>Crates</th><th>Role</th></tr>
+<tr><td><b>Facade</b></td><td><code>kithara</code></td><td>Unified <code>Resource</code> API with auto-detection (file / HLS)</td></tr>
+<tr><td><b>Player</b></td><td><code>kithara-play</code></td><td>AVPlayer-style traits: Engine, Player, Mixer, DJ subsystem</td></tr>
+<tr><td><b>Pipeline</b></td><td><code>kithara-audio</code>, <code>kithara-decode</code>, <code>kithara-events</code></td><td>Threaded decode + effects + resampling, event bus</td></tr>
+<tr><td><b>Protocols</b></td><td><code>kithara-file</code>, <code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-drm</code></td><td>HTTP progressive, HLS VOD with ABR, AES-128 decryption</td></tr>
+<tr><td><b>I/O</b></td><td><code>kithara-stream</code>, <code>kithara-net</code></td><td>Async-to-sync bridge (<code>Read + Seek</code>), HTTP with retry</td></tr>
+<tr><td><b>Storage</b></td><td><code>kithara-assets</code>, <code>kithara-storage</code></td><td>Disk cache with eviction, mmap/mem resources</td></tr>
+<tr><td><b>Primitives</b></td><td><code>kithara-bufpool</code>, <code>kithara-platform</code></td><td>Zero-alloc buffer pool, cross-platform sync types</td></tr>
+<tr><td><b>Browser</b></td><td><code>kithara-wasm</code></td><td>WASM player with AudioWorklet integration</td></tr>
+</table>
 
 ## Getting Started
 

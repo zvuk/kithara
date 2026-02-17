@@ -85,11 +85,12 @@ graph LR
 
 ## Three-Phase Download
 
-| Phase | Strategy |
-|-------|----------|
-| Sequential | Stream from file start via `Writer`; fast path for complete downloads |
-| Gap Filling | HTTP Range requests for missing chunks; batches up to 4 gaps, each up to 2 MB |
-| Complete | All data downloaded; resource committed |
+<table>
+<tr><th>Phase</th><th>Strategy</th></tr>
+<tr><td>Sequential</td><td>Stream from file start via <code>Writer</code>; fast path for complete downloads</td></tr>
+<tr><td>Gap Filling</td><td>HTTP Range requests for missing chunks; batches up to 4 gaps, each up to 2 MB</td></tr>
+<tr><td>Complete</td><td>All data downloaded; resource committed</td></tr>
+</table>
 
 ## Local File Handling
 

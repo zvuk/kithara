@@ -33,13 +33,14 @@ let resource = store.open_resource(&key)?;
 
 Requests flow through four layers (outermost to innermost):
 
-| Layer | Responsibility |
-|-------|---------------|
-| `CachedAssets` | In-memory LRU cache (default 5 entries); prevents duplicate mmap opens |
-| `LeaseAssets` | RAII-based pinning; `LeaseGuard` unpins on drop; prevents eviction of in-use assets |
-| `ProcessingAssets` | Optional chunk-based transformation on `commit()` (e.g., AES-128-CBC decryption) |
-| `EvictAssets` | LRU eviction by asset count and/or byte size; pinned assets excluded |
-| `DiskAssetStore` | Base disk I/O; maps `ResourceKey` to filesystem paths |
+<table>
+<tr><th>Layer</th><th>Responsibility</th></tr>
+<tr><td><code>CachedAssets</code></td><td>In-memory LRU cache (default 5 entries); prevents duplicate mmap opens</td></tr>
+<tr><td><code>LeaseAssets</code></td><td>RAII-based pinning; <code>LeaseGuard</code> unpins on drop; prevents eviction of in-use assets</td></tr>
+<tr><td><code>ProcessingAssets</code></td><td>Optional chunk-based transformation on <code>commit()</code> (e.g., AES-128-CBC decryption)</td></tr>
+<tr><td><code>EvictAssets</code></td><td>LRU eviction by asset count and/or byte size; pinned assets excluded</td></tr>
+<tr><td><code>DiskAssetStore</code></td><td>Base disk I/O; maps <code>ResourceKey</code> to filesystem paths</td></tr>
+</table>
 
 ```mermaid
 sequenceDiagram
@@ -97,11 +98,12 @@ sequenceDiagram
 
 Three index types are persisted under `_index/` for crash recovery:
 
-| Index | File | Purpose |
-|-------|------|---------|
-| Pins | `_index/pins.bin` | Persists pinned asset roots |
-| LRU | `_index/lru.bin` | Monotonic clock + byte accounting for eviction |
-| Coverage | `_index/cov.bin` | Per-segment byte-range coverage for partial downloads |
+<table>
+<tr><th>Index</th><th>File</th><th>Purpose</th></tr>
+<tr><td>Pins</td><td><code>_index/pins.bin</code></td><td>Persists pinned asset roots</td></tr>
+<tr><td>LRU</td><td><code>_index/lru.bin</code></td><td>Monotonic clock + byte accounting for eviction</td></tr>
+<tr><td>Coverage</td><td><code>_index/cov.bin</code></td><td>Per-segment byte-range coverage for partial downloads</td></tr>
+</table>
 
 All indices use bincode serialization with `Atomic<R>` for crash-safe writes.
 
