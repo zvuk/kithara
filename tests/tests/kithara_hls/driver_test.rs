@@ -10,8 +10,8 @@ use std::{
 };
 
 use kithara_assets::StoreOptions;
-use kithara_events::{Event, EventBus};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig, HlsEvent};
+use kithara_events::{Event, EventBus, HlsEvent};
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_stream::Stream;
 use rstest::rstest;
 use tempfile::TempDir;

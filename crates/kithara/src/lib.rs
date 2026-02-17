@@ -67,12 +67,10 @@ pub mod bufpool {
     pub use kithara_bufpool::*;
 }
 
-mod events;
-
-// Re-export from kithara-play
+// Events
 #[cfg(feature = "hls")]
-pub use events::HlsEvent;
-pub use events::{AudioEvent, Event, EventBus, FileEvent};
+pub use kithara_events::HlsEvent;
+pub use kithara_events::{AudioEvent, Event, EventBus, FileEvent};
 pub use kithara_play::{
     EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
     SourceType,

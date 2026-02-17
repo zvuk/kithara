@@ -355,8 +355,9 @@ impl PlayerImpl {
 mod tests {
     use std::time::Duration;
 
-    use kithara_audio::{AudioEvent, PcmReader};
+    use kithara_audio::PcmReader;
     use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+    use kithara_events::AudioEvent;
 
     use super::*;
 

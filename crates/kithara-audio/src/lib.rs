@@ -48,7 +48,6 @@ mod traits;
 
 // Public API exports
 pub use effects::eq::{EqBandConfig, EqEffect, generate_log_spaced_bands};
-pub use kithara_events::{AudioEvent, EventBus};
 pub use pipeline::{Audio, AudioConfig};
 pub use resampler::ResamplerQuality;
 #[doc(hidden)]

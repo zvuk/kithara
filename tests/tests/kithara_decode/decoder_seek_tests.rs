@@ -7,7 +7,8 @@
 use std::time::Duration;
 
 use kithara_assets::StoreOptions;
-use kithara_audio::{Audio, AudioConfig, AudioEvent, EventBus};
+use kithara_audio::{Audio, AudioConfig};
+use kithara_events::{AudioEvent, EventBus};
 use kithara_file::{File, FileConfig};
 use kithara_stream::Stream;
 use rstest::{fixture, rstest};

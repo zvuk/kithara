@@ -8,7 +8,8 @@ use std::{
     time::Duration,
 };
 
-use kithara_audio::{Audio, AudioConfig, EventBus};
+use kithara_audio::{Audio, AudioConfig};
+use kithara_events::EventBus;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_platform::ThreadPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};

@@ -77,7 +77,7 @@ pub trait PcmReader: Send {
     fn metadata(&self) -> &TrackMetadata;
 
     /// Subscribe to audio events.
-    fn decode_events(&self) -> tokio::sync::broadcast::Receiver<crate::AudioEvent>;
+    fn decode_events(&self) -> tokio::sync::broadcast::Receiver<kithara_events::AudioEvent>;
 
     /// Set the target sample rate of the audio host.
     ///
