@@ -44,6 +44,7 @@ pub struct MemCoverage {
 
 impl MemCoverage {
     /// Create a new empty coverage tracker.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             ranges: RangeSet::new(),
@@ -52,6 +53,7 @@ impl MemCoverage {
     }
 
     /// Create a coverage tracker with known total size.
+    #[must_use]
     pub fn with_total_size(total_size: u64) -> Self {
         Self {
             ranges: RangeSet::new(),

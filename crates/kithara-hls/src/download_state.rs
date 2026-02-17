@@ -14,7 +14,7 @@ use rangemap::RangeSet;
 use tracing::debug;
 use url::Url;
 
-// ---- LoadedSegment ----
+// LoadedSegment
 
 /// A segment that has been downloaded and placed in the virtual byte stream.
 #[derive(Debug, Clone)]
@@ -52,7 +52,7 @@ impl LoadedSegment {
     }
 }
 
-// ---- DownloadState ----
+// DownloadState
 
 /// Index of loaded segments, ordered by byte offset for O(log n) lookups.
 pub struct DownloadState {
@@ -169,7 +169,7 @@ impl DownloadState {
     }
 }
 
-// ---- DownloadProgress trait ----
+// DownloadProgress trait
 
 /// Read-only interface for querying download progress.
 #[cfg_attr(test, unimock::unimock(api = DownloadProgressMock))]
@@ -233,7 +233,7 @@ mod tests {
         }
     }
 
-    // ---- Test 1: push and find ----
+    // Test 1: push and find
 
     #[test]
     fn test_push_and_find() {
@@ -278,7 +278,7 @@ mod tests {
         assert!(state.find_at_offset(1000).is_none());
     }
 
-    // ---- Test 2: is_range_loaded ----
+    // Test 2: is_range_loaded
 
     #[test]
     fn test_is_range_loaded() {
@@ -306,7 +306,7 @@ mod tests {
         assert!(!state.is_range_loaded(&(500..600)));
     }
 
-    // ---- Test 3: is_segment_loaded ----
+    // Test 3: is_segment_loaded
 
     #[test]
     fn test_is_segment_loaded() {
@@ -328,7 +328,7 @@ mod tests {
         assert!(!state.is_segment_loaded(99, 0));
     }
 
-    // ---- Test 4: last ----
+    // Test 4: last
 
     #[test]
     fn test_last() {
@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(last.init_len, 50);
     }
 
-    // ---- Test 5: fence_at ----
+    // Test 5: fence_at
 
     #[test]
     fn test_fence_at() {
@@ -400,7 +400,7 @@ mod tests {
         assert_eq!(state.total_loaded_bytes(), 300); // 200 (V0) + 100 (V3)
     }
 
-    // ---- Test 6: first_segment_of_variant ----
+    // Test 6: first_segment_of_variant
 
     #[test]
     fn test_first_segment_of_variant() {
@@ -428,7 +428,7 @@ mod tests {
         assert!(state.first_segment_of_variant(99).is_none());
     }
 
-    // ---- Test 7: find_at_offset BTreeMap performance ----
+    // Test 7: find_at_offset BTreeMap performance
 
     #[test]
     fn test_find_at_offset_btree_performance() {
@@ -474,7 +474,7 @@ mod tests {
         assert_eq!(seg.segment_index, 789);
     }
 
-    // ---- Test 8: total_loaded_bytes ----
+    // Test 8: total_loaded_bytes
 
     #[test]
     fn test_total_loaded_bytes() {
@@ -489,7 +489,7 @@ mod tests {
         assert_eq!(state.total_loaded_bytes(), 300); // 100 + (50 + 150)
     }
 
-    // ---- Test 9: LoadedSegment methods ----
+    // Test 9: LoadedSegment methods
 
     #[test]
     fn test_loaded_segment_methods() {

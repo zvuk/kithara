@@ -9,36 +9,43 @@ publish = false
 [lints]
 workspace = true
 
+# Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-# All kithara crates
+kithara-hls = { workspace = true }
+kithara-stream = { workspace = true }
+url = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+futures = { workspace = true }
+
+# --- Native-only dependencies ---
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Kithara crates
 kithara-abr = { workspace = true }
 kithara-assets = { workspace = true, features = ["internal"] }
+kithara-audio = { workspace = true, features = ["web-audio"] }
 kithara-bufpool = { workspace = true }
-kithara-audio = { workspace = true }
 kithara-decode = { workspace = true }
 kithara-drm = { workspace = true }
 kithara-events = { workspace = true, features = ["hls"] }
 kithara-file = { workspace = true }
-kithara-hls = { workspace = true }
 kithara-net = { workspace = true }
 kithara-storage = { workspace = true }
-kithara-stream = { workspace = true }
 
 # Async runtime
-tokio = { workspace = true }
-tokio-util = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
-futures = { workspace = true }
 
 # Channels/buffers
 kanal = { workspace = true }
 bytes = { workspace = true }
 
 # HTTP/URL
-reqwest = { workspace = true }
-url = { workspace = true }
+reqwest = { workspace = true, features = ["rustls", "stream"] }
 axum = { workspace = true }
 tower = { workspace = true }
+tower-http = { workspace = true }
 
 # HLS parsing
 hls_m3u8 = { workspace = true }
@@ -52,9 +59,7 @@ rstest = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
 
-# Errors/logging
-thiserror = { workspace = true }
-tracing = { workspace = true }
+# Logging
 tracing-subscriber = { workspace = true }
 
 # Serialization
@@ -80,6 +85,17 @@ dashmap = { workspace = true }
 # Performance monitoring (optional)
 hotpath = { workspace = true, optional = true }
 
+# --- WASM-only dependencies ---
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-wasm = { workspace = true }
+kithara-audio = { workspace = true, features = ["web-audio"] }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+wasm-bindgen-test = { workspace = true }
+gloo-timers = { workspace = true }
+tracing-wasm = { workspace = true }
+console_error_panic_hook = { workspace = true }
+
 [features]
 perf = [
     "dep:hotpath",
@@ -91,6 +107,12 @@ perf = [
     "kithara-stream/perf",
     "kithara-net/perf",
 ]
+
+# HLS fixture server for browser-based WASM tests (native only)
+[[bin]]
+name = "hls_fixture_server"
+path = "bin/hls_fixture_server.rs"
+test = false
 
 # Performance test binaries
 [[test]]

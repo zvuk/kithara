@@ -136,7 +136,7 @@ async fn writer_with_offset_zero_is_same_as_new() {
 
     let payload = vec![0xFFu8; 256];
 
-    // --- Writer::new ---
+    // Writer::new
     let res_new = open_resource(&dir, "via_new.bin", 512);
     let source_new = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
         payload.clone(),
@@ -145,7 +145,7 @@ async fn writer_with_offset_zero_is_same_as_new() {
     let writer_new: Writer<std::io::Error> = Writer::new(source_new, res_new.clone(), cancel_new);
     let total_new = run_writer(writer_new).await.unwrap();
 
-    // --- Writer::with_offset(0) ---
+    // Writer::with_offset(0)
     let res_offset = open_resource(&dir, "via_offset.bin", 512);
     let source_offset = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
         payload.clone(),

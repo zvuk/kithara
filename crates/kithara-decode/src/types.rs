@@ -32,7 +32,7 @@ impl fmt::Display for PcmSpec {
 ///
 /// Combines audio format specification with position on the logical timeline.
 /// Each chunk gets unique timeline coordinates; `PcmSpec` is the static part.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PcmMeta {
     /// Audio format (channels, sample rate).
     pub spec: PcmSpec,
@@ -74,11 +74,13 @@ impl Default for PcmChunk {
 
 impl PcmChunk {
     /// Create a new `PcmChunk` from a pool-backed buffer.
+    #[must_use]
     pub fn new(meta: PcmMeta, pcm: PcmBuf) -> Self {
         Self { pcm, meta }
     }
 
     /// Audio format specification.
+    #[must_use]
     pub fn spec(&self) -> PcmSpec {
         self.meta.spec
     }
@@ -86,16 +88,14 @@ impl PcmChunk {
     /// Number of audio frames in this chunk.
     ///
     /// A frame contains one sample per channel.
+    #[must_use]
     pub fn frames(&self) -> usize {
         let channels = self.meta.spec.channels as usize;
-        if channels == 0 {
-            0
-        } else {
-            self.pcm.len() / channels
-        }
+        self.pcm.len().checked_div(channels).unwrap_or(0)
     }
 
     /// Get reference to raw samples.
+    #[must_use]
     pub fn samples(&self) -> &[f32] {
         &self.pcm
     }

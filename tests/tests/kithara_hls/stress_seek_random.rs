@@ -60,7 +60,7 @@ async fn stress_random_seek_read_hls(
         )
         .try_init();
 
-    // --- Init data ---
+    // Init data
     let init_data_per_variant = if with_init {
         let init_size = 1024;
         let mut init = b"V0-INIT:".to_vec();
@@ -70,7 +70,7 @@ async fn stress_random_seek_read_hls(
         None
     };
 
-    // --- Encryption config ---
+    // Encryption config
     let encryption = if with_encryption {
         Some(EncryptionConfig {
             key: *b"0123456789abcdef",
@@ -80,7 +80,7 @@ async fn stress_random_seek_read_hls(
         None
     };
 
-    // --- Step 1: Spawn HLS server ---
+    // Step 1: Spawn HLS server
     let server = HlsTestServer::new(HlsTestServerConfig {
         segments_per_variant: segment_count,
         segment_size,
@@ -103,7 +103,7 @@ async fn stress_random_seek_read_hls(
         "HLS server ready"
     );
 
-    // --- Step 2: Create Stream<Hls> ---
+    // Step 2: Create Stream<Hls>
     let temp_dir = TempDir::new().expect("temp dir");
     let cancel = CancellationToken::new();
 
@@ -117,7 +117,7 @@ async fn stress_random_seek_read_hls(
 
     let mut stream = Stream::<Hls>::new(config).await.expect("create HLS stream");
 
-    // --- Steps 3-7 in blocking thread ---
+    // Steps 3-7 in blocking thread
     let result = tokio::task::spawn_blocking(move || {
         // Step 3: Total byte length from fixture config
         info!(total_bytes, "Stream byte length");

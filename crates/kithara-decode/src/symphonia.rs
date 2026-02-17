@@ -168,11 +168,10 @@ impl SymphoniaInner {
         // which breaks streaming scenarios. After initialization, seek is enabled.
         let adapter = ReadSeekAdapter::new_seek_disabled(source);
 
-        let byte_len_handle = if let Some(ref handle) = config.byte_len_handle {
-            Arc::clone(handle)
-        } else {
-            adapter.byte_len_handle()
-        };
+        let byte_len_handle = config
+            .byte_len_handle
+            .as_ref()
+            .map_or_else(|| adapter.byte_len_handle(), Arc::clone);
 
         // Keep handle to re-enable seek after initialization
         let seek_enabled_handle = adapter.seek_enabled_handle();
@@ -237,11 +236,10 @@ impl SymphoniaInner {
             ReadSeekAdapter::new_seek_disabled(source)
         };
 
-        let byte_len_handle = if let Some(ref handle) = config.byte_len_handle {
-            Arc::clone(handle)
-        } else {
-            adapter.byte_len_handle()
-        };
+        let byte_len_handle = config
+            .byte_len_handle
+            .as_ref()
+            .map_or_else(|| adapter.byte_len_handle(), Arc::clone);
 
         let seek_enabled_handle = adapter.seek_enabled_handle();
 
@@ -347,6 +345,7 @@ impl SymphoniaInner {
         let sample_rate = codec_params
             .sample_rate
             .ok_or_else(|| DecodeError::InvalidData("No sample rate".to_string()))?;
+        #[expect(clippy::cast_possible_truncation)] // audio channel count always fits u16
         let channels = codec_params
             .channels
             .as_ref()
@@ -397,7 +396,7 @@ impl SymphoniaInner {
         let time_base = track.time_base?;
         let time = time_base.calc_time(Timestamp::new(num_frames as i64))?;
         let (seconds, nanos) = time.parts();
-        Some(Duration::new(seconds as u64, nanos))
+        Some(Duration::new(seconds.cast_unsigned(), nanos))
     }
 
     /// Decode the next chunk of PCM data.
@@ -453,6 +452,7 @@ impl SymphoniaInner {
             let mut pooled = self.pool.get_with(|v| v.resize(num_samples, 0.0));
             decoded.copy_to_slice_interleaved(&mut *pooled);
 
+            #[expect(clippy::cast_possible_truncation)] // audio channel count always fits u16
             let pcm_spec = PcmSpec {
                 channels: channels as u16,
                 sample_rate: spec.rate(),
@@ -472,10 +472,12 @@ impl SymphoniaInner {
             // Update position and frame offset
             if self.spec.sample_rate > 0 {
                 let frames = chunk.frames();
+                #[expect(clippy::cast_precision_loss)] // frame count precision loss is acceptable
                 let frame_duration =
-                    Duration::from_secs_f64(frames as f64 / self.spec.sample_rate as f64);
+                    Duration::from_secs_f64(frames as f64 / f64::from(self.spec.sample_rate));
                 self.position = self.position.saturating_add(frame_duration);
-                self.frame_offset += frames as u64;
+                let frames_u64 = frames as u64;
+                self.frame_offset += frames_u64;
             }
 
             return Ok(Some(chunk));
@@ -501,7 +503,11 @@ impl SymphoniaInner {
 
         self.decoder.reset();
         self.position = pos;
-        self.frame_offset = (pos.as_secs_f64() * self.spec.sample_rate as f64) as u64;
+        #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        // seek position and sample rate are non-negative; precision loss acceptable
+        {
+            self.frame_offset = (pos.as_secs_f64() * f64::from(self.spec.sample_rate)) as u64;
+        }
         Ok(())
     }
 

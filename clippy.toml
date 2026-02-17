@@ -1,2 +1,6 @@
 allow-unwrap-in-tests = true
 doc-valid-idents = ["YouTube", "GitHub", "OpenDAL"]
+
+# Complexity thresholds
+cognitive-complexity-threshold = 35
+too-many-lines-threshold = 150

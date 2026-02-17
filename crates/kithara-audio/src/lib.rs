@@ -43,6 +43,8 @@ mod resampler;
 mod rodio;
 mod traits;
 mod types;
+#[cfg(feature = "web-audio")]
+pub mod web_audio;
 
 // Public API exports
 pub use kithara_events::{AudioEvent, EventBus};

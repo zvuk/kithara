@@ -12,8 +12,8 @@ use std::{
 };
 
 use kithara_bufpool::BytePool;
+use kithara_platform::Mutex;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
-use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -100,9 +100,9 @@ where
     }
 
     fn ensure_loaded_best_effort(&self) -> AssetsResult<()> {
-        let should_load = { self.pins.lock().is_empty() };
+        let is_empty = self.pins.lock().is_empty();
 
-        if !should_load {
+        if !is_empty {
             return Ok(());
         }
 
@@ -111,10 +111,15 @@ where
         for p in loaded {
             guard.insert(p);
         }
+        drop(guard);
         Ok(())
     }
 
     /// Persist the current pin set to disk if dirty, then clear the dirty flag.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the pin index cannot be opened or written to disk.
     pub fn flush_pins(&self) -> AssetsResult<()> {
         if !self.enabled || !self.dirty.swap(false, Ordering::AcqRel) {
             return Ok(());

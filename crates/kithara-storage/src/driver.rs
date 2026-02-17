@@ -8,7 +8,7 @@
 
 use std::{fmt::Debug, ops::Range, path::Path, sync::Arc};
 
-use parking_lot::{Condvar, Mutex};
+use kithara_platform::{Condvar, Mutex};
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
 
@@ -32,6 +32,10 @@ pub trait Driver: Send + Sync + 'static {
     /// Open or create a new driver from options.
     ///
     /// Returns the driver and initial state to populate [`Resource<D>`].
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the backing storage cannot be opened or created.
     fn open(opts: Self::Options) -> StorageResult<(Self, DriverState)>
     where
         Self: Sized;
@@ -40,18 +44,36 @@ pub trait Driver: Send + Sync + 'static {
     ///
     /// `effective_len` is the min of `final_len` and physical storage length,
     /// pre-computed by [`Resource<D>`]. The driver reads up to `effective_len`.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the underlying storage read fails.
     fn read_at(&self, offset: u64, buf: &mut [u8], effective_len: u64) -> StorageResult<usize>;
 
     /// Write bytes at offset.
     ///
     /// `committed` comes from common state — the driver decides whether to
     /// reject (e.g. memory) or reopen as read-write (e.g. mmap `ReadWrite` mode).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the write fails or the resource is committed
+    /// and the driver does not support post-commit writes.
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()>;
 
     /// Finalize backing store (e.g. mmap: resize + reopen read-only; memory: truncate).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the backing store cannot be finalized (e.g. file
+    /// truncation or read-only reopen fails).
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()>;
 
     /// Reopen for writing (e.g. mmap: reopen as read-write; memory: no-op).
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the backing store cannot be reopened for writing.
     fn reactivate(&self) -> StorageResult<()>;
 
     /// Filesystem path, if any.
@@ -74,6 +96,15 @@ pub trait Driver: Send + Sync + 'static {
     /// Called by [`Resource<D>::write_at`] after a successful driver write,
     /// before updating state + condvar.
     fn notify_write(&self, _range: &Range<u64>) {}
+
+    /// Returns the valid data window for ring buffer drivers.
+    ///
+    /// When `Some(window)`, any ranges before `window.start` have been evicted
+    /// and should be removed from the available set. Returns `None` for
+    /// linear drivers where all written data is retained.
+    fn valid_window(&self) -> Option<Range<u64>> {
+        None
+    }
 }
 
 /// Initial state returned by [`Driver::open`] to populate [`Resource<D>`].
@@ -146,6 +177,10 @@ impl<D: Driver + Debug> Debug for Resource<D> {
 
 impl<D: Driver> Resource<D> {
     /// Create a resource from driver options.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the driver cannot be opened (e.g. file I/O failure).
     pub fn open(cancel: CancellationToken, opts: D::Options) -> StorageResult<Self> {
         let (driver, init) = D::open(opts)?;
         Ok(Self {
@@ -168,9 +203,12 @@ impl<D: Driver> Resource<D> {
         if self.inner.cancel.is_cancelled() {
             return Err(StorageError::Cancelled);
         }
-        let state = self.inner.state.lock();
-        if let Some(ref reason) = state.failed {
-            return Err(StorageError::Failed(reason.clone()));
+        let failed = {
+            let state = self.inner.state.lock();
+            state.failed.clone()
+        };
+        if let Some(reason) = failed {
+            return Err(StorageError::Failed(reason));
         }
         Ok(())
     }
@@ -185,9 +223,9 @@ impl<D: Driver> ResourceExt for Resource<D> {
         self.check_health()?;
 
         let effective_len = {
-            let state = self.inner.state.lock();
+            let final_len = self.inner.state.lock().final_len;
             let storage_len = self.inner.driver.storage_len();
-            let data_len = state.final_len.unwrap_or(storage_len);
+            let data_len = final_len.unwrap_or(storage_len);
             data_len.min(storage_len)
         };
 
@@ -196,6 +234,7 @@ impl<D: Driver> ResourceExt for Resource<D> {
         }
 
         // Clamp buf to effective_len.
+        #[expect(clippy::cast_possible_truncation)] // byte offset within allocated resource
         let available = (effective_len - offset) as usize;
         let to_read = buf.len().min(available);
 
@@ -230,13 +269,24 @@ impl<D: Driver> ResourceExt for Resource<D> {
         self.inner.driver.notify_write(&range);
 
         // Update common state and wake waiters.
-        let mut state = self.inner.state.lock();
-        state.available.insert(range);
+        {
+            let mut state = self.inner.state.lock();
+            state.available.insert(range);
+
+            // Invalidate evicted ranges for ring buffer drivers.
+            if let Some(window) = self.inner.driver.valid_window() {
+                let evict_end = window.start;
+                if evict_end > 0 {
+                    state.available.remove(0..evict_end);
+                }
+            }
+        }
         self.inner.condvar.notify_all();
 
         Ok(())
     }
 
+    #[expect(clippy::significant_drop_tightening)] // lock must be held for condvar.wait_for
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         if range.start > range.end {
             return Err(StorageError::InvalidRange {
@@ -291,21 +341,25 @@ impl<D: Driver> ResourceExt for Resource<D> {
         self.inner.driver.commit(final_len)?;
 
         // Update common state only on success.
-        let mut state = self.inner.state.lock();
-        state.committed = true;
-        state.final_len = final_len;
-        if let Some(len) = final_len
-            && len > 0
         {
-            state.available.insert(0..len);
+            let mut state = self.inner.state.lock();
+            state.committed = true;
+            state.final_len = final_len;
+            if let Some(len) = final_len
+                && len > 0
+            {
+                state.available.insert(0..len);
+            }
         }
         self.inner.condvar.notify_all();
         Ok(())
     }
 
     fn fail(&self, reason: String) {
-        let mut state = self.inner.state.lock();
-        state.failed = Some(reason);
+        {
+            let mut state = self.inner.state.lock();
+            state.failed = Some(reason);
+        }
         self.inner.condvar.notify_all();
     }
 
@@ -320,6 +374,7 @@ impl<D: Driver> ResourceExt for Resource<D> {
 
     fn status(&self) -> ResourceStatus {
         let state = self.inner.state.lock();
+        #[expect(clippy::option_if_let_else)] // three-way branch is clearer with if-let-else
         if let Some(ref reason) = state.failed {
             ResourceStatus::Failed(reason.clone())
         } else if state.committed {
@@ -338,10 +393,12 @@ impl<D: Driver> ResourceExt for Resource<D> {
         self.inner.driver.reactivate()?;
 
         // Update common state only on success.
-        let mut state = self.inner.state.lock();
-        state.committed = false;
-        state.final_len = None;
-        // Keep available data as-is — existing bytes remain readable.
+        {
+            let mut state = self.inner.state.lock();
+            state.committed = false;
+            state.final_len = None;
+            // Keep available data as-is — existing bytes remain readable.
+        }
         self.inner.condvar.notify_all();
         Ok(())
     }

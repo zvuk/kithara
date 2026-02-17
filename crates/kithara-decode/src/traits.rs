@@ -147,12 +147,21 @@ pub trait InnerDecoder: Send + 'static {
     /// Decode the next chunk of PCM data.
     ///
     /// Returns `Ok(Some(chunk))` with PCM data, or `Ok(None)` at end of stream.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::DecodeError`] if decoding fails.
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>>;
 
     /// Get the PCM output specification.
     fn spec(&self) -> PcmSpec;
 
     /// Seek to a time position.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::DecodeError::SeekFailed`] if seeking is not supported
+    /// or the position is invalid.
     fn seek(&mut self, pos: Duration) -> DecodeResult<()>;
 
     /// Update the byte length reported to the underlying media source.

@@ -50,17 +50,20 @@ impl std::fmt::Debug for KeyOptions {
 
 impl KeyOptions {
     /// Create default key options.
+    #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
     /// Set query parameters to append to key URLs.
+    #[must_use]
     pub fn with_query_params(mut self, params: HashMap<String, String>) -> Self {
         self.query_params = Some(params);
         self
     }
 
     /// Set headers to include in key requests.
+    #[must_use]
     pub fn with_request_headers(mut self, headers: HashMap<String, String>) -> Self {
         self.request_headers = Some(headers);
         self
@@ -150,6 +153,7 @@ impl Default for HlsConfig {
 
 impl HlsConfig {
     /// Create new HLS config with URL.
+    #[must_use]
     pub fn new(url: Url) -> Self {
         Self {
             abr: AbrOptions::default(),
@@ -180,54 +184,63 @@ impl HlsConfig {
     }
 
     /// Set storage options.
+    #[must_use]
     pub fn with_store(mut self, store: StoreOptions) -> Self {
         self.store = store;
         self
     }
 
     /// Set network options.
+    #[must_use]
     pub fn with_net(mut self, net: NetOptions) -> Self {
         self.net = net;
         self
     }
 
     /// Set ABR options.
+    #[must_use]
     pub fn with_abr(mut self, abr: AbrOptions) -> Self {
         self.abr = abr;
         self
     }
 
     /// Set key options.
+    #[must_use]
     pub fn with_keys(mut self, keys: KeyOptions) -> Self {
         self.keys = keys;
         self
     }
 
     /// Set base URL.
+    #[must_use]
     pub fn with_base_url(mut self, base_url: Url) -> Self {
         self.base_url = Some(base_url);
         self
     }
 
     /// Set cancellation token.
+    #[must_use]
     pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
         self.cancel = Some(cancel);
         self
     }
 
     /// Set event bus for subscribing to HLS events.
+    #[must_use]
     pub fn with_events(mut self, bus: EventBus) -> Self {
         self.bus = Some(bus);
         self
     }
 
     /// Set event bus channel capacity.
+    #[must_use]
     pub fn with_event_channel_capacity(mut self, capacity: usize) -> Self {
         self.event_channel_capacity = capacity;
         self
     }
 
     /// Set buffer pool (shared across all components).
+    #[must_use]
     pub fn with_pool(mut self, pool: BytePool) -> Self {
         self.pool = Some(pool);
         self
@@ -237,6 +250,7 @@ impl HlsConfig {
     ///
     /// - `Some(n)` — enable backpressure, pause when ahead by n bytes
     /// - `None` — disable backpressure, download as fast as possible
+    #[must_use]
     pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
         self.look_ahead_bytes = bytes;
         self
@@ -245,12 +259,14 @@ impl HlsConfig {
     /// Set thread pool for background work.
     ///
     /// The pool is shared across all components. Defaults to the global rayon pool.
+    #[must_use]
     pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
         self.thread_pool = pool;
         self
     }
 
     /// Force in-memory storage (no disk caching).
+    #[must_use]
     pub fn with_ephemeral(mut self, ephemeral: bool) -> Self {
         self.ephemeral = ephemeral;
         self

@@ -1,4 +1,6 @@
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use web_time::Instant;
 
 /// ABR mode selection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,11 +80,11 @@ impl std::fmt::Debug for AbrOptions {
 
 impl AbrOptions {
     /// Get initial variant index based on mode.
+    #[must_use]
     pub fn initial_variant(&self) -> usize {
         match self.mode {
-            AbrMode::Auto(Some(idx)) => idx,
+            AbrMode::Auto(Some(idx)) | AbrMode::Manual(idx) => idx,
             AbrMode::Auto(None) => 0,
-            AbrMode::Manual(idx) => idx,
         }
     }
 }

@@ -3,11 +3,13 @@
 use std::{collections::HashSet, path::Path, sync::Arc};
 
 use kithara_bufpool::BytePool;
-use parking_lot::Mutex;
+use kithara_platform::Mutex;
 use tokio_util::sync::CancellationToken;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::base::delete_asset_dir;
 use crate::{
-    base::{Assets, delete_asset_dir},
+    base::Assets,
     error::AssetsResult,
     index::{EvictConfig, LruIndex, PinsIndex},
     key::ResourceKey,
@@ -87,6 +89,10 @@ where
     }
 
     /// Record asset size for byte-based eviction (best-effort).
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the LRU index cannot be opened or updated.
     pub fn record_asset_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<()> {
         if !self.enabled {
             return Ok(());
@@ -99,6 +105,10 @@ where
     }
 
     /// Check if byte limit is exceeded and run eviction if needed.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "eviction logic evaluates multiple conditions"
+    )]
     pub fn check_and_evict_if_over_limit(&self) {
         if !self.enabled || self.cancel.is_cancelled() || self.cfg.max_bytes.is_none() {
             return;
@@ -165,6 +175,7 @@ where
             }
 
             tracing::debug!(asset_root = %cand, "Attempting to delete asset");
+            #[cfg(not(target_arch = "wasm32"))]
             if delete_asset_dir(self.inner.root_dir(), &cand).is_ok() {
                 tracing::debug!(asset_root = %cand, "Asset deleted successfully");
                 let _ = lru.remove(&cand);
@@ -225,6 +236,7 @@ where
                 continue;
             }
 
+            #[cfg(not(target_arch = "wasm32"))]
             if delete_asset_dir(self.inner.root_dir(), &cand).is_ok() {
                 let _ = lru.remove(&cand);
             }

@@ -22,8 +22,8 @@ kithara-net = { workspace = true, optional = true }
 kithara-abr = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
 rodio = { workspace = true, optional = true }
-tokio = { workspace = true }
-tokio-util = { workspace = true }
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["full"] }
 url = { workspace = true }
 
 [features]

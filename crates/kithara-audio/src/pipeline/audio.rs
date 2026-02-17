@@ -123,14 +123,28 @@ pub struct Audio<S> {
 
 impl<S> Audio<S> {
     /// Get reference to PCM receiver for direct channel access.
+    #[must_use]
     pub fn pcm_rx(&self) -> &Receiver<Fetch<PcmChunk>> {
         &self.pcm_rx
+    }
+
+    /// Enable non-blocking mode for `read()`.
+    ///
+    /// After calling this, `read()` returns immediately from buffered data
+    /// without blocking. Must be called after construction so that
+    /// `fill_buffer()` calls from JS (via `requestAnimationFrame`) don't hang.
+    pub fn preload(&mut self) {
+        self.preloaded = true;
+        if self.current_chunk.is_none() && !self.eof {
+            self.fill_buffer();
+        }
     }
 
     /// Subscribe to audio events.
     ///
     /// For `Audio<Stream<T>>`, prefer `events()` which provides unified
     /// stream + audio events.
+    #[must_use]
     pub fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
         self.audio_events_tx.subscribe()
     }
@@ -138,11 +152,13 @@ impl<S> Audio<S> {
     /// Get current audio specification.
     ///
     /// Returns sample rate and channel count for audio output setup.
+    #[must_use]
     pub fn spec(&self) -> PcmSpec {
         self.spec
     }
 
     /// Check if end of stream has been reached.
+    #[must_use]
     pub fn is_eof(&self) -> bool {
         self.eof
     }
@@ -150,22 +166,30 @@ impl<S> Audio<S> {
     /// Get current playback position.
     ///
     /// Calculated from samples read since last seek plus the seek base.
+    #[must_use]
     pub fn position(&self) -> Duration {
-        let rate = self.spec.sample_rate as f64 * self.spec.channels.max(1) as f64;
+        let rate = f64::from(self.spec.sample_rate) * f64::from(self.spec.channels.max(1));
         if rate == 0.0 {
             return self.seek_base;
         }
-        self.seek_base + Duration::from_secs_f64(self.samples_read as f64 / rate)
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "sample count precision loss is negligible"
+        )]
+        let samples = self.samples_read as f64;
+        self.seek_base + Duration::from_secs_f64(samples / rate)
     }
 
     /// Get total duration of the audio stream.
     ///
     /// Returns `None` for streaming sources where duration is unknown.
+    #[must_use]
     pub fn duration(&self) -> Option<Duration> {
         self.total_duration
     }
 
     /// Get track metadata (title, artist, album, artwork).
+    #[must_use]
     pub fn metadata(&self) -> &TrackMetadata {
         &self.metadata
     }
@@ -219,6 +243,10 @@ impl<S> Audio<S> {
     /// Seek to position in the audio stream.
     ///
     /// Note: Seek clears internal buffers and invalidates pending chunks.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::SeekError`] if the command channel is closed.
     pub fn seek(&mut self, position: Duration) -> DecodeResult<()> {
         // Increment epoch to invalidate pending chunks.
         // Do NOT store to shared atomic here — the worker does it in handle_command().
@@ -227,7 +255,18 @@ impl<S> Audio<S> {
         // and making it pass the consumer's epoch filter.
         let new_epoch = self.validator.next_epoch();
 
-        // Send seek command to worker with new epoch
+        // Send seek command to worker with new epoch.
+        // On wasm32 main thread, `Atomics.wait` is forbidden, so use `try_send()`
+        // to avoid blocking.  The command channel should always have capacity
+        // (bounded(1+) and the worker consumes commands promptly).
+        #[cfg(target_arch = "wasm32")]
+        self.cmd_tx
+            .try_send(AudioCommand::Seek {
+                position,
+                epoch: new_epoch,
+            })
+            .map_err(|_| DecodeError::SeekError("channel closed or full".to_string()))?;
+        #[cfg(not(target_arch = "wasm32"))]
         self.cmd_tx
             .send(AudioCommand::Seek {
                 position,
@@ -275,14 +314,25 @@ impl<S> Audio<S> {
     ///
     /// After `preload()`, non-blocking. Before `preload()`, blocks on first call.
     /// Returns `None` on EOF or channel close.
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "chunk validation with multiple conditions"
+    )]
     fn recv_valid_chunk(&mut self) -> Option<PcmChunk> {
         if self.eof {
             return None;
         }
 
         loop {
-            let result = if self.preloaded {
-                // Non-blocking mode after preload
+            // On wasm32, blocking recv is forbidden (Atomics.wait cannot run
+            // on the browser main thread). Always use non-blocking try_recv.
+            #[cfg(target_arch = "wasm32")]
+            let use_nonblocking = true;
+            #[cfg(not(target_arch = "wasm32"))]
+            let use_nonblocking = self.preloaded;
+
+            let result = if use_nonblocking {
+                // Non-blocking mode
                 match self.pcm_rx.try_recv() {
                     Ok(Some(fetch)) => Ok(fetch),
                     Ok(None) => return None, // No data available
@@ -293,42 +343,39 @@ impl<S> Audio<S> {
                     }
                 }
             } else {
-                // Blocking mode before preload (for tests/backward compat)
+                // Blocking mode before preload (native only, for tests/backward compat)
                 self.pcm_rx.recv().map_err(|_| ())
             };
 
-            match result {
-                Ok(fetch) => {
-                    // Skip stale chunks (from before seek)
-                    if !self.validator.is_valid(&fetch) {
-                        trace!(
-                            chunk_epoch = fetch.epoch(),
-                            current_epoch = self.validator.epoch,
-                            "skipping stale chunk"
-                        );
-                        continue;
-                    }
-
-                    if fetch.is_eof() {
-                        debug!(epoch = fetch.epoch(), "Audio: received EOF");
-                        self.eof = true;
-                        return None;
-                    }
-
-                    let chunk = fetch.into_inner();
+            if let Ok(fetch) = result {
+                // Skip stale chunks (from before seek)
+                if !self.validator.is_valid(&fetch) {
                     trace!(
-                        samples = chunk.pcm.len(),
-                        spec = ?chunk.spec(),
-                        "Audio: received chunk"
+                        chunk_epoch = fetch.epoch(),
+                        current_epoch = self.validator.epoch,
+                        "skipping stale chunk"
                     );
-                    return Some(chunk);
+                    continue;
                 }
-                Err(()) => {
-                    debug!("Audio: channel closed (EOF)");
+
+                if fetch.is_eof() {
+                    debug!(epoch = fetch.epoch(), "Audio: received EOF");
                     self.eof = true;
                     return None;
                 }
+
+                let chunk = fetch.into_inner();
+                trace!(
+                    samples = chunk.pcm.len(),
+                    spec = ?chunk.spec(),
+                    "Audio: received chunk"
+                );
+                return Some(chunk);
             }
+
+            debug!("Audio: channel closed (EOF)");
+            self.eof = true;
+            return None;
         }
     }
 
@@ -359,6 +406,11 @@ where
     /// This is the target API for Stream sources.
     /// Uses `StreamAudioSource` for automatic decoder recreation on format change.
     ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError`] if the stream cannot be created, the initial probe
+    /// fails, or the decoder cannot be initialized.
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -366,6 +418,10 @@ where
     /// let audio = Audio::new(config).await?;
     /// sink.append(audio);
     /// ```
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "pipeline setup with debug tracing"
+    )]
     pub async fn new(config: AudioConfig<T>) -> Result<Self, DecodeError> {
         let cancel = CancellationToken::new();
 
@@ -396,14 +452,17 @@ where
             .unwrap_or_else(|| EventBus::new(DEFAULT_EVENT_CAPACITY));
 
         // Create stream.
+        debug!("Audio::new — creating Stream...");
         let stream = Stream::<T>::new(stream_config)
             .await
             .map_err(|e| DecodeError::Io(std::io::Error::other(e.to_string())))?;
+        debug!("Audio::new — Stream created");
 
         // Resolve byte pool: config overrides global.
         let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::byte_pool().clone());
 
         // Trigger first segment load to get MediaInfo for proper decoder creation.
+        debug!("Audio::new — spawning probe task on thread pool...");
         let stream = thread_pool
             .spawn_async(move || {
                 let mut stream = stream;
@@ -416,13 +475,14 @@ where
             .map_err(|e| {
                 DecodeError::Io(std::io::Error::other(format!("probe task panicked: {e}")))
             })??;
+        debug!("Audio::new — probe task done");
 
         // Get initial MediaInfo.
         // For decoder creation: user-provided overrides stream-detected.
         // For format change tracking: always use stream-detected (so ABR switches
         // are detected correctly even when user overrides the format).
         let stream_media_info = stream.media_info();
-        let initial_media_info = user_media_info.or(stream_media_info.clone());
+        let initial_media_info = user_media_info.or_else(|| stream_media_info.clone());
         debug!(?initial_media_info, "Initial MediaInfo from stream");
 
         // Create shared stream for format change detection
@@ -435,6 +495,7 @@ where
 
         // Create initial decoder on the thread pool to avoid blocking tokio runtime.
         // Symphonia probe() does blocking IO which would deadlock the async downloader.
+        debug!("Audio::new — spawning decoder creation on thread pool...");
         let decoder_config = kithara_decode::DecoderConfig {
             prefer_hardware,
             hint: hint.clone(),
@@ -465,6 +526,7 @@ where
             .map_err(|e| {
                 DecodeError::Io(std::io::Error::other(format!("decoder task panicked: {e}")))
             })??;
+        debug!("Audio::new — decoder created");
 
         let initial_spec = decoder.spec();
         let total_duration = decoder.duration();
@@ -629,6 +691,7 @@ where
     /// Subscribe to unified events via the `EventBus`.
     ///
     /// Returns a receiver for all events published to the bus.
+    #[must_use]
     pub fn events(&self) -> broadcast::Receiver<kithara_events::Event> {
         self.bus.subscribe()
     }
@@ -636,6 +699,7 @@ where
     /// Get a reference to the underlying `EventBus`.
     ///
     /// Useful for passing to downstream components that also publish events.
+    #[must_use]
     pub fn event_bus(&self) -> &EventBus {
         &self.bus
     }
@@ -718,10 +782,7 @@ impl<S: Send> PcmReader for Audio<S> {
     }
 
     fn preload(&mut self) {
-        self.preloaded = true;
-        if self.current_chunk.is_none() && !self.eof {
-            self.fill_buffer();
-        }
+        Self::preload(self);
     }
 
     fn next_chunk(&mut self) -> Option<PcmChunk> {

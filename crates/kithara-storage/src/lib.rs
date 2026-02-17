@@ -18,15 +18,19 @@ mod coverage;
 mod driver;
 mod error;
 mod memory;
+#[cfg(not(target_arch = "wasm32"))]
 mod mmap;
 mod resource;
 mod unified;
 
-pub use atomic::{Atomic, AtomicMmap};
+pub use atomic::Atomic;
+#[cfg(not(target_arch = "wasm32"))]
+pub use atomic::AtomicMmap;
 pub use coverage::{Coverage, MemCoverage};
 pub use driver::{Driver, Resource};
 pub use error::{StorageError, StorageResult};
 pub use memory::{MemDriver, MemOptions, MemResource};
+#[cfg(not(target_arch = "wasm32"))]
 pub use mmap::{MmapDriver, MmapOptions, MmapResource};
 #[cfg(any(test, feature = "test-utils"))]
 pub use resource::ResourceMock;

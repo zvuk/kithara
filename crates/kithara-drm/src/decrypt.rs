@@ -31,6 +31,11 @@ const AES_BLOCK_SIZE: usize = 16;
 ///
 /// # Returns
 /// Number of decrypted bytes written to `output`.
+///
+/// # Errors
+///
+/// Returns an error string if the input length is not aligned to the AES block
+/// size, or if decryption / PKCS7 unpadding fails.
 pub fn aes128_cbc_process_chunk(
     input: &[u8],
     output: &mut [u8],

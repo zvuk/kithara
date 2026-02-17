@@ -9,7 +9,7 @@ use tempfile::TempDir;
 
 use crate::common::fixtures::temp_dir;
 
-// === Test Fixtures ===
+// Test Fixtures
 
 fn asset_store_with_root(temp_dir: &TempDir, asset_root: &str) -> AssetStore {
     AssetStoreBuilder::new()
@@ -22,7 +22,7 @@ fn asset_store_with_root(temp_dir: &TempDir, asset_root: &str) -> AssetStore {
         .build_disk()
 }
 
-// === AssetResource Path Tests ===
+// AssetResource Path Tests
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]

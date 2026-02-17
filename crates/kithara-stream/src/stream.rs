@@ -16,6 +16,7 @@ use std::{
     },
 };
 
+use kithara_platform::{MaybeSend, MaybeSync};
 use kithara_storage::WaitOutcome;
 
 use crate::{MediaInfo, StreamContext, ThreadPool, source::Source};
@@ -24,9 +25,11 @@ use crate::{MediaInfo, StreamContext, ThreadPool, source::Source};
 ///
 /// This trait is implemented by marker types (`Hls`, `File`) in their respective crates.
 /// The implementation provides the config type and source type.
-pub trait StreamType: Send + 'static {
+///
+/// On wasm32, `Send`/`Sync` bounds are relaxed via [`MaybeSend`]/[`MaybeSync`].
+pub trait StreamType: MaybeSend + 'static {
     /// Configuration for this stream type.
-    type Config: Default + Send;
+    type Config: Default + MaybeSend;
 
     /// Source implementing `Source`.
     type Source: Source;
@@ -37,9 +40,7 @@ pub trait StreamType: Send + 'static {
     /// Create the source from configuration.
     ///
     /// May also start background tasks (downloader) internally.
-    fn create(
-        config: Self::Config,
-    ) -> impl Future<Output = Result<Self::Source, Self::Error>> + Send;
+    fn create(config: Self::Config) -> impl Future<Output = Result<Self::Source, Self::Error>>;
 
     /// Extract the thread pool from config.
     ///
@@ -54,7 +55,7 @@ pub trait StreamType: Send + 'static {
     ///
     /// Concrete stream types set this to `kithara_events::EventBus`.
     /// `Audio::new()` constrains `T::Events = EventBus` to extract it.
-    type Events: Clone + Send + Sync + 'static;
+    type Events: Clone + MaybeSend + MaybeSync + 'static;
 
     /// Extract the event bus from config (if set).
     ///
@@ -87,6 +88,10 @@ pub struct Stream<T: StreamType> {
 
 impl<T: StreamType> Stream<T> {
     /// Create a new stream from configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying stream source cannot be created.
     pub async fn new(config: T::Config) -> Result<Self, T::Error> {
         let source = T::create(config).await?;
         Ok(Self {
@@ -176,8 +181,8 @@ impl<T: StreamType> Seek for Stream<T> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
         let current = self.pos.load(Ordering::Relaxed);
         let new_pos: i128 = match pos {
-            SeekFrom::Start(p) => p as i128,
-            SeekFrom::Current(delta) => (current as i128).saturating_add(delta as i128),
+            SeekFrom::Start(p) => i128::from(p),
+            SeekFrom::Current(delta) => i128::from(current).saturating_add(i128::from(delta)),
             SeekFrom::End(delta) => {
                 let Some(len) = self.source.len() else {
                     return Err(std::io::Error::new(
@@ -185,7 +190,7 @@ impl<T: StreamType> Seek for Stream<T> {
                         "seek from end requires known length",
                     ));
                 };
-                (len as i128).saturating_add(delta as i128)
+                i128::from(len).saturating_add(i128::from(delta))
             }
         };
 
@@ -196,6 +201,8 @@ impl<T: StreamType> Seek for Stream<T> {
             ));
         }
 
+        #[expect(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        // new_pos is verified non-negative above; i128 to u64 is safe after bounds check
         let new_pos = new_pos as u64;
 
         if let Some(len) = self.source.len()

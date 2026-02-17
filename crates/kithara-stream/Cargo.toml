@@ -15,8 +15,8 @@ bytes = { workspace = true }
 futures = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
+kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }
-parking_lot = { workspace = true }
 rayon = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -29,6 +29,13 @@ unimock = { workspace = true, optional = true }
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 test-utils = ["unimock"]
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["full"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true }
