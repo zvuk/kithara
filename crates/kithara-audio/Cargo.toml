@@ -30,9 +30,11 @@ bytes = { workspace = true }
 kithara-platform = { workspace = true }
 fast-interleave = { workspace = true }
 hotpath = { workspace = true, optional = true }
+unimock = { workspace = true, optional = true }
 
 [features]
 default = []
+test-utils = ["unimock"]
 # Enable rodio::Source adapter for playback
 rodio = ["dep:rodio"]
 # Enable performance monitoring with hotpath-rs (timing only, minimal overhead)

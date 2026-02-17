@@ -47,6 +47,9 @@ mod types;
 #[cfg(feature = "web-audio")]
 pub mod web_audio;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod mock;
+
 // Public API exports
 pub use effects::eq::{EqBandConfig, EqEffect, generate_log_spaced_bands};
 pub use kithara_events::{AudioEvent, EventBus};

@@ -1,11 +1,11 @@
 //! Audio pipeline traits.
 
 use kithara_decode::PcmChunk;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
 /// Audio processing effect in the chain (transforms PCM chunks).
-#[cfg_attr(test, unimock(api = AudioEffectMock))]
+#[cfg_attr(any(test, feature = "test-utils"), unimock(api = AudioEffectMock))]
 pub trait AudioEffect: Send + 'static {
     /// Process a PCM chunk, returning transformed output.
     ///

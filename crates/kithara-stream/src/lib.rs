@@ -20,6 +20,9 @@ mod source;
 mod stream;
 mod writer;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod mock;
+
 pub use backend::Backend;
 pub use context::{NullStreamContext, StreamContext};
 pub use downloader::{Downloader, DownloaderIo, PlanOutcome, StepResult};
@@ -27,10 +30,5 @@ pub use error::{StreamError, StreamResult};
 pub use fetch::{EpochValidator, Fetch};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use source::Source;
-// Test utilities
-#[cfg(any(test, feature = "test-utils"))]
-pub use source::SourceMock;
 pub use stream::{Stream, StreamType};
-#[cfg(any(test, feature = "test-utils"))]
-pub use unimock;
 pub use writer::{Writer, WriterError, WriterItem};
