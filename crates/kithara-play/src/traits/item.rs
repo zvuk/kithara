@@ -56,6 +56,10 @@ pub trait PlayerItem: MaybeSend + MaybeSync + 'static {
 
     fn set_preferred_peak_bitrate(&self, bitrate: f64);
 
+    fn preferred_peak_bitrate_for_expensive_networks(&self) -> f64;
+
+    fn set_preferred_peak_bitrate_for_expensive_networks(&self, bitrate: f64);
+
     fn asset_url(&self) -> Option<url::Url>;
 
     fn asset_duration(&self) -> MediaTime;

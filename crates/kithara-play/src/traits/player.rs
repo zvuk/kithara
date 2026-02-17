@@ -82,6 +82,12 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
 
     fn set_automatically_waits_to_minimize_stalling(&self, waits: bool);
 
+    // -- network --
+
+    fn is_network_expensive(&self) -> bool;
+
+    fn set_network_expensive(&self, expensive: bool);
+
     // -- time observation --
 
     fn add_periodic_time_observer(
