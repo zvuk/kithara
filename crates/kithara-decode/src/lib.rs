@@ -26,7 +26,7 @@ mod traits;
 mod types;
 
 #[cfg(any(test, feature = "test-utils"))]
-pub mod test_support;
+pub mod mock;
 
 // Platform-specific backends
 #[cfg(all(feature = "android", target_os = "android"))]
@@ -51,9 +51,5 @@ pub use factory::{DecoderConfig, DecoderFactory};
 pub use symphonia::{Symphonia, SymphoniaAac, SymphoniaFlac, SymphoniaMp3, SymphoniaVorbis};
 // Public traits
 pub use traits::InnerDecoder;
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::InnerDecoderMock;
 // Core types
 pub use types::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
-#[cfg(any(test, feature = "test-utils"))]
-pub use unimock;

@@ -33,6 +33,7 @@ pub use memory::{MemDriver, MemOptions, MemResource};
 #[cfg(not(target_arch = "wasm32"))]
 pub use mmap::{MmapDriver, MmapOptions, MmapResource};
 #[cfg(any(test, feature = "test-utils"))]
-pub use resource::ResourceMock;
+pub mod mock;
+
 pub use resource::{OpenMode, ResourceExt, ResourceStatus, WaitOutcome};
 pub use unified::StorageResource;

@@ -30,13 +30,6 @@ android = []
 test-utils = ["unimock"]
 
 [dev-dependencies]
+kithara-test-utils = { workspace = true }
 rstest = { workspace = true }
 unimock = { workspace = true }
-
-[[example]]
-name = "prime_info_check"
-required-features = ["apple"]
-
-[[example]]
-name = "abr_switch_simulator_apple"
-required-features = ["apple"]

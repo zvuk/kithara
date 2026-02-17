@@ -7,7 +7,7 @@ use std::{
 
 use rstest::{fixture, rstest};
 
-use crate::common::memory_source::{
+use kithara_test_utils::memory_source::{
     MemorySource, UnknownLenSource, memory_stream, unknown_len_stream,
 };
 

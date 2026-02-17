@@ -1,12 +1,12 @@
 use std::time::Duration;
 
-use kithara_bufpool::byte_pool;
-use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt, StorageError};
+use kithara::bufpool::byte_pool;
+use kithara::storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt, StorageError};
 use rstest::*;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
-use crate::common::fixtures::{cancel_token, cancel_token_cancelled, temp_dir};
+use kithara_test_utils::{cancel_token, cancel_token_cancelled, temp_dir};
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]

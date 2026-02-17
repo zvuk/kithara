@@ -1,21 +1,17 @@
 //! Play audio from an HLS stream.
 //!
 //! ```
-//! cargo run -p kithara-audio --example hls_audio --features rodio [URL]
+//! cargo run -p kithara --example hls_audio --features rodio [URL]
 //! ```
 
 use std::{env::args, error::Error};
 
-use kithara_audio::{Audio, AudioConfig, EventBus};
-use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_platform::ThreadPool;
-use kithara_stream::Stream;
+use kithara::prelude::*;
 use tracing::{info, metadata::LevelFilter, warn};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
 #[tokio::main(flavor = "current_thread")]
-#[cfg_attr(feature = "perf", hotpath::main)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(

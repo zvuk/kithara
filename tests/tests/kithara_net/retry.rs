@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use kithara_net::{Headers, Net, NetError, NetExt, RangeSpec, RetryPolicy};
+use kithara::net::{Headers, Net, NetError, NetExt, RangeSpec, RetryPolicy};
 use rstest::*;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -49,7 +49,7 @@ impl Net for RetryMockNet {
         &self,
         _url: Url,
         _headers: Option<Headers>,
-    ) -> Result<kithara_net::ByteStream, NetError> {
+    ) -> Result<kithara::net::ByteStream, NetError> {
         let attempt = self.attempt();
         if attempt < self.failures_before_success {
             Err(self.error_type.clone())
@@ -65,7 +65,7 @@ impl Net for RetryMockNet {
         _url: Url,
         _range: RangeSpec,
         _headers: Option<Headers>,
-    ) -> Result<kithara_net::ByteStream, NetError> {
+    ) -> Result<kithara::net::ByteStream, NetError> {
         let attempt = self.attempt();
         if attempt < self.failures_before_success {
             Err(self.error_type.clone())

@@ -103,6 +103,7 @@ pub fn asset_root_for_url(url: &Url, name: Option<&str>) -> String {
 /// # Errors
 ///
 /// Returns `AssetsError::MissingComponent` if the URL lacks a scheme or host.
+#[cfg_attr(not(feature = "internal"), expect(unreachable_pub))]
 pub fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
     // Validate that URL has required components for asset identification
     if url.scheme().is_empty() {

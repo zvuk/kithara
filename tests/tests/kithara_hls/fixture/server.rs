@@ -5,7 +5,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{Router, routing::get};
-use kithara_hls::HlsError;
+use kithara::hls::HlsError;
 use tokio::net::TcpListener;
 use url::Url;
 

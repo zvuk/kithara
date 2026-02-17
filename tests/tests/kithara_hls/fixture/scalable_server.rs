@@ -24,7 +24,7 @@ use cbc::{
     Encryptor,
     cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara_hls::HlsError;
+use kithara::hls::HlsError;
 use tokio::net::TcpListener;
 use url::Url;
 

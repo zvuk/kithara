@@ -1,4 +1,4 @@
-//! Common WAV file generation helpers for integration tests.
+//! WAV file generation helpers for tests.
 
 /// Create a WAV file with sine wave samples.
 ///
@@ -6,6 +6,7 @@
 /// - `sample_count`: number of audio frames
 /// - `sample_rate`: e.g. 44100
 /// - `channels`: e.g. 2 for stereo
+#[must_use]
 pub fn create_test_wav(sample_count: usize, sample_rate: u32, channels: u16) -> Vec<u8> {
     let bytes_per_sample = 2; // 16-bit
     let data_size = (sample_count * channels as usize * bytes_per_sample) as u32;
@@ -48,6 +49,7 @@ pub fn create_test_wav(sample_count: usize, sample_rate: u32, channels: u16) -> 
 /// Create WAV with saw-tooth pattern, sized exactly to `total_bytes`.
 ///
 /// Stereo 44100 Hz, 16-bit PCM. L and R channels get the same value per frame.
+#[must_use]
 pub fn create_saw_wav(total_bytes: usize) -> Vec<u8> {
     const SAW_PERIOD: usize = 65536;
     const SAMPLE_RATE: u32 = 44100;

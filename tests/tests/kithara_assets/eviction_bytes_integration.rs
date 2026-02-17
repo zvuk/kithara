@@ -12,12 +12,12 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use kithara_assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
-use kithara_storage::ResourceExt;
+use kithara::assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
+use kithara::storage::ResourceExt;
 use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 
-use crate::common::fixtures::{cancel_token, temp_dir};
+use kithara_test_utils::{cancel_token, temp_dir};
 
 fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
     root.join(asset_root).exists()

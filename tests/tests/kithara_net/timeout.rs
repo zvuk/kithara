@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use futures::StreamExt;
-use kithara_net::{Headers, Net, NetError, NetExt, RangeSpec};
+use kithara::net::{Headers, Net, NetError, NetExt, RangeSpec};
 use rstest::*;
 use url::Url;
 
@@ -41,7 +41,7 @@ impl Net for TimeoutMockNet {
         &self,
         _url: Url,
         _headers: Option<Headers>,
-    ) -> Result<kithara_net::ByteStream, NetError> {
+    ) -> Result<kithara::net::ByteStream, NetError> {
         tokio::time::sleep(self.delay).await;
         if self.should_succeed {
             let stream =
@@ -57,7 +57,7 @@ impl Net for TimeoutMockNet {
         _url: Url,
         _range: RangeSpec,
         _headers: Option<Headers>,
-    ) -> Result<kithara_net::ByteStream, NetError> {
+    ) -> Result<kithara::net::ByteStream, NetError> {
         tokio::time::sleep(self.delay).await;
         if self.should_succeed {
             let stream =

@@ -5,11 +5,11 @@
 
 use std::time::Duration;
 
-use kithara_assets::StoreOptions;
-use kithara_audio::{Audio, AudioConfig};
-use kithara_file::{File, FileConfig};
-use kithara_platform::ThreadPool;
-use kithara_stream::Stream;
+use kithara::assets::StoreOptions;
+use kithara::audio::{Audio, AudioConfig};
+use kithara::file::{File, FileConfig};
+use kithara::platform::ThreadPool;
+use kithara::stream::Stream;
 use rstest::rstest;
 use tempfile::TempDir;
 use tracing::info;

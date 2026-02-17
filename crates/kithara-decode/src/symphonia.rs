@@ -713,7 +713,8 @@ mod tests {
     use std::io::Cursor;
 
     use super::*;
-    use crate::{test_support::create_test_wav, traits::AudioDecoder};
+    use crate::traits::AudioDecoder;
+    use kithara_test_utils::create_test_wav;
 
     #[test]
     fn test_symphonia_config_default() {

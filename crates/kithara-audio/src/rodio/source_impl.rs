@@ -1,4 +1,4 @@
-//! rodio::Source implementation for [`Audio`].
+//! `rodio::Source` implementation for [`Audio`].
 
 use crate::pipeline::Audio;
 

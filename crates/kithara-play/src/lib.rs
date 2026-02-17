@@ -10,6 +10,9 @@ mod types;
 pub mod impls;
 pub mod traits;
 
+#[cfg(any(test, feature = "test-utils"))]
+pub mod mock;
+
 pub use error::PlayError;
 pub use events::{
     DjEvent, EngineEvent, InterruptionKind, ItemEvent, PlayerEvent, RouteChangeReason, SessionEvent,
@@ -24,22 +27,6 @@ pub use impls::{
 };
 pub use metadata::{Artwork, Metadata};
 pub use time::MediaTime;
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::asset::AssetMock;
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::dj::bpm::{BpmAnalyzerMock, BpmSyncMock};
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::dj::crossfade::CrossfadeControllerMock;
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::dj::effects::DjEffectMock;
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::dj::eq::EqualizerMock;
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::engine::EngineMock;
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::mixer::MixerMock;
-#[cfg(any(test, feature = "test-utils"))]
-pub use traits::session::AudioSessionMock;
 pub use traits::{
     asset::Asset,
     dj,

@@ -30,9 +30,11 @@ bytes = { workspace = true }
 kithara-platform = { workspace = true }
 fast-interleave = { workspace = true }
 hotpath = { workspace = true, optional = true }
+unimock = { workspace = true, optional = true }
 
 [features]
 default = []
+test-utils = ["unimock"]
 # Enable rodio::Source adapter for playback
 rodio = ["dep:rodio"]
 # Enable performance monitoring with hotpath-rs (timing only, minimal overhead)
@@ -41,8 +43,6 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
 # Enable Apple AudioToolbox hardware decoder (macOS/iOS)
 apple = ["kithara-decode/apple"]
-# Enable WASM AudioWorklet audio output
-web-audio = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["full"] }
@@ -70,6 +70,7 @@ kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
+kithara-test-utils = { workspace = true }
 tempfile = { workspace = true }
 rodio = { workspace = true }
 rstest = { workspace = true }
@@ -77,15 +78,3 @@ aes = { workspace = true }
 cbc = { workspace = true }
 hotpath = { workspace = true }
 unimock = { workspace = true }
-
-[[example]]
-name = "file_audio"
-required-features = ["rodio", "memprof", "perf", "kithara-net/perf"]
-
-[[example]]
-name = "hls_audio"
-required-features = ["rodio", "memprof", "perf", "kithara-net/perf", "kithara-hls/perf"]
-
-[[example]]
-name = "hls_drm_audio"
-required-features = ["rodio", "memprof", "perf", "kithara-net/perf", "kithara-hls/perf"]

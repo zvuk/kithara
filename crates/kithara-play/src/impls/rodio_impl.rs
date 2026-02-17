@@ -1,4 +1,4 @@
-//! rodio::Source implementation for [`Resource`].
+//! `rodio::Source` implementation for [`Resource`].
 
 use std::time::Duration;
 

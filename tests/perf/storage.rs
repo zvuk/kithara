@@ -6,7 +6,7 @@
 
 use std::io::Write;
 
-use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
+use kithara::storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
 use tempfile::NamedTempFile;
 use tokio_util::sync::CancellationToken;
 

@@ -13,7 +13,7 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_net::{
+use kithara::net::{
     Headers, HttpClient, Net, NetError, NetExt, NetOptions, RangeSpec, RetryPolicy, TimeoutNet,
 };
 use rstest::*;
@@ -361,7 +361,7 @@ async fn test_server(test_router: Router) -> TestServer {
 
 #[fixture]
 fn http_client() -> HttpClient {
-    HttpClient::new(kithara_net::NetOptions::default())
+    HttpClient::new(kithara::net::NetOptions::default())
 }
 
 // Helper functions for testing

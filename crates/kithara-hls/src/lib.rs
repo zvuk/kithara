@@ -49,4 +49,3 @@ pub use context::HlsStreamContext;
 pub use error::{HlsError, HlsResult};
 pub use inner::Hls;
 pub use kithara_abr::{AbrMode, AbrOptions};
-pub use kithara_events::{EventBus, HlsEvent};
