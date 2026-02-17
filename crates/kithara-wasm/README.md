@@ -4,6 +4,9 @@
 
 <div align="center">
 
+[![Crates.io](https://img.shields.io/crates/v/kithara-wasm.svg)](https://crates.io/crates/kithara-wasm)
+[![Downloads](https://img.shields.io/crates/d/kithara-wasm.svg)](https://crates.io/crates/kithara-wasm)
+[![docs.rs](https://docs.rs/kithara-wasm/badge.svg)](https://docs.rs/kithara-wasm)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>

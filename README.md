@@ -20,116 +20,51 @@
 
 > **Status: early development.** Public API will be kept as stable as possible, but internal architecture is actively being simplified — expect significant refactoring of larger crates. Pin to an exact version if you depend on kithara today.
 
-Rust library for networking and decoding. Provides transport primitives for progressive HTTP and HLS (VOD), a decoding layer producing PCM, and a persistent disk cache for offline playback.
+Modular audio engine in Rust. Streams, decodes, and plays audio from progressive HTTP and HLS sources with persistent caching and offline support. Designed as an open-source alternative to AVPlayer with DJ-grade mixing capabilities — multi-slot playback, crossfading, BPM sync, and per-channel EQ.
 
-Design goal: keep components modular so they can be reused independently and composed into a full engine/player.
+Components are independent crates that can be used standalone or composed into a full player.
 
 ## Features
 
+- **Player engine** — AVPlayer-style API with multi-slot arena, crossfading, BPM sync, and per-channel EQ (`kithara-play`)
 - **Progressive file download** — stream MP3, AAC, FLAC and other formats over HTTP with disk caching and gap filling
 - **HLS VOD** — adaptive bitrate streaming with variant switching, encrypted segments (AES-128-CBC), and offline support
 - **Multi-backend decoding** — Symphonia (software, cross-platform) and Apple AudioToolbox (hardware, macOS/iOS)
 - **Audio pipeline** — sample rate conversion via rubato, effects chain, OS-thread worker with backpressure
 - **Persistent disk cache** — lease/pin semantics, LRU eviction, crash-safe writes
-- **Zero-allocation hot paths** — sharded buffer pool (`kithara-bufpool`) for decode and I/O loops
-- **Async-to-sync bridge** — `Read + Seek` interface over async HTTP streams for synchronous decoders
-- **Modular crate design** — use only what you need: networking, caching, decoding, or the full stack
+- **Zero-allocation hot paths** — sharded buffer pool for decode and I/O loops
+- **WASM support** — browser playback via AudioWorklet with shared memory
 
-## Crate Architecture
+## Architecture
 
-```mermaid
-%%{init: {"flowchart": {"curve": "linear"}} }%%
-graph TD
-    kithara["kithara<br/><i>facade</i>"]
-    audio["kithara-audio<br/><i>pipeline, resampling</i>"]
-    decode["kithara-decode<br/><i>Symphonia, Apple, Android</i>"]
-    file["kithara-file<br/><i>progressive download</i>"]
-    hls["kithara-hls<br/><i>HLS VOD</i>"]
-    abr["kithara-abr<br/><i>adaptive bitrate</i>"]
-    drm["kithara-drm<br/><i>AES-128-CBC</i>"]
-    net["kithara-net<br/><i>HTTP + retry</i>"]
-    assets["kithara-assets<br/><i>cache, lease, evict</i>"]
-    stream["kithara-stream<br/><i>Source, Writer, Backend</i>"]
-    storage["kithara-storage<br/><i>mmap / mem</i>"]
-    bufpool["kithara-bufpool<br/><i>sharded pool</i>"]
-    events["kithara-events<br/><i>event bus</i>"]
-    platform["kithara-platform<br/><i>platform primitives</i>"]
-
-    kithara --> audio
-    kithara --> decode
-    kithara --> file
-    kithara --> hls
-    kithara --> events
-
-    audio --> decode
-    audio --> stream
-    audio --> file
-    audio --> hls
-    audio --> bufpool
-    audio --> events
-
-    decode --> stream
-    decode --> bufpool
-
-    file --> stream
-    file --> net
-    file --> assets
-    file --> storage
-    file --> events
-
-    hls --> stream
-    hls --> net
-    hls --> assets
-    hls --> storage
-    hls --> abr
-    hls --> drm
-    hls --> events
-
-    assets --> storage
-    assets --> bufpool
-    assets --> platform
-
-    stream --> storage
-    stream --> bufpool
-    stream --> net
-    stream --> platform
-
-    bufpool --> platform
-    storage --> platform
-
-    style kithara fill:#4a6fa5,color:#fff
-    style audio fill:#6b8cae,color:#fff
-    style decode fill:#6b8cae,color:#fff
-    style file fill:#7ea87e,color:#fff
-    style hls fill:#7ea87e,color:#fff
-    style abr fill:#c4a35a,color:#fff
-    style drm fill:#c4a35a,color:#fff
-    style net fill:#b07a5b,color:#fff
-    style assets fill:#b07a5b,color:#fff
-    style stream fill:#8b6b8b,color:#fff
-    style storage fill:#8b6b8b,color:#fff
-    style bufpool fill:#8b6b8b,color:#fff
-    style events fill:#6b8cae,color:#fff
-    style platform fill:#8b6b8b,color:#fff
+```
+┌─────────────────────────────────────────────────────┐
+│                      kithara                        │  facade
+│                     kithara-play                    │  player engine
+├──────────────────────┬──────────────────────────────┤
+│    kithara-audio     │       kithara-events         │  pipeline
+│    kithara-decode    │                              │
+├──────────────────────┴──────────────────────────────┤
+│  kithara-file    kithara-hls    kithara-abr         │  protocols
+│                  kithara-drm                        │
+├─────────────────────────────────────────────────────┤
+│  kithara-stream         kithara-net                 │  I/O
+├─────────────────────────────────────────────────────┤
+│  kithara-assets         kithara-storage             │  storage
+│  kithara-bufpool        kithara-platform            │  primitives
+└─────────────────────────────────────────────────────┘
 ```
 
-| Crate | Role |
-|-------|------|
-| **kithara** | Facade: unified `Resource` API with auto-detection (file / HLS) |
-| **kithara-audio** | Audio pipeline: OS thread worker, effects chain, resampling |
-| **kithara-decode** | Synchronous audio decoding via Symphonia |
-| **kithara-stream** | Async-to-sync byte-stream bridge (`Read + Seek`) |
-| **kithara-file** | Progressive file download (MP3, AAC, etc.) |
-| **kithara-hls** | HLS VOD orchestration with ABR, caching, and offline support |
-| **kithara-abr** | Adaptive bitrate algorithm (protocol-agnostic) |
-| **kithara-net** | HTTP networking with retry, timeout, and streaming |
-| **kithara-assets** | Persistent disk cache with lease/pin semantics and eviction |
-| **kithara-storage** | Unified `StorageResource` backed by `mmap-io` |
-| **kithara-drm** | AES-128-CBC segment decryption for encrypted HLS |
-| **kithara-events** | Unified event bus for pipeline monitoring |
-| **kithara-bufpool** | Sharded buffer pool for zero-allocation hot paths |
-| **kithara-platform** | Platform-aware primitives for native and wasm32 |
-| **kithara-wasm** | WASM HLS audio player for browser environments |
+| Layer | Crates | Role |
+|-------|--------|------|
+| **Facade** | `kithara` | Unified `Resource` API with auto-detection (file / HLS) |
+| **Player** | `kithara-play` | AVPlayer-style traits: Engine, Player, Mixer, DJ subsystem |
+| **Pipeline** | `kithara-audio`, `kithara-decode`, `kithara-events` | Threaded decode + effects + resampling, event bus |
+| **Protocols** | `kithara-file`, `kithara-hls`, `kithara-abr`, `kithara-drm` | HTTP progressive, HLS VOD with ABR, AES-128 decryption |
+| **I/O** | `kithara-stream`, `kithara-net` | Async-to-sync bridge (`Read + Seek`), HTTP with retry |
+| **Storage** | `kithara-assets`, `kithara-storage` | Disk cache with eviction, mmap/mem resources |
+| **Primitives** | `kithara-bufpool`, `kithara-platform` | Zero-alloc buffer pool, cross-platform sync types |
+| **Browser** | `kithara-wasm` | WASM player with AudioWorklet integration |
 
 ## Getting Started
 
@@ -150,6 +85,7 @@ cargo clippy --workspace -- -D warnings
 Each crate has its own `README.md`:
 
 - [`kithara`](crates/kithara/README.md) -- facade
+- [`kithara-play`](crates/kithara-play/README.md) -- player engine
 - [`kithara-audio`](crates/kithara-audio/README.md) -- audio pipeline
 - [`kithara-decode`](crates/kithara-decode/README.md) -- Symphonia decoder
 - [`kithara-stream`](crates/kithara-stream/README.md) -- async-to-sync bridge

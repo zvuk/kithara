@@ -40,72 +40,80 @@ cargo doc --workspace --no-deps --open
 
 ## Crate Architecture
 
-### Dependency flow
+### Layered architecture
 ```
-kithara-file     kithara-hls
-     |                |
-     +----> kithara-net <----+
-                |
-          kithara-assets
-                |
-          kithara-stream -----> kithara-decode
-                |
-          kithara-storage
+┌─────────────────────────────────────────────────────┐
+│                      kithara                        │  facade
+│                     kithara-play                    │  player engine
+├──────────────────────┬──────────────────────────────┤
+│    kithara-audio     │       kithara-events         │  pipeline
+│    kithara-decode    │                              │
+├──────────────────────┴──────────────────────────────┤
+│  kithara-file    kithara-hls    kithara-abr         │  protocols
+│                  kithara-drm                        │
+├─────────────────────────────────────────────────────┤
+│  kithara-stream         kithara-net                 │  I/O
+├─────────────────────────────────────────────────────┤
+│  kithara-assets         kithara-storage             │  storage
+│  kithara-bufpool        kithara-platform            │  primitives
+└─────────────────────────────────────────────────────┘
+```
 
-  kithara-bufpool (shared pool, used across all crates)
-  kithara-abr     (protocol-agnostic ABR, used by kithara-hls)
-```
+Dependencies flow downward. Each layer depends only on layers below it.
 
 ### Crate roles
 
-**`kithara-bufpool`** — Generic sharded buffer pool for zero-allocation hot paths
+**`kithara`** — Facade: unified `Resource` API with auto-detection (file / HLS)
 
-**`kithara-storage`** — Unified storage layer
-- `StorageResource`: enum (`Mmap` | `Mem`) with random-access `write_at`/`read_at`/`wait_range` + convenience `read_into`/`write_all`
-- `OpenMode`: `Auto` (default), `ReadWrite` (index files), `ReadOnly`
-- `ResourceExt` trait for generic resource access
+**`kithara-play`** — Player engine traits (AVPlayer-style API)
+- `Engine`: singleton with arena-based slot management, crossfade delegation
+- `Player` / `QueuePlayer`: playback control, time observers
+- `Mixer`: per-channel gain/pan/mute/solo, master bus, EQ, crossfader
+- DJ subsystem: `CrossfadeController`, `BpmAnalyzer`, `BpmSync`, `Equalizer`, `DjEffect`
 
-**`kithara-assets`** — Assets store (disk or in-memory) with lease/pin semantics and eviction
-- `Assets` trait (base), `LeaseAssets`, `CachedAssets`, `EvictAssets`, `ProcessingAssets` decorators
-- Resources identified by `ResourceKey { asset_root, rel_path }`
-- `AssetStore` type alias = `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>` (disk)
-- `MemAssetStore` / `MemStore` for ephemeral in-memory storage
-- `"_index"` namespace reserved for internal metadata
+**`kithara-audio`** — Audio pipeline: OS thread worker, effects chain, resampling
+- `Audio<S>`: threaded decode + effects pipeline with backpressure via `kanal`
+- `StreamAudioSource`: format change detection for ABR variant switches
 
-**`kithara-net`** — HTTP networking with retry, timeout, and streaming
-- `Net` trait + `TimeoutNet` decorator
-- `MockNet` for tests (behind `test-utils` feature)
+**`kithara-decode`** — Audio decoding via Symphonia
+- `Decoder`: synchronous decoder producing `PcmChunk` (pool-backed `Vec<f32>`)
+- Backends: Symphonia (cross-platform), Apple AudioToolbox (macOS/iOS)
 
-**`kithara-stream`** — Byte-stream orchestration bridging async downloads to sync `Read + Seek`
-- `Source` trait: sync random-access data (`wait_range`, `read_at`)
-- `Downloader` trait: async download feed
-- `Writer<E>`: generic async byte pump (network, file, PCM, etc.) → `StorageResource`
-- `Backend`: spawns async downloader, holds sync `Source` for direct access
-- `Stream<T>`: sync `Read + Seek` wrapper over `Backend`
-- Canonical types: `AudioCodec`, `ContainerFormat`, `MediaInfo`
+**`kithara-events`** — Unified event bus
+- `EventBus` backed by `tokio::sync::broadcast`
+- `Event` enum: `File(FileEvent)`, `Hls(HlsEvent)`, `Audio(AudioEvent)`
 
 **`kithara-file`** — Progressive file download (MP3, AAC, etc.)
 - `File` implements `StreamType` for use with `Stream<File>`
-- `FileConfig` for configuration
-- `FileEvent` for monitoring
+- Three-phase download: sequential, gap filling, complete
 
 **`kithara-hls`** — HLS VOD orchestration with ABR, caching, and offline support
 - `Hls` implements `StreamType` for use with `Stream<Hls>`
-- `HlsConfig` for configuration (includes ABR, key processing, caching options)
-- `HlsEvent` for monitoring
 - `FetchManager`: unified fetch layer (network + `AssetsBackend` for disk or in-memory cache)
-- Re-exports ABR types from `kithara-abr`
 
 **`kithara-abr`** — Protocol-agnostic adaptive bitrate algorithm
 - `AbrController` with Auto/Manual modes
-- Throughput estimation and buffer-aware decisions
+- Dual-track EWMA throughput estimation
 
-**`kithara-decode`** — Audio decoding via Symphonia
-- `Decoder<S>`: generic decoder running in blocking thread
-- `DecoderConfig<T>`: configuration generic over `StreamType`
-- `DecodeEvent` / `DecoderEvent<E>`: unified event system
-- `PcmChunk`, `PcmSpec` for PCM output
-- `AudioSyncReader`: rodio::Source adapter (behind `rodio` feature)
+**`kithara-drm`** — AES-128-CBC segment decryption for encrypted HLS
+
+**`kithara-stream`** — Byte-stream orchestration bridging async downloads to sync `Read + Seek`
+- `Source` trait, `Downloader` trait, `Writer<E>`, `Backend`, `Stream<T>`
+- Canonical types: `AudioCodec`, `ContainerFormat`, `MediaInfo`
+
+**`kithara-net`** — HTTP networking with retry, timeout, and streaming
+- `Net` trait + `TimeoutNet` / `RetryNet` decorators
+
+**`kithara-assets`** — Persistent disk cache with lease/pin semantics and eviction
+- Decorator chain: `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
+
+**`kithara-storage`** — Unified `StorageResource` (`Mmap` | `Mem`) with `read_at`/`write_at`/`wait_range`
+
+**`kithara-bufpool`** — Sharded buffer pool for zero-allocation hot paths
+
+**`kithara-platform`** — Platform-aware primitives (`Mutex`, `Condvar`, `MaybeSend`) for native and wasm32
+
+**`kithara-wasm`** — WASM player with AudioWorklet integration for browser playback
 
 ## Key design patterns
 
