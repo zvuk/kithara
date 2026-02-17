@@ -48,3 +48,6 @@ hotpath-*.json
 .worktrees/
 log*.txt
 crates/kithara-wasm/dist
+
+# Local docs / plans
+docs/

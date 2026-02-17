@@ -77,15 +77,3 @@ aes = { workspace = true }
 cbc = { workspace = true }
 hotpath = { workspace = true }
 unimock = { workspace = true }
-
-[[example]]
-name = "file_audio"
-required-features = ["rodio", "memprof", "perf", "kithara-net/perf"]
-
-[[example]]
-name = "hls_audio"
-required-features = ["rodio", "memprof", "perf", "kithara-net/perf", "kithara-hls/perf"]
-
-[[example]]
-name = "hls_drm_audio"
-required-features = ["rodio", "memprof", "perf", "kithara-net/perf", "kithara-hls/perf"]

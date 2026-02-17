@@ -1,30 +1,28 @@
-//! Example: Play audio from an HTTP file using rodio.
+//! Play audio from an HLS stream using rodio decoder.
 //!
 //! This demonstrates the Stream API:
-//! - `Stream::<File>::new()` creates a Read + Seek stream
+//! - `Stream::<Hls>::new()` creates a Read + Seek stream
 //! - `rodio::Decoder` handles audio decoding
 //!
 //! Run with:
 //! ```
-//! cargo run -p kithara-file --example rodio [URL]
+//! cargo run -p kithara --example hls_rodio --features rodio [URL]
 //! ```
 
-use std::{env::args, error::Error};
+use std::{env::args, error::Error, time::Duration};
 
-use kithara_file::{EventBus, File, FileConfig};
-use kithara_platform::ThreadPool;
-use kithara_stream::Stream;
+use kithara::prelude::*;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
 #[tokio::main(flavor = "current_thread")]
-#[cfg_attr(feature = "perf", hotpath::main)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::default()
-                .add_directive("kithara_file=info".parse()?)
+                .add_directive("kithara_hls=info".parse()?)
+                .add_directive("kithara_abr=debug".parse()?)
                 .add_directive("kithara_stream=info".parse()?)
                 .add_directive("kithara_net=info".parse()?)
                 .add_directive("symphonia_format_isomp4=warn".parse()?)
@@ -34,26 +32,30 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
         .with_file(false)
         .init();
 
-    let url = args().nth(1).unwrap_or_else(|| {
-        "http://www.hyperion-records.co.uk/audiotest/14 Clementi Piano Sonata in D major, Op 25 No \
-         6 - Movement 2 Un poco andante.MP3"
-            .to_string()
-    });
+    let url = args()
+        .nth(1)
+        .unwrap_or_else(|| "https://stream.silvercomet.top/hls/master.m3u8".to_string());
     let url: Url = url.parse()?;
 
-    info!("Opening file: {}", url);
+    info!("Opening HLS stream: {}", url);
 
-    // Create event bus
     let bus = EventBus::new(32);
     let mut events_rx = bus.subscribe();
 
     let pool = ThreadPool::with_num_threads(2)?;
-    let config = FileConfig::new(url.into())
+    let config = HlsConfig::new(url)
         .with_thread_pool(pool)
+        .with_abr(AbrOptions {
+            min_buffer_for_up_switch_secs: 0.0,
+            min_switch_interval: Duration::from_secs(3),
+            mode: AbrMode::Auto(Some(0)),
+            throughput_safety_factor: 1.1,
+            up_hysteresis_ratio: 1.05,
+            ..Default::default()
+        })
         .with_events(bus);
-    let stream = Stream::<File>::new(config).await?;
+    let stream = Stream::<Hls>::new(config).await?;
 
-    // Log events
     tokio::spawn(async move {
         while let Ok(ev) = events_rx.recv().await {
             info!(?ev);

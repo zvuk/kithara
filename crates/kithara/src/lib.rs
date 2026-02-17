@@ -79,6 +79,8 @@ pub use kithara_play::{
 };
 
 pub mod prelude {
+    #[cfg(feature = "hls")]
+    pub use kithara_abr::{AbrMode, AbrOptions};
     pub use kithara_audio::{Audio, AudioConfig, PcmReader, ResamplerQuality};
     pub use kithara_decode::{DecodeError, DecodeResult, PcmMeta, PcmSpec, TrackMetadata};
     #[cfg(feature = "file")]

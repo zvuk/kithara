@@ -1,21 +1,17 @@
-//! Play audio from a progressive HTTP file.
+//! Play audio from an AES-128 encrypted HLS stream.
 //!
 //! ```
-//! cargo run -p kithara-audio --example file_audio --features rodio [URL]
+//! cargo run -p kithara --example hls_drm_audio --features rodio [URL]
 //! ```
 
 use std::{env::args, error::Error};
 
-use kithara_audio::{Audio, AudioConfig, EventBus};
-use kithara_file::{File, FileConfig};
-use kithara_platform::ThreadPool;
-use kithara_stream::Stream;
+use kithara::prelude::*;
 use tracing::{info, metadata::LevelFilter, warn};
 use tracing_subscriber::EnvFilter;
 use url::Url;
 
 #[tokio::main(flavor = "current_thread")]
-#[cfg_attr(feature = "perf", hotpath::main)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -31,29 +27,23 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let url: Url = args()
         .nth(1)
-        .unwrap_or_else(|| {
-            "http://www.hyperion-records.co.uk/audiotest/14 Clementi Piano Sonata in D major, Op 25 \
-             No 6 - Movement 2 Un poco andante.MP3"
-                .to_string()
-        })
+        .unwrap_or_else(|| "https://stream.silvercomet.top/drm/master.m3u8".to_string())
         .parse()?;
 
-    info!("Opening file: {url}");
+    info!("Opening encrypted HLS stream: {url}");
 
     let bus = EventBus::new(128);
     let mut events_rx = bus.subscribe();
-    let hint = url.path().rsplit('.').next().map(|ext| ext.to_lowercase());
     let pool = ThreadPool::with_num_threads(2)?;
-    let mut config = AudioConfig::<File>::new(
-        FileConfig::new(url.into())
-            .with_thread_pool(pool)
-            .with_events(bus),
-    )
-    .with_prefer_hardware(true);
-    if let Some(ext) = hint {
-        config = config.with_hint(ext);
-    }
-    let audio = Audio::<Stream<File>>::new(config).await?;
+    let hls_config = HlsConfig::new(url)
+        .with_thread_pool(pool)
+        .with_events(bus)
+        .with_abr(AbrOptions {
+            mode: AbrMode::Auto(Some(0)),
+            ..Default::default()
+        });
+    let config = AudioConfig::<Hls>::new(hls_config).with_prefer_hardware(true);
+    let audio = Audio::<Stream<Hls>>::new(config).await?;
 
     info!("Starting playback... (Press Ctrl+C to stop)");
 

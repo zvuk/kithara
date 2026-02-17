@@ -52,7 +52,28 @@ rstest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 rodio = { workspace = true }
+url = { workspace = true }
 
 [[example]]
-name = "resource_play"
+name = "resource_rodio"
+required-features = ["rodio"]
+
+[[example]]
+name = "file_audio"
+required-features = ["rodio"]
+
+[[example]]
+name = "hls_audio"
+required-features = ["rodio"]
+
+[[example]]
+name = "hls_drm_audio"
+required-features = ["rodio"]
+
+[[example]]
+name = "file_rodio"
+required-features = ["rodio"]
+
+[[example]]
+name = "hls_rodio"
 required-features = ["rodio"]
