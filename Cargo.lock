@@ -1866,6 +1866,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-play"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.18",
+ "tokio",
+ "unimock",
+ "url",
+]
+
+[[package]]
 name = "kithara-storage"
 version = "0.1.0"
 dependencies = [
