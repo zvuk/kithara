@@ -52,17 +52,21 @@ graph TD
     stream["kithara-stream<br/><i>Source, Writer, Backend</i>"]
     storage["kithara-storage<br/><i>mmap / mem</i>"]
     bufpool["kithara-bufpool<br/><i>sharded pool</i>"]
+    events["kithara-events<br/><i>event bus</i>"]
+    platform["kithara-platform<br/><i>platform primitives</i>"]
 
     kithara --> audio
     kithara --> decode
     kithara --> file
     kithara --> hls
+    kithara --> events
 
     audio --> decode
     audio --> stream
     audio --> file
     audio --> hls
     audio --> bufpool
+    audio --> events
 
     decode --> stream
     decode --> bufpool
@@ -71,6 +75,7 @@ graph TD
     file --> net
     file --> assets
     file --> storage
+    file --> events
 
     hls --> stream
     hls --> net
@@ -78,13 +83,19 @@ graph TD
     hls --> storage
     hls --> abr
     hls --> drm
+    hls --> events
 
     assets --> storage
     assets --> bufpool
+    assets --> platform
 
     stream --> storage
     stream --> bufpool
     stream --> net
+    stream --> platform
+
+    bufpool --> platform
+    storage --> platform
 
     style kithara fill:#4a6fa5,color:#fff
     style audio fill:#6b8cae,color:#fff
@@ -98,6 +109,8 @@ graph TD
     style stream fill:#8b6b8b,color:#fff
     style storage fill:#8b6b8b,color:#fff
     style bufpool fill:#8b6b8b,color:#fff
+    style events fill:#6b8cae,color:#fff
+    style platform fill:#8b6b8b,color:#fff
 ```
 
 | Crate | Role |
@@ -113,7 +126,10 @@ graph TD
 | **kithara-assets** | Persistent disk cache with lease/pin semantics and eviction |
 | **kithara-storage** | Unified `StorageResource` backed by `mmap-io` |
 | **kithara-drm** | AES-128-CBC segment decryption for encrypted HLS |
+| **kithara-events** | Unified event bus for pipeline monitoring |
 | **kithara-bufpool** | Sharded buffer pool for zero-allocation hot paths |
+| **kithara-platform** | Platform-aware primitives for native and wasm32 |
+| **kithara-wasm** | WASM HLS audio player for browser environments |
 
 ## Getting Started
 
@@ -145,6 +161,9 @@ Each crate has its own `README.md`:
 - [`kithara-storage`](crates/kithara-storage/README.md) -- mmap storage
 - [`kithara-bufpool`](crates/kithara-bufpool/README.md) -- buffer pool
 - [`kithara-drm`](crates/kithara-drm/README.md) -- AES-128 decryption
+- [`kithara-events`](crates/kithara-events/README.md) -- event bus
+- [`kithara-platform`](crates/kithara-platform/README.md) -- platform primitives
+- [`kithara-wasm`](crates/kithara-wasm/README.md) -- WASM player
 
 ## Examples
 
@@ -175,7 +194,7 @@ See [`AGENTS.md`](AGENTS.md) for coding rules enforced across the workspace.
 
 ## Minimum Supported Rust Version (MSRV)
 
-The current MSRV is **1.85** (Rust edition 2024). It is tested in CI and may be bumped in minor releases.
+The current MSRV is **1.88** (Rust edition 2024). It is tested in CI and may be bumped in minor releases.
 
 ## License
 
