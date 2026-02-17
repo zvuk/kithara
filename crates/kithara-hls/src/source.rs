@@ -367,7 +367,7 @@ impl Source for HlsSource {
 }
 
 /// Build an `HlsDownloader` + `HlsSource` pair from config.
-pub fn build_pair(
+pub(crate) fn build_pair(
     fetch: Arc<DefaultFetchManager>,
     variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,

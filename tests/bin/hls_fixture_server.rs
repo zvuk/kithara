@@ -27,7 +27,7 @@ mod server {
     use tokio::net::TcpListener;
     use tower_http::cors::CorsLayer;
 
-    pub const PORT: u16 = 3333;
+    pub(crate) const PORT: u16 = 3333;
     const SAMPLE_RATE: u32 = 44100;
     const CHANNELS: u16 = 2;
     const SEGMENT_SIZE: usize = 200_000;
@@ -118,7 +118,7 @@ mod server {
         name.parse().ok()
     }
 
-    pub async fn run() {
+    pub(crate) async fn run() {
         let wav_data = create_saw_wav(TOTAL_BYTES);
         let segment_duration =
             SEGMENT_SIZE as f64 / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * 2.0);

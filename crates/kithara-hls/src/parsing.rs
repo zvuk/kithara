@@ -163,7 +163,7 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
                 }
                 | HlsVariantStreamTag::ExtXIFrame { uri, stream_data } => {
                     let bw = stream_data.bandwidth();
-                    let codecs = stream_data.codecs().map(std::string::ToString::to_string);
+                    let codecs = stream_data.codecs().map(ToString::to_string);
                     (uri.to_string(), Some(bw), codecs)
                 }
             };
@@ -221,8 +221,8 @@ pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<Med
             method,
             uri: Some(uri.to_string()),
             iv: k.iv.to_slice(),
-            key_format: k.format.as_ref().map(std::string::ToString::to_string),
-            key_format_versions: k.versions.as_ref().map(std::string::ToString::to_string),
+            key_format: k.format.as_ref().map(ToString::to_string),
+            key_format_versions: k.versions.as_ref().map(ToString::to_string),
         })
     }
 

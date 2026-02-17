@@ -147,6 +147,28 @@ If a new dependency is unavoidable:
 
 ---
 
+## 5) Visibility and API surface
+
+### 5.1 Default to `pub(crate)`
+**Rule:** new items must be `pub(crate)` unless they are part of a documented public contract.
+- Do not use bare `pub` for internal helpers, intermediate types, or implementation details.
+- The `unreachable_pub` lint (enabled workspace-wide) will flag `pub` items that are not reachable from outside their crate.
+- When promoting `pub(crate)` to `pub`, verify the item is tested and documented.
+
+### 5.2 `#[non_exhaustive]` on public types
+**Rule:** public enums and structs with named fields exposed across crate boundaries must be `#[non_exhaustive]`.
+- This prevents downstream code (including AI-generated code in wrong crates) from constructing values directly.
+- Forces use of constructors and builder patterns that can enforce invariants.
+- Exceptions: small, stable types that are unlikely to gain new variants/fields (e.g., `VariantId(usize)`).
+
+### 5.3 Single definition for shared types
+**Rule:** shared types (`AudioCodec`, `ContainerFormat`, `MediaInfo`) live in `kithara-stream`. **Never** duplicate type definitions across crates.
+- Before creating a new public type, search the workspace: `grep -r 'pub struct YourType\|pub enum YourType' crates/`.
+- If a type exists, import it — do not create a parallel definition.
+- `scripts/ci/check-arch.sh` enforces this automatically.
+
+---
+
 ## 6) Loose coupling and modularity
 
 **Goal:** components must be independent blocks that can be assembled into a system.
@@ -161,6 +183,7 @@ If a new dependency is unavoidable:
 - Avoid circular dependencies.
 - Dependencies point "downward" toward base abstractions, never back up.
 - Facade layer (if present) aggregates components but must not contain "smart" logic.
+- `scripts/ci/check-arch.sh` validates dependency direction in CI.
 
 ### 6.3 Encapsulation
 - External code must not know about internal cache details (paths/files/lease format).

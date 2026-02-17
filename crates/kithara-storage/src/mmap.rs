@@ -247,11 +247,9 @@ impl Driver for MmapDriver {
                         let f = std::fs::OpenOptions::new()
                             .write(true)
                             .open(&self.path)
-                            .map_err(|e| {
-                                crate::StorageError::Failed(format!("truncate open: {e}"))
-                            })?;
+                            .map_err(|e| StorageError::Failed(format!("truncate open: {e}")))?;
                         f.set_len(len)
-                            .map_err(|e| crate::StorageError::Failed(format!("truncate: {e}")))?;
+                            .map_err(|e| StorageError::Failed(format!("truncate: {e}")))?;
                     }
                 }
 

@@ -39,7 +39,7 @@ pub struct EvictConfig {
 /// - It is not a filesystem walker.
 /// - It does not delete anything.
 /// - It does not know about pinning; the eviction decorator combines this with a pins index.
-pub struct LruIndex<R: ResourceExt> {
+pub(crate) struct LruIndex<R: ResourceExt> {
     res: Atomic<R>,
     pool: BytePool,
 }
@@ -56,7 +56,7 @@ impl<R: ResourceExt> LruIndex<R> {
     ///
     /// Missing/empty file is treated as an empty index.
     /// Invalid or corrupted data is treated as an empty index (best-effort).
-    pub fn load(&self) -> AssetsResult<LruState> {
+    pub(crate) fn load(&self) -> AssetsResult<LruState> {
         let mut buf = self.pool.get();
         let n = self.res.read_into(&mut buf)?;
 
@@ -74,7 +74,7 @@ impl<R: ResourceExt> LruIndex<R> {
     }
 
     /// Persist the provided state to storage atomically.
-    pub fn store(&self, state: &LruState) -> AssetsResult<()> {
+    pub(crate) fn store(&self, state: &LruState) -> AssetsResult<()> {
         let file = state.to_file();
         let bytes = bincode::serde::encode_to_vec(&file, bincode::config::legacy())?;
         self.res.write_all(&bytes)?;
@@ -86,7 +86,7 @@ impl<R: ResourceExt> LruIndex<R> {
     /// - If the asset is new, it is inserted.
     /// - If `bytes_hint` is `Some`, the stored bytes are updated to that value.
     /// - Returns `true` if the asset was newly inserted (i.e. "created").
-    pub fn touch(&self, asset_root: &str, bytes_hint: Option<u64>) -> AssetsResult<bool> {
+    pub(crate) fn touch(&self, asset_root: &str, bytes_hint: Option<u64>) -> AssetsResult<bool> {
         let mut st = self.load()?;
         let created = st.touch(asset_root, bytes_hint);
         self.store(&st)?;
@@ -94,7 +94,7 @@ impl<R: ResourceExt> LruIndex<R> {
     }
 
     /// Remove an asset from the index (e.g. after eviction).
-    pub fn remove(&self, asset_root: &str) -> AssetsResult<()> {
+    pub(crate) fn remove(&self, asset_root: &str) -> AssetsResult<()> {
         let mut st = self.load()?;
         st.remove(asset_root);
         self.store(&st)?;
@@ -107,7 +107,7 @@ impl<R: ResourceExt> LruIndex<R> {
     /// - Returns a list of candidate `asset_root`s to attempt eviction for.
     ///
     /// This function does not mutate storage.
-    pub fn eviction_candidates(
+    pub(crate) fn eviction_candidates(
         &self,
         cfg: &EvictConfig,
         pinned: &HashSet<String>,
@@ -123,24 +123,24 @@ impl<R: ResourceExt> LruIndex<R> {
 /// - keep persistence format private,
 /// - keep logic testable without storage.
 #[derive(Clone, Debug, Default)]
-pub struct LruState {
+pub(crate) struct LruState {
     clock: u64,
     by_root: HashMap<String, LruEntry>,
 }
 
 impl LruState {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.by_root.len()
     }
 
-    pub fn remove(&mut self, asset_root: &str) {
+    pub(crate) fn remove(&mut self, asset_root: &str) {
         self.by_root.remove(asset_root);
     }
 
     /// Touch an asset in-memory.
     ///
     /// Returns `true` if it was newly inserted.
-    pub fn touch(&mut self, asset_root: &str, bytes_hint: Option<u64>) -> bool {
+    pub(crate) fn touch(&mut self, asset_root: &str, bytes_hint: Option<u64>) -> bool {
         self.clock = self.clock.saturating_add(1);
 
         if let Some(e) = self.by_root.get_mut(asset_root) {
@@ -161,14 +161,14 @@ impl LruState {
         }
     }
 
-    pub fn total_bytes_best_effort(&self) -> u64 {
+    pub(crate) fn total_bytes_best_effort(&self) -> u64 {
         self.by_root
             .values()
             .filter_map(|e| e.bytes)
             .fold(0u64, u64::saturating_add)
     }
 
-    pub fn oldest_first(&self) -> Vec<(String, LruEntry)> {
+    pub(crate) fn oldest_first(&self) -> Vec<(String, LruEntry)> {
         let mut v: Vec<(String, LruEntry)> = self
             .by_root
             .iter()
@@ -179,7 +179,11 @@ impl LruState {
         v
     }
 
-    pub fn eviction_candidates(&self, cfg: &EvictConfig, pinned: &HashSet<String>) -> Vec<String> {
+    pub(crate) fn eviction_candidates(
+        &self,
+        cfg: &EvictConfig,
+        pinned: &HashSet<String>,
+    ) -> Vec<String> {
         let max_assets = cfg.max_assets;
         let max_bytes = cfg.max_bytes;
 
@@ -275,9 +279,9 @@ impl LruState {
 }
 
 #[derive(Clone, Debug)]
-pub struct LruEntry {
-    pub last_touch: u64,
-    pub bytes: Option<u64>,
+pub(crate) struct LruEntry {
+    pub(crate) last_touch: u64,
+    pub(crate) bytes: Option<u64>,
 }
 
 /// On-disk binary format (private).

@@ -9,8 +9,7 @@ use futures::StreamExt;
 use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, HttpClient, Net};
-use kithara_platform::RwLock;
-use kithara_platform::{MaybeSend, MaybeSync};
+use kithara_platform::{MaybeSend, MaybeSync, RwLock};
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{ContainerFormat, Writer, WriterItem};
 use tokio::sync::OnceCell;
@@ -353,7 +352,7 @@ impl<N: Net> FetchManager<N> {
     /// `None` for unencrypted segments or unsupported methods.
     async fn resolve_decrypt_context(
         &self,
-        key: Option<&crate::parsing::SegmentKey>,
+        key: Option<&SegmentKey>,
         segment_url: &Url,
         sequence: u64,
     ) -> HlsResult<Option<DecryptContext>> {

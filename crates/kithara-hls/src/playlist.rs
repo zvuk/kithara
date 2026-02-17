@@ -187,7 +187,7 @@ impl PlaylistState {
 
 /// Read-only access to parsed playlist data.
 #[cfg_attr(test, unimock::unimock(api = PlaylistAccessMock))]
-pub trait PlaylistAccess: Send + Sync {
+pub(crate) trait PlaylistAccess: Send + Sync {
     /// Number of variants in the master playlist.
     #[cfg_attr(not(test), expect(dead_code))]
     fn num_variants(&self) -> usize;

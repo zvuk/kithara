@@ -101,7 +101,7 @@ impl<T: StreamType> OffsetReader<T> {
         // the correct location. This is critical when multiple fallback attempts
         // share the same underlying stream — each one may leave the position
         // in an arbitrary state.
-        let _ = shared.seek(std::io::SeekFrom::Start(base_offset));
+        let _ = shared.seek(SeekFrom::Start(base_offset));
         Self {
             shared,
             base_offset,

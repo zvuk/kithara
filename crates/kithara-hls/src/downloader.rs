@@ -29,7 +29,7 @@ use crate::{
 
 /// Pure I/O executor for HLS segment fetching.
 #[derive(Clone)]
-pub struct HlsIo {
+pub(crate) struct HlsIo {
     fetch: Arc<DefaultFetchManager>,
 }
 
@@ -40,14 +40,14 @@ impl HlsIo {
 }
 
 /// Plan for downloading a single HLS segment.
-pub struct HlsPlan {
+pub(crate) struct HlsPlan {
     pub(crate) variant: usize,
     pub(crate) segment_index: usize,
     pub(crate) need_init: bool,
 }
 
 /// Result of downloading a single HLS segment.
-pub struct HlsFetch {
+pub(crate) struct HlsFetch {
     pub(crate) init_len: u64,
     pub(crate) init_url: Option<Url>,
     pub(crate) media: SegmentMeta,
@@ -105,7 +105,7 @@ impl DownloaderIo for HlsIo {
 }
 
 /// HLS downloader: fetches segments and maintains ABR state.
-pub struct HlsDownloader {
+pub(crate) struct HlsDownloader {
     pub(crate) io: HlsIo,
     pub(crate) fetch: Arc<DefaultFetchManager>,
     pub(crate) playlist_state: Arc<PlaylistState>,
@@ -714,9 +714,7 @@ impl Downloader for HlsDownloader {
         if self.current_segment_index >= num_segments {
             debug!("reached end of playlist, stopping downloader");
             self.bus.publish(HlsEvent::EndOfStream);
-            self.shared
-                .eof
-                .store(true, std::sync::atomic::Ordering::Release);
+            self.shared.eof.store(true, Ordering::Release);
             self.shared.condvar.notify_all();
             return PlanOutcome::Complete;
         }
@@ -813,10 +811,7 @@ impl Downloader for HlsDownloader {
             return false;
         };
 
-        let reader_pos = self
-            .shared
-            .reader_offset
-            .load(std::sync::atomic::Ordering::Acquire);
+        let reader_pos = self.shared.reader_offset.load(Ordering::Acquire);
         let downloaded = self.shared.segments.lock().max_end_offset();
 
         downloaded.saturating_sub(reader_pos) > limit
