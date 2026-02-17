@@ -1,10 +1,9 @@
+use kithara_platform::{MaybeSend, MaybeSync};
 use tokio::sync::broadcast;
 
-use crate::events::PlayerEvent;
-use crate::item::PlayerItem;
-use crate::types::SlotId;
+use crate::{events::PlayerEvent, traits::item::PlayerItem, types::SlotId};
 
-pub trait QueuePlayer: Send + Sync + 'static {
+pub trait QueuePlayer: MaybeSend + MaybeSync + 'static {
     type Item: PlayerItem;
 
     fn items(&self) -> Vec<&Self::Item>;

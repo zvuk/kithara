@@ -1,17 +1,15 @@
-#![forbid(unsafe_code)]
-
 //! Type-erased resource: unified wrapper over decoded audio streams.
 
-use std::{num::NonZeroU32, time::Duration};
+use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
 use kithara_audio::{Audio, AudioConfig, PcmReader};
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::{Event, EventBus};
 use tokio::sync::broadcast;
 
-use crate::{config::ResourceConfig, source_type::SourceType};
+use crate::impls::{config::ResourceConfig, source_type::SourceType};
 
-// -- Resource -----------------------------------------------------------------
+// -- Resource ---------------------------------------------------------------------
 
 /// Type-erased audio resource wrapping any `PcmReader`.
 ///
@@ -21,7 +19,7 @@ use crate::{config::ResourceConfig, source_type::SourceType};
 /// # Example
 ///
 /// ```ignore
-/// use kithara::{Resource, ResourceConfig};
+/// use kithara_play::{Resource, ResourceConfig};
 ///
 /// // Auto-detect: .m3u8 -> HLS, everything else -> progressive file
 /// let config = ResourceConfig::new("https://example.com/song.mp3")?;
@@ -36,6 +34,7 @@ use crate::{config::ResourceConfig, source_type::SourceType};
 pub struct Resource {
     pub(crate) inner: Box<dyn PcmReader>,
     bus: EventBus,
+    src: Arc<str>,
 }
 
 impl Resource {
@@ -50,17 +49,18 @@ impl Resource {
     /// Returns an error if source type detection fails, or if the underlying
     /// audio stream cannot be created (network failure, invalid format, etc.).
     pub async fn new(config: ResourceConfig) -> DecodeResult<Self> {
+        let src: Arc<str> = Arc::from(config.src.to_string());
         let source_type = SourceType::detect(&config.src)?;
         match source_type {
             #[cfg(feature = "file")]
             SourceType::RemoteFile(_) | SourceType::LocalFile(_) => {
                 let audio_config = config.into_file_config();
-                Self::from_file(audio_config).await
+                Self::from_file(audio_config, src).await
             }
             #[cfg(feature = "hls")]
             SourceType::HlsStream(_) => {
                 let audio_config = config.into_hls_config()?;
-                Self::from_hls(audio_config).await
+                Self::from_hls(audio_config, src).await
             }
         }
     }
@@ -89,6 +89,7 @@ impl Resource {
         Self {
             inner: Box::new(reader),
             bus,
+            src: Arc::from("unknown"),
         }
     }
 
@@ -99,6 +100,7 @@ impl Resource {
     #[cfg(feature = "file")]
     pub(crate) async fn from_file(
         mut config: AudioConfig<kithara_file::File>,
+        src: Arc<str>,
     ) -> DecodeResult<Self> {
         use kithara_stream::Stream;
 
@@ -115,6 +117,7 @@ impl Resource {
         Ok(Self {
             inner: Box::new(audio),
             bus,
+            src,
         })
     }
 
@@ -122,7 +125,10 @@ impl Resource {
     ///
     /// Use this when you need to customize `HlsConfig`, ABR, keys, etc.
     #[cfg(feature = "hls")]
-    pub(crate) async fn from_hls(mut config: AudioConfig<kithara_hls::Hls>) -> DecodeResult<Self> {
+    pub(crate) async fn from_hls(
+        mut config: AudioConfig<kithara_hls::Hls>,
+        src: Arc<str>,
+    ) -> DecodeResult<Self> {
         use kithara_stream::Stream;
 
         // Extract existing bus from stream config, or create a new one.
@@ -138,7 +144,14 @@ impl Resource {
         Ok(Self {
             inner: Box::new(audio),
             bus,
+            src,
         })
+    }
+
+    /// Source identifier for this resource.
+    #[must_use]
+    pub fn src(&self) -> &Arc<str> {
+        &self.src
     }
 
     /// Subscribe to unified events.
@@ -229,6 +242,13 @@ impl Resource {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    clippy::cast_lossless,
+    reason = "test mock code; values are small and positive by construction"
+)]
 mod tests {
     use std::time::Duration;
 
@@ -241,7 +261,7 @@ mod tests {
 
     // -- Mock PcmReader -----------------------------------------------------------
 
-    /// A mock `PcmReader` for testing the Resource facade.
+    /// A mock `PcmReader` for testing the `Resource` facade.
     ///
     /// Produces a constant sample value, tracks seek position,
     /// and exposes an `AudioEvent` sender for event forwarding tests.

@@ -1,5 +1,6 @@
-use crate::error::PlayError;
-use crate::types::SlotId;
+use kithara_platform::{MaybeSend, MaybeSync};
+
+use crate::{error::PlayError, types::SlotId};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -20,7 +21,7 @@ pub enum DjEffectKind {
     any(test, feature = "test-utils"),
     unimock::unimock(api = DjEffectMock)
 )]
-pub trait DjEffect: Send + Sync + 'static {
+pub trait DjEffect: MaybeSend + MaybeSync + 'static {
     fn kind(&self) -> DjEffectKind;
 
     fn is_active(&self, slot: SlotId) -> bool;

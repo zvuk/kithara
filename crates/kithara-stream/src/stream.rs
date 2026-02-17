@@ -16,10 +16,10 @@ use std::{
     },
 };
 
-use kithara_platform::{MaybeSend, MaybeSync};
+use kithara_platform::{MaybeSend, MaybeSync, ThreadPool};
 use kithara_storage::WaitOutcome;
 
-use crate::{MediaInfo, StreamContext, ThreadPool, source::Source};
+use crate::{MediaInfo, StreamContext, source::Source};
 
 /// Defines a stream type and how to create it.
 ///

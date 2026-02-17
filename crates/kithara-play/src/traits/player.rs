@@ -1,16 +1,17 @@
 use std::time::Duration;
 
+use kithara_platform::{MaybeSend, MaybeSync};
 use tokio::sync::broadcast;
 
-use crate::error::PlayError;
-use crate::events::PlayerEvent;
-use crate::time::MediaTime;
-use crate::types::{
-    ActionAtItemEnd, ObserverId, PlayerStatus, SlotId, TimeControlStatus, WaitingReason,
+use crate::{
+    error::PlayError,
+    events::PlayerEvent,
+    time::MediaTime,
+    types::{ActionAtItemEnd, ObserverId, PlayerStatus, SlotId, TimeControlStatus, WaitingReason},
 };
 
-pub trait Player: Send + Sync + 'static {
-    type Item: crate::item::PlayerItem;
+pub trait Player: MaybeSend + MaybeSync + 'static {
+    type Item: crate::traits::item::PlayerItem;
 
     // -- status --
 

@@ -21,9 +21,11 @@
 //! wasm32 (browser fetch has its own retry/timeout mechanisms).
 
 mod maybe_send;
+mod pool;
 pub mod time;
 
 pub use maybe_send::{MaybeSend, MaybeSync};
+pub use pool::ThreadPool;
 
 // On native: re-export parking_lot types directly (zero overhead).
 #[cfg(not(target_arch = "wasm32"))]

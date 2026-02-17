@@ -1,11 +1,15 @@
-use crate::error::PlayError;
-use crate::types::{EqBand, SlotId};
+use kithara_platform::{MaybeSend, MaybeSync};
+
+use crate::{
+    error::PlayError,
+    types::{EqBand, SlotId},
+};
 
 #[cfg_attr(
     any(test, feature = "test-utils"),
     unimock::unimock(api = MixerMock)
 )]
-pub trait Mixer: Send + Sync + 'static {
+pub trait Mixer: MaybeSend + MaybeSync + 'static {
     // -- master bus --
 
     fn master_gain(&self) -> f32;

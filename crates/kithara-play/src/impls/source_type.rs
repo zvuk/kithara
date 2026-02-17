@@ -1,12 +1,10 @@
-#![forbid(unsafe_code)]
-
 //! Detected source type from input analysis.
 
 use std::path::PathBuf;
 
 use url::Url;
 
-use crate::config::ResourceSrc;
+use crate::impls::config::ResourceSrc;
 
 /// Detected source type from input.
 #[derive(Debug, Clone, PartialEq, Eq)]

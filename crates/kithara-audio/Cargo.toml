@@ -15,6 +15,7 @@ kithara-events = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
 kithara-bufpool = { workspace = true }
+biquad = { workspace = true }
 rubato = { workspace = true }
 audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }

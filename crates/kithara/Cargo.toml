@@ -13,6 +13,8 @@ workspace = true
 kithara-audio = { workspace = true }
 kithara-decode = { workspace = true }
 kithara-events = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-play = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-file = { workspace = true, optional = true }
 kithara-hls = { workspace = true, optional = true }
@@ -28,12 +30,12 @@ url = { workspace = true }
 
 [features]
 default = ["file", "hls"]
-file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
-hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net"]
+file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net", "kithara-play/file"]
+hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net", "kithara-play/hls"]
 assets = ["dep:kithara-assets", "dep:kithara-storage"]
 net = ["dep:kithara-net"]
 bufpool = []
-rodio = ["dep:rodio", "kithara-audio/rodio"]
+rodio = ["dep:rodio", "kithara-audio/rodio", "kithara-play/rodio"]
 perf = [
     "kithara-audio/perf",
     "kithara-decode/perf",

@@ -1,10 +1,14 @@
 use std::time::Duration;
 
-use crate::error::PlayError;
-use crate::time::MediaTime;
-use crate::types::{ItemStatus, TimeRange};
+use kithara_platform::{MaybeSend, MaybeSync};
 
-pub trait PlayerItem: Send + Sync + 'static {
+use crate::{
+    error::PlayError,
+    time::MediaTime,
+    types::{ItemStatus, TimeRange},
+};
+
+pub trait PlayerItem: MaybeSend + MaybeSync + 'static {
     fn status(&self) -> ItemStatus;
 
     fn error(&self) -> Option<String>;

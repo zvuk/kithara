@@ -1,15 +1,15 @@
+use kithara_platform::{MaybeSend, MaybeSync};
 use tokio::sync::broadcast;
 
-use crate::dj::crossfade::CrossfadeConfig;
-use crate::error::PlayError;
-use crate::events::EngineEvent;
-use crate::types::SlotId;
+use crate::{
+    error::PlayError, events::EngineEvent, traits::dj::crossfade::CrossfadeConfig, types::SlotId,
+};
 
 #[cfg_attr(
     any(test, feature = "test-utils"),
     unimock::unimock(api = EngineMock)
 )]
-pub trait Engine: Send + Sync + 'static {
+pub trait Engine: MaybeSend + MaybeSync + 'static {
     // -- lifecycle --
 
     fn start(&self) -> Result<(), PlayError>;

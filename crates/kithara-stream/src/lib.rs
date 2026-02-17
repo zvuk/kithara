@@ -16,7 +16,6 @@ mod downloader;
 mod error;
 mod fetch;
 mod media;
-mod pool;
 mod source;
 mod stream;
 mod writer;
@@ -27,7 +26,6 @@ pub use downloader::{Downloader, DownloaderIo, PlanOutcome, StepResult};
 pub use error::{StreamError, StreamResult};
 pub use fetch::{EpochValidator, Fetch};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
-pub use pool::ThreadPool;
 pub use source::Source;
 // Test utilities
 #[cfg(any(test, feature = "test-utils"))]

@@ -1,5 +1,9 @@
-use crate::error::PlayError;
-use crate::types::{EqBand, SlotId};
+use kithara_platform::{MaybeSend, MaybeSync};
+
+use crate::{
+    error::PlayError,
+    types::{EqBand, SlotId},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -29,7 +33,7 @@ impl Default for EqConfig {
     any(test, feature = "test-utils"),
     unimock::unimock(api = EqualizerMock)
 )]
-pub trait Equalizer: Send + Sync + 'static {
+pub trait Equalizer: MaybeSend + MaybeSync + 'static {
     fn gain(&self, slot: SlotId, band: EqBand) -> Option<f32>;
 
     fn set_gain(&self, slot: SlotId, band: EqBand, db: f32) -> Result<(), PlayError>;

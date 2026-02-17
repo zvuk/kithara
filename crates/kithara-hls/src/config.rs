@@ -6,7 +6,7 @@ use bytes::Bytes;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::NetOptions;
-use kithara_stream::ThreadPool;
+use kithara_platform::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 

@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use crate::types::SlotId;
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum PlayError {
     #[error("player not ready")]

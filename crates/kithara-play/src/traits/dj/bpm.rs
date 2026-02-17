@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use crate::error::PlayError;
-use crate::types::SlotId;
+use kithara_platform::{MaybeSend, MaybeSync};
+
+use crate::{error::PlayError, types::SlotId};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
@@ -33,7 +34,7 @@ impl Default for BeatGrid {
     any(test, feature = "test-utils"),
     unimock::unimock(api = BpmAnalyzerMock)
 )]
-pub trait BpmAnalyzer: Send + Sync + 'static {
+pub trait BpmAnalyzer: MaybeSend + MaybeSync + 'static {
     fn analyze(&self, slot: SlotId) -> Result<BpmInfo, PlayError>;
 
     fn bpm(&self, slot: SlotId) -> Option<f64>;
@@ -55,7 +56,7 @@ pub trait BpmAnalyzer: Send + Sync + 'static {
     any(test, feature = "test-utils"),
     unimock::unimock(api = BpmSyncMock)
 )]
-pub trait BpmSync: Send + Sync + 'static {
+pub trait BpmSync: MaybeSend + MaybeSync + 'static {
     fn sync(&self, follower: SlotId, leader: SlotId) -> Result<(), PlayError>;
 
     fn unsync(&self, slot: SlotId) -> Result<(), PlayError>;

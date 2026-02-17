@@ -8,7 +8,8 @@ use std::{env::args, error::Error};
 
 use kithara_audio::{Audio, AudioConfig, EventBus};
 use kithara_file::{File, FileConfig};
-use kithara_stream::{Stream, ThreadPool};
+use kithara_platform::ThreadPool;
+use kithara_stream::Stream;
 use tracing::{info, metadata::LevelFilter, warn};
 use tracing_subscriber::EnvFilter;
 use url::Url;

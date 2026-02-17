@@ -12,6 +12,7 @@ workspace = true
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
 kithara-hls = { workspace = true }
+kithara-platform = { workspace = true }
 kithara-stream = { workspace = true }
 url = { workspace = true }
 tracing = { workspace = true }

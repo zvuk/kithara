@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::resource::Resource;
+use super::resource::Resource;
 
 impl Iterator for Resource {
     type Item = f32;

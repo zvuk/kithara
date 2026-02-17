@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use crate::error::PlayError;
-use crate::types::SlotId;
+use kithara_platform::{MaybeSend, MaybeSync};
+
+use crate::{error::PlayError, types::SlotId};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -41,7 +42,7 @@ impl Default for CrossfadeConfig {
     any(test, feature = "test-utils"),
     unimock::unimock(api = CrossfadeControllerMock)
 )]
-pub trait CrossfadeController: Send + Sync + 'static {
+pub trait CrossfadeController: MaybeSend + MaybeSync + 'static {
     fn start(&self, from: SlotId, to: SlotId, config: CrossfadeConfig) -> Result<(), PlayError>;
 
     fn cancel(&self) -> Result<(), PlayError>;

@@ -440,6 +440,7 @@ where
             stream: stream_config,
             thread_pool,
             bus: config_bus,
+            effects: custom_effects,
         } = config;
 
         // Resolve thread pool: AudioConfig overrides stream config, which overrides global.
@@ -546,6 +547,7 @@ where
             &host_sample_rate,
             resampler_quality,
             Some(pool.clone()),
+            custom_effects,
         );
 
         info!(

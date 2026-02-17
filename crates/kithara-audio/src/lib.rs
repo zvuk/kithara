@@ -37,6 +37,7 @@
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns, clippy::allow_attributes))]
 
 // Internal modules
+pub mod effects;
 mod pipeline;
 mod resampler;
 #[cfg(feature = "rodio")]
@@ -47,6 +48,7 @@ mod types;
 pub mod web_audio;
 
 // Public API exports
+pub use effects::eq::{EqBandConfig, EqEffect, generate_log_spaced_bands};
 pub use kithara_events::{AudioEvent, EventBus};
 pub use pipeline::{Audio, AudioConfig};
 pub use resampler::ResamplerQuality;

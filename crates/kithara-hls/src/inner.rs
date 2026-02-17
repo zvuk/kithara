@@ -12,7 +12,8 @@ use kithara_assets::{
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_net::HttpClient;
-use kithara_stream::{StreamContext, StreamType, ThreadPool};
+use kithara_platform::ThreadPool;
+use kithara_stream::{StreamContext, StreamType};
 
 use crate::{
     HlsStreamContext,

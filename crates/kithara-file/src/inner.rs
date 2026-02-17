@@ -7,8 +7,9 @@ use std::sync::{Arc, atomic::AtomicU64};
 use kithara_assets::{AssetStoreBuilder, Assets, CoverageIndex, asset_root_for_url};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::HttpClient;
+use kithara_platform::ThreadPool;
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{Backend, NullStreamContext, StreamContext, StreamType, ThreadPool};
+use kithara_stream::{Backend, NullStreamContext, StreamContext, StreamType};
 use tokio_util::sync::CancellationToken;
 
 use crate::{

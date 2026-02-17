@@ -12,7 +12,8 @@
 use std::{env::args, error::Error, time::Duration};
 
 use kithara_hls::{AbrMode, AbrOptions, EventBus, Hls, HlsConfig};
-use kithara_stream::{Stream, ThreadPool};
+use kithara_platform::ThreadPool;
+use kithara_stream::Stream;
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 use url::Url;

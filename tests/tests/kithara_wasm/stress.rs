@@ -10,7 +10,8 @@ use std::{
 
 use kithara_audio::{Audio, AudioConfig, EventBus};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, ThreadPool};
+use kithara_platform::ThreadPool;
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
 use tracing::{info, warn};
 use url::Url;
 use wasm_bindgen_futures::JsFuture;

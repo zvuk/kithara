@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use kithara_platform::{MaybeSend, MaybeSync};
+
 use crate::error::PlayError;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -72,7 +74,7 @@ pub struct RouteDescription {
     any(test, feature = "test-utils"),
     unimock::unimock(api = AudioSessionMock)
 )]
-pub trait AudioSession: Send + Sync + 'static {
+pub trait AudioSession: MaybeSend + MaybeSync + 'static {
     fn category(&self) -> SessionCategory;
 
     fn set_category(&self, category: SessionCategory) -> Result<(), PlayError>;

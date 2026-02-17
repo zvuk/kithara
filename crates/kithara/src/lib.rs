@@ -29,6 +29,10 @@ pub mod decode {
     pub use kithara_decode::*;
 }
 
+pub mod play {
+    pub use kithara_play::*;
+}
+
 pub mod stream {
     pub use kithara_stream::*;
 }
@@ -63,19 +67,16 @@ pub mod bufpool {
     pub use kithara_bufpool::*;
 }
 
-mod config;
 mod events;
-mod resource;
-#[cfg(feature = "rodio")]
-mod rodio_impl;
-mod source_type;
 
-pub use config::{ResourceConfig, ResourceSrc};
+// Re-export from kithara-play
 #[cfg(feature = "hls")]
 pub use events::HlsEvent;
 pub use events::{AudioEvent, Event, EventBus, FileEvent};
-pub use resource::Resource;
-pub use source_type::SourceType;
+pub use kithara_play::{
+    EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
+    SourceType,
+};
 
 pub mod prelude {
     pub use kithara_audio::{Audio, AudioConfig, PcmReader, ResamplerQuality};
@@ -84,9 +85,8 @@ pub mod prelude {
     pub use kithara_file::{File, FileConfig};
     #[cfg(feature = "hls")]
     pub use kithara_hls::{Hls, HlsConfig};
-    pub use kithara_stream::{
-        AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType, ThreadPool,
-    };
+    pub use kithara_platform::ThreadPool;
+    pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
 
-    pub use crate::{Event, EventBus, Resource, ResourceConfig};
+    pub use crate::{Event, EventBus, PlayerConfig, PlayerImpl, Resource, ResourceConfig};
 }

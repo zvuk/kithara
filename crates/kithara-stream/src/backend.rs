@@ -10,13 +10,11 @@
 //! - Periodic yield to async runtime
 //! - Cancellation via `CancellationToken`
 
+use kithara_platform::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-use crate::{
-    downloader::{Downloader, DownloaderIo, PlanOutcome, StepResult},
-    pool::ThreadPool,
-};
+use crate::downloader::{Downloader, DownloaderIo, PlanOutcome, StepResult};
 
 /// Default yield interval (iterations between `yield_now` calls).
 const DEFAULT_YIELD_INTERVAL: usize = 8;
@@ -282,12 +280,12 @@ mod tests {
         time::Duration,
     };
 
+    use kithara_platform::ThreadPool;
     use rstest::rstest;
     use tokio::sync::Notify;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::pool::ThreadPool;
 
     // -- Mock infrastructure --
 

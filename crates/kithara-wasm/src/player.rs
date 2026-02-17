@@ -8,7 +8,8 @@ use std::{cell::RefCell, time::Duration};
 
 use kithara_audio::{Audio, AudioConfig, EventBus, web_audio::PcmRingBuffer};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_stream::{Stream, ThreadPool};
+use kithara_platform::ThreadPool;
+use kithara_stream::Stream;
 use tracing::{debug, info, warn};
 use url::Url;
 use wasm_bindgen::prelude::*;

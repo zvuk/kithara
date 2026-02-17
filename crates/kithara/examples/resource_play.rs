@@ -12,7 +12,10 @@
 
 use std::{env::args, error::Error};
 
-use kithara::{Resource, ResourceConfig, ThreadPool};
+use kithara::{
+    Resource,
+    prelude::{ResourceConfig, ThreadPool},
+};
 use tracing::{info, metadata::LevelFilter};
 use tracing_subscriber::EnvFilter;
 

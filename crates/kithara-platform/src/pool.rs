@@ -1,5 +1,3 @@
-#![forbid(unsafe_code)]
-
 //! Shared thread pool for blocking work (decode, probe, I/O).
 //!
 //! Wraps [`rayon::ThreadPool`] to provide a consistent threading abstraction
@@ -30,7 +28,7 @@ use std::{fmt, sync::Arc};
 /// # Example
 ///
 /// ```
-/// use kithara_stream::ThreadPool;
+/// use kithara_platform::ThreadPool;
 ///
 /// // Use global rayon pool (default)
 /// let pool = ThreadPool::global();

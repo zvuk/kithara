@@ -1,6 +1,4 @@
-#![forbid(unsafe_code)]
-
-//! Configuration for [`Resource`](crate::Resource).
+//! Configuration for [`Item`](crate::impls::item::Item).
 
 use std::{num::NonZeroU32, path::PathBuf};
 
@@ -11,7 +9,7 @@ use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::DecodeError;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::NetOptions;
-use kithara_stream::ThreadPool;
+use kithara_platform::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -36,15 +34,24 @@ impl From<PathBuf> for ResourceSrc {
     }
 }
 
-/// Unified configuration for creating a [`Resource`](crate::Resource).
+impl std::fmt::Display for ResourceSrc {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Url(url) => write!(f, "{url}"),
+            Self::Path(path) => write!(f, "{}", path.display()),
+        }
+    }
+}
+
+/// Unified configuration for creating an [`Item`](crate::impls::item::Item).
 ///
 /// Wraps source, audio options, and protocol-specific settings into a single
-/// builder. `Resource::new(config)` auto-detects the stream type from the input.
+/// builder. `Item::new(config)` auto-detects the stream type from the input.
 ///
 /// # Example
 ///
 /// ```ignore
-/// use kithara::ResourceConfig;
+/// use kithara_play::ResourceConfig;
 ///
 /// // From URL
 /// let config = ResourceConfig::new("https://example.com/song.mp3")?;

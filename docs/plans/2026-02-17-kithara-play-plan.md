@@ -34,7 +34,7 @@
 In root `Cargo.toml` `[workspace.dependencies]` section, add:
 
 ```toml
-firewheel = { git = "https://github.com/BillyDM/Firewheel.git", features = ["default", "pool", "all_nodes", "musical_transport", "scheduled_events"] }
+firewheel = { version = "0.10.0", features = ["default", "pool", "all_nodes", "musical_transport", "scheduled_events"] }
 biquad = "0.4"
 ```
 

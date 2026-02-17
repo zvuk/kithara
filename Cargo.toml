@@ -152,6 +152,12 @@ rubato = "1.0"
 audioadapter-buffers = "2.0"
 smallvec = "1"
 
+# audio engine
+firewheel = { version = "0.10.0", features = ["default", "pool", "all_nodes", "musical_transport", "scheduled_events"] }
+biquad = "0.5.0"
+thunderdome = { version = "0.6.1", default-features = false }
+portable-atomic = { version = "1.11.1", default-features = false, features = ["fallback", "float"] }
+
 # errors/logging/metrics
 thiserror = "2.0.18"
 tracing = "0.1.44"

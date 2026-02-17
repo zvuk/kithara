@@ -1,9 +1,10 @@
 use std::time::Duration;
 
-use crate::dj::bpm::BpmInfo;
-use crate::session::RouteDescription;
-use crate::time::MediaTime;
-use crate::types::{ItemStatus, PlayerStatus, SlotId, TimeControlStatus, TimeRange, WaitingReason};
+use crate::{
+    time::MediaTime,
+    traits::{dj::bpm::BpmInfo, session::RouteDescription},
+    types::{ItemStatus, PlayerStatus, SlotId, TimeControlStatus, TimeRange, WaitingReason},
+};
 
 #[derive(Clone, Debug)]
 #[non_exhaustive]

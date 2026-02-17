@@ -4,20 +4,56 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Trait-based player architecture mirroring AVPlayer API with DJ engine capabilities"
+description = "Player engine with Firewheel audio graph, EQ, crossfade, and DJ-ready architecture"
 
 [lints]
 workspace = true
 
 [dependencies]
-thiserror = { workspace = true }
+# Kithara sub-crates
+kithara-audio = { workspace = true }
+kithara-decode = { workspace = true }
+kithara-events = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-stream = { workspace = true }
+kithara-file = { workspace = true, optional = true }
+kithara-hls = { workspace = true, optional = true }
+kithara-abr = { workspace = true, optional = true }
+kithara-assets = { workspace = true, optional = true }
+kithara-net = { workspace = true, optional = true }
+kithara-bufpool = { workspace = true }
+
+# Audio engine
+firewheel = { workspace = true }
+biquad = { workspace = true }
+thunderdome = { workspace = true }
+
+# Async & channels
 tokio = { workspace = true }
+tokio-util = { workspace = true }
+kanal = { workspace = true }
+
+# Utilities
+thiserror = { workspace = true }
+tracing = { workspace = true }
 url = { workspace = true }
+portable-atomic = { workspace = true }
+smallvec = { workspace = true }
+
+# Audio output
+rodio = { workspace = true, optional = true }
+
+# Testing
 unimock = { workspace = true, optional = true }
 
 [features]
-default = []
+default = ["file", "hls"]
+file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
+hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net"]
+rodio = ["dep:rodio", "kithara-audio/rodio"]
+wasm-bindgen = ["firewheel/wasm-bindgen"]
 test-utils = ["unimock"]
 
 [dev-dependencies]
 unimock = { workspace = true }
+tokio = { workspace = true, features = ["full", "test-util"] }
