@@ -37,22 +37,47 @@ Components are independent crates that can be used standalone or composed into a
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│                      kithara                        │  facade
-│                     kithara-play                    │  player engine
-├──────────────────────┬──────────────────────────────┤
-│    kithara-audio     │       kithara-events         │  pipeline
-│    kithara-decode    │                              │
-├──────────────────────┴──────────────────────────────┤
-│  kithara-file    kithara-hls    kithara-abr         │  protocols
-│                  kithara-drm                        │
-├─────────────────────────────────────────────────────┤
-│  kithara-stream         kithara-net                 │  I/O
-├─────────────────────────────────────────────────────┤
-│  kithara-assets         kithara-storage             │  storage
-│  kithara-bufpool        kithara-platform            │  primitives
-└─────────────────────────────────────────────────────┘
+```mermaid
+block-beta
+    columns 4
+
+    block:facade:4
+        kithara["kithara"]
+        play["kithara-play"]
+    end
+
+    block:pipeline:4
+        audio["kithara-audio"]
+        decode["kithara-decode"]
+        events["kithara-events"]
+    end
+
+    block:protocols:4
+        file["kithara-file"]
+        hls["kithara-hls"]
+        abr["kithara-abr"]
+        drm["kithara-drm"]
+    end
+
+    block:io:4
+        stream["kithara-stream"]
+        net["kithara-net"]
+    end
+
+    block:storage:4
+        assets["kithara-assets"]
+        stor["kithara-storage"]
+        bufpool["kithara-bufpool"]
+        platform["kithara-platform"]
+    end
+
+    facade --> pipeline --> protocols --> io --> storage
+
+    style facade fill:#4a6fa5,color:#fff
+    style pipeline fill:#6b8cae,color:#fff
+    style protocols fill:#7ea87e,color:#fff
+    style io fill:#c4a35a,color:#fff
+    style storage fill:#8b6b8b,color:#fff
 ```
 
 | Layer | Crates | Role |
