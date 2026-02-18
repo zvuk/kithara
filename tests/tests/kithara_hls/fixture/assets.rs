@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use kithara::assets::{AssetStore, AssetStoreBuilder, EvictConfig, ProcessChunkFn};
 use kithara::drm::{DecryptContext, aes128_cbc_process_chunk};
+use kithara::hls::{AssetsBackend, fetch::FetchManager};
 use kithara::net::{HttpClient, NetOptions};
 use rstest::fixture;
 use tempfile::TempDir;
@@ -56,6 +57,21 @@ pub(crate) fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 pub(crate) fn create_test_net() -> HttpClient {
     let net_opts = NetOptions::default();
     HttpClient::new(net_opts)
+}
+
+pub(crate) fn test_fetch_manager(assets: &TestAssets, net: HttpClient) -> FetchManager<HttpClient> {
+    FetchManager::new(
+        AssetsBackend::Disk(assets.assets().clone()),
+        net,
+        CancellationToken::new(),
+    )
+}
+
+pub(crate) fn test_fetch_manager_shared(
+    assets: &TestAssets,
+    net: HttpClient,
+) -> Arc<FetchManager<HttpClient>> {
+    Arc::new(test_fetch_manager(assets, net))
 }
 
 /// Fixture: test assets

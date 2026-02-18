@@ -3,9 +3,8 @@
 use std::time::Duration;
 
 use fixture::*;
-use kithara::hls::{AssetsBackend, HlsResult, fetch::FetchManager, parsing::VariantId};
+use kithara::hls::{HlsResult, parsing::VariantId};
 use rstest::rstest;
-use tokio_util::sync::CancellationToken;
 
 use super::fixture;
 
@@ -20,11 +19,7 @@ async fn fetch_master_playlist_from_network(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
-
-    let fetch_manager =
-        FetchManager::new(AssetsBackend::Disk(assets), net, CancellationToken::new());
+    let fetch_manager = test_fetch_manager(&assets_fixture, net_fixture);
     let master_url = server.url("/master.m3u8")?;
     let master_playlist = fetch_manager.master_playlist(&master_url).await?;
 
@@ -41,11 +36,7 @@ async fn fetch_media_playlist_from_network(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
-
-    let fetch_manager =
-        FetchManager::new(AssetsBackend::Disk(assets), net, CancellationToken::new());
+    let fetch_manager = test_fetch_manager(&assets_fixture, net_fixture);
     let media_url = server.url("/video/480p/playlist.m3u8")?;
 
     let media_playlist = fetch_manager
@@ -66,13 +57,9 @@ async fn resolve_url_with_base_override(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
-
     let base_url = server.url("/custom/base/")?;
     let fetch_manager =
-        FetchManager::new(AssetsBackend::Disk(assets), net, CancellationToken::new())
-            .with_base_url(Some(base_url.clone()));
+        test_fetch_manager(&assets_fixture, net_fixture).with_base_url(Some(base_url.clone()));
 
     let relative_url = "video/480p/playlist.m3u8";
     let resolved = fetch_manager.resolve_url(&base_url, relative_url)?;
@@ -95,11 +82,7 @@ async fn fetch_media_playlist_for_different_variants(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
-
-    let fetch_manager =
-        FetchManager::new(AssetsBackend::Disk(assets), net, CancellationToken::new());
+    let fetch_manager = test_fetch_manager(&assets_fixture, net_fixture);
 
     // Test variant 0
     let media_url_0 = server.url("/video/480p/playlist.m3u8")?;
@@ -127,11 +110,7 @@ async fn fetch_manager_caching_behavior(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
-
-    let fetch_manager =
-        FetchManager::new(AssetsBackend::Disk(assets), net, CancellationToken::new());
+    let fetch_manager = test_fetch_manager(&assets_fixture, net_fixture);
     let master_url = server.url("/master.m3u8")?;
 
     // First fetch
@@ -155,11 +134,7 @@ async fn fetch_manager_error_handling_invalid_url(
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
-
-    let fetch_manager =
-        FetchManager::new(AssetsBackend::Disk(assets), net, CancellationToken::new());
+    let fetch_manager = test_fetch_manager(&assets_fixture, net_fixture);
 
     // Try to fetch from invalid URL
     let invalid_url =
@@ -183,13 +158,9 @@ async fn resolve_multiple_relative_urls(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
-
     let base_url = server.url("/base/")?;
     let fetch_manager =
-        FetchManager::new(AssetsBackend::Disk(assets), net, CancellationToken::new())
-            .with_base_url(Some(base_url.clone()));
+        test_fetch_manager(&assets_fixture, net_fixture).with_base_url(Some(base_url.clone()));
 
     // Test different relative URLs
     let test_cases = vec![
@@ -222,15 +193,8 @@ async fn fetch_manager_with_different_base_urls(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
-
     // Test with no base URL
-    let fetch_manager_no_base = FetchManager::new(
-        AssetsBackend::Disk(assets.clone()),
-        net.clone(),
-        CancellationToken::new(),
-    );
+    let fetch_manager_no_base = test_fetch_manager(&assets_fixture, net_fixture.clone());
     let master_url = server.url("/master.m3u8")?;
     let master_no_base = fetch_manager_no_base.master_playlist(&master_url).await?;
     assert_eq!(master_no_base.variants.len(), 3);
@@ -238,8 +202,7 @@ async fn fetch_manager_with_different_base_urls(
     // Test with base URL
     let base_url = server.url("/custom/base/")?;
     let fetch_manager_with_base =
-        FetchManager::new(AssetsBackend::Disk(assets), net, CancellationToken::new())
-            .with_base_url(Some(base_url));
+        test_fetch_manager(&assets_fixture, net_fixture).with_base_url(Some(base_url));
 
     // Fetch should still work with base URL
     let master_with_base = fetch_manager_with_base.master_playlist(&master_url).await?;
