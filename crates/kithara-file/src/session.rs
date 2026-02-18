@@ -307,9 +307,12 @@ impl kithara_stream::Source for FileSource {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
     use std::sync::Arc;
 
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
+    use kithara_stream::Source;
+    use rstest::rstest;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -324,18 +327,20 @@ mod tests {
         assert_eq!(p.download_pos(), 0);
     }
 
-    #[test]
-    fn test_progress_set_and_get_read_pos() {
+    #[rstest]
+    #[case::read(100, true)]
+    #[case::download(500, false)]
+    fn test_progress_set_and_get_positions(#[case] value: u64, #[case] read_pos: bool) {
         let p = Progress::new();
-        p.set_read_pos(100);
-        assert_eq!(p.read_pos(), 100);
-    }
-
-    #[test]
-    fn test_progress_set_and_get_download_pos() {
-        let p = Progress::new();
-        p.set_download_pos(500);
-        assert_eq!(p.download_pos(), 500);
+        if read_pos {
+            p.set_read_pos(value);
+            assert_eq!(p.read_pos(), value);
+            assert_eq!(p.download_pos(), 0);
+        } else {
+            p.set_download_pos(value);
+            assert_eq!(p.download_pos(), value);
+            assert_eq!(p.read_pos(), 0);
+        }
     }
 
     #[tokio::test]
@@ -362,30 +367,23 @@ mod tests {
 
     // SharedFileState
 
-    #[test]
-    fn test_shared_file_state_empty_queue() {
+    #[rstest]
+    #[case::empty(vec![], vec![])]
+    #[case::single(vec![100..200], vec![100..200])]
+    #[case::fifo(vec![0..10, 10..20, 20..30], vec![0..10, 10..20, 20..30])]
+    fn test_shared_file_state_pop_order(
+        #[case] requests: Vec<Range<u64>>,
+        #[case] expected: Vec<Range<u64>>,
+    ) {
         let state = SharedFileState::new();
-        assert!(state.pop_range_request().is_none());
-    }
+        for range in requests {
+            state.request_range(range);
+        }
 
-    #[test]
-    fn test_shared_file_state_request_and_pop() {
-        let state = SharedFileState::new();
-        state.request_range(100..200);
-        let r = state.pop_range_request().unwrap();
-        assert_eq!(r, 100..200);
-    }
-
-    #[test]
-    fn test_shared_file_state_fifo_order() {
-        let state = SharedFileState::new();
-        state.request_range(0..10);
-        state.request_range(10..20);
-        state.request_range(20..30);
-
-        assert_eq!(state.pop_range_request().unwrap(), 0..10);
-        assert_eq!(state.pop_range_request().unwrap(), 10..20);
-        assert_eq!(state.pop_range_request().unwrap(), 20..30);
+        for range in expected {
+            assert_eq!(state.pop_range_request(), Some(range));
+        }
+        assert_eq!(state.pop_range_request(), None);
     }
 
     #[test]
@@ -421,8 +419,6 @@ mod tests {
 
     #[test]
     fn test_file_source_read_at() {
-        use kithara_stream::Source;
-
         let dir = TempDir::new().unwrap();
         let data = b"hello world from kithara";
         let res = create_committed_resource(&dir, data);
@@ -459,7 +455,6 @@ mod tests {
         let source = FileSource::new(res, progress, bus, Some(12345));
 
         // len() should return the explicit value provided at construction.
-        use kithara_stream::Source;
         assert_eq!(source.len(), Some(12345));
     }
 }
