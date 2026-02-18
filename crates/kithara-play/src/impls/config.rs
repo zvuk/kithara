@@ -351,49 +351,44 @@ impl ResourceConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn config_from_http_url() {
-        let config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
-        assert!(matches!(&config.src, ResourceSrc::Url(url) if url.scheme() == "https"));
+    #[rstest]
+    #[case("https://example.com/song.mp3", true, "https")]
+    #[case("/tmp/song.mp3", false, "/tmp/song.mp3")]
+    #[case("file:///tmp/song.mp3", false, "/tmp/song.mp3")]
+    fn config_source_parsing_success(
+        #[case] input: &str,
+        #[case] expect_url: bool,
+        #[case] expected: &str,
+    ) {
+        let config = ResourceConfig::new(input).unwrap();
+        if expect_url {
+            assert!(matches!(&config.src, ResourceSrc::Url(url) if url.scheme() == expected));
+        } else {
+            assert!(matches!(&config.src, ResourceSrc::Path(path) if path == Path::new(expected)));
+        }
     }
 
-    #[test]
-    fn config_from_absolute_path() {
-        let config = ResourceConfig::new("/tmp/song.mp3").unwrap();
-        assert!(
-            matches!(&config.src, ResourceSrc::Path(p) if p == std::path::Path::new("/tmp/song.mp3"))
-        );
+    #[rstest]
+    #[case("relative/path.mp3")]
+    fn config_source_parsing_error(#[case] input: &str) {
+        assert!(ResourceConfig::new(input).is_err());
     }
 
-    #[test]
-    fn config_from_file_url_normalizes_to_path() {
-        let config = ResourceConfig::new("file:///tmp/song.mp3").unwrap();
-        assert!(
-            matches!(&config.src, ResourceSrc::Path(p) if p == std::path::Path::new("/tmp/song.mp3"))
-        );
-    }
-
-    #[test]
-    fn config_relative_path_fails() {
-        let config = ResourceConfig::new("relative/path.mp3");
-        assert!(config.is_err());
-    }
-
-    #[test]
-    fn config_with_events_sets_bus() {
-        let bus = EventBus::new(32);
-        let config = ResourceConfig::new("https://example.com/song.mp3")
-            .unwrap()
-            .with_events(bus);
-        assert!(config.bus.is_some());
-    }
-
-    #[test]
-    fn config_default_bus_is_none() {
-        let config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
-        assert!(config.bus.is_none());
+    #[rstest]
+    #[case(false)]
+    #[case(true)]
+    fn config_bus_presence(#[case] with_events: bool) {
+        let mut config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        if with_events {
+            config = config.with_events(EventBus::new(32));
+        }
+        assert_eq!(config.bus.is_some(), with_events);
     }
 
     #[cfg(feature = "file")]
