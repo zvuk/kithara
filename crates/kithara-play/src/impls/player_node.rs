@@ -124,6 +124,8 @@ impl AudioNode for PlayerNode {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -141,17 +143,20 @@ mod tests {
         let _ = info;
     }
 
-    #[test]
-    fn player_node_with_channel() {
+    #[rstest]
+    #[case(PlayerCmd::SetPaused(true))]
+    #[case(PlayerCmd::SetPaused(false))]
+    #[case(PlayerCmd::SetFadeDuration(0.25))]
+    fn player_node_with_channel(#[case] cmd: PlayerCmd) {
         let (tx, rx) = kanal::bounded(8);
         let shared_state = Arc::new(SharedPlayerState::new());
         let node = PlayerNode::with_channel(rx, shared_state, kithara_bufpool::pcm_pool().clone());
         assert!(!node.active);
 
         // Verify the channel is connected
-        tx.send(PlayerCmd::SetPaused(true)).ok();
+        tx.send(cmd).ok();
         let received = node.cmd_rx.try_recv();
-        assert!(received.is_ok());
+        assert!(matches!(received, Ok(Some(_))));
     }
 
     #[test]
