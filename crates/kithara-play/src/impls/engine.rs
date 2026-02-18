@@ -14,6 +14,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, ThreadPool};
 use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
@@ -37,6 +38,10 @@ pub struct EngineConfig {
     pub eq_bands: usize,
     /// Maximum number of concurrent player slots. Default: 4.
     pub max_slots: usize,
+    /// PCM buffer pool for audio-thread scratch buffers.
+    ///
+    /// When `None`, the global PCM pool is used.
+    pub pcm_pool: Option<PcmPool>,
     /// Sample rate passed to `CpalBackend` as a hint. Default: 44100.
     pub sample_rate: u32,
     /// Thread pool for the engine thread and background work.
@@ -51,6 +56,7 @@ impl Default for EngineConfig {
             channels: 2,
             eq_bands: 10,
             max_slots: 4,
+            pcm_pool: None,
             sample_rate: 44100,
             thread_pool: None,
         }
@@ -83,6 +89,15 @@ impl EngineConfig {
     #[must_use]
     pub fn with_eq_bands(mut self, eq_bands: usize) -> Self {
         self.eq_bands = eq_bands;
+        self
+    }
+
+    /// Set PCM buffer pool for audio-thread scratch buffers.
+    ///
+    /// When not set, the global PCM pool is used.
+    #[must_use]
+    pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
+        self.pcm_pool = Some(pool);
         self
     }
 
@@ -177,10 +192,14 @@ impl EngineImpl {
         let (done_tx, done_rx) = kanal::bounded(1);
 
         let max_slots = config.max_slots;
-        let pool = config.thread_pool.clone().unwrap_or_default();
+        let thread_pool = config.thread_pool.clone().unwrap_or_default();
+        let pcm_pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| pcm_pool().clone());
 
-        pool.spawn(move || {
-            engine_thread(&cmd_rx, &reply_tx, max_slots);
+        thread_pool.spawn(move || {
+            engine_thread(&cmd_rx, &reply_tx, max_slots, pcm_pool);
             let _ = done_tx.send(());
         });
 
@@ -429,24 +448,31 @@ struct SlotNodes {
 /// Mutable state owned by the engine thread.
 struct EngineThreadState {
     ctx: Option<firewheel::FirewheelCtx<firewheel::cpal::CpalBackend>>,
-    slot_nodes: Vec<SlotNodes>,
-    next_slot_id: u64,
     max_slots: usize,
     /// Node ID of the master volume/pan node in the audio graph.
     master_vol_pan_id: Option<firewheel::node::NodeID>,
     /// Memo for diffing master volume changes and sending patches.
     master_vol_pan_memo: Option<firewheel::diff::Memo<firewheel::nodes::volume_pan::VolumePanNode>>,
+    next_slot_id: u64,
+    pcm_pool: PcmPool,
+    slot_nodes: Vec<SlotNodes>,
 }
 
 /// The dedicated rayon pool thread that owns the `FirewheelCtx`.
-fn engine_thread(cmd_rx: &kanal::Receiver<Cmd>, reply_tx: &kanal::Sender<Reply>, max_slots: usize) {
+fn engine_thread(
+    cmd_rx: &kanal::Receiver<Cmd>,
+    reply_tx: &kanal::Sender<Reply>,
+    max_slots: usize,
+    pcm_pool: PcmPool,
+) {
     let mut state = EngineThreadState {
         ctx: None,
-        slot_nodes: Vec::new(),
-        next_slot_id: 1,
         max_slots,
         master_vol_pan_id: None,
         master_vol_pan_memo: None,
+        next_slot_id: 1,
+        pcm_pool,
+        slot_nodes: Vec::new(),
     };
 
     while let Ok(cmd) = cmd_rx.recv() {
@@ -552,7 +578,8 @@ fn handle_allocate_slot(state: &mut EngineThreadState) -> Reply {
     let (cmd_tx, cmd_rx) = kanal::bounded(32);
     let shared_state = Arc::new(SharedPlayerState::new());
 
-    let player_node = PlayerNode::with_channel(cmd_rx, Arc::clone(&shared_state));
+    let player_node =
+        PlayerNode::with_channel(cmd_rx, Arc::clone(&shared_state), state.pcm_pool.clone());
     let player_node_id = fw_ctx.add_node(player_node, None);
     let vol_pan_node_id = fw_ctx.add_node(VolumePanNode::from_volume(Volume::Linear(1.0)), None);
 

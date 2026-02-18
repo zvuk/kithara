@@ -443,7 +443,8 @@ mod tests {
     fn make_track() -> PlayerTrack {
         let src: Arc<str> = Arc::from("test.mp3");
         let resource = Resource::from_reader(MockPcmReader::new());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src));
+        let player_resource =
+            PlayerResource::new(resource, Arc::clone(&src), kithara_bufpool::pcm_pool());
         let arc_resource = Arc::new(Mutex::new(player_resource));
         let sample_rate = NonZeroU32::new(44100).expect("non-zero sample rate");
         PlayerTrack::new(arc_resource, src, 1.0, sample_rate, FadeCurve::SquareRoot)

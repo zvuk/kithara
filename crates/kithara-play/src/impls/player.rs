@@ -9,6 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, ThreadPool};
 use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
@@ -42,6 +43,11 @@ pub struct PlayerConfig {
     pub eq_bands: usize,
     /// Maximum concurrent slots in the engine. Default: 4.
     pub max_slots: usize,
+    /// PCM buffer pool for audio-thread scratch buffers.
+    ///
+    /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
+    /// PCM pool is used.
+    pub pcm_pool: Option<PcmPool>,
     /// Thread pool for the engine thread and background work.
     ///
     /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
@@ -56,6 +62,7 @@ impl Default for PlayerConfig {
             default_rate: 1.0,
             eq_bands: 10,
             max_slots: 4,
+            pcm_pool: None,
             thread_pool: None,
         }
     }
@@ -90,6 +97,15 @@ impl PlayerConfig {
         self
     }
 
+    /// Set PCM buffer pool for audio-thread scratch buffers.
+    ///
+    /// When not set, the global PCM pool is used.
+    #[must_use]
+    pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
+        self.pcm_pool = Some(pool);
+        self
+    }
+
     /// Set thread pool for the engine thread and background work.
     ///
     /// When not set, the global rayon pool is used.
@@ -111,24 +127,32 @@ impl PlayerConfig {
 pub struct PlayerImpl {
     config: PlayerConfig,
     engine: EngineImpl,
-    items: Mutex<Vec<Option<Resource>>>,
-    current_index: AtomicUsize,
-    current_slot: Mutex<Option<SlotId>>,
-    rate: AtomicF32,
-    volume: AtomicF32,
-    muted: AtomicBool,
-    status: Mutex<PlayerStatus>,
+
     action_at_item_end: Mutex<ActionAtItemEnd>,
     crossfade_duration: AtomicF32,
+    current_index: AtomicUsize,
+    current_slot: Mutex<Option<SlotId>>,
     events_tx: broadcast::Sender<PlayerEvent>,
+    items: Mutex<Vec<Option<Resource>>>,
+    muted: AtomicBool,
+    pcm_pool: PcmPool,
+    rate: AtomicF32,
+    status: Mutex<PlayerStatus>,
+    volume: AtomicF32,
 }
 
 impl PlayerImpl {
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(config: PlayerConfig) -> Self {
+        let resolved_pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| pcm_pool().clone());
+
         let engine_config = EngineConfig {
             max_slots: config.max_slots,
+            pcm_pool: Some(resolved_pool.clone()),
             thread_pool: config.thread_pool.clone(),
             ..EngineConfig::default()
         };
@@ -136,18 +160,19 @@ impl PlayerImpl {
 
         let (events_tx, _) = broadcast::channel(64);
         Self {
-            crossfade_duration: AtomicF32::new(config.crossfade_duration),
-            rate: AtomicF32::new(0.0), // starts paused
-            volume: AtomicF32::new(1.0),
-            muted: AtomicBool::new(false),
-            status: Mutex::new(PlayerStatus::Unknown),
             action_at_item_end: Mutex::new(ActionAtItemEnd::default()),
+            crossfade_duration: AtomicF32::new(config.crossfade_duration),
             current_index: AtomicUsize::new(0),
-            items: Mutex::new(Vec::new()),
             current_slot: Mutex::new(None),
+            events_tx,
+            items: Mutex::new(Vec::new()),
+            muted: AtomicBool::new(false),
+            pcm_pool: resolved_pool,
+            rate: AtomicF32::new(0.0), // starts paused
+            status: Mutex::new(PlayerStatus::Unknown),
+            volume: AtomicF32::new(1.0),
             engine,
             config,
-            events_tx,
         }
     }
 
@@ -384,7 +409,7 @@ impl PlayerImpl {
         };
 
         let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src));
+        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.pcm_pool);
         let arc_resource = Arc::new(Mutex::new(player_resource));
         drop(items);
 
@@ -596,6 +621,7 @@ mod tests {
             default_rate: 0.5,
             eq_bands: 5,
             max_slots: 2,
+            pcm_pool: None,
             thread_pool: None,
         };
         let player = PlayerImpl::new(config);

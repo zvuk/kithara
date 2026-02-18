@@ -20,7 +20,7 @@ use firewheel::{
     },
 };
 use kithara_audio::AudioEffect;
-use kithara_bufpool::{PcmBuf, pcm_pool};
+use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
 use kithara_platform::Mutex;
 
@@ -49,15 +49,20 @@ pub(crate) struct EffectBridgeNode {
     /// processor is built.
     #[diff(skip)]
     effect: Mutex<Option<Box<dyn AudioEffect>>>,
+
+    /// PCM buffer pool for scratch buffer allocation.
+    #[diff(skip)]
+    pcm_pool: PcmPool,
 }
 
 impl EffectBridgeNode {
     /// Create a new bridge node wrapping the given effect.
     #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
-    pub(crate) fn new(effect: Box<dyn AudioEffect>) -> Self {
+    pub(crate) fn new(effect: Box<dyn AudioEffect>, pcm_pool: PcmPool) -> Self {
         Self {
             active: true,
             effect: Mutex::new(Some(effect)),
+            pcm_pool,
         }
     }
 }
@@ -85,7 +90,7 @@ impl AudioNode for EffectBridgeNode {
             tracing::error!("EffectBridgeNode::construct_processor called more than once");
         }
 
-        EffectBridgeProcessor::new(effect, cx.stream_info.sample_rate)
+        EffectBridgeProcessor::new(effect, cx.stream_info.sample_rate, self.pcm_pool.clone())
     }
 }
 
@@ -106,17 +111,20 @@ pub(crate) struct EffectBridgeProcessor {
     /// more than once (which logs an error); in that case the processor
     /// acts as a bypass node.
     effect: Option<Box<dyn AudioEffect>>,
+    pool: PcmPool,
     sample_rate: NonZeroU32,
     /// Reusable interleaved scratch buffer from the pool. Resized as needed.
     scratch: PcmBuf,
 }
 
 impl EffectBridgeProcessor {
-    fn new(effect: Option<Box<dyn AudioEffect>>, sample_rate: NonZeroU32) -> Self {
+    fn new(effect: Option<Box<dyn AudioEffect>>, sample_rate: NonZeroU32, pool: PcmPool) -> Self {
+        let scratch = pool.get();
         Self {
             effect,
+            pool,
             sample_rate,
-            scratch: pcm_pool().get(),
+            scratch,
         }
     }
 
@@ -182,7 +190,7 @@ impl AudioNodeProcessor for EffectBridgeProcessor {
         self.interleave(buffers.inputs, frames);
 
         // 2. Build PcmChunk from scratch (swap in a fresh pool buffer)
-        let pcm_buf = std::mem::replace(&mut self.scratch, pcm_pool().get());
+        let pcm_buf = std::mem::replace(&mut self.scratch, self.pool.get());
         let spec = PcmSpec {
             channels: STEREO_CHANNELS,
             sample_rate: self.sample_rate.get(),
@@ -219,6 +227,8 @@ impl AudioNodeProcessor for EffectBridgeProcessor {
 
 #[cfg(test)]
 mod tests {
+    use kithara_bufpool::pcm_pool;
+
     use super::*;
 
     /// A no-op effect that passes audio through unchanged.
@@ -271,7 +281,7 @@ mod tests {
 
     #[test]
     fn node_info_is_stereo_in_stereo_out() {
-        let node = EffectBridgeNode::new(Box::new(PassthroughEffect));
+        let node = EffectBridgeNode::new(Box::new(PassthroughEffect), pcm_pool().clone());
         let info = node.info(&EmptyConfig);
         // AudioNodeInfo does not expose fields, but construction should not panic.
         let _ = info;
@@ -279,7 +289,7 @@ mod tests {
 
     #[test]
     fn node_defaults_to_active() {
-        let node = EffectBridgeNode::new(Box::new(PassthroughEffect));
+        let node = EffectBridgeNode::new(Box::new(PassthroughEffect), pcm_pool().clone());
         assert!(node.active);
     }
 
@@ -288,6 +298,7 @@ mod tests {
         let mut processor = EffectBridgeProcessor::new(
             Some(Box::new(PassthroughEffect)),
             NonZeroU32::new(44100).unwrap(),
+            pcm_pool().clone(),
         );
 
         let frames = 4;
@@ -334,6 +345,7 @@ mod tests {
         let mut processor = EffectBridgeProcessor::new(
             Some(Box::new(DoubleEffect)),
             NonZeroU32::new(44100).unwrap(),
+            pcm_pool().clone(),
         );
 
         let frames = 4;
@@ -376,6 +388,7 @@ mod tests {
         let mut processor = EffectBridgeProcessor::new(
             Some(Box::new(AccumulatingEffect)),
             NonZeroU32::new(44100).unwrap(),
+            pcm_pool().clone(),
         );
 
         let frames = 4;
@@ -406,6 +419,7 @@ mod tests {
         let mut processor = EffectBridgeProcessor::new(
             Some(Box::new(PassthroughEffect)),
             NonZeroU32::new(48000).unwrap(),
+            pcm_pool().clone(),
         );
 
         let frames = 128;
@@ -427,6 +441,7 @@ mod tests {
         let mut processor = EffectBridgeProcessor::new(
             Some(Box::new(PassthroughEffect)),
             NonZeroU32::new(44100).unwrap(),
+            pcm_pool().clone(),
         );
 
         // First call
@@ -461,6 +476,7 @@ mod tests {
         let mut processor = EffectBridgeProcessor::new(
             Some(Box::new(PassthroughEffect)),
             NonZeroU32::new(44100).unwrap(),
+            pcm_pool().clone(),
         );
 
         // Zero frames should bypass
