@@ -41,8 +41,8 @@ pub struct EngineConfig {
     pub sample_rate: u32,
     /// Thread pool for the engine thread and background work.
     ///
-    /// Shared across all components. Defaults to the global rayon pool.
-    pub thread_pool: ThreadPool,
+    /// When `None`, the global rayon pool is used.
+    pub thread_pool: Option<ThreadPool>,
 }
 
 impl Default for EngineConfig {
@@ -52,7 +52,7 @@ impl Default for EngineConfig {
             eq_bands: 10,
             max_slots: 4,
             sample_rate: 44100,
-            thread_pool: ThreadPool::default(),
+            thread_pool: None,
         }
     }
 }
@@ -88,10 +88,10 @@ impl EngineConfig {
 
     /// Set thread pool for the engine thread and background work.
     ///
-    /// The pool is shared across all components. Defaults to the global rayon pool.
+    /// When not set, the global rayon pool is used.
     #[must_use]
     pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = pool;
+        self.thread_pool = Some(pool);
         self
     }
 }
@@ -177,8 +177,9 @@ impl EngineImpl {
         let (done_tx, done_rx) = kanal::bounded(1);
 
         let max_slots = config.max_slots;
+        let pool = config.thread_pool.clone().unwrap_or_default();
 
-        config.thread_pool.spawn(move || {
+        pool.spawn(move || {
             engine_thread(&cmd_rx, &reply_tx, max_slots);
             let _ = done_tx.send(());
         });
@@ -660,16 +661,24 @@ mod tests {
     }
 
     #[test]
+    fn engine_config_default_thread_pool_is_none() {
+        let config = EngineConfig::default();
+        assert!(config.thread_pool.is_none());
+    }
+
+    #[test]
     fn engine_config_builder() {
+        let pool = ThreadPool::with_num_threads(1).unwrap();
         let config = EngineConfig::default()
             .with_max_slots(8)
             .with_sample_rate(48000)
             .with_channels(1)
             .with_eq_bands(5)
-            .with_thread_pool(ThreadPool::default());
+            .with_thread_pool(pool);
         assert_eq!(config.max_slots, 8);
         assert_eq!(config.sample_rate, 48000);
         assert_eq!(config.channels, 1);
+        assert!(config.thread_pool.is_some());
         assert_eq!(config.eq_bands, 5);
     }
 

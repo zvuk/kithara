@@ -44,9 +44,9 @@ pub struct PlayerConfig {
     pub max_slots: usize,
     /// Thread pool for the engine thread and background work.
     ///
-    /// Propagated to the underlying [`EngineImpl`]. Defaults to the global
-    /// rayon pool.
-    pub thread_pool: ThreadPool,
+    /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
+    /// rayon pool is used.
+    pub thread_pool: Option<ThreadPool>,
 }
 
 impl Default for PlayerConfig {
@@ -56,7 +56,7 @@ impl Default for PlayerConfig {
             default_rate: 1.0,
             eq_bands: 10,
             max_slots: 4,
-            thread_pool: ThreadPool::default(),
+            thread_pool: None,
         }
     }
 }
@@ -92,11 +92,10 @@ impl PlayerConfig {
 
     /// Set thread pool for the engine thread and background work.
     ///
-    /// The pool is propagated to the underlying engine. Defaults to the
-    /// global rayon pool.
+    /// When not set, the global rayon pool is used.
     #[must_use]
     pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = pool;
+        self.thread_pool = Some(pool);
         self
     }
 }
@@ -597,7 +596,7 @@ mod tests {
             default_rate: 0.5,
             eq_bands: 5,
             max_slots: 2,
-            thread_pool: ThreadPool::default(),
+            thread_pool: None,
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
@@ -605,16 +604,24 @@ mod tests {
 
     #[test]
     fn player_config_builder() {
+        let pool = ThreadPool::with_num_threads(1).unwrap();
         let config = PlayerConfig::default()
             .with_max_slots(8)
             .with_default_rate(0.5)
             .with_crossfade_duration(2.5)
             .with_eq_bands(5)
-            .with_thread_pool(ThreadPool::default());
+            .with_thread_pool(pool);
         assert_eq!(config.max_slots, 8);
         assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
         assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);
         assert_eq!(config.eq_bands, 5);
+        assert!(config.thread_pool.is_some());
+    }
+
+    #[test]
+    fn player_config_default_thread_pool_is_none() {
+        let config = PlayerConfig::default();
+        assert!(config.thread_pool.is_none());
     }
 
     #[test]
