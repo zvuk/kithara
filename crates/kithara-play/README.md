@@ -46,7 +46,7 @@ engine.stop()?;
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph TD
+flowchart TD
     subgraph Engine ["Engine (singleton -- arena of slots, audio output)"]
         S0["Slot 0<br/><i>Player · Item · Asset</i>"]
         S1["Slot 1<br/><i>Player · Item · Asset</i>"]

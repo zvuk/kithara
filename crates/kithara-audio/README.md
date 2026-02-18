@@ -39,7 +39,7 @@ while !audio.is_eof() {
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph TB
+flowchart TB
     subgraph "Main / Consumer Thread"
         App["Application Code"]
         Resource["Resource / Audio&lt;S&gt;<br/><i>PcmReader interface</i>"]
@@ -105,7 +105,7 @@ graph TB
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph LR
+flowchart LR
     ST["Stream&lt;T&gt;<br/><i>Read + Seek</i>"]
     DF["DecoderFactory<br/><i>Box&lt;dyn InnerDecoder&gt;</i>"]
     SAS["StreamAudioSource<br/><i>format change, effects</i>"]

@@ -39,7 +39,7 @@ Components are independent crates that can be used standalone or composed into a
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph TD
+flowchart TD
     subgraph facade["Facade"]
         kithara["kithara"]
         play["kithara-play"]

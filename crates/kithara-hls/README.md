@@ -29,7 +29,7 @@ let stream = Stream::<Hls>::new(config).await?;
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph LR
+flowchart LR
     subgraph Network
         MasterPL["Master<br/>Playlist"]
         MediaPL["Media<br/>Playlist"]
@@ -101,7 +101,7 @@ Segments are logically stitched into a contiguous byte stream:
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph LR
+flowchart LR
     subgraph "Single variant"
         I[Init] --> S0[Seg0] --> S1[Seg1] --> S2[Seg2] --> M1[...]
     end
@@ -109,7 +109,7 @@ graph LR
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph LR
+flowchart LR
     subgraph "Mid-stream ABR switch (V0 → V1)"
         V0S0["V0 Seg0"] --> V0S1["V0 Seg1"] --> F["⛔ fence"]
         F --> V1I["V1 Init"] --> V1S2["V1 Seg2"] --> V1S3["V1 Seg3"] --> M2[...]

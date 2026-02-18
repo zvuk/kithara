@@ -43,7 +43,7 @@ cargo doc --workspace --no-deps --open
 ### Layered architecture
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph TD
+flowchart TD
     subgraph facade["Facade"]
         kithara["kithara"]
         play["kithara-play"]

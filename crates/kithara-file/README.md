@@ -29,7 +29,7 @@ let stream = Stream::<File>::new(config).await?;
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph LR
+flowchart LR
     subgraph Network
         HTTP["HTTP Server"]
     end
