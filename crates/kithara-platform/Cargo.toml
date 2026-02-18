@@ -17,3 +17,6 @@ rayon = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["time", "sync"] }
+
+[dev-dependencies]
+rstest = { workspace = true }
