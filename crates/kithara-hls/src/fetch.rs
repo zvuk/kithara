@@ -672,6 +672,7 @@ mod tests {
     use kithara_assets::{AssetStoreBuilder, AssetsBackend, ProcessChunkFn};
     use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
     use kithara_net::{ByteStream, Headers, NetError, mock::NetMock};
+    use rstest::rstest;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
     use unimock::{MockFn, Unimock, matching};
@@ -705,6 +706,12 @@ mod tests {
 
     type StreamAnswer =
         dyn Fn(&Unimock, Url, Option<Headers>) -> Result<ByteStream, NetError> + Send + Sync;
+
+    #[derive(Clone, Copy)]
+    enum FetchKind {
+        Key,
+        Playlist,
+    }
 
     fn test_master_url() -> Url {
         Url::parse("http://test.com/master.m3u8").expect("valid master URL")
@@ -759,18 +766,32 @@ mod tests {
 
     // FetchManager tests
 
+    #[rstest]
+    #[case(FetchKind::Playlist)]
+    #[case(FetchKind::Key)]
     #[tokio::test]
-    async fn test_fetch_playlist_with_mock_net() {
-        let playlist_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
-        let url = test_url("http://example.com/playlist.m3u8");
+    async fn test_fetch_with_mock_net(#[case] kind: FetchKind) {
+        let (url, rel_path, expected) = match kind {
+            FetchKind::Playlist => (
+                test_url("http://example.com/playlist.m3u8"),
+                "playlist.m3u8",
+                Bytes::from_static(b"#EXTM3U\n#EXT-X-VERSION:6\n"),
+            ),
+            FetchKind::Key => (
+                test_url("http://example.com/key.bin"),
+                "key.bin",
+                Bytes::from_static(&[0u8; 16]),
+            ),
+        };
         let (_temp_dir, fetch_manager) =
-            test_fetch_manager_with_get_bytes_response(Ok(Bytes::from_static(playlist_content)));
-
-        let result: HlsResult<Bytes> = fetch_manager.fetch_playlist(&url, "playlist.m3u8").await;
+            test_fetch_manager_with_get_bytes_response(Ok(expected.clone()));
+        let result: HlsResult<Bytes> = match kind {
+            FetchKind::Playlist => fetch_manager.fetch_playlist(&url, rel_path).await,
+            FetchKind::Key => fetch_manager.fetch_key(&url, rel_path, None).await,
+        };
 
         assert!(result.is_ok());
-        let bytes = result.unwrap();
-        assert_eq!(bytes, Bytes::from_static(playlist_content));
+        assert_eq!(result.unwrap(), expected);
     }
 
     #[tokio::test]
@@ -789,27 +810,24 @@ mod tests {
         assert_eq!(result1.unwrap(), result2.unwrap());
     }
 
+    #[rstest]
+    #[case(FetchKind::Playlist)]
+    #[case(FetchKind::Key)]
     #[tokio::test]
-    async fn test_fetch_key_with_mock_net() {
-        let url = test_url("http://example.com/key.bin");
-        let key_content = vec![0u8; 16];
-        let (_temp_dir, fetch_manager) =
-            test_fetch_manager_with_get_bytes_response(Ok(Bytes::from(key_content)));
-
-        let result: HlsResult<Bytes> = fetch_manager.fetch_key(&url, "key.bin", None).await;
-
-        assert!(result.is_ok());
-        let bytes = result.unwrap();
-        assert_eq!(bytes.len(), 16);
-    }
-
-    #[tokio::test]
-    async fn test_fetch_with_network_error() {
-        let url = test_url("http://example.com/playlist.m3u8");
+    async fn test_fetch_with_network_error(#[case] kind: FetchKind) {
+        let (url, rel_path) = match kind {
+            FetchKind::Playlist => (
+                test_url("http://example.com/playlist.m3u8"),
+                "playlist.m3u8",
+            ),
+            FetchKind::Key => (test_url("http://example.com/key.bin"), "key.bin"),
+        };
         let (_temp_dir, fetch_manager) =
             test_fetch_manager_with_get_bytes_response(Err(NetError::Timeout));
-
-        let result: HlsResult<Bytes> = fetch_manager.fetch_playlist(&url, "playlist.m3u8").await;
+        let result: HlsResult<Bytes> = match kind {
+            FetchKind::Playlist => fetch_manager.fetch_playlist(&url, rel_path).await,
+            FetchKind::Key => fetch_manager.fetch_key(&url, rel_path, None).await,
+        };
 
         assert!(result.is_err());
     }
@@ -943,34 +961,36 @@ mod tests {
 
     // Partial segment tests
 
-    #[tokio::test]
-    async fn test_load_media_segment_stream_error_returns_err() {
-        let (_temp_dir, fetch) = partial_fetch_manager(&|_, _url, _headers| {
-            let stream = stream::iter(vec![
-                Ok(Bytes::from(vec![0xFF; 1000])),
-                Err(NetError::Timeout),
-            ]);
-            Ok(Box::pin(stream) as ByteStream)
-        });
-
-        let result = fetch.load_media_segment(0, 0).await;
-        assert!(
-            result.is_err(),
-            "stream error should propagate as load_media_segment error"
-        );
+    fn stream_with_timeout(
+        _mock: &Unimock,
+        _url: Url,
+        _headers: Option<Headers>,
+    ) -> Result<ByteStream, NetError> {
+        let stream = stream::iter(vec![
+            Ok(Bytes::from(vec![0xFF; 1000])),
+            Err(NetError::Timeout),
+        ]);
+        Ok(Box::pin(stream) as ByteStream)
     }
 
-    #[tokio::test]
-    async fn test_load_media_segment_empty_stream_returns_err() {
-        let (_temp_dir, fetch) = partial_fetch_manager(&|_, _url, _headers| {
-            let stream = stream::empty::<Result<Bytes, NetError>>();
-            Ok(Box::pin(stream) as ByteStream)
-        });
+    fn empty_stream(
+        _mock: &Unimock,
+        _url: Url,
+        _headers: Option<Headers>,
+    ) -> Result<ByteStream, NetError> {
+        let stream = stream::empty::<Result<Bytes, NetError>>();
+        Ok(Box::pin(stream) as ByteStream)
+    }
 
+    #[rstest]
+    #[case(&stream_with_timeout)]
+    #[case(&empty_stream)]
+    #[tokio::test]
+    async fn test_load_media_segment_invalid_stream_returns_err(
+        #[case] stream_answer: &'static StreamAnswer,
+    ) {
+        let (_temp_dir, fetch) = partial_fetch_manager(stream_answer);
         let result = fetch.load_media_segment(0, 0).await;
-        assert!(
-            result.is_err(),
-            "empty segment (0 bytes) should be treated as error"
-        );
+        assert!(result.is_err());
     }
 }

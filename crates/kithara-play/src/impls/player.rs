@@ -479,8 +479,32 @@ impl PlayerImpl {
 mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
+    use rstest::rstest;
 
     use super::*;
+
+    #[derive(Clone, Copy)]
+    enum PlayerBasicScenario {
+        ActionAtItemEndDefault,
+        AdvanceOnEmpty,
+        EngineAccessor,
+        QueueStartsEmpty,
+        SendToSlotWithoutSlot,
+        StartsPaused,
+    }
+
+    #[derive(Clone, Copy)]
+    enum InsertScenario {
+        AppendTwice,
+        InsertAfterIndex,
+    }
+
+    #[derive(Clone, Copy)]
+    enum RemoveAtScenario {
+        ExistingItem,
+        OutOfBounds,
+        ShiftCurrentIndex,
+    }
 
     fn mock_spec() -> PcmSpec {
         PcmSpec {
@@ -495,11 +519,38 @@ mod tests {
 
     // -- Tests --------------------------------------------------------------------
 
-    #[test]
-    fn player_starts_paused() {
+    #[rstest]
+    #[case(PlayerBasicScenario::StartsPaused)]
+    #[case(PlayerBasicScenario::QueueStartsEmpty)]
+    #[case(PlayerBasicScenario::ActionAtItemEndDefault)]
+    #[case(PlayerBasicScenario::AdvanceOnEmpty)]
+    #[case(PlayerBasicScenario::EngineAccessor)]
+    #[case(PlayerBasicScenario::SendToSlotWithoutSlot)]
+    fn player_basic_behaviors(#[case] scenario: PlayerBasicScenario) {
         let player = PlayerImpl::new(PlayerConfig::default());
-        assert!((player.rate() - 0.0).abs() < f32::EPSILON);
-        assert_eq!(player.status(), PlayerStatus::Unknown);
+        match scenario {
+            PlayerBasicScenario::StartsPaused => {
+                assert!((player.rate() - 0.0).abs() < f32::EPSILON);
+                assert_eq!(player.status(), PlayerStatus::Unknown);
+            }
+            PlayerBasicScenario::QueueStartsEmpty => {
+                assert_eq!(player.item_count(), 0);
+            }
+            PlayerBasicScenario::ActionAtItemEndDefault => {
+                assert_eq!(player.action_at_item_end(), ActionAtItemEnd::Advance);
+            }
+            PlayerBasicScenario::AdvanceOnEmpty => {
+                player.advance_to_next_item();
+                assert_eq!(player.current_index(), 0);
+            }
+            PlayerBasicScenario::EngineAccessor => {
+                assert!(!player.engine().is_running());
+            }
+            PlayerBasicScenario::SendToSlotWithoutSlot => {
+                let result = player.send_to_slot(PlayerCmd::SetPaused(true));
+                assert!(result.is_err());
+            }
+        }
     }
 
     #[test]
@@ -509,20 +560,6 @@ mod tests {
         player.rate.store(1.0, Ordering::Relaxed);
         player.pause();
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn player_insert_increases_count() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        assert_eq!(player.item_count(), 0);
-    }
-
-    #[test]
-    fn player_remove_all_clears() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        player.remove_all_items();
-        assert_eq!(player.item_count(), 0);
-        assert_eq!(player.current_index(), 0);
     }
 
     #[test]
@@ -548,12 +585,6 @@ mod tests {
         assert!((player.crossfade_duration() - 1.0).abs() < f32::EPSILON);
         player.set_crossfade_duration(3.0);
         assert!((player.crossfade_duration() - 3.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn player_action_at_item_end_default() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        assert_eq!(player.action_at_item_end(), ActionAtItemEnd::Advance);
     }
 
     #[test]
@@ -611,86 +642,71 @@ mod tests {
         assert!(!player.engine().is_running());
     }
 
-    #[test]
-    fn player_advance_does_nothing_when_empty() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        player.advance_to_next_item(); // should not panic
-        assert_eq!(player.current_index(), 0);
-    }
-
-    #[test]
-    fn player_engine_accessor() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        assert!(!player.engine().is_running());
-    }
-
-    #[test]
-    fn player_send_to_slot_without_slot_returns_error() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        let result = player.send_to_slot(PlayerCmd::SetPaused(true));
-        assert!(result.is_err());
-    }
-
     // -- Integration tests (player + resource + queue) ----------------------------
 
+    #[rstest]
+    #[case(InsertScenario::AppendTwice, 2)]
+    #[case(InsertScenario::InsertAfterIndex, 3)]
     #[tokio::test]
-    async fn player_insert_resource_increases_count() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        assert_eq!(player.item_count(), 1);
-        player.insert(make_resource(2.0), None);
-        assert_eq!(player.item_count(), 2);
-    }
-
-    #[tokio::test]
-    async fn player_insert_after_index() {
+    async fn player_insert_scenarios(
+        #[case] scenario: InsertScenario,
+        #[case] expected_count: usize,
+    ) {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.insert(make_resource(1.0), None);
         player.insert(make_resource(2.0), None);
-        // Insert after first item (index 0)
-        player.insert(make_resource(3.0), Some(0));
-        assert_eq!(player.item_count(), 3);
+        if matches!(scenario, InsertScenario::InsertAfterIndex) {
+            player.insert(make_resource(3.0), Some(0));
+        }
+        assert_eq!(player.item_count(), expected_count);
     }
 
+    #[rstest]
+    #[case(RemoveAtScenario::ExistingItem)]
+    #[case(RemoveAtScenario::OutOfBounds)]
+    #[case(RemoveAtScenario::ShiftCurrentIndex)]
     #[tokio::test]
-    async fn player_remove_at_returns_resource() {
+    async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
         let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        player.insert(make_resource(2.0), None);
-        let removed = player.remove_at(0);
-        assert!(removed.is_some());
-        assert_eq!(player.item_count(), 1);
+        match scenario {
+            RemoveAtScenario::ExistingItem => {
+                player.insert(make_resource(1.0), None);
+                player.insert(make_resource(2.0), None);
+                let removed = player.remove_at(0);
+                assert!(removed.is_some());
+                assert_eq!(player.item_count(), 1);
+            }
+            RemoveAtScenario::OutOfBounds => {
+                player.insert(make_resource(1.0), None);
+                assert!(player.remove_at(5).is_none());
+                assert_eq!(player.item_count(), 1);
+            }
+            RemoveAtScenario::ShiftCurrentIndex => {
+                player.insert(make_resource(1.0), None);
+                player.insert(make_resource(2.0), None);
+                player.insert(make_resource(3.0), None);
+                player.advance_to_next_item();
+                player.advance_to_next_item();
+                assert_eq!(player.current_index(), 2);
+                player.remove_at(0);
+                assert_eq!(player.current_index(), 1);
+                assert_eq!(player.item_count(), 2);
+            }
+        }
     }
 
+    #[rstest]
+    #[case(false)]
+    #[case(true)]
     #[tokio::test]
-    async fn player_remove_at_out_of_bounds_returns_none() {
+    async fn player_remove_all_resets_state(#[case] with_resources: bool) {
         let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        assert!(player.remove_at(5).is_none());
-        assert_eq!(player.item_count(), 1);
-    }
-
-    #[tokio::test]
-    async fn player_remove_at_adjusts_current_index() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        player.insert(make_resource(2.0), None);
-        player.insert(make_resource(3.0), None);
-        // Advance to index 2
-        player.advance_to_next_item();
-        player.advance_to_next_item();
-        assert_eq!(player.current_index(), 2);
-        // Remove item before current → current_index shifts back
-        player.remove_at(0);
-        assert_eq!(player.current_index(), 1);
-    }
-
-    #[tokio::test]
-    async fn player_remove_all_with_resources() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        player.insert(make_resource(2.0), None);
-        player.insert(make_resource(3.0), None);
+        if with_resources {
+            player.insert(make_resource(1.0), None);
+            player.insert(make_resource(2.0), None);
+            player.insert(make_resource(3.0), None);
+            assert_eq!(player.item_count(), 3);
+        }
         player.remove_all_items();
         assert_eq!(player.item_count(), 0);
         assert_eq!(player.current_index(), 0);

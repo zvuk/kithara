@@ -2619,6 +2619,7 @@ dependencies = [
  "futures",
  "parking_lot",
  "rayon",
+ "rstest",
  "tokio",
 ]
 
@@ -2728,6 +2729,7 @@ dependencies = [
  "console_error_panic_hook",
  "kithara-play",
  "rayon",
+ "rstest",
  "tokio",
  "tracing",
  "tracing-wasm",

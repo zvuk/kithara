@@ -443,10 +443,17 @@ mod tests {
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
     use kithara_drm::DecryptContext;
     use kithara_net::{HttpClient, NetOptions};
+    use rstest::rstest;
     use url::Url;
 
     use super::*;
     use crate::fetch::FetchManager;
+
+    #[derive(Clone, Copy)]
+    enum WaitRangeUnblock {
+        Cancel,
+        Stopped,
+    }
 
     /// Create a dummy PlaylistState for tests (no real playlists needed).
     fn dummy_playlist_state() -> Arc<PlaylistState> {
@@ -672,31 +679,11 @@ mod tests {
 
     // wait_range cancellation tests
 
+    #[rstest]
+    #[case(WaitRangeUnblock::Cancel)]
+    #[case(WaitRangeUnblock::Stopped)]
     #[tokio::test]
-    async fn test_wait_range_cancel_unblocks() {
-        // Cancel token should unblock wait_range within 100ms.
-        let cancel = CancellationToken::new();
-        let ps = dummy_playlist_state();
-        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps));
-        let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-
-        let handle = tokio::task::spawn_blocking(move || source.wait_range(0..1024));
-
-        // Give wait_range time to enter the loop
-        tokio::time::sleep(Duration::from_millis(20)).await;
-        cancel.cancel();
-
-        let result = tokio::time::timeout(Duration::from_millis(200), handle)
-            .await
-            .expect("task should complete within 200ms")
-            .expect("task should not panic");
-
-        assert!(result.is_err(), "wait_range should return Cancelled error");
-    }
-
-    #[tokio::test]
-    async fn test_wait_range_stopped_downloader_unblocks() {
-        // Downloader stop (via stopped flag + condvar) should unblock wait_range.
+    async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) {
         let cancel = CancellationToken::new();
         let ps = dummy_playlist_state();
         let shared = Arc::new(SharedSegments::new(cancel.clone(), ps));
@@ -708,9 +695,13 @@ mod tests {
         // Give wait_range time to enter the loop
         tokio::time::sleep(Duration::from_millis(20)).await;
 
-        // Simulate downloader drop
-        shared2.stopped.store(true, Ordering::Release);
-        shared2.condvar.notify_all();
+        match unblock {
+            WaitRangeUnblock::Cancel => cancel.cancel(),
+            WaitRangeUnblock::Stopped => {
+                shared2.stopped.store(true, Ordering::Release);
+                shared2.condvar.notify_all();
+            }
+        }
 
         let result = tokio::time::timeout(Duration::from_millis(200), handle)
             .await
@@ -719,7 +710,7 @@ mod tests {
 
         assert!(
             result.is_err(),
-            "wait_range should return error when downloader stopped"
+            "wait_range should return cancellation error"
         );
     }
 

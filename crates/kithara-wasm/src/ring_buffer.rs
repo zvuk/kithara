@@ -145,29 +145,32 @@ impl PcmRingBuffer {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn new_rounds_to_power_of_two() {
-        let ring = PcmRingBuffer::new(1000, 2, 44100);
-        assert_eq!(ring.capacity(), 1024);
+    #[rstest]
+    #[case(1000, 1024)]
+    #[case(16, 1024)]
+    fn new_normalizes_capacity(#[case] requested: usize, #[case] expected: u32) {
+        let ring = PcmRingBuffer::new(requested, 2, 44100);
+        assert_eq!(ring.capacity(), expected);
     }
 
-    #[test]
-    fn new_enforces_minimum_capacity() {
-        let ring = PcmRingBuffer::new(16, 2, 44100);
-        assert_eq!(ring.capacity(), 1024);
-    }
-
-    #[test]
-    fn write_and_available() {
+    #[rstest]
+    #[case(&[], 0, 0)]
+    #[case(&[0.5f32; 100], 100, 100)]
+    fn write_updates_available(
+        #[case] samples: &[f32],
+        #[case] expected_written: usize,
+        #[case] expected_available: u32,
+    ) {
         let mut ring = PcmRingBuffer::new(1024, 2, 44100);
         assert_eq!(ring.available(), 0);
 
-        let samples = vec![0.5f32; 100];
-        let written = ring.write(&samples);
-        assert_eq!(written, 100);
-        assert_eq!(ring.available(), 100);
+        let written = ring.write(samples);
+        assert_eq!(written, expected_written);
+        assert_eq!(ring.available(), expected_available);
     }
 
     #[test]
@@ -226,14 +229,6 @@ mod tests {
         assert!(!ring.buf_ptr().is_null());
         assert!(!ring.write_head_ptr().is_null());
         assert!(!ring.read_head_ptr().is_null());
-    }
-
-    #[test]
-    fn write_empty_slice_returns_zero() {
-        let mut ring = PcmRingBuffer::new(1024, 2, 44100);
-        let written = ring.write(&[]);
-        assert_eq!(written, 0);
-        assert_eq!(ring.available(), 0);
     }
 
     #[test]

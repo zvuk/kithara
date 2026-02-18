@@ -218,8 +218,16 @@ impl AudioNodeProcessor for EffectBridgeProcessor {
 #[cfg(test)]
 mod tests {
     use kithara_bufpool::pcm_pool;
+    use rstest::rstest;
 
     use super::*;
+
+    #[derive(Clone, Copy)]
+    enum EffectMode {
+        Accumulating,
+        Double,
+        Passthrough,
+    }
 
     /// A no-op effect that passes audio through unchanged.
     struct PassthroughEffect;
@@ -269,6 +277,52 @@ mod tests {
         fn reset(&mut self) {}
     }
 
+    fn make_processor(mode: EffectMode) -> EffectBridgeProcessor {
+        let effect: Box<dyn AudioEffect> = match mode {
+            EffectMode::Passthrough => Box::new(PassthroughEffect),
+            EffectMode::Double => Box::new(DoubleEffect),
+            EffectMode::Accumulating => Box::new(AccumulatingEffect),
+        };
+        EffectBridgeProcessor::new(
+            Some(effect),
+            NonZeroU32::new(44_100).unwrap(),
+            pcm_pool().clone(),
+        )
+    }
+
+    fn process_inputs(
+        processor: &mut EffectBridgeProcessor,
+        input_l: &[f32],
+        input_r: &[f32],
+    ) -> Option<(Vec<f32>, Vec<f32>)> {
+        let frames = input_l.len();
+        processor.interleave(&[input_l, input_r], frames);
+
+        let pcm_buf = std::mem::replace(&mut processor.scratch, pcm_pool().get());
+        let spec = PcmSpec {
+            channels: 2,
+            sample_rate: 44_100,
+        };
+        let chunk = PcmChunk::new(
+            PcmMeta {
+                spec,
+                ..PcmMeta::default()
+            },
+            pcm_buf,
+        );
+
+        let processed = processor
+            .effect
+            .as_mut()
+            .and_then(|effect| effect.process(chunk))?;
+        processor.scratch = processed.pcm;
+
+        let mut out_l = vec![0.0f32; frames];
+        let mut out_r = vec![0.0f32; frames];
+        processor.deinterleave(&mut [&mut out_l, &mut out_r], frames);
+        Some((out_l, out_r))
+    }
+
     #[test]
     fn node_info_is_stereo_in_stereo_out() {
         let node = EffectBridgeNode::new(Box::new(PassthroughEffect), pcm_pool().clone());
@@ -283,125 +337,28 @@ mod tests {
         assert!(node.active);
     }
 
-    #[test]
-    fn passthrough_preserves_audio() {
-        let mut processor = EffectBridgeProcessor::new(
-            Some(Box::new(PassthroughEffect)),
-            NonZeroU32::new(44100).unwrap(),
-            pcm_pool().clone(),
-        );
-
-        let frames = 4;
+    #[rstest]
+    #[case(EffectMode::Passthrough, Some(1.0))]
+    #[case(EffectMode::Double, Some(2.0))]
+    #[case(EffectMode::Accumulating, None)]
+    fn effect_processing_behaviors(#[case] mode: EffectMode, #[case] gain: Option<f32>) {
+        let mut processor = make_processor(mode);
         let input_l: Vec<f32> = vec![0.1, 0.2, 0.3, 0.4];
         let input_r: Vec<f32> = vec![0.5, 0.6, 0.7, 0.8];
+        let output = process_inputs(&mut processor, &input_l, &input_r);
 
-        processor.interleave(&[&input_l, &input_r], frames);
-
-        // Verify interleaving
-        assert_eq!(processor.scratch.len(), 8);
-        assert_eq!(processor.scratch[0], 0.1); // L0
-        assert_eq!(processor.scratch[1], 0.5); // R0
-        assert_eq!(processor.scratch[2], 0.2); // L1
-        assert_eq!(processor.scratch[3], 0.6); // R1
-
-        // Build chunk and process
-        let pcm_buf = std::mem::replace(&mut processor.scratch, pcm_pool().get());
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
-        let chunk = PcmChunk::new(
-            PcmMeta {
-                spec,
-                ..PcmMeta::default()
-            },
-            pcm_buf,
-        );
-
-        let result = processor.effect.as_mut().unwrap().process(chunk).unwrap();
-        processor.scratch = result.pcm;
-
-        // Deinterleave
-        let mut out_l = vec![0.0f32; frames];
-        let mut out_r = vec![0.0f32; frames];
-        processor.deinterleave(&mut [&mut out_l, &mut out_r], frames);
-
-        assert_eq!(out_l, input_l);
-        assert_eq!(out_r, input_r);
-    }
-
-    #[test]
-    fn double_effect_modifies_audio() {
-        let mut processor = EffectBridgeProcessor::new(
-            Some(Box::new(DoubleEffect)),
-            NonZeroU32::new(44100).unwrap(),
-            pcm_pool().clone(),
-        );
-
-        let frames = 4;
-        let input_l: Vec<f32> = vec![0.1, 0.2, 0.3, 0.4];
-        let input_r: Vec<f32> = vec![0.5, 0.6, 0.7, 0.8];
-
-        processor.interleave(&[&input_l, &input_r], frames);
-
-        let pcm_buf = std::mem::replace(&mut processor.scratch, pcm_pool().get());
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
-        let chunk = PcmChunk::new(
-            PcmMeta {
-                spec,
-                ..PcmMeta::default()
-            },
-            pcm_buf,
-        );
-
-        let result = processor.effect.as_mut().unwrap().process(chunk).unwrap();
-        processor.scratch = result.pcm;
-
-        let mut out_l = vec![0.0f32; frames];
-        let mut out_r = vec![0.0f32; frames];
-        processor.deinterleave(&mut [&mut out_l, &mut out_r], frames);
-
-        // Each sample should be doubled
-        for (out, inp) in out_l.iter().zip(input_l.iter()) {
-            assert!((out - inp * 2.0).abs() < f32::EPSILON);
+        match gain {
+            Some(gain) => {
+                let (out_l, out_r) = output.expect("effect should produce output");
+                for (out, inp) in out_l.iter().zip(input_l.iter()) {
+                    assert!((out - inp * gain).abs() < f32::EPSILON);
+                }
+                for (out, inp) in out_r.iter().zip(input_r.iter()) {
+                    assert!((out - inp * gain).abs() < f32::EPSILON);
+                }
+            }
+            None => assert!(output.is_none()),
         }
-        for (out, inp) in out_r.iter().zip(input_r.iter()) {
-            assert!((out - inp * 2.0).abs() < f32::EPSILON);
-        }
-    }
-
-    #[test]
-    fn accumulating_effect_returns_clear_all_outputs() {
-        let mut processor = EffectBridgeProcessor::new(
-            Some(Box::new(AccumulatingEffect)),
-            NonZeroU32::new(44100).unwrap(),
-            pcm_pool().clone(),
-        );
-
-        let frames = 4;
-        let input_l: Vec<f32> = vec![0.1, 0.2, 0.3, 0.4];
-        let input_r: Vec<f32> = vec![0.5, 0.6, 0.7, 0.8];
-
-        processor.interleave(&[&input_l, &input_r], frames);
-
-        let pcm_buf = std::mem::replace(&mut processor.scratch, pcm_pool().get());
-        let spec = PcmSpec {
-            channels: 2,
-            sample_rate: 44100,
-        };
-        let chunk = PcmChunk::new(
-            PcmMeta {
-                spec,
-                ..PcmMeta::default()
-            },
-            pcm_buf,
-        );
-
-        let result = processor.effect.as_mut().unwrap().process(chunk);
-        assert!(result.is_none());
     }
 
     #[test]
