@@ -3,306 +3,392 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kithara HLS Player</title>
-    <link data-trunk rel="copy-file" href="pcm-processor.js" />
+    <title>Kithara Play WASM</title>
+    <link data-trunk rel="copy-file" href="../../logo.svg" />
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            max-width: 700px;
-            margin: 40px auto;
-            padding: 0 20px;
-            background: #1a1a2e;
-            color: #eee;
+            max-width: 860px;
+            margin: 24px auto;
+            padding: 0 16px 24px;
+            background: #151a23;
+            color: #edf2f7;
         }
-        h1 { color: #e94560; margin-bottom: 8px; }
-        .subtitle { color: #666; font-size: 14px; margin-bottom: 24px; }
-        .row { display: flex; gap: 8px; margin: 12px 0; align-items: center; }
+        .header {
+            display: flex;
+            gap: 14px;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .logo {
+            width: 64px;
+            height: 64px;
+            object-fit: contain;
+            border-radius: 10px;
+            background: #0f141d;
+            border: 1px solid #2a3442;
+            padding: 8px;
+        }
+        h1 { color: #ff5d5d; font-size: 26px; }
+        .subtitle { color: #97a5b8; font-size: 13px; }
+        .card {
+            background: #0f141d;
+            border: 1px solid #2a3442;
+            border-radius: 10px;
+            padding: 12px;
+            margin-bottom: 12px;
+        }
+        .row { display: flex; gap: 8px; align-items: center; }
+        .row + .row { margin-top: 10px; }
         input[type="text"] {
-            flex: 1; padding: 8px 12px; font-size: 14px;
-            background: #16213e; border: 1px solid #333; color: #eee;
-            border-radius: 4px; outline: none;
+            flex: 1;
+            padding: 9px 12px;
+            font-size: 14px;
+            background: #111a27;
+            border: 1px solid #2e3a4e;
+            color: #edf2f7;
+            border-radius: 6px;
+            outline: none;
         }
-        input[type="text"]:focus { border-color: #e94560; }
+        input[type="text"]:focus { border-color: #ff5d5d; }
         button {
-            padding: 8px 16px; font-size: 14px; cursor: pointer;
-            background: #e94560; color: white; border: none; border-radius: 4px;
-            transition: background 0.2s;
+            padding: 9px 14px;
+            border: none;
+            border-radius: 6px;
+            background: #ff5d5d;
+            color: #fff;
+            font-size: 13px;
+            cursor: pointer;
         }
-        button:hover { background: #c73652; }
-        button:disabled { background: #555; cursor: not-allowed; }
-        input[type="range"] { flex: 1; accent-color: #e94560; }
-        .time { font-size: 13px; font-family: monospace; color: #aaa; min-width: 40px; }
-        .status {
-            font-size: 13px; color: #888; margin: 8px 0;
+        button:hover { background: #ef4b4b; }
+        button:disabled { background: #5b6370; cursor: not-allowed; }
+        #playlist {
+            margin-top: 10px;
+            list-style: none;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            max-height: 220px;
+            overflow-y: auto;
+        }
+        #playlist li {
+            border: 1px solid #2a3442;
+            border-radius: 6px;
+            padding: 8px 10px;
+            background: #111a27;
+            cursor: pointer;
+            font-size: 13px;
+            color: #dce3ee;
+            word-break: break-all;
+        }
+        #playlist li.active {
+            border-color: #ff5d5d;
+            background: #2c1720;
+        }
+        #playlist li:hover { border-color: #ff8989; }
+        input[type="range"] { flex: 1; accent-color: #ff5d5d; }
+        .time { min-width: 46px; color: #9bb0c8; font-family: monospace; }
+        #status {
+            font-size: 13px;
+            color: #9bb0c8;
+            font-family: monospace;
+            margin-bottom: 10px;
+        }
+        .eq-grid {
+            display: grid;
+            grid-template-columns: repeat(5, minmax(0, 1fr));
+            gap: 10px;
+            margin-top: 8px;
+        }
+        .eq-band {
+            border: 1px solid #2a3442;
+            border-radius: 8px;
+            padding: 8px;
+            background: #111a27;
+        }
+        .eq-band label {
+            display: block;
+            font-size: 11px;
+            color: #9bb0c8;
+            margin-bottom: 6px;
+        }
+        .eq-band .gain {
+            display: block;
+            margin-top: 4px;
+            font-size: 11px;
+            color: #f3f6fb;
             font-family: monospace;
         }
         #event-log {
-            background: #0f0f23; border: 1px solid #333; border-radius: 4px;
-            padding: 12px; font-size: 12px; font-family: monospace;
-            height: 200px; overflow-y: auto; margin-top: 16px;
-            color: #8892b0;
+            background: #0b1018;
+            border: 1px solid #2a3442;
+            border-radius: 8px;
+            padding: 10px;
+            font-size: 12px;
+            font-family: monospace;
+            color: #9fb0c6;
+            max-height: 220px;
+            overflow-y: auto;
         }
-        #event-log .error { color: #e94560; }
-        #event-log .info { color: #64ffda; }
+        #event-log .error { color: #ff7f7f; }
+        #event-log .info { color: #65f0d3; }
+        @media (max-width: 740px) {
+            .eq-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+            .header { align-items: flex-start; }
+        }
     </style>
 </head>
 <body>
-    <h1>Kithara HLS Player</h1>
-    <p class="subtitle">Full HLS audio player running in WebAssembly <span id="build-info" style="color:#555"></span></p>
-
-    <div class="row">
-        <input type="text" id="url-input"
-               placeholder="HLS playlist URL (.m3u8)"
-               value="https://stream.silvercomet.top/hls/master.m3u8">
-        <button id="load-btn" disabled>Load</button>
+    <div class="header">
+        <img class="logo" src="logo.svg" alt="Kithara logo" />
+        <div>
+            <h1>Kithara Play WASM</h1>
+            <p class="subtitle">Playlist + crossfade + EQ on top of kithara-play <span id="build-info" style="color:#6f7d90"></span></p>
+        </div>
     </div>
 
-    <div class="row">
-        <button id="play-btn" disabled>Play</button>
-        <button id="pause-btn" disabled>Pause</button>
-        <button id="stop-btn" disabled>Stop</button>
+    <div class="card">
+        <div class="row">
+            <input type="text" id="url-input" placeholder="Track URL (.m3u8 / .mp3 / etc)">
+            <button id="add-btn" disabled>Add To Playlist</button>
+        </div>
+        <ul id="playlist"></ul>
     </div>
 
-    <div class="row">
-        <span class="time" id="position">0:00</span>
-        <input type="range" id="seek-slider" min="0" max="100" value="0" step="0.1" disabled>
-        <span class="time" id="duration">0:00</span>
+    <div class="card">
+        <div class="row">
+            <button id="play-btn" disabled>Play</button>
+            <button id="pause-btn" disabled>Pause</button>
+            <button id="stop-btn" disabled>Stop</button>
+        </div>
+        <div class="row">
+            <span class="time" id="position">0:00</span>
+            <input type="range" id="seek-slider" min="0" max="100" value="0" step="0.1" disabled>
+            <span class="time" id="duration">0:00</span>
+        </div>
     </div>
 
-    <div class="status" id="status">Initializing WASM...</div>
+    <div class="card">
+        <div class="row" style="justify-content: space-between;">
+            <strong style="font-size: 13px; color:#c9d4e5;">Equalizer</strong>
+            <button id="eq-reset-btn" disabled>Reset EQ</button>
+        </div>
+        <div class="eq-grid" id="eq-grid"></div>
+    </div>
 
+    <div id="status">Initializing WASM...</div>
     <div id="event-log"></div>
 
-    <script>
-        console.log('[kithara] hello from inline script');
-        window.onerror = (msg, src, line, col, err) => console.error('[kithara] onerror:', msg, src, line, col, err);
-        window.onunhandledrejection = (e) => console.error('[kithara] unhandled rejection:', e.reason);
-
-        // Track all Web Workers so we can terminate them on page unload.
-        const _allWorkers = [];
-        const _OrigWorker = Worker;
-        window.Worker = function(...args) {
-            const w = new _OrigWorker(...args);
-            _allWorkers.push(w);
-            console.log('[kithara] Worker created, total:', _allWorkers.length);
-            return w;
-        };
-        window.Worker.prototype = _OrigWorker.prototype;
-
-        window.addEventListener('beforeunload', () => {
-            console.log('[kithara] beforeunload: terminating', _allWorkers.length, 'workers');
-            for (const w of _allWorkers) {
-                w.terminate();
-                console.log('[kithara] worker terminated');
-            }
-        });
-        window.addEventListener('unload', () => {
-            for (const w of _allWorkers) w.terminate();
-        });
-        window.addEventListener('pagehide', () => {
-            for (const w of _allWorkers) w.terminate();
-        });
-    </script>
     <script type="module">
-        console.log('[kithara] module script start');
-
-        // Step 1: just import the module, don't call anything
-        console.log('[kithara] importing kithara-wasm.js...');
-        const wasm = await import('/kithara-wasm.js');
-        console.log('[kithara] import done, exports:', Object.keys(wasm));
-
-        document.getElementById('status').textContent = 'Module loaded OK';
-
-        // Step 2: init WASM
-        console.log('[kithara] calling init()...');
-        await wasm.default();
-        console.log('[kithara] init() done');
-
-        // Step 3: setup
-        wasm.setup();
-        console.log('[kithara] setup() done');
-
-        // Show build revision on page
-        const bi = wasm.build_info();
-        console.log('[kithara] build:', bi);
-        document.getElementById('build-info').textContent = `(${bi})`;
-
-        // Step 4: initialize rayon thread pool via Web Workers.
-        // Required for Audio::new() which uses thread_pool.spawn_async() for
-        // probe and decoder creation — without this, rayon::spawn() has no workers.
-        console.log('[kithara] initThreadPool(1)...');
-        document.getElementById('status').textContent = 'Initializing thread pool...';
-        try {
-            await wasm.initThreadPool(1);
-            console.log('[kithara] initThreadPool done');
-        } catch (e) {
-            console.error('[kithara] initThreadPool FAILED:', e);
-            document.getElementById('status').textContent =
-                `Thread pool init failed: ${e.message || e}. Try reloading the page.`;
-            throw e;
-        }
-
-        // Step 5: create player
-        const player = new wasm.WasmPlayer();
-        console.log('[kithara] player created');
-
-        document.getElementById('status').textContent = 'Ready \u2014 enter HLS URL and click Load';
-
-        // --- UI wiring ---
+        const logEl = document.getElementById('event-log');
+        const statusEl = document.getElementById('status');
+        const buildInfoEl = document.getElementById('build-info');
+        const playlistEl = document.getElementById('playlist');
         const urlInput = document.getElementById('url-input');
-        const loadBtn = document.getElementById('load-btn');
+        const addBtn = document.getElementById('add-btn');
         const playBtn = document.getElementById('play-btn');
         const pauseBtn = document.getElementById('pause-btn');
         const stopBtn = document.getElementById('stop-btn');
         const seekSlider = document.getElementById('seek-slider');
         const positionEl = document.getElementById('position');
         const durationEl = document.getElementById('duration');
-        const statusEl = document.getElementById('status');
-        const logEl = document.getElementById('event-log');
+        const eqGrid = document.getElementById('eq-grid');
+        const eqResetBtn = document.getElementById('eq-reset-btn');
 
-        function log(msg, cls = '') {
+        function log(message, cls = '') {
             const line = document.createElement('div');
             if (cls) line.className = cls;
             const ts = new Date().toISOString().substring(11, 23);
-            line.textContent = `[${ts}] ${msg}`;
+            line.textContent = `[${ts}] ${message}`;
             logEl.appendChild(line);
             logEl.scrollTop = logEl.scrollHeight;
         }
 
         function formatTime(ms) {
-            const totalSec = Math.floor(ms / 1000);
+            const totalSec = Math.max(0, Math.floor(ms / 1000));
             const min = Math.floor(totalSec / 60);
             const sec = totalSec % 60;
             return `${min}:${String(sec).padStart(2, '0')}`;
         }
 
-        log('Player ready', 'info');
-        loadBtn.disabled = false;
+        function setControlsEnabled(enabled) {
+            addBtn.disabled = !enabled;
+            playBtn.disabled = !enabled;
+            pauseBtn.disabled = !enabled;
+            stopBtn.disabled = !enabled;
+            seekSlider.disabled = !enabled;
+            eqResetBtn.disabled = !enabled;
+        }
 
-        loadBtn.onclick = async () => {
-            const url = urlInput.value.trim();
-            if (!url) return;
-            loadBtn.disabled = true;
-            statusEl.textContent = 'Loading...';
-            log(`Loading: ${url}`, 'info');
-            try {
-                const info = await wasm.load_hls(url);
-                const [channels, sampleRate, durMs] = info;
-                player.update_ring(channels, sampleRate);
-                log(`Format: ${sampleRate}Hz, ${channels}ch`, 'info');
-                if (durMs > 0) {
-                    log(`Duration: ${formatTime(durMs)}`, 'info');
-                    seekSlider.max = durMs;
-                    durationEl.textContent = formatTime(durMs);
-                }
-                statusEl.textContent = 'Loaded \u2014 click Play';
-                playBtn.disabled = false;
-                loadBtn.disabled = false;
-            } catch (e) {
-                log(`Load error: ${e}`, 'error');
-                statusEl.textContent = `Load failed: ${e}`;
-                loadBtn.disabled = false;
+        let wasm;
+        let player;
+        let uiRaf = null;
+
+        function renderPlaylist() {
+            playlistEl.innerHTML = '';
+            const active = player.current_index();
+            const count = player.playlist_len();
+            for (let i = 0; i < count; i += 1) {
+                const li = document.createElement('li');
+                const url = player.playlist_item(i);
+                li.textContent = `${i + 1}. ${url}`;
+                if (active === i) li.classList.add('active');
+                li.onclick = async () => {
+                    statusEl.textContent = `Loading track ${i + 1}...`;
+                    try {
+                        await player.select_track(i);
+                        statusEl.textContent = `Playing track ${i + 1}`;
+                        log(`Track selected: ${url}`, 'info');
+                        renderPlaylist();
+                    } catch (err) {
+                        statusEl.textContent = `Track load failed: ${err}`;
+                        log(`Track load failed: ${err}`, 'error');
+                    }
+                };
+                playlistEl.appendChild(li);
             }
-        };
+        }
 
-        let audioCtx = null;
-        let workletNode = null;
-        let fillRAF = null;
+        function renderEq() {
+            eqGrid.innerHTML = '';
+            const bands = player.eq_band_count();
+            for (let i = 0; i < bands; i += 1) {
+                const band = document.createElement('div');
+                band.className = 'eq-band';
 
-        playBtn.onclick = async () => {
-            try {
-                if (audioCtx) await audioCtx.close();
-                audioCtx = new AudioContext({ sampleRate: player.sample_rate() });
-                await audioCtx.audioWorklet.addModule('pcm-processor.js');
-                workletNode = new AudioWorkletNode(audioCtx, 'pcm-processor', {
-                    outputChannelCount: [player.channels()],
-                });
-                const memory = wasm.wasm_memory().buffer;
-                workletNode.port.postMessage({
-                    type: 'init',
-                    memory: memory,
-                    bufByteOffset: player.ring_buf_ptr(),
-                    capacity: player.ring_capacity(),
-                    writeHeadByteOffset: player.ring_write_head_ptr(),
-                    readHeadByteOffset: player.ring_read_head_ptr(),
-                    channels: player.channels(),
-                });
-                workletNode.connect(audioCtx.destination);
-                if (audioCtx.state === 'suspended') await audioCtx.resume();
-                player.play();
-                startFillLoop();
-                log('Playback started', 'info');
-                statusEl.textContent = 'Playing';
-                playBtn.disabled = true;
-                pauseBtn.disabled = false;
-                stopBtn.disabled = false;
-                seekSlider.disabled = false;
-            } catch (e) {
-                log(`Play error: ${e}`, 'error');
+                const label = document.createElement('label');
+                label.textContent = `Band ${i + 1}`;
+
+                const slider = document.createElement('input');
+                slider.type = 'range';
+                slider.min = '-24';
+                slider.max = '6';
+                slider.step = '0.1';
+                slider.value = String(player.eq_gain(i));
+
+                const gain = document.createElement('span');
+                gain.className = 'gain';
+                gain.textContent = `${Number(slider.value).toFixed(1)} dB`;
+
+                slider.oninput = () => {
+                    gain.textContent = `${Number(slider.value).toFixed(1)} dB`;
+                };
+
+                slider.onchange = () => {
+                    try {
+                        player.set_eq_gain(i, Number(slider.value));
+                    } catch (err) {
+                        log(`EQ update failed: ${err}`, 'error');
+                    }
+                };
+
+                band.appendChild(label);
+                band.appendChild(slider);
+                band.appendChild(gain);
+                eqGrid.appendChild(band);
             }
-        };
+        }
 
-        pauseBtn.onclick = () => {
-            player.pause();
-            stopFillLoop();
-            log('Paused', 'info');
-            statusEl.textContent = 'Paused';
-            playBtn.disabled = false;
-            pauseBtn.disabled = true;
-        };
-
-        stopBtn.onclick = () => {
-            player.pause();
-            player.seek(0);
-            stopFillLoop();
-            seekSlider.value = 0;
-            positionEl.textContent = '0:00';
-            log('Stopped', 'info');
-            statusEl.textContent = 'Stopped';
-            playBtn.disabled = false;
-            pauseBtn.disabled = true;
-            stopBtn.disabled = true;
-        };
-
-        // Show position while dragging, but only seek on release.
-        // oninput fires per-pixel — flooding the bounded(1) command channel
-        // causes seek commands to be silently dropped, desynchronizing epochs.
-        seekSlider.oninput = () => {
-            positionEl.textContent = formatTime(parseFloat(seekSlider.value));
-        };
-        seekSlider.onchange = () => {
-            stopFillLoop();
-            const posMs = parseFloat(seekSlider.value);
-            player.seek(posMs);
+        function updateUi() {
+            const posMs = player.get_position_ms();
+            const durMs = player.get_duration_ms();
             positionEl.textContent = formatTime(posMs);
-            if (player.is_playing()) startFillLoop();
-        };
-
-        function fillLoop() {
-            if (!player || !player.is_playing()) { updatePosition(); return; }
-            player.fill_buffer();
-            updatePosition();
-            fillRAF = requestAnimationFrame(fillLoop);
-        }
-
-        function updatePosition() {
-            const pos = player.get_position_ms();
-            positionEl.textContent = formatTime(pos);
-            const dur = player.get_duration_ms();
-            if (dur > 0 && !seekSlider.matches(':active')) seekSlider.value = pos;
-            if (player.is_eof() && player.is_playing()) {
-                log('End of stream', 'info');
-                statusEl.textContent = 'Finished';
-                stopFillLoop();
-                playBtn.disabled = false;
-                pauseBtn.disabled = true;
+            durationEl.textContent = formatTime(durMs);
+            if (durMs > 0) {
+                seekSlider.max = String(durMs);
+                if (!seekSlider.matches(':active')) {
+                    seekSlider.value = String(Math.min(posMs, durMs));
+                }
             }
+            uiRaf = requestAnimationFrame(updateUi);
         }
 
-        function startFillLoop() { stopFillLoop(); fillRAF = requestAnimationFrame(fillLoop); }
-        function stopFillLoop() { if (fillRAF) { cancelAnimationFrame(fillRAF); fillRAF = null; } }
-    </script>
+        function startUiLoop() {
+            if (uiRaf) cancelAnimationFrame(uiRaf);
+            uiRaf = requestAnimationFrame(updateUi);
+        }
 
+        try {
+            wasm = await import('/kithara-wasm.js');
+            await wasm.default();
+            wasm.setup();
+
+            const build = wasm.build_info();
+            buildInfoEl.textContent = `(${build})`;
+
+            statusEl.textContent = 'Initializing thread pool...';
+            await wasm.initThreadPool(1);
+
+            player = new wasm.WasmPlayer();
+
+            renderPlaylist();
+            renderEq();
+            startUiLoop();
+
+            addBtn.onclick = () => {
+                const url = urlInput.value.trim();
+                if (!url) return;
+                try {
+                    const index = player.add_track(url);
+                    log(`Added track ${index + 1}: ${url}`, 'info');
+                    urlInput.value = '';
+                    renderPlaylist();
+                } catch (err) {
+                    log(`Add track failed: ${err}`, 'error');
+                }
+            };
+
+            playBtn.onclick = () => {
+                player.play();
+                statusEl.textContent = 'Playing';
+                log('Play', 'info');
+            };
+
+            pauseBtn.onclick = () => {
+                player.pause();
+                statusEl.textContent = 'Paused';
+                log('Pause', 'info');
+            };
+
+            stopBtn.onclick = () => {
+                player.stop();
+                seekSlider.value = '0';
+                positionEl.textContent = '0:00';
+                statusEl.textContent = 'Stopped';
+                log('Stop', 'info');
+            };
+
+            seekSlider.oninput = () => {
+                positionEl.textContent = formatTime(Number(seekSlider.value));
+            };
+
+            seekSlider.onchange = () => {
+                try {
+                    player.seek(Number(seekSlider.value));
+                } catch (err) {
+                    log(`Seek failed: ${err}`, 'error');
+                }
+            };
+
+            eqResetBtn.onclick = () => {
+                try {
+                    player.reset_eq();
+                    renderEq();
+                    log('EQ reset', 'info');
+                } catch (err) {
+                    log(`EQ reset failed: ${err}`, 'error');
+                }
+            };
+
+            setControlsEnabled(true);
+            statusEl.textContent = 'Ready';
+            log('WASM player initialized', 'info');
+        } catch (err) {
+            statusEl.textContent = `Initialization failed: ${err}`;
+            log(`Initialization failed: ${err}`, 'error');
+            console.error(err);
+        }
+    </script>
 </body>
 </html>
