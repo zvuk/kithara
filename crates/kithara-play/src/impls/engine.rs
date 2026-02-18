@@ -31,24 +31,68 @@ use super::{player_processor::PlayerCmd, shared_player_state::SharedPlayerState}
 /// Configuration for the audio engine.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
-    /// Maximum number of concurrent player slots. Default: 4.
-    pub max_slots: usize,
-    /// Sample rate passed to `CpalBackend` as a hint. Default: 44100.
-    pub sample_rate: u32,
     /// Number of output channels. Default: 2 (stereo).
     pub channels: u16,
     /// Number of EQ bands per slot (unused until Task 6). Default: 10.
     pub eq_bands: usize,
+    /// Maximum number of concurrent player slots. Default: 4.
+    pub max_slots: usize,
+    /// Sample rate passed to `CpalBackend` as a hint. Default: 44100.
+    pub sample_rate: u32,
+    /// Thread pool for the engine thread and background work.
+    ///
+    /// Shared across all components. Defaults to the global rayon pool.
+    pub thread_pool: ThreadPool,
 }
 
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            max_slots: 4,
-            sample_rate: 44100,
             channels: 2,
             eq_bands: 10,
+            max_slots: 4,
+            sample_rate: 44100,
+            thread_pool: ThreadPool::default(),
         }
+    }
+}
+
+impl EngineConfig {
+    /// Set maximum number of concurrent player slots.
+    #[must_use]
+    pub fn with_max_slots(mut self, max_slots: usize) -> Self {
+        self.max_slots = max_slots;
+        self
+    }
+
+    /// Set sample rate hint for `CpalBackend`.
+    #[must_use]
+    pub fn with_sample_rate(mut self, sample_rate: u32) -> Self {
+        self.sample_rate = sample_rate;
+        self
+    }
+
+    /// Set number of output channels.
+    #[must_use]
+    pub fn with_channels(mut self, channels: u16) -> Self {
+        self.channels = channels;
+        self
+    }
+
+    /// Set number of EQ bands per slot.
+    #[must_use]
+    pub fn with_eq_bands(mut self, eq_bands: usize) -> Self {
+        self.eq_bands = eq_bands;
+        self
+    }
+
+    /// Set thread pool for the engine thread and background work.
+    ///
+    /// The pool is shared across all components. Defaults to the global rayon pool.
+    #[must_use]
+    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
+        self.thread_pool = pool;
+        self
     }
 }
 
@@ -134,7 +178,7 @@ impl EngineImpl {
 
         let max_slots = config.max_slots;
 
-        ThreadPool::global().spawn(move || {
+        config.thread_pool.spawn(move || {
             engine_thread(&cmd_rx, &reply_tx, max_slots);
             let _ = done_tx.send(());
         });
@@ -609,10 +653,24 @@ mod tests {
     #[test]
     fn engine_config_defaults() {
         let config = EngineConfig::default();
-        assert_eq!(config.max_slots, 4);
-        assert_eq!(config.sample_rate, 44100);
         assert_eq!(config.channels, 2);
         assert_eq!(config.eq_bands, 10);
+        assert_eq!(config.max_slots, 4);
+        assert_eq!(config.sample_rate, 44100);
+    }
+
+    #[test]
+    fn engine_config_builder() {
+        let config = EngineConfig::default()
+            .with_max_slots(8)
+            .with_sample_rate(48000)
+            .with_channels(1)
+            .with_eq_bands(5)
+            .with_thread_pool(ThreadPool::default());
+        assert_eq!(config.max_slots, 8);
+        assert_eq!(config.sample_rate, 48000);
+        assert_eq!(config.channels, 1);
+        assert_eq!(config.eq_bands, 5);
     }
 
     #[test]
@@ -714,6 +772,15 @@ mod tests {
     fn engine_is_crossfading_returns_false() {
         let engine = make_engine();
         assert!(!engine.is_crossfading());
+    }
+
+    #[test]
+    fn engine_config_thread_pool_used_by_engine() {
+        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let config = EngineConfig::default().with_thread_pool(pool);
+        // Engine should accept a custom thread pool without panicking.
+        let engine = EngineImpl::new(config);
+        assert!(!engine.is_running());
     }
 
     #[test]

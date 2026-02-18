@@ -9,7 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use kithara_platform::Mutex;
+use kithara_platform::{Mutex, ThreadPool};
 use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
@@ -34,24 +34,70 @@ use super::{
 /// Configuration for the player.
 #[derive(Clone, Debug)]
 pub struct PlayerConfig {
-    /// Maximum concurrent slots in the engine. Default: 4.
-    pub max_slots: usize,
-    /// Default playback rate (1.0 = normal). Default: 1.0.
-    pub default_rate: f32,
     /// Crossfade duration in seconds. Default: 1.0.
     pub crossfade_duration: f32,
+    /// Default playback rate (1.0 = normal). Default: 1.0.
+    pub default_rate: f32,
     /// Number of EQ bands. Default: 10.
     pub eq_bands: usize,
+    /// Maximum concurrent slots in the engine. Default: 4.
+    pub max_slots: usize,
+    /// Thread pool for the engine thread and background work.
+    ///
+    /// Propagated to the underlying [`EngineImpl`]. Defaults to the global
+    /// rayon pool.
+    pub thread_pool: ThreadPool,
 }
 
 impl Default for PlayerConfig {
     fn default() -> Self {
         Self {
-            max_slots: 4,
-            default_rate: 1.0,
             crossfade_duration: 1.0,
+            default_rate: 1.0,
             eq_bands: 10,
+            max_slots: 4,
+            thread_pool: ThreadPool::default(),
         }
+    }
+}
+
+impl PlayerConfig {
+    /// Set maximum concurrent slots in the engine.
+    #[must_use]
+    pub fn with_max_slots(mut self, max_slots: usize) -> Self {
+        self.max_slots = max_slots;
+        self
+    }
+
+    /// Set default playback rate.
+    #[must_use]
+    pub fn with_default_rate(mut self, rate: f32) -> Self {
+        self.default_rate = rate;
+        self
+    }
+
+    /// Set crossfade duration in seconds.
+    #[must_use]
+    pub fn with_crossfade_duration(mut self, seconds: f32) -> Self {
+        self.crossfade_duration = seconds;
+        self
+    }
+
+    /// Set number of EQ bands.
+    #[must_use]
+    pub fn with_eq_bands(mut self, eq_bands: usize) -> Self {
+        self.eq_bands = eq_bands;
+        self
+    }
+
+    /// Set thread pool for the engine thread and background work.
+    ///
+    /// The pool is propagated to the underlying engine. Defaults to the
+    /// global rayon pool.
+    #[must_use]
+    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
+        self.thread_pool = pool;
+        self
     }
 }
 
@@ -84,6 +130,7 @@ impl PlayerImpl {
     pub fn new(config: PlayerConfig) -> Self {
         let engine_config = EngineConfig {
             max_slots: config.max_slots,
+            thread_pool: config.thread_pool.clone(),
             ..EngineConfig::default()
         };
         let engine = EngineImpl::new(engine_config);
@@ -546,13 +593,37 @@ mod tests {
     #[test]
     fn player_config_custom() {
         let config = PlayerConfig {
-            max_slots: 2,
-            default_rate: 0.5,
             crossfade_duration: 2.0,
+            default_rate: 0.5,
             eq_bands: 5,
+            max_slots: 2,
+            thread_pool: ThreadPool::default(),
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn player_config_builder() {
+        let config = PlayerConfig::default()
+            .with_max_slots(8)
+            .with_default_rate(0.5)
+            .with_crossfade_duration(2.5)
+            .with_eq_bands(5)
+            .with_thread_pool(ThreadPool::default());
+        assert_eq!(config.max_slots, 8);
+        assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
+        assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);
+        assert_eq!(config.eq_bands, 5);
+    }
+
+    #[test]
+    fn player_propagates_thread_pool_to_engine() {
+        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let config = PlayerConfig::default().with_thread_pool(pool);
+        // Should not panic — engine uses the player's thread pool.
+        let player = PlayerImpl::new(config);
+        assert!(!player.engine().is_running());
     }
 
     #[test]
