@@ -2365,6 +2365,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio-util",
  "tracing",
+ "unimock",
  "url",
 ]
 
@@ -2420,6 +2421,8 @@ dependencies = [
  "derivative",
  "hotpath",
  "kithara-platform",
+ "rstest",
+ "unimock",
 ]
 
 [[package]]

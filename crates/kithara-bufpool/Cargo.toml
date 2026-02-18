@@ -21,3 +21,4 @@ workspace = true
 
 [dev-dependencies]
 rstest = { workspace = true }
+unimock = { workspace = true }

@@ -10,6 +10,7 @@ use kithara_platform::Mutex;
 ///
 /// Implementors must provide logic to clear/reset the value
 /// and optionally shrink capacity to a trim size.
+#[cfg_attr(test, unimock::unimock(api = ReuseMock))]
 pub trait Reuse {
     /// Prepare this value for reuse.
     ///

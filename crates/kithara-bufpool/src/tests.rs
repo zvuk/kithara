@@ -1,4 +1,5 @@
 use super::*;
+use crate::pool::ReuseMock;
 use rstest::rstest;
 
 #[test]
@@ -223,4 +224,9 @@ fn test_multi_threaded_contention() {
     for h in handles {
         h.join().expect("thread panicked during contention test");
     }
+}
+
+#[test]
+fn reuse_mock_api_is_generated() {
+    let _ = ReuseMock::reuse;
 }
