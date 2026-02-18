@@ -15,6 +15,11 @@ web-time = { workspace = true }
 [dev-dependencies]
 unimock = { workspace = true }
 rstest = { workspace = true }
+criterion = { workspace = true }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "abr_estimator"
+harness = false

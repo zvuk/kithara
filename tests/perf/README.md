@@ -97,7 +97,15 @@ cargo test --features perf --release -- --ignored --nocapture 2>&1 | tee my-resu
 ./scripts/ci/compare-perf.sh my-results.txt saved-baseline.txt 10
 ```
 
-See `.github/workflows/perf.yml` for CI configuration.
+See `.gitlab-ci.yml` (`perf` job) for CI configuration.
+
+## Microbenchmarks (Criterion)
+
+For deterministic microbenchmarks of algorithmic hot paths, use Criterion benches:
+
+```bash
+cargo bench -p kithara-abr --bench abr_estimator
+```
 
 ## Guidelines
 

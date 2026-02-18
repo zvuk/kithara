@@ -7,8 +7,8 @@
 use std::time::{Duration, Instant};
 
 use kithara::abr::{
-    AbrController, AbrDecision, AbrMode, AbrOptions, ThroughputSample, ThroughputSampleSource,
-    Variant,
+    AbrController, AbrDecision, AbrMode, AbrOptions, ThroughputEstimator, ThroughputSample,
+    ThroughputSampleSource, Variant,
 };
 
 /// Helper to create variants from bitrates.
@@ -26,12 +26,21 @@ fn create_variants(bitrates: &[u64]) -> Vec<Variant> {
 /// Simulate ABR decision cycle with throughput sample.
 #[hotpath::measure]
 fn abr_decision_with_sample(
-    controller: &mut AbrController,
+    controller: &mut AbrController<ThroughputEstimator>,
     sample: ThroughputSample,
     now: Instant,
 ) -> AbrDecision {
     controller.push_throughput_sample(sample);
     controller.decide(now)
+}
+
+#[hotpath::measure]
+fn estimator_push_and_estimate(
+    estimator: &mut ThroughputEstimator,
+    sample: ThroughputSample,
+) -> Option<u64> {
+    estimator.push_sample(sample);
+    estimator.estimate_bps()
 }
 
 #[test]
@@ -176,5 +185,40 @@ fn perf_abr_pure_decision() {
     println!("\n{:=<60}", "");
     println!("ABR Pure Decision Performance");
     println!("Decisions: 100000 (without sample updates)");
+    println!("{:=<60}\n", "");
+}
+
+/// Measure estimator hot loop directly (without controller decision overhead).
+#[test]
+#[ignore]
+fn perf_abr_estimator_hot_loop() {
+    let _guard = hotpath::FunctionsGuardBuilder::new("abr_estimator_loop").build();
+
+    let cfg = AbrOptions::default();
+    let base_time = Instant::now();
+
+    for &(label, bytes, duration_ms) in &[
+        ("low_bitrate", 32_000, 250_u64),
+        ("mid_bitrate", 96_000, 250_u64),
+        ("high_bitrate", 256_000, 250_u64),
+    ] {
+        hotpath::measure_block!(label, {
+            let mut estimator = ThroughputEstimator::new(&cfg);
+            for _ in 0..100_000 {
+                let sample = ThroughputSample {
+                    bytes,
+                    duration: Duration::from_millis(duration_ms),
+                    at: base_time,
+                    source: ThroughputSampleSource::Network,
+                    content_duration: None,
+                };
+                let _ = estimator_push_and_estimate(&mut estimator, sample);
+            }
+        });
+    }
+
+    println!("\n{:=<60}", "");
+    println!("ABR Estimator Hot Loop");
+    println!("Iterations: 100000 per profile (low/mid/high bitrate)");
     println!("{:=<60}\n", "");
 }

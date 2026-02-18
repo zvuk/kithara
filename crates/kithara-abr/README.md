@@ -66,3 +66,11 @@ Samples below 16,000 bytes are filtered as noise. Cache hits set `initial_bps = 
 ## Integration
 
 Used by `kithara-hls` for variant selection. Fully independent of HLS specifics -- can be used with any adaptive streaming protocol.
+
+## Benchmarking
+
+Run Criterion microbenchmarks for ABR estimator/decision hot paths:
+
+```bash
+cargo bench -p kithara-abr --bench abr_estimator
+```
