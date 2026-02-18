@@ -38,33 +38,32 @@ Components are independent crates that can be used standalone or composed into a
 ## Architecture
 
 ```mermaid
-block-beta
-    columns 4
-
-    block:facade:4
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+graph TD
+    subgraph facade["Facade"]
         kithara["kithara"]
         play["kithara-play"]
     end
 
-    block:pipeline:4
+    subgraph pipeline["Pipeline"]
         audio["kithara-audio"]
         decode["kithara-decode"]
         events["kithara-events"]
     end
 
-    block:protocols:4
+    subgraph protocols["Protocols"]
         file["kithara-file"]
         hls["kithara-hls"]
         abr["kithara-abr"]
         drm["kithara-drm"]
     end
 
-    block:io:4
+    subgraph io["I/O"]
         stream["kithara-stream"]
         net["kithara-net"]
     end
 
-    block:storage:4
+    subgraph storage["Storage"]
         assets["kithara-assets"]
         stor["kithara-storage"]
         bufpool["kithara-bufpool"]
