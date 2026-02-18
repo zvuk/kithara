@@ -5,7 +5,7 @@ use std::{ops::Range, sync::Arc};
 use crossbeam_queue::SegQueue;
 use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
-use kithara_net::{HttpClient, Net};
+use kithara_net::{Headers, HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -20,6 +20,7 @@ pub(crate) struct FileStreamState {
     pub(crate) cancel: CancellationToken,
     pub(crate) res: AssetResource,
     pub(crate) bus: EventBus,
+    pub(crate) headers: Option<Headers>,
     pub(crate) len: Option<u64>,
 }
 
@@ -31,11 +32,12 @@ impl FileStreamState {
         cancel: CancellationToken,
         bus: Option<EventBus>,
         event_channel_capacity: usize,
+        headers: Option<Headers>,
     ) -> Result<Arc<Self>, SourceError> {
-        let headers = net_client.head(url.clone(), None).await?;
-        let len = headers
+        let resp_headers = net_client.head(url.clone(), headers.clone()).await?;
+        let len = resp_headers
             .get("content-length")
-            .or_else(|| headers.get("Content-Length"))
+            .or_else(|| resp_headers.get("Content-Length"))
             .and_then(|v| v.parse::<u64>().ok());
 
         let key = ResourceKey::from_url(&url);
@@ -48,6 +50,7 @@ impl FileStreamState {
             cancel,
             res,
             bus,
+            headers,
             len,
         }))
     }
@@ -62,6 +65,10 @@ impl FileStreamState {
 
     pub(crate) fn bus(&self) -> &EventBus {
         &self.bus
+    }
+
+    pub(crate) fn headers(&self) -> Option<&Headers> {
+        self.headers.as_ref()
     }
 
     pub(crate) fn len(&self) -> Option<u64> {

@@ -525,7 +525,7 @@ fn handle_start(state: &mut EngineThreadState, sample_rate: u32, master_volume: 
         Ok(()) => {
             // Create a master volume node and connect it to the graph output.
             let master_node = VolumePanNode::from_volume(Volume::Linear(master_volume));
-            let master_memo = Memo::new(master_node.clone());
+            let master_memo = Memo::new(master_node);
             let master_id = fw_ctx.add_node(master_node, None);
 
             let graph_out = fw_ctx.graph_out_node_id();

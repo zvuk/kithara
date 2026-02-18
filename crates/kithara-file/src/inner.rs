@@ -130,6 +130,7 @@ impl File {
             cancel.clone(),
             config.bus.clone(),
             config.event_channel_capacity,
+            config.headers.clone(),
         )
         .await?;
 

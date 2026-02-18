@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use kithara_assets::StoreOptions;
 use kithara_events::EventBus;
-use kithara_net::NetOptions;
+use kithara_net::{Headers, NetOptions};
 use kithara_platform::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -50,6 +50,8 @@ pub struct FileConfig {
     /// query parameters), setting a unique `name` ensures each gets its own
     /// cache directory.
     pub name: Option<String>,
+    /// Additional HTTP headers to include in all requests.
+    pub headers: Option<Headers>,
     /// Network configuration.
     pub net: NetOptions,
     /// File source (remote URL or local path).
@@ -69,6 +71,7 @@ impl Default for FileConfig {
 
             event_channel_capacity: 16,
             bus: None,
+            headers: None,
             look_ahead_bytes: None,
             name: None,
             net: NetOptions::default(),
@@ -90,6 +93,7 @@ impl FileConfig {
 
             event_channel_capacity: 16,
             bus: None,
+            headers: None,
             look_ahead_bytes: None,
             name: None,
             net: NetOptions::default(),
@@ -119,6 +123,13 @@ impl FileConfig {
     #[must_use]
     pub fn with_net(mut self, net: NetOptions) -> Self {
         self.net = net;
+        self
+    }
+
+    /// Set additional HTTP headers for all requests.
+    #[must_use]
+    pub fn with_headers(mut self, headers: Headers) -> Self {
+        self.headers = Some(headers);
         self
     }
 
@@ -238,6 +249,19 @@ mod tests {
 
         assert!(config.cancel.is_some());
         assert!(config.bus.is_some());
+    }
+
+    #[test]
+    fn test_with_headers() {
+        let mut headers = Headers::new();
+        headers.insert("Authorization", "Bearer token123");
+        let config = FileConfig::new(test_src()).with_headers(headers);
+
+        assert!(config.headers.is_some());
+        assert_eq!(
+            config.headers.as_ref().and_then(|h| h.get("Authorization")),
+            Some("Bearer token123")
+        );
     }
 
     #[test]
