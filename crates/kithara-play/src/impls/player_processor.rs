@@ -568,81 +568,16 @@ mod tests {
     }
 
     fn create_mock_player_resource(src: &str) -> Arc<Mutex<PlayerResource>> {
-        use std::time::Duration;
-
-        use kithara_audio::PcmReader;
-        use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
-        use kithara_events::AudioEvent;
-        use tokio::sync::broadcast;
+        use kithara_audio::mock::TestPcmReader;
+        use kithara_decode::PcmSpec;
 
         use crate::impls::resource::Resource;
 
-        struct MockReader {
-            spec: PcmSpec,
-            metadata: TrackMetadata,
-            events_tx: broadcast::Sender<AudioEvent>,
-        }
-
-        impl PcmReader for MockReader {
-            fn read(&mut self, buf: &mut [f32]) -> usize {
-                buf.fill(0.5);
-                buf.len()
-            }
-
-            fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
-                if output.is_empty() {
-                    return 0;
-                }
-                let frames = output[0].len();
-                for ch in output.iter_mut() {
-                    ch.fill(0.5);
-                }
-                frames
-            }
-
-            fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
-                Ok(())
-            }
-
-            fn spec(&self) -> PcmSpec {
-                self.spec
-            }
-
-            fn is_eof(&self) -> bool {
-                false
-            }
-
-            fn position(&self) -> Duration {
-                Duration::ZERO
-            }
-
-            fn duration(&self) -> Option<Duration> {
-                Some(Duration::from_secs(60))
-            }
-
-            fn metadata(&self) -> &TrackMetadata {
-                &self.metadata
-            }
-
-            fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-                self.events_tx.subscribe()
-            }
-        }
-
-        let (events_tx, _) = broadcast::channel(64);
-        let reader = MockReader {
-            spec: PcmSpec {
-                channels: 2,
-                sample_rate: 44100,
-            },
-            metadata: TrackMetadata {
-                album: None,
-                artist: None,
-                artwork: None,
-                title: Some("Mock".to_owned()),
-            },
-            events_tx,
+        let spec = PcmSpec {
+            channels: 2,
+            sample_rate: 44100,
         };
+        let reader = TestPcmReader::new(spec, 60.0);
 
         let resource = Resource::from_reader(reader);
         Arc::new(Mutex::new(PlayerResource::new(

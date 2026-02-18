@@ -66,6 +66,30 @@ pub fn scripted_inner_decoder(
     seek_results: Vec<DecodeResult<()>>,
     duration: Option<Duration>,
 ) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
+    build_scripted_inner_decoder(spec, chunks, seek_results, duration, true)
+}
+
+/// Create a scripted decoder mock with verification disabled in `Drop`.
+///
+/// Use this only for data-plane tests where not all mocked methods are expected
+/// to be called in every scenario.
+#[must_use]
+pub fn scripted_inner_decoder_loose(
+    spec: PcmSpec,
+    chunks: Vec<PcmChunk>,
+    seek_results: Vec<DecodeResult<()>>,
+    duration: Option<Duration>,
+) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
+    build_scripted_inner_decoder(spec, chunks, seek_results, duration, false)
+}
+
+fn build_scripted_inner_decoder(
+    spec: PcmSpec,
+    chunks: Vec<PcmChunk>,
+    seek_results: Vec<DecodeResult<()>>,
+    duration: Option<Duration>,
+    verify_in_drop: bool,
+) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
     let chunk_queue = Arc::new(MockLog::new(VecDeque::from(chunks)));
     let seek_queue = Arc::new(MockLog::new(VecDeque::from(seek_results)));
     let seek_log = Arc::new(MockLog::new(Vec::new()));
@@ -105,8 +129,12 @@ pub fn scripted_inner_decoder(
             .each_call(matching!())
             .returns(duration)
             .at_least_times(0),
-    ))
-    .no_verify_in_drop();
+    ));
+    let mock = if verify_in_drop {
+        mock
+    } else {
+        mock.no_verify_in_drop()
+    };
 
     (
         Box::new(mock),
@@ -124,6 +152,26 @@ pub fn scripted_inner_decoder(
 pub fn infinite_inner_decoder(
     spec: PcmSpec,
     stop: Arc<AtomicBool>,
+) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
+    build_infinite_inner_decoder(spec, stop, true)
+}
+
+/// Create an infinite decoder mock with verification disabled in `Drop`.
+///
+/// Use this only for data-plane tests where not all mocked methods are expected
+/// to be called in every scenario.
+#[must_use]
+pub fn infinite_inner_decoder_loose(
+    spec: PcmSpec,
+    stop: Arc<AtomicBool>,
+) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
+    build_infinite_inner_decoder(spec, stop, false)
+}
+
+fn build_infinite_inner_decoder(
+    spec: PcmSpec,
+    stop: Arc<AtomicBool>,
+    verify_in_drop: bool,
 ) -> (Box<dyn InnerDecoder>, InnerDecoderLogs) {
     let seek_log = Arc::new(MockLog::new(Vec::new()));
     let byte_len_log = Arc::new(MockLog::new(Vec::new()));
@@ -168,8 +216,12 @@ pub fn infinite_inner_decoder(
             .each_call(matching!())
             .returns(Some(Duration::from_secs(220)))
             .at_least_times(0),
-    ))
-    .no_verify_in_drop();
+    ));
+    let mock = if verify_in_drop {
+        mock
+    } else {
+        mock.no_verify_in_drop()
+    };
 
     (
         Box::new(mock),

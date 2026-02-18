@@ -11,7 +11,7 @@ use std::{
 
 use crate::pipeline::worker::AudioCommand;
 use kithara_bufpool::pcm_pool;
-use kithara_decode::mock::{infinite_inner_decoder, scripted_inner_decoder};
+use kithara_decode::mock::{infinite_inner_decoder_loose, scripted_inner_decoder_loose};
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec};
 use kithara_platform::Mutex;
 use kithara_storage::WaitOutcome;
@@ -274,11 +274,11 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
 
     // V0 decoder: 4 chunks then EOF
     let v0_chunks = vec![make_chunk(v0_spec(), 1024); 4];
-    let (v0_decoder, _) = scripted_inner_decoder(v0_spec(), v0_chunks, vec![], None);
+    let (v0_decoder, _) = scripted_inner_decoder_loose(v0_spec(), v0_chunks, vec![], None);
 
     // V3 decoder the factory will create
     let v3_chunks = vec![make_chunk(v3_spec(), 2048); 5];
-    let (v3_decoder, _) = scripted_inner_decoder(v3_spec(), v3_chunks, vec![], None);
+    let (v3_decoder, _) = scripted_inner_decoder_loose(v3_spec(), v3_chunks, vec![], None);
     let (factory, factory_offsets) = make_tracking_factory(vec![v3_decoder]);
 
     let mut source = make_source(shared, v0_decoder, factory, Some(v0_info()));
@@ -326,7 +326,7 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
 fn basic_decode_to_eof() {
     let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
     let chunks = vec![make_chunk(v0_spec(), 1024); 3];
-    let (decoder, _) = scripted_inner_decoder(v0_spec(), chunks, vec![], None);
+    let (decoder, _) = scripted_inner_decoder_loose(v0_spec(), chunks, vec![], None);
     let factory = make_factory(vec![]);
     let mut source = make_source(shared, decoder, factory, Some(v0_info()));
 
@@ -344,10 +344,10 @@ fn basic_decode_to_eof() {
 fn format_change_recreates_decoder() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let v0_chunks = vec![make_chunk(v0_spec(), 1024); 2];
-    let (v0_decoder, _) = scripted_inner_decoder(v0_spec(), v0_chunks, vec![], None);
+    let (v0_decoder, _) = scripted_inner_decoder_loose(v0_spec(), v0_chunks, vec![], None);
 
     let v3_chunks = vec![make_chunk(v3_spec(), 2048); 3];
-    let (v3_decoder, _) = scripted_inner_decoder(v3_spec(), v3_chunks, vec![], None);
+    let (v3_decoder, _) = scripted_inner_decoder_loose(v3_spec(), v3_chunks, vec![], None);
     let factory = make_factory(vec![v3_decoder]);
 
     let mut source = make_source(shared, v0_decoder, factory, Some(v0_info()));
@@ -378,7 +378,7 @@ fn format_change_recreates_decoder() {
 fn seek_updates_epoch_and_calls_decoder() {
     let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
     let chunks = vec![make_chunk(v0_spec(), 1024); 5];
-    let (decoder, logs) = scripted_inner_decoder(v0_spec(), chunks, vec![], None);
+    let (decoder, logs) = scripted_inner_decoder_loose(v0_spec(), chunks, vec![], None);
     let seek_log = logs.seek_log();
     let factory = make_factory(vec![]);
 
@@ -407,7 +407,7 @@ fn seek_updates_epoch_and_calls_decoder() {
 fn seek_skips_byte_len_update_after_abr_switch() {
     let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
     let chunks = vec![make_chunk(v3_spec(), 2048); 5];
-    let (decoder, logs) = scripted_inner_decoder(v3_spec(), chunks, vec![], None);
+    let (decoder, logs) = scripted_inner_decoder_loose(v3_spec(), chunks, vec![], None);
     let byte_len_log = logs.byte_len_log();
     let factory = make_factory(vec![]);
 
@@ -440,7 +440,7 @@ fn failed_seek_after_abr_switch_recovers() {
     let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
     let v3_chunks = vec![make_chunk(v3_spec(), 2048); 5];
-    let (v3_decoder, _) = scripted_inner_decoder(
+    let (v3_decoder, _) = scripted_inner_decoder_loose(
         v3_spec(),
         v3_chunks,
         vec![Err(DecodeError::SeekError("unexpected end of file".into()))],
@@ -448,7 +448,8 @@ fn failed_seek_after_abr_switch_recovers() {
     );
 
     let recovery_chunks = vec![make_chunk(v3_spec(), 2048); 5];
-    let (recovery_decoder, _) = scripted_inner_decoder(v3_spec(), recovery_chunks, vec![], None);
+    let (recovery_decoder, _) =
+        scripted_inner_decoder_loose(v3_spec(), recovery_chunks, vec![], None);
     let factory = make_factory(vec![recovery_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
@@ -489,11 +490,11 @@ fn seek_to_zero_after_abr_switch_resets_to_full_track() {
 
     // Current decoder: V3 at base_offset 863137
     let v3_chunks = vec![make_chunk(v3_spec(), 2048); 3];
-    let (v3_decoder, _) = scripted_inner_decoder(v3_spec(), v3_chunks, vec![], None);
+    let (v3_decoder, _) = scripted_inner_decoder_loose(v3_spec(), v3_chunks, vec![], None);
 
     // Factory: V0 decoder at offset 0
     let v0_chunks = vec![make_chunk(v0_spec(), 1024); 5];
-    let (v0_decoder, _) = scripted_inner_decoder(v0_spec(), v0_chunks, vec![], None);
+    let (v0_decoder, _) = scripted_inner_decoder_loose(v0_spec(), v0_chunks, vec![], None);
     let (factory, factory_offsets) = make_tracking_factory(vec![v0_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
@@ -549,7 +550,7 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
 
     // V0 decoder: 3 chunks, then seek will fail
     let v0_chunks = vec![make_chunk(v0_spec(), 1024); 3];
-    let (v0_decoder, _) = scripted_inner_decoder(
+    let (v0_decoder, _) = scripted_inner_decoder_loose(
         v0_spec(),
         v0_chunks,
         vec![Err(DecodeError::SeekError("unexpected end of file".into()))],
@@ -558,7 +559,7 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
 
     // V3 decoder that factory will create — should receive retried seek
     let v3_chunks = vec![make_chunk(v3_spec(), 2048); 10];
-    let (v3_decoder, logs) = scripted_inner_decoder(v3_spec(), v3_chunks, vec![], None);
+    let (v3_decoder, logs) = scripted_inner_decoder_loose(v3_spec(), v3_chunks, vec![], None);
     let v3_seek_log = logs.seek_log();
     let factory = make_factory(vec![v3_decoder]);
 
@@ -641,7 +642,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
 
         // V0 decoder: produces chunks until stopped
         let v0_stop = Arc::new(AtomicBool::new(false));
-        let (v0_decoder, _) = infinite_inner_decoder(v0_spec(), Arc::clone(&v0_stop));
+        let (v0_decoder, _) = infinite_inner_decoder_loose(v0_spec(), Arc::clone(&v0_stop));
 
         // Factory: only succeeds at correct offset, returns None at wrong offset.
         // Mimics production: ftyp atom only at 964431, not at 1732515.
@@ -651,7 +652,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
             factory_offsets_clone.lock().push(offset);
             if offset == V3_SEGMENT_19_START {
                 // Correct offset — decoder would succeed
-                Some(infinite_inner_decoder(v3_spec(), Arc::new(AtomicBool::new(false))).0)
+                Some(infinite_inner_decoder_loose(v3_spec(), Arc::new(AtomicBool::new(false))).0)
             } else {
                 // Wrong offset (1732515) — "missing ftyp atom" in production
                 None
