@@ -77,7 +77,8 @@ impl StreamType for Hls {
             Arc::new(
                 FetchManager::new(backend.clone(), net.clone(), cancel.clone())
                     .with_master_url(config.url.clone())
-                    .with_base_url(config.base_url.clone()),
+                    .with_base_url(config.base_url.clone())
+                    .with_headers(config.headers.clone()),
             ),
             config.keys.clone(),
         ));
@@ -86,6 +87,7 @@ impl StreamType for Hls {
         let mut fetch_manager = FetchManager::new(backend, net, cancel.clone())
             .with_master_url(config.url.clone())
             .with_base_url(config.base_url.clone())
+            .with_headers(config.headers.clone())
             .with_key_manager(key_manager);
 
         // Load master playlist
