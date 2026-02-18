@@ -42,33 +42,32 @@ cargo doc --workspace --no-deps --open
 
 ### Layered architecture
 ```mermaid
-block-beta
-    columns 4
-
-    block:facade:4
+%%{init: {"flowchart": {"curve": "linear"}} }%%
+flowchart TD
+    subgraph facade["Facade"]
         kithara["kithara"]
         play["kithara-play"]
     end
 
-    block:pipeline:4
+    subgraph pipeline["Pipeline"]
         audio["kithara-audio"]
         decode["kithara-decode"]
         events["kithara-events"]
     end
 
-    block:protocols:4
+    subgraph protocols["Protocols"]
         file["kithara-file"]
         hls["kithara-hls"]
         abr["kithara-abr"]
         drm["kithara-drm"]
     end
 
-    block:io:4
+    subgraph io["I/O"]
         stream["kithara-stream"]
         net["kithara-net"]
     end
 
-    block:storage:4
+    subgraph storage["Storage"]
         assets["kithara-assets"]
         stor["kithara-storage"]
         bufpool["kithara-bufpool"]
@@ -130,7 +129,7 @@ Dependencies flow downward. Each layer depends only on layers below it.
 - `Net` trait + `TimeoutNet` / `RetryNet` decorators
 
 **`kithara-assets`** — Persistent disk cache with lease/pin semantics and eviction
-- Decorator chain: `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
+- Decorator chain: `CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
 
 **`kithara-storage`** — Unified `StorageResource` (`Mmap` | `Mem`) with `read_at`/`write_at`/`wait_range`
 
@@ -146,7 +145,7 @@ Dependencies flow downward. Each layer depends only on layers below it.
 `File` and `Hls` are marker types implementing `StreamType`. Used as `Stream<File>` or `Stream<Hls>` for unified `Read + Seek` access. `Decoder<Stream<Hls>>` composes decoding on top.
 
 ### Decorator pattern (assets)
-`AssetStore = LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
+`AssetStore = CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
 
 ### Event-driven architecture
 Protocol crates emit events via broadcast channel (`FileEvent`, `HlsEvent`). `DecoderEvent<E>` wraps both stream and decode events.
