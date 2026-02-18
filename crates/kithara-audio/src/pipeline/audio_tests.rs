@@ -1,5 +1,6 @@
 use kithara_stream::Stream;
 use kithara_test_utils::create_test_wav;
+use rstest::rstest;
 
 use super::*;
 
@@ -16,9 +17,12 @@ fn test_wav_config(
     (tmp, config)
 }
 
+#[rstest]
+#[case::short(16)]
+#[case::regular(1000)]
 #[tokio::test]
-async fn test_audio_new() {
-    let (_tmp, config) = test_wav_config(1000);
+async fn test_audio_new(#[case] sample_count: usize) {
+    let (_tmp, config) = test_wav_config(sample_count);
     let _audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
@@ -96,18 +100,20 @@ async fn test_audio_read() {
     assert!(audio.is_eof());
 }
 
+#[rstest]
+#[case::tiny(100, 4)]
+#[case::wide(1000, 64)]
 #[tokio::test]
-async fn test_audio_read_small_buffer() {
-    let (_tmp, config) = test_wav_config(100);
+async fn test_audio_read_small_buffer(#[case] sample_count: usize, #[case] buf_len: usize) {
+    let (_tmp, config) = test_wav_config(sample_count);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
 
-    // Read with very small buffer
-    let mut buf = [0.0f32; 4];
+    let mut buf = vec![0.0f32; buf_len];
     let n = audio.read(&mut buf);
 
-    assert_eq!(n, 4);
+    assert_eq!(n, buf_len);
 }
 
 #[tokio::test]
@@ -145,48 +151,27 @@ async fn test_audio_seek() {
     assert!(!audio.is_eof());
 }
 
+#[rstest]
+#[case::single(false)]
+#[case::idempotent(true)]
 #[tokio::test]
-async fn test_audio_preload() {
+async fn test_audio_preload(#[case] second_preload: bool) {
     let (_tmp, config) = test_wav_config(1000);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
 
-    // Before preload, current_chunk should be None
     assert!(audio.current_chunk.is_none());
 
-    // Get notify and await it
     let notify = audio.preload_notify.clone();
     notify.notified().await;
     audio.preload();
+    if second_preload {
+        audio.preload();
+    }
 
-    // After preload, current_chunk should have data
     assert!(audio.current_chunk.is_some());
 
-    // First read should return data immediately
-    let mut buf = [0.0f32; 64];
-    let n = audio.read(&mut buf);
-    assert!(n > 0);
-}
-
-#[tokio::test]
-async fn test_audio_preload_idempotent() {
-    let (_tmp, config) = test_wav_config(1000);
-    let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
-        .await
-        .unwrap();
-
-    // Preload first time
-    let notify = audio.preload_notify.clone();
-    notify.notified().await;
-    audio.preload();
-    assert!(audio.current_chunk.is_some());
-
-    // Preload again — should be no-op since chunk is already loaded
-    audio.preload();
-    assert!(audio.current_chunk.is_some());
-
-    // Reading should still work normally
     let mut buf = [0.0f32; 64];
     let n = audio.read(&mut buf);
     assert!(n > 0);
