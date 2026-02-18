@@ -216,6 +216,10 @@ mod tests {
     use super::*;
     use crate::traits::NetMock;
 
+    fn test_url() -> Url {
+        Url::parse("http://test.com").expect("valid URL")
+    }
+
     // DefaultRetryPolicy Tests
 
     #[rstest]
@@ -286,7 +290,7 @@ mod tests {
             CancellationToken::new(),
         );
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.get_bytes(url, None).await;
 
         assert!(result.is_ok());
@@ -317,7 +321,7 @@ mod tests {
             CancellationToken::new(),
         );
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.get_bytes(url, None).await;
 
         assert!(result.is_ok());
@@ -342,7 +346,7 @@ mod tests {
             CancellationToken::new(),
         );
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.get_bytes(url, None).await;
 
         assert!(result.is_err());
@@ -363,7 +367,7 @@ mod tests {
             CancellationToken::new(),
         );
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.get_bytes(url, None).await;
 
         assert!(result.is_err());
@@ -389,7 +393,7 @@ mod tests {
             CancellationToken::new(),
         );
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.stream(url, None).await;
 
         assert!(result.is_ok());
@@ -423,7 +427,7 @@ mod tests {
             CancellationToken::new(),
         );
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.stream(url, None).await;
 
         assert!(result.is_ok());
@@ -447,7 +451,7 @@ mod tests {
             CancellationToken::new(),
         );
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let range = RangeSpec::from_start(0);
         let result = retry_net.get_range(url, range, None).await;
 
@@ -482,7 +486,7 @@ mod tests {
             CancellationToken::new(),
         );
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let range = RangeSpec::from_start(0);
         let result = retry_net.get_range(url, range, None).await;
 
@@ -506,7 +510,7 @@ mod tests {
             CancellationToken::new(),
         );
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.head(url, None).await;
 
         assert!(result.is_ok());
@@ -537,7 +541,7 @@ mod tests {
             CancellationToken::new(),
         );
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.head(url, None).await;
 
         assert!(result.is_ok());
@@ -584,11 +588,11 @@ mod tests {
         let cancel = CancellationToken::new();
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy), cancel.clone());
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let handle = tokio::spawn(async move { retry_net.get_bytes(url, None).await });
 
         // Give the first attempt time to fail and enter the retry sleep
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(50)).await;
         cancel.cancel();
 
         let result = tokio::time::timeout(Duration::from_millis(200), handle)
