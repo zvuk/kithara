@@ -2449,6 +2449,7 @@ name = "kithara-play"
 version = "0.1.0"
 dependencies = [
  "biquad",
+ "fast-interleave",
  "firewheel",
  "kanal",
  "kithara-abr",
@@ -2538,6 +2539,7 @@ name = "kithara-wasm"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "kithara-assets",
  "kithara-audio",
  "kithara-events",
  "kithara-hls",

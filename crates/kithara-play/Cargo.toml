@@ -25,6 +25,7 @@ kithara-net = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
 
 # Audio engine
+fast-interleave = { workspace = true }
 firewheel = { workspace = true }
 biquad = { workspace = true }
 thunderdome = { workspace = true }
@@ -56,5 +57,6 @@ wasm-bindgen = ["firewheel/wasm-bindgen"]
 test-utils = ["unimock"]
 
 [dev-dependencies]
+kithara-audio = { workspace = true, features = ["test-utils"] }
 unimock = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }

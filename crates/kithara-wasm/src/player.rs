@@ -10,6 +10,7 @@ use kithara_audio::{Audio, AudioConfig};
 use kithara_events::EventBus;
 
 use crate::ring_buffer::PcmRingBuffer;
+use kithara_assets::StoreOptions;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_platform::ThreadPool;
 use kithara_stream::Stream;
@@ -228,7 +229,7 @@ async fn load_hls_inner(
     let hls_config = HlsConfig::new(parsed_url)
         .with_thread_pool(pool)
         .with_events(bus)
-        .with_ephemeral(true)
+        .with_store(StoreOptions::default().with_ephemeral(true))
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()

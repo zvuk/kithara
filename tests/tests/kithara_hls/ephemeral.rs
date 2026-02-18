@@ -119,9 +119,8 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     // Create Audio pipeline with ephemeral=true
     let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true))
         .with_cancel(cancel)
-        .with_ephemeral(true)
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()

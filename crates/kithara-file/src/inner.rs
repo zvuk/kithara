@@ -29,7 +29,7 @@ impl StreamType for File {
     type Events = EventBus;
 
     fn thread_pool(config: &Self::Config) -> ThreadPool {
-        config.thread_pool.clone()
+        config.thread_pool.clone().unwrap_or_default()
     }
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
@@ -108,6 +108,7 @@ impl File {
             .root_dir(&config.store.cache_dir)
             .asset_root(Some(asset_root.as_str()))
             .evict_config(config.store.to_evict_config())
+            .ephemeral(config.store.ephemeral)
             .cancel(cancel.clone())
             .build();
 
@@ -180,7 +181,8 @@ impl File {
 
             // Spawn downloader on the thread pool.
             // Backend is stored in FileSource — dropping the source cancels the downloader.
-            let backend = Backend::new(downloader, &cancel, &config.thread_pool);
+            let pool = config.thread_pool.clone().unwrap_or_default();
+            let backend = Backend::new(downloader, &cancel, &pool);
 
             // Create source with shared state and backend for on-demand loading.
             let source = FileSource::with_shared(

@@ -60,8 +60,8 @@ pub struct FileConfig {
     pub store: StoreOptions,
     /// Thread pool for background work.
     ///
-    /// Shared across all components. Defaults to the global rayon pool.
-    pub thread_pool: ThreadPool,
+    /// Shared across all components. When `None`, defaults to the global rayon pool.
+    pub thread_pool: Option<ThreadPool>,
 }
 
 impl Default for FileConfig {
@@ -79,7 +79,7 @@ impl Default for FileConfig {
                 Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
             ),
             store: StoreOptions::default(),
-            thread_pool: ThreadPool::default(),
+            thread_pool: None,
         }
     }
 }
@@ -99,7 +99,7 @@ impl FileConfig {
             net: NetOptions::default(),
             src,
             store: StoreOptions::default(),
-            thread_pool: ThreadPool::default(),
+            thread_pool: None,
         }
     }
 
@@ -166,10 +166,11 @@ impl FileConfig {
 
     /// Set thread pool for background work.
     ///
-    /// The pool is shared across all components. Defaults to the global rayon pool.
+    /// The pool is shared across all components. When not set, defaults to the
+    /// global rayon pool.
     #[must_use]
     pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = pool;
+        self.thread_pool = Some(pool);
         self
     }
 }

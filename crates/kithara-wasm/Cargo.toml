@@ -11,6 +11,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+kithara-assets = { workspace = true }
 kithara-audio = { workspace = true }
 kithara-events = { workspace = true }
 kithara-hls = { workspace = true }

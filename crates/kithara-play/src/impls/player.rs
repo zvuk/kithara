@@ -424,121 +424,20 @@ impl PlayerImpl {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use kithara_audio::PcmReader;
-    use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
-    use kithara_events::AudioEvent;
+    use kithara_audio::mock::TestPcmReader;
+    use kithara_decode::PcmSpec;
 
     use super::*;
 
-    // -- Mock PcmReader -----------------------------------------------------------
-
-    struct MockPcmReader {
-        spec: PcmSpec,
-        metadata: TrackMetadata,
-        total_frames: u64,
-        position_frames: u64,
-        eof: bool,
-        events_tx: broadcast::Sender<AudioEvent>,
-    }
-
-    impl MockPcmReader {
-        fn new(duration_secs: f64) -> Self {
-            let spec = PcmSpec {
-                channels: 2,
-                sample_rate: 44100,
-            };
-            let total_frames = (spec.sample_rate as f64 * duration_secs) as u64;
-            let (events_tx, _) = broadcast::channel(64);
-            Self {
-                spec,
-                metadata: TrackMetadata::default(),
-                total_frames,
-                position_frames: 0,
-                eof: false,
-                events_tx,
-            }
-        }
-    }
-
-    impl PcmReader for MockPcmReader {
-        fn read(&mut self, buf: &mut [f32]) -> usize {
-            if self.eof {
-                return 0;
-            }
-            let ch = self.spec.channels as u64;
-            if ch == 0 {
-                return 0;
-            }
-            let remaining = (self.total_frames - self.position_frames) * ch;
-            let n = (buf.len() as u64).min(remaining) as usize;
-            for s in &mut buf[..n] {
-                *s = 0.5;
-            }
-            self.position_frames += n as u64 / ch;
-            if self.position_frames >= self.total_frames {
-                self.eof = true;
-            }
-            n
-        }
-
-        fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
-            if self.eof || output.is_empty() {
-                return 0;
-            }
-            let ch = self.spec.channels as usize;
-            let frames = output[0]
-                .len()
-                .min((self.total_frames - self.position_frames) as usize);
-            for c in output.iter_mut().take(ch) {
-                for s in c.iter_mut().take(frames) {
-                    *s = 0.5;
-                }
-            }
-            self.position_frames += frames as u64;
-            if self.position_frames >= self.total_frames {
-                self.eof = true;
-            }
-            frames
-        }
-
-        fn seek(&mut self, position: Duration) -> DecodeResult<()> {
-            let frame = (position.as_secs_f64() * self.spec.sample_rate as f64) as u64;
-            self.position_frames = frame.min(self.total_frames);
-            self.eof = self.position_frames >= self.total_frames;
-            Ok(())
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-
-        fn is_eof(&self) -> bool {
-            self.eof
-        }
-
-        fn position(&self) -> Duration {
-            Duration::from_secs_f64(self.position_frames as f64 / self.spec.sample_rate as f64)
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs_f64(
-                self.total_frames as f64 / self.spec.sample_rate as f64,
-            ))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.metadata
-        }
-
-        fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-            self.events_tx.subscribe()
+    fn mock_spec() -> PcmSpec {
+        PcmSpec {
+            channels: 2,
+            sample_rate: 44100,
         }
     }
 
     fn make_resource(duration_secs: f64) -> Resource {
-        Resource::from_reader(MockPcmReader::new(duration_secs))
+        Resource::from_reader(TestPcmReader::new(mock_spec(), duration_secs))
     }
 
     // -- Tests --------------------------------------------------------------------

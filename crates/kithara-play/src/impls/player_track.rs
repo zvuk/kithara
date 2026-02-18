@@ -354,86 +354,16 @@ impl PlayerTrack {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use kithara_audio::PcmReader;
-    use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
-    use kithara_events::AudioEvent;
-    use tokio::sync::broadcast;
+    use kithara_audio::mock::TestPcmReader;
+    use kithara_decode::PcmSpec;
 
     use super::*;
     use crate::impls::resource::Resource;
 
-    struct MockPcmReader {
-        spec: PcmSpec,
-        metadata: TrackMetadata,
-        events_tx: broadcast::Sender<AudioEvent>,
-    }
-
-    impl MockPcmReader {
-        fn new() -> Self {
-            let (events_tx, _) = broadcast::channel(64);
-            Self {
-                spec: PcmSpec {
-                    channels: 2,
-                    sample_rate: 44100,
-                },
-                metadata: TrackMetadata {
-                    album: None,
-                    artist: None,
-                    artwork: None,
-                    title: Some("Mock".to_owned()),
-                },
-                events_tx,
-            }
-        }
-    }
-
-    impl PcmReader for MockPcmReader {
-        fn read(&mut self, buf: &mut [f32]) -> usize {
-            buf.fill(0.5);
-            buf.len()
-        }
-
-        fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
-            if output.is_empty() {
-                return 0;
-            }
-            let frames = output[0].len();
-            for ch in output.iter_mut() {
-                for s in ch.iter_mut() {
-                    *s = 0.5;
-                }
-            }
-            frames
-        }
-
-        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
-            Ok(())
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-
-        fn is_eof(&self) -> bool {
-            false
-        }
-
-        fn position(&self) -> Duration {
-            Duration::ZERO
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs(60))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.metadata
-        }
-
-        fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-            self.events_tx.subscribe()
+    fn mock_spec() -> PcmSpec {
+        PcmSpec {
+            channels: 2,
+            sample_rate: 44100,
         }
     }
 
@@ -442,7 +372,7 @@ mod tests {
     // this helper must use `#[tokio::test]`.
     fn make_track() -> PlayerTrack {
         let src: Arc<str> = Arc::from("test.mp3");
-        let resource = Resource::from_reader(MockPcmReader::new());
+        let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), 60.0));
         let player_resource =
             PlayerResource::new(resource, Arc::clone(&src), kithara_bufpool::pcm_pool());
         let arc_resource = Arc::new(Mutex::new(player_resource));

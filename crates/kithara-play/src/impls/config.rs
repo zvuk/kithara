@@ -123,8 +123,8 @@ pub struct ResourceConfig {
     pub store: StoreOptions,
     /// Thread pool for background work (decode, probe, downloads).
     ///
-    /// Shared across all components. Defaults to the global rayon pool.
-    pub thread_pool: ThreadPool,
+    /// Shared across all components. When `None`, defaults to the global rayon pool.
+    pub thread_pool: Option<ThreadPool>,
 }
 
 impl ResourceConfig {
@@ -183,7 +183,7 @@ impl ResourceConfig {
             src,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
-            thread_pool: ThreadPool::default(),
+            thread_pool: None,
         })
     }
 
@@ -319,10 +319,11 @@ impl ResourceConfig {
 
     /// Set thread pool for background work (decode, probe, downloads).
     ///
-    /// The pool is shared across all components. Defaults to the global rayon pool.
+    /// The pool is shared across all components. When not set, defaults to the
+    /// global rayon pool.
     #[must_use]
     pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = pool;
+        self.thread_pool = Some(pool);
         self
     }
 
@@ -348,8 +349,11 @@ impl ResourceConfig {
         let mut file_config = kithara_file::FileConfig::new(file_src)
             .with_store(self.store)
             .with_net(self.net)
-            .with_look_ahead_bytes(self.look_ahead_bytes)
-            .with_thread_pool(self.thread_pool.clone());
+            .with_look_ahead_bytes(self.look_ahead_bytes);
+
+        if let Some(pool) = self.thread_pool.clone() {
+            file_config = file_config.with_thread_pool(pool);
+        }
 
         if let Some(headers) = self.headers {
             file_config = file_config.with_headers(headers);
@@ -407,8 +411,11 @@ impl ResourceConfig {
             .with_net(self.net)
             .with_abr(self.abr)
             .with_keys(self.keys)
-            .with_look_ahead_bytes(self.look_ahead_bytes)
-            .with_thread_pool(self.thread_pool.clone());
+            .with_look_ahead_bytes(self.look_ahead_bytes);
+
+        if let Some(pool) = self.thread_pool.clone() {
+            hls_config = hls_config.with_thread_pool(pool);
+        }
 
         if let Some(headers) = self.headers {
             hls_config = hls_config.with_headers(headers);

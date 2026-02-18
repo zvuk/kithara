@@ -7,8 +7,9 @@
 //! [`AudioEffect`]: kithara_audio::AudioEffect
 //! [`AudioNode`]: firewheel::node::AudioNode
 
-use std::num::NonZeroU32;
+use std::num::{NonZeroU32, NonZeroUsize};
 
+use fast_interleave::{deinterleave_variable, interleave_variable};
 use firewheel::{
     StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},
@@ -130,29 +131,19 @@ impl EffectBridgeProcessor {
 
     /// Interleave per-channel input slices into `self.scratch`.
     fn interleave(&mut self, inputs: &[&[f32]], frames: usize) {
-        let needed = frames * STEREO;
+        let num_channels = inputs.len();
+        let needed = frames * num_channels;
         self.scratch.resize(needed, 0.0);
 
-        if inputs.len() >= STEREO {
-            for (frame, (&l, &r)) in self
-                .scratch
-                .chunks_exact_mut(STEREO)
-                .zip(inputs[0].iter().zip(inputs[1].iter()))
-                .take(frames)
-            {
-                frame[0] = l;
-                frame[1] = r;
-            }
+        if let Some(nc) = NonZeroUsize::new(num_channels) {
+            interleave_variable(inputs, 0..frames, &mut self.scratch, nc);
         }
     }
 
     /// Deinterleave `self.scratch` into per-channel output slices.
     fn deinterleave(&self, outputs: &mut [&mut [f32]], frames: usize) {
-        if outputs.len() >= STEREO {
-            for (i, frame) in self.scratch.chunks_exact(STEREO).enumerate().take(frames) {
-                outputs[0][i] = frame[0];
-                outputs[1][i] = frame[1];
-            }
+        if let Some(nc) = NonZeroUsize::new(outputs.len()) {
+            deinterleave_variable(&self.scratch, nc, outputs, 0..frames);
         }
     }
 }

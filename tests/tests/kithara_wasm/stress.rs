@@ -8,6 +8,7 @@ use std::{
     time::Duration,
 };
 
+use kithara::assets::StoreOptions;
 use kithara::audio::{Audio, AudioConfig};
 use kithara::events::EventBus;
 use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
@@ -82,7 +83,7 @@ async fn create_pipeline() -> Audio<Stream<Hls>> {
     let hls_config = HlsConfig::new(fixture_url())
         .with_thread_pool(pool)
         .with_events(bus)
-        .with_ephemeral(true)
+        .with_store(StoreOptions::default().with_ephemeral(true))
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()

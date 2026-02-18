@@ -223,9 +223,10 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
     if ephemeral {
         let cap = std::num::NonZeroUsize::new(SEGMENT_COUNT * VARIANT_COUNT + 20).expect("nz");
         store.cache_capacity = Some(cap);
+        store.ephemeral = true;
     }
 
-    let mut hls_config = HlsConfig::new(url)
+    let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
         .with_abr(AbrOptions {
@@ -236,9 +237,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
             throughput_safety_factor: 1.0,
             ..AbrOptions::default()
         });
-    if ephemeral {
-        hls_config = hls_config.with_ephemeral(true);
-    }
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);

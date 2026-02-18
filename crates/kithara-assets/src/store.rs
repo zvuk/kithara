@@ -36,6 +36,12 @@ pub struct StoreOptions {
     pub cache_dir: PathBuf,
     /// In-memory LRU cache capacity for opened resources.
     pub cache_capacity: Option<NonZeroUsize>,
+    /// Use ephemeral (in-memory) storage instead of disk.
+    ///
+    /// When `true`, the asset store uses `MemAssetStore` instead of
+    /// `DiskAssetStore`. Data is never written to disk.
+    /// Default: `false`.
+    pub ephemeral: bool,
     /// Maximum number of assets to keep (soft cap for LRU eviction).
     pub max_assets: Option<usize>,
     /// Maximum bytes to store (soft cap for LRU eviction).
@@ -50,6 +56,7 @@ impl Default for StoreOptions {
             #[cfg(target_arch = "wasm32")]
             cache_dir: std::path::PathBuf::from("/kithara"),
             cache_capacity: None,
+            ephemeral: false,
             max_assets: None,
             max_bytes: None,
         }
@@ -62,6 +69,7 @@ impl StoreOptions {
         Self {
             cache_dir: cache_dir.into(),
             cache_capacity: None,
+            ephemeral: false,
             max_assets: None,
             max_bytes: None,
         }
@@ -78,6 +86,16 @@ impl StoreOptions {
     #[must_use]
     pub fn with_max_bytes(mut self, max: u64) -> Self {
         self.max_bytes = Some(max);
+        self
+    }
+
+    /// Use ephemeral (in-memory) storage instead of disk.
+    ///
+    /// When `true`, the asset store uses in-memory storage. Data is never
+    /// written to disk. Default: `false`.
+    #[must_use]
+    pub fn with_ephemeral(mut self, ephemeral: bool) -> Self {
+        self.ephemeral = ephemeral;
         self
     }
 
