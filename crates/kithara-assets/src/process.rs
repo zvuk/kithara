@@ -309,6 +309,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
+    use rstest::rstest;
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
 
@@ -377,21 +378,23 @@ mod tests {
         assert_eq!(buf, expected);
     }
 
-    #[test]
-    fn test_process_called_once_on_multiple_commits() {
+    #[rstest]
+    #[case::short(&b"data"[..], 4)]
+    #[case::longer(&b"abcdef"[..], 6)]
+    fn test_process_called_once_on_multiple_commits(#[case] content: &[u8], #[case] len: u64) {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x00, Arc::clone(&call_count));
 
-        let (resource, _dir) = mock_resource(b"data");
+        let (resource, _dir) = mock_resource(content);
         let processed = ProcessedResource::new(resource, Some(()), process_fn, test_pool());
 
         // First commit
-        processed.commit(Some(4)).unwrap();
+        processed.commit(Some(len)).unwrap();
         let count_after_first = call_count.load(Ordering::SeqCst);
         assert!(count_after_first > 0);
 
         // Second commit - should not process again
-        processed.commit(Some(4)).unwrap();
+        processed.commit(Some(len)).unwrap();
         assert_eq!(call_count.load(Ordering::SeqCst), count_after_first);
     }
 
