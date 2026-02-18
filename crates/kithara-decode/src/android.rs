@@ -132,27 +132,40 @@ pub type AndroidAlac = Android<Alac>;
 mod tests {
     use std::io::Cursor;
 
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn test_android_config_default() {
-        let config = AndroidConfig::default();
-        assert!(config.byte_len_handle.is_none());
-    }
-
-    #[test]
-    fn test_android_config_with_handle() {
+    #[rstest]
+    #[case::default(false)]
+    #[case::with_handle(true)]
+    fn test_android_config_handle_presence(#[case] with_handle: bool) {
         let handle = Arc::new(AtomicU64::new(12345));
-        let config = AndroidConfig {
-            byte_len_handle: Some(Arc::clone(&handle)),
+        let config = if with_handle {
+            AndroidConfig {
+                byte_len_handle: Some(Arc::clone(&handle)),
+            }
+        } else {
+            AndroidConfig::default()
         };
-        assert!(config.byte_len_handle.is_some());
+        assert_eq!(config.byte_len_handle.is_some(), with_handle);
     }
 
-    #[test]
-    fn test_android_decoder_not_implemented() {
+    #[rstest]
+    #[case::aac(0)]
+    #[case::mp3(1)]
+    #[case::flac(2)]
+    #[case::alac(3)]
+    fn test_android_decoder_not_implemented(#[case] codec: u8) {
         let cursor = Cursor::new(vec![0u8; 100]);
-        let result = AndroidAac::create(Box::new(cursor), AndroidConfig::default());
+        let input: Box<dyn DecoderInput> = Box::new(cursor);
+        let result = match codec {
+            0 => AndroidAac::create(input, AndroidConfig::default()).map(|_| ()),
+            1 => AndroidMp3::create(input, AndroidConfig::default()).map(|_| ()),
+            2 => AndroidFlac::create(input, AndroidConfig::default()).map(|_| ()),
+            3 => AndroidAlac::create(input, AndroidConfig::default()).map(|_| ()),
+            _ => unreachable!("unknown codec test case"),
+        };
         assert!(result.is_err());
 
         match result {
