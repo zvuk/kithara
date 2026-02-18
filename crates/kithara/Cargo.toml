@@ -47,6 +47,7 @@ rodio = ["dep:rodio", "kithara-audio/rodio", "kithara-play/rodio"]
 perf = [
     "kithara-audio/perf",
     "kithara-decode/perf",
+    "kithara-storage/perf",
     "kithara-stream/perf",
     "kithara-bufpool/perf",
     "kithara-file/perf",

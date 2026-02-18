@@ -2661,6 +2661,7 @@ version = "0.1.0"
 dependencies = [
  "crossbeam-queue",
  "derivative",
+ "hotpath",
  "kithara-bufpool",
  "kithara-platform",
  "mmap-io",

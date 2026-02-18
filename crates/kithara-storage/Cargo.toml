@@ -11,7 +11,9 @@ description = "Unified storage resource backed by mmap with random-access I/O"
 workspace = true
 
 [features]
+default = []
 test-utils = ["unimock"]
+perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
 derivative = { workspace = true }
@@ -28,6 +30,7 @@ crossbeam-queue = { workspace = true }
 
 # mock support (optional)
 unimock = { workspace = true, optional = true }
+hotpath = { workspace = true, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # mmap backend (not available on wasm32)

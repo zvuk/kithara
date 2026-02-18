@@ -114,6 +114,7 @@ impl Driver for MemDriver {
 }
 
 impl DriverIo for MemDriver {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         let ring = self.state.lock();
         let window_end = ring.window_start + ring.capacity as u64;
@@ -148,6 +149,7 @@ impl DriverIo for MemDriver {
         Ok(to_read)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
         if committed {
             return Err(StorageError::Failed(

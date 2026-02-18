@@ -70,12 +70,14 @@ impl Default for MemCoverage {
 }
 
 impl Coverage for MemCoverage {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn mark(&mut self, range: Range<u64>) {
         if !range.is_empty() {
             self.ranges.insert(range);
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn is_complete(&self) -> bool {
         let Some(total) = self.total_size else {
             return false;

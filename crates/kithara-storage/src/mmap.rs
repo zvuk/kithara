@@ -149,6 +149,7 @@ impl Driver for MmapDriver {
 }
 
 impl DriverIo for MmapDriver {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         {
             let mmap_guard = self.mmap.lock();
@@ -159,6 +160,7 @@ impl DriverIo for MmapDriver {
         Ok(buf.len())
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
         let end = offset + data.len() as u64;
         let mut mmap_guard = self.mmap.lock();

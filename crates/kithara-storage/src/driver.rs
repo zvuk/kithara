@@ -210,6 +210,7 @@ impl<D: DriverIo> Resource<D> {
 }
 
 impl<D: DriverIo> ResourceExt for Resource<D> {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -238,6 +239,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             .read_at(offset, &mut buf[..to_read], effective_len)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
         if data.is_empty() {
             return Ok(());
@@ -281,6 +283,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
         Ok(())
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     #[expect(clippy::significant_drop_tightening)] // lock must be held for condvar.wait_for
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         if range.start > range.end {
