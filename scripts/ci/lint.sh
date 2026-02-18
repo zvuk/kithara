@@ -21,6 +21,12 @@ bash "$SCRIPT_DIR/test-compare-perf.sh"
 echo "==> generating quality report..."
 bash "$SCRIPT_DIR/quality-report.sh"
 
+echo "==> checking kithara-play trait unimock coverage..."
+bash "$SCRIPT_DIR/check-play-traits-unimock.sh"
+
+echo "==> running rstest parameterization audit..."
+bash "$SCRIPT_DIR/rstest-audit.sh"
+
 echo "==> checking architecture constraints..."
 bash "$SCRIPT_DIR/check-arch.sh"
 
