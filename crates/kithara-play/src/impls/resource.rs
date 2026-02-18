@@ -255,6 +255,7 @@ mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
     use kithara_events::{AudioEvent, Event};
+    use rstest::rstest;
     use tokio::sync::broadcast;
 
     use super::Resource;
@@ -279,32 +280,42 @@ mod tests {
         (resource, sender)
     }
 
-    // -- Tests --------------------------------------------------------------------
-
-    #[tokio::test]
-    async fn test_resource_from_reader_read() {
-        let mut resource = make_resource();
-        let mut buf = [0.0f32; 64];
-        let n = resource.read(&mut buf);
-        assert_eq!(n, 64);
-        for sample in &buf[..n] {
-            assert!((sample - 0.5).abs() < f32::EPSILON);
-        }
+    #[derive(Clone, Copy)]
+    enum ReadMode {
+        Interleaved,
+        Planar,
     }
 
+    // -- Tests --------------------------------------------------------------------
+
+    #[rstest]
+    #[case(ReadMode::Interleaved)]
+    #[case(ReadMode::Planar)]
     #[tokio::test]
-    async fn test_resource_from_reader_read_planar() {
+    async fn test_resource_from_reader_read_variants(#[case] mode: ReadMode) {
         let mut resource = make_resource();
-        let mut ch0 = [0.0f32; 32];
-        let mut ch1 = [0.0f32; 32];
-        let mut output: Vec<&mut [f32]> = vec![&mut ch0, &mut ch1];
-        let frames = resource.read_planar(&mut output);
-        assert_eq!(frames, 32);
-        for &s in &ch0[..frames] {
-            assert!((s - 0.5).abs() < f32::EPSILON);
-        }
-        for &s in &ch1[..frames] {
-            assert!((s - 0.5).abs() < f32::EPSILON);
+        match mode {
+            ReadMode::Interleaved => {
+                let mut buf = [0.0f32; 64];
+                let n = resource.read(&mut buf);
+                assert_eq!(n, 64);
+                for sample in &buf[..n] {
+                    assert!((sample - 0.5).abs() < f32::EPSILON);
+                }
+            }
+            ReadMode::Planar => {
+                let mut ch0 = [0.0f32; 32];
+                let mut ch1 = [0.0f32; 32];
+                let mut output: Vec<&mut [f32]> = vec![&mut ch0, &mut ch1];
+                let frames = resource.read_planar(&mut output);
+                assert_eq!(frames, 32);
+                for &s in &ch0[..frames] {
+                    assert!((s - 0.5).abs() < f32::EPSILON);
+                }
+                for &s in &ch1[..frames] {
+                    assert!((s - 0.5).abs() < f32::EPSILON);
+                }
+            }
         }
     }
 

@@ -2619,6 +2619,7 @@ dependencies = [
  "futures",
  "parking_lot",
  "rayon",
+ "rstest",
  "tokio",
 ]
 
@@ -2733,6 +2734,7 @@ dependencies = [
  "kithara-platform",
  "kithara-stream",
  "rayon",
+ "rstest",
  "tokio",
  "tracing",
  "tracing-wasm",

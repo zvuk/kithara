@@ -1,9 +1,26 @@
 use std::sync::Arc;
 
+use rstest::rstest;
+
 use super::*;
 
 fn make_engine() -> EngineImpl {
     EngineImpl::new(EngineConfig::default())
+}
+
+#[derive(Clone, Copy)]
+enum EngineInitialScenario {
+    ActiveSlotsEmpty,
+    NotCrossfading,
+    NotRunning,
+    SlotState,
+}
+
+#[derive(Clone, Copy)]
+enum NotRunningErrorScenario {
+    AllocateSlot,
+    ReleaseSlot,
+    Stop,
 }
 
 #[test]
@@ -37,17 +54,22 @@ fn engine_config_builder() {
     assert_eq!(config.eq_bands, 5);
 }
 
-#[test]
-fn engine_not_running_initially() {
+#[rstest]
+#[case(EngineInitialScenario::NotRunning)]
+#[case(EngineInitialScenario::SlotState)]
+#[case(EngineInitialScenario::ActiveSlotsEmpty)]
+#[case(EngineInitialScenario::NotCrossfading)]
+fn engine_initial_state(#[case] scenario: EngineInitialScenario) {
     let engine = make_engine();
-    assert!(!engine.is_running());
-}
-
-#[test]
-fn engine_slot_count_zero_initially() {
-    let engine = make_engine();
-    assert_eq!(engine.slot_count(), 0);
-    assert_eq!(engine.max_slots(), 4);
+    match scenario {
+        EngineInitialScenario::NotRunning => assert!(!engine.is_running()),
+        EngineInitialScenario::SlotState => {
+            assert_eq!(engine.slot_count(), 0);
+            assert_eq!(engine.max_slots(), 4);
+        }
+        EngineInitialScenario::ActiveSlotsEmpty => assert!(engine.active_slots().is_empty()),
+        EngineInitialScenario::NotCrossfading => assert!(!engine.is_crossfading()),
+    }
 }
 
 #[test]
@@ -89,31 +111,18 @@ fn engine_set_master_volume_emits_event() {
     );
 }
 
-#[test]
-fn engine_stop_when_not_running_returns_error() {
+#[rstest]
+#[case(NotRunningErrorScenario::Stop)]
+#[case(NotRunningErrorScenario::AllocateSlot)]
+#[case(NotRunningErrorScenario::ReleaseSlot)]
+fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorScenario) {
     let engine = make_engine();
-    let err = engine.stop().unwrap_err();
+    let err = match scenario {
+        NotRunningErrorScenario::Stop => engine.stop().unwrap_err(),
+        NotRunningErrorScenario::AllocateSlot => engine.allocate_slot().unwrap_err(),
+        NotRunningErrorScenario::ReleaseSlot => engine.release_slot(SlotId(99)).unwrap_err(),
+    };
     assert!(matches!(err, PlayError::EngineNotRunning));
-}
-
-#[test]
-fn engine_allocate_slot_when_not_running_returns_error() {
-    let engine = make_engine();
-    let err = engine.allocate_slot().unwrap_err();
-    assert!(matches!(err, PlayError::EngineNotRunning));
-}
-
-#[test]
-fn engine_release_slot_when_not_running_returns_error() {
-    let engine = make_engine();
-    let err = engine.release_slot(SlotId(99)).unwrap_err();
-    assert!(matches!(err, PlayError::EngineNotRunning));
-}
-
-#[test]
-fn engine_active_slots_empty_initially() {
-    let engine = make_engine();
-    assert!(engine.active_slots().is_empty());
 }
 
 #[test]
@@ -130,12 +139,6 @@ fn engine_cancel_crossfade_stub_returns_no_crossfade() {
     let engine = make_engine();
     let err = engine.cancel_crossfade().unwrap_err();
     assert!(matches!(err, PlayError::NoCrossfade));
-}
-
-#[test]
-fn engine_is_crossfading_returns_false() {
-    let engine = make_engine();
-    assert!(!engine.is_crossfading());
 }
 
 #[test]

@@ -197,6 +197,7 @@ impl PlayerResource {
 mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
+    use rstest::rstest;
 
     use super::*;
 
@@ -213,14 +214,33 @@ mod tests {
         PlayerResource::new(resource, Arc::from("test.mp3"), kithara_bufpool::pcm_pool())
     }
 
-    #[tokio::test]
-    async fn resource_new_creates_buffers() {
-        let pr = make_player_resource();
+    type AccessorAssertion = fn(&PlayerResource);
+
+    fn assert_buffers_initialized(pr: &PlayerResource) {
         // Buffer size = (44100 / 5) * max(2, 2) = 8820 * 2 = 17640
         assert!(!pr.channel_buffers[0].is_empty());
         assert!(!pr.channel_buffers[1].is_empty());
         assert_eq!(pr.write_len, 0);
         assert_eq!(pr.write_pos, 0);
+    }
+
+    fn assert_position_and_duration(pr: &PlayerResource) {
+        assert_eq!(pr.position(), 0.0);
+        assert!((pr.duration() - 1.0).abs() < 0.01);
+    }
+
+    fn assert_src(pr: &PlayerResource) {
+        assert_eq!(&**pr.src(), "test.mp3");
+    }
+
+    #[rstest]
+    #[case(assert_buffers_initialized)]
+    #[case(assert_position_and_duration)]
+    #[case(assert_src)]
+    #[tokio::test]
+    async fn resource_accessors(#[case] assert_fn: AccessorAssertion) {
+        let pr = make_player_resource();
+        assert_fn(&pr);
     }
 
     #[tokio::test]
@@ -284,18 +304,5 @@ mod tests {
                 Err(_) => return,
             }
         }
-    }
-
-    #[tokio::test]
-    async fn resource_position_and_duration() {
-        let pr = make_player_resource();
-        assert_eq!(pr.position(), 0.0);
-        assert!((pr.duration() - 1.0).abs() < 0.01);
-    }
-
-    #[tokio::test]
-    async fn resource_src() {
-        let pr = make_player_resource();
-        assert_eq!(&**pr.src(), "test.mp3");
     }
 }
