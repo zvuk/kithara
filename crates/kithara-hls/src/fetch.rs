@@ -713,13 +713,17 @@ mod tests {
     fn test_fetch_manager_with_get_bytes_response(
         response: Result<Bytes, NetError>,
     ) -> (TempDir, FetchManager<Unimock>) {
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("test", temp_dir.path());
         let mock_net = Unimock::new(
             NetMock::get_bytes
                 .some_call(matching!(_, _))
                 .returns(response),
         );
+        test_fetch_manager(mock_net)
+    }
+
+    fn test_fetch_manager(mock_net: Unimock) -> (TempDir, FetchManager<Unimock>) {
+        let temp_dir = TempDir::new().unwrap();
+        let backend = test_backend("test", temp_dir.path());
         let fetch = FetchManager::new(backend, mock_net, CancellationToken::new());
         (temp_dir, fetch)
     }
@@ -816,9 +820,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_matcher_url_path_matching() {
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("test", temp_dir.path());
-
         let master_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
         let media_content = b"#EXTINF:4.0\nseg0.bin\n";
 
@@ -828,8 +829,7 @@ mod tests {
             each.call(matching!((url, _) if url.path().ends_with("/v0.m3u8")))
                 .returns(Ok(Bytes::from_static(media_content)));
         }));
-
-        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
+        let (_temp_dir, fetch_manager) = test_fetch_manager(mock_net);
 
         let master_url = Url::parse("http://example.com/master.m3u8").unwrap();
         let master: HlsResult<Bytes> = fetch_manager
@@ -844,9 +844,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_matcher_url_domain_matching() {
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("test", temp_dir.path());
-
         let content = b"test content";
 
         let mock_net = Unimock::new(
@@ -854,8 +851,7 @@ mod tests {
                 .some_call(matching!((url, _) if url.host_str() == Some("cdn1.example.com")))
                 .returns(Ok(Bytes::from_static(content))),
         );
-
-        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
+        let (_temp_dir, fetch_manager) = test_fetch_manager(mock_net);
 
         let url = Url::parse("http://cdn1.example.com/file.m3u8").unwrap();
         let result: HlsResult<Bytes> = fetch_manager.fetch_playlist(&url, "file.m3u8").await;
@@ -869,9 +865,6 @@ mod tests {
 
         use kithara_net::Headers;
 
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("test", temp_dir.path());
-
         let key_content = vec![0u8; 16];
 
         let mock_net = Unimock::new(
@@ -879,8 +872,7 @@ mod tests {
                 .some_call(matching!((_, headers) if headers.as_ref().is_some_and(|h| h.get("Authorization").is_some())))
                 .returns(Ok(Bytes::from(key_content))),
         );
-
-        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
+        let (_temp_dir, fetch_manager) = test_fetch_manager(mock_net);
 
         let url = Url::parse("http://example.com/key.bin").unwrap();
         let mut headers_map = HashMap::new();
