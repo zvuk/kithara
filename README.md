@@ -39,56 +39,35 @@ Components are independent crates that can be used standalone or composed into a
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-flowchart TD
-    subgraph facade["Facade"]
-        kithara["kithara"]
-        play["kithara-play"]
-    end
-
-    subgraph pipeline["Pipeline"]
-        audio["kithara-audio"]
-        decode["kithara-decode"]
-        events["kithara-events"]
-    end
-
-    subgraph protocols["Protocols"]
-        file["kithara-file"]
-        hls["kithara-hls"]
-        abr["kithara-abr"]
-        drm["kithara-drm"]
-    end
-
-    subgraph io["I/O"]
-        stream["kithara-stream"]
-        net["kithara-net"]
-    end
-
-    subgraph storage["Storage"]
-        assets["kithara-assets"]
-        stor["kithara-storage"]
-        bufpool["kithara-bufpool"]
-        platform["kithara-platform"]
-    end
+flowchart LR
+    facade["Facade<br/>kithara + kithara-play"]
+    pipeline["Pipeline<br/>audio + decode + events"]
+    protocols["Protocols<br/>file + hls + abr + drm"]
+    io["I/O<br/>stream + net"]
+    storage["Storage<br/>assets + storage + bufpool + platform"]
+    wasm["Browser<br/>kithara-wasm"]
 
     facade --> pipeline --> protocols --> io --> storage
+    wasm --> pipeline
 
     style facade fill:#4a6fa5,color:#fff
     style pipeline fill:#6b8cae,color:#fff
     style protocols fill:#7ea87e,color:#fff
     style io fill:#c4a35a,color:#fff
     style storage fill:#8b6b8b,color:#fff
+    style wasm fill:#5b8f8f,color:#fff
 ```
 
 <table>
 <tr><th>Layer</th><th>Crates</th><th>Role</th></tr>
-<tr><td><b>Facade</b></td><td><code>kithara</code></td><td>Unified <code>Resource</code> API with auto-detection (file / HLS)</td></tr>
-<tr><td><b>Player</b></td><td><code>kithara-play</code></td><td>AVPlayer-style traits: Engine, Player, Mixer, DJ subsystem</td></tr>
-<tr><td><b>Pipeline</b></td><td><code>kithara-audio</code>, <code>kithara-decode</code>, <code>kithara-events</code></td><td>Threaded decode + effects + resampling, event bus</td></tr>
-<tr><td><b>Protocols</b></td><td><code>kithara-file</code>, <code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-drm</code></td><td>HTTP progressive, HLS VOD with ABR, AES-128 decryption</td></tr>
-<tr><td><b>I/O</b></td><td><code>kithara-stream</code>, <code>kithara-net</code></td><td>Async-to-sync bridge (<code>Read + Seek</code>), HTTP with retry</td></tr>
-<tr><td><b>Storage</b></td><td><code>kithara-assets</code>, <code>kithara-storage</code></td><td>Disk cache with eviction, mmap/mem resources</td></tr>
-<tr><td><b>Primitives</b></td><td><code>kithara-bufpool</code>, <code>kithara-platform</code></td><td>Zero-alloc buffer pool, cross-platform sync types</td></tr>
-<tr><td><b>Browser</b></td><td><code>kithara-wasm</code></td><td>WASM player with AudioWorklet integration</td></tr>
+<tr><td><b>Facade</b></td><td><a href="crates/kithara/README.md"><code>kithara</code></a></td><td>Unified <code>Resource</code> API with auto-detection (file / HLS)</td></tr>
+<tr><td><b>Player</b></td><td><a href="crates/kithara-play/README.md"><code>kithara-play</code></a></td><td>AVPlayer-style traits: Engine, Player, Mixer, DJ subsystem</td></tr>
+<tr><td><b>Pipeline</b></td><td><a href="crates/kithara-audio/README.md"><code>kithara-audio</code></a><br/><a href="crates/kithara-decode/README.md"><code>kithara-decode</code></a><br/><a href="crates/kithara-events/README.md"><code>kithara-events</code></a></td><td>Threaded decode + effects + resampling, event bus</td></tr>
+<tr><td><b>Protocols</b></td><td><a href="crates/kithara-file/README.md"><code>kithara-file</code></a><br/><a href="crates/kithara-hls/README.md"><code>kithara-hls</code></a><br/><a href="crates/kithara-abr/README.md"><code>kithara-abr</code></a><br/><a href="crates/kithara-drm/README.md"><code>kithara-drm</code></a></td><td>HTTP progressive, HLS VOD with ABR, AES-128 decryption</td></tr>
+<tr><td><b>I/O</b></td><td><a href="crates/kithara-stream/README.md"><code>kithara-stream</code></a><br/><a href="crates/kithara-net/README.md"><code>kithara-net</code></a></td><td>Async-to-sync bridge (<code>Read + Seek</code>), HTTP with retry</td></tr>
+<tr><td><b>Storage</b></td><td><a href="crates/kithara-assets/README.md"><code>kithara-assets</code></a><br/><a href="crates/kithara-storage/README.md"><code>kithara-storage</code></a></td><td>Disk cache with eviction, mmap/mem resources</td></tr>
+<tr><td><b>Primitives</b></td><td><a href="crates/kithara-bufpool/README.md"><code>kithara-bufpool</code></a><br/><a href="crates/kithara-platform/README.md"><code>kithara-platform</code></a></td><td>Zero-alloc buffer pool, cross-platform sync types</td></tr>
+<tr><td><b>Browser</b></td><td><a href="crates/kithara-wasm/README.md"><code>kithara-wasm</code></a></td><td>WASM player with AudioWorklet integration</td></tr>
 </table>
 
 ## Getting Started
@@ -104,27 +83,6 @@ cargo test --workspace
 cargo fmt --all --check
 cargo clippy --workspace -- -D warnings
 ```
-
-## Crate Documentation
-
-Each crate has its own `README.md`:
-
-- [`kithara`](crates/kithara/README.md) -- facade
-- [`kithara-play`](crates/kithara-play/README.md) -- player engine
-- [`kithara-audio`](crates/kithara-audio/README.md) -- audio pipeline
-- [`kithara-decode`](crates/kithara-decode/README.md) -- Symphonia decoder
-- [`kithara-stream`](crates/kithara-stream/README.md) -- async-to-sync bridge
-- [`kithara-file`](crates/kithara-file/README.md) -- progressive file
-- [`kithara-hls`](crates/kithara-hls/README.md) -- HLS VOD
-- [`kithara-abr`](crates/kithara-abr/README.md) -- adaptive bitrate
-- [`kithara-net`](crates/kithara-net/README.md) -- HTTP networking
-- [`kithara-assets`](crates/kithara-assets/README.md) -- disk cache
-- [`kithara-storage`](crates/kithara-storage/README.md) -- mmap storage
-- [`kithara-bufpool`](crates/kithara-bufpool/README.md) -- buffer pool
-- [`kithara-drm`](crates/kithara-drm/README.md) -- AES-128 decryption
-- [`kithara-events`](crates/kithara-events/README.md) -- event bus
-- [`kithara-platform`](crates/kithara-platform/README.md) -- platform primitives
-- [`kithara-wasm`](crates/kithara-wasm/README.md) -- WASM player
 
 ## Examples
 
