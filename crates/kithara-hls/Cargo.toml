@@ -19,6 +19,7 @@ kithara-net = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-storage = { workspace = true }
 bytes = { workspace = true }
+derive_setters = { workspace = true }
 futures = { workspace = true }
 hls_m3u8 = { workspace = true }
 hex = { workspace = true }

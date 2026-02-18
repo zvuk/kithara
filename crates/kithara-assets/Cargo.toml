@@ -17,6 +17,7 @@ internal = []  # Expose internal types for testing
 bincode = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
+derive_setters = { workspace = true }
 hex = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-storage = { workspace = true }

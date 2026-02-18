@@ -14,6 +14,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, ThreadPool};
 use portable_atomic::AtomicF32;
@@ -30,7 +31,8 @@ use crate::{
 use super::{player_processor::PlayerCmd, shared_player_state::SharedPlayerState};
 
 /// Configuration for the audio engine.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Setters)]
+#[setters(prefix = "with_", strip_option)]
 pub struct EngineConfig {
     /// Number of output channels. Default: 2 (stereo).
     pub channels: u16,
@@ -60,54 +62,6 @@ impl Default for EngineConfig {
             sample_rate: 44100,
             thread_pool: None,
         }
-    }
-}
-
-impl EngineConfig {
-    /// Set maximum number of concurrent player slots.
-    #[must_use]
-    pub fn with_max_slots(mut self, max_slots: usize) -> Self {
-        self.max_slots = max_slots;
-        self
-    }
-
-    /// Set sample rate hint for `CpalBackend`.
-    #[must_use]
-    pub fn with_sample_rate(mut self, sample_rate: u32) -> Self {
-        self.sample_rate = sample_rate;
-        self
-    }
-
-    /// Set number of output channels.
-    #[must_use]
-    pub fn with_channels(mut self, channels: u16) -> Self {
-        self.channels = channels;
-        self
-    }
-
-    /// Set number of EQ bands per slot.
-    #[must_use]
-    pub fn with_eq_bands(mut self, eq_bands: usize) -> Self {
-        self.eq_bands = eq_bands;
-        self
-    }
-
-    /// Set PCM buffer pool for audio-thread scratch buffers.
-    ///
-    /// When not set, the global PCM pool is used.
-    #[must_use]
-    pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
-        self.pcm_pool = Some(pool);
-        self
-    }
-
-    /// Set thread pool for the engine thread and background work.
-    ///
-    /// When not set, the global rayon pool is used.
-    #[must_use]
-    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = Some(pool);
-        self
     }
 }
 

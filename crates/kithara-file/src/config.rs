@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use derive_setters::Setters;
 use kithara_assets::StoreOptions;
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
@@ -31,30 +32,35 @@ impl From<PathBuf> for FileSrc {
 /// Configuration for file streaming.
 ///
 /// Used with `Stream::<File>::new(config)`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Setters)]
+#[setters(prefix = "with_", strip_option)]
 pub struct FileConfig {
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Event bus channel capacity (used when `bus` is not provided).
     pub event_channel_capacity: usize,
     /// Event bus (optional - if not provided, one is created internally).
+    #[setters(rename = "with_events")]
     pub bus: Option<EventBus>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     ///
     /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
     /// - `None` — no backpressure, download as fast as possible
+    #[setters(skip)]
     pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
     ///
     /// When multiple URLs share the same canonical form (e.g. differ only in
     /// query parameters), setting a unique `name` ensures each gets its own
     /// cache directory.
+    #[setters(skip)]
     pub name: Option<String>,
     /// Additional HTTP headers to include in all requests.
     pub headers: Option<Headers>,
     /// Network configuration.
     pub net: NetOptions,
     /// File source (remote URL or local path).
+    #[setters(skip)]
     pub src: FileSrc,
     /// Storage configuration.
     pub store: StoreOptions,
@@ -104,53 +110,8 @@ impl FileConfig {
     }
 
     /// Set name for cache disambiguation.
-    ///
-    /// When multiple URLs share the same canonical form (differ only in query
-    /// parameters), a unique name ensures each gets its own cache directory.
     pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
-        self
-    }
-
-    /// Set storage options.
-    #[must_use]
-    pub fn with_store(mut self, store: StoreOptions) -> Self {
-        self.store = store;
-        self
-    }
-
-    /// Set network options.
-    #[must_use]
-    pub fn with_net(mut self, net: NetOptions) -> Self {
-        self.net = net;
-        self
-    }
-
-    /// Set additional HTTP headers for all requests.
-    #[must_use]
-    pub fn with_headers(mut self, headers: Headers) -> Self {
-        self.headers = Some(headers);
-        self
-    }
-
-    /// Set cancellation token.
-    #[must_use]
-    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
-        self.cancel = Some(cancel);
-        self
-    }
-
-    /// Set event bus for subscribing to file events.
-    #[must_use]
-    pub fn with_events(mut self, bus: EventBus) -> Self {
-        self.bus = Some(bus);
-        self
-    }
-
-    /// Set event bus channel capacity.
-    #[must_use]
-    pub fn with_event_channel_capacity(mut self, capacity: usize) -> Self {
-        self.event_channel_capacity = capacity;
         self
     }
 
@@ -161,16 +122,6 @@ impl FileConfig {
     #[must_use]
     pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
         self.look_ahead_bytes = bytes;
-        self
-    }
-
-    /// Set thread pool for background work.
-    ///
-    /// The pool is shared across all components. When not set, defaults to the
-    /// global rayon pool.
-    #[must_use]
-    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = Some(pool);
         self
     }
 }

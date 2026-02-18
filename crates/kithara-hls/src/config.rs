@@ -3,6 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
+use derive_setters::Setters;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
@@ -25,7 +26,8 @@ pub type KeyProcessor = Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send
 pub use kithara_abr::{AbrMode, AbrOptions};
 
 /// Encryption key handling configuration.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Setters)]
+#[setters(prefix = "with_", strip_option)]
 pub struct KeyOptions {
     /// Callback for processing (e.g. decrypting) raw key bytes after fetch.
     pub key_processor: Option<KeyProcessor>,
@@ -54,32 +56,13 @@ impl KeyOptions {
     pub fn new() -> Self {
         Self::default()
     }
-
-    /// Set query parameters to append to key URLs.
-    #[must_use]
-    pub fn with_query_params(mut self, params: HashMap<String, String>) -> Self {
-        self.query_params = Some(params);
-        self
-    }
-
-    /// Set headers to include in key requests.
-    #[must_use]
-    pub fn with_request_headers(mut self, headers: HashMap<String, String>) -> Self {
-        self.request_headers = Some(headers);
-        self
-    }
-
-    /// Set callback for processing raw key bytes after fetch.
-    pub fn with_key_processor(mut self, processor: KeyProcessor) -> Self {
-        self.key_processor = Some(processor);
-        self
-    }
 }
 
 /// Configuration for HLS streaming.
 ///
 /// Used with `Stream::<Hls>::new(config)`.
-#[derive(Clone)]
+#[derive(Clone, Setters)]
+#[setters(prefix = "with_", strip_option)]
 pub struct HlsConfig {
     /// ABR (Adaptive Bitrate) configuration.
     pub abr: AbrOptions,
@@ -90,6 +73,7 @@ pub struct HlsConfig {
     /// Capacity of the event bus channel (used when `bus` is not provided).
     pub event_channel_capacity: usize,
     /// Event bus (optional - if not provided, one is created internally).
+    #[setters(rename = "with_events")]
     pub bus: Option<EventBus>,
     /// Encryption key handling configuration.
     pub keys: KeyOptions,
@@ -97,17 +81,20 @@ pub struct HlsConfig {
     ///
     /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
     /// - `None` — no backpressure, download as fast as possible
+    #[setters(skip)]
     pub look_ahead_bytes: Option<u64>,
     /// Max segments to download per step.
     ///
     /// Higher values reduce per-step overhead (ABR decisions happen per-batch)
     /// but reduce ABR reactivity. Default: 3.
+    #[setters(skip)]
     pub download_batch_size: usize,
     /// Optional name for cache disambiguation.
     ///
     /// When multiple URLs share the same canonical form (e.g. differ only in
     /// query parameters), setting a unique `name` ensures each gets its own
     /// cache directory.
+    #[setters(skip)]
     pub name: Option<String>,
     /// Network configuration.
     pub net: NetOptions,
@@ -122,6 +109,7 @@ pub struct HlsConfig {
     /// Shared across all components. When `None`, defaults to the global rayon pool.
     pub thread_pool: Option<ThreadPool>,
     /// Master playlist URL.
+    #[setters(skip)]
     pub url: Url,
 }
 
@@ -171,81 +159,8 @@ impl HlsConfig {
     }
 
     /// Set name for cache disambiguation.
-    ///
-    /// When multiple URLs share the same canonical form (differ only in query
-    /// parameters), a unique name ensures each gets its own cache directory.
     pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
-        self
-    }
-
-    /// Set storage options.
-    #[must_use]
-    pub fn with_store(mut self, store: StoreOptions) -> Self {
-        self.store = store;
-        self
-    }
-
-    /// Set network options.
-    #[must_use]
-    pub fn with_net(mut self, net: NetOptions) -> Self {
-        self.net = net;
-        self
-    }
-
-    /// Set additional HTTP headers for all requests.
-    #[must_use]
-    pub fn with_headers(mut self, headers: Headers) -> Self {
-        self.headers = Some(headers);
-        self
-    }
-
-    /// Set ABR options.
-    #[must_use]
-    pub fn with_abr(mut self, abr: AbrOptions) -> Self {
-        self.abr = abr;
-        self
-    }
-
-    /// Set key options.
-    #[must_use]
-    pub fn with_keys(mut self, keys: KeyOptions) -> Self {
-        self.keys = keys;
-        self
-    }
-
-    /// Set base URL.
-    #[must_use]
-    pub fn with_base_url(mut self, base_url: Url) -> Self {
-        self.base_url = Some(base_url);
-        self
-    }
-
-    /// Set cancellation token.
-    #[must_use]
-    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
-        self.cancel = Some(cancel);
-        self
-    }
-
-    /// Set event bus for subscribing to HLS events.
-    #[must_use]
-    pub fn with_events(mut self, bus: EventBus) -> Self {
-        self.bus = Some(bus);
-        self
-    }
-
-    /// Set event bus channel capacity.
-    #[must_use]
-    pub fn with_event_channel_capacity(mut self, capacity: usize) -> Self {
-        self.event_channel_capacity = capacity;
-        self
-    }
-
-    /// Set buffer pool (shared across all components).
-    #[must_use]
-    pub fn with_pool(mut self, pool: BytePool) -> Self {
-        self.pool = Some(pool);
         self
     }
 
@@ -256,16 +171,6 @@ impl HlsConfig {
     #[must_use]
     pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
         self.look_ahead_bytes = bytes;
-        self
-    }
-
-    /// Set thread pool for background work.
-    ///
-    /// The pool is shared across all components. When not set, defaults to the
-    /// global rayon pool.
-    #[must_use]
-    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = Some(pool);
         self
     }
 }

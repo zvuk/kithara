@@ -9,6 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, ThreadPool};
 use portable_atomic::AtomicF32;
@@ -33,7 +34,8 @@ use super::{
 // -- PlayerConfig -----------------------------------------------------------------
 
 /// Configuration for the player.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Setters)]
+#[setters(prefix = "with_", strip_option)]
 pub struct PlayerConfig {
     /// Crossfade duration in seconds. Default: 1.0.
     pub crossfade_duration: f32,
@@ -65,54 +67,6 @@ impl Default for PlayerConfig {
             pcm_pool: None,
             thread_pool: None,
         }
-    }
-}
-
-impl PlayerConfig {
-    /// Set maximum concurrent slots in the engine.
-    #[must_use]
-    pub fn with_max_slots(mut self, max_slots: usize) -> Self {
-        self.max_slots = max_slots;
-        self
-    }
-
-    /// Set default playback rate.
-    #[must_use]
-    pub fn with_default_rate(mut self, rate: f32) -> Self {
-        self.default_rate = rate;
-        self
-    }
-
-    /// Set crossfade duration in seconds.
-    #[must_use]
-    pub fn with_crossfade_duration(mut self, seconds: f32) -> Self {
-        self.crossfade_duration = seconds;
-        self
-    }
-
-    /// Set number of EQ bands.
-    #[must_use]
-    pub fn with_eq_bands(mut self, eq_bands: usize) -> Self {
-        self.eq_bands = eq_bands;
-        self
-    }
-
-    /// Set PCM buffer pool for audio-thread scratch buffers.
-    ///
-    /// When not set, the global PCM pool is used.
-    #[must_use]
-    pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
-        self.pcm_pool = Some(pool);
-        self
-    }
-
-    /// Set thread pool for the engine thread and background work.
-    ///
-    /// When not set, the global rayon pool is used.
-    #[must_use]
-    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = Some(pool);
-        self
     }
 }
 

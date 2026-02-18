@@ -7,6 +7,7 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
+use derive_setters::Setters;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
@@ -136,18 +137,24 @@ impl ResamplerKind {
 /// Configuration parameters for the resampler effect.
 ///
 /// Contains all values needed to construct a [`ResamplerProcessor`].
+#[derive(Setters)]
+#[setters(prefix = "with_")]
 pub struct ResamplerParams {
     /// Number of audio channels.
+    #[setters(skip)]
     pub channels: usize,
     /// Number of input frames per resampler processing block.
+    #[setters(skip)]
     pub chunk_size: usize,
     /// Shared atomic for dynamic host sample rate tracking.
+    #[setters(skip)]
     pub host_sample_rate: Arc<AtomicU32>,
     /// Shared PCM pool for output buffers.
     pub pool: Option<PcmPool>,
     /// Quality preset controlling resampling algorithm.
     pub quality: ResamplerQuality,
     /// Initial source sample rate.
+    #[setters(skip)]
     pub source_sample_rate: u32,
 }
 
@@ -162,20 +169,6 @@ impl ResamplerParams {
             quality: ResamplerQuality::default(),
             source_sample_rate,
         }
-    }
-
-    /// Set shared PCM pool for output buffers.
-    #[must_use]
-    pub fn with_pool(mut self, pool: Option<PcmPool>) -> Self {
-        self.pool = pool;
-        self
-    }
-
-    /// Set resampling quality preset.
-    #[must_use]
-    pub fn with_quality(mut self, quality: ResamplerQuality) -> Self {
-        self.quality = quality;
-        self
     }
 }
 

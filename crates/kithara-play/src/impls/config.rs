@@ -2,6 +2,7 @@
 
 use std::{num::NonZeroU32, path::PathBuf};
 
+use derive_setters::Setters;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
 use kithara_audio::{AudioConfig, ResamplerQuality};
@@ -65,9 +66,12 @@ impl std::fmt::Display for ResourceSrc {
 ///     .with_hint("mp3")
 ///     .with_look_ahead_bytes(Some(1_000_000));
 /// ```
+#[derive(Setters)]
+#[setters(prefix = "with_", strip_option)]
 pub struct ResourceConfig {
     /// ABR (Adaptive Bitrate) configuration.
     #[cfg(feature = "hls")]
+    #[setters(skip)]
     pub abr: kithara_abr::AbrOptions,
     /// Unified event bus for streaming, decode, and audio events.
     ///
@@ -75,37 +79,45 @@ pub struct ResourceConfig {
     /// pipeline. All events (`FileEvent`, `HlsEvent`, `AudioEvent`) are
     /// published to this bus, enabling a single subscription point.
     /// When `None`, a fresh bus is created per resource.
+    #[setters(rename = "with_events")]
     pub bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Optional format hint (file extension like "mp3", "wav").
+    #[setters(skip)]
     pub hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
     #[cfg(feature = "hls")]
+    #[setters(skip)]
     pub hls_base_url: Option<Url>,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
     /// Encryption key handling configuration.
     #[cfg(feature = "hls")]
+    #[setters(skip)]
     pub keys: kithara_hls::KeyOptions,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     ///
     /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
     /// - `None` — no backpressure, download as fast as possible
+    #[setters(skip)]
     pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
     ///
     /// When multiple URLs share the same canonical form (e.g. differ only in
     /// query parameters), setting a unique `name` ensures each gets its own
     /// cache directory.
+    #[setters(skip)]
     pub name: Option<String>,
     /// Additional HTTP headers to include in all network requests.
     #[cfg(any(feature = "file", feature = "hls"))]
+    #[setters(skip)]
     pub headers: Option<Headers>,
     /// Network configuration (timeouts, retries).
     #[cfg(any(feature = "file", feature = "hls"))]
+    #[setters(skip)]
     pub net: NetOptions,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
@@ -113,13 +125,16 @@ pub struct ResourceConfig {
     ///
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
+    #[setters(skip)]
     pub preload_chunks: usize,
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
+    #[setters(skip)]
     pub src: ResourceSrc,
     /// Storage configuration (cache directory, eviction limits).
     #[cfg(any(feature = "file", feature = "hls"))]
+    #[setters(skip)]
     pub store: StoreOptions,
     /// Thread pool for background work (decode, probe, downloads).
     ///
@@ -188,29 +203,9 @@ impl ResourceConfig {
     }
 
     /// Set name for cache disambiguation.
-    ///
-    /// When multiple URLs share the same canonical form (differ only in query
-    /// parameters), a unique name ensures each gets its own cache directory.
     #[must_use]
     pub fn with_name<N: Into<String>>(mut self, name: N) -> Self {
         self.name = Some(name.into());
-        self
-    }
-
-    /// Set unified event bus.
-    ///
-    /// The bus is shared across the entire pipeline (stream + decode + audio).
-    /// All events are published to this bus.
-    #[must_use]
-    pub fn with_events(mut self, bus: EventBus) -> Self {
-        self.bus = Some(bus);
-        self
-    }
-
-    /// Set cancellation token.
-    #[must_use]
-    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
-        self.cancel = Some(cancel);
         self
     }
 
@@ -218,37 +213,6 @@ impl ResourceConfig {
     #[must_use]
     pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
         self.hint = Some(hint.into());
-        self
-    }
-
-    /// Set shared byte pool for temporary buffers (probe, etc.).
-    #[must_use]
-    pub fn with_byte_pool(mut self, pool: BytePool) -> Self {
-        self.byte_pool = Some(pool);
-        self
-    }
-
-    /// Set shared PCM pool for temporary buffers.
-    ///
-    /// The pool is shared across the entire audio chain, eliminating
-    /// per-call allocations in `read_planar` and internal decode buffers.
-    #[must_use]
-    pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
-        self.pcm_pool = Some(pool);
-        self
-    }
-
-    /// Set target sample rate of the audio host (for resampling).
-    #[must_use]
-    pub fn with_host_sample_rate(mut self, sample_rate: NonZeroU32) -> Self {
-        self.host_sample_rate = Some(sample_rate);
-        self
-    }
-
-    /// Set resampling quality preset.
-    #[must_use]
-    pub fn with_resampler_quality(mut self, quality: ResamplerQuality) -> Self {
-        self.resampler_quality = quality;
         self
     }
 
@@ -314,16 +278,6 @@ impl ResourceConfig {
     #[must_use]
     pub fn with_hls_base_url(mut self, base_url: Url) -> Self {
         self.hls_base_url = Some(base_url);
-        self
-    }
-
-    /// Set thread pool for background work (decode, probe, downloads).
-    ///
-    /// The pool is shared across all components. When not set, defaults to the
-    /// global rayon pool.
-    #[must_use]
-    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = Some(pool);
         self
     }
 

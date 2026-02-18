@@ -2,6 +2,7 @@
 
 use std::{hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
+use derive_setters::Setters;
 use kithara_bufpool::{BytePool, byte_pool};
 use kithara_storage::StorageResource;
 #[cfg(not(target_arch = "wasm32"))]
@@ -30,11 +31,14 @@ use crate::{
 ///
 /// Used by higher-level crates (kithara-file, kithara-hls) for unified configuration.
 /// This provides a user-friendly API that hides internal details like `asset_root`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Setters)]
+#[setters(prefix = "with_", strip_option)]
 pub struct StoreOptions {
     /// Directory for persistent cache storage (required).
+    #[setters(skip)]
     pub cache_dir: PathBuf,
     /// In-memory LRU cache capacity for opened resources.
+    #[setters(skip)]
     pub cache_capacity: Option<NonZeroUsize>,
     /// Use ephemeral (in-memory) storage instead of disk.
     ///
@@ -73,30 +77,6 @@ impl StoreOptions {
             max_assets: None,
             max_bytes: None,
         }
-    }
-
-    /// Set maximum number of assets to keep.
-    #[must_use]
-    pub fn with_max_assets(mut self, max: usize) -> Self {
-        self.max_assets = Some(max);
-        self
-    }
-
-    /// Set maximum bytes to store.
-    #[must_use]
-    pub fn with_max_bytes(mut self, max: u64) -> Self {
-        self.max_bytes = Some(max);
-        self
-    }
-
-    /// Use ephemeral (in-memory) storage instead of disk.
-    ///
-    /// When `true`, the asset store uses in-memory storage. Data is never
-    /// written to disk. Default: `false`.
-    #[must_use]
-    pub fn with_ephemeral(mut self, ephemeral: bool) -> Self {
-        self.ephemeral = ephemeral;
-        self
     }
 
     /// Convert to internal `EvictConfig`.
