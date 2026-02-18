@@ -7,6 +7,7 @@ use std::sync::{
     atomic::{AtomicU32, Ordering},
 };
 
+use derive_setters::Setters;
 use fast_interleave::{deinterleave_variable, interleave_variable};
 use kithara_bufpool::{PcmBuf, PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
@@ -136,6 +137,8 @@ impl ResamplerKind {
 /// Configuration parameters for the resampler effect.
 ///
 /// Contains all values needed to construct a [`ResamplerProcessor`].
+#[derive(Setters)]
+#[setters(prefix = "with_")]
 pub struct ResamplerParams {
     /// Number of audio channels.
     pub channels: usize,
@@ -162,20 +165,6 @@ impl ResamplerParams {
             quality: ResamplerQuality::default(),
             source_sample_rate,
         }
-    }
-
-    /// Set shared PCM pool for output buffers.
-    #[must_use]
-    pub fn with_pool(mut self, pool: Option<PcmPool>) -> Self {
-        self.pool = pool;
-        self
-    }
-
-    /// Set resampling quality preset.
-    #[must_use]
-    pub fn with_quality(mut self, quality: ResamplerQuality) -> Self {
-        self.quality = quality;
-        self
     }
 }
 
@@ -734,6 +723,7 @@ impl AudioEffect for ResamplerProcessor {
 #[cfg(test)]
 mod tests {
     use kithara_bufpool::pcm_pool;
+    use rstest::rstest;
 
     use super::*;
 
@@ -764,22 +754,17 @@ mod tests {
         ResamplerParams::new(host_sr, source_rate, channels).with_quality(quality)
     }
 
-    #[test]
-    fn test_passthrough_same_rate() {
-        let processor = ResamplerProcessor::new(params(make_host_rate(44100), 44100, 2));
-        assert!(processor.is_passthrough());
-    }
-
-    #[test]
-    fn test_passthrough_host_zero() {
-        let processor = ResamplerProcessor::new(params(make_host_rate(0), 44100, 2));
-        assert!(processor.is_passthrough());
-    }
-
-    #[test]
-    fn test_no_passthrough_different_rate() {
-        let processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
-        assert!(!processor.is_passthrough());
+    #[rstest]
+    #[case::same_rate(44100, 44100, true)]
+    #[case::host_zero(0, 44100, true)]
+    #[case::different_rate(44100, 48000, false)]
+    fn test_passthrough_mode(
+        #[case] host_rate: u32,
+        #[case] source_rate: u32,
+        #[case] expected: bool,
+    ) {
+        let processor = ResamplerProcessor::new(params(make_host_rate(host_rate), source_rate, 2));
+        assert_eq!(processor.is_passthrough(), expected);
     }
 
     #[test]
@@ -947,55 +932,18 @@ mod tests {
 
     // Quality-specific tests
 
-    #[test]
-    fn test_fast_quality_resamples() {
+    #[rstest]
+    #[case::fast(ResamplerQuality::Fast)]
+    #[case::normal(ResamplerQuality::Normal)]
+    #[case::good(ResamplerQuality::Good)]
+    #[case::high(ResamplerQuality::High)]
+    #[case::maximum(ResamplerQuality::Maximum)]
+    fn test_quality_resamples(#[case] quality: ResamplerQuality) {
         let mut processor = ResamplerProcessor::new(params_with_quality(
             make_host_rate(44100),
             48000,
             2,
-            ResamplerQuality::Fast,
-        ));
-        assert!(!processor.is_passthrough());
-
-        let chunk = test_chunk(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 48000,
-            },
-            vec![0.1; 16384],
-        );
-        let result = processor.process(chunk);
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_maximum_quality_resamples() {
-        let mut processor = ResamplerProcessor::new(params_with_quality(
-            make_host_rate(44100),
-            48000,
-            2,
-            ResamplerQuality::Maximum,
-        ));
-        assert!(!processor.is_passthrough());
-
-        let chunk = test_chunk(
-            PcmSpec {
-                channels: 2,
-                sample_rate: 48000,
-            },
-            vec![0.1; 16384],
-        );
-        let result = processor.process(chunk);
-        assert!(result.is_some());
-    }
-
-    #[test]
-    fn test_good_quality_resamples() {
-        let mut processor = ResamplerProcessor::new(params_with_quality(
-            make_host_rate(44100),
-            48000,
-            2,
-            ResamplerQuality::Good,
+            quality,
         ));
         assert!(!processor.is_passthrough());
 

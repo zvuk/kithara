@@ -10,6 +10,10 @@ use crate::{
     types::{ActionAtItemEnd, ObserverId, PlayerStatus, SlotId, TimeControlStatus, WaitingReason},
 };
 
+#[cfg_attr(
+    any(test, feature = "test-utils"),
+    unimock::unimock(api = PlayerMock, type Item = unimock::Unimock;)
+)]
 pub trait Player: MaybeSend + MaybeSync + 'static {
     type Item: crate::traits::item::PlayerItem;
 
@@ -82,6 +86,12 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
 
     fn set_automatically_waits_to_minimize_stalling(&self, waits: bool);
 
+    // -- network --
+
+    fn is_network_expensive(&self) -> bool;
+
+    fn set_network_expensive(&self, expensive: bool);
+
     // -- time observation --
 
     fn add_periodic_time_observer(
@@ -105,4 +115,23 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
     // -- engine integration --
 
     fn slot_id(&self) -> Option<SlotId>;
+}
+
+#[cfg(test)]
+mod tests {
+    use unimock::Unimock;
+
+    use super::*;
+
+    fn assert_player_item_unimock<T: Player<Item = Unimock>>() {}
+
+    #[test]
+    fn player_mock_api_is_generated() {
+        let _ = PlayerMock::status;
+    }
+
+    #[test]
+    fn player_unimock_item_is_unimock() {
+        assert_player_item_unimock::<Unimock>();
+    }
 }

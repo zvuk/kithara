@@ -13,8 +13,9 @@
 //! Rayon supports WASM via `wasm-bindgen-rayon`, mapping pool threads
 //! to Web Workers. This makes `ThreadPool` portable across native and web.
 
-use std::{fmt, sync::Arc};
+use std::{fmt, io, sync::Arc};
 
+use futures::channel::oneshot;
 /// Shared thread pool for blocking/CPU-bound work.
 ///
 /// Wraps an optional [`rayon::ThreadPool`]. When `None`, delegates to the
@@ -97,17 +98,17 @@ impl ThreadPool {
     /// # Errors
     ///
     /// Returns an error if the pool thread panics.
-    pub async fn spawn_async<F, R>(&self, f: F) -> Result<R, std::io::Error>
+    pub async fn spawn_async<F, R>(&self, f: F) -> Result<R, io::Error>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         self.spawn(move || {
             let _ = tx.send(f());
         });
         rx.await
-            .map_err(|_| std::io::Error::other("thread pool task panicked"))
+            .map_err(|_| io::Error::other("thread pool task panicked"))
     }
 }
 
@@ -135,13 +136,9 @@ impl fmt::Debug for ThreadPool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn test_global_pool() {
-        let pool = ThreadPool::global();
-        assert!(pool.inner.is_none());
-    }
+    use super::*;
 
     #[test]
     fn test_custom_pool() {
@@ -159,16 +156,16 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 42);
     }
 
+    #[rstest]
+    #[case::custom(true)]
+    #[case::global(false)]
     #[tokio::test]
-    async fn test_spawn_async() {
-        let pool = ThreadPool::with_num_threads(2).unwrap();
-        let result = pool.spawn_async(|| 42).await.unwrap();
-        assert_eq!(result, 42);
-    }
-
-    #[tokio::test]
-    async fn test_spawn_async_global() {
-        let pool = ThreadPool::global();
+    async fn test_spawn_async(#[case] custom: bool) {
+        let pool = if custom {
+            ThreadPool::with_num_threads(2).unwrap()
+        } else {
+            ThreadPool::global()
+        };
         let result = pool.spawn_async(|| 42).await.unwrap();
         assert_eq!(result, 42);
     }
@@ -190,23 +187,28 @@ mod tests {
         assert_eq!(rx2.recv().unwrap(), 2);
     }
 
-    #[test]
-    fn test_debug_global() {
-        let pool = ThreadPool::global();
+    #[rstest]
+    #[case::global(false, "global")]
+    #[case::custom(true, "custom")]
+    fn test_debug(#[case] custom: bool, #[case] expected_kind: &str) {
+        let pool = if custom {
+            ThreadPool::with_num_threads(3).unwrap()
+        } else {
+            ThreadPool::global()
+        };
         let debug = format!("{:?}", pool);
-        assert!(debug.contains("global"));
+        assert!(debug.contains(expected_kind));
     }
 
-    #[test]
-    fn test_debug_custom() {
-        let pool = ThreadPool::with_num_threads(3).unwrap();
-        let debug = format!("{:?}", pool);
-        assert!(debug.contains("custom"));
-    }
-
-    #[test]
-    fn test_default_is_global() {
-        let pool = ThreadPool::default();
+    #[rstest]
+    #[case::global(false)]
+    #[case::default(true)]
+    fn test_default_and_global_are_global(#[case] default_ctor: bool) {
+        let pool = if default_ctor {
+            ThreadPool::default()
+        } else {
+            ThreadPool::global()
+        };
         assert!(pool.inner.is_none());
     }
 }

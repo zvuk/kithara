@@ -4,6 +4,9 @@
 
 <div align="center">
 
+[![Crates.io](https://img.shields.io/crates/v/kithara-wasm.svg)](https://crates.io/crates/kithara-wasm)
+[![Downloads](https://img.shields.io/crates/d/kithara-wasm.svg)](https://crates.io/crates/kithara-wasm)
+[![docs.rs](https://docs.rs/kithara-wasm/badge.svg)](https://docs.rs/kithara-wasm)
 [![License](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](../../LICENSE-MIT)
 
 </div>
@@ -27,13 +30,14 @@ player.play();
 
 ## Key Types
 
-| Type | Role |
-|------|------|
-| `WasmPlayer` | Main player: `play()`, `pause()`, `seek()`, `fill_buffer()` |
-| `setup()` | Initialize panic hook and tracing (call once before anything else) |
-| `load_hls(url)` | Load HLS playlist; returns `[channels, sample_rate, duration_ms]` |
-| `wasm_memory()` | Expose WASM memory as `SharedArrayBuffer` for AudioWorklet |
-| `init_thread_pool(n)` | Initialize rayon thread pool (requires `threads` feature) |
+<table>
+<tr><th>Type</th><th>Role</th></tr>
+<tr><td><code>WasmPlayer</code></td><td>Main player: <code>play()</code>, <code>pause()</code>, <code>seek()</code>, <code>fill_buffer()</code></td></tr>
+<tr><td><code>setup()</code></td><td>Initialize panic hook and tracing (call once before anything else)</td></tr>
+<tr><td><code>load_hls(url)</code></td><td>Load HLS playlist; returns <code>[channels, sample_rate, duration_ms]</code></td></tr>
+<tr><td><code>wasm_memory()</code></td><td>Expose WASM memory as <code>SharedArrayBuffer</code> for AudioWorklet</td></tr>
+<tr><td><code>init_thread_pool(n)</code></td><td>Initialize rayon thread pool (requires <code>threads</code> feature)</td></tr>
+</table>
 
 ## Architecture
 
@@ -43,9 +47,10 @@ player.play();
 
 ## Features
 
-| Feature | Default | Enables |
-|---------|---------|---------|
-| `threads` | yes | `wasm-bindgen-rayon` thread pool (requires `atomics` + `bulk-memory` target features) |
+<table>
+<tr><th>Feature</th><th>Default</th><th>Enables</th></tr>
+<tr><td><code>threads</code></td><td>yes</td><td><code>wasm-bindgen-rayon</code> thread pool (requires <code>atomics</code> + <code>bulk-memory</code> target features)</td></tr>
+</table>
 
 ## Integration
 

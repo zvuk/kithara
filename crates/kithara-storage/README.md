@@ -67,24 +67,26 @@ sequenceDiagram
 
 ## Key Types
 
-| Type | Role |
-|------|------|
-| `ResourceExt` (trait) | Consumer-facing API: `read_at`, `write_at`, `wait_range`, `commit`, `fail` |
-| `StorageResource` | Enum dispatching to `MmapResource` or `MemResource` |
-| `OpenMode` | Access mode: `Auto`, `ReadWrite`, or `ReadOnly` |
-| `ResourceStatus` | `Active`, `Committed { final_len }`, or `Failed(String)` |
-| `WaitOutcome` | `Ready` or `Eof` |
-| `Atomic<R>` | Decorator for crash-safe writes via write-temp-rename |
-| `Coverage` (trait) | Tracks downloaded byte ranges via `MemCoverage` |
+<table>
+<tr><th>Type</th><th>Role</th></tr>
+<tr><td><code>ResourceExt</code> (trait)</td><td>Consumer-facing API: <code>read_at</code>, <code>write_at</code>, <code>wait_range</code>, <code>commit</code>, <code>fail</code></td></tr>
+<tr><td><code>StorageResource</code></td><td>Enum dispatching to <code>MmapResource</code> or <code>MemResource</code></td></tr>
+<tr><td><code>OpenMode</code></td><td>Access mode: <code>Auto</code>, <code>ReadWrite</code>, or <code>ReadOnly</code></td></tr>
+<tr><td><code>ResourceStatus</code></td><td><code>Active</code>, <code>Committed { final_len }</code>, or <code>Failed(String)</code></td></tr>
+<tr><td><code>WaitOutcome</code></td><td><code>Ready</code> or <code>Eof</code></td></tr>
+<tr><td><code>Atomic&lt;R&gt;</code></td><td>Decorator for crash-safe writes via write-temp-rename</td></tr>
+<tr><td><code>Coverage</code> (trait)</td><td>Tracks downloaded byte ranges via <code>MemCoverage</code></td></tr>
+</table>
 
 ## Mmap vs Mem
 
-| Aspect | MmapDriver | MemDriver |
-|--------|-----------|-----------|
-| Backing | `mmap-io::MemoryMappedFile` | `Vec<u8>` behind `Mutex` |
-| Lock-free fast path | Yes (`SegQueue` for write notifications) | No |
-| Auto-resize | 2x growth on overflow | Extend on write |
-| `path()` | `Some` | `None` |
+<table>
+<tr><th>Aspect</th><th>MmapDriver</th><th>MemDriver</th></tr>
+<tr><td>Backing</td><td><code>mmap-io::MemoryMappedFile</code></td><td><code>Vec&lt;u8&gt;</code> behind <code>Mutex</code></td></tr>
+<tr><td>Lock-free fast path</td><td>Yes (<code>SegQueue</code> for write notifications)</td><td>No</td></tr>
+<tr><td>Auto-resize</td><td>2x growth on overflow</td><td>Extend on write</td></tr>
+<tr><td><code>path()</code></td><td><code>Some</code></td><td><code>None</code></td></tr>
+</table>
 
 ## Synchronization
 

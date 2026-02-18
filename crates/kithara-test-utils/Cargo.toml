@@ -19,3 +19,6 @@ tokio-util = { workspace = true }
 tracing-subscriber = { workspace = true }
 thiserror = { workspace = true }
 futures = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
+url = { workspace = true }

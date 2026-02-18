@@ -9,13 +9,14 @@
 
 use std::time::Duration;
 
-use kithara::audio::{Audio, AudioConfig};
-use kithara::file::{File, FileConfig, FileSrc};
-use kithara::stream::Stream;
+use kithara::{
+    audio::{Audio, AudioConfig},
+    file::{File, FileConfig, FileSrc},
+    stream::Stream,
+};
+use kithara_test_utils::{Xorshift64, wav::create_test_wav};
 use rstest::rstest;
 use tracing::info;
-
-use kithara_test_utils::{Xorshift64, wav::create_test_wav};
 
 const SAMPLE_RATE: u32 = 44100;
 const DURATION_SECS: f64 = 10.0;

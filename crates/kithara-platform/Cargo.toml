@@ -5,14 +5,19 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Platform-aware primitives (sync, traits, time) for native and wasm32 targets"
 
 [lints]
 workspace = true
 
 [dependencies]
+futures = { workspace = true }
 parking_lot = { workspace = true }
 rayon = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["time", "sync"] }
+
+[dev-dependencies]
+rstest = { workspace = true }

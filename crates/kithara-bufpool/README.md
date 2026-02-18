@@ -33,10 +33,11 @@ let pcm = pcm_pool().get_with(|b| b.clear());
 
 ## Type aliases
 
-| Alias | Definition | Global accessor |
-|-------|-----------|----------------|
-| `BytePool` | `SharedPool<32, Vec<u8>>` | `byte_pool()` |
-| `PcmPool` | `SharedPool<32, Vec<f32>>` | `pcm_pool()` |
+<table>
+<tr><th>Alias</th><th>Definition</th><th>Global accessor</th></tr>
+<tr><td><code>BytePool</code></td><td><code>SharedPool&lt;32, Vec&lt;u8&gt;&gt;</code></td><td><code>byte_pool()</code></td></tr>
+<tr><td><code>PcmPool</code></td><td><code>SharedPool&lt;32, Vec&lt;f32&gt;&gt;</code></td><td><code>pcm_pool()</code></td></tr>
+</table>
 
 ## Allocation Flow
 
@@ -45,10 +46,11 @@ let pcm = pcm_pool().get_with(|b| b.clear());
 
 ## Global Pools
 
-| Pool | Type | Max Buffers | Trim Capacity |
-|------|------|-------------|---------------|
-| `byte_pool()` | `SharedPool<32, Vec<u8>>` | 1024 | 64 KB |
-| `pcm_pool()` | `SharedPool<32, Vec<f32>>` | 64 | 200K |
+<table>
+<tr><th>Pool</th><th>Type</th><th>Max Buffers</th><th>Trim Capacity</th></tr>
+<tr><td><code>byte_pool()</code></td><td><code>SharedPool&lt;32, Vec&lt;u8&gt;&gt;</code></td><td>1024</td><td>64 KB</td></tr>
+<tr><td><code>pcm_pool()</code></td><td><code>SharedPool&lt;32, Vec&lt;f32&gt;&gt;</code></td><td>64</td><td>200K</td></tr>
+</table>
 
 ## Integration
 

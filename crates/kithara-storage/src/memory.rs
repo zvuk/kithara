@@ -7,40 +7,34 @@
 //! (wasm32 + atomics) where mmap is unavailable.
 //!
 //! When writes wrap around and evict old data, the `available` `RangeSet` in
-//! `CommonState` is updated (via [`Driver::valid_window`]) to remove evicted
+//! `CommonState` is updated (via [`DriverIo::valid_window`]) to remove evicted
 //! ranges. This allows `wait_range()` to detect gaps and trigger re-fetches
 //! on seek.
 
 use std::{ops::Range, path::Path};
 
+use derivative::Derivative;
 use kithara_platform::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     StorageError, StorageResult,
-    driver::{Driver, DriverState, Resource},
+    driver::{Driver, DriverIo, DriverState, Resource},
 };
 
 /// Default ring buffer capacity (1 mebibyte, power of 2).
 const DEFAULT_RING_CAPACITY: usize = 1 << 20;
 
 /// Options for creating a [`MemResource`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Derivative)]
+#[derivative(Default)]
 pub struct MemOptions {
     /// Pre-fill the resource with this data (committed on creation).
     pub initial_data: Option<Vec<u8>>,
     /// Ring buffer capacity in bytes. Must be power of 2.
     /// Defaults to 1 mebibyte. Rounded up to next power of 2 if not already.
+    #[derivative(Default(value = "DEFAULT_RING_CAPACITY"))]
     pub capacity: usize,
-}
-
-impl Default for MemOptions {
-    fn default() -> Self {
-        Self {
-            initial_data: None,
-            capacity: DEFAULT_RING_CAPACITY,
-        }
-    }
 }
 
 /// Internal state of the ring buffer driver.
@@ -117,7 +111,10 @@ impl Driver for MemDriver {
 
         Ok((driver, init))
     }
+}
 
+impl DriverIo for MemDriver {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         let ring = self.state.lock();
         let window_end = ring.window_start + ring.capacity as u64;
@@ -152,6 +149,7 @@ impl Driver for MemDriver {
         Ok(to_read)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
         if committed {
             return Err(StorageError::Failed(

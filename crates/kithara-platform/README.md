@@ -27,19 +27,21 @@ let guard = lock.lock();
 
 ## Key Types
 
-| Type | Native | wasm32 |
-|------|--------|--------|
-| `Mutex<T>` | `parking_lot::Mutex` | Spin-loop `try_lock` wrapper |
-| `RwLock<T>` | `parking_lot::RwLock` | Spin-loop reader-writer lock |
-| `Condvar` | `parking_lot::Condvar` | Modified semantics for single-threaded wasm |
-| `MaybeSend` | = `Send` | No-op (auto-implemented) |
-| `MaybeSync` | = `Sync` | No-op (auto-implemented) |
+<table>
+<tr><th>Type</th><th>Native</th><th>wasm32</th></tr>
+<tr><td><code>Mutex&lt;T&gt;</code></td><td><code>parking_lot::Mutex</code></td><td>Spin-loop <code>try_lock</code> wrapper</td></tr>
+<tr><td><code>RwLock&lt;T&gt;</code></td><td><code>parking_lot::RwLock</code></td><td>Spin-loop reader-writer lock</td></tr>
+<tr><td><code>Condvar</code></td><td><code>parking_lot::Condvar</code></td><td>Modified semantics for single-threaded wasm</td></tr>
+<tr><td><code>MaybeSend</code></td><td>= <code>Send</code></td><td>No-op (auto-implemented)</td></tr>
+<tr><td><code>MaybeSync</code></td><td>= <code>Sync</code></td><td>No-op (auto-implemented)</td></tr>
+</table>
 
 ## Time Utilities
 
-| Function | Native | wasm32 |
-|----------|--------|--------|
-| `sleep(duration)` | `tokio::time::sleep` | No-op |
+<table>
+<tr><th>Function</th><th>Native</th><th>wasm32</th></tr>
+<tr><td><code>sleep(duration)</code></td><td><code>tokio::time::sleep</code></td><td>No-op</td></tr>
+</table>
 
 ## Integration
 

@@ -68,12 +68,13 @@ sequenceDiagram
 
 ## Key Traits
 
-| Trait | Role |
-|-------|------|
-| `Source` | Sync random-access interface: `wait_range`, `read_at`, `len`, `media_info` |
-| `Downloader` | Async planner: `plan()` returns batches; `commit()` stores results; backpressure via `should_throttle()` |
-| `DownloaderIo` | Pure I/O (network fetch), `Clone + Send`, stateless; runs multiple copies in parallel |
-| `StreamType` | Marker trait for protocol types (`File`, `Hls`); associated types: `Config`, `Source`, `Error`, `Event` |
+<table>
+<tr><th>Trait</th><th>Role</th></tr>
+<tr><td><code>Source</code></td><td>Sync random-access interface: <code>wait_range</code>, <code>read_at</code>, <code>len</code>, <code>media_info</code></td></tr>
+<tr><td><code>Downloader</code></td><td>Async planner: <code>plan()</code> returns batches; <code>commit()</code> stores results; backpressure via <code>should_throttle()</code></td></tr>
+<tr><td><code>DownloaderIo</code></td><td>Pure I/O (network fetch), <code>Clone + Send</code>, stateless; runs multiple copies in parallel</td></tr>
+<tr><td><code>StreamType</code></td><td>Marker trait for protocol types (<code>File</code>, <code>Hls</code>); associated types: <code>Config</code>, <code>Source</code>, <code>Error</code>, <code>Event</code></td></tr>
+</table>
 
 ## Canonical Types
 

@@ -10,6 +10,7 @@ use kithara_platform::Mutex;
 ///
 /// Implementors must provide logic to clear/reset the value
 /// and optionally shrink capacity to a trim size.
+#[cfg_attr(test, unimock::unimock(api = ReuseMock))]
 pub trait Reuse {
     /// Prepare this value for reuse.
     ///
@@ -498,5 +499,14 @@ where
 {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
+    }
+}
+
+impl<const SHARDS: usize, T> fmt::Debug for SharedPool<SHARDS, T>
+where
+    T: Reuse,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharedPool").finish_non_exhaustive()
     }
 }

@@ -31,25 +31,26 @@ impl<T: Read + Seek + Send + Sync> DecoderInput for T {}
 ///
 /// Implementations provide compile-time codec identification that maps
 /// to runtime [`AudioCodec`] values.
-pub trait CodecType: Send + 'static {
+pub(crate) trait CodecType: Send + 'static {
     /// The codec this type represents.
+    #[cfg_attr(not(test), expect(dead_code))]
     const CODEC: AudioCodec;
 }
 
 /// AAC codec marker (maps to AAC-LC, the most common variant).
-pub struct Aac;
+pub(crate) struct Aac;
 impl CodecType for Aac {
     const CODEC: AudioCodec = AudioCodec::AacLc;
 }
 
 /// MP3 codec marker.
-pub struct Mp3;
+pub(crate) struct Mp3;
 impl CodecType for Mp3 {
     const CODEC: AudioCodec = AudioCodec::Mp3;
 }
 
 /// FLAC codec marker.
-pub struct Flac;
+pub(crate) struct Flac;
 impl CodecType for Flac {
     const CODEC: AudioCodec = AudioCodec::Flac;
 }
@@ -61,7 +62,7 @@ impl CodecType for Alac {
 }
 
 /// Vorbis codec marker.
-pub struct Vorbis;
+pub(crate) struct Vorbis;
 impl CodecType for Vorbis {
     const CODEC: AudioCodec = AudioCodec::Vorbis;
 }
@@ -186,31 +187,26 @@ pub trait InnerDecoder: Send + 'static {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn test_aac_codec_type() {
-        assert_eq!(Aac::CODEC, AudioCodec::AacLc);
-    }
-
-    #[test]
-    fn test_mp3_codec_type() {
-        assert_eq!(Mp3::CODEC, AudioCodec::Mp3);
-    }
-
-    #[test]
-    fn test_flac_codec_type() {
-        assert_eq!(Flac::CODEC, AudioCodec::Flac);
-    }
-
-    #[test]
-    fn test_alac_codec_type() {
-        assert_eq!(Alac::CODEC, AudioCodec::Alac);
-    }
-
-    #[test]
-    fn test_vorbis_codec_type() {
-        assert_eq!(Vorbis::CODEC, AudioCodec::Vorbis);
+    #[rstest]
+    #[case::aac(0, AudioCodec::AacLc)]
+    #[case::mp3(1, AudioCodec::Mp3)]
+    #[case::flac(2, AudioCodec::Flac)]
+    #[case::alac(3, AudioCodec::Alac)]
+    #[case::vorbis(4, AudioCodec::Vorbis)]
+    fn test_codec_type_mapping(#[case] codec: u8, #[case] expected: AudioCodec) {
+        let actual = match codec {
+            0 => Aac::CODEC,
+            1 => Mp3::CODEC,
+            2 => Flac::CODEC,
+            3 => Alac::CODEC,
+            4 => Vorbis::CODEC,
+            _ => unreachable!("unknown codec case"),
+        };
+        assert_eq!(actual, expected);
     }
 
     #[test]

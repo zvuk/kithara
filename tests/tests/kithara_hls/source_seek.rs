@@ -15,16 +15,18 @@ use std::{
 };
 
 use fixture::TestServer;
-use kithara::assets::StoreOptions;
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    stream::Stream,
+};
+use kithara_test_utils::{cancel_token, temp_dir, tracing_setup};
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture;
-use kithara_test_utils::{cancel_token, temp_dir, tracing_setup};
 
 // Test Data Helpers
 

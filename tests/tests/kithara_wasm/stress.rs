@@ -8,11 +8,12 @@ use std::{
     time::Duration,
 };
 
-use kithara::audio::{Audio, AudioConfig};
-use kithara::events::EventBus;
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::platform::ThreadPool;
-use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
+use kithara_assets::StoreOptions;
+use kithara_audio::{Audio, AudioConfig};
+use kithara_events::EventBus;
+use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
+use kithara_platform::ThreadPool;
+use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
 use tracing::{info, warn};
 use url::Url;
 use wasm_bindgen_futures::JsFuture;
@@ -82,7 +83,7 @@ async fn create_pipeline() -> Audio<Stream<Hls>> {
     let hls_config = HlsConfig::new(fixture_url())
         .with_thread_pool(pool)
         .with_events(bus)
-        .with_ephemeral(true)
+        .with_store(StoreOptions::default().with_ephemeral(true))
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()

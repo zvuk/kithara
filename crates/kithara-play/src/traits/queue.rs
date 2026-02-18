@@ -3,6 +3,10 @@ use tokio::sync::broadcast;
 
 use crate::{events::PlayerEvent, traits::item::PlayerItem, types::SlotId};
 
+#[cfg_attr(
+    any(test, feature = "test-utils"),
+    unimock::unimock(api = QueuePlayerMock, type Item = unimock::Unimock;)
+)]
 pub trait QueuePlayer: MaybeSend + MaybeSync + 'static {
     type Item: PlayerItem;
 
@@ -29,4 +33,23 @@ pub trait QueuePlayer: MaybeSend + MaybeSync + 'static {
     fn slot_id(&self) -> Option<SlotId>;
 
     fn subscribe(&self) -> broadcast::Receiver<PlayerEvent>;
+}
+
+#[cfg(test)]
+mod tests {
+    use unimock::Unimock;
+
+    use super::*;
+
+    fn assert_queue_item_unimock<T: QueuePlayer<Item = Unimock>>() {}
+
+    #[test]
+    fn queue_player_mock_api_is_generated() {
+        let _ = QueuePlayerMock::items;
+    }
+
+    #[test]
+    fn queue_player_unimock_item_is_unimock() {
+        assert_queue_item_unimock::<Unimock>();
+    }
 }

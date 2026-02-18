@@ -1,0 +1,4 @@
+# file_path|reason
+crates/kithara-platform/src/maybe_send.rs|marker cfg traits (MaybeSend/MaybeSync) are compile-time auto-trait shims, not runtime behavior contracts
+crates/kithara-stream/src/downloader.rs|traits use RPITIT (impl Future) and are currently validated through concrete fake implementations in backend tests
+crates/kithara-stream/src/stream.rs|StreamType includes static factory methods without self receiver, which unimock cannot generate mocks for

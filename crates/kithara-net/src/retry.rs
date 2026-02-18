@@ -210,11 +210,40 @@ impl RetryPolicyTrait for DefaultRetryPolicy {
 
 #[cfg(test)]
 mod tests {
+    use futures::stream;
     use rstest::*;
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
     use crate::traits::NetMock;
+
+    fn test_url() -> Url {
+        Url::parse("http://test.com").expect("valid URL")
+    }
+
+    fn empty_stream() -> ByteStream {
+        Box::pin(stream::empty())
+    }
+
+    fn fast_retry_policy(max_retries: u32) -> RetryPolicy {
+        RetryPolicy {
+            base_delay: Duration::from_millis(1),
+            max_delay: Duration::from_secs(1),
+            max_retries,
+        }
+    }
+
+    fn retry_net(mock: Unimock, policy: RetryPolicy) -> RetryNet<Unimock, DefaultRetryPolicy> {
+        RetryNet::new(
+            mock,
+            DefaultRetryPolicy::new(policy),
+            CancellationToken::new(),
+        )
+    }
+
+    fn retry_net_default(mock: Unimock) -> RetryNet<Unimock, DefaultRetryPolicy> {
+        retry_net(mock, RetryPolicy::default())
+    }
 
     // DefaultRetryPolicy Tests
 
@@ -279,14 +308,9 @@ mod tests {
                 .some_call(matching!(_, _))
                 .returns(Ok(Bytes::from("success"))),
         );
-        let policy = RetryPolicy::default();
-        let retry_net = RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::new(),
-        );
+        let retry_net = retry_net_default(mock);
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.get_bytes(url, None).await;
 
         assert!(result.is_ok());
@@ -306,18 +330,9 @@ mod tests {
                 .next_call(matching!(_, _))
                 .returns(Ok(Bytes::from("success"))),
         ));
-        let policy = RetryPolicy {
-            base_delay: Duration::from_millis(1),
-            max_delay: Duration::from_secs(1),
-            max_retries: 3,
-        };
-        let retry_net = RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::new(),
-        );
+        let retry_net = retry_net(mock, fast_retry_policy(3));
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.get_bytes(url, None).await;
 
         assert!(result.is_ok());
@@ -331,18 +346,9 @@ mod tests {
                 .each_call(matching!(_, _))
                 .returns(Err(NetError::Timeout)),
         );
-        let policy = RetryPolicy {
-            base_delay: Duration::from_millis(1),
-            max_delay: Duration::from_secs(1),
-            max_retries: 2,
-        };
-        let retry_net = RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::new(),
-        );
+        let retry_net = retry_net(mock, fast_retry_policy(2));
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.get_bytes(url, None).await;
 
         assert!(result.is_err());
@@ -356,14 +362,9 @@ mod tests {
                 .some_call(matching!(_, _))
                 .returns(Err(NetError::Http("status: 404".to_string()))),
         );
-        let policy = RetryPolicy::default();
-        let retry_net = RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::new(),
-        );
+        let retry_net = retry_net_default(mock);
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.get_bytes(url, None).await;
 
         assert!(result.is_err());
@@ -377,19 +378,11 @@ mod tests {
         let mock = Unimock::new(
             NetMock::stream
                 .some_call(matching!(_, _))
-                .answers(&|_, _, _| {
-                    use futures::stream;
-                    Ok(Box::pin(stream::empty()) as ByteStream)
-                }),
+                .answers(&|_, _, _| Ok(empty_stream())),
         );
-        let policy = RetryPolicy::default();
-        let retry_net = RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::new(),
-        );
+        let retry_net = retry_net_default(mock);
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.stream(url, None).await;
 
         assert!(result.is_ok());
@@ -407,23 +400,11 @@ mod tests {
                 .answers(&|_, _, _| Err(NetError::Timeout)),
             NetMock::stream
                 .next_call(matching!(_, _))
-                .answers(&|_, _, _| {
-                    use futures::stream;
-                    Ok(Box::pin(stream::empty()) as ByteStream)
-                }),
+                .answers(&|_, _, _| Ok(empty_stream())),
         ));
-        let policy = RetryPolicy {
-            base_delay: Duration::from_millis(1),
-            max_delay: Duration::from_secs(1),
-            max_retries: 3,
-        };
-        let retry_net = RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::new(),
-        );
+        let retry_net = retry_net(mock, fast_retry_policy(3));
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.stream(url, None).await;
 
         assert!(result.is_ok());
@@ -434,20 +415,14 @@ mod tests {
     #[rstest]
     #[tokio::test]
     async fn test_retry_net_get_range_success() {
-        let mock = Unimock::new(NetMock::get_range.some_call(matching!(_, _, _)).answers(
-            &|_, _, _, _| {
-                use futures::stream;
-                Ok(Box::pin(stream::empty()) as ByteStream)
-            },
-        ));
-        let policy = RetryPolicy::default();
-        let retry_net = RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::new(),
+        let mock = Unimock::new(
+            NetMock::get_range
+                .some_call(matching!(_, _, _))
+                .answers(&|_, _, _, _| Ok(empty_stream())),
         );
+        let retry_net = retry_net_default(mock);
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let range = RangeSpec::from_start(0);
         let result = retry_net.get_range(url, range, None).await;
 
@@ -466,23 +441,11 @@ mod tests {
                 .answers(&|_, _, _, _| Err(NetError::Timeout)),
             NetMock::get_range
                 .next_call(matching!(_, _, _))
-                .answers(&|_, _, _, _| {
-                    use futures::stream;
-                    Ok(Box::pin(stream::empty()) as ByteStream)
-                }),
+                .answers(&|_, _, _, _| Ok(empty_stream())),
         ));
-        let policy = RetryPolicy {
-            base_delay: Duration::from_millis(1),
-            max_delay: Duration::from_secs(1),
-            max_retries: 3,
-        };
-        let retry_net = RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::new(),
-        );
+        let retry_net = retry_net(mock, fast_retry_policy(3));
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let range = RangeSpec::from_start(0);
         let result = retry_net.get_range(url, range, None).await;
 
@@ -499,14 +462,9 @@ mod tests {
                 .some_call(matching!(_, _))
                 .returns(Ok(Headers::new())),
         );
-        let policy = RetryPolicy::default();
-        let retry_net = RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::new(),
-        );
+        let retry_net = retry_net_default(mock);
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.head(url, None).await;
 
         assert!(result.is_ok());
@@ -526,18 +484,9 @@ mod tests {
                 .next_call(matching!(_, _))
                 .returns(Ok(Headers::new())),
         ));
-        let policy = RetryPolicy {
-            base_delay: Duration::from_millis(1),
-            max_delay: Duration::from_secs(1),
-            max_retries: 3,
-        };
-        let retry_net = RetryNet::new(
-            mock,
-            DefaultRetryPolicy::new(policy),
-            CancellationToken::new(),
-        );
+        let retry_net = retry_net(mock, fast_retry_policy(3));
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let result = retry_net.head(url, None).await;
 
         assert!(result.is_ok());
@@ -584,11 +533,11 @@ mod tests {
         let cancel = CancellationToken::new();
         let retry_net = RetryNet::new(mock, DefaultRetryPolicy::new(policy), cancel.clone());
 
-        let url = Url::parse("http://test.com").unwrap();
+        let url = test_url();
         let handle = tokio::spawn(async move { retry_net.get_bytes(url, None).await });
 
         // Give the first attempt time to fail and enter the retry sleep
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        sleep(Duration::from_millis(50)).await;
         cancel.cancel();
 
         let result = tokio::time::timeout(Duration::from_millis(200), handle)

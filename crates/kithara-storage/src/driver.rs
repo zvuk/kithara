@@ -1,13 +1,15 @@
 #![forbid(unsafe_code)]
 
-//! Generic `Resource<D>` and `Driver` trait.
+//! Generic `Resource<D>`, `DriverIo` and `Driver` traits.
 //!
-//! `Driver` abstracts backend-specific storage I/O (mmap, in-memory, etc.).
+//! `DriverIo` abstracts backend-specific storage I/O (mmap, in-memory, etc.).
+//! `Driver` adds backend creation (`open`).
 //! `Resource<D>` owns the common state machine (range tracking, committed/failed
 //! flags, condvar coordination, cancellation) and delegates I/O to the driver.
 
 use std::{fmt::Debug, ops::Range, path::Path, sync::Arc};
 
+use derivative::Derivative;
 use kithara_platform::{Condvar, Mutex};
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
@@ -25,21 +27,8 @@ use crate::{
 ///
 /// Each driver manages its own interior mutability (e.g. `Mutex<MmapState>`
 /// for mmap, `Mutex<Vec<u8>>` for memory).
-pub trait Driver: Send + Sync + 'static {
-    /// Configuration needed to open/create a driver instance.
-    type Options: Send;
-
-    /// Open or create a new driver from options.
-    ///
-    /// Returns the driver and initial state to populate [`Resource<D>`].
-    ///
-    /// # Errors
-    ///
-    /// Returns error if the backing storage cannot be opened or created.
-    fn open(opts: Self::Options) -> StorageResult<(Self, DriverState)>
-    where
-        Self: Sized;
-
+#[cfg_attr(any(test, feature = "test-utils"), unimock::unimock(api = DriverIoMock))]
+pub trait DriverIo: Send + Sync + 'static {
     /// Read bytes at offset into `buf`.
     ///
     /// `effective_len` is the min of `final_len` and physical storage length,
@@ -107,7 +96,27 @@ pub trait Driver: Send + Sync + 'static {
     }
 }
 
+/// Driver factory + I/O contract.
+///
+/// `Driver` inherits the runtime operations from [`DriverIo`] and adds creation.
+pub trait Driver: DriverIo {
+    /// Configuration needed to open/create a driver instance.
+    type Options: Send;
+
+    /// Open or create a new driver from options.
+    ///
+    /// Returns the driver and initial state to populate [`Resource<D>`].
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the backing storage cannot be opened or created.
+    fn open(opts: Self::Options) -> StorageResult<(Self, DriverState)>
+    where
+        Self: Sized;
+}
+
 /// Initial state returned by [`Driver::open`] to populate [`Resource<D>`].
+#[derive(Default)]
 pub struct DriverState {
     /// Pre-populated available byte ranges.
     pub available: RangeSet<u64>,
@@ -115,16 +124,6 @@ pub struct DriverState {
     pub committed: bool,
     /// Known final length (if committed).
     pub final_len: Option<u64>,
-}
-
-impl Default for DriverState {
-    fn default() -> Self {
-        Self {
-            available: RangeSet::new(),
-            committed: false,
-            final_len: None,
-        }
-    }
 }
 
 /// Common state tracked by `Resource<D>`.
@@ -136,7 +135,7 @@ struct CommonState {
 }
 
 /// Shared inner storage.
-struct Inner<D: Driver> {
+struct Inner<D: DriverIo> {
     driver: D,
     state: Mutex<CommonState>,
     condvar: Condvar,
@@ -152,19 +151,13 @@ struct Inner<D: Driver> {
 /// Use via type aliases:
 /// - [`MmapResource`](crate::MmapResource) = `Resource<MmapDriver>`
 /// - [`MemResource`](crate::MemResource) = `Resource<MemDriver>`
-pub struct Resource<D: Driver> {
+#[derive(Derivative)]
+#[derivative(Clone(bound = ""))]
+pub struct Resource<D: DriverIo> {
     inner: Arc<Inner<D>>,
 }
 
-impl<D: Driver> Clone for Resource<D> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-}
-
-impl<D: Driver + Debug> Debug for Resource<D> {
+impl<D: DriverIo + Debug> Debug for Resource<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let state = self.inner.state.lock();
         f.debug_struct("Resource")
@@ -197,7 +190,9 @@ impl<D: Driver> Resource<D> {
             }),
         })
     }
+}
 
+impl<D: DriverIo> Resource<D> {
     /// Check if the resource is cancelled or failed, returning error if so.
     fn check_health(&self) -> StorageResult<()> {
         if self.inner.cancel.is_cancelled() {
@@ -214,7 +209,8 @@ impl<D: Driver> Resource<D> {
     }
 }
 
-impl<D: Driver> ResourceExt for Resource<D> {
+impl<D: DriverIo> ResourceExt for Resource<D> {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
         if buf.is_empty() {
             return Ok(0);
@@ -243,6 +239,7 @@ impl<D: Driver> ResourceExt for Resource<D> {
             .read_at(offset, &mut buf[..to_read], effective_len)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
         if data.is_empty() {
             return Ok(());
@@ -286,6 +283,7 @@ impl<D: Driver> ResourceExt for Resource<D> {
         Ok(())
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     #[expect(clippy::significant_drop_tightening)] // lock must be held for condvar.wait_for
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         if range.start > range.end {
@@ -401,5 +399,15 @@ impl<D: Driver> ResourceExt for Resource<D> {
         }
         self.inner.condvar.notify_all();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn driver_io_mock_api_is_generated() {
+        let _ = DriverIoMock::read_at;
     }
 }

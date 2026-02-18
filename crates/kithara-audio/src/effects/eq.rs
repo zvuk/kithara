@@ -4,6 +4,7 @@
 //! Each band uses a peaking EQ biquad filter per channel, applied as a cascade.
 
 use biquad::{Biquad, Coefficients, DirectForm1, ToHertz, Type};
+use derivative::Derivative;
 use kithara_decode::PcmChunk;
 
 use crate::AudioEffect;
@@ -18,24 +19,17 @@ const PASSTHROUGH: Coefficients<f32> = Coefficients {
 };
 
 /// Configuration for a single parametric EQ band.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Derivative, PartialEq)]
+#[derivative(Default)]
 pub struct EqBandConfig {
     /// Center frequency in Hz.
+    #[derivative(Default(value = "1000.0"))]
     pub frequency: f32,
     /// Q factor (bandwidth control).
+    #[derivative(Default(value = "std::f32::consts::FRAC_1_SQRT_2"))]
     pub q_factor: f32,
     /// Gain in dB (clamped to -24..+6 on set).
     pub gain_db: f32,
-}
-
-impl Default for EqBandConfig {
-    fn default() -> Self {
-        Self {
-            frequency: 1000.0,
-            q_factor: std::f32::consts::FRAC_1_SQRT_2, // Q_BUTTERWORTH_F32
-            gain_db: 0.0,
-        }
-    }
 }
 
 /// Generate logarithmically-spaced EQ bands from 30 Hz to 18 kHz.
@@ -209,6 +203,7 @@ impl AudioEffect for EqEffect {
 mod tests {
     use kithara_bufpool::pcm_pool;
     use kithara_decode::{PcmMeta, PcmSpec};
+    use rstest::rstest;
 
     use super::*;
 
@@ -222,40 +217,32 @@ mod tests {
         )
     }
 
-    #[test]
-    fn generates_10_log_spaced_bands() {
-        let bands = generate_log_spaced_bands(10);
-        assert_eq!(bands.len(), 10);
+    #[rstest]
+    #[case(0, 0)]
+    #[case(1, 1)]
+    #[case(10, 10)]
+    fn generates_log_spaced_bands(#[case] count: usize, #[case] expected_len: usize) {
+        let bands = generate_log_spaced_bands(count);
+        assert_eq!(bands.len(), expected_len);
 
-        // First band near 30 Hz
-        assert!((bands[0].frequency - 30.0).abs() < 1.0);
-        // Last band near 18 kHz
-        assert!((bands[9].frequency - 18000.0).abs() < 1.0);
-
-        // Ascending frequency order
-        for pair in bands.windows(2) {
-            assert!(pair[1].frequency > pair[0].frequency);
+        match count {
+            0 => assert!(bands.is_empty()),
+            1 => {
+                let expected = (30.0f32 * 18000.0).sqrt();
+                assert!((bands[0].frequency - expected).abs() < 1.0);
+            }
+            10 => {
+                assert!((bands[0].frequency - 30.0).abs() < 1.0);
+                assert!((bands[9].frequency - 18000.0).abs() < 1.0);
+                for pair in bands.windows(2) {
+                    assert!(pair[1].frequency > pair[0].frequency);
+                }
+                for band in &bands {
+                    assert!((band.gain_db).abs() < f32::EPSILON);
+                }
+            }
+            _ => {}
         }
-
-        // All gains at 0
-        for band in &bands {
-            assert!((band.gain_db).abs() < f32::EPSILON);
-        }
-    }
-
-    #[test]
-    fn generates_1_band_centered() {
-        let bands = generate_log_spaced_bands(1);
-        assert_eq!(bands.len(), 1);
-        // Geometric mean of 30 and 18000
-        let expected = (30.0f32 * 18000.0).sqrt();
-        assert!((bands[0].frequency - expected).abs() < 1.0);
-    }
-
-    #[test]
-    fn generates_0_bands_empty() {
-        let bands = generate_log_spaced_bands(0);
-        assert!(bands.is_empty());
     }
 
     #[test]
@@ -330,22 +317,29 @@ mod tests {
         }
     }
 
-    #[test]
-    fn eq_process_returns_some() {
+    #[rstest]
+    #[case(2, 256, Some((2, 3.0)))]
+    #[case(1, 128, None)]
+    fn eq_process_supported_channel_layouts(
+        #[case] channels: u16,
+        #[case] sample_len: usize,
+        #[case] gain: Option<(usize, f32)>,
+    ) {
         let bands = generate_log_spaced_bands(5);
         let spec = PcmSpec {
-            channels: 2,
+            channels,
             sample_rate: 44100,
         };
         let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
+        if let Some((band, gain_db)) = gain {
+            eq.set_gain(band, gain_db);
+        }
 
-        // Set non-zero gain to exercise filter path
-        eq.set_gain(2, 3.0);
-
-        let pcm = vec![0.5f32; 256];
+        let pcm = vec![0.5f32; sample_len];
         let chunk = test_chunk(spec, pcm);
         let result = eq.process(chunk);
         assert!(result.is_some());
+        assert_eq!(result.unwrap().samples().len(), sample_len);
     }
 
     #[test]
@@ -353,21 +347,5 @@ mod tests {
         let bands = generate_log_spaced_bands(3);
         let mut eq = EqEffect::new(bands, 44100, 2);
         assert!(eq.flush().is_none());
-    }
-
-    #[test]
-    fn eq_mono_processing() {
-        let bands = generate_log_spaced_bands(3);
-        let spec = PcmSpec {
-            channels: 1,
-            sample_rate: 44100,
-        };
-        let mut eq = EqEffect::new(bands, spec.sample_rate, spec.channels);
-
-        let pcm = vec![0.5f32; 128];
-        let chunk = test_chunk(spec, pcm);
-        let result = eq.process(chunk);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap().samples().len(), 128);
     }
 }

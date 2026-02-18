@@ -5,13 +5,12 @@
 
 use std::{num::NonZeroU32, sync::Arc, time::Duration};
 
+// Re-export for convenience
+pub use kithara_decode::{DecodeError, DecodeResult};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use tokio::sync::Notify;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
-
-// Re-export for convenience
-pub use kithara_decode::{DecodeError, DecodeResult};
 
 /// Audio processing effect in the chain (transforms PCM chunks).
 #[cfg_attr(any(test, feature = "test-utils"), unimock(api = AudioEffectMock))]

@@ -1,4 +1,6 @@
 use super::*;
+use crate::pool::ReuseMock;
+use rstest::rstest;
 
 #[test]
 fn test_pool_basic() {
@@ -102,79 +104,60 @@ fn test_shard_saturation_drops_excess() {
     );
 }
 
-#[test]
-fn test_pooled_into_inner_not_returned() {
-    let pool = Pool::<4, Vec<u8>>::new(16, 1024);
-
-    // Get a buffer, write data, extract via into_inner
-    let buf = pool.get_with(|b| b.extend_from_slice(b"extracted"));
-    let cap_before = buf.capacity();
-    let vec = buf.into_inner();
-    assert_eq!(&vec[..], b"extracted");
-    assert_eq!(vec.capacity(), cap_before);
-    drop(vec); // dropped without returning to pool
-
-    // Next get should be a fresh allocation (pool is empty)
-    let fresh = pool.get();
-    assert_eq!(fresh.len(), 0);
-    assert_eq!(fresh.capacity(), 0, "pool should be empty after into_inner");
+#[rstest]
+#[case::pool(false)]
+#[case::shared_pool(true)]
+fn test_into_inner_does_not_recycle(#[case] shared: bool) {
+    if shared {
+        let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
+        let buf = pool.get_with(|b| b.extend_from_slice(b"owned_extracted"));
+        let cap_before = buf.capacity();
+        let vec = buf.into_inner();
+        assert_eq!(&vec[..], b"owned_extracted");
+        assert_eq!(vec.capacity(), cap_before);
+        drop(vec);
+        let fresh = pool.get();
+        assert_eq!(fresh.len(), 0);
+        assert_eq!(fresh.capacity(), 0, "pool should be empty after into_inner");
+    } else {
+        let pool = Pool::<4, Vec<u8>>::new(16, 1024);
+        let buf = pool.get_with(|b| b.extend_from_slice(b"extracted"));
+        let cap_before = buf.capacity();
+        let vec = buf.into_inner();
+        assert_eq!(&vec[..], b"extracted");
+        assert_eq!(vec.capacity(), cap_before);
+        drop(vec);
+        let fresh = pool.get();
+        assert_eq!(fresh.len(), 0);
+        assert_eq!(fresh.capacity(), 0, "pool should be empty after into_inner");
+    }
 }
 
-#[test]
-fn test_pooled_owned_into_inner_not_returned() {
-    let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
-
-    // Get an owned buffer, write data, extract via into_inner
-    let buf = pool.get_with(|b| b.extend_from_slice(b"owned_extracted"));
-    let cap_before = buf.capacity();
-    let vec = buf.into_inner();
-    assert_eq!(&vec[..], b"owned_extracted");
-    assert_eq!(vec.capacity(), cap_before);
-    drop(vec); // dropped without returning to pool
-
-    // Next get should be a fresh allocation (pool is empty)
-    let fresh = pool.get();
-    assert_eq!(fresh.len(), 0);
-    assert_eq!(
-        fresh.capacity(),
-        0,
-        "shared pool should be empty after into_inner"
-    );
-}
-
-#[test]
-fn test_pool_recycle() {
-    let pool = Pool::<4, Vec<u8>>::new(16, 1024);
-
-    // Get a buffer, extract it, and recycle manually
-    let buf = pool.get_with(|b| b.extend_from_slice(b"recycle me"));
-    let vec = buf.into_inner(); // Extracted — not returned to pool
-    assert_eq!(&vec[..], b"recycle me");
-
-    let cap = vec.capacity();
-    pool.recycle(vec);
-
-    // Next get should return the recycled buffer (cleared, capacity retained)
-    let reused = pool.get();
-    assert_eq!(reused.len(), 0);
-    assert_eq!(reused.capacity(), cap);
-}
-
-#[test]
-fn test_shared_pool_recycle() {
-    let pool = SharedPool::<4, Vec<f32>>::new(16, 1024);
-
-    let buf = pool.get_with(|b| b.resize(100, 1.0));
-    let vec = buf.into_inner();
-    assert_eq!(vec.len(), 100);
-
-    let cap = vec.capacity();
-    pool.recycle(vec);
-
-    // Next get should return the recycled buffer
-    let reused = pool.get();
-    assert_eq!(reused.len(), 0);
-    assert_eq!(reused.capacity(), cap);
+#[rstest]
+#[case::pool(false)]
+#[case::shared_pool(true)]
+fn test_recycle_roundtrip(#[case] shared: bool) {
+    if shared {
+        let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
+        let buf = pool.get_with(|b| b.extend_from_slice(b"recycle me"));
+        let vec = buf.into_inner();
+        assert_eq!(&vec[..], b"recycle me");
+        let cap = vec.capacity();
+        pool.recycle(vec);
+        let reused = pool.get();
+        assert_eq!(reused.len(), 0);
+        assert_eq!(reused.capacity(), cap);
+    } else {
+        let pool = Pool::<4, Vec<u8>>::new(16, 1024);
+        let buf = pool.get_with(|b| b.extend_from_slice(b"recycle me"));
+        let vec = buf.into_inner();
+        assert_eq!(&vec[..], b"recycle me");
+        let cap = vec.capacity();
+        pool.recycle(vec);
+        let reused = pool.get();
+        assert_eq!(reused.len(), 0);
+        assert_eq!(reused.capacity(), cap);
+    }
 }
 
 #[test]
@@ -241,4 +224,9 @@ fn test_multi_threaded_contention() {
     for h in handles {
         h.join().expect("thread panicked during contention test");
     }
+}
+
+#[test]
+fn reuse_mock_api_is_generated() {
+    let _ = ReuseMock::reuse;
 }

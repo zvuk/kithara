@@ -9,9 +9,8 @@
 use std::{io::Cursor, time::Duration};
 
 use kithara::decode::{DecoderConfig, DecoderFactory};
-use rstest::rstest;
-
 use kithara_test_utils::{Xorshift64, wav::create_test_wav};
+use rstest::rstest;
 
 const SAMPLE_RATE: u32 = 44100;
 const DURATION_SECS: f64 = 10.0;

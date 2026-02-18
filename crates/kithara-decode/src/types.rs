@@ -1,5 +1,6 @@
 use std::{fmt, sync::Arc, time::Duration};
 
+use derivative::Derivative;
 use kithara_bufpool::{PcmBuf, pcm_pool};
 
 /// Audio track metadata extracted from Symphonia tags.
@@ -57,19 +58,12 @@ pub struct PcmMeta {
 /// - `pcm.len() % channels == 0` (frame-aligned)
 /// - `spec.channels > 0` and `spec.sample_rate > 0`
 /// - All samples are f32 and interleaved (LRLRLR...)
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Derivative)]
+#[derivative(Default)]
 pub struct PcmChunk {
+    #[derivative(Default(value = "pcm_pool().get()"))]
     pub pcm: PcmBuf,
     pub meta: PcmMeta,
-}
-
-impl Default for PcmChunk {
-    fn default() -> Self {
-        Self {
-            pcm: pcm_pool().get(),
-            meta: PcmMeta::default(),
-        }
-    }
 }
 
 impl PcmChunk {

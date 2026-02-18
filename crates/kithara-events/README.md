@@ -40,20 +40,22 @@ while let Ok(event) = rx.recv().await {
 
 ## Key Types
 
-| Type | Role |
-|------|------|
-| `EventBus` | Clone-able broadcast publisher; `publish()` works from both async and blocking contexts |
-| `Event` | Top-level enum: `File(FileEvent)`, `Hls(HlsEvent)`, `Audio(AudioEvent)` |
-| `FileEvent` | Download progress, completion, errors, end-of-stream |
-| `HlsEvent` | Variant discovery, ABR switches, segment lifecycle, throughput samples |
-| `AudioEvent` | Format detection, format changes, seek completion, end-of-stream |
+<table>
+<tr><th>Type</th><th>Role</th></tr>
+<tr><td><code>EventBus</code></td><td>Clone-able broadcast publisher; <code>publish()</code> works from both async and blocking contexts</td></tr>
+<tr><td><code>Event</code></td><td>Top-level enum: <code>File(FileEvent)</code>, <code>Hls(HlsEvent)</code>, <code>Audio(AudioEvent)</code></td></tr>
+<tr><td><code>FileEvent</code></td><td>Download progress, completion, errors, end-of-stream</td></tr>
+<tr><td><code>HlsEvent</code></td><td>Variant discovery, ABR switches, segment lifecycle, throughput samples</td></tr>
+<tr><td><code>AudioEvent</code></td><td>Format detection, format changes, seek completion, end-of-stream</td></tr>
+</table>
 
 ## Features
 
-| Feature | Default | Enables |
-|---------|---------|---------|
-| `hls` | yes | `HlsEvent` variant, depends on `kithara-abr` |
-| `audio` | yes | `AudioEvent` variant, depends on `kithara-decode` |
+<table>
+<tr><th>Feature</th><th>Default</th><th>Enables</th></tr>
+<tr><td><code>hls</code></td><td>yes</td><td><code>HlsEvent</code> variant, depends on <code>kithara-abr</code></td></tr>
+<tr><td><code>audio</code></td><td>yes</td><td><code>AudioEvent</code> variant, depends on <code>kithara-decode</code></td></tr>
+</table>
 
 ## Integration
 

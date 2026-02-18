@@ -43,53 +43,60 @@ impl From<AudioEvent> for Event {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn file_event_into_event() {
-        let event: Event = FileEvent::EndOfStream.into();
-        assert!(matches!(event, Event::File(FileEvent::EndOfStream)));
+    fn file_is_end_of_stream(event: &FileEvent) -> bool {
+        matches!(event, FileEvent::EndOfStream)
     }
 
-    #[test]
-    fn file_event_download_complete() {
-        let event: Event = FileEvent::DownloadComplete { total_bytes: 42 }.into();
-        assert!(matches!(
+    fn file_is_download_complete_42(event: &FileEvent) -> bool {
+        matches!(event, FileEvent::DownloadComplete { total_bytes: 42 })
+    }
+
+    #[rstest]
+    #[case(FileEvent::EndOfStream, file_is_end_of_stream)]
+    #[case(
+        FileEvent::DownloadComplete { total_bytes: 42 },
+        file_is_download_complete_42
+    )]
+    fn file_event_into_event(#[case] file_event: FileEvent, #[case] check: fn(&FileEvent) -> bool) {
+        let event: Event = file_event.into();
+        assert!(matches!(event, Event::File(inner) if check(&inner)));
+    }
+
+    #[cfg(feature = "hls")]
+    fn hls_is_end_of_stream(event: &HlsEvent) -> bool {
+        matches!(event, HlsEvent::EndOfStream)
+    }
+
+    #[cfg(feature = "hls")]
+    fn hls_is_variant_applied_upswitch(event: &HlsEvent) -> bool {
+        matches!(
             event,
-            Event::File(FileEvent::DownloadComplete { total_bytes: 42 })
-        ));
+            HlsEvent::VariantApplied {
+                from_variant: 0,
+                to_variant: 1,
+                reason: kithara_abr::AbrReason::UpSwitch,
+            }
+        )
     }
 
     #[cfg(feature = "hls")]
-    #[test]
-    fn hls_event_into_event() {
-        let event: Event = HlsEvent::EndOfStream.into();
-        assert!(matches!(event, Event::Hls(HlsEvent::EndOfStream)));
-    }
-
-    #[cfg(feature = "hls")]
-    #[test]
-    fn hls_event_variant_applied() {
-        use kithara_abr::AbrReason;
-
-        let hls = HlsEvent::VariantApplied {
+    #[rstest]
+    #[case(HlsEvent::EndOfStream, hls_is_end_of_stream)]
+    #[case(
+        HlsEvent::VariantApplied {
             from_variant: 0,
             to_variant: 1,
-            reason: AbrReason::UpSwitch,
-        };
-        let event: Event = hls.into();
-        match event {
-            Event::Hls(HlsEvent::VariantApplied {
-                from_variant,
-                to_variant,
-                reason,
-            }) => {
-                assert_eq!(from_variant, 0);
-                assert_eq!(to_variant, 1);
-                assert!(matches!(reason, AbrReason::UpSwitch));
-            }
-            _ => panic!("expected Hls(VariantApplied)"),
-        }
+            reason: kithara_abr::AbrReason::UpSwitch,
+        },
+        hls_is_variant_applied_upswitch
+    )]
+    fn hls_event_into_event(#[case] hls_event: HlsEvent, #[case] check: fn(&HlsEvent) -> bool) {
+        let event: Event = hls_event.into();
+        assert!(matches!(event, Event::Hls(inner) if check(&inner)));
     }
 
     #[cfg(feature = "audio")]

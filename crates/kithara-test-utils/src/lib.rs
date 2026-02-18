@@ -18,10 +18,12 @@
 //! Shared test utilities for the kithara workspace.
 
 pub mod fixtures;
+pub mod http_server;
 pub mod memory_source;
 pub mod rng;
 pub mod wav;
 
 pub use fixtures::*;
+pub use http_server::TestHttpServer;
 pub use rng::*;
 pub use wav::{create_saw_wav, create_test_wav};

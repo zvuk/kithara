@@ -9,11 +9,20 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use kithara_platform::Mutex;
+use derivative::Derivative;
+use derive_setters::Setters;
+use kithara_bufpool::{PcmPool, pcm_pool};
+use kithara_platform::{Mutex, ThreadPool};
 use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
+use super::{
+    engine::{EngineConfig, EngineImpl},
+    player_processor::PlayerCmd,
+    player_resource::PlayerResource,
+    player_track::TrackTransition,
+};
 use crate::{
     error::PlayError,
     events::PlayerEvent,
@@ -22,37 +31,35 @@ use crate::{
     types::{ActionAtItemEnd, PlayerStatus, SlotId},
 };
 
-use super::{
-    engine::{EngineConfig, EngineImpl},
-    player_processor::PlayerCmd,
-    player_resource::PlayerResource,
-    player_track::TrackTransition,
-};
-
 // -- PlayerConfig -----------------------------------------------------------------
 
 /// Configuration for the player.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Derivative, Setters)]
+#[derivative(Default)]
+#[setters(prefix = "with_", strip_option)]
 pub struct PlayerConfig {
-    /// Maximum concurrent slots in the engine. Default: 4.
-    pub max_slots: usize,
-    /// Default playback rate (1.0 = normal). Default: 1.0.
-    pub default_rate: f32,
     /// Crossfade duration in seconds. Default: 1.0.
+    #[derivative(Default(value = "1.0"))]
     pub crossfade_duration: f32,
+    /// Default playback rate (1.0 = normal). Default: 1.0.
+    #[derivative(Default(value = "1.0"))]
+    pub default_rate: f32,
     /// Number of EQ bands. Default: 10.
+    #[derivative(Default(value = "10"))]
     pub eq_bands: usize,
-}
-
-impl Default for PlayerConfig {
-    fn default() -> Self {
-        Self {
-            max_slots: 4,
-            default_rate: 1.0,
-            crossfade_duration: 1.0,
-            eq_bands: 10,
-        }
-    }
+    /// Maximum concurrent slots in the engine. Default: 4.
+    #[derivative(Default(value = "4"))]
+    pub max_slots: usize,
+    /// PCM buffer pool for audio-thread scratch buffers.
+    ///
+    /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
+    /// PCM pool is used.
+    pub pcm_pool: Option<PcmPool>,
+    /// Thread pool for the engine thread and background work.
+    ///
+    /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
+    /// rayon pool is used.
+    pub thread_pool: Option<ThreadPool>,
 }
 
 // -- PlayerImpl -------------------------------------------------------------------
@@ -66,42 +73,52 @@ impl Default for PlayerConfig {
 pub struct PlayerImpl {
     config: PlayerConfig,
     engine: EngineImpl,
-    items: Mutex<Vec<Option<Resource>>>,
-    current_index: AtomicUsize,
-    current_slot: Mutex<Option<SlotId>>,
-    rate: AtomicF32,
-    volume: AtomicF32,
-    muted: AtomicBool,
-    status: Mutex<PlayerStatus>,
+
     action_at_item_end: Mutex<ActionAtItemEnd>,
     crossfade_duration: AtomicF32,
+    current_index: AtomicUsize,
+    current_slot: Mutex<Option<SlotId>>,
     events_tx: broadcast::Sender<PlayerEvent>,
+    items: Mutex<Vec<Option<Resource>>>,
+    muted: AtomicBool,
+    pcm_pool: PcmPool,
+    rate: AtomicF32,
+    status: Mutex<PlayerStatus>,
+    volume: AtomicF32,
 }
 
 impl PlayerImpl {
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(config: PlayerConfig) -> Self {
+        let resolved_pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| pcm_pool().clone());
+
         let engine_config = EngineConfig {
             max_slots: config.max_slots,
+            pcm_pool: Some(resolved_pool.clone()),
+            thread_pool: config.thread_pool.clone(),
             ..EngineConfig::default()
         };
         let engine = EngineImpl::new(engine_config);
 
         let (events_tx, _) = broadcast::channel(64);
         Self {
-            crossfade_duration: AtomicF32::new(config.crossfade_duration),
-            rate: AtomicF32::new(0.0), // starts paused
-            volume: AtomicF32::new(1.0),
-            muted: AtomicBool::new(false),
-            status: Mutex::new(PlayerStatus::Unknown),
             action_at_item_end: Mutex::new(ActionAtItemEnd::default()),
+            crossfade_duration: AtomicF32::new(config.crossfade_duration),
             current_index: AtomicUsize::new(0),
-            items: Mutex::new(Vec::new()),
             current_slot: Mutex::new(None),
+            events_tx,
+            items: Mutex::new(Vec::new()),
+            muted: AtomicBool::new(false),
+            pcm_pool: resolved_pool,
+            rate: AtomicF32::new(0.0), // starts paused
+            status: Mutex::new(PlayerStatus::Unknown),
+            volume: AtomicF32::new(1.0),
             engine,
             config,
-            events_tx,
         }
     }
 
@@ -338,7 +355,7 @@ impl PlayerImpl {
         };
 
         let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src));
+        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.pcm_pool);
         let arc_resource = Arc::new(Mutex::new(player_resource));
         drop(items);
 
@@ -353,130 +370,80 @@ impl PlayerImpl {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use kithara_audio::PcmReader;
-    use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
-    use kithara_events::AudioEvent;
+    use kithara_audio::mock::TestPcmReader;
+    use kithara_decode::PcmSpec;
+    use rstest::rstest;
 
     use super::*;
 
-    // -- Mock PcmReader -----------------------------------------------------------
-
-    struct MockPcmReader {
-        spec: PcmSpec,
-        metadata: TrackMetadata,
-        total_frames: u64,
-        position_frames: u64,
-        eof: bool,
-        events_tx: broadcast::Sender<AudioEvent>,
+    #[derive(Clone, Copy)]
+    enum PlayerBasicScenario {
+        ActionAtItemEndDefault,
+        AdvanceOnEmpty,
+        EngineAccessor,
+        QueueStartsEmpty,
+        SendToSlotWithoutSlot,
+        StartsPaused,
     }
 
-    impl MockPcmReader {
-        fn new(duration_secs: f64) -> Self {
-            let spec = PcmSpec {
-                channels: 2,
-                sample_rate: 44100,
-            };
-            let total_frames = (spec.sample_rate as f64 * duration_secs) as u64;
-            let (events_tx, _) = broadcast::channel(64);
-            Self {
-                spec,
-                metadata: TrackMetadata::default(),
-                total_frames,
-                position_frames: 0,
-                eof: false,
-                events_tx,
-            }
-        }
+    #[derive(Clone, Copy)]
+    enum InsertScenario {
+        AppendTwice,
+        InsertAfterIndex,
     }
 
-    impl PcmReader for MockPcmReader {
-        fn read(&mut self, buf: &mut [f32]) -> usize {
-            if self.eof {
-                return 0;
-            }
-            let ch = self.spec.channels as u64;
-            if ch == 0 {
-                return 0;
-            }
-            let remaining = (self.total_frames - self.position_frames) * ch;
-            let n = (buf.len() as u64).min(remaining) as usize;
-            for s in &mut buf[..n] {
-                *s = 0.5;
-            }
-            self.position_frames += n as u64 / ch;
-            if self.position_frames >= self.total_frames {
-                self.eof = true;
-            }
-            n
-        }
+    #[derive(Clone, Copy)]
+    enum RemoveAtScenario {
+        ExistingItem,
+        OutOfBounds,
+        ShiftCurrentIndex,
+    }
 
-        fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
-            if self.eof || output.is_empty() {
-                return 0;
-            }
-            let ch = self.spec.channels as usize;
-            let frames = output[0]
-                .len()
-                .min((self.total_frames - self.position_frames) as usize);
-            for c in output.iter_mut().take(ch) {
-                for s in c.iter_mut().take(frames) {
-                    *s = 0.5;
-                }
-            }
-            self.position_frames += frames as u64;
-            if self.position_frames >= self.total_frames {
-                self.eof = true;
-            }
-            frames
-        }
-
-        fn seek(&mut self, position: Duration) -> DecodeResult<()> {
-            let frame = (position.as_secs_f64() * self.spec.sample_rate as f64) as u64;
-            self.position_frames = frame.min(self.total_frames);
-            self.eof = self.position_frames >= self.total_frames;
-            Ok(())
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-
-        fn is_eof(&self) -> bool {
-            self.eof
-        }
-
-        fn position(&self) -> Duration {
-            Duration::from_secs_f64(self.position_frames as f64 / self.spec.sample_rate as f64)
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs_f64(
-                self.total_frames as f64 / self.spec.sample_rate as f64,
-            ))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.metadata
-        }
-
-        fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-            self.events_tx.subscribe()
+    fn mock_spec() -> PcmSpec {
+        PcmSpec {
+            channels: 2,
+            sample_rate: 44100,
         }
     }
 
     fn make_resource(duration_secs: f64) -> Resource {
-        Resource::from_reader(MockPcmReader::new(duration_secs))
+        Resource::from_reader(TestPcmReader::new(mock_spec(), duration_secs))
     }
 
     // -- Tests --------------------------------------------------------------------
 
-    #[test]
-    fn player_starts_paused() {
+    #[rstest]
+    #[case(PlayerBasicScenario::StartsPaused)]
+    #[case(PlayerBasicScenario::QueueStartsEmpty)]
+    #[case(PlayerBasicScenario::ActionAtItemEndDefault)]
+    #[case(PlayerBasicScenario::AdvanceOnEmpty)]
+    #[case(PlayerBasicScenario::EngineAccessor)]
+    #[case(PlayerBasicScenario::SendToSlotWithoutSlot)]
+    fn player_basic_behaviors(#[case] scenario: PlayerBasicScenario) {
         let player = PlayerImpl::new(PlayerConfig::default());
-        assert!((player.rate() - 0.0).abs() < f32::EPSILON);
-        assert_eq!(player.status(), PlayerStatus::Unknown);
+        match scenario {
+            PlayerBasicScenario::StartsPaused => {
+                assert!((player.rate() - 0.0).abs() < f32::EPSILON);
+                assert_eq!(player.status(), PlayerStatus::Unknown);
+            }
+            PlayerBasicScenario::QueueStartsEmpty => {
+                assert_eq!(player.item_count(), 0);
+            }
+            PlayerBasicScenario::ActionAtItemEndDefault => {
+                assert_eq!(player.action_at_item_end(), ActionAtItemEnd::Advance);
+            }
+            PlayerBasicScenario::AdvanceOnEmpty => {
+                player.advance_to_next_item();
+                assert_eq!(player.current_index(), 0);
+            }
+            PlayerBasicScenario::EngineAccessor => {
+                assert!(!player.engine().is_running());
+            }
+            PlayerBasicScenario::SendToSlotWithoutSlot => {
+                let result = player.send_to_slot(PlayerCmd::SetPaused(true));
+                assert!(result.is_err());
+            }
+        }
     }
 
     #[test]
@@ -486,20 +453,6 @@ mod tests {
         player.rate.store(1.0, Ordering::Relaxed);
         player.pause();
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn player_insert_increases_count() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        assert_eq!(player.item_count(), 0);
-    }
-
-    #[test]
-    fn player_remove_all_clears() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        player.remove_all_items();
-        assert_eq!(player.item_count(), 0);
-        assert_eq!(player.current_index(), 0);
     }
 
     #[test]
@@ -528,12 +481,6 @@ mod tests {
     }
 
     #[test]
-    fn player_action_at_item_end_default() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        assert_eq!(player.action_at_item_end(), ActionAtItemEnd::Advance);
-    }
-
-    #[test]
     fn player_events_subscribe() {
         let player = PlayerImpl::new(PlayerConfig::default());
         let mut rx = player.subscribe();
@@ -546,95 +493,113 @@ mod tests {
     #[test]
     fn player_config_custom() {
         let config = PlayerConfig {
-            max_slots: 2,
-            default_rate: 0.5,
             crossfade_duration: 2.0,
+            default_rate: 0.5,
             eq_bands: 5,
+            max_slots: 2,
+            pcm_pool: None,
+            thread_pool: None,
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
     }
 
     #[test]
-    fn player_advance_does_nothing_when_empty() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        player.advance_to_next_item(); // should not panic
-        assert_eq!(player.current_index(), 0);
+    fn player_config_builder() {
+        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let config = PlayerConfig::default()
+            .with_max_slots(8)
+            .with_default_rate(0.5)
+            .with_crossfade_duration(2.5)
+            .with_eq_bands(5)
+            .with_thread_pool(pool);
+        assert_eq!(config.max_slots, 8);
+        assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
+        assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);
+        assert_eq!(config.eq_bands, 5);
+        assert!(config.thread_pool.is_some());
     }
 
     #[test]
-    fn player_engine_accessor() {
-        let player = PlayerImpl::new(PlayerConfig::default());
+    fn player_config_default_thread_pool_is_none() {
+        let config = PlayerConfig::default();
+        assert!(config.thread_pool.is_none());
+    }
+
+    #[test]
+    fn player_propagates_thread_pool_to_engine() {
+        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let config = PlayerConfig::default().with_thread_pool(pool);
+        // Should not panic — engine uses the player's thread pool.
+        let player = PlayerImpl::new(config);
         assert!(!player.engine().is_running());
-    }
-
-    #[test]
-    fn player_send_to_slot_without_slot_returns_error() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        let result = player.send_to_slot(PlayerCmd::SetPaused(true));
-        assert!(result.is_err());
     }
 
     // -- Integration tests (player + resource + queue) ----------------------------
 
+    #[rstest]
+    #[case(InsertScenario::AppendTwice, 2)]
+    #[case(InsertScenario::InsertAfterIndex, 3)]
     #[tokio::test]
-    async fn player_insert_resource_increases_count() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        assert_eq!(player.item_count(), 1);
-        player.insert(make_resource(2.0), None);
-        assert_eq!(player.item_count(), 2);
-    }
-
-    #[tokio::test]
-    async fn player_insert_after_index() {
+    async fn player_insert_scenarios(
+        #[case] scenario: InsertScenario,
+        #[case] expected_count: usize,
+    ) {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.insert(make_resource(1.0), None);
         player.insert(make_resource(2.0), None);
-        // Insert after first item (index 0)
-        player.insert(make_resource(3.0), Some(0));
-        assert_eq!(player.item_count(), 3);
+        if matches!(scenario, InsertScenario::InsertAfterIndex) {
+            player.insert(make_resource(3.0), Some(0));
+        }
+        assert_eq!(player.item_count(), expected_count);
     }
 
+    #[rstest]
+    #[case(RemoveAtScenario::ExistingItem)]
+    #[case(RemoveAtScenario::OutOfBounds)]
+    #[case(RemoveAtScenario::ShiftCurrentIndex)]
     #[tokio::test]
-    async fn player_remove_at_returns_resource() {
+    async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
         let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        player.insert(make_resource(2.0), None);
-        let removed = player.remove_at(0);
-        assert!(removed.is_some());
-        assert_eq!(player.item_count(), 1);
+        match scenario {
+            RemoveAtScenario::ExistingItem => {
+                player.insert(make_resource(1.0), None);
+                player.insert(make_resource(2.0), None);
+                let removed = player.remove_at(0);
+                assert!(removed.is_some());
+                assert_eq!(player.item_count(), 1);
+            }
+            RemoveAtScenario::OutOfBounds => {
+                player.insert(make_resource(1.0), None);
+                assert!(player.remove_at(5).is_none());
+                assert_eq!(player.item_count(), 1);
+            }
+            RemoveAtScenario::ShiftCurrentIndex => {
+                player.insert(make_resource(1.0), None);
+                player.insert(make_resource(2.0), None);
+                player.insert(make_resource(3.0), None);
+                player.advance_to_next_item();
+                player.advance_to_next_item();
+                assert_eq!(player.current_index(), 2);
+                player.remove_at(0);
+                assert_eq!(player.current_index(), 1);
+                assert_eq!(player.item_count(), 2);
+            }
+        }
     }
 
+    #[rstest]
+    #[case(false)]
+    #[case(true)]
     #[tokio::test]
-    async fn player_remove_at_out_of_bounds_returns_none() {
+    async fn player_remove_all_resets_state(#[case] with_resources: bool) {
         let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        assert!(player.remove_at(5).is_none());
-        assert_eq!(player.item_count(), 1);
-    }
-
-    #[tokio::test]
-    async fn player_remove_at_adjusts_current_index() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        player.insert(make_resource(2.0), None);
-        player.insert(make_resource(3.0), None);
-        // Advance to index 2
-        player.advance_to_next_item();
-        player.advance_to_next_item();
-        assert_eq!(player.current_index(), 2);
-        // Remove item before current → current_index shifts back
-        player.remove_at(0);
-        assert_eq!(player.current_index(), 1);
-    }
-
-    #[tokio::test]
-    async fn player_remove_all_with_resources() {
-        let player = PlayerImpl::new(PlayerConfig::default());
-        player.insert(make_resource(1.0), None);
-        player.insert(make_resource(2.0), None);
-        player.insert(make_resource(3.0), None);
+        if with_resources {
+            player.insert(make_resource(1.0), None);
+            player.insert(make_resource(2.0), None);
+            player.insert(make_resource(3.0), None);
+            assert_eq!(player.item_count(), 3);
+        }
         player.remove_all_items();
         assert_eq!(player.item_count(), 0);
         assert_eq!(player.current_index(), 0);

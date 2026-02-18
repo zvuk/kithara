@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Facade crate for audio streaming with auto-detection (file / HLS)"
 
 [lints]
@@ -46,8 +47,10 @@ rodio = ["dep:rodio", "kithara-audio/rodio", "kithara-play/rodio"]
 perf = [
     "kithara-audio/perf",
     "kithara-decode/perf",
+    "kithara-storage/perf",
     "kithara-stream/perf",
     "kithara-bufpool/perf",
+    "kithara-file/perf",
     "kithara-hls/perf",
     "kithara-net/perf",
 ]
@@ -84,3 +87,7 @@ required-features = ["rodio"]
 [[example]]
 name = "hls_rodio"
 required-features = ["rodio"]
+
+[[example]]
+name = "play_crossfade_audio"
+required-features = ["file", "hls"]

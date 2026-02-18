@@ -27,6 +27,15 @@ use crate::{
 ///
 /// `IndexRes` is the resource type used for internal index persistence (pins, LRU).
 /// Disk-backed stores use `MmapResource`; in-memory stores use `MemResource`.
+#[cfg_attr(
+    test,
+    unimock::unimock(
+        api = AssetsMock,
+        type Res = StorageResource;
+        type Context = ();
+        type IndexRes = StorageResource;
+    )
+)]
 pub trait Assets: Clone + Send + Sync + 'static {
     /// Type returned by `open_resource`. Must be Clone for caching.
     type Res: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
@@ -270,12 +279,17 @@ pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
-    use kithara_storage::{ResourceExt, ResourceStatus};
+    use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
     use rstest::rstest;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
     use crate::key::ResourceKey;
+
+    fn assert_assets_mock_types<
+        T: Assets<Res = StorageResource, Context = (), IndexRes = StorageResource>,
+    >() {
+    }
 
     #[rstest]
     #[case("valid.txt", true, "Simple filename")]
@@ -330,5 +344,11 @@ mod tests {
         let mut buf = [0u8; 15];
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(&buf[..n], b"fake audio data");
+    }
+
+    #[test]
+    fn assets_mock_api_is_generated() {
+        let _ = AssetsMock::open_resource_with_ctx;
+        assert_assets_mock_types::<unimock::Unimock>();
     }
 }

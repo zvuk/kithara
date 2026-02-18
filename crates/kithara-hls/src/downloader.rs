@@ -15,6 +15,7 @@ use kithara_events::{EventBus, HlsEvent};
 use kithara_storage::{Coverage, MmapResource};
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
+use tokio::time::sleep;
 use tracing::debug;
 use url::Url;
 use web_time::Instant;
@@ -125,6 +126,13 @@ pub(crate) struct HlsDownloader {
 }
 
 impl HlsDownloader {
+    fn publish_download_error(&self, context: &str, error: &HlsError) {
+        debug!(?error, context, "hls downloader error");
+        self.bus.publish(HlsEvent::DownloadError {
+            error: format!("{context}: {error}"),
+        });
+    }
+
     /// Calculate size map for a variant via HEAD requests and store in `PlaylistState`.
     async fn calculate_size_map(
         playlist_state: &PlaylistState,
@@ -617,7 +625,16 @@ impl Downloader for HlsDownloader {
             "processing on-demand segment request"
         );
 
-        let num_segments = self.fetch.num_segments(req.variant).await.ok().unwrap_or(0);
+        let num_segments = match self.fetch.num_segments(req.variant).await {
+            Ok(value) => value,
+            Err(e) => {
+                self.publish_download_error("failed to query segment count for demand", &e);
+                // Preserve demand request for retry on transient network failures.
+                self.shared.segment_requests.push(req);
+                self.shared.condvar.notify_all();
+                return None;
+            }
+        };
         if req.segment_index >= num_segments {
             debug!(
                 variant = req.variant,
@@ -651,11 +668,8 @@ impl Downloader for HlsDownloader {
         {
             Ok(flags) => flags,
             Err(e) => {
-                debug!(?e, "variant preparation error in poll_demand");
+                self.publish_download_error("variant preparation error in poll_demand", &e);
                 self.shared.condvar.notify_all();
-                self.bus.publish(HlsEvent::DownloadError {
-                    error: e.to_string(),
-                });
                 return None;
             }
         };
@@ -709,7 +723,15 @@ impl Downloader for HlsDownloader {
         let decision = self.make_abr_decision();
         let variant = self.abr.get_current_variant_index();
 
-        let num_segments = self.fetch.num_segments(variant).await.ok().unwrap_or(0);
+        let num_segments = match self.fetch.num_segments(variant).await {
+            Ok(value) => value,
+            Err(e) => {
+                self.publish_download_error("failed to query segment count", &e);
+                self.shared.condvar.notify_all();
+                sleep(Duration::from_millis(100)).await;
+                return PlanOutcome::Batch(Vec::new());
+            }
+        };
 
         if self.current_segment_index >= num_segments {
             debug!("reached end of playlist, stopping downloader");
@@ -735,10 +757,7 @@ impl Downloader for HlsDownloader {
             Ok(flags) => flags,
             Err(e) => {
                 self.shared.condvar.notify_all();
-                debug!(?e, "variant preparation error");
-                self.bus.publish(HlsEvent::DownloadError {
-                    error: e.to_string(),
-                });
+                self.publish_download_error("variant preparation error", &e);
                 return PlanOutcome::Complete;
             }
         };

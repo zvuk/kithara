@@ -3,18 +3,10 @@
 use std::{sync::Arc, time::Duration};
 
 use fixture::*;
-use kithara::hls::{AssetsBackend, HlsResult, fetch::FetchManager, keys::KeyManager};
-use rstest::{fixture, rstest};
-use tokio_util::sync::CancellationToken;
+use kithara::hls::{HlsResult, keys::KeyManager};
+use rstest::rstest;
 
 use super::fixture;
-
-// Fixtures
-
-#[fixture]
-async fn test_server() -> TestServer {
-    TestServer::new().await
-}
 
 // Test Cases
 
@@ -27,14 +19,7 @@ async fn fetch_and_cache_key(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
-
-    let fetch_manager = Arc::new(FetchManager::new(
-        AssetsBackend::Disk(assets),
-        net,
-        CancellationToken::new(),
-    ));
+    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
     let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -54,8 +39,6 @@ async fn key_processor_applied(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
 
     let processor = Arc::new(|key: bytes::Bytes, _context: kithara::hls::KeyContext| {
         // Simple processor that just adds a prefix
@@ -65,11 +48,7 @@ async fn key_processor_applied(
         Ok(bytes::Bytes::from(processed))
     });
 
-    let fetch_manager = Arc::new(FetchManager::new(
-        AssetsBackend::Disk(assets),
-        net,
-        CancellationToken::new(),
-    ));
+    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
     let key_manager = KeyManager::new(fetch_manager.clone(), Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -88,8 +67,6 @@ async fn key_manager_with_different_processors(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
 
     // Test with uppercase processor
     let uppercase_processor = Arc::new(|key: bytes::Bytes, _context: kithara::hls::KeyContext| {
@@ -97,11 +74,7 @@ async fn key_manager_with_different_processors(
         Ok(bytes::Bytes::from(upper))
     });
 
-    let fetch_manager = Arc::new(FetchManager::new(
-        AssetsBackend::Disk(assets.clone()),
-        net.clone(),
-        CancellationToken::new(),
-    ));
+    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
     let key_manager = KeyManager::new(fetch_manager.clone(), Some(uppercase_processor), None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -118,14 +91,7 @@ async fn key_manager_error_handling(
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
-
-    let fetch_manager = Arc::new(FetchManager::new(
-        AssetsBackend::Disk(assets),
-        net,
-        CancellationToken::new(),
-    ));
+    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
     let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
 
     // Try to get key from invalid URL
@@ -150,14 +116,7 @@ async fn key_manager_caching_behavior(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
-
-    let fetch_manager = Arc::new(FetchManager::new(
-        AssetsBackend::Disk(assets),
-        net,
-        CancellationToken::new(),
-    ));
+    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
     let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -182,8 +141,6 @@ async fn key_manager_with_context(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
-    let net = net_fixture;
 
     let processor = Arc::new(|key: bytes::Bytes, context: kithara::hls::KeyContext| {
         // Use context to modify key
@@ -197,11 +154,7 @@ async fn key_manager_with_context(
         Ok(bytes::Bytes::from(processed))
     });
 
-    let fetch_manager = Arc::new(FetchManager::new(
-        AssetsBackend::Disk(assets),
-        net,
-        CancellationToken::new(),
-    ));
+    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net_fixture);
     let key_manager = KeyManager::new(fetch_manager.clone(), Some(processor), None, None);
     let key_url = server.url("/key.bin")?;
 
@@ -227,19 +180,13 @@ async fn aes128_key_decrypts_ciphertext(
     net_fixture: kithara::net::HttpClient,
 ) -> HlsResult<()> {
     let server = test_server.await;
-    let assets = assets_fixture.assets().clone();
     let net = net_fixture;
-
-    let fetch_manager = Arc::new(FetchManager::new(
-        AssetsBackend::Disk(assets),
-        net.clone(),
-        CancellationToken::new(),
-    ));
+    let fetch_manager = test_fetch_manager_shared(&assets_fixture, net.clone());
     let key_manager = KeyManager::new(fetch_manager.clone(), None, None, None);
 
     let key_url = server.url("/aes/key.bin")?;
     let cipher_url = server.url("/aes/seg0.bin")?;
-    let iv = fixture::aes128_iv();
+    let iv = aes128_iv();
 
     // Fetch key through KeyManager (the production path)
     let key_bytes = key_manager.get_raw_key(&key_url, Some(iv)).await?;
@@ -253,7 +200,7 @@ async fn aes128_key_decrypts_ciphertext(
     let written = kithara::drm::aes128_cbc_process_chunk(&cipher, &mut output, &mut ctx, true)
         .map_err(kithara::hls::HlsError::KeyProcessing)?;
 
-    assert!(output[..written].starts_with(fixture::aes128_plaintext_segment().as_slice()));
+    assert!(output[..written].starts_with(aes128_plaintext_segment().as_slice()));
 
     Ok(())
 }

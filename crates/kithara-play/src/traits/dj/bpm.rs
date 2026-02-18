@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use derivative::Derivative;
 use kithara_platform::{MaybeSend, MaybeSync};
 
 use crate::{error::PlayError, types::SlotId};
@@ -12,22 +13,15 @@ pub struct BpmInfo {
     pub first_beat_offset: Duration,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Derivative, PartialEq)]
+#[derivative(Default)]
 #[non_exhaustive]
 pub struct BeatGrid {
+    #[derivative(Default(value = "120.0"))]
     pub bpm: f64,
     pub offset: Duration,
+    #[derivative(Default(value = "4"))]
     pub beats_per_bar: u8,
-}
-
-impl Default for BeatGrid {
-    fn default() -> Self {
-        Self {
-            bpm: 120.0,
-            offset: Duration::ZERO,
-            beats_per_bar: 4,
-        }
-    }
 }
 
 #[cfg_attr(

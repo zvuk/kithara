@@ -12,12 +12,13 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use kithara::assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
-use kithara::storage::ResourceExt;
+use kithara::{
+    assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey},
+    storage::ResourceExt,
+};
+use kithara_test_utils::{cancel_token, temp_dir};
 use rstest::rstest;
 use tokio_util::sync::CancellationToken;
-
-use kithara_test_utils::{cancel_token, temp_dir};
 
 fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
     root.join(asset_root).exists()
@@ -78,7 +79,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     }
 
     // Wait for async unpinning to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Asset B
     {
@@ -97,7 +98,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     }
 
     // Wait for async unpinning to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Asset C: triggers eviction
     {
@@ -114,7 +115,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     }
 
     // Wait for async eviction callback to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Expect A evicted (oldest) to satisfy max_bytes.
     let asset_a_path = dir.join(asset_a_name).join("media/a.bin");

@@ -23,5 +23,3 @@ pub use config::{FileConfig, FileSrc};
 #[doc(hidden)]
 pub use error::SourceError;
 pub use inner::File;
-#[doc(hidden)]
-pub use session::Progress;

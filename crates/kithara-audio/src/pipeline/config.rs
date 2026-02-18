@@ -1,10 +1,11 @@
 //! Audio pipeline configuration.
 
 use std::{
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroUsize},
     sync::{Arc, atomic::AtomicU32},
 };
 
+use derive_setters::Setters;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::PcmSpec;
 use kithara_events::EventBus;
@@ -16,16 +17,22 @@ use crate::{
     traits::AudioEffect,
 };
 
+/// Default number of preload chunks.
+const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+
 /// Configuration for audio pipeline with stream config.
 ///
 /// Generic over `StreamType` to include stream-specific configuration.
 /// Combines stream config and audio pipeline settings into a single builder.
+#[derive(Setters)]
+#[setters(prefix = "with_", strip_option)]
 pub struct AudioConfig<T: StreamType> {
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
     /// Command channel capacity.
     pub command_channel_capacity: usize,
     /// Optional format hint (file extension like "mp3", "wav")
+    #[setters(skip)]
     pub hint: Option<String>,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
@@ -41,7 +48,7 @@ pub struct AudioConfig<T: StreamType> {
     ///
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
-    pub preload_chunks: usize,
+    pub preload_chunks: NonZeroUsize,
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
@@ -52,8 +59,10 @@ pub struct AudioConfig<T: StreamType> {
     /// When `Some`, overrides the stream config pool.
     pub thread_pool: Option<ThreadPool>,
     /// Unified event bus (optional — if not provided, one is created internally).
+    #[setters(rename = "with_events")]
     pub bus: Option<EventBus>,
     /// Additional effects to append after resampler in the processing chain.
+    #[setters(skip)]
     pub effects: Vec<Box<dyn AudioEffect>>,
 }
 
@@ -69,7 +78,7 @@ impl<T: StreamType> AudioConfig<T> {
             pcm_buffer_chunks: 10,
             pcm_pool: None,
             prefer_hardware: false,
-            preload_chunks: 3,
+            preload_chunks: DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
             stream,
             thread_pool: None,
@@ -81,69 +90,6 @@ impl<T: StreamType> AudioConfig<T> {
     /// Set format hint.
     pub fn with_hint<S: Into<String>>(mut self, hint: S) -> Self {
         self.hint = Some(hint.into());
-        self
-    }
-
-    /// Set media info.
-    pub fn with_media_info(mut self, info: kithara_stream::MediaInfo) -> Self {
-        self.media_info = Some(info);
-        self
-    }
-
-    /// Set shared byte pool for temporary buffers (probe, etc.).
-    pub fn with_byte_pool(mut self, pool: BytePool) -> Self {
-        self.byte_pool = Some(pool);
-        self
-    }
-
-    /// Set shared PCM pool for temporary buffers.
-    pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
-        self.pcm_pool = Some(pool);
-        self
-    }
-
-    /// Set target sample rate of the audio host.
-    pub fn with_host_sample_rate(mut self, sample_rate: NonZeroU32) -> Self {
-        self.host_sample_rate = Some(sample_rate);
-        self
-    }
-
-    /// Set resampling quality preset.
-    pub fn with_resampler_quality(mut self, quality: ResamplerQuality) -> Self {
-        self.resampler_quality = quality;
-        self
-    }
-
-    /// Set number of chunks to buffer before signaling preload readiness.
-    pub fn with_preload_chunks(mut self, chunks: usize) -> Self {
-        self.preload_chunks = chunks.max(1);
-        self
-    }
-
-    /// Prefer hardware decoder when available (Apple `AudioToolbox`, Android `MediaCodec`).
-    ///
-    /// When enabled, attempts to use platform-native hardware decoders first,
-    /// falling back to Symphonia software decoder on failure.
-    pub fn with_prefer_hardware(mut self, prefer: bool) -> Self {
-        self.prefer_hardware = prefer;
-        self
-    }
-
-    /// Set unified event bus.
-    ///
-    /// All audio events are published to the bus. The bus capacity is set
-    /// at creation by the caller.
-    pub fn with_events(mut self, bus: EventBus) -> Self {
-        self.bus = Some(bus);
-        self
-    }
-
-    /// Set thread pool for blocking work (decode, probe).
-    ///
-    /// Overrides the pool from stream config. When not set, the pool is
-    /// inherited from the stream config via `StreamType::thread_pool()`.
-    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = Some(pool);
         self
     }
 
@@ -193,9 +139,10 @@ pub(super) fn create_effects(
 
 #[cfg(test)]
 mod tests {
+    use kithara_decode::PcmChunk;
+
     use super::*;
     use crate::traits::AudioEffect;
-    use kithara_decode::PcmChunk;
 
     /// Minimal pass-through effect for testing.
     struct PassthroughEffect;

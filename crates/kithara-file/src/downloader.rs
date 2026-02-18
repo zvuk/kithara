@@ -8,7 +8,7 @@ use std::{future::Future, sync::Arc};
 use futures::StreamExt;
 use kithara_assets::{AssetResource, CoverageIndex, DiskCoverage};
 use kithara_events::{EventBus, FileEvent};
-use kithara_net::{HttpClient, RangeSpec};
+use kithara_net::{Headers, HttpClient, RangeSpec};
 use kithara_storage::{Coverage, MemCoverage, MmapResource, ResourceExt};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome, StepResult, Writer, WriterItem};
 use tokio_util::sync::CancellationToken;
@@ -24,6 +24,7 @@ pub(crate) struct FileIo {
     url: url::Url,
     res: AssetResource,
     cancel: CancellationToken,
+    headers: Option<Headers>,
 }
 
 /// Plan for downloading a file range.
@@ -66,7 +67,7 @@ impl DownloaderIo for FileIo {
 
         match self
             .net_client
-            .get_range(self.url.clone(), spec, None)
+            .get_range(self.url.clone(), spec, self.headers.clone())
             .await
         {
             Ok(stream) => {
@@ -108,6 +109,7 @@ pub(crate) enum FileCoverage {
 }
 
 impl Coverage for FileCoverage {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn mark(&mut self, range: std::ops::Range<u64>) {
         match self {
             Self::Memory(c) => c.mark(range),
@@ -115,6 +117,7 @@ impl Coverage for FileCoverage {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn is_complete(&self) -> bool {
         match self {
             Self::Memory(c) => c.is_complete(),
@@ -208,8 +211,9 @@ impl FileDownloader {
         let total = state.len();
         let res = state.res().clone();
         let cancel = state.cancel().clone();
+        let req_headers = state.headers().cloned();
 
-        let writer = match net_client.stream(url.clone(), None).await {
+        let writer = match net_client.stream(url.clone(), req_headers.clone()).await {
             Ok(stream) => Writer::new(stream, res.clone(), cancel.clone()),
             Err(e) => {
                 tracing::warn!("failed to open stream: {}", e);
@@ -254,6 +258,7 @@ impl FileDownloader {
             url,
             res: res.clone(),
             cancel,
+            headers: req_headers,
         };
 
         Self {
@@ -465,6 +470,7 @@ impl Downloader for FileDownloader {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn should_throttle(&self) -> bool {
         // Only throttle during sequential phase.
         if !matches!(self.phase, FilePhase::Sequential) {
@@ -547,6 +553,7 @@ mod tests {
             url: url.clone(),
             res: res.clone(),
             cancel: cancel.clone(),
+            headers: None,
         };
 
         let shared = Arc::new(SharedFileState::new());

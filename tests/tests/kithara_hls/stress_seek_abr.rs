@@ -5,15 +5,16 @@
 
 use std::time::{Duration, Instant};
 
-use kithara::assets::StoreOptions;
-use kithara::audio::{Audio, AudioConfig};
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    audio::{Audio, AudioConfig},
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    stream::Stream,
+};
+use kithara_test_utils::temp_dir;
 use rstest::rstest;
 use tempfile::TempDir;
 use tracing::info;
-
-use kithara_test_utils::temp_dir;
 
 const HLS_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 

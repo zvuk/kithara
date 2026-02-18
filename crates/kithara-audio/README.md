@@ -39,26 +39,28 @@ while !audio.is_eof() {
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph TB
+flowchart TB
     subgraph "Main / Consumer Thread"
         App["Application Code"]
         Resource["Resource / Audio&lt;S&gt;<br/><i>PcmReader interface</i>"]
         App -- "read(buf)" --> Resource
     end
 
-    subgraph "tokio Runtime (async tasks)"
+    subgraph "Downloader Thread (rayon, async via block_on)"
+        DLLoop["Backend::run_downloader<br/><i>orchestration loop</i>"]
         NetTask["Network I/O<br/><i>reqwest + retry</i>"]
         WriterTask["Writer&lt;E&gt;<br/><i>byte pump</i>"]
+        DLLoop -- "plan + fetch" --> NetTask
+        NetTask -- "bytes" --> WriterTask
     end
 
-    subgraph "rayon ThreadPool (blocking)"
-        DLLoop["Backend::run_downloader<br/><i>orchestration loop</i>"]
+    subgraph "Decode Thread (rayon)"
         DecodeWorker["AudioWorker<br/><i>decode + effects</i>"]
     end
 
     subgraph "Shared State (lock-based)"
         StorageRes["StorageResource<br/><i>Mutex + Condvar</i>"]
-        SegIdx["SegmentIndex / SharedSegments<br/><i>Mutex + Condvar</i>"]
+        SegIdx["DownloadState / SharedSegments<br/><i>Mutex + Condvar</i>"]
         Progress["Progress<br/><i>AtomicU64 + Notify</i>"]
     end
 
@@ -68,8 +70,6 @@ graph TB
         EventChan["EventBus&lt;Event&gt;<br/><i>all -> consumer</i>"]
     end
 
-    DLLoop -- "plan + fetch" --> NetTask
-    NetTask -- "bytes" --> WriterTask
     WriterTask -- "write_at()" --> StorageRes
     DLLoop -- "commit()" --> SegIdx
 
@@ -96,15 +96,16 @@ graph TB
     style EventChan fill:#5b8a5b,color:#fff
 ```
 
-- **OS thread** (`kithara-audio`): runs `run_audio_loop` -- drains seek commands, calls `Decoder::next_chunk`, applies effects (resampler), sends processed chunks through a bounded `kanal` channel with backpressure.
-- **tokio task**: publishes events (ABR switch, progress, decode) to a unified `EventBus`.
+- **Downloader thread** (rayon): runs `Backend::run_downloader` via `handle.block_on()` -- async orchestration loop that plans, fetches (reqwest), and writes bytes to `StorageResource` through `Writer<E>`.
+- **Decode thread** (rayon): runs `run_audio_loop` -- drains seek commands, calls `Decoder::next_chunk`, applies effects (resampler), sends processed chunks through a bounded `kanal` channel with backpressure.
+- **Events**: published to a unified `EventBus` (ABR switch, progress, decode).
 - **Epoch-based invalidation**: after seek, stale in-flight chunks are filtered by epoch counter (`Arc<AtomicU64>`).
 
 ## Pipeline Architecture
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph LR
+flowchart LR
     ST["Stream&lt;T&gt;<br/><i>Read + Seek</i>"]
     DF["DecoderFactory<br/><i>Box&lt;dyn InnerDecoder&gt;</i>"]
     SAS["StreamAudioSource<br/><i>format change, effects</i>"]
@@ -124,13 +125,14 @@ graph LR
 
 ## Resampler Quality Levels
 
-| Quality | Algorithm | Use Case |
-|---------|-----------|----------|
-| Fast | Polynomial (cubic) | Low-power, previews |
-| Normal | 64-tap sinc, linear | Standard playback |
-| Good | 128-tap sinc, linear | Better quality |
-| High (default) | 256-tap sinc, cubic | Recommended for music |
-| Maximum | FFT-based | Offline / high-end |
+<table>
+<tr><th>Quality</th><th>Algorithm</th><th>Use Case</th></tr>
+<tr><td>Fast</td><td>Polynomial (cubic)</td><td>Low-power, previews</td></tr>
+<tr><td>Normal</td><td>64-tap sinc, linear</td><td>Standard playback</td></tr>
+<tr><td>Good</td><td>128-tap sinc, linear</td><td>Better quality</td></tr>
+<tr><td>High (default)</td><td>256-tap sinc, cubic</td><td>Recommended for music</td></tr>
+<tr><td>Maximum</td><td>FFT-based</td><td>Offline / high-end</td></tr>
+</table>
 
 ## Format Change Handling
 

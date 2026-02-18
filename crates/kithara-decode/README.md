@@ -33,11 +33,12 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 
 ## Backends
 
-| Backend | Implementation | Platform |
-|---------|---------------|----------|
-| Symphonia | Software decoding; all formats | Cross-platform |
-| Apple AudioToolbox | Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF | macOS / iOS |
-| Android MediaCodec | Placeholder | Android |
+<table>
+<tr><th>Backend</th><th>Implementation</th><th>Platform</th></tr>
+<tr><td>Symphonia</td><td>Software decoding; all formats</td><td>Cross-platform</td></tr>
+<tr><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
+<tr><td>Android MediaCodec</td><td>Placeholder</td><td>Android</td></tr>
+</table>
 
 ## Initialization Paths
 
@@ -46,12 +47,13 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 
 ## Feature Flags
 
-| Feature | Effect |
-|---------|--------|
-| `apple` | Enables Apple AudioToolbox hardware decoder |
-| `android` | Enables Android MediaCodec decoder (placeholder) |
-| `perf` | Performance instrumentation via `hotpath` |
-| `test-utils` | Mock trait generation via `unimock` |
+<table>
+<tr><th>Feature</th><th>Effect</th></tr>
+<tr><td><code>apple</code></td><td>Enables Apple AudioToolbox hardware decoder</td></tr>
+<tr><td><code>android</code></td><td>Enables Android MediaCodec decoder (placeholder)</td></tr>
+<tr><td><code>perf</code></td><td>Performance instrumentation via <code>hotpath</code></td></tr>
+<tr><td><code>test-utils</code></td><td>Mock trait generation via <code>unimock</code></td></tr>
+</table>
 
 ## Integration
 

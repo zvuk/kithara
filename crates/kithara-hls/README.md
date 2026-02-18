@@ -29,7 +29,7 @@ let stream = Stream::<Hls>::new(config).await?;
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph LR
+flowchart LR
     subgraph Network
         MasterPL["Master<br/>Playlist"]
         MediaPL["Media<br/>Playlist"]
@@ -55,7 +55,7 @@ graph LR
 
     subgraph "Sync (rayon thread)"
         HS["HlsSource<br/><i>Source impl</i>"]
-        SI["SegmentIndex<br/><i>virtual stream</i>"]
+        SI["DownloadState<br/><i>virtual stream</i>"]
         StreamH["Stream&lt;Hls&gt;"]
     end
 
@@ -92,7 +92,7 @@ graph LR
 ```
 
 - **ABR**: `AbrController` selects variant (quality) based on throughput estimation and buffer state. Emits `HlsEvent::VariantApplied` on quality switch.
-- **Virtual byte stream**: segments are indexed linearly. Reader sees a single contiguous byte stream via `SegmentIndex`.
+- **Virtual byte stream**: segments are indexed linearly. Reader sees a single contiguous byte stream via `DownloadState`.
 - **Backpressure**: downloader waits when too far ahead of reader position (`look_ahead_bytes`).
 
 ## Virtual Stream Layout
@@ -101,7 +101,7 @@ Segments are logically stitched into a contiguous byte stream:
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph LR
+flowchart LR
     subgraph "Single variant"
         I[Init] --> S0[Seg0] --> S1[Seg1] --> S2[Seg2] --> M1[...]
     end
@@ -109,7 +109,7 @@ graph LR
 
 ```mermaid
 %%{init: {"flowchart": {"curve": "linear"}} }%%
-graph LR
+flowchart LR
     subgraph "Mid-stream ABR switch (V0 → V1)"
         V0S0["V0 Seg0"] --> V0S1["V0 Seg1"] --> F["⛔ fence"]
         F --> V1I["V1 Init"] --> V1S2["V1 Seg2"] --> V1S3["V1 Seg3"] --> M2[...]
@@ -118,7 +118,7 @@ graph LR
     style F fill:#c44,color:#fff
 ```
 
-`SegmentIndex` maintains a mapping of `(variant, segment_index) → SegmentEntry` plus a `RangeSet<u64>` for loaded byte ranges. On ABR switch, `fence_at()` discards old variant segments.
+`DownloadState` maintains a `BTreeMap<u64, LoadedSegment>` ordered by byte offset plus a `RangeSet<u64>` for loaded byte ranges. On ABR switch, `fence_at()` discards old variant segments.
 
 ## ABR Integration
 

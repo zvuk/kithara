@@ -23,6 +23,7 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
+use derivative::Derivative;
 use kithara_bufpool::PcmPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, StreamContext};
 
@@ -62,12 +63,15 @@ pub(crate) struct ProbeHint {
 }
 
 /// Configuration for `DecoderFactory`.
+#[derive(Derivative)]
+#[derivative(Default)]
 pub struct DecoderConfig {
     /// Prefer hardware decoder when available.
     pub prefer_hardware: bool,
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Enable gapless playback.
+    #[derivative(Default(value = "true"))]
     pub gapless: bool,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
     ///
@@ -81,20 +85,6 @@ pub struct DecoderConfig {
     ///
     /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
     pub pcm_pool: Option<PcmPool>,
-}
-
-impl Default for DecoderConfig {
-    fn default() -> Self {
-        Self {
-            prefer_hardware: false,
-            byte_len_handle: None,
-            gapless: true,
-            hint: None,
-            stream_ctx: None,
-            epoch: 0,
-            pcm_pool: None,
-        }
-    }
 }
 
 /// Factory for creating decoders with runtime backend selection.
@@ -492,6 +482,10 @@ impl DecoderFactory {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -575,214 +569,55 @@ mod tests {
         assert_eq!(codec, AudioCodec::Vorbis);
     }
 
-    #[test]
-    fn test_probe_from_extension_mp3() {
+    #[rstest]
+    #[case("mp3", AudioCodec::Mp3)]
+    #[case("aac", AudioCodec::AacLc)]
+    #[case("m4a", AudioCodec::AacLc)]
+    #[case("flac", AudioCodec::Flac)]
+    #[case("ogg", AudioCodec::Vorbis)]
+    #[case("opus", AudioCodec::Opus)]
+    #[case("wav", AudioCodec::Pcm)]
+    #[case("MP3", AudioCodec::Mp3)]
+    fn test_probe_from_extension(#[case] extension: &str, #[case] expected: AudioCodec) {
         let hint = ProbeHint {
-            extension: Some("mp3".into()),
+            extension: Some(extension.into()),
             ..Default::default()
         };
         let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Mp3);
+        assert_eq!(codec, expected);
     }
 
-    #[test]
-    fn test_probe_from_extension_aac() {
+    #[rstest]
+    #[case("audio/mpeg", AudioCodec::Mp3)]
+    #[case("audio/flac", AudioCodec::Flac)]
+    #[case("audio/aac", AudioCodec::AacLc)]
+    #[case("audio/vorbis", AudioCodec::Vorbis)]
+    #[case("audio/ogg", AudioCodec::Vorbis)]
+    #[case("audio/opus", AudioCodec::Opus)]
+    #[case("audio/wav", AudioCodec::Pcm)]
+    #[case("audio/mp4", AudioCodec::AacLc)]
+    fn test_probe_from_mime(#[case] mime: &str, #[case] expected: AudioCodec) {
         let hint = ProbeHint {
-            extension: Some("aac".into()),
+            mime: Some(mime.into()),
             ..Default::default()
         };
         let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::AacLc);
+        assert_eq!(codec, expected);
     }
 
-    #[test]
-    fn test_probe_from_extension_m4a() {
+    #[rstest]
+    #[case(ContainerFormat::MpegAudio, AudioCodec::Mp3)]
+    #[case(ContainerFormat::Ogg, AudioCodec::Vorbis)]
+    #[case(ContainerFormat::Wav, AudioCodec::Pcm)]
+    #[case(ContainerFormat::Fmp4, AudioCodec::AacLc)]
+    #[case(ContainerFormat::Caf, AudioCodec::Alac)]
+    fn test_probe_from_container(#[case] container: ContainerFormat, #[case] expected: AudioCodec) {
         let hint = ProbeHint {
-            extension: Some("m4a".into()),
+            container: Some(container),
             ..Default::default()
         };
         let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::AacLc);
-    }
-
-    #[test]
-    fn test_probe_from_extension_flac() {
-        let hint = ProbeHint {
-            extension: Some("flac".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Flac);
-    }
-
-    #[test]
-    fn test_probe_from_extension_ogg() {
-        let hint = ProbeHint {
-            extension: Some("ogg".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Vorbis);
-    }
-
-    #[test]
-    fn test_probe_from_extension_opus() {
-        let hint = ProbeHint {
-            extension: Some("opus".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Opus);
-    }
-
-    #[test]
-    fn test_probe_from_extension_wav() {
-        let hint = ProbeHint {
-            extension: Some("wav".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Pcm);
-    }
-
-    #[test]
-    fn test_probe_from_extension_case_insensitive() {
-        let hint = ProbeHint {
-            extension: Some("MP3".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Mp3);
-    }
-
-    #[test]
-    fn test_probe_from_mime_mpeg() {
-        let hint = ProbeHint {
-            mime: Some("audio/mpeg".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Mp3);
-    }
-
-    #[test]
-    fn test_probe_from_mime_flac() {
-        let hint = ProbeHint {
-            mime: Some("audio/flac".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Flac);
-    }
-
-    #[test]
-    fn test_probe_from_mime_aac() {
-        let hint = ProbeHint {
-            mime: Some("audio/aac".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::AacLc);
-    }
-
-    #[test]
-    fn test_probe_from_mime_vorbis() {
-        let hint = ProbeHint {
-            mime: Some("audio/vorbis".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Vorbis);
-    }
-
-    #[test]
-    fn test_probe_from_mime_ogg() {
-        let hint = ProbeHint {
-            mime: Some("audio/ogg".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Vorbis);
-    }
-
-    #[test]
-    fn test_probe_from_mime_opus() {
-        let hint = ProbeHint {
-            mime: Some("audio/opus".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Opus);
-    }
-
-    #[test]
-    fn test_probe_from_mime_wav() {
-        let hint = ProbeHint {
-            mime: Some("audio/wav".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Pcm);
-    }
-
-    #[test]
-    fn test_probe_from_mime_mp4() {
-        let hint = ProbeHint {
-            mime: Some("audio/mp4".into()),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::AacLc);
-    }
-
-    #[test]
-    fn test_probe_from_container_mpeg_audio() {
-        let hint = ProbeHint {
-            container: Some(ContainerFormat::MpegAudio),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Mp3);
-    }
-
-    #[test]
-    fn test_probe_from_container_ogg() {
-        let hint = ProbeHint {
-            container: Some(ContainerFormat::Ogg),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Vorbis);
-    }
-
-    #[test]
-    fn test_probe_from_container_wav() {
-        let hint = ProbeHint {
-            container: Some(ContainerFormat::Wav),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Pcm);
-    }
-
-    #[test]
-    fn test_probe_from_container_fmp4() {
-        let hint = ProbeHint {
-            container: Some(ContainerFormat::Fmp4),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::AacLc);
-    }
-
-    #[test]
-    fn test_probe_from_container_caf() {
-        let hint = ProbeHint {
-            container: Some(ContainerFormat::Caf),
-            ..Default::default()
-        };
-        let codec = DecoderFactory::probe_codec(&hint).expect("should probe successfully");
-        assert_eq!(codec, AudioCodec::Alac);
+        assert_eq!(codec, expected);
     }
 
     #[test]
@@ -809,61 +644,34 @@ mod tests {
         assert_eq!(codec, AudioCodec::Flac);
     }
 
-    #[test]
-    fn test_probe_fails_no_hints() {
-        let hint = ProbeHint::default();
+    #[rstest]
+    #[case(ProbeHint::default())]
+    #[case(ProbeHint { extension: Some("xyz".into()), ..Default::default() })]
+    #[case(ProbeHint { mime: Some("application/octet-stream".into()), ..Default::default() })]
+    #[case(ProbeHint { container: Some(ContainerFormat::Mkv), ..Default::default() })]
+    fn test_probe_fails_for_insufficient_hints(#[case] hint: ProbeHint) {
         let result = DecoderFactory::probe_codec(&hint);
         assert!(matches!(result, Err(DecodeError::ProbeFailed)));
     }
 
-    #[test]
-    fn test_probe_fails_unknown_extension() {
-        let hint = ProbeHint {
-            extension: Some("xyz".into()),
-            ..Default::default()
-        };
-        let result = DecoderFactory::probe_codec(&hint);
-        assert!(matches!(result, Err(DecodeError::ProbeFailed)));
+    #[rstest]
+    #[case("unknown")]
+    #[case("")]
+    #[case("doc")]
+    fn test_codec_from_extension_unknown_returns_none(#[case] extension: &str) {
+        assert!(DecoderFactory::codec_from_extension(extension).is_none());
     }
 
-    #[test]
-    fn test_probe_fails_unknown_mime() {
-        let hint = ProbeHint {
-            mime: Some("application/octet-stream".into()),
-            ..Default::default()
-        };
-        let result = DecoderFactory::probe_codec(&hint);
-        assert!(matches!(result, Err(DecodeError::ProbeFailed)));
-    }
-
-    #[test]
-    fn test_probe_fails_mkv_container_alone() {
-        // MKV can contain many codecs, so container alone isn't enough
-        let hint = ProbeHint {
-            container: Some(ContainerFormat::Mkv),
-            ..Default::default()
-        };
-        let result = DecoderFactory::probe_codec(&hint);
-        assert!(matches!(result, Err(DecodeError::ProbeFailed)));
-    }
-
-    #[test]
-    fn test_codec_from_extension_unknown_returns_none() {
-        assert!(DecoderFactory::codec_from_extension("unknown").is_none());
-        assert!(DecoderFactory::codec_from_extension("").is_none());
-        assert!(DecoderFactory::codec_from_extension("doc").is_none());
-    }
-
-    #[test]
-    fn test_codec_from_mime_unknown_returns_none() {
-        assert!(DecoderFactory::codec_from_mime("text/plain").is_none());
-        assert!(DecoderFactory::codec_from_mime("").is_none());
-        assert!(DecoderFactory::codec_from_mime("video/mp4").is_none());
+    #[rstest]
+    #[case("text/plain")]
+    #[case("")]
+    #[case("video/mp4")]
+    fn test_codec_from_mime_unknown_returns_none(#[case] mime: &str) {
+        assert!(DecoderFactory::codec_from_mime(mime).is_none());
     }
 
     #[test]
     fn test_auto_selector_fails() {
-        use std::io::Cursor;
         let empty = Cursor::new(Vec::new());
         let result = DecoderFactory::create(empty, &CodecSelector::Auto, DecoderConfig::default());
         assert!(matches!(result, Err(DecodeError::ProbeFailed)));
@@ -874,8 +682,6 @@ mod tests {
     fn test_prefer_hardware_aac_falls_back_to_symphonia() {
         // When prefer_hardware is true but Apple decoder fails (not implemented),
         // should fall back to Symphonia
-        use std::io::Cursor;
-
         let cursor = Cursor::new(vec![0u8; 100]);
 
         let config = DecoderConfig {

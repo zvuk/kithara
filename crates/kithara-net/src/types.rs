@@ -1,5 +1,7 @@
 use std::{cmp::min, collections::HashMap, time::Duration};
 
+use derivative::Derivative;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Headers {
     inner: HashMap<String, String>,
@@ -69,21 +71,15 @@ impl RangeSpec {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Derivative)]
+#[derivative(Default)]
 pub struct RetryPolicy {
+    #[derivative(Default(value = "Duration::from_millis(100)"))]
     pub base_delay: Duration,
+    #[derivative(Default(value = "Duration::from_secs(5)"))]
     pub max_delay: Duration,
+    #[derivative(Default(value = "3"))]
     pub max_retries: u32,
-}
-
-impl Default for RetryPolicy {
-    fn default() -> Self {
-        Self {
-            base_delay: Duration::from_millis(100),
-            max_delay: Duration::from_secs(5),
-            max_retries: 3,
-        }
-    }
 }
 
 impl RetryPolicy {
@@ -107,22 +103,14 @@ impl RetryPolicy {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Derivative)]
+#[derivative(Default)]
 pub struct NetOptions {
     /// Max idle connections per host. Set to 0 to disable pooling and reduce memory.
     pub pool_max_idle_per_host: usize,
+    #[derivative(Default(value = "Duration::from_secs(30)"))]
     pub request_timeout: Duration,
     pub retry_policy: RetryPolicy,
-}
-
-impl Default for NetOptions {
-    fn default() -> Self {
-        Self {
-            pool_max_idle_per_host: 0, // Disable pooling for lower memory
-            request_timeout: Duration::from_secs(30),
-            retry_policy: RetryPolicy::default(),
-        }
-    }
 }
 
 #[cfg(test)]

@@ -3,8 +3,10 @@
 //! Maps the rich [`CrossfadeCurve`] enum to firewheel's limited [`FadeCurve`],
 //! and bundles duration + curve into [`CrossfadeSettings`] for the processor.
 
-use crate::traits::dj::crossfade::CrossfadeCurve;
+use derivative::Derivative;
 use firewheel::dsp::fade::FadeCurve;
+
+use crate::traits::dj::crossfade::CrossfadeCurve;
 
 /// Default crossfade duration in seconds.
 pub(crate) const DEFAULT_CROSSFADE_DURATION: f32 = 1.0;
@@ -23,19 +25,12 @@ pub(crate) fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
 }
 
 /// Crossfade configuration for the player processor.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Derivative)]
+#[derivative(Default)]
 pub(crate) struct CrossfadeSettings {
+    #[derivative(Default(value = "DEFAULT_CROSSFADE_DURATION"))]
     pub duration: f32,
     pub curve: CrossfadeCurve,
-}
-
-impl Default for CrossfadeSettings {
-    fn default() -> Self {
-        Self {
-            duration: DEFAULT_CROSSFADE_DURATION,
-            curve: CrossfadeCurve::default(),
-        }
-    }
 }
 
 impl CrossfadeSettings {
@@ -47,42 +42,22 @@ impl CrossfadeSettings {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn equal_power_maps_to_square_root() {
-        assert_eq!(map_curve(CrossfadeCurve::EqualPower), FadeCurve::SquareRoot);
-    }
-
-    #[test]
-    fn linear_maps_to_linear() {
-        assert_eq!(map_curve(CrossfadeCurve::Linear), FadeCurve::Linear);
-    }
-
-    #[test]
-    fn s_curve_maps_to_linear() {
-        assert_eq!(map_curve(CrossfadeCurve::SCurve), FadeCurve::Linear);
-    }
-
-    #[test]
-    fn constant_power_maps_to_square_root() {
-        assert_eq!(
-            map_curve(CrossfadeCurve::ConstantPower),
-            FadeCurve::SquareRoot
-        );
-    }
-
-    #[test]
-    fn fast_fade_in_maps_to_square_root() {
-        assert_eq!(map_curve(CrossfadeCurve::FastFadeIn), FadeCurve::SquareRoot);
-    }
-
-    #[test]
-    fn fast_fade_out_maps_to_square_root() {
-        assert_eq!(
-            map_curve(CrossfadeCurve::FastFadeOut),
-            FadeCurve::SquareRoot
-        );
+    #[rstest]
+    #[case(CrossfadeCurve::EqualPower, FadeCurve::SquareRoot)]
+    #[case(CrossfadeCurve::Linear, FadeCurve::Linear)]
+    #[case(CrossfadeCurve::SCurve, FadeCurve::Linear)]
+    #[case(CrossfadeCurve::ConstantPower, FadeCurve::SquareRoot)]
+    #[case(CrossfadeCurve::FastFadeIn, FadeCurve::SquareRoot)]
+    #[case(CrossfadeCurve::FastFadeOut, FadeCurve::SquareRoot)]
+    fn map_curve_matches_expected_fade_curve(
+        #[case] input: CrossfadeCurve,
+        #[case] expected: FadeCurve,
+    ) {
+        assert_eq!(map_curve(input), expected);
     }
 
     #[test]

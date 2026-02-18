@@ -4,6 +4,7 @@ use bytes::Bytes;
 use futures::StreamExt;
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
 use kithara_stream::{Writer, WriterError, WriterItem};
+use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 
 /// Run a writer to completion, returning total bytes written.
@@ -35,97 +36,61 @@ fn open_resource(dir: &tempfile::TempDir, name: &str, len: u64) -> MmapResource 
     .unwrap()
 }
 
-// 1. with_offset writes data at the correct position
-
+#[rstest]
+#[case(
+    100,
+    vec![vec![0xABu8; 512]],
+    vec![(100_u64, 512_usize)],
+    612_u64
+)]
+#[case(
+    200,
+    vec![vec![0xAAu8; 100], vec![0xBBu8; 100], vec![0xCCu8; 100]],
+    vec![(200_u64, 100_usize), (300_u64, 100_usize), (400_u64, 100_usize)],
+    500_u64
+)]
 #[tokio::test]
-async fn writer_with_offset_writes_at_correct_position() {
+async fn writer_with_offset_writes_expected_offsets(
+    #[case] start_offset: u64,
+    #[case] chunks: Vec<Vec<u8>>,
+    #[case] expected_offsets: Vec<(u64, usize)>,
+    #[case] expected_total_bytes: u64,
+) {
     let dir = tempfile::tempdir().unwrap();
-    let res = open_resource(&dir, "offset_write.bin", 1024);
-
-    let start_offset: u64 = 100;
-    let payload = vec![0xABu8; 512];
-    let source = futures::stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(
-        payload.clone(),
-    ))]);
-
-    let cancel = CancellationToken::new();
-    let mut writer: Writer<std::io::Error> =
-        Writer::with_offset(source, res.clone(), cancel, start_offset);
-
-    let mut saw_stream_ended = false;
-    while let Some(result) = writer.next().await {
-        match result.unwrap() {
-            WriterItem::ChunkWritten { offset, len } => {
-                assert_eq!(offset, 100);
-                assert_eq!(len, 512);
-            }
-            WriterItem::StreamEnded { total_bytes } => {
-                // total_bytes is the final offset (start_offset + bytes written)
-                assert_eq!(total_bytes, 100 + 512);
-                saw_stream_ended = true;
-            }
-        }
-    }
-    assert!(saw_stream_ended, "must receive StreamEnded");
-
-    // Verify data actually landed at offset 100 in the resource.
-    let mut buf = vec![0u8; 512];
-    let n = res.read_at(100, &mut buf).unwrap();
-    assert_eq!(n, 512);
-    assert_eq!(buf, payload);
-}
-
-// 2. Multiple chunks written at correct cumulative offsets
-
-#[tokio::test]
-async fn writer_with_offset_multiple_chunks() {
-    let dir = tempfile::tempdir().unwrap();
-    let res = open_resource(&dir, "multi_chunk.bin", 1024);
-
-    let start_offset: u64 = 200;
-    let chunk_a = vec![0xAAu8; 100];
-    let chunk_b = vec![0xBBu8; 100];
-    let chunk_c = vec![0xCCu8; 100];
-
-    let source = futures::stream::iter(vec![
-        Ok::<Bytes, std::io::Error>(Bytes::from(chunk_a.clone())),
-        Ok::<Bytes, std::io::Error>(Bytes::from(chunk_b.clone())),
-        Ok::<Bytes, std::io::Error>(Bytes::from(chunk_c.clone())),
-    ]);
+    let res = open_resource(&dir, "offset_write.bin", 4096);
+    let source_chunks = chunks.clone();
+    let source = futures::stream::iter(
+        source_chunks
+            .into_iter()
+            .map(|chunk| Ok::<Bytes, std::io::Error>(Bytes::from(chunk))),
+    );
 
     let cancel = CancellationToken::new();
     let mut writer: Writer<std::io::Error> =
         Writer::with_offset(source, res.clone(), cancel, start_offset);
 
     let mut offsets = Vec::new();
+    let mut stream_end_total = None;
     while let Some(result) = writer.next().await {
         match result.unwrap() {
             WriterItem::ChunkWritten { offset, len } => {
                 offsets.push((offset, len));
             }
             WriterItem::StreamEnded { total_bytes } => {
-                assert_eq!(total_bytes, 200 + 300);
+                stream_end_total = Some(total_bytes);
             }
         }
     }
 
-    assert_eq!(
-        offsets,
-        vec![(200, 100), (300, 100), (400, 100)],
-        "each chunk must be written at start_offset + cumulative bytes"
-    );
+    assert_eq!(offsets, expected_offsets);
+    assert_eq!(stream_end_total, Some(expected_total_bytes));
 
-    // Read back and verify each chunk landed at the right place.
-    let mut buf = vec![0u8; 100];
-
-    res.read_at(200, &mut buf).unwrap();
-    assert_eq!(buf, chunk_a);
-
-    res.read_at(300, &mut buf).unwrap();
-    assert_eq!(buf, chunk_b);
-
-    res.read_at(400, &mut buf).unwrap();
-    assert_eq!(buf, chunk_c);
+    for (chunk, (offset, len)) in chunks.iter().zip(expected_offsets.iter()) {
+        let mut buf = vec![0u8; *len];
+        let n = res.read_at(*offset, &mut buf).unwrap();
+        assert_eq!(n, *len);
+        assert_eq!(buf, *chunk);
+    }
 }
 
 // 3. with_offset(0) behaves identically to new()

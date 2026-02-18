@@ -1,81 +1,56 @@
 use std::time::Duration;
 
+use derivative::Derivative;
 use web_time::Instant;
 
 /// ABR mode selection.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Derivative, PartialEq, Eq)]
+#[derivative(Default)]
 pub enum AbrMode {
     /// Automatic bitrate adaptation (ABR enabled).
     /// Optionally specify initial variant index (defaults to 0).
+    #[derivative(Default)]
     Auto(Option<usize>),
     /// Manual variant selection (ABR disabled).
     /// Always use the specified variant index.
     Manual(usize),
 }
 
-impl Default for AbrMode {
-    fn default() -> Self {
-        Self::Auto(None)
-    }
-}
-
 /// ABR (Adaptive Bitrate) configuration.
-#[derive(Clone)]
+#[derive(Clone, Derivative)]
+#[derivative(Default, Debug)]
 pub struct AbrOptions {
     /// Hysteresis ratio for down-switch.
+    #[derivative(Default(value = "0.8"))]
     pub down_hysteresis_ratio: f64,
     /// Buffer level (seconds) that triggers down-switch.
+    #[derivative(Default(value = "5.0"))]
     pub down_switch_buffer_secs: f64,
     /// Minimum buffer level (seconds) required for up-switch.
+    #[derivative(Default(value = "10.0"))]
     pub min_buffer_for_up_switch_secs: f64,
     /// Minimum interval between variant switches.
+    #[derivative(Default(value = "Duration::from_secs(30)"))]
     pub min_switch_interval: Duration,
     /// ABR mode: Auto (adaptive) or Manual (fixed variant).
     pub mode: AbrMode,
     /// Sample window for throughput estimation.
+    #[derivative(Default(value = "Duration::from_secs(30)"))]
     pub sample_window: Duration,
     /// Safety factor for throughput estimation (e.g., 1.5 means use 66% of estimated throughput).
+    #[derivative(Default(value = "1.5"))]
     pub throughput_safety_factor: f64,
     /// Hysteresis ratio for up-switch (bandwidth must exceed target by this factor).
+    #[derivative(Default(value = "1.3"))]
     pub up_hysteresis_ratio: f64,
     /// Available variants for ABR selection.
     /// Set by the streaming layer after parsing playlist.
+    #[derivative(Debug(format_with = "fmt_variants_len"))]
     pub variants: Vec<Variant>,
 }
 
-impl Default for AbrOptions {
-    fn default() -> Self {
-        Self {
-            down_hysteresis_ratio: 0.8,
-            down_switch_buffer_secs: 5.0,
-            min_buffer_for_up_switch_secs: 10.0,
-            min_switch_interval: Duration::from_secs(30),
-            mode: AbrMode::default(),
-            sample_window: Duration::from_secs(30),
-            throughput_safety_factor: 1.5,
-            up_hysteresis_ratio: 1.3,
-            variants: Vec::new(),
-        }
-    }
-}
-
-impl std::fmt::Debug for AbrOptions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AbrOptions")
-            .field("down_hysteresis_ratio", &self.down_hysteresis_ratio)
-            .field("down_switch_buffer_secs", &self.down_switch_buffer_secs)
-            .field(
-                "min_buffer_for_up_switch_secs",
-                &self.min_buffer_for_up_switch_secs,
-            )
-            .field("min_switch_interval", &self.min_switch_interval)
-            .field("mode", &self.mode)
-            .field("sample_window", &self.sample_window)
-            .field("throughput_safety_factor", &self.throughput_safety_factor)
-            .field("up_hysteresis_ratio", &self.up_hysteresis_ratio)
-            .field("variants", &self.variants.len())
-            .finish()
-    }
+fn fmt_variants_len(val: &[Variant], f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    write!(f, "{}", val.len())
 }
 
 impl AbrOptions {

@@ -1,12 +1,13 @@
 use std::time::Duration;
 
-use kithara::bufpool::byte_pool;
-use kithara::storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt, StorageError};
+use kithara::{
+    bufpool::byte_pool,
+    storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt, StorageError},
+};
+use kithara_test_utils::{cancel_token, cancel_token_cancelled, temp_dir};
 use rstest::*;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
-
-use kithara_test_utils::{cancel_token, cancel_token_cancelled, temp_dir};
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]

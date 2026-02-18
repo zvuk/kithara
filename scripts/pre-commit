@@ -23,4 +23,9 @@ if ! bash scripts/ci/lint-style.sh; then
     exit 1
 fi
 
+echo "pre-commit: checking architecture constraints..."
+if ! bash scripts/ci/check-arch.sh; then
+    exit 1
+fi
+
 echo "pre-commit: all checks passed."
