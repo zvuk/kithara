@@ -652,7 +652,6 @@ where
         let preload_notify = Arc::new(Notify::new());
         let worker_notify = preload_notify.clone();
 
-        let worker_preload_chunks = preload_chunks.max(1);
         let worker_cancel = cancel.clone();
 
         thread_pool.spawn(move || {
@@ -661,7 +660,7 @@ where
                 &cmd_rx,
                 &data_tx,
                 &worker_notify,
-                worker_preload_chunks,
+                preload_chunks.get(),
                 &worker_cancel,
             );
         });

@@ -1,7 +1,7 @@
 //! Audio pipeline configuration.
 
 use std::{
-    num::NonZeroU32,
+    num::{NonZeroU32, NonZeroUsize},
     sync::{Arc, atomic::AtomicU32},
 };
 
@@ -16,6 +16,9 @@ use crate::{
     resampler::{ResamplerParams, ResamplerProcessor, ResamplerQuality},
     traits::AudioEffect,
 };
+
+/// Default number of preload chunks.
+const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
 
 /// Configuration for audio pipeline with stream config.
 ///
@@ -45,8 +48,7 @@ pub struct AudioConfig<T: StreamType> {
     ///
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
-    #[setters(skip)]
-    pub preload_chunks: usize,
+    pub preload_chunks: NonZeroUsize,
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
@@ -76,7 +78,7 @@ impl<T: StreamType> AudioConfig<T> {
             pcm_buffer_chunks: 10,
             pcm_pool: None,
             prefer_hardware: false,
-            preload_chunks: 3,
+            preload_chunks: DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
             stream,
             thread_pool: None,
@@ -88,12 +90,6 @@ impl<T: StreamType> AudioConfig<T> {
     /// Set format hint.
     pub fn with_hint<S: Into<String>>(mut self, hint: S) -> Self {
         self.hint = Some(hint.into());
-        self
-    }
-
-    /// Set number of chunks to buffer before signaling preload readiness.
-    pub fn with_preload_chunks(mut self, chunks: usize) -> Self {
-        self.preload_chunks = chunks.max(1);
         self
     }
 

@@ -1,6 +1,9 @@
 //! Configuration for [`Item`](crate::impls::item::Item).
 
-use std::{num::NonZeroU32, path::PathBuf};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    path::PathBuf,
+};
 
 use derive_setters::Setters;
 #[cfg(any(feature = "file", feature = "hls"))]
@@ -45,6 +48,9 @@ impl std::fmt::Display for ResourceSrc {
     }
 }
 
+/// Default number of preload chunks.
+const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+
 /// Unified configuration for creating an [`Item`](crate::impls::item::Item).
 ///
 /// Wraps source, audio options, and protocol-specific settings into a single
@@ -71,7 +77,6 @@ impl std::fmt::Display for ResourceSrc {
 pub struct ResourceConfig {
     /// ABR (Adaptive Bitrate) configuration.
     #[cfg(feature = "hls")]
-    #[setters(skip)]
     pub abr: kithara_abr::AbrOptions,
     /// Unified event bus for streaming, decode, and audio events.
     ///
@@ -90,13 +95,11 @@ pub struct ResourceConfig {
     pub hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
     #[cfg(feature = "hls")]
-    #[setters(skip)]
     pub hls_base_url: Option<Url>,
     /// Target sample rate of the audio host (for resampling).
     pub host_sample_rate: Option<NonZeroU32>,
     /// Encryption key handling configuration.
     #[cfg(feature = "hls")]
-    #[setters(skip)]
     pub keys: kithara_hls::KeyOptions,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     ///
@@ -112,11 +115,9 @@ pub struct ResourceConfig {
     pub name: Option<String>,
     /// Additional HTTP headers to include in all network requests.
     #[cfg(any(feature = "file", feature = "hls"))]
-    #[setters(skip)]
     pub headers: Option<Headers>,
     /// Network configuration (timeouts, retries).
     #[cfg(any(feature = "file", feature = "hls"))]
-    #[setters(skip)]
     pub net: NetOptions,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
@@ -124,15 +125,13 @@ pub struct ResourceConfig {
     ///
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
-    #[setters(skip)]
-    pub preload_chunks: usize,
+    pub preload_chunks: NonZeroUsize,
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
     pub src: ResourceSrc,
     /// Storage configuration (cache directory, eviction limits).
     #[cfg(any(feature = "file", feature = "hls"))]
-    #[setters(skip)]
     pub store: StoreOptions,
     /// Thread pool for background work (decode, probe, downloads).
     ///
@@ -191,7 +190,7 @@ impl ResourceConfig {
             #[cfg(any(feature = "file", feature = "hls"))]
             net: NetOptions::default(),
             pcm_pool: None,
-            preload_chunks: 3,
+            preload_chunks: DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
             src,
             #[cfg(any(feature = "file", feature = "hls"))]
@@ -211,61 +210,6 @@ impl ResourceConfig {
     #[must_use]
     pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
         self.hint = Some(hint.into());
-        self
-    }
-
-    /// Set number of chunks to buffer before signaling preload readiness.
-    #[must_use]
-    pub fn with_preload_chunks(mut self, chunks: usize) -> Self {
-        self.preload_chunks = chunks.max(1);
-        self
-    }
-
-    /// Set storage options.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[must_use]
-    pub fn with_store(mut self, store: StoreOptions) -> Self {
-        self.store = store;
-        self
-    }
-
-    /// Set network options.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[must_use]
-    pub fn with_net(mut self, net: NetOptions) -> Self {
-        self.net = net;
-        self
-    }
-
-    /// Set additional HTTP headers for all network requests.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[must_use]
-    pub fn with_headers(mut self, headers: Headers) -> Self {
-        self.headers = Some(headers);
-        self
-    }
-
-    /// Set ABR options.
-    #[cfg(feature = "hls")]
-    #[must_use]
-    pub fn with_abr(mut self, abr: kithara_abr::AbrOptions) -> Self {
-        self.abr = abr;
-        self
-    }
-
-    /// Set encryption key options.
-    #[cfg(feature = "hls")]
-    #[must_use]
-    pub fn with_keys(mut self, keys: kithara_hls::KeyOptions) -> Self {
-        self.keys = keys;
-        self
-    }
-
-    /// Set base URL for resolving relative HLS URLs.
-    #[cfg(feature = "hls")]
-    #[must_use]
-    pub fn with_hls_base_url(mut self, base_url: Url) -> Self {
-        self.hls_base_url = Some(base_url);
         self
     }
 
@@ -499,10 +443,10 @@ mod tests {
             .with_hint("mp3")
             .with_name("test")
             .with_thread_pool(ThreadPool::default())
-            .with_preload_chunks(5);
+            .with_preload_chunks(NonZeroUsize::new(5).expect("5 > 0"));
         assert!(config.bus.is_some());
         assert_eq!(config.hint.as_deref(), Some("mp3"));
         assert_eq!(config.name.as_deref(), Some("test"));
-        assert_eq!(config.preload_chunks, 5);
+        assert_eq!(config.preload_chunks.get(), 5);
     }
 }
