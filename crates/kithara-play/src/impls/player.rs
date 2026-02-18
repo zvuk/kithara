@@ -9,7 +9,8 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use kithara_platform::Mutex;
+use kithara_bufpool::{PcmPool, pcm_pool};
+use kithara_platform::{Mutex, ThreadPool};
 use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
@@ -34,24 +35,84 @@ use super::{
 /// Configuration for the player.
 #[derive(Clone, Debug)]
 pub struct PlayerConfig {
-    /// Maximum concurrent slots in the engine. Default: 4.
-    pub max_slots: usize,
-    /// Default playback rate (1.0 = normal). Default: 1.0.
-    pub default_rate: f32,
     /// Crossfade duration in seconds. Default: 1.0.
     pub crossfade_duration: f32,
+    /// Default playback rate (1.0 = normal). Default: 1.0.
+    pub default_rate: f32,
     /// Number of EQ bands. Default: 10.
     pub eq_bands: usize,
+    /// Maximum concurrent slots in the engine. Default: 4.
+    pub max_slots: usize,
+    /// PCM buffer pool for audio-thread scratch buffers.
+    ///
+    /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
+    /// PCM pool is used.
+    pub pcm_pool: Option<PcmPool>,
+    /// Thread pool for the engine thread and background work.
+    ///
+    /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
+    /// rayon pool is used.
+    pub thread_pool: Option<ThreadPool>,
 }
 
 impl Default for PlayerConfig {
     fn default() -> Self {
         Self {
-            max_slots: 4,
-            default_rate: 1.0,
             crossfade_duration: 1.0,
+            default_rate: 1.0,
             eq_bands: 10,
+            max_slots: 4,
+            pcm_pool: None,
+            thread_pool: None,
         }
+    }
+}
+
+impl PlayerConfig {
+    /// Set maximum concurrent slots in the engine.
+    #[must_use]
+    pub fn with_max_slots(mut self, max_slots: usize) -> Self {
+        self.max_slots = max_slots;
+        self
+    }
+
+    /// Set default playback rate.
+    #[must_use]
+    pub fn with_default_rate(mut self, rate: f32) -> Self {
+        self.default_rate = rate;
+        self
+    }
+
+    /// Set crossfade duration in seconds.
+    #[must_use]
+    pub fn with_crossfade_duration(mut self, seconds: f32) -> Self {
+        self.crossfade_duration = seconds;
+        self
+    }
+
+    /// Set number of EQ bands.
+    #[must_use]
+    pub fn with_eq_bands(mut self, eq_bands: usize) -> Self {
+        self.eq_bands = eq_bands;
+        self
+    }
+
+    /// Set PCM buffer pool for audio-thread scratch buffers.
+    ///
+    /// When not set, the global PCM pool is used.
+    #[must_use]
+    pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
+        self.pcm_pool = Some(pool);
+        self
+    }
+
+    /// Set thread pool for the engine thread and background work.
+    ///
+    /// When not set, the global rayon pool is used.
+    #[must_use]
+    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
+        self.thread_pool = Some(pool);
+        self
     }
 }
 
@@ -66,42 +127,52 @@ impl Default for PlayerConfig {
 pub struct PlayerImpl {
     config: PlayerConfig,
     engine: EngineImpl,
-    items: Mutex<Vec<Option<Resource>>>,
-    current_index: AtomicUsize,
-    current_slot: Mutex<Option<SlotId>>,
-    rate: AtomicF32,
-    volume: AtomicF32,
-    muted: AtomicBool,
-    status: Mutex<PlayerStatus>,
+
     action_at_item_end: Mutex<ActionAtItemEnd>,
     crossfade_duration: AtomicF32,
+    current_index: AtomicUsize,
+    current_slot: Mutex<Option<SlotId>>,
     events_tx: broadcast::Sender<PlayerEvent>,
+    items: Mutex<Vec<Option<Resource>>>,
+    muted: AtomicBool,
+    pcm_pool: PcmPool,
+    rate: AtomicF32,
+    status: Mutex<PlayerStatus>,
+    volume: AtomicF32,
 }
 
 impl PlayerImpl {
     /// Create a new player with the given configuration.
     #[must_use]
     pub fn new(config: PlayerConfig) -> Self {
+        let resolved_pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| pcm_pool().clone());
+
         let engine_config = EngineConfig {
             max_slots: config.max_slots,
+            pcm_pool: Some(resolved_pool.clone()),
+            thread_pool: config.thread_pool.clone(),
             ..EngineConfig::default()
         };
         let engine = EngineImpl::new(engine_config);
 
         let (events_tx, _) = broadcast::channel(64);
         Self {
-            crossfade_duration: AtomicF32::new(config.crossfade_duration),
-            rate: AtomicF32::new(0.0), // starts paused
-            volume: AtomicF32::new(1.0),
-            muted: AtomicBool::new(false),
-            status: Mutex::new(PlayerStatus::Unknown),
             action_at_item_end: Mutex::new(ActionAtItemEnd::default()),
+            crossfade_duration: AtomicF32::new(config.crossfade_duration),
             current_index: AtomicUsize::new(0),
-            items: Mutex::new(Vec::new()),
             current_slot: Mutex::new(None),
+            events_tx,
+            items: Mutex::new(Vec::new()),
+            muted: AtomicBool::new(false),
+            pcm_pool: resolved_pool,
+            rate: AtomicF32::new(0.0), // starts paused
+            status: Mutex::new(PlayerStatus::Unknown),
+            volume: AtomicF32::new(1.0),
             engine,
             config,
-            events_tx,
         }
     }
 
@@ -338,7 +409,7 @@ impl PlayerImpl {
         };
 
         let src = Arc::clone(resource.src());
-        let player_resource = PlayerResource::new(resource, Arc::clone(&src));
+        let player_resource = PlayerResource::new(resource, Arc::clone(&src), &self.pcm_pool);
         let arc_resource = Arc::new(Mutex::new(player_resource));
         drop(items);
 
@@ -546,13 +617,46 @@ mod tests {
     #[test]
     fn player_config_custom() {
         let config = PlayerConfig {
-            max_slots: 2,
-            default_rate: 0.5,
             crossfade_duration: 2.0,
+            default_rate: 0.5,
             eq_bands: 5,
+            max_slots: 2,
+            pcm_pool: None,
+            thread_pool: None,
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn player_config_builder() {
+        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let config = PlayerConfig::default()
+            .with_max_slots(8)
+            .with_default_rate(0.5)
+            .with_crossfade_duration(2.5)
+            .with_eq_bands(5)
+            .with_thread_pool(pool);
+        assert_eq!(config.max_slots, 8);
+        assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
+        assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);
+        assert_eq!(config.eq_bands, 5);
+        assert!(config.thread_pool.is_some());
+    }
+
+    #[test]
+    fn player_config_default_thread_pool_is_none() {
+        let config = PlayerConfig::default();
+        assert!(config.thread_pool.is_none());
+    }
+
+    #[test]
+    fn player_propagates_thread_pool_to_engine() {
+        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let config = PlayerConfig::default().with_thread_pool(pool);
+        // Should not panic — engine uses the player's thread pool.
+        let player = PlayerImpl::new(config);
+        assert!(!player.engine().is_running());
     }
 
     #[test]

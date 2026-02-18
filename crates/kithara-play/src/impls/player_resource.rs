@@ -7,7 +7,7 @@
 
 use std::{num::NonZeroU32, ops::Range, sync::Arc, time::Duration};
 
-use kithara_bufpool::{PcmBuf, pcm_pool};
+use kithara_bufpool::{PcmBuf, PcmPool};
 use tracing::warn;
 
 use crate::{error::PlayError, impls::resource::Resource};
@@ -29,22 +29,22 @@ pub(crate) struct PlayerResource {
 impl PlayerResource {
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
-    /// Allocates two channel scratch buffers from the global PCM pool,
+    /// Allocates two channel scratch buffers from the given PCM pool,
     /// sized to `sample_rate / 5` frames (200ms worth of audio).
-    pub(crate) fn new(resource: Resource, src: Arc<str>) -> Self {
+    pub(crate) fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
         let spec = resource.spec();
         let channels = spec.channels as usize;
         let buffer_len = (spec.sample_rate as usize / 5) * channels.max(2);
 
         let channel_buffers = [
-            pcm_pool().get_with(|b: &mut Vec<f32>| {
+            pool.get_with(|b: &mut Vec<f32>| {
                 let cap = b.capacity();
                 if cap < buffer_len {
                     b.reserve(buffer_len - cap);
                 }
                 b.resize(buffer_len, 0.0);
             }),
-            pcm_pool().get_with(|b: &mut Vec<f32>| {
+            pool.get_with(|b: &mut Vec<f32>| {
                 let cap = b.capacity();
                 if cap < buffer_len {
                     b.reserve(buffer_len - cap);
@@ -330,7 +330,7 @@ mod tests {
     fn make_player_resource() -> PlayerResource {
         let reader = MockPcmReader::new(mock_spec(), 1.0, 0.5);
         let resource = Resource::from_reader(reader);
-        PlayerResource::new(resource, Arc::from("test.mp3"))
+        PlayerResource::new(resource, Arc::from("test.mp3"), kithara_bufpool::pcm_pool())
     }
 
     #[tokio::test]
@@ -380,7 +380,11 @@ mod tests {
     async fn resource_eof_returns_error() {
         let reader = MockPcmReader::new(mock_spec(), 0.01, 0.5);
         let resource = Resource::from_reader(reader);
-        let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"));
+        let mut pr = PlayerResource::new(
+            resource,
+            Arc::from("short.mp3"),
+            kithara_bufpool::pcm_pool(),
+        );
 
         // Read all data
         let mut left = vec![0.0f32; 4096];

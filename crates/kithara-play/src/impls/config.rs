@@ -7,6 +7,7 @@ use kithara_assets::StoreOptions;
 use kithara_audio::{AudioConfig, ResamplerQuality};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::DecodeError;
+use kithara_events::EventBus;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::NetOptions;
 use kithara_platform::ThreadPool;
@@ -68,6 +69,13 @@ pub struct ResourceConfig {
     /// ABR (Adaptive Bitrate) configuration.
     #[cfg(feature = "hls")]
     pub abr: kithara_abr::AbrOptions,
+    /// Unified event bus for streaming, decode, and audio events.
+    ///
+    /// When set, the bus is propagated to the underlying stream and audio
+    /// pipeline. All events (`FileEvent`, `HlsEvent`, `AudioEvent`) are
+    /// published to this bus, enabling a single subscription point.
+    /// When `None`, a fresh bus is created per resource.
+    pub bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
     /// Cancellation token for graceful shutdown.
@@ -151,6 +159,7 @@ impl ResourceConfig {
         Ok(Self {
             #[cfg(feature = "hls")]
             abr: kithara_abr::AbrOptions::default(),
+            bus: None,
             byte_pool: None,
             cancel: None,
             hint: None,
@@ -177,8 +186,19 @@ impl ResourceConfig {
     ///
     /// When multiple URLs share the same canonical form (differ only in query
     /// parameters), a unique name ensures each gets its own cache directory.
+    #[must_use]
     pub fn with_name<N: Into<String>>(mut self, name: N) -> Self {
         self.name = Some(name.into());
+        self
+    }
+
+    /// Set unified event bus.
+    ///
+    /// The bus is shared across the entire pipeline (stream + decode + audio).
+    /// All events are published to this bus.
+    #[must_use]
+    pub fn with_events(mut self, bus: EventBus) -> Self {
+        self.bus = Some(bus);
         self
     }
 
@@ -190,6 +210,7 @@ impl ResourceConfig {
     }
 
     /// Set format hint (file extension like "mp3", "wav").
+    #[must_use]
     pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
         self.hint = Some(hint.into());
         self
@@ -321,6 +342,9 @@ impl ResourceConfig {
             file_config = file_config.with_name(name);
         }
 
+        if let Some(ref bus) = self.bus {
+            file_config = file_config.with_events(bus.clone());
+        }
         if let Some(cancel) = self.cancel {
             file_config = file_config.with_cancel(cancel);
         }
@@ -375,6 +399,9 @@ impl ResourceConfig {
 
         if let Some(base_url) = self.hls_base_url {
             hls_config = hls_config.with_base_url(base_url);
+        }
+        if let Some(ref bus) = self.bus {
+            hls_config = hls_config.with_events(bus.clone());
         }
         if let Some(cancel) = self.cancel {
             hls_config = hls_config.with_cancel(cancel);
@@ -432,5 +459,58 @@ mod tests {
     fn config_relative_path_fails() {
         let config = ResourceConfig::new("relative/path.mp3");
         assert!(config.is_err());
+    }
+
+    #[test]
+    fn config_with_events_sets_bus() {
+        let bus = EventBus::new(32);
+        let config = ResourceConfig::new("https://example.com/song.mp3")
+            .unwrap()
+            .with_events(bus);
+        assert!(config.bus.is_some());
+    }
+
+    #[test]
+    fn config_default_bus_is_none() {
+        let config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        assert!(config.bus.is_none());
+    }
+
+    #[cfg(feature = "file")]
+    #[test]
+    fn config_bus_propagates_to_file_config() {
+        let bus = EventBus::new(32);
+        let config = ResourceConfig::new("https://example.com/song.mp3")
+            .unwrap()
+            .with_events(bus);
+        let audio_config = config.into_file_config();
+        assert!(audio_config.stream.bus.is_some());
+    }
+
+    #[cfg(feature = "hls")]
+    #[test]
+    fn config_bus_propagates_to_hls_config() {
+        let bus = EventBus::new(32);
+        let config = ResourceConfig::new("https://example.com/live.m3u8")
+            .unwrap()
+            .with_events(bus);
+        let audio_config = config.into_hls_config().unwrap();
+        assert!(audio_config.stream.bus.is_some());
+    }
+
+    #[test]
+    fn config_builder_chain() {
+        let bus = EventBus::new(32);
+        let config = ResourceConfig::new("https://example.com/song.mp3")
+            .unwrap()
+            .with_events(bus)
+            .with_hint("mp3")
+            .with_name("test")
+            .with_thread_pool(ThreadPool::default())
+            .with_preload_chunks(5);
+        assert!(config.bus.is_some());
+        assert_eq!(config.hint.as_deref(), Some("mp3"));
+        assert_eq!(config.name.as_deref(), Some("test"));
+        assert_eq!(config.preload_chunks, 5);
     }
 }

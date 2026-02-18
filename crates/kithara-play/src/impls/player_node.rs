@@ -15,6 +15,7 @@ use firewheel::{
     diff::{Diff, Patch},
     node::{AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig},
 };
+use kithara_bufpool::PcmPool;
 
 use super::{
     player_processor::{PlayerCmd, PlayerNodeProcessor},
@@ -41,6 +42,10 @@ pub(crate) struct PlayerNode {
     #[diff(skip)]
     cmd_rx: kanal::Receiver<PlayerCmd>,
 
+    /// PCM buffer pool for scratch buffer allocation.
+    #[diff(skip)]
+    pcm_pool: PcmPool,
+
     /// Shared atomic state for position, duration, notifications, etc.
     #[diff(skip)]
     shared_state: Arc<SharedPlayerState>,
@@ -58,6 +63,7 @@ impl PlayerNode {
         Self {
             active: false,
             cmd_rx: rx,
+            pcm_pool: kithara_bufpool::pcm_pool().clone(),
             shared_state: Arc::new(SharedPlayerState::new()),
         }
     }
@@ -66,10 +72,12 @@ impl PlayerNode {
     pub(crate) fn with_channel(
         cmd_rx: kanal::Receiver<PlayerCmd>,
         shared_state: Arc<SharedPlayerState>,
+        pcm_pool: PcmPool,
     ) -> Self {
         Self {
             active: false,
             cmd_rx,
+            pcm_pool,
             shared_state,
         }
     }
@@ -109,6 +117,7 @@ impl AudioNode for PlayerNode {
             self.cmd_rx.clone(),
             Arc::clone(&self.shared_state),
             sample_rate,
+            &self.pcm_pool,
         )
     }
 }
@@ -136,7 +145,7 @@ mod tests {
     fn player_node_with_channel() {
         let (tx, rx) = kanal::bounded(8);
         let shared_state = Arc::new(SharedPlayerState::new());
-        let node = PlayerNode::with_channel(rx, shared_state);
+        let node = PlayerNode::with_channel(rx, shared_state, kithara_bufpool::pcm_pool().clone());
         assert!(!node.active);
 
         // Verify the channel is connected

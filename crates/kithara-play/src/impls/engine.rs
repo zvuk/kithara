@@ -14,6 +14,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, ThreadPool};
 use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
@@ -31,24 +32,82 @@ use super::{player_processor::PlayerCmd, shared_player_state::SharedPlayerState}
 /// Configuration for the audio engine.
 #[derive(Clone, Debug)]
 pub struct EngineConfig {
-    /// Maximum number of concurrent player slots. Default: 4.
-    pub max_slots: usize,
-    /// Sample rate passed to `CpalBackend` as a hint. Default: 44100.
-    pub sample_rate: u32,
     /// Number of output channels. Default: 2 (stereo).
     pub channels: u16,
     /// Number of EQ bands per slot (unused until Task 6). Default: 10.
     pub eq_bands: usize,
+    /// Maximum number of concurrent player slots. Default: 4.
+    pub max_slots: usize,
+    /// PCM buffer pool for audio-thread scratch buffers.
+    ///
+    /// When `None`, the global PCM pool is used.
+    pub pcm_pool: Option<PcmPool>,
+    /// Sample rate passed to `CpalBackend` as a hint. Default: 44100.
+    pub sample_rate: u32,
+    /// Thread pool for the engine thread and background work.
+    ///
+    /// When `None`, the global rayon pool is used.
+    pub thread_pool: Option<ThreadPool>,
 }
 
 impl Default for EngineConfig {
     fn default() -> Self {
         Self {
-            max_slots: 4,
-            sample_rate: 44100,
             channels: 2,
             eq_bands: 10,
+            max_slots: 4,
+            pcm_pool: None,
+            sample_rate: 44100,
+            thread_pool: None,
         }
+    }
+}
+
+impl EngineConfig {
+    /// Set maximum number of concurrent player slots.
+    #[must_use]
+    pub fn with_max_slots(mut self, max_slots: usize) -> Self {
+        self.max_slots = max_slots;
+        self
+    }
+
+    /// Set sample rate hint for `CpalBackend`.
+    #[must_use]
+    pub fn with_sample_rate(mut self, sample_rate: u32) -> Self {
+        self.sample_rate = sample_rate;
+        self
+    }
+
+    /// Set number of output channels.
+    #[must_use]
+    pub fn with_channels(mut self, channels: u16) -> Self {
+        self.channels = channels;
+        self
+    }
+
+    /// Set number of EQ bands per slot.
+    #[must_use]
+    pub fn with_eq_bands(mut self, eq_bands: usize) -> Self {
+        self.eq_bands = eq_bands;
+        self
+    }
+
+    /// Set PCM buffer pool for audio-thread scratch buffers.
+    ///
+    /// When not set, the global PCM pool is used.
+    #[must_use]
+    pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
+        self.pcm_pool = Some(pool);
+        self
+    }
+
+    /// Set thread pool for the engine thread and background work.
+    ///
+    /// When not set, the global rayon pool is used.
+    #[must_use]
+    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
+        self.thread_pool = Some(pool);
+        self
     }
 }
 
@@ -133,9 +192,14 @@ impl EngineImpl {
         let (done_tx, done_rx) = kanal::bounded(1);
 
         let max_slots = config.max_slots;
+        let thread_pool = config.thread_pool.clone().unwrap_or_default();
+        let pcm_pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| pcm_pool().clone());
 
-        ThreadPool::global().spawn(move || {
-            engine_thread(&cmd_rx, &reply_tx, max_slots);
+        thread_pool.spawn(move || {
+            engine_thread(&cmd_rx, &reply_tx, max_slots, pcm_pool);
             let _ = done_tx.send(());
         });
 
@@ -384,24 +448,31 @@ struct SlotNodes {
 /// Mutable state owned by the engine thread.
 struct EngineThreadState {
     ctx: Option<firewheel::FirewheelCtx<firewheel::cpal::CpalBackend>>,
-    slot_nodes: Vec<SlotNodes>,
-    next_slot_id: u64,
     max_slots: usize,
     /// Node ID of the master volume/pan node in the audio graph.
     master_vol_pan_id: Option<firewheel::node::NodeID>,
     /// Memo for diffing master volume changes and sending patches.
     master_vol_pan_memo: Option<firewheel::diff::Memo<firewheel::nodes::volume_pan::VolumePanNode>>,
+    next_slot_id: u64,
+    pcm_pool: PcmPool,
+    slot_nodes: Vec<SlotNodes>,
 }
 
 /// The dedicated rayon pool thread that owns the `FirewheelCtx`.
-fn engine_thread(cmd_rx: &kanal::Receiver<Cmd>, reply_tx: &kanal::Sender<Reply>, max_slots: usize) {
+fn engine_thread(
+    cmd_rx: &kanal::Receiver<Cmd>,
+    reply_tx: &kanal::Sender<Reply>,
+    max_slots: usize,
+    pcm_pool: PcmPool,
+) {
     let mut state = EngineThreadState {
         ctx: None,
-        slot_nodes: Vec::new(),
-        next_slot_id: 1,
         max_slots,
         master_vol_pan_id: None,
         master_vol_pan_memo: None,
+        next_slot_id: 1,
+        pcm_pool,
+        slot_nodes: Vec::new(),
     };
 
     while let Ok(cmd) = cmd_rx.recv() {
@@ -507,7 +578,8 @@ fn handle_allocate_slot(state: &mut EngineThreadState) -> Reply {
     let (cmd_tx, cmd_rx) = kanal::bounded(32);
     let shared_state = Arc::new(SharedPlayerState::new());
 
-    let player_node = PlayerNode::with_channel(cmd_rx, Arc::clone(&shared_state));
+    let player_node =
+        PlayerNode::with_channel(cmd_rx, Arc::clone(&shared_state), state.pcm_pool.clone());
     let player_node_id = fw_ctx.add_node(player_node, None);
     let vol_pan_node_id = fw_ctx.add_node(VolumePanNode::from_volume(Volume::Linear(1.0)), None);
 
@@ -609,10 +681,32 @@ mod tests {
     #[test]
     fn engine_config_defaults() {
         let config = EngineConfig::default();
-        assert_eq!(config.max_slots, 4);
-        assert_eq!(config.sample_rate, 44100);
         assert_eq!(config.channels, 2);
         assert_eq!(config.eq_bands, 10);
+        assert_eq!(config.max_slots, 4);
+        assert_eq!(config.sample_rate, 44100);
+    }
+
+    #[test]
+    fn engine_config_default_thread_pool_is_none() {
+        let config = EngineConfig::default();
+        assert!(config.thread_pool.is_none());
+    }
+
+    #[test]
+    fn engine_config_builder() {
+        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let config = EngineConfig::default()
+            .with_max_slots(8)
+            .with_sample_rate(48000)
+            .with_channels(1)
+            .with_eq_bands(5)
+            .with_thread_pool(pool);
+        assert_eq!(config.max_slots, 8);
+        assert_eq!(config.sample_rate, 48000);
+        assert_eq!(config.channels, 1);
+        assert!(config.thread_pool.is_some());
+        assert_eq!(config.eq_bands, 5);
     }
 
     #[test]
@@ -714,6 +808,15 @@ mod tests {
     fn engine_is_crossfading_returns_false() {
         let engine = make_engine();
         assert!(!engine.is_crossfading());
+    }
+
+    #[test]
+    fn engine_config_thread_pool_used_by_engine() {
+        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let config = EngineConfig::default().with_thread_pool(pool);
+        // Engine should accept a custom thread pool without panicking.
+        let engine = EngineImpl::new(config);
+        assert!(!engine.is_running());
     }
 
     #[test]

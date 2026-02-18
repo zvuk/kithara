@@ -16,7 +16,7 @@ use firewheel::{
     event::ProcEvents,
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
-use kithara_bufpool::{PcmBuf, pcm_pool};
+use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_platform::Mutex;
 use thunderdome::{Arena, Index};
 use tracing::warn;
@@ -79,13 +79,13 @@ impl std::fmt::Debug for PlayerCmd {
 /// and renders mixed stereo audio into the Firewheel output buffers.
 pub(crate) struct PlayerNodeProcessor {
     cmd_rx: kanal::Receiver<PlayerCmd>,
+    crossfade: CrossfadeSettings,
+    sample_rate: NonZeroU32,
+    scratch_bufs: [PcmBuf; 4],
     shared_state: Arc<SharedPlayerState>,
     tracks: Arena<PlayerTrack>,
     tracks_index: HashMap<Arc<str>, Index>,
     tracks_transitions: VecDeque<TrackTransition>,
-    crossfade: CrossfadeSettings,
-    sample_rate: NonZeroU32,
-    scratch_bufs: [PcmBuf; 4],
 }
 
 impl PlayerNodeProcessor {
@@ -94,23 +94,19 @@ impl PlayerNodeProcessor {
         cmd_rx: kanal::Receiver<PlayerCmd>,
         shared_state: Arc<SharedPlayerState>,
         sample_rate: NonZeroU32,
+        pool: &PcmPool,
     ) -> Self {
-        let scratch_bufs = [
-            pcm_pool().get(),
-            pcm_pool().get(),
-            pcm_pool().get(),
-            pcm_pool().get(),
-        ];
+        let scratch_bufs = [pool.get(), pool.get(), pool.get(), pool.get()];
 
         Self {
             cmd_rx,
+            crossfade: CrossfadeSettings::default(),
+            sample_rate,
+            scratch_bufs,
             shared_state,
             tracks: Arena::with_capacity(MAX_TRACKS),
             tracks_index: HashMap::with_capacity(MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(MAX_TRACKS),
-            crossfade: CrossfadeSettings::default(),
-            sample_rate,
-            scratch_bufs,
         }
     }
 
@@ -465,7 +461,8 @@ mod tests {
         let shared_state = make_shared_state();
         let (tx, rx) = kanal::bounded(32);
         let sample_rate = NonZeroU32::new(44100).expect("non-zero");
-        let processor = PlayerNodeProcessor::new(rx, shared_state, sample_rate);
+        let processor =
+            PlayerNodeProcessor::new(rx, shared_state, sample_rate, kithara_bufpool::pcm_pool());
         (processor, tx)
     }
 
@@ -658,6 +655,10 @@ mod tests {
         };
 
         let resource = Resource::from_reader(reader);
-        Arc::new(Mutex::new(PlayerResource::new(resource, Arc::from(src))))
+        Arc::new(Mutex::new(PlayerResource::new(
+            resource,
+            Arc::from(src),
+            kithara_bufpool::pcm_pool(),
+        )))
     }
 }
