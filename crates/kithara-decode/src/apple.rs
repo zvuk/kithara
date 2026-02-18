@@ -16,6 +16,7 @@
 #![allow(dead_code)]
 
 use std::{
+    cell::Cell,
     collections::VecDeque,
     ffi::c_void,
     io::{Read, Seek, SeekFrom},
@@ -404,9 +405,27 @@ struct AppleInner {
     prime_info: Option<AudioConverterPrimeInfo>,
     /// PCM buffer pool (resolved from config or global).
     pool: PcmPool,
+    /// Owner thread for FFI decoder state (set on first decoder operation in debug builds).
+    owner_thread: Cell<Option<std::thread::ThreadId>>,
 }
 
 impl AppleInner {
+    #[inline]
+    fn assert_thread_affinity(&self) {
+        #[cfg(debug_assertions)]
+        {
+            let current = std::thread::current().id();
+            if let Some(owner) = self.owner_thread.get() {
+                debug_assert_eq!(
+                    owner, current,
+                    "Apple decoder used from multiple threads; this backend requires thread affinity"
+                );
+            } else {
+                self.owner_thread.set(Some(current));
+            }
+        }
+    }
+
     fn new<R>(mut source: R, config: &AppleConfig) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + 'static,
@@ -679,10 +698,12 @@ impl AppleInner {
             data_offset,
             prime_info,
             pool,
+            owner_thread: Cell::new(None),
         })
     }
 
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        self.assert_thread_affinity();
         loop {
             // Ensure we have packets to decode
             while self.parser_state.packet_buffer.len() < 4 && !self.source_eof {
@@ -844,6 +865,7 @@ impl AppleInner {
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
+        self.assert_thread_affinity();
         let target_frame = (pos.as_secs_f64() * self.spec.sample_rate as f64) as u64;
 
         debug!(
@@ -938,6 +960,7 @@ impl AppleInner {
 
     /// Query kAudioConverterPrimeInfo from the converter.
     fn query_prime_info(&self) -> Option<(u32, u32)> {
+        self.assert_thread_affinity();
         if self.converter.is_null() {
             return None;
         }
@@ -980,11 +1003,17 @@ impl AppleInner {
     }
 }
 
-// SAFETY: The decoder is designed to be used from one thread at a time.
+// SAFETY:
+// - AudioToolbox handles (`AudioFileStreamID`, `AudioConverterRef`) are only touched
+//   by methods that require thread affinity (`next_chunk`, `seek`, `query_prime_info`).
+// - In debug builds we enforce this with `assert_thread_affinity()`.
+// - Cross-thread update path (`update_byte_len`) only writes to an `AtomicU64` and does
+//   not touch AudioToolbox state.
 unsafe impl Send for AppleInner {}
 
 impl Drop for AppleInner {
     fn drop(&mut self) {
+        self.assert_thread_affinity();
         debug!("Apple decoder: disposing");
         unsafe {
             if !self.converter.is_null() {
