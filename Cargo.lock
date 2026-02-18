@@ -2727,6 +2727,7 @@ dependencies = [
  "kithara-platform",
  "kithara-stream",
  "rayon",
+ "rstest",
  "tokio",
  "tracing",
  "tracing-wasm",
