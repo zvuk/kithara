@@ -312,16 +312,26 @@ mod tests {
 
     use url::Url;
 
+    use crate::parsing::{
+        CodecInfo, InitSegment, MediaPlaylist, MediaSegment, VariantId, VariantStream,
+    };
+
     use super::*;
 
     fn base_url() -> Url {
-        Url::parse("https://cdn.example.com/audio/").unwrap()
+        Url::parse("https://cdn.example.com/audio/").expect("valid base URL")
+    }
+
+    fn test_url(raw: &str) -> Url {
+        Url::parse(raw).expect("valid test URL")
     }
 
     fn make_segment(index: usize) -> SegmentState {
         SegmentState {
             index,
-            url: base_url().join(&format!("segment-{index}.m4s")).unwrap(),
+            url: base_url()
+                .join(&format!("segment-{index}.m4s"))
+                .expect("valid segment URL"),
             duration: Duration::from_secs(4),
             key: None,
         }
@@ -331,11 +341,11 @@ mod tests {
         let segments: Vec<SegmentState> = (0..num_segments).map(make_segment).collect();
         VariantState {
             id,
-            uri: base_url().join("variant.m3u8").unwrap(),
+            uri: base_url().join("variant.m3u8").expect("valid variant URL"),
             bandwidth: Some(128_000),
             codec: Some(AudioCodec::AacLc),
             container: Some(ContainerFormat::Fmp4),
-            init_url: Some(base_url().join("init.mp4").unwrap()),
+            init_url: Some(base_url().join("init.mp4").expect("valid init URL")),
             segments,
             size_map: None,
         }
@@ -526,10 +536,6 @@ mod tests {
 
     #[test]
     fn test_from_parsed_basic() {
-        use crate::parsing::{
-            CodecInfo, InitSegment, MediaPlaylist, MediaSegment, VariantId, VariantStream,
-        };
-
         let variants = vec![VariantStream {
             id: VariantId(0),
             uri: "v0.m3u8".to_string(),
@@ -542,7 +548,7 @@ mod tests {
             }),
         }];
 
-        let media_url = Url::parse("https://cdn.example.com/audio/v0.m3u8").unwrap();
+        let media_url = test_url("https://cdn.example.com/audio/v0.m3u8");
         let playlist = MediaPlaylist {
             segments: vec![
                 MediaSegment {
