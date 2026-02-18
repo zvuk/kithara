@@ -97,6 +97,7 @@ impl PlayerImpl {
             .unwrap_or_else(|| pcm_pool().clone());
 
         let engine_config = EngineConfig {
+            eq_bands: config.eq_bands,
             max_slots: config.max_slots,
             pcm_pool: Some(resolved_pool.clone()),
             thread_pool: config.thread_pool.clone(),
@@ -179,6 +180,7 @@ impl PlayerImpl {
         }
 
         // Load current resource into slot and start playback.
+        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
         self.load_current_item();
         let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
 
@@ -267,8 +269,9 @@ impl PlayerImpl {
 
     /// Set crossfade duration in seconds.
     pub fn set_crossfade_duration(&self, seconds: f32) {
-        self.crossfade_duration
-            .store(seconds.max(0.0), Ordering::Relaxed);
+        let clamped = seconds.max(0.0);
+        self.crossfade_duration.store(clamped, Ordering::Relaxed);
+        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(clamped));
     }
 
     /// Get crossfade duration in seconds.
@@ -289,6 +292,110 @@ impl PlayerImpl {
     /// Get a reference to the underlying engine.
     pub fn engine(&self) -> &EngineImpl {
         &self.engine
+    }
+
+    /// Seek active tracks to position in seconds.
+    pub fn seek_seconds(&self, seconds: f64) -> Result<(), PlayError> {
+        self.send_to_slot(PlayerCmd::Seek(seconds.max(0.0)))
+    }
+
+    /// Current playback position in seconds.
+    pub fn position_seconds(&self) -> Option<f64> {
+        let slot_id = (*self.current_slot.lock())?;
+        let state = self.engine.slot_shared_state(slot_id)?;
+        Some(state.position.load(Ordering::Relaxed))
+    }
+
+    /// Current media duration in seconds.
+    pub fn duration_seconds(&self) -> Option<f64> {
+        let slot_id = (*self.current_slot.lock())?;
+        let state = self.engine.slot_shared_state(slot_id)?;
+        Some(state.duration.load(Ordering::Relaxed))
+    }
+
+    /// Returns `true` if the player is in playing state.
+    pub fn is_playing(&self) -> bool {
+        let Some(slot_id) = *self.current_slot.lock() else {
+            return false;
+        };
+        let Some(state) = self.engine.slot_shared_state(slot_id) else {
+            return false;
+        };
+        state.playing.load(Ordering::Relaxed)
+    }
+
+    /// Number of EQ bands available for this player.
+    pub fn eq_band_count(&self) -> usize {
+        self.config.eq_bands
+    }
+
+    /// Get EQ gain for a band in dB.
+    pub fn eq_gain(&self, band: usize) -> Option<f32> {
+        let slot_id = (*self.current_slot.lock())?;
+        self.engine.slot_eq(slot_id).and_then(|eq| eq.gain(band))
+    }
+
+    /// Set EQ gain for a band in dB.
+    pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
+        let slot_id = (*self.current_slot.lock())
+            .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
+        let eq = self
+            .engine
+            .slot_eq(slot_id)
+            .ok_or_else(|| PlayError::Internal("eq state not found".into()))?;
+        eq.set_gain(band, gain_db).map(|_| ())
+    }
+
+    /// Reset EQ gains to 0 dB for all bands.
+    pub fn reset_eq(&self) -> Result<(), PlayError> {
+        let slot_id = (*self.current_slot.lock())
+            .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
+        let eq = self
+            .engine
+            .slot_eq(slot_id)
+            .ok_or_else(|| PlayError::Internal("eq state not found".into()))?;
+        eq.reset();
+        Ok(())
+    }
+
+    /// Select and load a queue item by index.
+    pub fn select_item(&self, index: usize, autoplay: bool) -> Result<(), PlayError> {
+        let items_len = self.item_count();
+        if index >= items_len {
+            return Err(PlayError::Internal(format!(
+                "item index out of range: {index} (len: {items_len})"
+            )));
+        }
+
+        self.ensure_engine_started()?;
+        self.ensure_slot()?;
+        self.current_index.store(index, Ordering::Relaxed);
+        let _ = self.events_tx.send(PlayerEvent::CurrentItemChanged);
+
+        let _ = self.send_to_slot(PlayerCmd::SetFadeDuration(self.crossfade_duration()));
+        self.load_current_item();
+
+        if autoplay {
+            self.rate.store(self.config.default_rate, Ordering::Relaxed);
+            let _ = self.send_to_slot(PlayerCmd::SetPaused(false));
+            let _ = self.events_tx.send(PlayerEvent::RateChanged {
+                rate: self.config.default_rate,
+            });
+            self.set_status(PlayerStatus::ReadyToPlay);
+        } else {
+            self.rate.store(0.0, Ordering::Relaxed);
+            let _ = self.send_to_slot(PlayerCmd::SetPaused(true));
+            let _ = self.events_tx.send(PlayerEvent::RateChanged { rate: 0.0 });
+        }
+
+        Ok(())
+    }
+
+    /// Insert a resource at the end and immediately crossfade to it.
+    pub fn play_resource(&self, resource: Resource) -> Result<(), PlayError> {
+        self.insert(resource, None);
+        let index = self.item_count().saturating_sub(1);
+        self.select_item(index, true)
     }
 
     // -- Internal helpers ---------------------------------------------------------

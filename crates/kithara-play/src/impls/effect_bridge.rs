@@ -58,7 +58,6 @@ pub(crate) struct EffectBridgeNode {
 
 impl EffectBridgeNode {
     /// Create a new bridge node wrapping the given effect.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
     pub(crate) fn new(effect: Box<dyn AudioEffect>, pcm_pool: PcmPool) -> Self {
         Self {
             active: true,

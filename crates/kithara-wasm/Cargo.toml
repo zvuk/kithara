@@ -11,14 +11,8 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-kithara-assets = { workspace = true }
-kithara-audio = { workspace = true }
-kithara-events = { workspace = true }
-kithara-hls = { workspace = true }
-kithara-platform = { workspace = true }
-kithara-stream = { workspace = true }
+kithara-play = { workspace = true, features = ["file", "hls", "wasm-bindgen"] }
 tracing = { workspace = true }
-url = { workspace = true }
 tokio = { workspace = true }
 rayon = { workspace = true, optional = true }
 

@@ -6,7 +6,7 @@ pub mod ring_buffer;
 mod player;
 
 #[cfg(target_arch = "wasm32")]
-pub use player::{WasmPlayer, load_hls, load_hls_with_media_info};
+pub use player::WasmPlayer;
 
 // Set up panic hook and tracing. Called from JS main thread
 // before any other player operations.

@@ -2422,6 +2422,7 @@ dependencies = [
  "hotpath",
  "kithara-platform",
  "rstest",
+ "unimock",
 ]
 
 [[package]]
@@ -2725,17 +2726,11 @@ name = "kithara-wasm"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
- "kithara-assets",
- "kithara-audio",
- "kithara-events",
- "kithara-hls",
- "kithara-platform",
- "kithara-stream",
+ "kithara-play",
  "rayon",
  "tokio",
  "tracing",
  "tracing-wasm",
- "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-rayon",
