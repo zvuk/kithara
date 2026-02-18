@@ -671,6 +671,7 @@ mod tests {
     use kithara_assets::{AssetStoreBuilder, AssetsBackend, ProcessChunkFn};
     use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
     use kithara_net::mock::NetMock;
+    use kithara_net::{ByteStream, Headers, NetError};
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
     use unimock::{MockFn, Unimock, matching};
@@ -691,23 +692,71 @@ mod tests {
             .build()
     }
 
+    const MASTER_SINGLE_VARIANT_PLAYLIST: &str = "#EXTM3U\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=128000\n\
+         v0.m3u8\n";
+    const V0_SINGLE_SEGMENT_PLAYLIST: &str = "#EXTM3U\n\
+         #EXT-X-TARGETDURATION:4\n\
+         #EXT-X-MEDIA-SEQUENCE:0\n\
+         #EXT-X-PLAYLIST-TYPE:VOD\n\
+         #EXTINF:4.0,\n\
+         seg0.ts\n\
+         #EXT-X-ENDLIST\n";
+
+    type StreamAnswer =
+        dyn Fn(&Unimock, Url, Option<Headers>) -> Result<ByteStream, NetError> + Send + Sync;
+
+    fn test_master_url() -> Url {
+        Url::parse("http://test.com/master.m3u8").expect("valid master URL")
+    }
+
+    fn test_fetch_manager_with_get_bytes_response(
+        response: Result<Bytes, NetError>,
+    ) -> (TempDir, FetchManager<Unimock>) {
+        let temp_dir = TempDir::new().unwrap();
+        let backend = test_backend("test", temp_dir.path());
+        let mock_net = Unimock::new(
+            NetMock::get_bytes
+                .some_call(matching!(_, _))
+                .returns(response),
+        );
+        let fetch = FetchManager::new(backend, mock_net, CancellationToken::new());
+        (temp_dir, fetch)
+    }
+
+    fn partial_fetch_manager(
+        stream_answer: &'static StreamAnswer,
+    ) -> (TempDir, FetchManager<Unimock>) {
+        let temp_dir = TempDir::new().unwrap();
+        let backend = test_backend("partial-test", temp_dir.path());
+        let mock_net = Unimock::new((
+            NetMock::get_bytes.stub(|each| {
+                each.call(matching!((url, _) if url.path().ends_with("/master.m3u8")))
+                    .returns(Ok(Bytes::from_static(
+                        MASTER_SINGLE_VARIANT_PLAYLIST.as_bytes(),
+                    )));
+                each.call(matching!((url, _) if url.path().ends_with("/v0.m3u8")))
+                    .returns(Ok(Bytes::from_static(
+                        V0_SINGLE_SEGMENT_PLAYLIST.as_bytes(),
+                    )));
+            }),
+            NetMock::stream
+                .some_call(matching!((url, _) if url.path().contains("seg0")))
+                .answers(stream_answer),
+        ));
+        let fetch = FetchManager::new(backend, mock_net, CancellationToken::new())
+            .with_master_url(test_master_url());
+        (temp_dir, fetch)
+    }
+
     // FetchManager tests
 
     #[tokio::test]
     async fn test_fetch_playlist_with_mock_net() {
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("test", temp_dir.path());
-
         let playlist_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
         let test_url = Url::parse("http://example.com/playlist.m3u8").unwrap();
-
-        let mock_net = Unimock::new(
-            NetMock::get_bytes
-                .some_call(matching!(_, _))
-                .returns(Ok(Bytes::from_static(playlist_content))),
-        );
-
-        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
+        let (_temp_dir, fetch_manager) =
+            test_fetch_manager_with_get_bytes_response(Ok(Bytes::from_static(playlist_content)));
 
         let result: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -720,20 +769,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_playlist_uses_cache() {
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("test", temp_dir.path());
-
         let test_url = Url::parse("http://example.com/playlist.m3u8").unwrap();
         let playlist_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
 
-        // get_bytes called exactly once — second fetch should use cache
-        let mock_net = Unimock::new(
-            NetMock::get_bytes
-                .some_call(matching!(_, _))
-                .returns(Ok(Bytes::from_static(playlist_content))),
-        );
-
-        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
+        let (_temp_dir, fetch_manager) =
+            test_fetch_manager_with_get_bytes_response(Ok(Bytes::from_static(playlist_content)));
 
         let result1: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -749,19 +789,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_key_with_mock_net() {
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("test", temp_dir.path());
-
         let test_url = Url::parse("http://example.com/key.bin").unwrap();
         let key_content = vec![0u8; 16];
-
-        let mock_net = Unimock::new(
-            NetMock::get_bytes
-                .some_call(matching!(_, _))
-                .returns(Ok(Bytes::from(key_content))),
-        );
-
-        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
+        let (_temp_dir, fetch_manager) =
+            test_fetch_manager_with_get_bytes_response(Ok(Bytes::from(key_content)));
 
         let result: HlsResult<Bytes> = fetch_manager.fetch_key(&test_url, "key.bin", None).await;
 
@@ -772,20 +803,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_with_network_error() {
-        use kithara_net::NetError;
-
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("test", temp_dir.path());
-
         let test_url = Url::parse("http://example.com/playlist.m3u8").unwrap();
-
-        let mock_net = Unimock::new(
-            NetMock::get_bytes
-                .some_call(matching!(_, _))
-                .returns(Err(NetError::Timeout)),
-        );
-
-        let fetch_manager = FetchManager::new(backend, mock_net, CancellationToken::new());
+        let (_temp_dir, fetch_manager) =
+            test_fetch_manager_with_get_bytes_response(Err(NetError::Timeout));
 
         let result: HlsResult<Bytes> = fetch_manager
             .fetch_playlist(&test_url, "playlist.m3u8")
@@ -941,44 +961,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_media_segment_stream_error_returns_err() {
-        use kithara_net::{ByteStream, NetError};
-
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("partial-test", temp_dir.path());
-
-        let mock_net = Unimock::new((
-            NetMock::get_bytes.stub(|each| {
-                each.call(matching!((url, _) if url.path().ends_with("/master.m3u8")))
-                    .returns(Ok(Bytes::from(
-                        "#EXTM3U\n\
-                         #EXT-X-STREAM-INF:BANDWIDTH=128000\n\
-                         v0.m3u8\n",
-                    )));
-                each.call(matching!((url, _) if url.path().ends_with("/v0.m3u8")))
-                    .returns(Ok(Bytes::from(
-                        "#EXTM3U\n\
-                         #EXT-X-TARGETDURATION:4\n\
-                         #EXT-X-MEDIA-SEQUENCE:0\n\
-                         #EXT-X-PLAYLIST-TYPE:VOD\n\
-                         #EXTINF:4.0,\n\
-                         seg0.ts\n\
-                         #EXT-X-ENDLIST\n",
-                    )));
-            }),
-            NetMock::stream
-                .some_call(matching!((url, _) if url.path().contains("seg0")))
-                .answers(&|_, _url, _headers| {
-                    let stream = futures::stream::iter(vec![
-                        Ok(Bytes::from(vec![0xFF; 1000])),
-                        Err(NetError::Timeout),
-                    ]);
-                    Ok(Box::pin(stream) as ByteStream)
-                }),
-        ));
-
-        let master_url = Url::parse("http://test.com/master.m3u8").unwrap();
-        let fetch = FetchManager::new(backend, mock_net, CancellationToken::new())
-            .with_master_url(master_url);
+        let (_temp_dir, fetch) = partial_fetch_manager(&|_, _url, _headers| {
+            let stream = futures::stream::iter(vec![
+                Ok(Bytes::from(vec![0xFF; 1000])),
+                Err(NetError::Timeout),
+            ]);
+            Ok(Box::pin(stream) as ByteStream)
+        });
 
         let result = fetch.load_media_segment(0, 0).await;
         assert!(
@@ -989,41 +978,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_media_segment_empty_stream_returns_err() {
-        use kithara_net::{ByteStream, NetError};
-
-        let temp_dir = TempDir::new().unwrap();
-        let backend = test_backend("partial-test", temp_dir.path());
-
-        let mock_net = Unimock::new((
-            NetMock::get_bytes.stub(|each| {
-                each.call(matching!((url, _) if url.path().ends_with("/master.m3u8")))
-                    .returns(Ok(Bytes::from(
-                        "#EXTM3U\n\
-                         #EXT-X-STREAM-INF:BANDWIDTH=128000\n\
-                         v0.m3u8\n",
-                    )));
-                each.call(matching!((url, _) if url.path().ends_with("/v0.m3u8")))
-                    .returns(Ok(Bytes::from(
-                        "#EXTM3U\n\
-                         #EXT-X-TARGETDURATION:4\n\
-                         #EXT-X-MEDIA-SEQUENCE:0\n\
-                         #EXT-X-PLAYLIST-TYPE:VOD\n\
-                         #EXTINF:4.0,\n\
-                         seg0.ts\n\
-                         #EXT-X-ENDLIST\n",
-                    )));
-            }),
-            NetMock::stream
-                .some_call(matching!((url, _) if url.path().contains("seg0")))
-                .answers(&|_, _url, _headers| {
-                    let stream = futures::stream::empty::<Result<Bytes, NetError>>();
-                    Ok(Box::pin(stream) as ByteStream)
-                }),
-        ));
-
-        let master_url = Url::parse("http://test.com/master.m3u8").unwrap();
-        let fetch = FetchManager::new(backend, mock_net, CancellationToken::new())
-            .with_master_url(master_url);
+        let (_temp_dir, fetch) = partial_fetch_manager(&|_, _url, _headers| {
+            let stream = futures::stream::empty::<Result<Bytes, NetError>>();
+            Ok(Box::pin(stream) as ByteStream)
+        });
 
         let result = fetch.load_media_segment(0, 0).await;
         assert!(
