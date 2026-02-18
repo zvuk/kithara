@@ -58,7 +58,6 @@ use crate::{
 };
 
 /// Configuration for Symphonia-based decoders.
-#[doc(hidden)]
 #[derive(Default)]
 pub(crate) struct SymphoniaConfig {
     /// Enable data verification (slower but safer).
@@ -537,7 +536,7 @@ impl SymphoniaInner {
 ///     // Process PCM samples
 /// }
 /// ```
-pub struct Symphonia<C: CodecType> {
+pub(crate) struct Symphonia<C: CodecType> {
     inner: SymphoniaInner,
     _codec: PhantomData<C>,
 }
@@ -604,16 +603,16 @@ impl<C: CodecType> InnerDecoder for Symphonia<C> {
 }
 
 /// Symphonia-based AAC decoder.
-pub type SymphoniaAac = Symphonia<Aac>;
+pub(crate) type SymphoniaAac = Symphonia<Aac>;
 
 /// Symphonia-based MP3 decoder.
-pub type SymphoniaMp3 = Symphonia<Mp3>;
+pub(crate) type SymphoniaMp3 = Symphonia<Mp3>;
 
 /// Symphonia-based FLAC decoder.
-pub type SymphoniaFlac = Symphonia<Flac>;
+pub(crate) type SymphoniaFlac = Symphonia<Flac>;
 
 /// Symphonia-based Vorbis decoder.
-pub type SymphoniaVorbis = Symphonia<Vorbis>;
+pub(crate) type SymphoniaVorbis = Symphonia<Vorbis>;
 
 /// Adapter that wraps a Read + Seek source as a Symphonia `MediaSource`.
 ///

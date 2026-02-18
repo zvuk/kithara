@@ -31,25 +31,26 @@ impl<T: Read + Seek + Send + Sync> DecoderInput for T {}
 ///
 /// Implementations provide compile-time codec identification that maps
 /// to runtime [`AudioCodec`] values.
-pub trait CodecType: Send + 'static {
+pub(crate) trait CodecType: Send + 'static {
     /// The codec this type represents.
+    #[cfg_attr(not(test), expect(dead_code))]
     const CODEC: AudioCodec;
 }
 
 /// AAC codec marker (maps to AAC-LC, the most common variant).
-pub struct Aac;
+pub(crate) struct Aac;
 impl CodecType for Aac {
     const CODEC: AudioCodec = AudioCodec::AacLc;
 }
 
 /// MP3 codec marker.
-pub struct Mp3;
+pub(crate) struct Mp3;
 impl CodecType for Mp3 {
     const CODEC: AudioCodec = AudioCodec::Mp3;
 }
 
 /// FLAC codec marker.
-pub struct Flac;
+pub(crate) struct Flac;
 impl CodecType for Flac {
     const CODEC: AudioCodec = AudioCodec::Flac;
 }
@@ -61,7 +62,7 @@ impl CodecType for Alac {
 }
 
 /// Vorbis codec marker.
-pub struct Vorbis;
+pub(crate) struct Vorbis;
 impl CodecType for Vorbis {
     const CODEC: AudioCodec = AudioCodec::Vorbis;
 }

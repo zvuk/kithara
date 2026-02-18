@@ -81,7 +81,7 @@ impl FileStreamState {
 }
 
 /// Progress tracker for download and playback positions.
-pub struct Progress {
+pub(crate) struct Progress {
     read_pos: std::sync::atomic::AtomicU64,
     download_pos: std::sync::atomic::AtomicU64,
     /// Source -> Downloader: reader advanced, may resume downloading.
@@ -90,7 +90,7 @@ pub struct Progress {
 
 impl Progress {
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             read_pos: std::sync::atomic::AtomicU64::new(0),
             download_pos: std::sync::atomic::AtomicU64::new(0),
@@ -98,36 +98,31 @@ impl Progress {
         }
     }
 
-    pub fn read_pos(&self) -> u64 {
+    pub(crate) fn read_pos(&self) -> u64 {
         use std::sync::atomic::Ordering;
         self.read_pos.load(Ordering::Acquire)
     }
 
-    pub fn download_pos(&self) -> u64 {
+    pub(crate) fn download_pos(&self) -> u64 {
         use std::sync::atomic::Ordering;
         self.download_pos.load(Ordering::Acquire)
     }
 
-    pub fn set_read_pos(&self, v: u64) {
+    pub(crate) fn set_read_pos(&self, v: u64) {
         use std::sync::atomic::Ordering;
         self.read_pos.store(v, Ordering::Release);
         self.reader_advanced.notify_one();
     }
 
-    pub fn set_download_pos(&self, v: u64) {
+    pub(crate) fn set_download_pos(&self, v: u64) {
         use std::sync::atomic::Ordering;
         self.download_pos.store(v, Ordering::Release);
     }
 
     /// Register for reader advance notification.
     /// Must be called BEFORE checking positions to avoid race.
-    pub fn notified_reader_advance(&self) -> tokio::sync::futures::Notified<'_> {
+    pub(crate) fn notified_reader_advance(&self) -> tokio::sync::futures::Notified<'_> {
         self.reader_advanced.notified()
-    }
-
-    /// Signal that the reader needs data (wake paused downloader).
-    pub fn signal_reader_advanced(&self) {
-        self.reader_advanced.notify_one();
     }
 }
 

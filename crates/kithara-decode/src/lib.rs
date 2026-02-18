@@ -34,21 +34,10 @@ mod android;
 #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
 mod apple;
 
-// Android MediaCodec backend (Android only)
-#[doc(hidden)]
-#[cfg(all(feature = "android", target_os = "android"))]
-pub use android::{Android, AndroidAac, AndroidAlac, AndroidConfig, AndroidFlac, AndroidMp3};
-// Apple AudioToolbox backend (macOS/iOS only)
-#[doc(hidden)]
-#[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
-pub use apple::{Apple, AppleAac, AppleAlac, AppleConfig, AppleFlac, AppleMp3};
 // Error types
 pub use error::{DecodeError, DecodeResult};
 // Factory for runtime selection
 pub use factory::{DecoderConfig, DecoderFactory};
-// Symphonia backend
-#[doc(hidden)]
-pub use symphonia::{Symphonia, SymphoniaAac, SymphoniaFlac, SymphoniaMp3, SymphoniaVorbis};
 // Public traits
 pub use traits::InnerDecoder;
 // Core types
