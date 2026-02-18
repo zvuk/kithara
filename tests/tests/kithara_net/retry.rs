@@ -12,9 +12,10 @@ use kithara_net::mock::NetMock;
 use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 use unimock::{MockFn, Unimock, matching};
-use url::Url;
 
-use super::fixture::{assert_success_all_net_methods, leaked, ok_headers, success_stream};
+use super::fixture::{
+    assert_success_all_net_methods, leaked, ok_headers, success_stream, test_url,
+};
 
 fn should_fail(attempts: &Arc<AtomicUsize>, failures_before_success: usize) -> bool {
     attempts.fetch_add(1, Ordering::SeqCst) < failures_before_success
@@ -92,7 +93,7 @@ async fn test_retryable_errors_success_after_retries(#[case] failures_before_suc
     );
     let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
-    let url = Url::parse("http://example.com").unwrap();
+    let url = test_url();
     let result = retry_net.get_bytes(url, None).await;
 
     assert!(result.is_ok());
@@ -114,7 +115,7 @@ async fn test_non_retryable_errors_no_retry(#[case] failures_before_success: usi
     );
     let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
-    let url = Url::parse("http://example.com").unwrap();
+    let url = test_url();
     let result = retry_net.get_bytes(url, None).await;
 
     assert!(result.is_err());
@@ -136,7 +137,7 @@ async fn test_retry_exhaustion(#[case] failures_before_success: usize, #[case] m
     );
     let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
-    let url = Url::parse("http://example.com").unwrap();
+    let url = test_url();
     let result = retry_net.get_bytes(url, None).await;
 
     assert!(result.is_err());
@@ -158,7 +159,7 @@ async fn test_exponential_backoff_with_max_delay(
     let retry_policy = RetryPolicy::new(max_retries, base_delay, max_delay);
     let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
-    let url = Url::parse("http://example.com").unwrap();
+    let url = test_url();
     let result = retry_net.get_bytes(url, None).await;
 
     assert!(result.is_err());
@@ -198,7 +199,7 @@ async fn test_timeout_retry_chaining(#[case] failures_before_success: usize) {
         .with_timeout(Duration::from_secs(5))
         .with_retry(retry_policy, CancellationToken::new());
 
-    let url = Url::parse("http://example.com").unwrap();
+    let url = test_url();
     let result = net.get_bytes(url, None).await;
 
     assert!(result.is_ok());
@@ -212,7 +213,7 @@ async fn test_zero_max_retries() {
     let retry_policy = RetryPolicy::new(0, Duration::from_millis(10), Duration::from_secs(5));
     let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
-    let url = Url::parse("http://example.com").unwrap();
+    let url = test_url();
     let result = retry_net.get_bytes(url, None).await;
 
     assert!(result.is_err());
@@ -232,7 +233,7 @@ async fn test_zero_base_delay(#[case] failures_before_success: usize) {
     );
     let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
-    let url = Url::parse("http://example.com").unwrap();
+    let url = test_url();
     let result = retry_net.get_bytes(url, None).await;
 
     assert!(result.is_ok());

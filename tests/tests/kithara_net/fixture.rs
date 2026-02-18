@@ -62,8 +62,12 @@ pub(crate) fn ok_headers() -> Headers {
     headers
 }
 
+pub(crate) fn test_url() -> Url {
+    Url::parse("http://example.com").expect("valid test URL")
+}
+
 pub(crate) async fn assert_success_all_net_methods(net: &impl Net) {
-    let url = Url::parse("http://example.com").unwrap();
+    let url = test_url();
 
     let result = net.get_bytes(url.clone(), None).await;
     assert!(result.is_ok());
