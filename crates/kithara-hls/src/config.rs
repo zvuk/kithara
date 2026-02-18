@@ -5,7 +5,7 @@ use std::{collections::HashMap, sync::Arc};
 use bytes::Bytes;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_events::EventBus;
-use kithara_net::NetOptions;
+use kithara_net::{Headers, NetOptions};
 use kithara_platform::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -111,6 +111,8 @@ pub struct HlsConfig {
     pub name: Option<String>,
     /// Network configuration.
     pub net: NetOptions,
+    /// Additional HTTP headers to include in all requests.
+    pub headers: Option<Headers>,
     /// Buffer pool (shared across all components, created if not provided).
     pub pool: Option<BytePool>,
     /// Storage configuration.
@@ -141,6 +143,7 @@ impl Default for HlsConfig {
             look_ahead_bytes: None,
             name: None,
             net: NetOptions::default(),
+            headers: None,
             pool: None,
             download_batch_size: 3,
             store: StoreOptions::default(),
@@ -165,6 +168,7 @@ impl HlsConfig {
             look_ahead_bytes: None,
             name: None,
             net: NetOptions::default(),
+            headers: None,
             pool: None,
             download_batch_size: 3,
             store: StoreOptions::default(),
@@ -194,6 +198,13 @@ impl HlsConfig {
     #[must_use]
     pub fn with_net(mut self, net: NetOptions) -> Self {
         self.net = net;
+        self
+    }
+
+    /// Set additional HTTP headers for all requests.
+    #[must_use]
+    pub fn with_headers(mut self, headers: Headers) -> Self {
+        self.headers = Some(headers);
         self
     }
 

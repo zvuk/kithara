@@ -111,6 +111,7 @@ pub struct FetchManager<N> {
     key_manager: Option<Arc<crate::keys::KeyManager>>,
     net: N,
     cancel: CancellationToken,
+    headers: Option<Headers>,
     // Playlist state
     master_url: Option<Url>,
     base_url: Option<Url>,
@@ -130,6 +131,7 @@ impl<N: Net> FetchManager<N> {
             key_manager: None,
             net,
             cancel,
+            headers: None,
             master_url: None,
             base_url: None,
             master: Arc::new(OnceCell::new()),
@@ -158,6 +160,30 @@ impl<N: Net> FetchManager<N> {
         self
     }
 
+    /// Set additional HTTP headers for all requests.
+    #[must_use]
+    pub fn with_headers(mut self, headers: Option<Headers>) -> Self {
+        self.headers = headers;
+        self
+    }
+
+    /// Merge per-request headers with config-level headers.
+    /// Per-request headers take precedence on key conflict.
+    fn merge_headers(&self, request_headers: Option<Headers>) -> Option<Headers> {
+        match (&self.headers, request_headers) {
+            (None, None) => None,
+            (Some(base), None) => Some(base.clone()),
+            (None, Some(req)) => Some(req),
+            (Some(base), Some(req)) => {
+                let mut merged = base.clone();
+                for (k, v) in req.iter() {
+                    merged.insert(k, v);
+                }
+                Some(merged)
+            }
+        }
+    }
+
     /// Get the parsed playlist state (if set).
     pub fn playlist_state(&self) -> Option<&Arc<PlaylistState>> {
         self.playlist_state.as_ref()
@@ -179,7 +205,7 @@ impl<N: Net> FetchManager<N> {
     // Low-level fetch
 
     pub async fn fetch_playlist(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
-        self.fetch_atomic_internal(url, rel_path, None, "playlist")
+        self.fetch_atomic_internal(url, rel_path, self.headers.clone(), "playlist")
             .await
     }
 
@@ -189,7 +215,8 @@ impl<N: Net> FetchManager<N> {
         rel_path: &str,
         headers: Option<Headers>,
     ) -> HlsResult<Bytes> {
-        self.fetch_atomic_internal(url, rel_path, headers, "key")
+        let merged = self.merge_headers(headers);
+        self.fetch_atomic_internal(url, rel_path, merged, "key")
             .await
     }
 
@@ -272,7 +299,7 @@ impl<N: Net> FetchManager<N> {
         }
 
         trace!(url = %url, "start_fetch: starting network fetch");
-        let net_stream = self.net.stream(url.clone(), None).await?;
+        let net_stream = self.net.stream(url.clone(), self.headers.clone()).await?;
         let writer = Writer::new(net_stream, res.clone(), self.cancel.clone());
 
         Ok(FetchResult::Active(writer, res))
@@ -517,10 +544,10 @@ impl<N: Net> FetchManager<N> {
     ///
     /// Returns the size in bytes if Content-Length header is present and parseable.
     pub async fn get_content_length(&self, url: &Url) -> HlsResult<u64> {
-        let headers = self.net.head(url.clone(), None).await?;
-        let content_length = headers
+        let resp = self.net.head(url.clone(), self.headers.clone()).await?;
+        let content_length = resp
             .get("content-length")
-            .or_else(|| headers.get("Content-Length"))
+            .or_else(|| resp.get("Content-Length"))
             .ok_or_else(|| {
                 HlsError::InvalidUrl(format!(
                     "No Content-Length header in HEAD response for {url}",
