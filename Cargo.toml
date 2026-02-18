@@ -200,6 +200,7 @@ async-trait = "0.1.89"
 rangemap = { version = "1.7.1", features = ["serde1"] }
 mmap-io = { version = "0.9", default-features = false }
 dashmap = "6.1.0"
+derive_setters = "0.1"
 lru = "0.16"
 
 # memory profiling
