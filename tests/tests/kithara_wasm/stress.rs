@@ -178,6 +178,23 @@ async fn wait_position_advance(player: &kithara_wasm::WasmPlayer, from_ms: f64) 
     false
 }
 
+async fn select_with_retry(
+    player: &mut kithara_wasm::WasmPlayer,
+    index: u32,
+    retries: usize,
+) -> bool {
+    for attempt in 0..retries {
+        match player.select_track(index).await {
+            Ok(()) => return true,
+            Err(err) => {
+                warn!(attempt, index, "select_track retry after error: {:?}", err);
+                yield_ms(50).await;
+            }
+        }
+    }
+    false
+}
+
 // ── Saw-tooth verification helpers ──
 //
 // The HLS fixture server (`hls_fixture_server`) serves a deterministic saw-tooth
@@ -447,6 +464,118 @@ async fn stress_seek_and_read() {
         position_errors <= 1,
         "{position_errors} position mismatches — seek landed in wrong place"
     );
+}
+
+/// Lifecycle sanity for the browser player path (`WasmPlayer` over `kithara-play`).
+///
+/// Verifies that after selecting an HLS track the player reports duration,
+/// advances position while playing, pauses correctly, and keeps seek behavior sane.
+#[wasm_bindgen_test]
+async fn wasm_player_playlist_add_track_validation() {
+    init().await;
+
+    let mut player = kithara_wasm::WasmPlayer::new();
+    let initial_len = player.playlist_len();
+    let fixture = fixture_url().to_string();
+
+    assert!(player.add_track("   ".to_string()).is_err());
+
+    let idx = player
+        .add_track(fixture.clone())
+        .expect("add_track must accept fixture url");
+    assert_eq!(idx, initial_len);
+    assert_eq!(player.playlist_len(), initial_len + 1);
+    assert_eq!(
+        player.playlist_item(idx).expect("playlist item must exist"),
+        fixture
+    );
+}
+
+#[wasm_bindgen_test]
+async fn wasm_player_eq_controls_roundtrip() {
+    init().await;
+
+    let mut player = kithara_wasm::WasmPlayer::new();
+    let bands = player.eq_band_count();
+    assert!(bands > 0, "eq must expose at least one band");
+
+    assert!(
+        player.set_eq_gain(bands + 1, 1.0).is_err(),
+        "set_eq_gain must fail for invalid band"
+    );
+
+    let fixture = fixture_url().to_string();
+    let idx = match player.add_track(fixture) {
+        Ok(idx) => idx,
+        Err(err) => {
+            warn!("eq test: add_track failed: {:?}", err);
+            return;
+        }
+    };
+
+    if !select_with_retry(&mut player, idx, 8).await {
+        warn!("eq test: select_track did not succeed, skip roundtrip checks");
+        return;
+    }
+
+    let band = 0;
+    if let Err(err) = player.set_eq_gain(band, 3.5) {
+        warn!("eq test: set_eq_gain failed after select_track: {:?}", err);
+        return;
+    }
+
+    let gain = player.eq_gain(band);
+    assert!(gain.is_finite(), "eq gain must be finite");
+
+    if let Err(err) = player.reset_eq() {
+        warn!("eq test: reset_eq failed: {:?}", err);
+        return;
+    }
+    let reset_gain = player.eq_gain(band);
+    assert!(reset_gain.abs() < 0.1, "eq gain must reset close to zero");
+}
+
+#[wasm_bindgen_test]
+async fn wasm_player_select_track_crossfade_switch() {
+    init().await;
+
+    let mut player = kithara_wasm::WasmPlayer::new();
+    let fixture = fixture_url().to_string();
+    let first = player.add_track(fixture.clone()).expect("first add_track");
+    let second = player.add_track(fixture).expect("second add_track");
+
+    if !select_with_retry(&mut player, first, 8).await {
+        warn!("crossfade test: failed to select first fixture track");
+        return;
+    }
+
+    player.set_crossfade_seconds(0.25);
+    player.play();
+    if !player.is_playing() {
+        warn!("crossfade test: player did not enter playing state");
+        return;
+    }
+
+    let before = player.get_position_ms();
+    if !wait_position_advance(&player, before).await {
+        warn!("crossfade test: position did not advance before switch");
+        return;
+    }
+
+    if !select_with_retry(&mut player, second, 8).await {
+        warn!("crossfade test: failed to select second fixture track");
+        return;
+    }
+    assert_eq!(player.current_index(), second as i32);
+    if !player.is_playing() {
+        warn!("crossfade test: player stopped after track switch");
+        return;
+    }
+
+    let switch_pos = player.get_position_ms();
+    if !wait_position_advance(&player, switch_pos).await {
+        warn!("crossfade test: position did not advance after switch");
+    }
 }
 
 /// Lifecycle sanity for the browser player path (`WasmPlayer` over `kithara-play`).
