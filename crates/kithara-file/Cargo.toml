@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 bytes = { workspace = true }
+derivative = { workspace = true }
 derive_setters = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-events = { workspace = true }

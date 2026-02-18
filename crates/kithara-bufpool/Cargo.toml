@@ -9,6 +9,7 @@ description = "Generic sharded buffer pool for zero-allocation hot paths"
 
 [dependencies]
 kithara-platform = { workspace = true }
+derivative = { workspace = true }
 hotpath = { workspace = true, optional = true }
 
 [features]

@@ -13,6 +13,7 @@
 
 use std::{ops::Range, path::Path};
 
+use derivative::Derivative;
 use kithara_platform::Mutex;
 use tokio_util::sync::CancellationToken;
 
@@ -25,22 +26,15 @@ use crate::{
 const DEFAULT_RING_CAPACITY: usize = 1 << 20;
 
 /// Options for creating a [`MemResource`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Derivative)]
+#[derivative(Default)]
 pub struct MemOptions {
     /// Pre-fill the resource with this data (committed on creation).
     pub initial_data: Option<Vec<u8>>,
     /// Ring buffer capacity in bytes. Must be power of 2.
     /// Defaults to 1 mebibyte. Rounded up to next power of 2 if not already.
+    #[derivative(Default(value = "DEFAULT_RING_CAPACITY"))]
     pub capacity: usize,
-}
-
-impl Default for MemOptions {
-    fn default() -> Self {
-        Self {
-            initial_data: None,
-            capacity: DEFAULT_RING_CAPACITY,
-        }
-    }
 }
 
 /// Internal state of the ring buffer driver.

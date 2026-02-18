@@ -3,6 +3,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use bytes::Bytes;
+use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_events::EventBus;
@@ -26,10 +27,12 @@ pub type KeyProcessor = Arc<dyn Fn(Bytes, KeyContext) -> HlsResult<Bytes> + Send
 pub use kithara_abr::{AbrMode, AbrOptions};
 
 /// Encryption key handling configuration.
-#[derive(Clone, Default, Setters)]
+#[derive(Clone, Default, Derivative, Setters)]
+#[derivative(Debug)]
 #[setters(prefix = "with_", strip_option)]
 pub struct KeyOptions {
     /// Callback for processing (e.g. decrypting) raw key bytes after fetch.
+    #[derivative(Debug(format_with = "fmt_key_processor"))]
     pub key_processor: Option<KeyProcessor>,
     /// Query parameters to append to key URLs.
     pub query_params: Option<HashMap<String, String>>,
@@ -37,17 +40,8 @@ pub struct KeyOptions {
     pub request_headers: Option<HashMap<String, String>>,
 }
 
-impl std::fmt::Debug for KeyOptions {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("KeyOptions")
-            .field(
-                "key_processor",
-                &self.key_processor.as_ref().map(|_| "KeyProcessor"),
-            )
-            .field("query_params", &self.query_params)
-            .field("request_headers", &self.request_headers)
-            .finish()
-    }
+fn fmt_key_processor(val: &Option<KeyProcessor>, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+    std::fmt::Debug::fmt(&val.as_ref().map(|_| "KeyProcessor"), f)
 }
 
 impl KeyOptions {
@@ -61,7 +55,8 @@ impl KeyOptions {
 /// Configuration for HLS streaming.
 ///
 /// Used with `Stream::<Hls>::new(config)`.
-#[derive(Clone, Setters)]
+#[derive(Clone, Derivative, Setters)]
+#[derivative(Default, Debug)]
 #[setters(prefix = "with_", strip_option)]
 pub struct HlsConfig {
     /// ABR (Adaptive Bitrate) configuration.
@@ -71,6 +66,7 @@ pub struct HlsConfig {
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Capacity of the event bus channel (used when `bus` is not provided).
+    #[derivative(Default(value = "32"))]
     pub event_channel_capacity: usize,
     /// Event bus (optional - if not provided, one is created internally).
     #[setters(rename = "with_events")]
@@ -86,6 +82,7 @@ pub struct HlsConfig {
     ///
     /// Higher values reduce per-step overhead (ABR decisions happen per-batch)
     /// but reduce ABR reactivity. Default: 3.
+    #[derivative(Default(value = "3"))]
     pub download_batch_size: usize,
     /// Optional name for cache disambiguation.
     ///
@@ -107,29 +104,10 @@ pub struct HlsConfig {
     /// Shared across all components. When `None`, defaults to the global rayon pool.
     pub thread_pool: Option<ThreadPool>,
     /// Master playlist URL.
+    #[derivative(Default(
+        value = "Url::parse(\"http://localhost/stream.m3u8\").expect(\"valid default URL\")"
+    ))]
     pub url: Url,
-}
-
-impl Default for HlsConfig {
-    fn default() -> Self {
-        Self {
-            abr: AbrOptions::default(),
-            base_url: None,
-            cancel: None,
-            event_channel_capacity: 32,
-            bus: None,
-            keys: KeyOptions::default(),
-            look_ahead_bytes: None,
-            name: None,
-            net: NetOptions::default(),
-            headers: None,
-            pool: None,
-            download_batch_size: 3,
-            store: StoreOptions::default(),
-            thread_pool: None,
-            url: Url::parse("http://localhost/stream.m3u8").expect("valid default URL"),
-        }
-    }
 }
 
 impl HlsConfig {
@@ -137,21 +115,8 @@ impl HlsConfig {
     #[must_use]
     pub fn new(url: Url) -> Self {
         Self {
-            abr: AbrOptions::default(),
-            base_url: None,
-            cancel: None,
-            event_channel_capacity: 32,
-            bus: None,
-            keys: KeyOptions::default(),
-            look_ahead_bytes: None,
-            name: None,
-            net: NetOptions::default(),
-            headers: None,
-            pool: None,
-            download_batch_size: 3,
-            store: StoreOptions::default(),
-            thread_pool: None,
             url,
+            ..Self::default()
         }
     }
 

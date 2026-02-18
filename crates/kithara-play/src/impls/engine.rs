@@ -14,6 +14,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, ThreadPool};
@@ -31,38 +32,30 @@ use crate::{
 use super::{player_processor::PlayerCmd, shared_player_state::SharedPlayerState};
 
 /// Configuration for the audio engine.
-#[derive(Clone, Debug, Setters)]
+#[derive(Clone, Debug, Derivative, Setters)]
+#[derivative(Default)]
 #[setters(prefix = "with_", strip_option)]
 pub struct EngineConfig {
     /// Number of output channels. Default: 2 (stereo).
+    #[derivative(Default(value = "2"))]
     pub channels: u16,
     /// Number of EQ bands per slot (unused until Task 6). Default: 10.
+    #[derivative(Default(value = "10"))]
     pub eq_bands: usize,
     /// Maximum number of concurrent player slots. Default: 4.
+    #[derivative(Default(value = "4"))]
     pub max_slots: usize,
     /// PCM buffer pool for audio-thread scratch buffers.
     ///
     /// When `None`, the global PCM pool is used.
     pub pcm_pool: Option<PcmPool>,
     /// Sample rate passed to `CpalBackend` as a hint. Default: 44100.
+    #[derivative(Default(value = "44100"))]
     pub sample_rate: u32,
     /// Thread pool for the engine thread and background work.
     ///
     /// When `None`, the global rayon pool is used.
     pub thread_pool: Option<ThreadPool>,
-}
-
-impl Default for EngineConfig {
-    fn default() -> Self {
-        Self {
-            channels: 2,
-            eq_bands: 10,
-            max_slots: 4,
-            pcm_pool: None,
-            sample_rate: 44100,
-            thread_pool: None,
-        }
-    }
 }
 
 /// Commands sent from `EngineImpl` to the engine thread.

@@ -9,6 +9,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
+use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, ThreadPool};
@@ -34,16 +35,21 @@ use super::{
 // -- PlayerConfig -----------------------------------------------------------------
 
 /// Configuration for the player.
-#[derive(Clone, Debug, Setters)]
+#[derive(Clone, Debug, Derivative, Setters)]
+#[derivative(Default)]
 #[setters(prefix = "with_", strip_option)]
 pub struct PlayerConfig {
     /// Crossfade duration in seconds. Default: 1.0.
+    #[derivative(Default(value = "1.0"))]
     pub crossfade_duration: f32,
     /// Default playback rate (1.0 = normal). Default: 1.0.
+    #[derivative(Default(value = "1.0"))]
     pub default_rate: f32,
     /// Number of EQ bands. Default: 10.
+    #[derivative(Default(value = "10"))]
     pub eq_bands: usize,
     /// Maximum concurrent slots in the engine. Default: 4.
+    #[derivative(Default(value = "4"))]
     pub max_slots: usize,
     /// PCM buffer pool for audio-thread scratch buffers.
     ///
@@ -55,19 +61,6 @@ pub struct PlayerConfig {
     /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
     /// rayon pool is used.
     pub thread_pool: Option<ThreadPool>,
-}
-
-impl Default for PlayerConfig {
-    fn default() -> Self {
-        Self {
-            crossfade_duration: 1.0,
-            default_rate: 1.0,
-            eq_bands: 10,
-            max_slots: 4,
-            pcm_pool: None,
-            thread_pool: None,
-        }
-    }
 }
 
 // -- PlayerImpl -------------------------------------------------------------------

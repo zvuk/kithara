@@ -8,6 +8,7 @@
 
 use std::{fmt::Debug, ops::Range, path::Path, sync::Arc};
 
+use derivative::Derivative;
 use kithara_platform::{Condvar, Mutex};
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
@@ -108,6 +109,7 @@ pub trait Driver: Send + Sync + 'static {
 }
 
 /// Initial state returned by [`Driver::open`] to populate [`Resource<D>`].
+#[derive(Default)]
 pub struct DriverState {
     /// Pre-populated available byte ranges.
     pub available: RangeSet<u64>,
@@ -115,16 +117,6 @@ pub struct DriverState {
     pub committed: bool,
     /// Known final length (if committed).
     pub final_len: Option<u64>,
-}
-
-impl Default for DriverState {
-    fn default() -> Self {
-        Self {
-            available: RangeSet::new(),
-            committed: false,
-            final_len: None,
-        }
-    }
 }
 
 /// Common state tracked by `Resource<D>`.
@@ -152,16 +144,10 @@ struct Inner<D: Driver> {
 /// Use via type aliases:
 /// - [`MmapResource`](crate::MmapResource) = `Resource<MmapDriver>`
 /// - [`MemResource`](crate::MemResource) = `Resource<MemDriver>`
+#[derive(Derivative)]
+#[derivative(Clone(bound = ""))]
 pub struct Resource<D: Driver> {
     inner: Arc<Inner<D>>,
-}
-
-impl<D: Driver> Clone for Resource<D> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: Arc::clone(&self.inner),
-        }
-    }
 }
 
 impl<D: Driver + Debug> Debug for Resource<D> {

@@ -36,6 +36,7 @@ tokio-util = { workspace = true }
 kanal = { workspace = true }
 
 # Utilities
+derivative = { workspace = true }
 derive_setters = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

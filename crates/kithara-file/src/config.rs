@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_assets::StoreOptions;
 use kithara_events::EventBus;
@@ -32,12 +33,14 @@ impl From<PathBuf> for FileSrc {
 /// Configuration for file streaming.
 ///
 /// Used with `Stream::<File>::new(config)`.
-#[derive(Clone, Debug, Setters)]
+#[derive(Clone, Debug, Derivative, Setters)]
+#[derivative(Default)]
 #[setters(prefix = "with_", strip_option)]
 pub struct FileConfig {
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Event bus channel capacity (used when `bus` is not provided).
+    #[derivative(Default(value = "16"))]
     pub event_channel_capacity: usize,
     /// Event bus (optional - if not provided, one is created internally).
     #[setters(rename = "with_events")]
@@ -59,6 +62,9 @@ pub struct FileConfig {
     /// Network configuration.
     pub net: NetOptions,
     /// File source (remote URL or local path).
+    #[derivative(Default(
+        value = "FileSrc::Remote(Url::parse(\"http://localhost/audio.mp3\").expect(\"valid default URL\"))"
+    ))]
     pub src: FileSrc,
     /// Storage configuration.
     pub store: StoreOptions,
@@ -68,42 +74,13 @@ pub struct FileConfig {
     pub thread_pool: Option<ThreadPool>,
 }
 
-impl Default for FileConfig {
-    fn default() -> Self {
-        Self {
-            cancel: None,
-
-            event_channel_capacity: 16,
-            bus: None,
-            headers: None,
-            look_ahead_bytes: None,
-            name: None,
-            net: NetOptions::default(),
-            src: FileSrc::Remote(
-                Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
-            ),
-            store: StoreOptions::default(),
-            thread_pool: None,
-        }
-    }
-}
-
 impl FileConfig {
     /// Create new file config with source.
     #[must_use]
     pub fn new(src: FileSrc) -> Self {
         Self {
-            cancel: None,
-
-            event_channel_capacity: 16,
-            bus: None,
-            headers: None,
-            look_ahead_bytes: None,
-            name: None,
-            net: NetOptions::default(),
             src,
-            store: StoreOptions::default(),
-            thread_pool: None,
+            ..Self::default()
         }
     }
 

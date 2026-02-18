@@ -15,6 +15,7 @@ test-utils = ["unimock"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
+derivative = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-platform = { workspace = true }
 bytes = { workspace = true }

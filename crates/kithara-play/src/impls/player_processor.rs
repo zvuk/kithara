@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
+use derivative::Derivative;
 use firewheel::{
     StreamInfo,
     event::ProcEvents,
@@ -35,6 +36,8 @@ use super::{
 const MAX_TRACKS: usize = 4;
 
 /// Commands sent from the main thread to the processor.
+#[derive(Derivative)]
+#[derivative(Debug)]
 #[expect(
     dead_code,
     reason = "some variants used when seek/unload/crossfade are wired"
@@ -42,6 +45,7 @@ const MAX_TRACKS: usize = 4;
 pub(crate) enum PlayerCmd {
     /// Load a track into the processor arena.
     LoadTrack {
+        #[derivative(Debug = "ignore")]
         resource: Arc<Mutex<PlayerResource>>,
         src: Arc<str>,
     },
@@ -57,20 +61,6 @@ pub(crate) enum PlayerCmd {
     SetFadeDuration(f32),
     /// Update the crossfade curve.
     SetCrossfadeCurve(CrossfadeCurve),
-}
-
-impl std::fmt::Debug for PlayerCmd {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LoadTrack { src, .. } => f.debug_struct("LoadTrack").field("src", src).finish(),
-            Self::UnloadTrack { src } => f.debug_struct("UnloadTrack").field("src", src).finish(),
-            Self::Transition(t) => f.debug_tuple("Transition").field(t).finish(),
-            Self::Seek(s) => f.debug_tuple("Seek").field(s).finish(),
-            Self::SetPaused(p) => f.debug_tuple("SetPaused").field(p).finish(),
-            Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
-            Self::SetCrossfadeCurve(c) => f.debug_tuple("SetCrossfadeCurve").field(c).finish(),
-        }
-    }
 }
 
 /// The realtime audio processor for the player node.

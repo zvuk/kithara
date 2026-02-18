@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use derivative::Derivative;
 use kithara_platform::{MaybeSend, MaybeSync};
 
 use crate::{error::PlayError, types::SlotId};
@@ -16,26 +17,17 @@ pub enum CrossfadeCurve {
     FastFadeOut,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Derivative, PartialEq)]
+#[derivative(Default)]
 #[non_exhaustive]
 pub struct CrossfadeConfig {
+    #[derivative(Default(value = "Duration::from_secs(5)"))]
     pub duration: Duration,
     pub curve: CrossfadeCurve,
     pub beat_aligned: bool,
     pub cut_incoming_at: f32,
+    #[derivative(Default(value = "1.0"))]
     pub cut_outgoing_at: f32,
-}
-
-impl Default for CrossfadeConfig {
-    fn default() -> Self {
-        Self {
-            duration: Duration::from_secs(5),
-            curve: CrossfadeCurve::EqualPower,
-            beat_aligned: false,
-            cut_incoming_at: 0.0,
-            cut_outgoing_at: 1.0,
-        }
-    }
 }
 
 #[cfg_attr(

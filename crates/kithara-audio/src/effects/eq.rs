@@ -4,6 +4,7 @@
 //! Each band uses a peaking EQ biquad filter per channel, applied as a cascade.
 
 use biquad::{Biquad, Coefficients, DirectForm1, ToHertz, Type};
+use derivative::Derivative;
 use kithara_decode::PcmChunk;
 
 use crate::AudioEffect;
@@ -18,24 +19,17 @@ const PASSTHROUGH: Coefficients<f32> = Coefficients {
 };
 
 /// Configuration for a single parametric EQ band.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Derivative, PartialEq)]
+#[derivative(Default)]
 pub struct EqBandConfig {
     /// Center frequency in Hz.
+    #[derivative(Default(value = "1000.0"))]
     pub frequency: f32,
     /// Q factor (bandwidth control).
+    #[derivative(Default(value = "std::f32::consts::FRAC_1_SQRT_2"))]
     pub q_factor: f32,
     /// Gain in dB (clamped to -24..+6 on set).
     pub gain_db: f32,
-}
-
-impl Default for EqBandConfig {
-    fn default() -> Self {
-        Self {
-            frequency: 1000.0,
-            q_factor: std::f32::consts::FRAC_1_SQRT_2, // Q_BUTTERWORTH_F32
-            gain_db: 0.0,
-        }
-    }
 }
 
 /// Generate logarithmically-spaced EQ bands from 30 Hz to 18 kHz.

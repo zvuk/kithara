@@ -1030,6 +1030,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
+name = "derivative"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcc3dd5e9e9c0b295d6e1e4d811fb6f157d5ffd784b8d202fc62eac8035a770b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "derive_builder"
 version = "0.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2228,6 +2239,7 @@ dependencies = [
 name = "kithara-abr"
 version = "0.1.0"
 dependencies = [
+ "derivative",
  "rstest",
  "tracing",
  "unimock",
@@ -2270,6 +2282,7 @@ dependencies = [
  "biquad",
  "bytes",
  "cbc",
+ "derivative",
  "derive_setters",
  "fallible-iterator",
  "fast-interleave",
@@ -2308,6 +2321,7 @@ dependencies = [
 name = "kithara-bufpool"
 version = "0.1.0"
 dependencies = [
+ "derivative",
  "hotpath",
  "kithara-platform",
 ]
@@ -2318,6 +2332,7 @@ version = "0.1.0"
 dependencies = [
  "core-foundation",
  "core-foundation-sys",
+ "derivative",
  "hotpath",
  "kithara-bufpool",
  "kithara-stream",
@@ -2358,6 +2373,7 @@ dependencies = [
  "axum",
  "bytes",
  "crossbeam-queue",
+ "derivative",
  "derive_setters",
  "dhat",
  "futures",
@@ -2389,6 +2405,7 @@ dependencies = [
  "bytes",
  "crossbeam-queue",
  "dashmap",
+ "derivative",
  "derive_setters",
  "futures",
  "hex",
@@ -2470,6 +2487,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bytes",
+ "derivative",
  "futures",
  "gloo-timers",
  "hotpath",
@@ -2500,6 +2518,7 @@ name = "kithara-play"
 version = "0.1.0"
 dependencies = [
  "biquad",
+ "derivative",
  "derive_setters",
  "fast-interleave",
  "firewheel",
@@ -2532,6 +2551,7 @@ name = "kithara-storage"
 version = "0.1.0"
 dependencies = [
  "crossbeam-queue",
+ "derivative",
  "kithara-bufpool",
  "kithara-platform",
  "mmap-io",

@@ -11,6 +11,7 @@ description = "Audio pipeline with OS thread worker, effects chain, and resampli
 workspace = true
 
 [dependencies]
+derivative = { workspace = true }
 derive_setters = { workspace = true }
 kithara-decode = { workspace = true }
 kithara-events = { workspace = true }

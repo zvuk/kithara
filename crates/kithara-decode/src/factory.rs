@@ -23,6 +23,7 @@ use std::{
     sync::{Arc, atomic::AtomicU64},
 };
 
+use derivative::Derivative;
 use kithara_bufpool::PcmPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, StreamContext};
 
@@ -62,12 +63,15 @@ pub(crate) struct ProbeHint {
 }
 
 /// Configuration for `DecoderFactory`.
+#[derive(Derivative)]
+#[derivative(Default)]
 pub struct DecoderConfig {
     /// Prefer hardware decoder when available.
     pub prefer_hardware: bool,
     /// Handle for dynamic byte length updates (HLS).
     pub byte_len_handle: Option<Arc<AtomicU64>>,
     /// Enable gapless playback.
+    #[derivative(Default(value = "true"))]
     pub gapless: bool,
     /// File extension hint for Symphonia probe (e.g., "mp3", "aac").
     ///
@@ -81,20 +85,6 @@ pub struct DecoderConfig {
     ///
     /// When `None`, the global `kithara_bufpool::pcm_pool()` is used.
     pub pcm_pool: Option<PcmPool>,
-}
-
-impl Default for DecoderConfig {
-    fn default() -> Self {
-        Self {
-            prefer_hardware: false,
-            byte_len_handle: None,
-            gapless: true,
-            hint: None,
-            stream_ctx: None,
-            epoch: 0,
-            pcm_pool: None,
-        }
-    }
 }
 
 /// Factory for creating decoders with runtime backend selection.

@@ -14,6 +14,7 @@ workspace = true
 test-utils = ["unimock"]
 
 [dependencies]
+derivative = { workspace = true }
 thiserror = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }

@@ -3,6 +3,8 @@
 //! Maps the rich [`CrossfadeCurve`] enum to firewheel's limited [`FadeCurve`],
 //! and bundles duration + curve into [`CrossfadeSettings`] for the processor.
 
+use derivative::Derivative;
+
 use crate::traits::dj::crossfade::CrossfadeCurve;
 use firewheel::dsp::fade::FadeCurve;
 
@@ -23,19 +25,12 @@ pub(crate) fn map_curve(curve: CrossfadeCurve) -> FadeCurve {
 }
 
 /// Crossfade configuration for the player processor.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Derivative)]
+#[derivative(Default)]
 pub(crate) struct CrossfadeSettings {
+    #[derivative(Default(value = "DEFAULT_CROSSFADE_DURATION"))]
     pub duration: f32,
     pub curve: CrossfadeCurve,
-}
-
-impl Default for CrossfadeSettings {
-    fn default() -> Self {
-        Self {
-            duration: DEFAULT_CROSSFADE_DURATION,
-            curve: CrossfadeCurve::default(),
-        }
-    }
 }
 
 impl CrossfadeSettings {

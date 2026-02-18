@@ -1,3 +1,4 @@
+use derivative::Derivative;
 use kithara_platform::{MaybeSend, MaybeSync};
 
 use crate::{
@@ -5,28 +6,22 @@ use crate::{
     types::{EqBand, SlotId},
 };
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Derivative, PartialEq)]
+#[derivative(Default)]
 #[non_exhaustive]
 pub struct EqConfig {
+    #[derivative(Default(value = "200.0"))]
     pub low_freq: f32,
+    #[derivative(Default(value = "1000.0"))]
     pub mid_freq: f32,
+    #[derivative(Default(value = "5000.0"))]
     pub high_freq: f32,
+    #[derivative(Default(value = "0.707"))]
     pub low_q: f32,
+    #[derivative(Default(value = "0.707"))]
     pub mid_q: f32,
+    #[derivative(Default(value = "0.707"))]
     pub high_q: f32,
-}
-
-impl Default for EqConfig {
-    fn default() -> Self {
-        Self {
-            low_freq: 200.0,
-            mid_freq: 1000.0,
-            high_freq: 5000.0,
-            low_q: 0.707,
-            mid_q: 0.707,
-            high_q: 0.707,
-        }
-    }
 }
 
 #[cfg_attr(

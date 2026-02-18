@@ -19,24 +19,9 @@ use crate::{ResourceExt, ResourceStatus, StorageResult, WaitOutcome};
 /// is either the old version or the new version — never a partial write.
 ///
 /// For in-memory resources: direct delegation (crash-safety is not applicable).
+#[derive(Clone, Debug)]
 pub struct Atomic<R: ResourceExt> {
     inner: R,
-}
-
-impl<R: ResourceExt + Clone> Clone for Atomic<R> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: self.inner.clone(),
-        }
-    }
-}
-
-impl<R: ResourceExt + std::fmt::Debug> std::fmt::Debug for Atomic<R> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("Atomic")
-            .field("inner", &self.inner)
-            .finish()
-    }
 }
 
 impl<R: ResourceExt> Atomic<R> {
