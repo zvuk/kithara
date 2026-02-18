@@ -87,3 +87,7 @@ required-features = ["rodio"]
 [[example]]
 name = "hls_rodio"
 required-features = ["rodio"]
+
+[[example]]
+name = "play_crossfade_audio"
+required-features = ["file", "hls"]
