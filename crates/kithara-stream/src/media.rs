@@ -66,7 +66,6 @@ pub struct MediaInfo {
     /// Number of audio channels
     pub channels: Option<u16>,
     /// Audio codec
-    #[setters(skip)]
     pub codec: Option<AudioCodec>,
     /// Container format (fMP4, MPEG-TS, etc.)
     pub container: Option<ContainerFormat>,

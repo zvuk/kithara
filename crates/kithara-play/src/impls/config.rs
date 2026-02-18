@@ -64,7 +64,7 @@ impl std::fmt::Display for ResourceSrc {
 /// // With options
 /// let config = ResourceConfig::new("https://example.com/playlist.m3u8")?
 ///     .with_hint("mp3")
-///     .with_look_ahead_bytes(Some(1_000_000));
+///     .with_look_ahead_bytes(1_000_000);
 /// ```
 #[derive(Setters)]
 #[setters(prefix = "with_", strip_option)]
@@ -102,7 +102,6 @@ pub struct ResourceConfig {
     ///
     /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
     /// - `None` — no backpressure, download as fast as possible
-    #[setters(skip)]
     pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
     ///
@@ -130,7 +129,6 @@ pub struct ResourceConfig {
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
-    #[setters(skip)]
     pub src: ResourceSrc,
     /// Storage configuration (cache directory, eviction limits).
     #[cfg(any(feature = "file", feature = "hls"))]
@@ -223,16 +221,6 @@ impl ResourceConfig {
         self
     }
 
-    /// Set max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — enable backpressure, pause when ahead by n bytes
-    /// - `None` — disable backpressure, download as fast as possible
-    #[must_use]
-    pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
-        self.look_ahead_bytes = bytes;
-        self
-    }
-
     /// Set storage options.
     #[cfg(any(feature = "file", feature = "hls"))]
     #[must_use]
@@ -302,8 +290,11 @@ impl ResourceConfig {
 
         let mut file_config = kithara_file::FileConfig::new(file_src)
             .with_store(self.store)
-            .with_net(self.net)
-            .with_look_ahead_bytes(self.look_ahead_bytes);
+            .with_net(self.net);
+
+        if let Some(bytes) = self.look_ahead_bytes {
+            file_config = file_config.with_look_ahead_bytes(bytes);
+        }
 
         if let Some(pool) = self.thread_pool.clone() {
             file_config = file_config.with_thread_pool(pool);
@@ -364,8 +355,11 @@ impl ResourceConfig {
             .with_store(self.store)
             .with_net(self.net)
             .with_abr(self.abr)
-            .with_keys(self.keys)
-            .with_look_ahead_bytes(self.look_ahead_bytes);
+            .with_keys(self.keys);
+
+        if let Some(bytes) = self.look_ahead_bytes {
+            hls_config = hls_config.with_look_ahead_bytes(bytes);
+        }
 
         if let Some(pool) = self.thread_pool.clone() {
             hls_config = hls_config.with_thread_pool(pool);

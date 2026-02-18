@@ -141,20 +141,16 @@ impl ResamplerKind {
 #[setters(prefix = "with_")]
 pub struct ResamplerParams {
     /// Number of audio channels.
-    #[setters(skip)]
     pub channels: usize,
     /// Number of input frames per resampler processing block.
-    #[setters(skip)]
     pub chunk_size: usize,
     /// Shared atomic for dynamic host sample rate tracking.
-    #[setters(skip)]
     pub host_sample_rate: Arc<AtomicU32>,
     /// Shared PCM pool for output buffers.
     pub pool: Option<PcmPool>,
     /// Quality preset controlling resampling algorithm.
     pub quality: ResamplerQuality,
     /// Initial source sample rate.
-    #[setters(skip)]
     pub source_sample_rate: u32,
 }
 

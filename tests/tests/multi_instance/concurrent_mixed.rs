@@ -109,7 +109,6 @@ async fn mixed_two_file_two_hls() {
 
         let file_config = FileConfig::new(url.into())
             .with_store(StoreOptions::new(temp.path()))
-            .with_look_ahead_bytes(None)
             .with_thread_pool(pool.clone());
         let config = AudioConfig::<File>::new(file_config)
             .with_hint("mp3")
@@ -224,7 +223,6 @@ async fn mixed_four_file_four_hls() {
 
         let file_config = FileConfig::new(url.into())
             .with_store(StoreOptions::new(temp.path()))
-            .with_look_ahead_bytes(None)
             .with_thread_pool(pool.clone());
         let config = AudioConfig::<File>::new(file_config)
             .with_hint("mp3")

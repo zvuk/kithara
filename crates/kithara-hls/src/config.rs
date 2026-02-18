@@ -81,13 +81,11 @@ pub struct HlsConfig {
     ///
     /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
     /// - `None` — no backpressure, download as fast as possible
-    #[setters(skip)]
     pub look_ahead_bytes: Option<u64>,
     /// Max segments to download per step.
     ///
     /// Higher values reduce per-step overhead (ABR decisions happen per-batch)
     /// but reduce ABR reactivity. Default: 3.
-    #[setters(skip)]
     pub download_batch_size: usize,
     /// Optional name for cache disambiguation.
     ///
@@ -109,7 +107,6 @@ pub struct HlsConfig {
     /// Shared across all components. When `None`, defaults to the global rayon pool.
     pub thread_pool: Option<ThreadPool>,
     /// Master playlist URL.
-    #[setters(skip)]
     pub url: Url,
 }
 
@@ -161,16 +158,6 @@ impl HlsConfig {
     /// Set name for cache disambiguation.
     pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
-        self
-    }
-
-    /// Set max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — enable backpressure, pause when ahead by n bytes
-    /// - `None` — disable backpressure, download as fast as possible
-    #[must_use]
-    pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
-        self.look_ahead_bytes = bytes;
         self
     }
 }

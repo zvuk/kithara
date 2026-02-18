@@ -46,7 +46,6 @@ pub struct FileConfig {
     ///
     /// - `Some(n)` — pause when downloaded - read > n bytes (backpressure)
     /// - `None` — no backpressure, download as fast as possible
-    #[setters(skip)]
     pub look_ahead_bytes: Option<u64>,
     /// Optional name for cache disambiguation.
     ///
@@ -60,7 +59,6 @@ pub struct FileConfig {
     /// Network configuration.
     pub net: NetOptions,
     /// File source (remote URL or local path).
-    #[setters(skip)]
     pub src: FileSrc,
     /// Storage configuration.
     pub store: StoreOptions,
@@ -112,16 +110,6 @@ impl FileConfig {
     /// Set name for cache disambiguation.
     pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
-        self
-    }
-
-    /// Set max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — enable backpressure, pause when ahead by n bytes
-    /// - `None` — disable backpressure, download as fast as possible
-    #[must_use]
-    pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
-        self.look_ahead_bytes = bytes;
         self
     }
 }

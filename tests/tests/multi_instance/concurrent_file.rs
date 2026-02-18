@@ -45,7 +45,6 @@ async fn create_file_audio(
 ) -> Audio<Stream<File>> {
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(cache_dir))
-        .with_look_ahead_bytes(None)
         .with_thread_pool(pool.clone());
 
     let config = AudioConfig::<File>::new(file_config)

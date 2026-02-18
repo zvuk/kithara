@@ -35,10 +35,8 @@ use crate::{
 #[setters(prefix = "with_", strip_option)]
 pub struct StoreOptions {
     /// Directory for persistent cache storage (required).
-    #[setters(skip)]
     pub cache_dir: PathBuf,
     /// In-memory LRU cache capacity for opened resources.
-    #[setters(skip)]
     pub cache_capacity: Option<NonZeroUsize>,
     /// Use ephemeral (in-memory) storage instead of disk.
     ///

@@ -148,7 +148,6 @@ async fn file_threads_released_after_drop() {
     // Create and partially read a File instance, then drop it.
     let file_config = FileConfig::new(server.mp3_url().into())
         .with_store(StoreOptions::new(temp.path()))
-        .with_look_ahead_bytes(None)
         .with_thread_pool(pool.clone());
     let config = AudioConfig::<File>::new(file_config)
         .with_hint("mp3")
@@ -249,7 +248,6 @@ async fn sequential_file_create_destroy_no_leak() {
         let temp = TempDir::new().expect("temp dir");
         let file_config = FileConfig::new(server.mp3_url().into())
             .with_store(StoreOptions::new(temp.path()))
-            .with_look_ahead_bytes(None)
             .with_thread_pool(pool.clone());
         let config = AudioConfig::<File>::new(file_config)
             .with_hint("mp3")
@@ -360,7 +358,6 @@ async fn pool_recovers_after_saturation() {
     let temp1 = TempDir::new().expect("temp dir");
     let file_config = FileConfig::new(server.mp3_url().into())
         .with_store(StoreOptions::new(temp1.path()))
-        .with_look_ahead_bytes(None)
         .with_thread_pool(pool.clone());
     let config = AudioConfig::<File>::new(file_config)
         .with_hint("mp3")
@@ -422,7 +419,6 @@ async fn pool_recovers_after_saturation() {
     let temp3 = TempDir::new().expect("temp dir");
     let file_config = FileConfig::new(server.mp3_url().into())
         .with_store(StoreOptions::new(temp3.path()))
-        .with_look_ahead_bytes(None)
         .with_thread_pool(pool.clone());
     let config = AudioConfig::<File>::new(file_config)
         .with_hint("mp3")

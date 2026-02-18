@@ -27,7 +27,6 @@ pub struct AudioConfig<T: StreamType> {
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
     /// Command channel capacity.
-    #[setters(skip)]
     pub command_channel_capacity: usize,
     /// Optional format hint (file extension like "mp3", "wav")
     #[setters(skip)]
@@ -37,7 +36,6 @@ pub struct AudioConfig<T: StreamType> {
     /// Media info hint for format detection
     pub media_info: Option<kithara_stream::MediaInfo>,
     /// PCM buffer size in chunks (~100ms per chunk = 10 chunks ≈ 1s)
-    #[setters(skip)]
     pub pcm_buffer_chunks: usize,
     /// Shared PCM pool for temporary buffers.
     pub pcm_pool: Option<PcmPool>,
@@ -52,7 +50,6 @@ pub struct AudioConfig<T: StreamType> {
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
-    #[setters(skip)]
     pub stream: T::Config,
     /// Thread pool for blocking work (decode, probe).
     ///
