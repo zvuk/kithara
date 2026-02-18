@@ -45,6 +45,7 @@ lint:
     paths:
       - target/quality-report.md
       - target/trait-mock-audit.md
+      - target/rstest-audit.md
     expire_in: 30 days
 
 deny:
