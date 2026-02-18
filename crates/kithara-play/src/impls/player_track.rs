@@ -356,9 +356,19 @@ impl PlayerTrack {
 mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
+    use rstest::rstest;
 
     use super::*;
     use crate::impls::resource::Resource;
+
+    #[derive(Clone, Copy)]
+    enum TrackStateScenario {
+        FadeIn,
+        FadeOutAfterPlay,
+        Play,
+        StartPreloading,
+        StopAfterPlay,
+    }
 
     fn mock_spec() -> PcmSpec {
         PcmSpec {
@@ -380,40 +390,32 @@ mod tests {
         PlayerTrack::new(arc_resource, src, 1.0, sample_rate, FadeCurve::SquareRoot)
     }
 
+    #[rstest]
+    #[case(TrackStateScenario::StartPreloading, TrackState::Preloading)]
+    #[case(TrackStateScenario::FadeIn, TrackState::FadingIn)]
+    #[case(TrackStateScenario::FadeOutAfterPlay, TrackState::FadingOut)]
+    #[case(TrackStateScenario::Play, TrackState::Playing)]
+    #[case(TrackStateScenario::StopAfterPlay, TrackState::Finished)]
     #[tokio::test]
-    async fn track_starts_in_preloading_state() {
-        let track = make_track();
-        assert_eq!(track.state(), TrackState::Preloading);
-    }
-
-    #[tokio::test]
-    async fn track_fade_in_transitions_to_fading_in() {
+    async fn track_state_transitions(
+        #[case] scenario: TrackStateScenario,
+        #[case] expected_state: TrackState,
+    ) {
         let mut track = make_track();
-        track.fade_in();
-        assert_eq!(track.state(), TrackState::FadingIn);
-    }
-
-    #[tokio::test]
-    async fn track_fade_out_transitions_to_fading_out() {
-        let mut track = make_track();
-        track.play();
-        track.fade_out();
-        assert_eq!(track.state(), TrackState::FadingOut);
-    }
-
-    #[tokio::test]
-    async fn track_play_transitions_to_playing() {
-        let mut track = make_track();
-        track.play();
-        assert_eq!(track.state(), TrackState::Playing);
-    }
-
-    #[tokio::test]
-    async fn track_stop_transitions_to_finished() {
-        let mut track = make_track();
-        track.play();
-        track.stop();
-        assert_eq!(track.state(), TrackState::Finished);
+        match scenario {
+            TrackStateScenario::StartPreloading => {}
+            TrackStateScenario::FadeIn => track.fade_in(),
+            TrackStateScenario::FadeOutAfterPlay => {
+                track.play();
+                track.fade_out();
+            }
+            TrackStateScenario::Play => track.play(),
+            TrackStateScenario::StopAfterPlay => {
+                track.play();
+                track.stop();
+            }
+        }
+        assert_eq!(track.state(), expected_state);
     }
 
     #[test]
