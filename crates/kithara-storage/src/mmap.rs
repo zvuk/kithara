@@ -23,7 +23,7 @@ use mmap_io::MemoryMappedFile;
 
 use crate::{
     StorageError, StorageResult,
-    driver::{Driver, DriverState, Resource},
+    driver::{Driver, DriverIo, DriverState, Resource},
     resource::OpenMode,
 };
 
@@ -146,7 +146,9 @@ impl Driver for MmapDriver {
 
         Ok((driver, init))
     }
+}
 
+impl DriverIo for MmapDriver {
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         {
             let mmap_guard = self.mmap.lock();

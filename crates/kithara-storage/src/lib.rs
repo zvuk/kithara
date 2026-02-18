@@ -27,7 +27,7 @@ pub use atomic::Atomic;
 #[cfg(not(target_arch = "wasm32"))]
 pub use atomic::AtomicMmap;
 pub use coverage::{Coverage, MemCoverage};
-pub use driver::{Driver, Resource};
+pub use driver::{Driver, DriverIo, Resource};
 pub use error::{StorageError, StorageResult};
 pub use memory::{MemDriver, MemOptions, MemResource};
 #[cfg(not(target_arch = "wasm32"))]

@@ -7,7 +7,7 @@
 //! (wasm32 + atomics) where mmap is unavailable.
 //!
 //! When writes wrap around and evict old data, the `available` `RangeSet` in
-//! `CommonState` is updated (via [`Driver::valid_window`]) to remove evicted
+//! `CommonState` is updated (via [`DriverIo::valid_window`]) to remove evicted
 //! ranges. This allows `wait_range()` to detect gaps and trigger re-fetches
 //! on seek.
 
@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     StorageError, StorageResult,
-    driver::{Driver, DriverState, Resource},
+    driver::{Driver, DriverIo, DriverState, Resource},
 };
 
 /// Default ring buffer capacity (1 mebibyte, power of 2).
@@ -111,7 +111,9 @@ impl Driver for MemDriver {
 
         Ok((driver, init))
     }
+}
 
+impl DriverIo for MemDriver {
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         let ring = self.state.lock();
         let window_end = ring.window_start + ring.capacity as u64;
