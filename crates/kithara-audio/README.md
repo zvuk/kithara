@@ -46,13 +46,15 @@ graph TB
         App -- "read(buf)" --> Resource
     end
 
-    subgraph "tokio Runtime (async tasks)"
+    subgraph "Downloader Thread (rayon, async via block_on)"
+        DLLoop["Backend::run_downloader<br/><i>orchestration loop</i>"]
         NetTask["Network I/O<br/><i>reqwest + retry</i>"]
         WriterTask["Writer&lt;E&gt;<br/><i>byte pump</i>"]
+        DLLoop -- "plan + fetch" --> NetTask
+        NetTask -- "bytes" --> WriterTask
     end
 
-    subgraph "rayon ThreadPool (blocking)"
-        DLLoop["Backend::run_downloader<br/><i>orchestration loop</i>"]
+    subgraph "Decode Thread (rayon)"
         DecodeWorker["AudioWorker<br/><i>decode + effects</i>"]
     end
 
@@ -68,8 +70,6 @@ graph TB
         EventChan["EventBus&lt;Event&gt;<br/><i>all -> consumer</i>"]
     end
 
-    DLLoop -- "plan + fetch" --> NetTask
-    NetTask -- "bytes" --> WriterTask
     WriterTask -- "write_at()" --> StorageRes
     DLLoop -- "commit()" --> SegIdx
 
@@ -96,8 +96,9 @@ graph TB
     style EventChan fill:#5b8a5b,color:#fff
 ```
 
-- **OS thread** (`kithara-audio`): runs `run_audio_loop` -- drains seek commands, calls `Decoder::next_chunk`, applies effects (resampler), sends processed chunks through a bounded `kanal` channel with backpressure.
-- **tokio task**: publishes events (ABR switch, progress, decode) to a unified `EventBus`.
+- **Downloader thread** (rayon): runs `Backend::run_downloader` via `handle.block_on()` -- async orchestration loop that plans, fetches (reqwest), and writes bytes to `StorageResource` through `Writer<E>`.
+- **Decode thread** (rayon): runs `run_audio_loop` -- drains seek commands, calls `Decoder::next_chunk`, applies effects (resampler), sends processed chunks through a bounded `kanal` channel with backpressure.
+- **Events**: published to a unified `EventBus` (ABR switch, progress, decode).
 - **Epoch-based invalidation**: after seek, stale in-flight chunks are filtered by epoch counter (`Arc<AtomicU64>`).
 
 ## Pipeline Architecture
