@@ -77,6 +77,10 @@ mod tests {
 
     use super::*;
 
+    fn test_url(raw: &str) -> Url {
+        Url::parse(raw).expect("valid test URL")
+    }
+
     // Test error creation methods
     #[rstest]
     #[case::timeout_error(NetError::timeout(), NetError::Timeout)]
@@ -94,9 +98,9 @@ mod tests {
     // Test is_retryable method - parameterized
     #[rstest]
     #[case::timeout(NetError::Timeout, true)]
-    #[case::http_500(NetError::HttpError { status: 500, url: Url::parse("http://example.com").unwrap(), body: None }, true)]
-    #[case::http_429(NetError::HttpError { status: 429, url: Url::parse("http://example.com").unwrap(), body: None }, true)]
-    #[case::http_404(NetError::HttpError { status: 404, url: Url::parse("http://example.com").unwrap(), body: None }, false)]
+    #[case::http_500(NetError::HttpError { status: 500, url: test_url("http://example.com"), body: None }, true)]
+    #[case::http_429(NetError::HttpError { status: 429, url: test_url("http://example.com"), body: None }, true)]
+    #[case::http_404(NetError::HttpError { status: 404, url: test_url("http://example.com"), body: None }, false)]
     #[case::unimplemented(NetError::Unimplemented, false)]
     #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) }, false)]
     #[tokio::test]
@@ -113,7 +117,7 @@ mod tests {
     #[case::timeout(NetError::Timeout, "Timeout")]
     #[case::unimplemented(NetError::Unimplemented, "not implemented")]
     #[case::http_error_with_details(
-        NetError::HttpError { status: 404, url: Url::parse("http://example.com/test").unwrap(), body: Some("Not found".to_string()) },
+        NetError::HttpError { status: 404, url: test_url("http://example.com/test"), body: Some("Not found".to_string()) },
         "HTTP 404: Some(\"Not found\") for URL: Url { scheme: \"http\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"example.com\")), port: None, path: \"/test\", query: None, fragment: None }"
     )]
     #[tokio::test]
@@ -144,7 +148,7 @@ mod tests {
     // Test error cloning
     #[rstest]
     #[case::timeout(NetError::Timeout)]
-    #[case::http_error(NetError::HttpError { status: 500, url: Url::parse("http://example.com").unwrap(), body: None })]
+    #[case::http_error(NetError::HttpError { status: 500, url: test_url("http://example.com"), body: None })]
     #[case::unimplemented(NetError::Unimplemented)]
     #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) })]
     #[tokio::test]
@@ -161,7 +165,7 @@ mod tests {
     // Test error debug formatting
     #[rstest]
     #[case::timeout(NetError::Timeout)]
-    #[case::http_error(NetError::HttpError { status: 404, url: Url::parse("http://example.com").unwrap(), body: None })]
+    #[case::http_error(NetError::HttpError { status: 404, url: test_url("http://example.com"), body: None })]
     #[tokio::test]
     async fn test_error_debug(#[case] error: NetError) {
         let debug_output = format!("{:?}", error);
