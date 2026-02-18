@@ -20,7 +20,7 @@ while IFS= read -r file; do
   fi
 
   total_trait_files=$((total_trait_files + 1))
-  unimock_count="$( (rg -n 'unimock::unimock\(' "$file" || true) | wc -l | tr -d ' ' )"
+  unimock_count="$( (rg -n 'unimock(::unimock)?\(' "$file" || true) | wc -l | tr -d ' ' )"
   rel="${file#$ROOT_DIR/}"
 
   if (( unimock_count > 0 )); then
