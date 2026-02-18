@@ -131,6 +131,34 @@ async fn yield_ms(ms: u32) {
     gloo_timers::future::TimeoutFuture::new(ms).await;
 }
 
+async fn create_player_with_fixture() -> kithara_wasm::WasmPlayer {
+    let mut player = kithara_wasm::WasmPlayer::new();
+    let idx = player.add_track(fixture_url().to_string()).unwrap();
+    player.select_track(idx).await.unwrap();
+    player
+}
+
+async fn wait_duration_ms(player: &kithara_wasm::WasmPlayer) -> f64 {
+    for _ in 0..200 {
+        let duration_ms = player.get_duration_ms();
+        if duration_ms > 0.0 {
+            return duration_ms;
+        }
+        yield_ms(10).await;
+    }
+    0.0
+}
+
+async fn wait_position_advance(player: &kithara_wasm::WasmPlayer, from_ms: f64) -> bool {
+    for _ in 0..200 {
+        if player.get_position_ms() > from_ms + 120.0 {
+            return true;
+        }
+        yield_ms(10).await;
+    }
+    false
+}
+
 // ── Saw-tooth verification helpers ──
 //
 // The HLS fixture server (`hls_fixture_server`) serves a deterministic saw-tooth
@@ -402,77 +430,60 @@ async fn stress_seek_and_read() {
     );
 }
 
-/// The actual WASM player uses `WasmPlayer::fill_buffer()` which reads decoded
-/// PCM via `Audio::read()` and writes into `PcmRingBuffer`.  The JS AudioWorklet
-/// (`pcm-processor.js`) consumes from the ring buffer at real-time rate.
+/// Lifecycle sanity for the browser player path (`WasmPlayer` over `kithara-play`).
 ///
-/// Bug: `fill_buffer()` reads from the decoder (advancing `position()`) without
-/// checking ring buffer capacity.  When the ring is full, overflow is silently
-/// dropped.  Position races ahead, audio skips.
-///
-/// This test exercises the real `WasmPlayer::fill_buffer()` path and verifies
-/// that every sample read from the decoder makes it to the ring buffer.
+/// Verifies that after selecting an HLS track the player reports duration,
+/// advances position while playing, pauses correctly, and keeps seek behavior sane.
 #[wasm_bindgen_test]
 async fn fill_buffer_position_must_not_drift() {
     init().await;
-    info!("Starting fill_buffer_position_must_not_drift");
+    info!("Starting fill_buffer_position_must_not_drift (new API)");
 
-    // Load HLS via the real WasmPlayer path (stores Audio in thread_local).
-    let mut player = kithara_wasm::WasmPlayer::new();
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let info = kithara_wasm::load_hls_with_media_info(fixture_url().to_string(), wav_info)
-        .await
-        .unwrap();
-    let channels = info[0];
-    let sample_rate = info[1];
-    info!(channels, sample_rate, "Loaded HLS");
-
-    player.update_ring(channels as u32, sample_rate as u32);
-    player.play();
-
-    let rate = sample_rate * channels;
-    let mut total_to_ring = 0u64;
-
-    // Call fill_buffer in a loop, yielding to let async I/O progress.
-    // No AudioWorklet is consuming — ring will fill up quickly.
-    for i in 0..200 {
-        let written = player.fill_buffer();
-        total_to_ring += u64::from(written);
-
-        if written == 0 {
-            if player.is_eof() {
-                info!(iteration = i, "EOF reached");
-                break;
-            }
-            // No data yet or ring full — yield and retry.
-            yield_ms(20).await;
-            continue;
-        }
-
-        // Yield every 10 iterations to let downloads progress.
-        if i % 10 == 9 {
-            yield_ms(5).await;
-        }
-    }
-
-    assert!(total_to_ring > 0, "must write some samples to ring");
-
-    let position_ms = player.get_position_ms();
-    let ring_ms = (total_to_ring as f64 / rate) * 1000.0;
-
-    info!(
-        position_ms,
-        ring_ms, total_to_ring, "Position vs ring content"
+    let mut player = create_player_with_fixture().await;
+    let duration_ms = wait_duration_ms(&player).await;
+    assert!(
+        duration_ms > 0.0,
+        "duration must be known after track selection"
     );
 
-    // Position (from Audio::samples_read) must match what actually reached
-    // the ring buffer.  With backpressure they should be equal.
-    // Without it, position >> ring_ms (the bug).
-    let drift = position_ms / ring_ms.max(0.001);
+    player.play();
+    assert!(player.is_playing(), "play() must set playing state");
+
+    let start_ms = player.get_position_ms();
     assert!(
-        drift < 1.05,
-        "position drifted {drift:.1}x ahead of ring buffer: \
-         position={position_ms:.0}ms but ring received only {ring_ms:.0}ms of audio"
+        wait_position_advance(&player, start_ms).await,
+        "position must advance after play()"
+    );
+
+    player.pause();
+    assert!(!player.is_playing(), "pause() must clear playing state");
+    let paused_ms = player.get_position_ms();
+    yield_ms(120).await;
+    let after_pause_ms = player.get_position_ms();
+    assert!(
+        (after_pause_ms - paused_ms).abs() < 250.0,
+        "position advanced too much while paused: {paused_ms:.0} -> {after_pause_ms:.0}"
+    );
+
+    let target_ms = (duration_ms * 0.4).min((duration_ms - 500.0).max(0.0));
+    player.seek(target_ms).unwrap();
+    let seek_pos_ms = player.get_position_ms();
+    assert!(
+        (seek_pos_ms - target_ms).abs() < 4000.0,
+        "seek landed too far from target: target={target_ms:.0}ms actual={seek_pos_ms:.0}ms"
+    );
+
+    player.play();
+    let resume_ms = player.get_position_ms();
+    assert!(
+        wait_position_advance(&player, resume_ms).await,
+        "position must continue advancing after seek + play"
+    );
+
+    let final_pos = player.get_position_ms();
+    assert!(
+        final_pos <= duration_ms + 1000.0,
+        "position {final_pos:.0}ms exceeds duration {duration_ms:.0}ms too much"
     );
 }
 
@@ -804,45 +815,26 @@ async fn stress_seek_to_zero_after_pressure() {
     );
 }
 
-/// Full WasmPlayer lifecycle under pressure: play → rapid seeks → pause →
-/// seek to 0 → play → verify data flows.
-///
-/// Tests the same code path the browser uses (WasmPlayer + fill_buffer).
-/// Catches the bug where the browser player stops after seeking and
-/// requires stop+restart to resume.
+/// Full `WasmPlayer` lifecycle under pressure: play → rapid seeks → pause →
+/// seek to 0 → play → verify position flow.
 #[wasm_bindgen_test]
 async fn stress_player_lifecycle_seek_pressure() {
     init().await;
     info!("Starting stress_player_lifecycle_seek_pressure");
 
-    let mut player = kithara_wasm::WasmPlayer::new();
-    let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let load_info = kithara_wasm::load_hls_with_media_info(fixture_url().to_string(), wav_info)
-        .await
-        .unwrap();
-    let channels = load_info[0] as u32;
-    let sample_rate = load_info[1] as u32;
-    let duration_ms = load_info[2];
-    info!(channels, sample_rate, duration_ms, "HLS loaded");
+    let mut player = create_player_with_fixture().await;
+    let duration_ms = wait_duration_ms(&player).await;
+    info!(duration_ms, "HLS loaded");
+    assert!(duration_ms > 0.0, "duration must be known");
 
-    player.update_ring(channels, sample_rate);
-
-    // Phase 1: Play and fill some data
+    // Phase 1: Play and observe movement
     player.play();
     assert!(player.is_playing(), "should be playing after play()");
-
-    let mut total_filled = 0u64;
-    for i in 0..100 {
-        let written = player.fill_buffer();
-        total_filled += u64::from(written);
-        if written == 0 {
-            yield_ms(20).await;
-        } else if i % 20 == 19 {
-            yield_ms(5).await;
-        }
-    }
-    assert!(total_filled > 0, "must fill some data during warmup");
-    info!(total_filled, "Warmup fill done");
+    let warmup_ms = player.get_position_ms();
+    assert!(
+        wait_position_advance(&player, warmup_ms).await,
+        "position must advance during warmup"
+    );
 
     let max_seek_ms = if duration_ms > 1000.0 {
         duration_ms - 500.0
@@ -850,9 +842,9 @@ async fn stress_player_lifecycle_seek_pressure() {
         duration_ms * 0.9
     };
 
-    // Phase 2: Rapid seek+fill_buffer cycles (500 iterations)
+    // Phase 2: Rapid seek cycles (500 iterations)
     let mut rng = Xorshift64::new(0x1234_5678_9ABC_DEF0);
-    let mut dead_fills = 0u64;
+    let mut dead_seeks = 0u64;
 
     for i in 0..500 {
         // Random seek position: 10% near start, 10% near end, 80% random
@@ -865,33 +857,28 @@ async fn stress_player_lifecycle_seek_pressure() {
             rng.range_f64(0.0, max_seek_ms)
         };
 
-        player.seek(seek_ms);
+        player.seek(seek_ms).unwrap();
 
-        // Try to fill after seek — must eventually produce data
-        let mut got_data = false;
-        for _ in 0..50 {
-            let written = player.fill_buffer();
-            if written > 0 {
-                got_data = true;
-                total_filled += u64::from(written);
-                break;
-            }
-            if player.is_eof() {
-                got_data = true;
+        // Seek should land reasonably close.
+        let mut seek_ok = false;
+        for _ in 0..30 {
+            let pos = player.get_position_ms();
+            if (pos - seek_ms).abs() < 4000.0 {
+                seek_ok = true;
                 break;
             }
             yield_ms(10).await;
         }
 
-        if !got_data {
-            dead_fills += 1;
-            if dead_fills <= 3 {
+        if !seek_ok {
+            dead_seeks += 1;
+            if dead_seeks <= 3 {
                 warn!(
                     iteration = i,
                     seek_ms,
                     is_playing = player.is_playing(),
-                    is_eof = player.is_eof(),
-                    "fill_buffer stuck after seek"
+                    actual_pos_ms = player.get_position_ms(),
+                    "seek did not settle near requested position"
                 );
             }
         }
@@ -899,8 +886,7 @@ async fn stress_player_lifecycle_seek_pressure() {
         if i % 100 == 99 {
             info!(
                 iteration = i + 1,
-                dead_fills,
-                total_filled,
+                dead_seeks,
                 is_playing = player.is_playing(),
                 "Seek stress progress"
             );
@@ -908,41 +894,26 @@ async fn stress_player_lifecycle_seek_pressure() {
         }
     }
 
-    info!(dead_fills, "Seek stress done: 500 seeks");
+    info!(dead_seeks, "Seek stress done: 500 seeks");
 
-    // Phase 3: Pause → seek to 0 → play → verify fill_buffer works
+    // Phase 3: Pause → seek to 0 → play → verify movement resumes
     player.pause();
     assert!(!player.is_playing(), "should be paused after pause()");
 
-    player.seek(0.0);
+    player.seek(0.0).unwrap();
     player.play();
     assert!(player.is_playing(), "should be playing after play()");
 
-    let mut post_reset_filled = 0u64;
-    for i in 0..200 {
-        let written = player.fill_buffer();
-        post_reset_filled += u64::from(written);
-        if written == 0 {
-            if player.is_eof() {
-                break;
-            }
-            yield_ms(20).await;
-        } else if i % 20 == 19 {
-            yield_ms(5).await;
-        }
-    }
-
-    info!(
-        post_reset_filled,
-        position_ms = player.get_position_ms(),
-        is_playing = player.is_playing(),
-        "Post-reset fill complete"
+    let reset_pos = player.get_position_ms();
+    assert!(
+        wait_position_advance(&player, reset_pos).await,
+        "position must move after pause → seek(0) → play"
     );
 
-    assert!(
-        post_reset_filled > 0,
-        "fill_buffer must produce data after pause → seek(0) → play \
-         (got 0 samples — pipeline stalled)"
+    info!(
+        position_ms = player.get_position_ms(),
+        is_playing = player.is_playing(),
+        "Post-reset progress complete"
     );
 
     // Position should be reasonable (not stuck at 0, not wildly ahead)
@@ -954,8 +925,8 @@ async fn stress_player_lifecycle_seek_pressure() {
 
     let max_dead = 500u64 / 100; // 1%
     assert!(
-        dead_fills <= max_dead,
-        "fill_buffer stalled {dead_fills}/500 times \
-         (>{max_dead} = 1% threshold) — pipeline stuck after seek"
+        dead_seeks <= max_dead,
+        "seek settled poorly {dead_seeks}/500 times \
+         (>{max_dead} = 1% threshold)"
     );
 }
