@@ -187,31 +187,26 @@ pub trait InnerDecoder: Send + 'static {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn test_aac_codec_type() {
-        assert_eq!(Aac::CODEC, AudioCodec::AacLc);
-    }
-
-    #[test]
-    fn test_mp3_codec_type() {
-        assert_eq!(Mp3::CODEC, AudioCodec::Mp3);
-    }
-
-    #[test]
-    fn test_flac_codec_type() {
-        assert_eq!(Flac::CODEC, AudioCodec::Flac);
-    }
-
-    #[test]
-    fn test_alac_codec_type() {
-        assert_eq!(Alac::CODEC, AudioCodec::Alac);
-    }
-
-    #[test]
-    fn test_vorbis_codec_type() {
-        assert_eq!(Vorbis::CODEC, AudioCodec::Vorbis);
+    #[rstest]
+    #[case::aac(0, AudioCodec::AacLc)]
+    #[case::mp3(1, AudioCodec::Mp3)]
+    #[case::flac(2, AudioCodec::Flac)]
+    #[case::alac(3, AudioCodec::Alac)]
+    #[case::vorbis(4, AudioCodec::Vorbis)]
+    fn test_codec_type_mapping(#[case] codec: u8, #[case] expected: AudioCodec) {
+        let actual = match codec {
+            0 => Aac::CODEC,
+            1 => Mp3::CODEC,
+            2 => Flac::CODEC,
+            3 => Alac::CODEC,
+            4 => Vorbis::CODEC,
+            _ => unreachable!("unknown codec case"),
+        };
+        assert_eq!(actual, expected);
     }
 
     #[test]
