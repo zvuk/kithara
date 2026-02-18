@@ -60,36 +60,44 @@ impl SourceType {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    #[cfg(feature = "file")]
-    fn detect_local_file_path() {
-        let src = ResourceSrc::Path(PathBuf::from("/tmp/song.mp3"));
-        let result = SourceType::detect(&src);
-        assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), SourceType::LocalFile(_)));
+    fn source_tag(source: &SourceType) -> &'static str {
+        match source {
+            #[cfg(feature = "file")]
+            SourceType::LocalFile(_) => "local",
+            #[cfg(feature = "file")]
+            SourceType::RemoteFile(_) => "remote",
+            #[cfg(feature = "hls")]
+            SourceType::HlsStream(_) => "hls",
+        }
     }
 
-    #[test]
+    #[rstest]
     #[cfg(feature = "file")]
-    fn detect_remote_file_url() {
-        let src = ResourceSrc::Url(Url::parse("https://example.com/song.mp3").unwrap());
-        let result = SourceType::detect(&src);
-        assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), SourceType::RemoteFile(_)));
+    #[case(ResourceSrc::Path(PathBuf::from("/tmp/song.mp3")), "local")]
+    #[case(
+        ResourceSrc::Url(Url::parse("https://example.com/song.mp3").expect("valid URL")),
+        "remote"
+    )]
+    fn detect_file_sources(#[case] src: ResourceSrc, #[case] expected: &str) {
+        let detected = SourceType::detect(&src).expect("source must be detected");
+        assert_eq!(source_tag(&detected), expected);
     }
 
-    #[test]
+    #[rstest]
     #[cfg(feature = "hls")]
-    fn detect_hls_url() {
-        let src = ResourceSrc::Url(Url::parse("https://example.com/playlist.m3u8").unwrap());
-        let result = SourceType::detect(&src);
-        assert!(result.is_ok());
-        assert!(matches!(result.unwrap(), SourceType::HlsStream(_)));
+    #[case("https://example.com/playlist.m3u8")]
+    #[case("https://example.com/live/index.m3u8")]
+    fn detect_hls_url(#[case] url: &str) {
+        let src = ResourceSrc::Url(Url::parse(url).expect("valid URL"));
+        let detected = SourceType::detect(&src).expect("source must be detected");
+        assert_eq!(source_tag(&detected), "hls");
     }
 
-    #[test]
+    #[rstest]
     fn detect_invalid_relative_path() {
         // Relative paths should not reach here (caught by ResourceConfig::new),
         // but verify graceful handling via the Path variant
@@ -97,6 +105,11 @@ mod tests {
         let result = SourceType::detect(&src);
         // With file feature enabled, it's accepted as LocalFile
         #[cfg(feature = "file")]
-        assert!(matches!(result.unwrap(), SourceType::LocalFile(_)));
+        assert_eq!(
+            source_tag(&result.expect("relative path must map to local")),
+            "local"
+        );
+        #[cfg(not(feature = "file"))]
+        assert!(result.is_err());
     }
 }
