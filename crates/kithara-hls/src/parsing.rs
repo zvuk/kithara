@@ -455,10 +455,7 @@ video.m3u8"
 
         let media = result.unwrap();
         assert_eq!(media.segments.len(), 2);
-        assert_eq!(
-            media.target_duration,
-            Some(std::time::Duration::from_secs_f64(4.0))
-        );
+        assert_eq!(media.target_duration, Some(Duration::from_secs_f64(4.0)));
         assert_eq!(media.media_sequence, 0);
         assert!(media.end_list);
 
@@ -598,7 +595,7 @@ video.m3u8"
             sequence,
             variant_id: VariantId(variant_id as usize),
             uri: uri.to_string(),
-            duration: std::time::Duration::from_secs_f64(duration_secs),
+            duration: Duration::from_secs_f64(duration_secs),
             key: None,
         };
 
