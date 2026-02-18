@@ -22,16 +22,15 @@ use axum::{
     http::{HeaderMap, StatusCode},
     routing::get,
 };
-use kithara::assets::StoreOptions;
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    stream::Stream,
+};
+use kithara_test_utils::{TestHttpServer, cancel_token, debug_tracing_setup, temp_dir};
 use rstest::rstest;
 use tempfile::TempDir;
-use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use url::Url;
-
-use kithara_test_utils::{cancel_token, debug_tracing_setup, temp_dir};
 
 // Constants
 
@@ -105,11 +104,7 @@ async fn segment_head_response() -> (StatusCode, HeaderMap) {
 }
 
 /// Start a test HTTP server with mismatched HEAD/GET Content-Lengths.
-async fn start_mismatch_server() -> Url {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let base_url = format!("http://127.0.0.1:{}", addr.port());
-
+async fn start_mismatch_server() -> TestHttpServer {
     let app = Router::new()
         .route("/master.m3u8", get(|| async { master_playlist() }))
         .route("/v0.m3u8", get(|| async { media_playlist(0) }))
@@ -140,13 +135,7 @@ async fn start_mismatch_server() -> Url {
             get(|| async { segment_data(1, 2) }).head(segment_head_response),
         );
 
-    let url: Url = format!("{}/master.m3u8", base_url).parse().unwrap();
-
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    url
+    TestHttpServer::new(app).await
 }
 
 // Tests
@@ -165,7 +154,8 @@ async fn seek_beyond_head_total_within_actual_total(
     temp_dir: TempDir,
     cancel_token: CancellationToken,
 ) {
-    let url = start_mismatch_server().await;
+    let server = start_mismatch_server().await;
+    let url = server.url("/master.m3u8");
 
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
