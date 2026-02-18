@@ -2474,6 +2474,7 @@ dependencies = [
  "derive_setters",
  "dhat",
  "futures",
+ "hotpath",
  "kithara-assets",
  "kithara-events",
  "kithara-net",

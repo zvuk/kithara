@@ -109,6 +109,7 @@ pub(crate) enum FileCoverage {
 }
 
 impl Coverage for FileCoverage {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn mark(&mut self, range: std::ops::Range<u64>) {
         match self {
             Self::Memory(c) => c.mark(range),
@@ -116,6 +117,7 @@ impl Coverage for FileCoverage {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn is_complete(&self) -> bool {
         match self {
             Self::Memory(c) => c.is_complete(),
@@ -468,6 +470,7 @@ impl Downloader for FileDownloader {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn should_throttle(&self) -> bool {
         // Only throttle during sequential phase.
         if !matches!(self.phase, FilePhase::Sequential) {

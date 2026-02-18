@@ -98,6 +98,7 @@ impl Progress {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn read_pos(&self) -> u64 {
         use std::sync::atomic::Ordering;
         self.read_pos.load(Ordering::Acquire)
@@ -108,6 +109,7 @@ impl Progress {
         self.download_pos.load(Ordering::Acquire)
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn set_read_pos(&self, v: u64) {
         use std::sync::atomic::Ordering;
         self.read_pos.store(v, Ordering::Release);
@@ -226,6 +228,7 @@ impl FileSource {
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn wait_range(
         &mut self,
         range: Range<u64>,
@@ -265,6 +268,7 @@ impl kithara_stream::Source for FileSource {
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(
         &mut self,
         offset: u64,

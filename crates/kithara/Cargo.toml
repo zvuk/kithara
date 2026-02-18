@@ -49,6 +49,7 @@ perf = [
     "kithara-decode/perf",
     "kithara-stream/perf",
     "kithara-bufpool/perf",
+    "kithara-file/perf",
     "kithara-hls/perf",
     "kithara-net/perf",
 ]
