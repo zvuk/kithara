@@ -1331,49 +1331,36 @@ pub type AppleAlac = Apple<Alac>;
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn test_apple_config_default() {
-        let config = AppleConfig::default();
-        assert!(config.byte_len_handle.is_none());
-        assert!(config.container.is_none());
-        assert!(config.pcm_pool.is_none());
-    }
-
-    #[test]
-    fn test_apple_config_with_container() {
+    #[rstest]
+    #[case::default(None)]
+    #[case::fmp4(Some(ContainerFormat::Fmp4))]
+    fn test_apple_config_container(#[case] container: Option<ContainerFormat>) {
         let config = AppleConfig {
-            container: Some(ContainerFormat::Fmp4),
+            container,
             pcm_pool: None,
             ..Default::default()
         };
-        assert_eq!(config.container, Some(ContainerFormat::Fmp4));
+        assert!(config.byte_len_handle.is_none());
+        assert_eq!(config.container, container);
+        assert!(config.pcm_pool.is_none());
     }
 
-    #[test]
-    fn test_container_to_file_type() {
-        assert_eq!(
-            container_to_file_type(ContainerFormat::Fmp4),
-            Some(kAudioFileM4AType)
-        );
-        assert_eq!(
-            container_to_file_type(ContainerFormat::Adts),
-            Some(kAudioFileAAC_ADTSType)
-        );
-        assert_eq!(
-            container_to_file_type(ContainerFormat::MpegAudio),
-            Some(kAudioFileMP3Type)
-        );
-        assert_eq!(
-            container_to_file_type(ContainerFormat::Flac),
-            Some(kAudioFileFLACType)
-        );
-        assert_eq!(
-            container_to_file_type(ContainerFormat::Caf),
-            Some(kAudioFileCAFType)
-        );
-        assert_eq!(container_to_file_type(ContainerFormat::Wav), None);
+    #[rstest]
+    #[case::fmp4(ContainerFormat::Fmp4, Some(kAudioFileM4AType))]
+    #[case::adts(ContainerFormat::Adts, Some(kAudioFileAAC_ADTSType))]
+    #[case::mpeg(ContainerFormat::MpegAudio, Some(kAudioFileMP3Type))]
+    #[case::flac(ContainerFormat::Flac, Some(kAudioFileFLACType))]
+    #[case::caf(ContainerFormat::Caf, Some(kAudioFileCAFType))]
+    #[case::wav(ContainerFormat::Wav, None)]
+    fn test_container_to_file_type(
+        #[case] container: ContainerFormat,
+        #[case] expected: Option<AudioFileTypeID>,
+    ) {
+        assert_eq!(container_to_file_type(container), expected);
     }
 
     #[test]
