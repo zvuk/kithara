@@ -29,12 +29,21 @@ variables:
 
 lint:
   stage: lint
+  variables:
+    QUALITY_MIN_UNIMOCK_TRAITS: "1"
+    QUALITY_MIN_RSTEST_CASES: "1"
+    QUALITY_MIN_PERF_TEST_FILES: "1"
+    QUALITY_MIN_BENCH_TARGETS: "1"
   before_script:
     - apt-get update -qq && apt-get install -y -qq libasound2-dev
     - rustup component add clippy
     - rustup toolchain install nightly --component rustfmt
   script:
     - bash scripts/ci/lint.sh
+  artifacts:
+    paths:
+      - target/quality-report.md
+    expire_in: 30 days
 
 deny:
   stage: lint

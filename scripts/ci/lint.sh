@@ -18,6 +18,9 @@ bash "$SCRIPT_DIR/lint-style.sh"
 echo "==> testing perf comparison script..."
 bash "$SCRIPT_DIR/test-compare-perf.sh"
 
+echo "==> generating quality report..."
+bash "$SCRIPT_DIR/quality-report.sh"
+
 echo "==> checking architecture constraints..."
 bash "$SCRIPT_DIR/check-arch.sh"
 
