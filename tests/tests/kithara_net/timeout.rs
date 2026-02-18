@@ -1,96 +1,119 @@
 use std::time::Duration;
 
+use bytes::Bytes;
 use futures::StreamExt;
-use kithara::net::{Headers, Net, NetError, NetExt, RangeSpec};
-use rstest::*;
+use kithara::net::{ByteStream, Headers, Net, NetError, NetExt, RangeSpec};
+use kithara_net::mock::NetMock;
+use rstest::rstest;
+use unimock::{MockFn, Unimock, matching};
 use url::Url;
 
-// Mock Net implementation for testing timeout logic
-
-#[derive(Clone)]
-struct TimeoutMockNet {
+struct DelayedNet<N> {
     delay: Duration,
-    should_succeed: bool,
+    inner: N,
 }
 
-impl TimeoutMockNet {
-    fn new(delay: Duration, should_succeed: bool) -> Self {
-        Self {
-            delay,
-            should_succeed,
-        }
+impl<N: Net> DelayedNet<N> {
+    fn new(inner: N, delay: Duration) -> Self {
+        Self { delay, inner }
     }
 }
 
 #[async_trait::async_trait]
-impl Net for TimeoutMockNet {
-    async fn get_bytes(
-        &self,
-        _url: Url,
-        _headers: Option<Headers>,
-    ) -> Result<bytes::Bytes, NetError> {
+impl<N: Net> Net for DelayedNet<N> {
+    async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
         tokio::time::sleep(self.delay).await;
-        if self.should_succeed {
-            Ok(bytes::Bytes::from("success"))
-        } else {
-            Err(NetError::Http("mock error".to_string()))
-        }
+        self.inner.get_bytes(url, headers).await
     }
 
-    async fn stream(
-        &self,
-        _url: Url,
-        _headers: Option<Headers>,
-    ) -> Result<kithara::net::ByteStream, NetError> {
+    async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
         tokio::time::sleep(self.delay).await;
-        if self.should_succeed {
-            let stream =
-                futures::stream::iter(vec![Ok::<_, NetError>(bytes::Bytes::from("success"))]);
-            Ok(Box::pin(stream))
-        } else {
-            Err(NetError::Http("mock error".to_string()))
-        }
+        self.inner.stream(url, headers).await
     }
 
     async fn get_range(
         &self,
-        _url: Url,
-        _range: RangeSpec,
-        _headers: Option<Headers>,
-    ) -> Result<kithara::net::ByteStream, NetError> {
+        url: Url,
+        range: RangeSpec,
+        headers: Option<Headers>,
+    ) -> Result<ByteStream, NetError> {
         tokio::time::sleep(self.delay).await;
-        if self.should_succeed {
-            let stream =
-                futures::stream::iter(vec![Ok::<_, NetError>(bytes::Bytes::from("success"))]);
-            Ok(Box::pin(stream))
-        } else {
-            Err(NetError::Http("mock error".to_string()))
-        }
+        self.inner.get_range(url, range, headers).await
     }
 
-    async fn head(&self, _url: Url, _headers: Option<Headers>) -> Result<Headers, NetError> {
+    async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
         tokio::time::sleep(self.delay).await;
-        if self.should_succeed {
-            let mut headers = Headers::new();
-            headers.insert("content-length", "7");
-            Ok(headers)
-        } else {
-            Err(NetError::Http("mock error".to_string()))
-        }
+        self.inner.head(url, headers).await
     }
 }
 
-// Helper functions
+fn success_stream() -> ByteStream {
+    let stream = futures::stream::iter(vec![Ok::<_, NetError>(Bytes::from_static(b"success"))]);
+    Box::pin(stream)
+}
+
+fn mock_error() -> NetError {
+    NetError::Http("mock error".to_string())
+}
+
+fn leaked<F>(f: F) -> &'static F
+where
+    F: Send + Sync + 'static,
+{
+    Box::leak(Box::new(f))
+}
+
+fn make_timeout_mock(should_succeed: bool) -> Unimock {
+    Unimock::new((
+        NetMock::get_bytes
+            .some_call(matching!(_, _))
+            .answers(leaked(move |_, _url, _headers| {
+                if should_succeed {
+                    Ok(Bytes::from_static(b"success"))
+                } else {
+                    Err(mock_error())
+                }
+            })),
+        NetMock::stream
+            .some_call(matching!(_, _))
+            .answers(leaked(move |_, _url, _headers| {
+                if should_succeed {
+                    Ok(success_stream())
+                } else {
+                    Err(mock_error())
+                }
+            })),
+        NetMock::get_range
+            .some_call(matching!(_, _, _))
+            .answers(leaked(move |_, _url, _range, _headers| {
+                if should_succeed {
+                    Ok(success_stream())
+                } else {
+                    Err(mock_error())
+                }
+            })),
+        NetMock::head
+            .some_call(matching!(_, _))
+            .answers(leaked(move |_, _url, _headers| {
+                if should_succeed {
+                    let mut headers = Headers::new();
+                    headers.insert("content-length", "7");
+                    Ok(headers)
+                } else {
+                    Err(mock_error())
+                }
+            })),
+    ))
+    .no_verify_in_drop()
+}
 
 async fn test_all_net_methods_with_timeout_net(net: &impl Net) {
     let url = Url::parse("http://example.com").unwrap();
 
-    // Test get_bytes
     let result = net.get_bytes(url.clone(), None).await;
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
+    assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
 
-    // Test stream
     let result = net.stream(url.clone(), None).await;
     assert!(result.is_ok());
     let mut stream = result.unwrap();
@@ -101,7 +124,6 @@ async fn test_all_net_methods_with_timeout_net(net: &impl Net) {
     }
     assert_eq!(collected, b"success");
 
-    // Test get_range
     let range = RangeSpec::new(0, None);
     let result = net.get_range(url.clone(), range, None).await;
     assert!(result.is_ok());
@@ -113,16 +135,12 @@ async fn test_all_net_methods_with_timeout_net(net: &impl Net) {
     }
     assert_eq!(collected, b"success");
 
-    // Test head
     let result = net.head(url, None).await;
     assert!(result.is_ok());
     let headers = result.unwrap();
     assert_eq!(headers.get("content-length"), Some("7"));
 }
 
-// Tests
-
-// Test timeout scenarios
 #[rstest]
 #[case::success_before_timeout(Duration::from_millis(100), Duration::from_millis(200), true)]
 #[case::timeout_before_success(Duration::from_millis(200), Duration::from_millis(100), false)]
@@ -134,7 +152,7 @@ async fn test_timeout_scenarios(
     #[case] timeout: Duration,
     #[case] should_succeed: bool,
 ) {
-    let mock_net = TimeoutMockNet::new(delay, true);
+    let mock_net = DelayedNet::new(make_timeout_mock(true), delay);
     let timeout_net = mock_net.with_timeout(timeout);
 
     let url = Url::parse("http://example.com").unwrap();
@@ -142,19 +160,18 @@ async fn test_timeout_scenarios(
 
     if should_succeed {
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
+        assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
     } else {
         assert!(result.is_err());
         assert!(matches!(result.err().unwrap(), NetError::Timeout));
     }
 }
 
-// Test timeout with error (not timeout) - should preserve original error when timeout > delay
 #[rstest]
-#[case(Duration::from_millis(100), Duration::from_millis(200))] // Error before timeout
+#[case(Duration::from_millis(100), Duration::from_millis(200))]
 #[tokio::test]
 async fn test_timeout_with_error(#[case] delay: Duration, #[case] timeout: Duration) {
-    let mock_net = TimeoutMockNet::new(delay, false);
+    let mock_net = DelayedNet::new(make_timeout_mock(false), delay);
     let timeout_net = mock_net.with_timeout(timeout);
 
     let url = Url::parse("http://example.com").unwrap();
@@ -163,8 +180,6 @@ async fn test_timeout_with_error(#[case] delay: Duration, #[case] timeout: Durat
     assert!(result.is_err());
     let error = result.err().unwrap();
 
-    // When delay < timeout, should get original Http error
-    // When delay > timeout, should get Timeout error
     if delay < timeout {
         assert!(matches!(error, NetError::Http(_)));
     } else {
@@ -172,7 +187,6 @@ async fn test_timeout_with_error(#[case] delay: Duration, #[case] timeout: Durat
     }
 }
 
-// Test all Net methods with timeout
 #[rstest]
 #[case(Duration::from_millis(100), Duration::from_millis(200), true)]
 #[case(Duration::from_millis(200), Duration::from_millis(100), false)]
@@ -182,13 +196,12 @@ async fn test_all_net_methods_with_timeout(
     #[case] timeout: Duration,
     #[case] should_succeed: bool,
 ) {
-    let mock_net = TimeoutMockNet::new(delay, true);
+    let mock_net = DelayedNet::new(make_timeout_mock(true), delay);
     let timeout_net = mock_net.with_timeout(timeout);
 
     if should_succeed {
         test_all_net_methods_with_timeout_net(&timeout_net).await;
     } else {
-        // For timeout case, just test get_bytes as representative
         let url = Url::parse("http://example.com").unwrap();
         let result = timeout_net.get_bytes(url, None).await;
         assert!(result.is_err());
@@ -196,14 +209,13 @@ async fn test_all_net_methods_with_timeout(
     }
 }
 
-// Test zero timeout (should timeout immediately for any non-zero delay)
 #[rstest]
 #[case(Duration::from_millis(0), true)]
 #[case(Duration::from_millis(1), false)]
 #[case(Duration::from_millis(100), false)]
 #[tokio::test]
 async fn test_zero_timeout(#[case] delay: Duration, #[case] should_succeed: bool) {
-    let mock_net = TimeoutMockNet::new(delay, true);
+    let mock_net = DelayedNet::new(make_timeout_mock(true), delay);
     let timeout_net = mock_net.with_timeout(Duration::from_millis(0));
 
     let url = Url::parse("http://example.com").unwrap();
@@ -211,14 +223,13 @@ async fn test_zero_timeout(#[case] delay: Duration, #[case] should_succeed: bool
 
     if should_succeed {
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
+        assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
     } else {
         assert!(result.is_err());
         assert!(matches!(result.err().unwrap(), NetError::Timeout));
     }
 }
 
-// Test large timeout (should succeed for reasonable delays)
 #[rstest]
 #[case(Duration::from_millis(0), true)]
 #[case(Duration::from_millis(100), true)]
@@ -226,7 +237,7 @@ async fn test_zero_timeout(#[case] delay: Duration, #[case] should_succeed: bool
 #[case(Duration::from_millis(5000), true)]
 #[tokio::test]
 async fn test_large_timeout(#[case] delay: Duration, #[case] should_succeed: bool) {
-    let mock_net = TimeoutMockNet::new(delay, true);
+    let mock_net = DelayedNet::new(make_timeout_mock(true), delay);
     let timeout_net = mock_net.with_timeout(Duration::from_secs(10));
 
     let url = Url::parse("http://example.com").unwrap();
@@ -234,22 +245,20 @@ async fn test_large_timeout(#[case] delay: Duration, #[case] should_succeed: boo
 
     if should_succeed {
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
+        assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
     } else {
         assert!(result.is_err());
-        // Should not timeout with 10 second timeout
         assert!(matches!(result.err().unwrap(), NetError::Http(_)));
     }
 }
 
-// Test timeout preserves original error when operation fails before timeout
 #[rstest]
 #[case(Duration::from_millis(50))]
 #[case(Duration::from_millis(100))]
 #[case(Duration::from_millis(200))]
 #[tokio::test]
 async fn test_timeout_preserves_error(#[case] delay: Duration) {
-    let mock_net = TimeoutMockNet::new(delay, false);
+    let mock_net = DelayedNet::new(make_timeout_mock(false), delay);
     let timeout_net = mock_net.with_timeout(Duration::from_secs(1));
 
     let url = Url::parse("http://example.com").unwrap();
@@ -262,7 +271,6 @@ async fn test_timeout_preserves_error(#[case] delay: Duration) {
     assert!(error.to_string().contains("mock error"));
 }
 
-// Test timeout with representative scenarios
 #[rstest]
 #[case::fast_delay(100, 200, true)]
 #[case::slow_delay(200, 100, false)]
@@ -276,7 +284,7 @@ async fn test_timeout_representative_scenarios(
     #[case] timeout_ms: u64,
     #[case] should_succeed: bool,
 ) {
-    let mock_net = TimeoutMockNet::new(Duration::from_millis(delay_ms), true);
+    let mock_net = DelayedNet::new(make_timeout_mock(true), Duration::from_millis(delay_ms));
     let timeout_net = mock_net.with_timeout(Duration::from_millis(timeout_ms));
 
     let url = Url::parse("http://example.com").unwrap();
@@ -289,7 +297,7 @@ async fn test_timeout_representative_scenarios(
             delay_ms,
             timeout_ms
         );
-        assert_eq!(result.unwrap(), bytes::Bytes::from("success"));
+        assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
     } else {
         assert!(
             result.is_err(),

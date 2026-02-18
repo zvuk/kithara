@@ -22,6 +22,7 @@ futures = { workspace = true }
 # Kithara crates not in facade
 kithara-test-utils = { workspace = true }
 kithara-wasm = { workspace = true }
+kithara-net = { workspace = true, features = ["test-utils"] }
 # kithara-assets needs "internal" feature for test-only types
 kithara-assets = { workspace = true, features = ["internal"] }
 
@@ -51,6 +52,7 @@ rodio = { workspace = true }
 rstest = { workspace = true }
 serial_test = { workspace = true }
 tempfile = { workspace = true }
+unimock = { workspace = true }
 
 # Logging
 tracing-subscriber = { workspace = true }
