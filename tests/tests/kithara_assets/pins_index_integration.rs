@@ -2,12 +2,13 @@
 
 use std::{collections::HashSet, time::Duration};
 
-use kithara::assets::{AssetStore, AssetStoreBuilder, DiskAssetStore, EvictConfig, PinsIndex};
-use kithara::bufpool::byte_pool;
+use kithara::{
+    assets::{AssetStore, AssetStoreBuilder, DiskAssetStore, EvictConfig, PinsIndex},
+    bufpool::byte_pool,
+};
+use kithara_test_utils::temp_dir;
 use rstest::{fixture, rstest};
 use tokio_util::sync::CancellationToken;
-
-use kithara_test_utils::temp_dir;
 
 fn pins_path(root: &std::path::Path) -> std::path::PathBuf {
     root.join("_index").join("pins.bin")

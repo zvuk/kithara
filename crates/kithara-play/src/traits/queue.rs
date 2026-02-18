@@ -37,8 +37,9 @@ pub trait QueuePlayer: MaybeSend + MaybeSync + 'static {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use unimock::Unimock;
+
+    use super::*;
 
     fn assert_queue_item_unimock<T: QueuePlayer<Item = Unimock>>() {}
 

@@ -5,11 +5,10 @@ use std::{
     time::Duration,
 };
 
-use rstest::{fixture, rstest};
-
 use kithara_test_utils::memory_source::{
     MemorySource, UnknownLenSource, memory_stream, unknown_len_stream,
 };
+use rstest::{fixture, rstest};
 
 // Fixtures
 

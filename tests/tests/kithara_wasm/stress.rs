@@ -8,12 +8,14 @@ use std::{
     time::Duration,
 };
 
-use kithara::assets::StoreOptions;
-use kithara::audio::{Audio, AudioConfig};
-use kithara::events::EventBus;
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::platform::ThreadPool;
-use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
+use kithara::{
+    assets::StoreOptions,
+    audio::{Audio, AudioConfig},
+    events::EventBus,
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    platform::ThreadPool,
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+};
 use tracing::{info, warn};
 use url::Url;
 use wasm_bindgen_futures::JsFuture;

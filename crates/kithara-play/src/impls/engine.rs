@@ -22,14 +22,13 @@ use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
+use super::{player_processor::PlayerCmd, shared_player_state::SharedPlayerState};
 use crate::{
     error::PlayError,
     events::EngineEvent,
     traits::{dj::crossfade::CrossfadeConfig, engine::Engine},
     types::SlotId,
 };
-
-use super::{player_processor::PlayerCmd, shared_player_state::SharedPlayerState};
 
 /// Configuration for the audio engine.
 #[derive(Clone, Debug, Derivative, Setters)]

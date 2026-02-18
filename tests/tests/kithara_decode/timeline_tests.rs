@@ -2,14 +2,15 @@
 
 use std::{io::Cursor, sync::Arc, time::Duration};
 
-use kithara::assets::StoreOptions;
-use kithara::decode::{DecoderConfig, DecoderFactory};
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
+use kithara::{
+    assets::StoreOptions,
+    decode::{DecoderConfig, DecoderFactory},
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
+};
+use kithara_test_utils::wav::create_saw_wav;
 use rstest::rstest;
 use tokio_util::sync::CancellationToken;
-
-use kithara_test_utils::wav::create_saw_wav;
 
 use super::fixture::EmbeddedAudio;
 use crate::kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig};

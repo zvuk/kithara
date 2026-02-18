@@ -312,11 +312,10 @@ mod tests {
 
     use url::Url;
 
+    use super::*;
     use crate::parsing::{
         CodecInfo, InitSegment, MediaPlaylist, MediaSegment, VariantId, VariantStream,
     };
-
-    use super::*;
 
     fn base_url() -> Url {
         Url::parse("https://cdn.example.com/audio/").expect("valid base URL")

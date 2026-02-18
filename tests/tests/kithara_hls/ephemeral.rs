@@ -9,18 +9,20 @@
 
 use std::{sync::Arc, time::Duration};
 
-use kithara::assets::{AssetStoreBuilder, StoreOptions};
-use kithara::audio::{Audio, AudioConfig};
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::storage::ResourceExt;
-use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
+use kithara::{
+    assets::{AssetStoreBuilder, StoreOptions},
+    audio::{Audio, AudioConfig},
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    storage::ResourceExt,
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+};
+use kithara_test_utils::wav::create_saw_wav;
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture::{HlsTestServer, HlsTestServerConfig};
-use kithara_test_utils::wav::create_saw_wav;
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]

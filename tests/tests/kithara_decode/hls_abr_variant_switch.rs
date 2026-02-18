@@ -12,16 +12,18 @@
 
 use std::{env, error::Error, io::Read as _, time::Duration};
 
-use kithara::assets::StoreOptions;
-use kithara::events::{Event, EventBus, HlsEvent};
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    events::{Event, EventBus, HlsEvent},
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    stream::Stream,
+};
+use kithara_test_utils::temp_dir;
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
-use kithara_test_utils::temp_dir;
 // Import AbrTestServer from kithara-hls fixture
 use crate::kithara_hls::fixture::abr::{AbrTestServer, master_playlist};
 

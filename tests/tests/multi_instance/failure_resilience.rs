@@ -6,17 +6,18 @@
 
 use std::{sync::Arc, time::Duration};
 
-use kithara::assets::StoreOptions;
-use kithara::audio::{Audio, AudioConfig};
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::platform::ThreadPool;
-use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
+use kithara::{
+    assets::StoreOptions,
+    audio::{Audio, AudioConfig},
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    platform::ThreadPool,
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+};
+use kithara_test_utils::wav::create_test_wav;
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
-
-use kithara_test_utils::wav::create_test_wav;
 
 use crate::kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig};
 

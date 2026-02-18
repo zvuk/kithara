@@ -119,8 +119,9 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use unimock::Unimock;
+
+    use super::*;
 
     fn assert_player_item_unimock<T: Player<Item = Unimock>>() {}
 

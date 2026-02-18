@@ -17,19 +17,18 @@ use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
+use super::{
+    engine::{EngineConfig, EngineImpl},
+    player_processor::PlayerCmd,
+    player_resource::PlayerResource,
+    player_track::TrackTransition,
+};
 use crate::{
     error::PlayError,
     events::PlayerEvent,
     impls::resource::Resource,
     traits::engine::Engine,
     types::{ActionAtItemEnd, PlayerStatus, SlotId},
-};
-
-use super::{
-    engine::{EngineConfig, EngineImpl},
-    player_processor::PlayerCmd,
-    player_resource::PlayerResource,
-    player_track::TrackTransition,
 };
 
 // -- PlayerConfig -----------------------------------------------------------------

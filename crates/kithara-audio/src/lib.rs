@@ -52,5 +52,4 @@ pub use pipeline::{Audio, AudioConfig};
 pub use resampler::ResamplerQuality;
 #[doc(hidden)]
 pub use resampler::{ResamplerParams, ResamplerProcessor};
-pub use traits::AudioEffect;
-pub use traits::{DecodeError, DecodeResult, PcmReader};
+pub use traits::{AudioEffect, DecodeError, DecodeResult, PcmReader};

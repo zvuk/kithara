@@ -9,16 +9,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::pipeline::worker::AudioCommand;
 use kithara_bufpool::pcm_pool;
-use kithara_decode::mock::{infinite_inner_decoder_loose, scripted_inner_decoder_loose};
-use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec};
+use kithara_decode::{
+    DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec,
+    mock::{infinite_inner_decoder_loose, scripted_inner_decoder_loose},
+};
 use kithara_platform::Mutex;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{MediaInfo, Source, Stream, StreamResult, StreamType};
 use rstest::rstest;
 
 use super::*;
+use crate::pipeline::worker::AudioCommand;
 
 // TestSource + TestStream
 

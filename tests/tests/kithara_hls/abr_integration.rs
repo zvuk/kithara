@@ -2,8 +2,10 @@
 
 use std::time::{Duration, Instant};
 
-use kithara::abr::{AbrController, AbrMode, AbrOptions, AbrReason, Variant};
-use kithara::hls::parsing::{MasterPlaylist, parse_master_playlist};
+use kithara::{
+    abr::{AbrController, AbrMode, AbrOptions, AbrReason, Variant},
+    hls::parsing::{MasterPlaylist, parse_master_playlist},
+};
 use rstest::{fixture, rstest};
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).

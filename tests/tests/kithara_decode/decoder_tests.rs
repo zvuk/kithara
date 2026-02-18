@@ -5,8 +5,10 @@
 use std::io::Cursor;
 
 use fixture::EmbeddedAudio;
-use kithara::decode::{DecoderConfig, DecoderFactory};
-use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo};
+use kithara::{
+    decode::{DecoderConfig, DecoderFactory},
+    stream::{AudioCodec, ContainerFormat, MediaInfo},
+};
 use rstest::{fixture, rstest};
 
 use super::fixture;

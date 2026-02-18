@@ -711,9 +711,10 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for ReadSeek
 mod tests {
     use std::io::Cursor;
 
+    use kithara_test_utils::create_test_wav;
+
     use super::*;
     use crate::traits::AudioDecoder;
-    use kithara_test_utils::create_test_wav;
 
     #[test]
     fn test_symphonia_config_default() {

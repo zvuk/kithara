@@ -6,16 +6,18 @@
 
 use std::time::Duration;
 
-use kithara::assets::StoreOptions;
-use kithara::audio::{Audio, AudioConfig};
-use kithara::events::{AudioEvent, EventBus};
-use kithara::file::{File, FileConfig};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    audio::{Audio, AudioConfig},
+    events::{AudioEvent, EventBus},
+    file::{File, FileConfig},
+    stream::Stream,
+};
+use kithara_test_utils::temp_dir;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
 use super::fixture::AudioTestServer;
-use kithara_test_utils::temp_dir;
 
 #[fixture]
 async fn server() -> AudioTestServer {

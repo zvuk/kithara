@@ -13,16 +13,18 @@ use std::{
     time::Duration,
 };
 
-use kithara::assets::StoreOptions;
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    stream::Stream,
+};
+use kithara_test_utils::Xorshift64;
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture::{EncryptionConfig, HlsTestServer, HlsTestServerConfig};
-use kithara_test_utils::Xorshift64;
 
 /// Random seek+read cycles with exact byte verification on HLS stream.
 ///

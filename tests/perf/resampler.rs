@@ -6,9 +6,11 @@
 
 use std::sync::{Arc, atomic::AtomicU32};
 
-use kithara::audio::{AudioEffect, ResamplerParams, ResamplerQuality};
-use kithara::bufpool::pcm_pool;
-use kithara::decode::{PcmChunk, PcmMeta, PcmSpec};
+use kithara::{
+    audio::{AudioEffect, ResamplerParams, ResamplerQuality},
+    bufpool::pcm_pool,
+    decode::{PcmChunk, PcmMeta, PcmSpec},
+};
 
 /// Create a test PCM chunk with specified sample count.
 fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {

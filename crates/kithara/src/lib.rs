@@ -96,35 +96,28 @@ pub mod mock {
 /// Prelude — flat imports for common types.
 pub mod prelude {
     // Audio pipeline
+    // HLS (optional)
+    #[cfg(feature = "hls")]
+    pub use kithara_abr::{AbrMode, AbrOptions};
     pub use kithara_audio::{Audio, AudioConfig, PcmReader, ResamplerQuality};
-
     // Decode
     pub use kithara_decode::{DecodeError, DecodeResult, PcmMeta, PcmSpec, TrackMetadata};
-
     // Events
     #[cfg(feature = "hls")]
     pub use kithara_events::HlsEvent;
     pub use kithara_events::{AudioEvent, Event, EventBus, FileEvent};
-
+    // File (optional)
+    #[cfg(feature = "file")]
+    pub use kithara_file::{File, FileConfig};
+    #[cfg(feature = "hls")]
+    pub use kithara_hls::{Hls, HlsConfig};
     // Platform
     pub use kithara_platform::ThreadPool;
-
     // Play
     pub use kithara_play::{
         EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,
         SourceType,
     };
-
     // Stream
     pub use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType};
-
-    // File (optional)
-    #[cfg(feature = "file")]
-    pub use kithara_file::{File, FileConfig};
-
-    // HLS (optional)
-    #[cfg(feature = "hls")]
-    pub use kithara_abr::{AbrMode, AbrOptions};
-    #[cfg(feature = "hls")]
-    pub use kithara_hls::{Hls, HlsConfig};
 }

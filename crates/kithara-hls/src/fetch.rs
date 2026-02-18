@@ -671,8 +671,7 @@ mod tests {
     use futures::stream;
     use kithara_assets::{AssetStoreBuilder, AssetsBackend, ProcessChunkFn};
     use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
-    use kithara_net::mock::NetMock;
-    use kithara_net::{ByteStream, Headers, NetError};
+    use kithara_net::{ByteStream, Headers, NetError, mock::NetMock};
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
     use unimock::{MockFn, Unimock, matching};

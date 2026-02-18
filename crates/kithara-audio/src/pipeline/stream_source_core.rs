@@ -10,16 +10,17 @@ use std::{
 
 use fallible_iterator::FallibleIterator;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
+use kithara_events::AudioEvent;
 use kithara_platform::Mutex;
 use kithara_stream::{Fetch, MediaInfo, Stream, StreamType};
 use tracing::{debug, trace, warn};
 
-use crate::pipeline::worker::{
-    AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects,
+use crate::{
+    pipeline::worker::{
+        AudioCommand, AudioWorkerSource, apply_effects, flush_effects, reset_effects,
+    },
+    traits::AudioEffect,
 };
-use kithara_events::AudioEvent;
-
-use crate::traits::AudioEffect;
 
 /// Shared stream wrapper for format change detection.
 ///

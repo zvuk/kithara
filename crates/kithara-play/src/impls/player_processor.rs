@@ -22,8 +22,6 @@ use kithara_platform::Mutex;
 use thunderdome::{Arena, Index};
 use tracing::warn;
 
-use crate::traits::dj::crossfade::CrossfadeCurve;
-
 use super::{
     crossfade::CrossfadeSettings,
     player_notification::PlayerNotification,
@@ -31,6 +29,7 @@ use super::{
     player_track::{PlayerTrack, TrackState, TrackTransition},
     shared_player_state::SharedPlayerState,
 };
+use crate::traits::dj::crossfade::CrossfadeCurve;
 
 /// Maximum number of concurrent tracks per player node.
 const MAX_TRACKS: usize = 4;

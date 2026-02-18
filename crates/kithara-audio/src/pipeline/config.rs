@@ -139,9 +139,10 @@ pub(super) fn create_effects(
 
 #[cfg(test)]
 mod tests {
+    use kithara_decode::PcmChunk;
+
     use super::*;
     use crate::traits::AudioEffect;
-    use kithara_decode::PcmChunk;
 
     /// Minimal pass-through effect for testing.
     struct PassthroughEffect;
