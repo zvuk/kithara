@@ -121,6 +121,8 @@ semver:
 coverage:
   stage: quality
   needs: [test]
+  variables:
+    COVERAGE_MIN: "80"
   before_script:
     - apt-get update -qq && apt-get install -y -qq libasound2-dev
     - test -f "$CARGO_HOME/bin/cargo-tarpaulin" || cargo install cargo-tarpaulin --locked

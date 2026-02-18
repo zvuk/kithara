@@ -1,19 +1,19 @@
-#!/bin/bash
-# Compare performance test results with baseline
+#!/usr/bin/env bash
+# Compare performance test results with baseline.
 #
 # Usage:
 #   ./scripts/ci/compare-perf.sh <current_results.txt> <baseline_results.txt> [threshold_percent]
 #
 # Exit codes:
-#   0 - No significant regression
-#   1 - Regression detected above threshold
-#   2 - Error (missing files, etc.)
+#   0 - no significant regression
+#   1 - regression detected above threshold
+#   2 - error (missing files, parse issues, etc.)
 
 set -euo pipefail
 
 CURRENT="${1:-}"
 BASELINE="${2:-baseline-results.txt}"
-THRESHOLD="${3:-10}"  # Default: fail if >10% slower
+THRESHOLD="${3:-10}"  # Fail if function is >THRESHOLD% slower.
 
 if [[ -z "$CURRENT" ]]; then
     echo "Usage: $0 <current_results.txt> [baseline_results.txt] [threshold_percent]"
@@ -21,14 +21,14 @@ if [[ -z "$CURRENT" ]]; then
 fi
 
 if [[ ! -f "$CURRENT" ]]; then
-    echo "Error: Current results file not found: $CURRENT"
+    echo "Error: current results file not found: $CURRENT"
     exit 2
 fi
 
 if [[ ! -f "$BASELINE" ]]; then
-    echo "Warning: Baseline file not found: $BASELINE"
+    echo "Warning: baseline file not found: $BASELINE"
     echo "Run tests on main branch to create baseline"
-    exit 0  # Don't fail if baseline missing
+    exit 0
 fi
 
 echo "Comparing performance results..."
@@ -37,76 +37,130 @@ echo "Baseline: $BASELINE"
 echo "Threshold: ${THRESHOLD}%"
 echo ""
 
-# Extract average times from hotpath output
-# Format: | function_name | Calls | Avg | P95 | Total | % Total |
+# Extract hotpath table rows as:
+#   <function>\t<avg_time>
+# where avg_time is one of: ns/us/ms/s.
 extract_metrics() {
     local file="$1"
-    # Extract lines with timing data (contains 'µs' or 'ms' or 'ns')
-    grep -E '\|.*\|.*[0-9]+\.[0-9]+(µs|ms|ns)' "$file" 2>/dev/null | \
-        awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $2); gsub(/^[ \t]+|[ \t]+$/, "", $4); print $2 ":" $4}' | \
-        grep -v "Function" | \
-        sed 's/://g'
+
+    awk -F'|' '
+      {
+        name = $2
+        avg = $4
+        gsub(/^[ \t]+|[ \t]+$/, "", name)
+        gsub(/^[ \t]+|[ \t]+$/, "", avg)
+        gsub(/µs/, "us", avg)
+
+        if (name == "" || avg == "" || tolower(name) == "function") {
+          next
+        }
+        if (avg !~ /^[0-9]+(\.[0-9]+)?(ns|us|ms|s)$/) {
+          next
+        }
+        print name "\t" avg
+      }
+    ' "$file"
 }
 
-# Convert time to nanoseconds for comparison
 to_nanoseconds() {
     local value="$1"
-    if [[ "$value" =~ ([0-9.]+)(ns|µs|ms|s) ]]; then
-        local num="${BASH_REMATCH[1]}"
-        local unit="${BASH_REMATCH[2]}"
-        case "$unit" in
-            ns) echo "$num" ;;
-            µs) echo "$num * 1000" | bc ;;
-            ms) echo "$num * 1000000" | bc ;;
-            s)  echo "$num * 1000000000" | bc ;;
-        esac
-    else
-        echo "0"
-    fi
+    local num factor
+
+    case "$value" in
+        *ns)
+            num="${value%ns}"
+            factor="1"
+            ;;
+        *us)
+            num="${value%us}"
+            factor="1000"
+            ;;
+        *ms)
+            num="${value%ms}"
+            factor="1000000"
+            ;;
+        *s)
+            num="${value%s}"
+            factor="1000000000"
+            ;;
+        *)
+            echo "0"
+            return
+            ;;
+    esac
+
+    awk -v n="$num" -v f="$factor" 'BEGIN { printf "%.6f\n", n * f }'
 }
 
-REGRESSION_FOUND=0
-COMPARISON_COUNT=0
+baseline_metrics="$(mktemp)"
+current_metrics="$(mktemp)"
+joined_metrics="$(mktemp)"
+trap 'rm -f "$baseline_metrics" "$current_metrics" "$joined_metrics"' EXIT
+
+extract_metrics "$BASELINE" | LC_ALL=C sort -u >"$baseline_metrics"
+extract_metrics "$CURRENT" | LC_ALL=C sort -u >"$current_metrics"
+
+if [[ ! -s "$baseline_metrics" ]]; then
+    echo "Error: no parsable metrics found in baseline file"
+    exit 2
+fi
+
+if [[ ! -s "$current_metrics" ]]; then
+    echo "Error: no parsable metrics found in current file"
+    exit 2
+fi
+
+join -t $'\t' -j 1 "$current_metrics" "$baseline_metrics" >"$joined_metrics" || true
+
+regression_found=0
+comparison_count=0
 
 echo "Function | Current | Baseline | Change"
 echo "---------|---------|----------|-------"
 
-# Simple comparison: look for common function names
-while IFS=: read -r func current_time; do
-    # Clean function name
-    func=$(echo "$func" | xargs)
-    current_time=$(echo "$current_time" | xargs)
+while IFS=$'\t' read -r name current_time baseline_time; do
+    current_ns="$(to_nanoseconds "$current_time")"
+    baseline_ns="$(to_nanoseconds "$baseline_time")"
 
-    # Find baseline for same function
-    baseline_time=$(grep "^$func " "$BASELINE" 2>/dev/null | awk '{print $2}' | head -1 || echo "")
+    change="$(
+        awk -v c="$current_ns" -v b="$baseline_ns" '
+          BEGIN {
+            if (b <= 0.0) {
+              print "NaN"
+            } else {
+              printf "%.2f", ((c - b) / b) * 100.0
+            }
+          }
+        '
+    )"
 
-    if [[ -n "$baseline_time" ]]; then
-        current_ns=$(to_nanoseconds "$current_time")
-        baseline_ns=$(to_nanoseconds "$baseline_time")
-
-        if [[ $(echo "$baseline_ns > 0" | bc) -eq 1 ]]; then
-            change=$(echo "scale=2; (($current_ns - $baseline_ns) / $baseline_ns) * 100" | bc)
-
-            echo "$func | $current_time | $baseline_time | ${change}%"
-
-            # Check if regression exceeds threshold
-            if [[ $(echo "$change > $THRESHOLD" | bc) -eq 1 ]]; then
-                echo "  ⚠️  REGRESSION: $func is ${change}% slower (threshold: ${THRESHOLD}%)"
-                REGRESSION_FOUND=1
-            fi
-
-            ((COMPARISON_COUNT++))
-        fi
+    if [[ "$change" == "NaN" ]]; then
+        continue
     fi
-done < <(extract_metrics "$CURRENT" | head -20)
+
+    echo "$name | $current_time | $baseline_time | ${change}%"
+    comparison_count=$((comparison_count + 1))
+
+    if awk -v change="$change" -v threshold="$THRESHOLD" \
+        'BEGIN { exit(!(change > threshold)) }'
+    then
+        echo "  REGRESSION: $name is ${change}% slower (threshold: ${THRESHOLD}%)"
+        regression_found=1
+    fi
+done <"$joined_metrics"
 
 echo ""
-echo "Comparisons made: $COMPARISON_COUNT"
+echo "Comparisons made: $comparison_count"
 
-if [[ $REGRESSION_FOUND -eq 1 ]]; then
-    echo "❌ Performance regression detected!"
-    exit 1
-else
-    echo "✅ No significant regression detected"
-    exit 0
+if [[ "$comparison_count" -eq 0 ]]; then
+    echo "Error: no overlapping metrics found between current and baseline"
+    exit 2
 fi
+
+if [[ "$regression_found" -eq 1 ]]; then
+    echo "Performance regression detected"
+    exit 1
+fi
+
+echo "No significant regression detected"
+exit 0

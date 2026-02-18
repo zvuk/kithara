@@ -12,7 +12,7 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use tokio::net::TcpListener;
+use kithara_test_utils::TestHttpServer;
 use url::Url;
 
 /// A tiny WAV file (0.1 seconds of silence, 44.1kHz, stereo)
@@ -24,17 +24,13 @@ const TEST_MP3_BYTES: &[u8] = include_bytes!("fixtures/test.mp3");
 
 /// Test server for serving audio fixtures
 pub(crate) struct AudioTestServer {
-    base_url: String,
+    server: TestHttpServer,
     request_counts: Arc<std::sync::Mutex<HashMap<String, usize>>>,
 }
 
 impl AudioTestServer {
     /// Create a new test server
     pub(crate) async fn new() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let base_url = format!("http://127.0.0.1:{}", addr.port());
-
         let request_counts = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let request_counts_clone = request_counts.clone();
 
@@ -54,15 +50,10 @@ impl AudioTestServer {
                 },
             ));
 
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-
-        // Give server time to start
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let server = TestHttpServer::new(app).await;
 
         Self {
-            base_url,
+            server,
             request_counts,
         }
     }
@@ -73,17 +64,17 @@ impl AudioTestServer {
         reason = "test utility reserved for future integration tests"
     )]
     pub(crate) fn base_url(&self) -> &str {
-        &self.base_url
+        self.server.base_url().as_str()
     }
 
     /// Get the URL for the WAV fixture
     pub(crate) fn wav_url(&self) -> Url {
-        Url::parse(&format!("{}/silence.wav", self.base_url)).unwrap()
+        self.server.url("/silence.wav")
     }
 
     /// Get the URL for the MP3 fixture
     pub(crate) fn mp3_url(&self) -> Url {
-        Url::parse(&format!("{}/test.mp3", self.base_url)).unwrap()
+        self.server.url("/test.mp3")
     }
 
     /// Get request count for a path

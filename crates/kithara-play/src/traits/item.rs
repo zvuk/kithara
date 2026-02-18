@@ -8,6 +8,10 @@ use crate::{
     types::{ItemStatus, TimeRange},
 };
 
+#[cfg_attr(
+    any(test, feature = "test-utils"),
+    unimock::unimock(api = PlayerItemMock)
+)]
 pub trait PlayerItem: MaybeSend + MaybeSync + 'static {
     fn status(&self) -> ItemStatus;
 
@@ -67,4 +71,14 @@ pub trait PlayerItem: MaybeSend + MaybeSync + 'static {
     fn asset_is_playable(&self) -> bool;
 
     fn asset_metadata(&self) -> crate::metadata::Metadata;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn player_item_mock_api_is_generated() {
+        let _ = PlayerItemMock::status;
+    }
 }

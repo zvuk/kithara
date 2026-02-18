@@ -2599,14 +2599,17 @@ dependencies = [
 name = "kithara-test-utils"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "futures",
  "kithara-storage",
  "kithara-stream",
  "rstest",
  "tempfile",
  "thiserror 2.0.18",
+ "tokio",
  "tokio-util",
  "tracing-subscriber",
+ "url",
 ]
 
 [[package]]
