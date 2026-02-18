@@ -440,7 +440,16 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
+
+    #[derive(Clone, Copy)]
+    enum TrackCommandScenario {
+        DuplicateLoad,
+        LoadOnly,
+        LoadThenUnload,
+    }
 
     fn make_shared_state() -> Arc<SharedPlayerState> {
         Arc::new(SharedPlayerState::new())
@@ -462,42 +471,49 @@ mod tests {
         assert_eq!(processor.tracks_index.len(), 0);
     }
 
+    #[rstest]
+    #[case(TrackCommandScenario::LoadOnly, 1, true)]
+    #[case(TrackCommandScenario::DuplicateLoad, 1, true)]
+    #[case(TrackCommandScenario::LoadThenUnload, 0, false)]
     #[tokio::test]
-    async fn processor_loads_track_via_command() {
+    async fn processor_track_command_scenarios(
+        #[case] scenario: TrackCommandScenario,
+        #[case] expected_tracks: usize,
+        #[case] should_contain_track: bool,
+    ) {
         let (mut processor, tx) = make_processor();
+        let track_src = Arc::from("track1.mp3");
 
-        let resource = create_mock_player_resource("track1.mp3");
         tx.send(PlayerCmd::LoadTrack {
-            resource,
-            src: Arc::from("track1.mp3"),
+            resource: create_mock_player_resource("track1.mp3"),
+            src: Arc::clone(&track_src),
         })
         .ok();
 
+        match scenario {
+            TrackCommandScenario::LoadOnly => {}
+            TrackCommandScenario::DuplicateLoad => {
+                tx.send(PlayerCmd::LoadTrack {
+                    resource: create_mock_player_resource("track1.mp3"),
+                    src: Arc::clone(&track_src),
+                })
+                .ok();
+            }
+            TrackCommandScenario::LoadThenUnload => {
+                tx.send(PlayerCmd::UnloadTrack {
+                    src: Arc::clone(&track_src),
+                })
+                .ok();
+            }
+        }
+
         processor.drain_commands();
 
-        assert_eq!(processor.tracks.len(), 1);
-        assert!(processor.tracks_index.contains_key("track1.mp3"));
-    }
-
-    #[tokio::test]
-    async fn processor_unloads_track_via_command() {
-        let (mut processor, tx) = make_processor();
-
-        let resource = create_mock_player_resource("track1.mp3");
-        tx.send(PlayerCmd::LoadTrack {
-            resource,
-            src: Arc::from("track1.mp3"),
-        })
-        .ok();
-        processor.drain_commands();
-        assert_eq!(processor.tracks.len(), 1);
-
-        tx.send(PlayerCmd::UnloadTrack {
-            src: Arc::from("track1.mp3"),
-        })
-        .ok();
-        processor.drain_commands();
-        assert_eq!(processor.tracks.len(), 0);
+        assert_eq!(processor.tracks.len(), expected_tracks);
+        assert_eq!(
+            processor.tracks_index.contains_key("track1.mp3"),
+            should_contain_track
+        );
     }
 
     #[test]
@@ -518,28 +534,6 @@ mod tests {
         tx.send(PlayerCmd::SetPaused(true)).ok();
         processor.drain_commands();
         assert!(!processor.shared_state.playing.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn processor_duplicate_load_is_noop() {
-        let (mut processor, tx) = make_processor();
-
-        let resource1 = create_mock_player_resource("track1.mp3");
-        let resource2 = create_mock_player_resource("track1.mp3");
-
-        tx.send(PlayerCmd::LoadTrack {
-            resource: resource1,
-            src: Arc::from("track1.mp3"),
-        })
-        .ok();
-        tx.send(PlayerCmd::LoadTrack {
-            resource: resource2,
-            src: Arc::from("track1.mp3"),
-        })
-        .ok();
-        processor.drain_commands();
-
-        assert_eq!(processor.tracks.len(), 1);
     }
 
     #[tokio::test]
