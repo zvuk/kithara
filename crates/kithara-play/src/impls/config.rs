@@ -9,7 +9,7 @@ use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 #[cfg(any(feature = "file", feature = "hls"))]
-use kithara_net::NetOptions;
+use kithara_net::{Headers, NetOptions};
 use kithara_platform::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -101,6 +101,9 @@ pub struct ResourceConfig {
     /// query parameters), setting a unique `name` ensures each gets its own
     /// cache directory.
     pub name: Option<String>,
+    /// Additional HTTP headers to include in all network requests.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    pub headers: Option<Headers>,
     /// Network configuration (timeouts, retries).
     #[cfg(any(feature = "file", feature = "hls"))]
     pub net: NetOptions,
@@ -163,6 +166,8 @@ impl ResourceConfig {
             byte_pool: None,
             cancel: None,
             hint: None,
+            #[cfg(any(feature = "file", feature = "hls"))]
+            headers: None,
             #[cfg(feature = "hls")]
             hls_base_url: None,
             host_sample_rate: None,
@@ -280,6 +285,14 @@ impl ResourceConfig {
         self
     }
 
+    /// Set additional HTTP headers for all network requests.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[must_use]
+    pub fn with_headers(mut self, headers: Headers) -> Self {
+        self.headers = Some(headers);
+        self
+    }
+
     /// Set ABR options.
     #[cfg(feature = "hls")]
     #[must_use]
@@ -338,6 +351,10 @@ impl ResourceConfig {
             .with_look_ahead_bytes(self.look_ahead_bytes)
             .with_thread_pool(self.thread_pool.clone());
 
+        if let Some(headers) = self.headers {
+            file_config = file_config.with_headers(headers);
+        }
+
         if let Some(name) = self.name {
             file_config = file_config.with_name(name);
         }
@@ -392,6 +409,10 @@ impl ResourceConfig {
             .with_keys(self.keys)
             .with_look_ahead_bytes(self.look_ahead_bytes)
             .with_thread_pool(self.thread_pool.clone());
+
+        if let Some(headers) = self.headers {
+            hls_config = hls_config.with_headers(headers);
+        }
 
         if let Some(name) = self.name {
             hls_config = hls_config.with_name(name);
@@ -496,6 +517,22 @@ mod tests {
             .with_events(bus);
         let audio_config = config.into_hls_config().unwrap();
         assert!(audio_config.stream.bus.is_some());
+    }
+
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[test]
+    fn config_with_headers() {
+        let mut headers = Headers::new();
+        headers.insert("Authorization", "Bearer test");
+        let config = ResourceConfig::new("https://example.com/song.mp3")
+            .unwrap()
+            .with_headers(headers);
+
+        assert!(config.headers.is_some());
+        assert_eq!(
+            config.headers.as_ref().and_then(|h| h.get("Authorization")),
+            Some("Bearer test")
+        );
     }
 
     #[test]
