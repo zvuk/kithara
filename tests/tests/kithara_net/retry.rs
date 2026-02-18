@@ -7,28 +7,17 @@ use std::{
 };
 
 use bytes::Bytes;
-use futures::StreamExt;
-use kithara::net::{ByteStream, Headers, Net, NetError, NetExt, RangeSpec, RetryPolicy};
+use kithara::net::{Net, NetError, NetExt, RetryPolicy};
 use kithara_net::mock::NetMock;
 use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 use unimock::{MockFn, Unimock, matching};
 use url::Url;
 
-fn success_stream() -> ByteStream {
-    let stream = futures::stream::iter(vec![Ok::<_, NetError>(Bytes::from_static(b"success"))]);
-    Box::pin(stream)
-}
+use super::fixture::{assert_success_all_net_methods, leaked, ok_headers, success_stream};
 
 fn should_fail(attempts: &Arc<AtomicUsize>, failures_before_success: usize) -> bool {
     attempts.fetch_add(1, Ordering::SeqCst) < failures_before_success
-}
-
-fn leaked<F>(f: F) -> &'static F
-where
-    F: Send + Sync + 'static,
-{
-    Box::leak(Box::new(f))
 }
 
 fn make_retry_mock(failures_before_success: usize, error_type: NetError) -> Unimock {
@@ -81,47 +70,11 @@ fn make_retry_mock(failures_before_success: usize, error_type: NetError) -> Unim
                 if should_fail(&head_attempts, failures_before_success) {
                     Err(head_error.as_ref().clone())
                 } else {
-                    let mut headers = Headers::new();
-                    headers.insert("content-length", "7");
-                    Ok(headers)
+                    Ok(ok_headers())
                 }
             })),
     ))
     .no_verify_in_drop()
-}
-
-async fn test_all_net_methods_with_retry_net(net: &impl Net) {
-    let url = Url::parse("http://example.com").unwrap();
-
-    let result = net.get_bytes(url.clone(), None).await;
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
-
-    let result = net.stream(url.clone(), None).await;
-    assert!(result.is_ok());
-    let mut stream = result.unwrap();
-    let mut collected = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        assert!(chunk.is_ok());
-        collected.extend_from_slice(&chunk.unwrap());
-    }
-    assert_eq!(collected, b"success");
-
-    let range = RangeSpec::new(0, None);
-    let result = net.get_range(url.clone(), range, None).await;
-    assert!(result.is_ok());
-    let mut stream = result.unwrap();
-    let mut collected = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        assert!(chunk.is_ok());
-        collected.extend_from_slice(&chunk.unwrap());
-    }
-    assert_eq!(collected, b"success");
-
-    let result = net.head(url, None).await;
-    assert!(result.is_ok());
-    let headers = result.unwrap();
-    assert_eq!(headers.get("content-length"), Some("7"));
 }
 
 #[rstest]
@@ -225,7 +178,7 @@ async fn test_all_net_methods_with_retry(#[case] failures_before_success: usize)
     );
     let retry_net = mock_net.with_retry(retry_policy, CancellationToken::new());
 
-    test_all_net_methods_with_retry_net(&retry_net).await;
+    assert_success_all_net_methods(&retry_net).await;
 }
 
 #[rstest]
