@@ -6,6 +6,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use axum::{Router, routing::get};
 use kithara::hls::HlsError;
+use rstest::fixture;
 use tokio::net::TcpListener;
 use url::Url;
 
@@ -104,6 +105,11 @@ impl TestServer {
             .parse()
             .map_err(|e| HlsError::InvalidUrl(format!("Invalid test URL: {}", e)))
     }
+}
+
+#[fixture]
+pub(crate) async fn test_server() -> TestServer {
+    TestServer::new().await
 }
 
 /// Master playlist with standard bitrates

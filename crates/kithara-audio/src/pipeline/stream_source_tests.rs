@@ -16,6 +16,7 @@ use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta,
 use kithara_platform::Mutex;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{MediaInfo, Source, Stream, StreamResult, StreamType};
+use rstest::rstest;
 
 use super::*;
 
@@ -374,40 +375,19 @@ fn format_change_recreates_decoder() {
     assert_eq!(fetch.data.spec(), v3_spec());
 }
 
-#[test]
-fn seek_updates_epoch_and_calls_decoder() {
+#[rstest]
+#[case::from_track_start(v0_spec(), v0_info(), 0, 1)]
+#[case::after_abr_switch(v3_spec(), v3_info(), 863_137, 0)]
+fn seek_updates_epoch_and_decoder_and_controls_byte_len_update(
+    #[case] spec: PcmSpec,
+    #[case] media_info: MediaInfo,
+    #[case] base_offset: u64,
+    #[case] expected_byte_len_updates: usize,
+) {
     let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
-    let chunks = vec![make_chunk(v0_spec(), 1024); 5];
-    let (decoder, logs) = scripted_inner_decoder_loose(v0_spec(), chunks, vec![], None);
+    let chunks = vec![make_chunk(spec, 1024); 5];
+    let (decoder, logs) = scripted_inner_decoder_loose(spec, chunks, vec![], None);
     let seek_log = logs.seek_log();
-    let factory = make_factory(vec![]);
-
-    let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
-        shared,
-        decoder,
-        factory,
-        Some(v0_info()),
-        Arc::clone(&epoch),
-        vec![],
-    );
-
-    source.handle_command(AudioCommand::Seek {
-        position: Duration::from_secs(10),
-        epoch: 42,
-    });
-
-    assert_eq!(epoch.load(Ordering::Acquire), 42);
-    let seeks = seek_log.lock();
-    assert_eq!(seeks.len(), 1);
-    assert_eq!(seeks[0], Duration::from_secs(10));
-}
-
-#[test]
-fn seek_skips_byte_len_update_after_abr_switch() {
-    let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
-    let chunks = vec![make_chunk(v3_spec(), 2048); 5];
-    let (decoder, logs) = scripted_inner_decoder_loose(v3_spec(), chunks, vec![], None);
     let byte_len_log = logs.byte_len_log();
     let factory = make_factory(vec![]);
 
@@ -416,23 +396,29 @@ fn seek_skips_byte_len_update_after_abr_switch() {
         shared,
         decoder,
         factory,
-        Some(v3_info()),
+        Some(media_info),
         Arc::clone(&epoch),
         vec![],
     );
 
-    // Simulate that ABR switch already happened
-    source.base_offset = 863137;
+    source.base_offset = base_offset;
 
     source.handle_command(AudioCommand::Seek {
-        position: Duration::from_secs(110),
-        epoch: 1,
+        position: Duration::from_secs(10),
+        epoch: 42,
     });
 
-    assert!(
-        byte_len_log.lock().is_empty(),
-        "update_byte_len must not be called when base_offset > 0"
-    );
+    assert_eq!(epoch.load(Ordering::Acquire), 42);
+
+    let seeks = seek_log.lock();
+    assert_eq!(seeks.len(), 1);
+    assert_eq!(seeks[0], Duration::from_secs(10));
+
+    let byte_len_updates = byte_len_log.lock();
+    assert_eq!(byte_len_updates.len(), expected_byte_len_updates);
+    if expected_byte_len_updates > 0 {
+        assert_eq!(byte_len_updates[0], 1000);
+    }
 }
 
 #[test]

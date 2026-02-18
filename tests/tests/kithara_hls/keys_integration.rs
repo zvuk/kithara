@@ -4,17 +4,10 @@ use std::{sync::Arc, time::Duration};
 
 use fixture::*;
 use kithara::hls::{AssetsBackend, HlsResult, fetch::FetchManager, keys::KeyManager};
-use rstest::{fixture, rstest};
+use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 
 use super::fixture;
-
-// Fixtures
-
-#[fixture]
-async fn test_server() -> TestServer {
-    TestServer::new().await
-}
 
 // Test Cases
 
