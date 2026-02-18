@@ -27,6 +27,9 @@ bash "$SCRIPT_DIR/check-play-traits-unimock.sh"
 echo "==> running rstest parameterization audit..."
 bash "$SCRIPT_DIR/rstest-audit.sh"
 
+echo "==> running trait mock audit..."
+bash "$SCRIPT_DIR/trait-mock-audit.sh"
+
 echo "==> checking architecture constraints..."
 bash "$SCRIPT_DIR/check-arch.sh"
 
