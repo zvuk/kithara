@@ -167,6 +167,10 @@ bench:
   needs: [test]
   script:
     - bash scripts/ci/bench-test.sh
+  artifacts:
+    paths:
+      - bench-results.txt
+    expire_in: 30 days
   rules:
     - changes:
         - crates/kithara-abr/**/*
