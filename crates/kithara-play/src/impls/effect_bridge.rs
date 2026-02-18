@@ -20,7 +20,7 @@ use firewheel::{
     },
 };
 use kithara_audio::AudioEffect;
-use kithara_bufpool::pcm_pool;
+use kithara_bufpool::{PcmBuf, pcm_pool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec};
 use kithara_platform::Mutex;
 
@@ -97,8 +97,8 @@ impl AudioNode for EffectBridgeNode {
 /// 3. Passes the chunk through `effect.process()`.
 /// 4. Deinterleaves the result back into output channel slices.
 ///
-/// The scratch `Vec<f32>` is pre-allocated at construction time and reused
-/// across calls to avoid per-block heap allocation.
+/// The scratch `PcmBuf` is obtained from the global pool at construction
+/// time and reused across calls to avoid per-block heap allocation.
 ///
 /// [`AudioEffect`]: kithara_audio::AudioEffect
 pub(crate) struct EffectBridgeProcessor {
@@ -107,8 +107,8 @@ pub(crate) struct EffectBridgeProcessor {
     /// acts as a bypass node.
     effect: Option<Box<dyn AudioEffect>>,
     sample_rate: NonZeroU32,
-    /// Reusable interleaved scratch buffer. Allocated once, resized as needed.
-    scratch: Vec<f32>,
+    /// Reusable interleaved scratch buffer from the pool. Resized as needed.
+    scratch: PcmBuf,
 }
 
 impl EffectBridgeProcessor {
@@ -116,7 +116,7 @@ impl EffectBridgeProcessor {
         Self {
             effect,
             sample_rate,
-            scratch: Vec::new(),
+            scratch: pcm_pool().get(),
         }
     }
 
@@ -181,9 +181,8 @@ impl AudioNodeProcessor for EffectBridgeProcessor {
         // 1. Interleave inputs -> scratch
         self.interleave(buffers.inputs, frames);
 
-        // 2. Build PcmChunk from scratch (take ownership of scratch, replace with empty)
-        let interleaved = std::mem::take(&mut self.scratch);
-        let pcm_buf = pcm_pool().attach(interleaved);
+        // 2. Build PcmChunk from scratch (swap in a fresh pool buffer)
+        let pcm_buf = std::mem::replace(&mut self.scratch, pcm_pool().get());
         let spec = PcmSpec {
             channels: STEREO_CHANNELS,
             sample_rate: self.sample_rate.get(),
@@ -203,8 +202,8 @@ impl AudioNodeProcessor for EffectBridgeProcessor {
         };
 
         if let Some(processed) = effect.process(chunk) {
-            // 4. Recover scratch vec (avoids pool return on drop)
-            self.scratch = processed.pcm.into_inner();
+            // 4. Recover scratch buffer (keeps it pool-backed)
+            self.scratch = processed.pcm;
 
             // 5. Deinterleave scratch -> outputs
             self.deinterleave(buffers.outputs, frames);
@@ -212,8 +211,7 @@ impl AudioNodeProcessor for EffectBridgeProcessor {
             ProcessStatus::OutputsModified
         } else {
             // Effect returned None (accumulating data). Pass through silence.
-            // Recover an empty scratch vec for next call.
-            self.scratch = Vec::new();
+            // scratch already replaced with a fresh pool buffer above.
             ProcessStatus::ClearAllOutputs
         }
     }
@@ -221,8 +219,6 @@ impl AudioNodeProcessor for EffectBridgeProcessor {
 
 #[cfg(test)]
 mod tests {
-    use kithara_bufpool::pcm_pool;
-
     use super::*;
 
     /// A no-op effect that passes audio through unchanged.
@@ -308,8 +304,7 @@ mod tests {
         assert_eq!(processor.scratch[3], 0.6); // R1
 
         // Build chunk and process
-        let interleaved = std::mem::take(&mut processor.scratch);
-        let pcm_buf = pcm_pool().attach(interleaved);
+        let pcm_buf = std::mem::replace(&mut processor.scratch, pcm_pool().get());
         let spec = PcmSpec {
             channels: 2,
             sample_rate: 44100,
@@ -323,7 +318,7 @@ mod tests {
         );
 
         let result = processor.effect.as_mut().unwrap().process(chunk).unwrap();
-        processor.scratch = result.pcm.into_inner();
+        processor.scratch = result.pcm;
 
         // Deinterleave
         let mut out_l = vec![0.0f32; frames];
@@ -347,8 +342,7 @@ mod tests {
 
         processor.interleave(&[&input_l, &input_r], frames);
 
-        let interleaved = std::mem::take(&mut processor.scratch);
-        let pcm_buf = pcm_pool().attach(interleaved);
+        let pcm_buf = std::mem::replace(&mut processor.scratch, pcm_pool().get());
         let spec = PcmSpec {
             channels: 2,
             sample_rate: 44100,
@@ -362,7 +356,7 @@ mod tests {
         );
 
         let result = processor.effect.as_mut().unwrap().process(chunk).unwrap();
-        processor.scratch = result.pcm.into_inner();
+        processor.scratch = result.pcm;
 
         let mut out_l = vec![0.0f32; frames];
         let mut out_r = vec![0.0f32; frames];
@@ -390,8 +384,7 @@ mod tests {
 
         processor.interleave(&[&input_l, &input_r], frames);
 
-        let interleaved = std::mem::take(&mut processor.scratch);
-        let pcm_buf = pcm_pool().attach(interleaved);
+        let pcm_buf = std::mem::replace(&mut processor.scratch, pcm_pool().get());
         let spec = PcmSpec {
             channels: 2,
             sample_rate: 44100,
@@ -441,8 +434,7 @@ mod tests {
         let input_r = vec![2.0f32; 64];
         processor.interleave(&[&input_l, &input_r], 64);
 
-        let interleaved = std::mem::take(&mut processor.scratch);
-        let pcm_buf = pcm_pool().attach(interleaved);
+        let pcm_buf = std::mem::replace(&mut processor.scratch, pcm_pool().get());
         let chunk = PcmChunk::new(
             PcmMeta {
                 spec: PcmSpec {
@@ -454,7 +446,7 @@ mod tests {
             pcm_buf,
         );
         let result = processor.effect.as_mut().unwrap().process(chunk).unwrap();
-        processor.scratch = result.pcm.into_inner();
+        processor.scratch = result.pcm;
 
         let capacity_after_first = processor.scratch.capacity();
         assert!(capacity_after_first >= 128);
