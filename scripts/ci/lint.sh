@@ -30,6 +30,9 @@ bash "$SCRIPT_DIR/rstest-audit.sh"
 echo "==> running trait mock audit..."
 bash "$SCRIPT_DIR/trait-mock-audit.sh"
 
+echo "==> validating trait mock exceptions..."
+bash "$SCRIPT_DIR/trait-mock-exceptions.sh"
+
 echo "==> checking architecture constraints..."
 bash "$SCRIPT_DIR/check-arch.sh"
 
