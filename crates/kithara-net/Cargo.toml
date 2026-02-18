@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "HTTP networking with retry, timeout, and streaming support"
 
 [lints]
@@ -14,6 +15,7 @@ test-utils = ["unimock"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 
 [dependencies]
+derivative = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-platform = { workspace = true }
 bytes = { workspace = true }

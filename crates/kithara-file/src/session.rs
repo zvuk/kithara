@@ -5,7 +5,7 @@ use std::{ops::Range, sync::Arc};
 use crossbeam_queue::SegQueue;
 use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
-use kithara_net::{HttpClient, Net};
+use kithara_net::{Headers, HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -20,6 +20,7 @@ pub(crate) struct FileStreamState {
     pub(crate) cancel: CancellationToken,
     pub(crate) res: AssetResource,
     pub(crate) bus: EventBus,
+    pub(crate) headers: Option<Headers>,
     pub(crate) len: Option<u64>,
 }
 
@@ -31,11 +32,12 @@ impl FileStreamState {
         cancel: CancellationToken,
         bus: Option<EventBus>,
         event_channel_capacity: usize,
+        headers: Option<Headers>,
     ) -> Result<Arc<Self>, SourceError> {
-        let headers = net_client.head(url.clone(), None).await?;
-        let len = headers
+        let resp_headers = net_client.head(url.clone(), headers.clone()).await?;
+        let len = resp_headers
             .get("content-length")
-            .or_else(|| headers.get("Content-Length"))
+            .or_else(|| resp_headers.get("Content-Length"))
             .and_then(|v| v.parse::<u64>().ok());
 
         let key = ResourceKey::from_url(&url);
@@ -48,6 +50,7 @@ impl FileStreamState {
             cancel,
             res,
             bus,
+            headers,
             len,
         }))
     }
@@ -64,6 +67,10 @@ impl FileStreamState {
         &self.bus
     }
 
+    pub(crate) fn headers(&self) -> Option<&Headers> {
+        self.headers.as_ref()
+    }
+
     pub(crate) fn len(&self) -> Option<u64> {
         self.len
     }
@@ -74,7 +81,7 @@ impl FileStreamState {
 }
 
 /// Progress tracker for download and playback positions.
-pub struct Progress {
+pub(crate) struct Progress {
     read_pos: std::sync::atomic::AtomicU64,
     download_pos: std::sync::atomic::AtomicU64,
     /// Source -> Downloader: reader advanced, may resume downloading.
@@ -83,7 +90,7 @@ pub struct Progress {
 
 impl Progress {
     #[must_use]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             read_pos: std::sync::atomic::AtomicU64::new(0),
             download_pos: std::sync::atomic::AtomicU64::new(0),
@@ -91,36 +98,33 @@ impl Progress {
         }
     }
 
-    pub fn read_pos(&self) -> u64 {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    pub(crate) fn read_pos(&self) -> u64 {
         use std::sync::atomic::Ordering;
         self.read_pos.load(Ordering::Acquire)
     }
 
-    pub fn download_pos(&self) -> u64 {
+    pub(crate) fn download_pos(&self) -> u64 {
         use std::sync::atomic::Ordering;
         self.download_pos.load(Ordering::Acquire)
     }
 
-    pub fn set_read_pos(&self, v: u64) {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
+    pub(crate) fn set_read_pos(&self, v: u64) {
         use std::sync::atomic::Ordering;
         self.read_pos.store(v, Ordering::Release);
         self.reader_advanced.notify_one();
     }
 
-    pub fn set_download_pos(&self, v: u64) {
+    pub(crate) fn set_download_pos(&self, v: u64) {
         use std::sync::atomic::Ordering;
         self.download_pos.store(v, Ordering::Release);
     }
 
     /// Register for reader advance notification.
     /// Must be called BEFORE checking positions to avoid race.
-    pub fn notified_reader_advance(&self) -> tokio::sync::futures::Notified<'_> {
+    pub(crate) fn notified_reader_advance(&self) -> tokio::sync::futures::Notified<'_> {
         self.reader_advanced.notified()
-    }
-
-    /// Signal that the reader needs data (wake paused downloader).
-    pub fn signal_reader_advanced(&self) {
-        self.reader_advanced.notify_one();
     }
 }
 
@@ -224,6 +228,7 @@ impl FileSource {
 impl kithara_stream::Source for FileSource {
     type Error = SourceError;
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn wait_range(
         &mut self,
         range: Range<u64>,
@@ -263,6 +268,7 @@ impl kithara_stream::Source for FileSource {
             .map_err(|e| StreamError::Source(SourceError::Storage(e)))
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(
         &mut self,
         offset: u64,
@@ -301,9 +307,12 @@ impl kithara_stream::Source for FileSource {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
     use std::sync::Arc;
 
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
+    use kithara_stream::Source;
+    use rstest::rstest;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -318,18 +327,20 @@ mod tests {
         assert_eq!(p.download_pos(), 0);
     }
 
-    #[test]
-    fn test_progress_set_and_get_read_pos() {
+    #[rstest]
+    #[case::read(100, true)]
+    #[case::download(500, false)]
+    fn test_progress_set_and_get_positions(#[case] value: u64, #[case] read_pos: bool) {
         let p = Progress::new();
-        p.set_read_pos(100);
-        assert_eq!(p.read_pos(), 100);
-    }
-
-    #[test]
-    fn test_progress_set_and_get_download_pos() {
-        let p = Progress::new();
-        p.set_download_pos(500);
-        assert_eq!(p.download_pos(), 500);
+        if read_pos {
+            p.set_read_pos(value);
+            assert_eq!(p.read_pos(), value);
+            assert_eq!(p.download_pos(), 0);
+        } else {
+            p.set_download_pos(value);
+            assert_eq!(p.download_pos(), value);
+            assert_eq!(p.read_pos(), 0);
+        }
     }
 
     #[tokio::test]
@@ -356,30 +367,23 @@ mod tests {
 
     // SharedFileState
 
-    #[test]
-    fn test_shared_file_state_empty_queue() {
+    #[rstest]
+    #[case::empty(vec![], vec![])]
+    #[case::single(vec![100..200], vec![100..200])]
+    #[case::fifo(vec![0..10, 10..20, 20..30], vec![0..10, 10..20, 20..30])]
+    fn test_shared_file_state_pop_order(
+        #[case] requests: Vec<Range<u64>>,
+        #[case] expected: Vec<Range<u64>>,
+    ) {
         let state = SharedFileState::new();
-        assert!(state.pop_range_request().is_none());
-    }
+        for range in requests {
+            state.request_range(range);
+        }
 
-    #[test]
-    fn test_shared_file_state_request_and_pop() {
-        let state = SharedFileState::new();
-        state.request_range(100..200);
-        let r = state.pop_range_request().unwrap();
-        assert_eq!(r, 100..200);
-    }
-
-    #[test]
-    fn test_shared_file_state_fifo_order() {
-        let state = SharedFileState::new();
-        state.request_range(0..10);
-        state.request_range(10..20);
-        state.request_range(20..30);
-
-        assert_eq!(state.pop_range_request().unwrap(), 0..10);
-        assert_eq!(state.pop_range_request().unwrap(), 10..20);
-        assert_eq!(state.pop_range_request().unwrap(), 20..30);
+        for range in expected {
+            assert_eq!(state.pop_range_request(), Some(range));
+        }
+        assert_eq!(state.pop_range_request(), None);
     }
 
     #[test]
@@ -415,8 +419,6 @@ mod tests {
 
     #[test]
     fn test_file_source_read_at() {
-        use kithara_stream::Source;
-
         let dir = TempDir::new().unwrap();
         let data = b"hello world from kithara";
         let res = create_committed_resource(&dir, data);
@@ -453,7 +455,6 @@ mod tests {
         let source = FileSource::new(res, progress, bus, Some(12345));
 
         // len() should return the explicit value provided at construction.
-        use kithara_stream::Source;
         assert_eq!(source.len(), Some(12345));
     }
 }

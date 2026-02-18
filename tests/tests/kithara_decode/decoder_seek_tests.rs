@@ -6,16 +6,18 @@
 
 use std::time::Duration;
 
-use kithara::assets::StoreOptions;
-use kithara::audio::{Audio, AudioConfig};
-use kithara::events::{AudioEvent, EventBus};
-use kithara::file::{File, FileConfig};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    audio::{Audio, AudioConfig},
+    events::{AudioEvent, EventBus},
+    file::{File, FileConfig},
+    stream::Stream,
+};
+use kithara_test_utils::temp_dir;
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
 use super::fixture::AudioTestServer;
-use kithara_test_utils::temp_dir;
 
 #[fixture]
 async fn server() -> AudioTestServer {
@@ -30,9 +32,7 @@ async fn decoder_file_creates_successfully(#[future] server: AudioTestServer, te
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url.into())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(None);
+    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
 
     let decoder = Audio::<Stream<File>>::new(config).await.unwrap();
@@ -50,9 +50,7 @@ async fn decoder_file_reads_samples(#[future] server: AudioTestServer, temp_dir:
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url.into())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(None);
+    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
@@ -73,9 +71,7 @@ async fn decoder_file_seek_to_zero(#[future] server: AudioTestServer, temp_dir: 
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url.into())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(None);
+    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
@@ -102,9 +98,7 @@ async fn decoder_file_seek_forward(#[future] server: AudioTestServer, temp_dir: 
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url.into())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(None);
+    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
@@ -144,9 +138,7 @@ async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir:
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url.into())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(None);
+    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
@@ -189,9 +181,7 @@ async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir:
     let server = server.await;
     let url = server.mp3_url();
 
-    let file_config = FileConfig::new(url.into())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(None);
+    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut decoder = Audio::<Stream<File>>::new(config).await.unwrap();
 
@@ -237,9 +227,7 @@ async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_
     let bus = EventBus::new(64);
     let mut events_rx = bus.subscribe();
 
-    let file_config = FileConfig::new(url.into())
-        .with_store(StoreOptions::new(temp_dir.path()))
-        .with_look_ahead_bytes(None);
+    let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let config = AudioConfig::<File>::new(file_config)
         .with_hint("mp3")
         .with_events(bus);

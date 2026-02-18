@@ -16,11 +16,12 @@ use std::{
     time::Duration,
 };
 
-use kithara::assets::{AssetStoreBuilder, Assets, EvictConfig, ProcessChunkFn, ResourceKey};
-use kithara::storage::ResourceExt;
-use rstest::rstest;
-
+use kithara::{
+    assets::{AssetStoreBuilder, Assets, EvictConfig, ProcessChunkFn, ResourceKey},
+    storage::ResourceExt,
+};
 use kithara_test_utils::temp_dir;
+use rstest::rstest;
 
 /// Context for test processing callback.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Default)]

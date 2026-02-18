@@ -1,14 +1,19 @@
 //! Configuration for [`Item`](crate::impls::item::Item).
 
-use std::{num::NonZeroU32, path::PathBuf};
+use std::{
+    num::{NonZeroU32, NonZeroUsize},
+    path::PathBuf,
+};
 
+use derive_setters::Setters;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_assets::StoreOptions;
 use kithara_audio::{AudioConfig, ResamplerQuality};
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::DecodeError;
+use kithara_events::EventBus;
 #[cfg(any(feature = "file", feature = "hls"))]
-use kithara_net::NetOptions;
+use kithara_net::{Headers, NetOptions};
 use kithara_platform::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -43,6 +48,9 @@ impl std::fmt::Display for ResourceSrc {
     }
 }
 
+/// Default number of preload chunks.
+const DEFAULT_PRELOAD_CHUNKS: NonZeroUsize = NonZeroUsize::new(3).unwrap();
+
 /// Unified configuration for creating an [`Item`](crate::impls::item::Item).
 ///
 /// Wraps source, audio options, and protocol-specific settings into a single
@@ -62,17 +70,28 @@ impl std::fmt::Display for ResourceSrc {
 /// // With options
 /// let config = ResourceConfig::new("https://example.com/playlist.m3u8")?
 ///     .with_hint("mp3")
-///     .with_look_ahead_bytes(Some(1_000_000));
+///     .with_look_ahead_bytes(1_000_000);
 /// ```
+#[derive(Setters)]
+#[setters(prefix = "with_", strip_option)]
 pub struct ResourceConfig {
     /// ABR (Adaptive Bitrate) configuration.
     #[cfg(feature = "hls")]
     pub abr: kithara_abr::AbrOptions,
+    /// Unified event bus for streaming, decode, and audio events.
+    ///
+    /// When set, the bus is propagated to the underlying stream and audio
+    /// pipeline. All events (`FileEvent`, `HlsEvent`, `AudioEvent`) are
+    /// published to this bus, enabling a single subscription point.
+    /// When `None`, a fresh bus is created per resource.
+    #[setters(rename = "with_events")]
+    pub bus: Option<EventBus>,
     /// Shared byte pool for temporary buffers (probe, etc.).
     pub byte_pool: Option<BytePool>,
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Optional format hint (file extension like "mp3", "wav").
+    #[setters(skip)]
     pub hint: Option<String>,
     /// Base URL for resolving relative HLS playlist/segment URLs.
     #[cfg(feature = "hls")]
@@ -92,7 +111,11 @@ pub struct ResourceConfig {
     /// When multiple URLs share the same canonical form (e.g. differ only in
     /// query parameters), setting a unique `name` ensures each gets its own
     /// cache directory.
+    #[setters(skip)]
     pub name: Option<String>,
+    /// Additional HTTP headers to include in all network requests.
+    #[cfg(any(feature = "file", feature = "hls"))]
+    pub headers: Option<Headers>,
     /// Network configuration (timeouts, retries).
     #[cfg(any(feature = "file", feature = "hls"))]
     pub net: NetOptions,
@@ -102,7 +125,7 @@ pub struct ResourceConfig {
     ///
     /// Higher values reduce the chance of the audio thread blocking on `recv()`
     /// after preload, but increase initial latency. Default: 3.
-    pub preload_chunks: usize,
+    pub preload_chunks: NonZeroUsize,
     /// Resampling quality preset.
     pub resampler_quality: ResamplerQuality,
     /// Audio resource source (URL or local path).
@@ -112,8 +135,8 @@ pub struct ResourceConfig {
     pub store: StoreOptions,
     /// Thread pool for background work (decode, probe, downloads).
     ///
-    /// Shared across all components. Defaults to the global rayon pool.
-    pub thread_pool: ThreadPool,
+    /// Shared across all components. When `None`, defaults to the global rayon pool.
+    pub thread_pool: Option<ThreadPool>,
 }
 
 impl ResourceConfig {
@@ -151,9 +174,12 @@ impl ResourceConfig {
         Ok(Self {
             #[cfg(feature = "hls")]
             abr: kithara_abr::AbrOptions::default(),
+            bus: None,
             byte_pool: None,
             cancel: None,
             hint: None,
+            #[cfg(any(feature = "file", feature = "hls"))]
+            headers: None,
             #[cfg(feature = "hls")]
             hls_base_url: None,
             host_sample_rate: None,
@@ -164,131 +190,26 @@ impl ResourceConfig {
             #[cfg(any(feature = "file", feature = "hls"))]
             net: NetOptions::default(),
             pcm_pool: None,
-            preload_chunks: 3,
+            preload_chunks: DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
             src,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
-            thread_pool: ThreadPool::default(),
+            thread_pool: None,
         })
     }
 
     /// Set name for cache disambiguation.
-    ///
-    /// When multiple URLs share the same canonical form (differ only in query
-    /// parameters), a unique name ensures each gets its own cache directory.
+    #[must_use]
     pub fn with_name<N: Into<String>>(mut self, name: N) -> Self {
         self.name = Some(name.into());
         self
     }
 
-    /// Set cancellation token.
-    #[must_use]
-    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
-        self.cancel = Some(cancel);
-        self
-    }
-
     /// Set format hint (file extension like "mp3", "wav").
+    #[must_use]
     pub fn with_hint<H: Into<String>>(mut self, hint: H) -> Self {
         self.hint = Some(hint.into());
-        self
-    }
-
-    /// Set shared byte pool for temporary buffers (probe, etc.).
-    #[must_use]
-    pub fn with_byte_pool(mut self, pool: BytePool) -> Self {
-        self.byte_pool = Some(pool);
-        self
-    }
-
-    /// Set shared PCM pool for temporary buffers.
-    ///
-    /// The pool is shared across the entire audio chain, eliminating
-    /// per-call allocations in `read_planar` and internal decode buffers.
-    #[must_use]
-    pub fn with_pcm_pool(mut self, pool: PcmPool) -> Self {
-        self.pcm_pool = Some(pool);
-        self
-    }
-
-    /// Set target sample rate of the audio host (for resampling).
-    #[must_use]
-    pub fn with_host_sample_rate(mut self, sample_rate: NonZeroU32) -> Self {
-        self.host_sample_rate = Some(sample_rate);
-        self
-    }
-
-    /// Set resampling quality preset.
-    #[must_use]
-    pub fn with_resampler_quality(mut self, quality: ResamplerQuality) -> Self {
-        self.resampler_quality = quality;
-        self
-    }
-
-    /// Set number of chunks to buffer before signaling preload readiness.
-    #[must_use]
-    pub fn with_preload_chunks(mut self, chunks: usize) -> Self {
-        self.preload_chunks = chunks.max(1);
-        self
-    }
-
-    /// Set max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — enable backpressure, pause when ahead by n bytes
-    /// - `None` — disable backpressure, download as fast as possible
-    #[must_use]
-    pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
-        self.look_ahead_bytes = bytes;
-        self
-    }
-
-    /// Set storage options.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[must_use]
-    pub fn with_store(mut self, store: StoreOptions) -> Self {
-        self.store = store;
-        self
-    }
-
-    /// Set network options.
-    #[cfg(any(feature = "file", feature = "hls"))]
-    #[must_use]
-    pub fn with_net(mut self, net: NetOptions) -> Self {
-        self.net = net;
-        self
-    }
-
-    /// Set ABR options.
-    #[cfg(feature = "hls")]
-    #[must_use]
-    pub fn with_abr(mut self, abr: kithara_abr::AbrOptions) -> Self {
-        self.abr = abr;
-        self
-    }
-
-    /// Set encryption key options.
-    #[cfg(feature = "hls")]
-    #[must_use]
-    pub fn with_keys(mut self, keys: kithara_hls::KeyOptions) -> Self {
-        self.keys = keys;
-        self
-    }
-
-    /// Set base URL for resolving relative HLS URLs.
-    #[cfg(feature = "hls")]
-    #[must_use]
-    pub fn with_hls_base_url(mut self, base_url: Url) -> Self {
-        self.hls_base_url = Some(base_url);
-        self
-    }
-
-    /// Set thread pool for background work (decode, probe, downloads).
-    ///
-    /// The pool is shared across all components. Defaults to the global rayon pool.
-    #[must_use]
-    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = pool;
         self
     }
 
@@ -313,14 +234,27 @@ impl ResourceConfig {
 
         let mut file_config = kithara_file::FileConfig::new(file_src)
             .with_store(self.store)
-            .with_net(self.net)
-            .with_look_ahead_bytes(self.look_ahead_bytes)
-            .with_thread_pool(self.thread_pool.clone());
+            .with_net(self.net);
+
+        if let Some(bytes) = self.look_ahead_bytes {
+            file_config = file_config.with_look_ahead_bytes(bytes);
+        }
+
+        if let Some(pool) = self.thread_pool.clone() {
+            file_config = file_config.with_thread_pool(pool);
+        }
+
+        if let Some(headers) = self.headers {
+            file_config = file_config.with_headers(headers);
+        }
 
         if let Some(name) = self.name {
             file_config = file_config.with_name(name);
         }
 
+        if let Some(ref bus) = self.bus {
+            file_config = file_config.with_events(bus.clone());
+        }
         if let Some(cancel) = self.cancel {
             file_config = file_config.with_cancel(cancel);
         }
@@ -365,9 +299,19 @@ impl ResourceConfig {
             .with_store(self.store)
             .with_net(self.net)
             .with_abr(self.abr)
-            .with_keys(self.keys)
-            .with_look_ahead_bytes(self.look_ahead_bytes)
-            .with_thread_pool(self.thread_pool.clone());
+            .with_keys(self.keys);
+
+        if let Some(bytes) = self.look_ahead_bytes {
+            hls_config = hls_config.with_look_ahead_bytes(bytes);
+        }
+
+        if let Some(pool) = self.thread_pool.clone() {
+            hls_config = hls_config.with_thread_pool(pool);
+        }
+
+        if let Some(headers) = self.headers {
+            hls_config = hls_config.with_headers(headers);
+        }
 
         if let Some(name) = self.name {
             hls_config = hls_config.with_name(name);
@@ -375,6 +319,9 @@ impl ResourceConfig {
 
         if let Some(base_url) = self.hls_base_url {
             hls_config = hls_config.with_base_url(base_url);
+        }
+        if let Some(ref bus) = self.bus {
+            hls_config = hls_config.with_events(bus.clone());
         }
         if let Some(cancel) = self.cancel {
             hls_config = hls_config.with_cancel(cancel);
@@ -404,33 +351,97 @@ impl ResourceConfig {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn config_from_http_url() {
-        let config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
-        assert!(matches!(&config.src, ResourceSrc::Url(url) if url.scheme() == "https"));
+    #[rstest]
+    #[case("https://example.com/song.mp3", true, "https")]
+    #[case("/tmp/song.mp3", false, "/tmp/song.mp3")]
+    #[case("file:///tmp/song.mp3", false, "/tmp/song.mp3")]
+    fn config_source_parsing_success(
+        #[case] input: &str,
+        #[case] expect_url: bool,
+        #[case] expected: &str,
+    ) {
+        let config = ResourceConfig::new(input).unwrap();
+        if expect_url {
+            assert!(matches!(&config.src, ResourceSrc::Url(url) if url.scheme() == expected));
+        } else {
+            assert!(matches!(&config.src, ResourceSrc::Path(path) if path == Path::new(expected)));
+        }
     }
 
+    #[rstest]
+    #[case("relative/path.mp3")]
+    fn config_source_parsing_error(#[case] input: &str) {
+        assert!(ResourceConfig::new(input).is_err());
+    }
+
+    #[rstest]
+    #[case(false)]
+    #[case(true)]
+    fn config_bus_presence(#[case] with_events: bool) {
+        let mut config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        if with_events {
+            config = config.with_events(EventBus::new(32));
+        }
+        assert_eq!(config.bus.is_some(), with_events);
+    }
+
+    #[cfg(feature = "file")]
     #[test]
-    fn config_from_absolute_path() {
-        let config = ResourceConfig::new("/tmp/song.mp3").unwrap();
-        assert!(
-            matches!(&config.src, ResourceSrc::Path(p) if p == std::path::Path::new("/tmp/song.mp3"))
+    fn config_bus_propagates_to_file_config() {
+        let bus = EventBus::new(32);
+        let config = ResourceConfig::new("https://example.com/song.mp3")
+            .unwrap()
+            .with_events(bus);
+        let audio_config = config.into_file_config();
+        assert!(audio_config.stream.bus.is_some());
+    }
+
+    #[cfg(feature = "hls")]
+    #[test]
+    fn config_bus_propagates_to_hls_config() {
+        let bus = EventBus::new(32);
+        let config = ResourceConfig::new("https://example.com/live.m3u8")
+            .unwrap()
+            .with_events(bus);
+        let audio_config = config.into_hls_config().unwrap();
+        assert!(audio_config.stream.bus.is_some());
+    }
+
+    #[cfg(any(feature = "file", feature = "hls"))]
+    #[test]
+    fn config_with_headers() {
+        let mut headers = Headers::new();
+        headers.insert("Authorization", "Bearer test");
+        let config = ResourceConfig::new("https://example.com/song.mp3")
+            .unwrap()
+            .with_headers(headers);
+
+        assert!(config.headers.is_some());
+        assert_eq!(
+            config.headers.as_ref().and_then(|h| h.get("Authorization")),
+            Some("Bearer test")
         );
     }
 
     #[test]
-    fn config_from_file_url_normalizes_to_path() {
-        let config = ResourceConfig::new("file:///tmp/song.mp3").unwrap();
-        assert!(
-            matches!(&config.src, ResourceSrc::Path(p) if p == std::path::Path::new("/tmp/song.mp3"))
-        );
-    }
-
-    #[test]
-    fn config_relative_path_fails() {
-        let config = ResourceConfig::new("relative/path.mp3");
-        assert!(config.is_err());
+    fn config_builder_chain() {
+        let bus = EventBus::new(32);
+        let config = ResourceConfig::new("https://example.com/song.mp3")
+            .unwrap()
+            .with_events(bus)
+            .with_hint("mp3")
+            .with_name("test")
+            .with_thread_pool(ThreadPool::default())
+            .with_preload_chunks(NonZeroUsize::new(5).expect("5 > 0"));
+        assert!(config.bus.is_some());
+        assert_eq!(config.hint.as_deref(), Some("mp3"));
+        assert_eq!(config.name.as_deref(), Some("test"));
+        assert_eq!(config.preload_chunks.get(), 5);
     }
 }

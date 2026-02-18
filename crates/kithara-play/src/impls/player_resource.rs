@@ -7,7 +7,7 @@
 
 use std::{num::NonZeroU32, ops::Range, sync::Arc, time::Duration};
 
-use kithara_bufpool::{PcmBuf, pcm_pool};
+use kithara_bufpool::{PcmBuf, PcmPool};
 use tracing::warn;
 
 use crate::{error::PlayError, impls::resource::Resource};
@@ -29,22 +29,22 @@ pub(crate) struct PlayerResource {
 impl PlayerResource {
     /// Create a new `PlayerResource` wrapping the given resource.
     ///
-    /// Allocates two channel scratch buffers from the global PCM pool,
+    /// Allocates two channel scratch buffers from the given PCM pool,
     /// sized to `sample_rate / 5` frames (200ms worth of audio).
-    pub(crate) fn new(resource: Resource, src: Arc<str>) -> Self {
+    pub(crate) fn new(resource: Resource, src: Arc<str>, pool: &PcmPool) -> Self {
         let spec = resource.spec();
         let channels = spec.channels as usize;
         let buffer_len = (spec.sample_rate as usize / 5) * channels.max(2);
 
         let channel_buffers = [
-            pcm_pool().get_with(|b: &mut Vec<f32>| {
+            pool.get_with(|b: &mut Vec<f32>| {
                 let cap = b.capacity();
                 if cap < buffer_len {
                     b.reserve(buffer_len - cap);
                 }
                 b.resize(buffer_len, 0.0);
             }),
-            pcm_pool().get_with(|b: &mut Vec<f32>| {
+            pool.get_with(|b: &mut Vec<f32>| {
                 let cap = b.capacity();
                 if cap < buffer_len {
                     b.reserve(buffer_len - cap);
@@ -195,130 +195,11 @@ impl PlayerResource {
     reason = "test mock code; values are small and positive by construction"
 )]
 mod tests {
-    use std::time::Duration;
-
-    use kithara_audio::PcmReader;
-    use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
-    use kithara_events::AudioEvent;
-    use tokio::sync::broadcast;
+    use kithara_audio::mock::TestPcmReader;
+    use kithara_decode::PcmSpec;
+    use rstest::rstest;
 
     use super::*;
-
-    /// Mock `PcmReader` for testing `PlayerResource`.
-    struct MockPcmReader {
-        spec: PcmSpec,
-        metadata: TrackMetadata,
-        total_frames: u64,
-        position_frames: u64,
-        eof: bool,
-        sample_value: f32,
-        events_tx: broadcast::Sender<AudioEvent>,
-    }
-
-    impl MockPcmReader {
-        fn new(spec: PcmSpec, duration_secs: f64, sample_value: f32) -> Self {
-            let total_frames = (spec.sample_rate as f64 * duration_secs) as u64;
-            let (events_tx, _) = broadcast::channel(64);
-            Self {
-                spec,
-                metadata: TrackMetadata {
-                    album: None,
-                    artist: None,
-                    artwork: None,
-                    title: Some("Mock".to_owned()),
-                },
-                total_frames,
-                position_frames: 0,
-                eof: false,
-                sample_value,
-                events_tx,
-            }
-        }
-
-        fn frames_to_duration(&self, frames: u64) -> Duration {
-            if self.spec.sample_rate == 0 {
-                return Duration::ZERO;
-            }
-            Duration::from_secs_f64(frames as f64 / self.spec.sample_rate as f64)
-        }
-    }
-
-    impl PcmReader for MockPcmReader {
-        fn read(&mut self, buf: &mut [f32]) -> usize {
-            if self.eof {
-                return 0;
-            }
-            let channels = self.spec.channels as u64;
-            if channels == 0 {
-                return 0;
-            }
-            let remaining_samples = (self.total_frames - self.position_frames) * channels;
-            let to_write = (buf.len() as u64).min(remaining_samples) as usize;
-            for sample in &mut buf[..to_write] {
-                *sample = self.sample_value;
-            }
-            let frames_advanced = to_write as u64 / channels;
-            self.position_frames += frames_advanced;
-            if self.position_frames >= self.total_frames {
-                self.eof = true;
-            }
-            to_write
-        }
-
-        fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
-            if self.eof || output.is_empty() {
-                return 0;
-            }
-            let channels = self.spec.channels as usize;
-            if channels == 0 || output.len() < channels {
-                return 0;
-            }
-            let frames_per_channel = output[0].len();
-            let remaining = (self.total_frames - self.position_frames) as usize;
-            let frames_to_write = frames_per_channel.min(remaining);
-            for ch in output.iter_mut().take(channels) {
-                for sample in ch.iter_mut().take(frames_to_write) {
-                    *sample = self.sample_value;
-                }
-            }
-            self.position_frames += frames_to_write as u64;
-            if self.position_frames >= self.total_frames {
-                self.eof = true;
-            }
-            frames_to_write
-        }
-
-        fn seek(&mut self, position: Duration) -> DecodeResult<()> {
-            let frame = (position.as_secs_f64() * self.spec.sample_rate as f64) as u64;
-            self.position_frames = frame.min(self.total_frames);
-            self.eof = self.position_frames >= self.total_frames;
-            Ok(())
-        }
-
-        fn spec(&self) -> PcmSpec {
-            self.spec
-        }
-
-        fn is_eof(&self) -> bool {
-            self.eof
-        }
-
-        fn position(&self) -> Duration {
-            self.frames_to_duration(self.position_frames)
-        }
-
-        fn duration(&self) -> Option<Duration> {
-            Some(self.frames_to_duration(self.total_frames))
-        }
-
-        fn metadata(&self) -> &TrackMetadata {
-            &self.metadata
-        }
-
-        fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-            self.events_tx.subscribe()
-        }
-    }
 
     fn mock_spec() -> PcmSpec {
         PcmSpec {
@@ -328,19 +209,38 @@ mod tests {
     }
 
     fn make_player_resource() -> PlayerResource {
-        let reader = MockPcmReader::new(mock_spec(), 1.0, 0.5);
+        let reader = TestPcmReader::new(mock_spec(), 1.0);
         let resource = Resource::from_reader(reader);
-        PlayerResource::new(resource, Arc::from("test.mp3"))
+        PlayerResource::new(resource, Arc::from("test.mp3"), kithara_bufpool::pcm_pool())
     }
 
-    #[tokio::test]
-    async fn resource_new_creates_buffers() {
-        let pr = make_player_resource();
+    type AccessorAssertion = fn(&PlayerResource);
+
+    fn assert_buffers_initialized(pr: &PlayerResource) {
         // Buffer size = (44100 / 5) * max(2, 2) = 8820 * 2 = 17640
         assert!(!pr.channel_buffers[0].is_empty());
         assert!(!pr.channel_buffers[1].is_empty());
         assert_eq!(pr.write_len, 0);
         assert_eq!(pr.write_pos, 0);
+    }
+
+    fn assert_position_and_duration(pr: &PlayerResource) {
+        assert_eq!(pr.position(), 0.0);
+        assert!((pr.duration() - 1.0).abs() < 0.01);
+    }
+
+    fn assert_src(pr: &PlayerResource) {
+        assert_eq!(&**pr.src(), "test.mp3");
+    }
+
+    #[rstest]
+    #[case(assert_buffers_initialized)]
+    #[case(assert_position_and_duration)]
+    #[case(assert_src)]
+    #[tokio::test]
+    async fn resource_accessors(#[case] assert_fn: AccessorAssertion) {
+        let pr = make_player_resource();
+        assert_fn(&pr);
     }
 
     #[tokio::test]
@@ -378,9 +278,13 @@ mod tests {
 
     #[tokio::test]
     async fn resource_eof_returns_error() {
-        let reader = MockPcmReader::new(mock_spec(), 0.01, 0.5);
+        let reader = TestPcmReader::new(mock_spec(), 0.01);
         let resource = Resource::from_reader(reader);
-        let mut pr = PlayerResource::new(resource, Arc::from("short.mp3"));
+        let mut pr = PlayerResource::new(
+            resource,
+            Arc::from("short.mp3"),
+            kithara_bufpool::pcm_pool(),
+        );
 
         // Read all data
         let mut left = vec![0.0f32; 4096];
@@ -400,18 +304,5 @@ mod tests {
                 Err(_) => return,
             }
         }
-    }
-
-    #[tokio::test]
-    async fn resource_position_and_duration() {
-        let pr = make_player_resource();
-        assert_eq!(pr.position(), 0.0);
-        assert!((pr.duration() - 1.0).abs() < 0.01);
-    }
-
-    #[tokio::test]
-    async fn resource_src() {
-        let pr = make_player_resource();
-        assert_eq!(&**pr.src(), "test.mp3");
     }
 }

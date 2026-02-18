@@ -1,6 +1,6 @@
 //! Integration tests for kithara-decode
 
-pub mod fixture;
+pub(crate) mod fixture;
 
 mod decoder_seek_tests;
 mod decoder_tests;

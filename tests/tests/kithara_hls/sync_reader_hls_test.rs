@@ -11,15 +11,17 @@
 
 use std::{io::Read, time::Duration};
 
-use kithara::assets::StoreOptions;
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    stream::Stream,
+};
+use kithara_test_utils::temp_dir;
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use super::fixture::abr::{AbrTestServer, master_playlist};
-use kithara_test_utils::temp_dir;
 
 #[rstest]
 #[timeout(Duration::from_secs(30))]

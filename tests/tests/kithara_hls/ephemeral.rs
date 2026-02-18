@@ -9,18 +9,20 @@
 
 use std::{sync::Arc, time::Duration};
 
-use kithara::assets::{AssetStoreBuilder, StoreOptions};
-use kithara::audio::{Audio, AudioConfig};
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::storage::ResourceExt;
-use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
+use kithara::{
+    assets::{AssetStoreBuilder, StoreOptions},
+    audio::{Audio, AudioConfig},
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    storage::ResourceExt,
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+};
+use kithara_test_utils::wav::create_saw_wav;
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture::{HlsTestServer, HlsTestServerConfig};
-use kithara_test_utils::wav::create_saw_wav;
 
 #[rstest]
 #[timeout(Duration::from_secs(5))]
@@ -119,9 +121,8 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     // Create Audio pipeline with ephemeral=true
     let hls_config = HlsConfig::new(url)
-        .with_store(StoreOptions::new(temp_dir.path()))
+        .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true))
         .with_cancel(cancel)
-        .with_ephemeral(true)
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()

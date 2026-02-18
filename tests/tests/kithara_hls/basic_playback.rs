@@ -3,10 +3,13 @@
 use std::{error::Error, io::Read, time::Duration};
 
 use fixture::TestServer;
-use kithara::assets::StoreOptions;
-use kithara::events::EventBus;
-use kithara::hls::{Hls, HlsConfig};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    events::EventBus,
+    hls::{Hls, HlsConfig},
+    stream::Stream,
+};
+use kithara_test_utils::{cancel_token, temp_dir};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -15,7 +18,6 @@ use tracing_subscriber::EnvFilter;
 use url::Url;
 
 use super::fixture;
-use kithara_test_utils::{cancel_token, temp_dir};
 
 // Fixtures
 

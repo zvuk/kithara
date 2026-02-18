@@ -16,6 +16,7 @@ use crate::{
 };
 
 /// Trait for recording asset bytes for eviction tracking.
+#[cfg_attr(test, unimock::unimock(api = ByteRecorderMock))]
 pub trait ByteRecorder: Send + Sync {
     /// Record asset bytes and check if eviction is needed.
     fn record_bytes(&self, asset_root: &str, bytes: u64);
@@ -306,6 +307,16 @@ where
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
         self.inner.remove_resource(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_recorder_mock_api_is_generated() {
+        let _ = ByteRecorderMock::record_bytes;
     }
 }
 

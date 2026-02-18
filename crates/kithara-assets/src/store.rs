@@ -2,6 +2,7 @@
 
 use std::{hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 
+use derive_setters::Setters;
 use kithara_bufpool::{BytePool, byte_pool};
 use kithara_storage::StorageResource;
 #[cfg(not(target_arch = "wasm32"))]
@@ -30,12 +31,19 @@ use crate::{
 ///
 /// Used by higher-level crates (kithara-file, kithara-hls) for unified configuration.
 /// This provides a user-friendly API that hides internal details like `asset_root`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Setters)]
+#[setters(prefix = "with_", strip_option)]
 pub struct StoreOptions {
     /// Directory for persistent cache storage (required).
     pub cache_dir: PathBuf,
     /// In-memory LRU cache capacity for opened resources.
     pub cache_capacity: Option<NonZeroUsize>,
+    /// Use ephemeral (in-memory) storage instead of disk.
+    ///
+    /// When `true`, the asset store uses `MemAssetStore` instead of
+    /// `DiskAssetStore`. Data is never written to disk.
+    /// Default: `false`.
+    pub ephemeral: bool,
     /// Maximum number of assets to keep (soft cap for LRU eviction).
     pub max_assets: Option<usize>,
     /// Maximum bytes to store (soft cap for LRU eviction).
@@ -50,6 +58,7 @@ impl Default for StoreOptions {
             #[cfg(target_arch = "wasm32")]
             cache_dir: std::path::PathBuf::from("/kithara"),
             cache_capacity: None,
+            ephemeral: false,
             max_assets: None,
             max_bytes: None,
         }
@@ -62,23 +71,10 @@ impl StoreOptions {
         Self {
             cache_dir: cache_dir.into(),
             cache_capacity: None,
+            ephemeral: false,
             max_assets: None,
             max_bytes: None,
         }
-    }
-
-    /// Set maximum number of assets to keep.
-    #[must_use]
-    pub fn with_max_assets(mut self, max: usize) -> Self {
-        self.max_assets = Some(max);
-        self
-    }
-
-    /// Set maximum bytes to store.
-    #[must_use]
-    pub fn with_max_bytes(mut self, max: u64) -> Self {
-        self.max_bytes = Some(max);
-        self
     }
 
     /// Convert to internal `EvictConfig`.

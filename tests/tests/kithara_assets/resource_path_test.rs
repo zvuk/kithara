@@ -2,12 +2,13 @@
 
 use std::time::Duration;
 
-use kithara::assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey};
-use kithara::storage::ResourceExt;
+use kithara::{
+    assets::{AssetStore, AssetStoreBuilder, Assets, EvictConfig, ResourceKey},
+    storage::ResourceExt,
+};
+use kithara_test_utils::temp_dir;
 use rstest::rstest;
 use tempfile::TempDir;
-
-use kithara_test_utils::temp_dir;
 
 // Test Fixtures
 

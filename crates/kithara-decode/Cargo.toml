@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Synchronous audio decoding via Symphonia with PCM output"
 
 [lints]
@@ -12,6 +13,7 @@ workspace = true
 [dependencies]
 kithara-stream = { workspace = true }
 kithara-bufpool = { workspace = true }
+derivative = { workspace = true }
 symphonia = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

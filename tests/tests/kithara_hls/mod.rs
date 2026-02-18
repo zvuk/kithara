@@ -1,6 +1,6 @@
 //! Integration tests for kithara-hls
 
-pub mod fixture;
+pub(crate) mod fixture;
 
 mod abr_integration;
 mod basic_playback;

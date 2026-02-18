@@ -3,6 +3,8 @@
 //! These types allow sources to communicate codec/container information
 //! to decoders, enabling direct decoder instantiation without probing.
 
+use derive_setters::Setters;
+
 /// Container format type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerFormat {
@@ -58,7 +60,8 @@ pub enum AudioCodec {
 /// - File extension
 /// - HTTP Content-Type header
 /// - Container metadata
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Setters)]
+#[setters(prefix = "with_", strip_option)]
 pub struct MediaInfo {
     /// Number of audio channels
     pub channels: Option<u16>,
@@ -85,34 +88,6 @@ impl MediaInfo {
             sample_rate: None,
             variant_index: None,
         }
-    }
-
-    /// Set container format.
-    #[must_use]
-    pub fn with_container(mut self, container: ContainerFormat) -> Self {
-        self.container = Some(container);
-        self
-    }
-
-    /// Set sample rate.
-    #[must_use]
-    pub fn with_sample_rate(mut self, sample_rate: u32) -> Self {
-        self.sample_rate = Some(sample_rate);
-        self
-    }
-
-    /// Set channel count.
-    #[must_use]
-    pub fn with_channels(mut self, channels: u16) -> Self {
-        self.channels = Some(channels);
-        self
-    }
-
-    /// Set variant index (for ABR streams).
-    #[must_use]
-    pub fn with_variant_index(mut self, variant_index: u32) -> Self {
-        self.variant_index = Some(variant_index);
-        self
     }
 }
 

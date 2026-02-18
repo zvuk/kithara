@@ -13,17 +13,19 @@
 
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
-use kithara::assets::StoreOptions;
-use kithara::audio::{Audio, AudioConfig};
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
+use kithara::{
+    assets::StoreOptions,
+    audio::{Audio, AudioConfig},
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+};
+use kithara_test_utils::{Xorshift64, wav::create_saw_wav};
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture::{HlsTestServer, HlsTestServerConfig};
-use kithara_test_utils::{Xorshift64, wav::create_saw_wav};
 
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 2;
@@ -120,18 +122,16 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         // Ephemeral mode auto-evicts MemResources from LRU cache.
         // Increase capacity so all segments remain accessible for random seeks.
         store.cache_capacity = Some(NonZeroUsize::new(SEGMENT_COUNT + 10).expect("nonzero"));
+        store.ephemeral = true;
     }
 
-    let mut hls_config = HlsConfig::new(url)
+    let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });
-    if ephemeral {
-        hls_config = hls_config.with_ephemeral(true);
-    }
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);

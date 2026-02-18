@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Persistent disk cache with lease/pin semantics and LRU eviction"
 
 [lints]
@@ -16,6 +17,7 @@ internal = []  # Expose internal types for testing
 bincode = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
+derive_setters = { workspace = true }
 hex = { workspace = true }
 kithara-bufpool = { workspace = true }
 kithara-storage = { workspace = true }
@@ -38,3 +40,4 @@ kithara-assets = { path = ".", features = ["internal"] }
 tempfile = { workspace = true }
 rstest = { workspace = true }
 serial_test = { workspace = true }
+unimock = { workspace = true }

@@ -11,17 +11,16 @@ use std::{
     sync::{Arc, atomic::Ordering},
 };
 
+use derivative::Derivative;
 use firewheel::{
     StreamInfo,
     event::ProcEvents,
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
-use kithara_bufpool::{PcmBuf, pcm_pool};
+use kithara_bufpool::{PcmBuf, PcmPool};
 use kithara_platform::Mutex;
 use thunderdome::{Arena, Index};
 use tracing::warn;
-
-use crate::traits::dj::crossfade::CrossfadeCurve;
 
 use super::{
     crossfade::CrossfadeSettings,
@@ -30,11 +29,14 @@ use super::{
     player_track::{PlayerTrack, TrackState, TrackTransition},
     shared_player_state::SharedPlayerState,
 };
+use crate::traits::dj::crossfade::CrossfadeCurve;
 
 /// Maximum number of concurrent tracks per player node.
 const MAX_TRACKS: usize = 4;
 
 /// Commands sent from the main thread to the processor.
+#[derive(Derivative)]
+#[derivative(Debug)]
 #[expect(
     dead_code,
     reason = "some variants used when seek/unload/crossfade are wired"
@@ -42,6 +44,7 @@ const MAX_TRACKS: usize = 4;
 pub(crate) enum PlayerCmd {
     /// Load a track into the processor arena.
     LoadTrack {
+        #[derivative(Debug = "ignore")]
         resource: Arc<Mutex<PlayerResource>>,
         src: Arc<str>,
     },
@@ -59,33 +62,19 @@ pub(crate) enum PlayerCmd {
     SetCrossfadeCurve(CrossfadeCurve),
 }
 
-impl std::fmt::Debug for PlayerCmd {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::LoadTrack { src, .. } => f.debug_struct("LoadTrack").field("src", src).finish(),
-            Self::UnloadTrack { src } => f.debug_struct("UnloadTrack").field("src", src).finish(),
-            Self::Transition(t) => f.debug_tuple("Transition").field(t).finish(),
-            Self::Seek(s) => f.debug_tuple("Seek").field(s).finish(),
-            Self::SetPaused(p) => f.debug_tuple("SetPaused").field(p).finish(),
-            Self::SetFadeDuration(d) => f.debug_tuple("SetFadeDuration").field(d).finish(),
-            Self::SetCrossfadeCurve(c) => f.debug_tuple("SetCrossfadeCurve").field(c).finish(),
-        }
-    }
-}
-
 /// The realtime audio processor for the player node.
 ///
 /// Manages tracks in a thunderdome arena, handles transitions,
 /// and renders mixed stereo audio into the Firewheel output buffers.
 pub(crate) struct PlayerNodeProcessor {
     cmd_rx: kanal::Receiver<PlayerCmd>,
+    crossfade: CrossfadeSettings,
+    sample_rate: NonZeroU32,
+    scratch_bufs: [PcmBuf; 4],
     shared_state: Arc<SharedPlayerState>,
     tracks: Arena<PlayerTrack>,
     tracks_index: HashMap<Arc<str>, Index>,
     tracks_transitions: VecDeque<TrackTransition>,
-    crossfade: CrossfadeSettings,
-    sample_rate: NonZeroU32,
-    scratch_bufs: [PcmBuf; 4],
 }
 
 impl PlayerNodeProcessor {
@@ -94,23 +83,19 @@ impl PlayerNodeProcessor {
         cmd_rx: kanal::Receiver<PlayerCmd>,
         shared_state: Arc<SharedPlayerState>,
         sample_rate: NonZeroU32,
+        pool: &PcmPool,
     ) -> Self {
-        let scratch_bufs = [
-            pcm_pool().get(),
-            pcm_pool().get(),
-            pcm_pool().get(),
-            pcm_pool().get(),
-        ];
+        let scratch_bufs = [pool.get(), pool.get(), pool.get(), pool.get()];
 
         Self {
             cmd_rx,
+            crossfade: CrossfadeSettings::default(),
+            sample_rate,
+            scratch_bufs,
             shared_state,
             tracks: Arena::with_capacity(MAX_TRACKS),
             tracks_index: HashMap::with_capacity(MAX_TRACKS),
             tracks_transitions: VecDeque::with_capacity(MAX_TRACKS),
-            crossfade: CrossfadeSettings::default(),
-            sample_rate,
-            scratch_bufs,
         }
     }
 
@@ -455,7 +440,16 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
+
+    #[derive(Clone, Copy)]
+    enum TrackCommandScenario {
+        DuplicateLoad,
+        LoadOnly,
+        LoadThenUnload,
+    }
 
     fn make_shared_state() -> Arc<SharedPlayerState> {
         Arc::new(SharedPlayerState::new())
@@ -465,7 +459,8 @@ mod tests {
         let shared_state = make_shared_state();
         let (tx, rx) = kanal::bounded(32);
         let sample_rate = NonZeroU32::new(44100).expect("non-zero");
-        let processor = PlayerNodeProcessor::new(rx, shared_state, sample_rate);
+        let processor =
+            PlayerNodeProcessor::new(rx, shared_state, sample_rate, kithara_bufpool::pcm_pool());
         (processor, tx)
     }
 
@@ -476,42 +471,49 @@ mod tests {
         assert_eq!(processor.tracks_index.len(), 0);
     }
 
+    #[rstest]
+    #[case(TrackCommandScenario::LoadOnly, 1, true)]
+    #[case(TrackCommandScenario::DuplicateLoad, 1, true)]
+    #[case(TrackCommandScenario::LoadThenUnload, 0, false)]
     #[tokio::test]
-    async fn processor_loads_track_via_command() {
+    async fn processor_track_command_scenarios(
+        #[case] scenario: TrackCommandScenario,
+        #[case] expected_tracks: usize,
+        #[case] should_contain_track: bool,
+    ) {
         let (mut processor, tx) = make_processor();
+        let track_src = Arc::from("track1.mp3");
 
-        let resource = create_mock_player_resource("track1.mp3");
         tx.send(PlayerCmd::LoadTrack {
-            resource,
-            src: Arc::from("track1.mp3"),
+            resource: create_mock_player_resource("track1.mp3"),
+            src: Arc::clone(&track_src),
         })
         .ok();
 
+        match scenario {
+            TrackCommandScenario::LoadOnly => {}
+            TrackCommandScenario::DuplicateLoad => {
+                tx.send(PlayerCmd::LoadTrack {
+                    resource: create_mock_player_resource("track1.mp3"),
+                    src: Arc::clone(&track_src),
+                })
+                .ok();
+            }
+            TrackCommandScenario::LoadThenUnload => {
+                tx.send(PlayerCmd::UnloadTrack {
+                    src: Arc::clone(&track_src),
+                })
+                .ok();
+            }
+        }
+
         processor.drain_commands();
 
-        assert_eq!(processor.tracks.len(), 1);
-        assert!(processor.tracks_index.contains_key("track1.mp3"));
-    }
-
-    #[tokio::test]
-    async fn processor_unloads_track_via_command() {
-        let (mut processor, tx) = make_processor();
-
-        let resource = create_mock_player_resource("track1.mp3");
-        tx.send(PlayerCmd::LoadTrack {
-            resource,
-            src: Arc::from("track1.mp3"),
-        })
-        .ok();
-        processor.drain_commands();
-        assert_eq!(processor.tracks.len(), 1);
-
-        tx.send(PlayerCmd::UnloadTrack {
-            src: Arc::from("track1.mp3"),
-        })
-        .ok();
-        processor.drain_commands();
-        assert_eq!(processor.tracks.len(), 0);
+        assert_eq!(processor.tracks.len(), expected_tracks);
+        assert_eq!(
+            processor.tracks_index.contains_key("track1.mp3"),
+            should_contain_track
+        );
     }
 
     #[test]
@@ -532,28 +534,6 @@ mod tests {
         tx.send(PlayerCmd::SetPaused(true)).ok();
         processor.drain_commands();
         assert!(!processor.shared_state.playing.load(Ordering::SeqCst));
-    }
-
-    #[tokio::test]
-    async fn processor_duplicate_load_is_noop() {
-        let (mut processor, tx) = make_processor();
-
-        let resource1 = create_mock_player_resource("track1.mp3");
-        let resource2 = create_mock_player_resource("track1.mp3");
-
-        tx.send(PlayerCmd::LoadTrack {
-            resource: resource1,
-            src: Arc::from("track1.mp3"),
-        })
-        .ok();
-        tx.send(PlayerCmd::LoadTrack {
-            resource: resource2,
-            src: Arc::from("track1.mp3"),
-        })
-        .ok();
-        processor.drain_commands();
-
-        assert_eq!(processor.tracks.len(), 1);
     }
 
     #[tokio::test]
@@ -581,83 +561,22 @@ mod tests {
     }
 
     fn create_mock_player_resource(src: &str) -> Arc<Mutex<PlayerResource>> {
-        use std::time::Duration;
-
-        use kithara_audio::PcmReader;
-        use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
-        use kithara_events::AudioEvent;
-        use tokio::sync::broadcast;
+        use kithara_audio::mock::TestPcmReader;
+        use kithara_decode::PcmSpec;
 
         use crate::impls::resource::Resource;
 
-        struct MockReader {
-            spec: PcmSpec,
-            metadata: TrackMetadata,
-            events_tx: broadcast::Sender<AudioEvent>,
-        }
-
-        impl PcmReader for MockReader {
-            fn read(&mut self, buf: &mut [f32]) -> usize {
-                buf.fill(0.5);
-                buf.len()
-            }
-
-            fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
-                if output.is_empty() {
-                    return 0;
-                }
-                let frames = output[0].len();
-                for ch in output.iter_mut() {
-                    ch.fill(0.5);
-                }
-                frames
-            }
-
-            fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
-                Ok(())
-            }
-
-            fn spec(&self) -> PcmSpec {
-                self.spec
-            }
-
-            fn is_eof(&self) -> bool {
-                false
-            }
-
-            fn position(&self) -> Duration {
-                Duration::ZERO
-            }
-
-            fn duration(&self) -> Option<Duration> {
-                Some(Duration::from_secs(60))
-            }
-
-            fn metadata(&self) -> &TrackMetadata {
-                &self.metadata
-            }
-
-            fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
-                self.events_tx.subscribe()
-            }
-        }
-
-        let (events_tx, _) = broadcast::channel(64);
-        let reader = MockReader {
-            spec: PcmSpec {
-                channels: 2,
-                sample_rate: 44100,
-            },
-            metadata: TrackMetadata {
-                album: None,
-                artist: None,
-                artwork: None,
-                title: Some("Mock".to_owned()),
-            },
-            events_tx,
+        let spec = PcmSpec {
+            channels: 2,
+            sample_rate: 44100,
         };
+        let reader = TestPcmReader::new(spec, 60.0);
 
         let resource = Resource::from_reader(reader);
-        Arc::new(Mutex::new(PlayerResource::new(resource, Arc::from(src))))
+        Arc::new(Mutex::new(PlayerResource::new(
+            resource,
+            Arc::from(src),
+            kithara_bufpool::pcm_pool(),
+        )))
     }
 }

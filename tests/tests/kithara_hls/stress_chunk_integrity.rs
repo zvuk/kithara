@@ -13,18 +13,20 @@
 
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 
-use kithara::assets::StoreOptions;
-use kithara::audio::{Audio, AudioConfig, PcmReader};
-use kithara::decode::{PcmChunk, PcmMeta};
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
+use kithara::{
+    assets::StoreOptions,
+    audio::{Audio, AudioConfig, PcmReader},
+    decode::{PcmChunk, PcmMeta},
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
+};
+use kithara_test_utils::Xorshift64;
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture::{HlsTestServer, HlsTestServerConfig};
-use kithara_test_utils::Xorshift64;
 
 const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 2;
@@ -228,9 +230,10 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         // Ephemeral mode auto-evicts MemResources from LRU cache.
         // 2 variants × SEGMENT_COUNT segments + headroom.
         store.cache_capacity = Some(NonZeroUsize::new(SEGMENT_COUNT * 2 + 10).expect("nonzero"));
+        store.ephemeral = true;
     }
 
-    let mut hls_config = HlsConfig::new(url)
+    let hls_config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(cancel)
         .with_abr(AbrOptions {
@@ -241,9 +244,6 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             throughput_safety_factor: 1.0,
             ..AbrOptions::default()
         });
-    if ephemeral {
-        hls_config = hls_config.with_ephemeral(true);
-    }
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
@@ -276,7 +276,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
                 );
             }
 
-            let Some(chunk) = audio.next_chunk() else {
+            let Some(chunk) = PcmReader::next_chunk(&mut audio) else {
                 if audio.is_eof() {
                     panic!(
                         "Hit EOF before ABR switch \
@@ -324,7 +324,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         let mut continuity_breaks = 0u64;
 
         for chunk_idx in 0..POST_SWITCH_CHUNKS {
-            let Some(chunk) = audio.next_chunk() else {
+            let Some(chunk) = PcmReader::next_chunk(&mut audio) else {
                 panic!(
                     "next_chunk returned None at post-switch chunk {chunk_idx} (is_eof={})",
                     audio.is_eof()
@@ -426,7 +426,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
             let mut prev_last_sample: Option<f32> = None;
 
             for c in 0..CHUNKS_PER_SEEK {
-                let Some(chunk) = audio.next_chunk() else {
+                let Some(chunk) = PcmReader::next_chunk(&mut audio) else {
                     // EOF or no data — acceptable after seek near end
                     break;
                 };
@@ -592,7 +592,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
         let mut remaining_chunks = 0u64;
         let mut remaining_samples = 0u64;
-        while let Some(chunk) = audio.next_chunk() {
+        while let Some(chunk) = PcmReader::next_chunk(&mut audio) {
             remaining_chunks += 1;
             remaining_samples += chunk.pcm.len() as u64;
             for &sample in chunk.pcm.iter() {

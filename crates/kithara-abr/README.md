@@ -52,16 +52,25 @@ Samples below 16,000 bytes are filtered as noise. Cache hits set `initial_bps = 
 
 ## Key Types
 
-| Type | Role |
-|------|------|
-| `AbrController<E>` | Main controller with Auto/Manual modes |
-| `AbrOptions` | Full configuration: hysteresis ratios, buffer thresholds, mode, variants |
-| `AbrDecision` | Decision result: target variant index, reason, changed flag |
-| `AbrReason` | Why the decision was made (UpSwitch, DownSwitch, MinInterval, etc.) |
-| `Variant` | Variant descriptor: index + bandwidth in bps |
-| `ThroughputSample` | Measurement: bytes, duration, timestamp, source |
-| `Estimator` (trait) | Pluggable estimation strategy |
+<table>
+<tr><th>Type</th><th>Role</th></tr>
+<tr><td><code>AbrController&lt;E&gt;</code></td><td>Main controller with Auto/Manual modes</td></tr>
+<tr><td><code>AbrOptions</code></td><td>Full configuration: hysteresis ratios, buffer thresholds, mode, variants</td></tr>
+<tr><td><code>AbrDecision</code></td><td>Decision result: target variant index, reason, changed flag</td></tr>
+<tr><td><code>AbrReason</code></td><td>Why the decision was made (UpSwitch, DownSwitch, MinInterval, etc.)</td></tr>
+<tr><td><code>Variant</code></td><td>Variant descriptor: index + bandwidth in bps</td></tr>
+<tr><td><code>ThroughputSample</code></td><td>Measurement: bytes, duration, timestamp, source</td></tr>
+<tr><td><code>Estimator</code> (trait)</td><td>Pluggable estimation strategy</td></tr>
+</table>
 
 ## Integration
 
 Used by `kithara-hls` for variant selection. Fully independent of HLS specifics -- can be used with any adaptive streaming protocol.
+
+## Benchmarking
+
+Run Criterion microbenchmarks for ABR estimator/decision hot paths:
+
+```bash
+cargo bench -p kithara-abr --bench abr_estimator
+```

@@ -9,10 +9,13 @@ use std::{
     time::Duration,
 };
 
-use kithara::assets::StoreOptions;
-use kithara::events::{Event, EventBus, HlsEvent};
-use kithara::hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    events::{Event, EventBus, HlsEvent},
+    hls::{AbrMode, AbrOptions, Hls, HlsConfig},
+    stream::Stream,
+};
+use kithara_test_utils::{cancel_token, temp_dir, tracing_setup};
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
@@ -22,7 +25,6 @@ use super::fixture::{
     TestServer,
     abr::{AbrTestServer, master_playlist},
 };
-use kithara_test_utils::{cancel_token, temp_dir, tracing_setup};
 
 /// Driver-1: Verify that seek works AFTER all segments have been downloaded.
 ///

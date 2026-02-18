@@ -1,8 +1,12 @@
 use std::time::Duration;
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+use derivative::Derivative;
+
+#[derive(Clone, Copy, Debug, Derivative, PartialEq)]
+#[derivative(Default)]
 pub struct MediaTime {
     value: i64,
+    #[derivative(Default(value = "1"))]
     timescale: i32,
 }
 
@@ -74,12 +78,6 @@ impl MediaTime {
             return None;
         }
         Some(Duration::from_secs_f64(self.seconds()))
-    }
-}
-
-impl Default for MediaTime {
-    fn default() -> Self {
-        Self::ZERO
     }
 }
 

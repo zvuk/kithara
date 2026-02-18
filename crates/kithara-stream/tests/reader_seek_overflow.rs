@@ -33,6 +33,7 @@ use std::{
 
 use kithara_storage::WaitOutcome;
 use kithara_stream::{NullStreamContext, Source, Stream, StreamContext, StreamResult, StreamType};
+use rstest::rstest;
 
 /// Minimal mock source with known length.
 struct MockSource {
@@ -117,9 +118,9 @@ fn mock_stream(source: MockSource) -> Stream<MockStream> {
     };
     // Uses a simple blocking wrapper since MockStream::create is trivial.
     tokio::runtime::Runtime::new()
-        .unwrap()
+        .expect("runtime creation should succeed")
         .block_on(Stream::new(config))
-        .unwrap()
+        .expect("stream creation should succeed")
 }
 
 // Regression tests — document the seek bug from production (2026-02-01)
@@ -129,26 +130,27 @@ fn mock_stream(source: MockSource) -> Stream<MockStream> {
 // correct deltas. These tests replay the corrupted deltas that symphonia
 // produced *before* the fix — they can't turn green at the Stream level.
 
-/// Reproduction of epoch 10 seek failure from production log.
+/// Reproduction of corrupted seek deltas from production logs.
 ///
-/// Symphonia sent `SeekFrom::Current(9_223_372_036_854_115_238)` because
+/// Symphonia sent huge positive `SeekFrom::Current(delta)` values because
 /// `byte_len()` returned `None`. With `byte_len` fixed, symphonia sends
-/// a correct small delta instead.
-#[test]
+/// correct small deltas instead.
+#[rstest]
+#[case::epoch_10(595_033, 9_223_372_036_854_115_238i64)]
+#[case::epoch_11(544_238, 9_223_372_036_854_233_317i64)]
 #[ignore = "documents historical bug — fix is in decoder.rs (probe_byte_len)"]
-fn seek_epoch_10_corrupted_delta() {
-    // Exact values from production log (2026-02-01T20:58:45.643Z)
+fn seek_corrupted_delta_from_production(#[case] current_pos: u64, #[case] symphonia_delta: i64) {
+    // Production stream length from logs.
     const STREAM_LEN: usize = 1_890_485;
-    const CURRENT_POS: u64 = 595_033;
-    const SYMPHONIA_DELTA: i64 = 9_223_372_036_854_115_238;
 
     let source = MockSource::new(STREAM_LEN);
     let mut stream = mock_stream(source);
-    stream.seek(SeekFrom::Start(CURRENT_POS)).unwrap();
+    stream
+        .seek(SeekFrom::Start(current_pos))
+        .expect("seek to current position should succeed");
 
-    // Symphonia sends this delta when seeking to ~80.9s in a 220s fMP4 stream.
-    // The delta is wrong because byte_len() returned None.
-    let result = stream.seek(SeekFrom::Current(SYMPHONIA_DELTA));
+    // Delta is wrong because byte_len() returned None.
+    let result = stream.seek(SeekFrom::Current(symphonia_delta));
 
     // EXPECTED: seek should succeed (once byte_len() is fixed, symphonia
     //           will send a correct small delta to a position within the stream).
@@ -160,58 +162,23 @@ fn seek_epoch_10_corrupted_delta() {
     );
 }
 
-/// Second instance of the bug — epoch 11, seek to ~107.2s.
-///
-/// Same root cause, different byte positions.
-#[test]
-#[ignore = "documents historical bug — fix is in decoder.rs (probe_byte_len)"]
-fn seek_epoch_11_corrupted_delta() {
-    // From production log (2026-02-01T20:58:45.666Z)
-    // seek: position=107.215606689s epoch=11 stream_pos=544238
-    // seek_from=Current(9223372036854233317) → new_pos overflows
-    const STREAM_LEN: usize = 1_890_485;
-    const CURRENT_POS: u64 = 544_238;
-    const SYMPHONIA_DELTA: i64 = 9_223_372_036_854_233_317;
-
-    let source = MockSource::new(STREAM_LEN);
-    let mut stream = mock_stream(source);
-    stream.seek(SeekFrom::Start(CURRENT_POS)).unwrap();
-
-    let result = stream.seek(SeekFrom::Current(SYMPHONIA_DELTA));
-
-    assert!(
-        result.is_ok(),
-        "BUG (byte_len=None): epoch 11 seek overflow: {}",
-        result.unwrap_err(),
-    );
-}
-
 // GREEN tests — normal seek behavior (sanity checks)
 
-/// Normal backward seek via `SeekFrom::Current` with negative delta.
-#[test]
-fn seek_current_normal_backward() {
+/// Normal current-relative seeks with bounded deltas.
+#[rstest]
+#[case::backward(500_000, -100_000, 400_000)]
+#[case::forward(100_000, 200_000, 300_000)]
+fn seek_current_normal(#[case] start: u64, #[case] delta: i64, #[case] expected: u64) {
     let source = MockSource::new(1_000_000);
     let mut stream = mock_stream(source);
 
-    stream.seek(SeekFrom::Start(500_000)).unwrap();
+    stream
+        .seek(SeekFrom::Start(start))
+        .expect("initial seek should succeed");
 
-    let result = stream.seek(SeekFrom::Current(-100_000));
+    let result = stream.seek(SeekFrom::Current(delta));
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 400_000);
-}
-
-/// Normal forward seek via `SeekFrom::Current` with positive delta.
-#[test]
-fn seek_current_normal_forward() {
-    let source = MockSource::new(1_000_000);
-    let mut stream = mock_stream(source);
-
-    stream.seek(SeekFrom::Start(100_000)).unwrap();
-
-    let result = stream.seek(SeekFrom::Current(200_000));
-    assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 300_000);
+    assert_eq!(result.expect("seek should return new offset"), expected);
 }
 
 /// Genuine seek past EOF returns error (graceful, no crash).
@@ -237,7 +204,7 @@ fn seek_from_end_backward() {
 
     let result = stream.seek(SeekFrom::End(-100));
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 999_900);
+    assert_eq!(result.expect("seek should return new offset"), 999_900);
 }
 
 // ABR variant switch — unsynchronized decoder causes garbage seeks
@@ -273,7 +240,9 @@ fn variant_switch_stale_atoms_produce_garbage_seek() {
     let mut stream = mock_stream(source);
 
     // Stream position after decoding part of variant 3's first segment
-    stream.seek(SeekFrom::Start(1_165_770)).unwrap();
+    stream
+        .seek(SeekFrom::Start(1_165_770))
+        .expect("seek to replay position should succeed");
 
     // Symphonia's AtomIterator reads old variant 0 bytes as atom header,
     // gets atom.size ≈ 3.5 GB, calls ignore_bytes → this seek:
@@ -289,9 +258,13 @@ fn read_after_seek() {
     let source = MockSource::new(1_000);
     let mut stream = mock_stream(source);
 
-    stream.seek(SeekFrom::Start(500)).unwrap();
+    stream
+        .seek(SeekFrom::Start(500))
+        .expect("seek before read should succeed");
     let mut buf = [0u8; 16];
-    let n = stream.read(&mut buf).unwrap();
+    let n = stream
+        .read(&mut buf)
+        .expect("read after seek should succeed");
     assert!(n > 0);
     assert_eq!(&buf[..n], &vec![0xAA; n][..]);
 }

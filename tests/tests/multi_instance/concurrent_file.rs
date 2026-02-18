@@ -5,11 +5,13 @@
 
 use std::time::Duration;
 
-use kithara::assets::StoreOptions;
-use kithara::audio::{Audio, AudioConfig};
-use kithara::file::{File, FileConfig};
-use kithara::platform::ThreadPool;
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    audio::{Audio, AudioConfig},
+    file::{File, FileConfig},
+    platform::ThreadPool,
+    stream::Stream,
+};
 use rstest::rstest;
 use tempfile::TempDir;
 use tracing::info;
@@ -45,7 +47,6 @@ async fn create_file_audio(
 ) -> Audio<Stream<File>> {
     let file_config = FileConfig::new(url.into())
         .with_store(StoreOptions::new(cache_dir))
-        .with_look_ahead_bytes(None)
         .with_thread_pool(pool.clone());
 
     let config = AudioConfig::<File>::new(file_config)

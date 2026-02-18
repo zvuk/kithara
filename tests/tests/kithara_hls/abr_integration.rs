@@ -2,8 +2,10 @@
 
 use std::time::{Duration, Instant};
 
-use kithara::abr::{AbrController, AbrMode, AbrOptions, AbrReason, Variant};
-use kithara::hls::parsing::{MasterPlaylist, parse_master_playlist};
+use kithara::{
+    abr::{AbrController, AbrMode, AbrOptions, AbrReason, Variant},
+    hls::parsing::{MasterPlaylist, parse_master_playlist},
+};
 use rstest::{fixture, rstest};
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
@@ -40,26 +42,20 @@ video/360p/playlist.m3u8
 }
 
 #[fixture]
-fn parsed_master_playlist(
-    test_master_playlist_data: &str,
-) -> kithara::hls::parsing::MasterPlaylist {
+fn parsed_master_playlist(test_master_playlist_data: &str) -> MasterPlaylist {
     parse_master_playlist(test_master_playlist_data.as_bytes())
         .expect("Failed to parse master playlist")
 }
 
 #[fixture]
-fn variants_from_parsed_playlist(
-    parsed_master_playlist: kithara::hls::parsing::MasterPlaylist,
-) -> Vec<kithara::abr::Variant> {
+fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<Variant> {
     variants_from_master(&parsed_master_playlist)
 }
 
 // Test Cases
 
 #[rstest]
-fn test_variant_selection_manual_override(
-    variants_from_parsed_playlist: Vec<kithara::abr::Variant>,
-) {
+fn test_variant_selection_manual_override(variants_from_parsed_playlist: Vec<Variant>) {
     let opts = AbrOptions {
         mode: AbrMode::Manual(2),
         variants: variants_from_parsed_playlist,
@@ -80,7 +76,7 @@ fn test_variant_selection_manual_override(
 #[case(3)]
 fn test_manual_selector_different_indices(
     #[case] selector_index: usize,
-    variants_from_parsed_playlist: Vec<kithara::abr::Variant>,
+    variants_from_parsed_playlist: Vec<Variant>,
 ) {
     let opts = AbrOptions {
         mode: AbrMode::Manual(selector_index),
@@ -99,7 +95,7 @@ fn test_manual_selector_different_indices(
 #[rstest]
 fn test_abr_controller_no_selector(
     mut abr_config_default: AbrOptions,
-    variants_from_parsed_playlist: Vec<kithara::abr::Variant>,
+    variants_from_parsed_playlist: Vec<Variant>,
 ) {
     let variants_len = variants_from_parsed_playlist.len();
     abr_config_default.variants = variants_from_parsed_playlist;
@@ -121,7 +117,7 @@ fn test_abr_controller_no_selector(
 fn test_abr_decision_with_different_conditions(
     #[case] _buffer_secs: f64,
     #[case] _time_since_last_switch_secs: f64,
-    variants_from_parsed_playlist: Vec<kithara::abr::Variant>,
+    variants_from_parsed_playlist: Vec<Variant>,
 ) {
     let opts = AbrOptions {
         mode: AbrMode::Manual(1),
@@ -138,9 +134,7 @@ fn test_abr_decision_with_different_conditions(
 }
 
 #[rstest]
-fn test_variants_from_master_structure(
-    parsed_master_playlist: kithara::hls::parsing::MasterPlaylist,
-) {
+fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
     let variants = variants_from_master(&parsed_master_playlist);
 
     assert_eq!(variants.len(), 3);

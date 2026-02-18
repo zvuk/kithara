@@ -35,7 +35,7 @@ impl StreamType for Hls {
     type Events = EventBus;
 
     fn thread_pool(config: &Self::Config) -> ThreadPool {
-        config.thread_pool.clone()
+        config.thread_pool.clone().unwrap_or_default()
     }
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
@@ -60,7 +60,7 @@ impl StreamType for Hls {
             .cancel(cancel.clone())
             .root_dir(&config.store.cache_dir)
             .evict_config(config.store.to_evict_config())
-            .ephemeral(config.ephemeral);
+            .ephemeral(config.store.ephemeral);
         if let Some(ref pool) = config.pool {
             builder = builder.pool(pool.clone());
         }
@@ -77,7 +77,8 @@ impl StreamType for Hls {
             Arc::new(
                 FetchManager::new(backend.clone(), net.clone(), cancel.clone())
                     .with_master_url(config.url.clone())
-                    .with_base_url(config.base_url.clone()),
+                    .with_base_url(config.base_url.clone())
+                    .with_headers(config.headers.clone()),
             ),
             config.keys.clone(),
         ));
@@ -86,6 +87,7 @@ impl StreamType for Hls {
         let mut fetch_manager = FetchManager::new(backend, net, cancel.clone())
             .with_master_url(config.url.clone())
             .with_base_url(config.base_url.clone())
+            .with_headers(config.headers.clone())
             .with_key_manager(key_manager);
 
         // Load master playlist
@@ -152,7 +154,8 @@ impl StreamType for Hls {
 
         // Spawn downloader on the thread pool.
         // Backend is stored in HlsSource — dropping the source cancels the downloader.
-        let backend = kithara_stream::Backend::new(downloader, &cancel, &config.thread_pool);
+        let pool = config.thread_pool.clone().unwrap_or_default();
+        let backend = kithara_stream::Backend::new(downloader, &cancel, &pool);
         source.set_backend(backend);
 
         Ok(source)

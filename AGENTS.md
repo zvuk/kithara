@@ -203,6 +203,9 @@ If a new dependency is unavoidable:
   - do not configure per-crate without a reason.
 - To unify settings via `workspace.metadata`, do so in the root `Cargo.toml`, not in subcrates.
 
+### Lint and test failures are your responsibility
+**Rule:** the repository has a pre-commit hook that enforces clean builds, clippy, and formatting. If `cargo clippy` or `cargo test` reports errors, **assume they are caused by your changes** and fix them. Do not dismiss failures as "pre-existing" or "unrelated" — committed code has already passed the hook. If you genuinely believe an error predates your changes, verify by checking the relevant code with `git diff` or `git stash` before claiming it.
+
 ### Code Style Rules (enforced by `scripts/ci/lint-style.sh`)
 - **No separator comments** (`// ====...`, `// ────...`) — use plain `//` section headers.
 - **No inline qualified paths** — import everything at the top of the file via `use`; do not use `std::io::Error` in function bodies (write `io::Error`).

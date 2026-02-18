@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Streaming orchestration (source -> bytes stream) with sync Read+Seek"
 
 [lints]
@@ -12,6 +13,7 @@ workspace = true
 [dependencies]
 async-stream = { workspace = true }
 bytes = { workspace = true }
+derive_setters = { workspace = true }
 futures = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-net = { workspace = true }

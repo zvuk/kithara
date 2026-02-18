@@ -61,6 +61,8 @@ impl SharedPlayerState {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -72,18 +74,14 @@ mod tests {
         assert_eq!(state.sample_rate.load(Ordering::Relaxed), 0);
     }
 
-    #[test]
-    fn shared_state_sample_rate_none_when_zero() {
+    #[rstest]
+    #[case(0, None)]
+    #[case(44_100, Some(44_100))]
+    #[case(48_000, Some(48_000))]
+    fn shared_state_sample_rate_view(#[case] raw_sample_rate: u32, #[case] expected: Option<u32>) {
         let state = SharedPlayerState::new();
-        assert!(state.sample_rate().is_none());
-    }
-
-    #[test]
-    fn shared_state_sample_rate_some_when_set() {
-        let state = SharedPlayerState::new();
-        state.sample_rate.store(44100, Ordering::Relaxed);
-        let sr = state.sample_rate();
-        assert_eq!(sr, NonZeroU32::new(44100));
+        state.sample_rate.store(raw_sample_rate, Ordering::Relaxed);
+        assert_eq!(state.sample_rate().map(NonZeroU32::get), expected);
     }
 
     #[test]

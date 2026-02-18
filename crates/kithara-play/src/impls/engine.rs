@@ -2,7 +2,7 @@
 //!
 //! Graph topology (per slot):
 //! ```text
-//! PlayerNode[slotN] -> VolPanNode[slotN] -> GraphOut
+//! PlayerNode[slotN] -> VolPanNode[slotN] -> MasterVolPanNode -> GraphOut
 //! ```
 //!
 //! `FirewheelCtx` is `!Send`, so it lives on a dedicated rayon pool thread.
@@ -14,11 +14,15 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use derivative::Derivative;
+use derive_setters::Setters;
+use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, ThreadPool};
 use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
+use super::{player_processor::PlayerCmd, shared_player_state::SharedPlayerState};
 use crate::{
     error::PlayError,
     events::EngineEvent,
@@ -26,45 +30,57 @@ use crate::{
     types::SlotId,
 };
 
-use super::{player_processor::PlayerCmd, shared_player_state::SharedPlayerState};
-
 /// Configuration for the audio engine.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Derivative, Setters)]
+#[derivative(Default)]
+#[setters(prefix = "with_", strip_option)]
 pub struct EngineConfig {
-    /// Maximum number of concurrent player slots. Default: 4.
-    pub max_slots: usize,
-    /// Sample rate passed to `CpalBackend` as a hint. Default: 44100.
-    pub sample_rate: u32,
     /// Number of output channels. Default: 2 (stereo).
+    #[derivative(Default(value = "2"))]
     pub channels: u16,
     /// Number of EQ bands per slot (unused until Task 6). Default: 10.
+    #[derivative(Default(value = "10"))]
     pub eq_bands: usize,
-}
-
-impl Default for EngineConfig {
-    fn default() -> Self {
-        Self {
-            max_slots: 4,
-            sample_rate: 44100,
-            channels: 2,
-            eq_bands: 10,
-        }
-    }
+    /// Maximum number of concurrent player slots. Default: 4.
+    #[derivative(Default(value = "4"))]
+    pub max_slots: usize,
+    /// PCM buffer pool for audio-thread scratch buffers.
+    ///
+    /// When `None`, the global PCM pool is used.
+    pub pcm_pool: Option<PcmPool>,
+    /// Sample rate passed to `CpalBackend` as a hint. Default: 44100.
+    #[derivative(Default(value = "44100"))]
+    pub sample_rate: u32,
+    /// Thread pool for the engine thread and background work.
+    ///
+    /// When `None`, the global rayon pool is used.
+    pub thread_pool: Option<ThreadPool>,
 }
 
 /// Commands sent from `EngineImpl` to the engine thread.
 enum Cmd {
     Start {
         sample_rate: u32,
+        master_volume: f32,
     },
     Stop,
     AllocateSlot,
     ReleaseSlot {
         slot: SlotId,
     },
+    /// Update the master volume node in the audio graph.
+    SetMasterVolume {
+        volume: f32,
+    },
     /// Query the actual sample rate from `StreamInfo`.
     QuerySampleRate,
     Shutdown,
+}
+
+/// Command envelope with a dedicated reply channel.
+struct CmdMsg {
+    cmd: Cmd,
+    reply_tx: kanal::Sender<Reply>,
 }
 
 /// Responses sent back from the engine thread.
@@ -91,9 +107,7 @@ pub struct EngineImpl {
     config: EngineConfig,
 
     /// Sender half of the command channel to the engine thread.
-    cmd_tx: kanal::Sender<Cmd>,
-    /// Receiver half of the reply channel from the engine thread.
-    reply_rx: kanal::Receiver<Reply>,
+    cmd_tx: kanal::Sender<CmdMsg>,
 
     /// Per-slot tracking (owned by the main side, mirrored).
     active_slots: Mutex<Vec<SlotId>>,
@@ -124,20 +138,23 @@ impl EngineImpl {
         let (events_tx, _) = broadcast::channel(64);
 
         let (cmd_tx, cmd_rx) = kanal::bounded(8);
-        let (reply_tx, reply_rx) = kanal::bounded(8);
         let (done_tx, done_rx) = kanal::bounded(1);
 
         let max_slots = config.max_slots;
+        let thread_pool = config.thread_pool.clone().unwrap_or_default();
+        let pcm_pool = config
+            .pcm_pool
+            .clone()
+            .unwrap_or_else(|| pcm_pool().clone());
 
-        ThreadPool::global().spawn(move || {
-            engine_thread(&cmd_rx, &reply_tx, max_slots);
+        thread_pool.spawn(move || {
+            engine_thread(&cmd_rx, max_slots, pcm_pool);
             let _ = done_tx.send(());
         });
 
         Self {
             config,
             cmd_tx,
-            reply_rx,
             active_slots: Mutex::new(Vec::new()),
             slot_handles: Mutex::new(Vec::new()),
             master_volume: AtomicF32::new(1.0),
@@ -155,10 +172,11 @@ impl EngineImpl {
 
     /// Send a command and wait for its reply.
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        let (reply_tx, reply_rx) = kanal::bounded(1);
         self.cmd_tx
-            .send(cmd)
+            .send(CmdMsg { cmd, reply_tx })
             .map_err(|_| PlayError::Internal("engine thread gone".into()))?;
-        self.reply_rx
+        reply_rx
             .recv()
             .map_err(|_| PlayError::Internal("engine thread gone (reply)".into()))
     }
@@ -195,7 +213,11 @@ impl EngineImpl {
 impl Drop for EngineImpl {
     fn drop(&mut self) {
         // Ask the engine thread to shut down.
-        let _ = self.cmd_tx.send(Cmd::Shutdown);
+        let (reply_tx, _) = kanal::bounded(1);
+        let _ = self.cmd_tx.send(CmdMsg {
+            cmd: Cmd::Shutdown,
+            reply_tx,
+        });
         // Wait for it to finish.
         let _ = self.done_rx.recv();
     }
@@ -211,6 +233,7 @@ impl Engine for EngineImpl {
 
         self.call_ok(Cmd::Start {
             sample_rate: self.config.sample_rate,
+            master_volume: self.master_volume.load(Ordering::Relaxed),
         })?;
 
         self.running.store(true, Ordering::Release);
@@ -322,7 +345,9 @@ impl Engine for EngineImpl {
     fn set_master_volume(&self, volume: f32) {
         let clamped = volume.clamp(0.0, 1.0);
         self.master_volume.store(clamped, Ordering::Relaxed);
-        // TODO(task-9): send Cmd to engine thread to update VolPanNode in graph
+        if self.running.load(Ordering::Acquire) {
+            let _ = self.call(Cmd::SetMasterVolume { volume: clamped });
+        }
         self.emit(EngineEvent::MasterVolumeChanged { volume: clamped });
     }
 
@@ -376,40 +401,59 @@ struct SlotNodes {
 /// Mutable state owned by the engine thread.
 struct EngineThreadState {
     ctx: Option<firewheel::FirewheelCtx<firewheel::cpal::CpalBackend>>,
-    slot_nodes: Vec<SlotNodes>,
-    next_slot_id: u64,
     max_slots: usize,
+    /// Node ID of the master volume/pan node in the audio graph.
+    master_vol_pan_id: Option<firewheel::node::NodeID>,
+    /// Memo for diffing master volume changes and sending patches.
+    master_vol_pan_memo: Option<firewheel::diff::Memo<firewheel::nodes::volume_pan::VolumePanNode>>,
+    next_slot_id: u64,
+    pcm_pool: PcmPool,
+    slot_nodes: Vec<SlotNodes>,
 }
 
 /// The dedicated rayon pool thread that owns the `FirewheelCtx`.
-fn engine_thread(cmd_rx: &kanal::Receiver<Cmd>, reply_tx: &kanal::Sender<Reply>, max_slots: usize) {
+fn engine_thread(cmd_rx: &kanal::Receiver<CmdMsg>, max_slots: usize, pcm_pool: PcmPool) {
     let mut state = EngineThreadState {
         ctx: None,
-        slot_nodes: Vec::new(),
-        next_slot_id: 1,
         max_slots,
+        master_vol_pan_id: None,
+        master_vol_pan_memo: None,
+        next_slot_id: 1,
+        pcm_pool,
+        slot_nodes: Vec::new(),
     };
 
-    while let Ok(cmd) = cmd_rx.recv() {
+    while let Ok(msg) = cmd_rx.recv() {
+        let CmdMsg { cmd, reply_tx } = msg;
+        let should_shutdown = matches!(cmd, Cmd::Shutdown);
         let reply = match cmd {
-            Cmd::Start { sample_rate } => handle_start(&mut state, sample_rate),
+            Cmd::Start {
+                sample_rate,
+                master_volume,
+            } => handle_start(&mut state, sample_rate, master_volume),
             Cmd::Stop => handle_stop(&mut state),
             Cmd::AllocateSlot => handle_allocate_slot(&mut state),
             Cmd::ReleaseSlot { slot } => handle_release_slot(&mut state, slot),
+            Cmd::SetMasterVolume { volume } => handle_set_master_volume(&mut state, volume),
             Cmd::QuerySampleRate => handle_query_sample_rate(&state),
             Cmd::Shutdown => {
                 if let Some(ref mut fw_ctx) = state.ctx {
                     fw_ctx.stop_stream();
                 }
-                break;
+                Reply::Ok
             }
         };
         let _ = reply_tx.send(reply);
+        if should_shutdown {
+            break;
+        }
     }
 }
 
-fn handle_start(state: &mut EngineThreadState, sample_rate: u32) -> Reply {
-    use firewheel::{FirewheelConfig, cpal::CpalBackend};
+fn handle_start(state: &mut EngineThreadState, sample_rate: u32, master_volume: f32) -> Reply {
+    use firewheel::{
+        FirewheelConfig, Volume, cpal::CpalBackend, diff::Memo, nodes::volume_pan::VolumePanNode,
+    };
 
     if state.ctx.is_some() {
         return Reply::Err("already started".into());
@@ -432,6 +476,22 @@ fn handle_start(state: &mut EngineThreadState, sample_rate: u32) -> Reply {
 
     match fw_ctx.start_stream(cpal_config) {
         Ok(()) => {
+            // Create a master volume node and connect it to the graph output.
+            let master_node = VolumePanNode::from_volume(Volume::Linear(master_volume));
+            let master_memo = Memo::new(master_node);
+            let master_id = fw_ctx.add_node(master_node, None);
+
+            let graph_out = fw_ctx.graph_out_node_id();
+            if let Err(e) = fw_ctx.connect(master_id, graph_out, &[(0, 0), (1, 1)], false) {
+                return Reply::Err(format!("connect master_vol->graph_out failed: {e}"));
+            }
+
+            if let Err(e) = fw_ctx.update() {
+                warn!("graph update after master vol_pan creation failed: {e:?}");
+            }
+
+            state.master_vol_pan_id = Some(master_id);
+            state.master_vol_pan_memo = Some(master_memo);
             state.ctx = Some(fw_ctx);
             state.slot_nodes.clear();
             Reply::Ok
@@ -446,6 +506,8 @@ fn handle_stop(state: &mut EngineThreadState) -> Reply {
     }
     state.ctx = None;
     state.slot_nodes.clear();
+    state.master_vol_pan_id = None;
+    state.master_vol_pan_memo = None;
     Reply::Ok
 }
 
@@ -469,7 +531,8 @@ fn handle_allocate_slot(state: &mut EngineThreadState) -> Reply {
     let (cmd_tx, cmd_rx) = kanal::bounded(32);
     let shared_state = Arc::new(SharedPlayerState::new());
 
-    let player_node = PlayerNode::with_channel(cmd_rx, Arc::clone(&shared_state));
+    let player_node =
+        PlayerNode::with_channel(cmd_rx, Arc::clone(&shared_state), state.pcm_pool.clone());
     let player_node_id = fw_ctx.add_node(player_node, None);
     let vol_pan_node_id = fw_ctx.add_node(VolumePanNode::from_volume(Volume::Linear(1.0)), None);
 
@@ -477,9 +540,12 @@ fn handle_allocate_slot(state: &mut EngineThreadState) -> Reply {
         return Reply::Err(format!("connect player->volpan failed: {e}"));
     }
 
-    let graph_out = fw_ctx.graph_out_node_id();
-    if let Err(e) = fw_ctx.connect(vol_pan_node_id, graph_out, &[(0, 0), (1, 1)], false) {
-        return Reply::Err(format!("connect volpan->graph_out failed: {e}"));
+    // Connect per-slot volume node to the master volume node.
+    let Some(master_id) = state.master_vol_pan_id else {
+        return Reply::Err("master volume node not initialised".into());
+    };
+    if let Err(e) = fw_ctx.connect(vol_pan_node_id, master_id, &[(0, 0), (1, 1)], false) {
+        return Reply::Err(format!("connect volpan->master_vol failed: {e}"));
     }
 
     if let Err(e) = fw_ctx.update() {
@@ -520,6 +586,34 @@ fn handle_release_slot(state: &mut EngineThreadState, slot: SlotId) -> Reply {
     Reply::Ok
 }
 
+fn handle_set_master_volume(state: &mut EngineThreadState, volume: f32) -> Reply {
+    use firewheel::Volume;
+
+    let Some(ref mut fw_ctx) = state.ctx else {
+        return Reply::Err("engine not running".into());
+    };
+
+    let Some(master_id) = state.master_vol_pan_id else {
+        return Reply::Err("master volume node not initialised".into());
+    };
+
+    let Some(ref mut memo) = state.master_vol_pan_memo else {
+        return Reply::Err("master volume memo not initialised".into());
+    };
+
+    memo.volume = Volume::Linear(volume);
+    {
+        let mut queue = fw_ctx.event_queue(master_id);
+        memo.update_memo(&mut queue);
+    }
+
+    if let Err(e) = fw_ctx.update() {
+        warn!("graph update after set_master_volume failed: {e:?}");
+    }
+
+    Reply::Ok
+}
+
 fn handle_query_sample_rate(state: &EngineThreadState) -> Reply {
     let sr = state
         .ctx
@@ -530,182 +624,5 @@ fn handle_query_sample_rate(state: &EngineThreadState) -> Reply {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_engine() -> EngineImpl {
-        EngineImpl::new(EngineConfig::default())
-    }
-
-    #[test]
-    fn engine_config_defaults() {
-        let config = EngineConfig::default();
-        assert_eq!(config.max_slots, 4);
-        assert_eq!(config.sample_rate, 44100);
-        assert_eq!(config.channels, 2);
-        assert_eq!(config.eq_bands, 10);
-    }
-
-    #[test]
-    fn engine_not_running_initially() {
-        let engine = make_engine();
-        assert!(!engine.is_running());
-    }
-
-    #[test]
-    fn engine_slot_count_zero_initially() {
-        let engine = make_engine();
-        assert_eq!(engine.slot_count(), 0);
-        assert_eq!(engine.max_slots(), 4);
-    }
-
-    #[test]
-    fn engine_subscribe_works() {
-        let engine = make_engine();
-        let _rx = engine.subscribe();
-    }
-
-    #[test]
-    fn engine_master_volume_default() {
-        let engine = make_engine();
-        assert!((engine.master_volume() - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn engine_set_master_volume() {
-        let engine = make_engine();
-        engine.set_master_volume(0.5);
-        assert!((engine.master_volume() - 0.5).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn engine_set_master_volume_clamps() {
-        let engine = make_engine();
-        engine.set_master_volume(2.0);
-        assert!((engine.master_volume() - 1.0).abs() < f32::EPSILON);
-        engine.set_master_volume(-0.5);
-        assert!(engine.master_volume().abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn engine_set_master_volume_emits_event() {
-        let engine = make_engine();
-        let mut rx = engine.subscribe();
-        engine.set_master_volume(0.75);
-        let event = rx.try_recv().unwrap();
-        assert!(
-            matches!(event, EngineEvent::MasterVolumeChanged { volume } if (volume - 0.75).abs() < f32::EPSILON)
-        );
-    }
-
-    #[test]
-    fn engine_stop_when_not_running_returns_error() {
-        let engine = make_engine();
-        let err = engine.stop().unwrap_err();
-        assert!(matches!(err, PlayError::EngineNotRunning));
-    }
-
-    #[test]
-    fn engine_allocate_slot_when_not_running_returns_error() {
-        let engine = make_engine();
-        let err = engine.allocate_slot().unwrap_err();
-        assert!(matches!(err, PlayError::EngineNotRunning));
-    }
-
-    #[test]
-    fn engine_release_slot_when_not_running_returns_error() {
-        let engine = make_engine();
-        let err = engine.release_slot(SlotId(99)).unwrap_err();
-        assert!(matches!(err, PlayError::EngineNotRunning));
-    }
-
-    #[test]
-    fn engine_active_slots_empty_initially() {
-        let engine = make_engine();
-        assert!(engine.active_slots().is_empty());
-    }
-
-    #[test]
-    fn engine_crossfade_stub_returns_not_ready() {
-        let engine = make_engine();
-        let err = engine
-            .crossfade(SlotId(1), SlotId(2), CrossfadeConfig::default())
-            .unwrap_err();
-        assert!(matches!(err, PlayError::NotReady));
-    }
-
-    #[test]
-    fn engine_cancel_crossfade_stub_returns_no_crossfade() {
-        let engine = make_engine();
-        let err = engine.cancel_crossfade().unwrap_err();
-        assert!(matches!(err, PlayError::NoCrossfade));
-    }
-
-    #[test]
-    fn engine_is_crossfading_returns_false() {
-        let engine = make_engine();
-        assert!(!engine.is_crossfading());
-    }
-
-    #[test]
-    fn engine_master_sample_rate_returns_config_when_stopped() {
-        let config = EngineConfig {
-            sample_rate: 48000,
-            ..Default::default()
-        };
-        let engine = EngineImpl::new(config);
-        assert_eq!(engine.master_sample_rate(), 48000);
-    }
-
-    #[test]
-    fn engine_master_channels_returns_config() {
-        let engine = make_engine();
-        assert_eq!(engine.master_channels(), 2);
-    }
-
-    // Tests that require actual audio hardware should be marked #[ignore].
-    // They are run explicitly during local development or on hardware-capable CI.
-
-    #[test]
-    #[ignore = "requires audio hardware"]
-    fn engine_start_stop_roundtrip() {
-        let engine = make_engine();
-        engine.start().unwrap();
-        assert!(engine.is_running());
-        engine.stop().unwrap();
-        assert!(!engine.is_running());
-    }
-
-    #[test]
-    #[ignore = "requires audio hardware"]
-    fn engine_allocate_and_release_slot() {
-        let engine = make_engine();
-        engine.start().unwrap();
-
-        let slot_id = engine.allocate_slot().unwrap();
-        assert_eq!(engine.slot_count(), 1);
-        assert!(engine.active_slots().contains(&slot_id));
-
-        engine.release_slot(slot_id).unwrap();
-        assert_eq!(engine.slot_count(), 0);
-
-        engine.stop().unwrap();
-    }
-
-    #[test]
-    #[ignore = "requires audio hardware"]
-    fn engine_arena_full_error() {
-        let config = EngineConfig {
-            max_slots: 1,
-            ..Default::default()
-        };
-        let engine = EngineImpl::new(config);
-        engine.start().unwrap();
-
-        let _slot1 = engine.allocate_slot().unwrap();
-        let result = engine.allocate_slot();
-        assert!(matches!(result, Err(PlayError::ArenaFull)));
-
-        engine.stop().unwrap();
-    }
-}
+#[path = "engine_tests.rs"]
+mod tests;

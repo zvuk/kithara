@@ -201,6 +201,7 @@ impl DownloadProgress for DownloadState {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use url::Url;
 
     use super::*;
@@ -491,17 +492,17 @@ mod tests {
 
     // Test 9: LoadedSegment methods
 
-    #[test]
-    fn test_loaded_segment_methods() {
+    #[rstest]
+    #[case(99, false)]
+    #[case(100, true)]
+    #[case(200, true)]
+    #[case(349, true)]
+    #[case(350, false)]
+    fn test_loaded_segment_methods(#[case] offset: u64, #[case] contains: bool) {
         let seg = make_segment(0, 0, 100, 50, 200);
 
         assert_eq!(seg.total_len(), 250);
         assert_eq!(seg.end_offset(), 350);
-
-        assert!(!seg.contains(99));
-        assert!(seg.contains(100));
-        assert!(seg.contains(200));
-        assert!(seg.contains(349));
-        assert!(!seg.contains(350));
+        assert_eq!(seg.contains(offset), contains);
     }
 }

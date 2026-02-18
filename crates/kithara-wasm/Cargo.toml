@@ -11,6 +11,7 @@ publish = false
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+kithara-assets = { workspace = true }
 kithara-audio = { workspace = true }
 kithara-events = { workspace = true }
 kithara-hls = { workspace = true }
@@ -32,6 +33,9 @@ console_error_panic_hook = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-rayon = { workspace = true, optional = true }
+
+[dev-dependencies]
+rstest = { workspace = true }
 
 [lints]
 workspace = true

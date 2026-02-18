@@ -16,53 +16,14 @@ use futures::StreamExt;
 use kithara::net::{
     Headers, HttpClient, Net, NetError, NetExt, NetOptions, RangeSpec, RetryPolicy, TimeoutNet,
 };
+use kithara_test_utils::TestHttpServer;
 use rstest::*;
-use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
 // Test server infrastructure
 
-struct TestServer {
-    base_url: Url,
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
-}
-
-impl TestServer {
-    async fn new(router: Router) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
-
-        let server = axum::serve(listener, router).with_graceful_shutdown(async {
-            shutdown_rx.await.ok();
-        });
-
-        tokio::spawn(async move {
-            server.await.unwrap();
-        });
-
-        tokio::time::sleep(Duration::from_millis(100)).await;
-
-        Self {
-            base_url: Url::parse(&format!("http://{}", addr)).unwrap(),
-            shutdown_tx: Some(shutdown_tx),
-        }
-    }
-
-    fn url(&self, path: &str) -> Url {
-        self.base_url.join(path).unwrap()
-    }
-}
-
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        if let Some(shutdown_tx) = self.shutdown_tx.take() {
-            let _ = shutdown_tx.send(());
-        }
-    }
-}
+type TestServer = TestHttpServer;
 
 // Test endpoints
 
@@ -160,7 +121,7 @@ async fn slow_body_endpoint() -> impl IntoResponse {
         chunk
     });
 
-    axum::response::Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .body(axum::body::Body::from_stream(stream))
         .unwrap()
@@ -361,7 +322,7 @@ async fn test_server(test_router: Router) -> TestServer {
 
 #[fixture]
 fn http_client() -> HttpClient {
-    HttpClient::new(kithara::net::NetOptions::default())
+    HttpClient::new(NetOptions::default())
 }
 
 // Helper functions for testing

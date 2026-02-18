@@ -4,15 +4,22 @@ version = "0.1.0"
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Protocol-agnostic adaptive bitrate algorithm for audio streaming"
 
 [dependencies]
+derivative = { workspace = true }
 tracing = { workspace = true }
 web-time = { workspace = true }
 
 [dev-dependencies]
 unimock = { workspace = true }
 rstest = { workspace = true }
+criterion = { workspace = true }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "abr_estimator"
+harness = false

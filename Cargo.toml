@@ -200,6 +200,8 @@ async-trait = "0.1.89"
 rangemap = { version = "1.7.1", features = ["serde1"] }
 mmap-io = { version = "0.9", default-features = false }
 dashmap = "6.1.0"
+derivative = "2.2"
+derive_setters = "0.1"
 lru = "0.16"
 
 # memory profiling
@@ -208,6 +210,7 @@ memory-stats = "1.2"
 
 # performance monitoring
 hotpath = "0.10.1"
+criterion = "0.5.1"
 
 # fast interleave/deinterleave
 fast-interleave = "0.1"

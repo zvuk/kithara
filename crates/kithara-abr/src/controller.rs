@@ -316,6 +316,17 @@ mod tests {
         ]
     }
 
+    fn estimator_static(estimate_bps: Option<u64>, buffer_secs: f64) -> Unimock {
+        Unimock::new((
+            EstimatorMock::estimate_bps
+                .each_call(matching!())
+                .returns(estimate_bps),
+            EstimatorMock::buffer_level_secs
+                .each_call(matching!())
+                .returns(buffer_secs),
+        ))
+    }
+
     #[rstest]
     #[case("downswitch_low_throughput", 2, 300_000 / 8, 10.0, 0, AbrReason::DownSwitch, true)]
     #[case("upswitch_high_throughput", 0, 2_000_000 / 8, 0.0, 2, AbrReason::UpSwitch, true)]
@@ -612,14 +623,7 @@ mod tests {
 
         // adjusted_bps = 768_000 / 1.5 = 512_000 → variant 1 (512k) is best-under
         // candidate == current → AlreadyOptimal, no switch
-        let mock = Unimock::new((
-            EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(768_000)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(0.0),
-        ));
+        let mock = estimator_static(Some(768_000), 0.0);
 
         let mut c = AbrController::with_estimator(cfg, mock);
         let now = Instant::now();
@@ -647,14 +651,7 @@ mod tests {
         };
 
         // High throughput to trigger up-switch from variant 0
-        let mock = Unimock::new((
-            EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(5_000_000)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(0.0),
-        ));
+        let mock = estimator_static(Some(5_000_000), 0.0);
 
         let mut c = AbrController::with_estimator(cfg, mock);
         let now = Instant::now();
@@ -682,14 +679,7 @@ mod tests {
 
         // First call: high throughput → up-switch to variant 2
         // Second call: same throughput → variant 2 is now current, AlreadyOptimal
-        let mock = Unimock::new((
-            EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(5_000_000)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(0.0),
-        ));
+        let mock = estimator_static(Some(5_000_000), 0.0);
 
         let mut c = AbrController::with_estimator(cfg, mock);
         let now = Instant::now();
@@ -738,14 +728,7 @@ mod tests {
         // At exact threshold → adjusted_bps == candidate_bw * up_hysteresis → switch
         // But due to integer truncation, threshold_bps / safety_factor may lose precision.
         // Use threshold - 1 to guarantee NO switch.
-        let mock_below = Unimock::new((
-            EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(threshold_bps - 1)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(0.0),
-        ));
+        let mock_below = estimator_static(Some(threshold_bps - 1), 0.0);
         let c = AbrController::with_estimator(base_cfg.clone(), mock_below);
         let d = c.decide(Instant::now());
         assert_ne!(
@@ -755,14 +738,7 @@ mod tests {
         );
 
         // threshold + 1 → guaranteed switch
-        let mock_above = Unimock::new((
-            EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(threshold_bps + 1)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(0.0),
-        ));
+        let mock_above = estimator_static(Some(threshold_bps + 1), 0.0);
         let c = AbrController::with_estimator(base_cfg, mock_above);
         let d = c.decide(Instant::now());
         assert_eq!(
@@ -799,14 +775,7 @@ mod tests {
         };
 
         // At threshold → adjusted = threshold / safety = current_bw * down_hysteresis → switch
-        let mock_at = Unimock::new((
-            EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(threshold_bps)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(10.0), // high buffer, no urgent-down
-        ));
+        let mock_at = estimator_static(Some(threshold_bps), 10.0);
         let c = AbrController::with_estimator(base_cfg.clone(), mock_at);
         let d = c.decide(Instant::now());
         assert_eq!(
@@ -817,14 +786,7 @@ mod tests {
         assert!(d.changed);
 
         // threshold + 1 → adjusted just above margin → no switch
-        let mock_above = Unimock::new((
-            EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(threshold_bps + 1)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(10.0),
-        ));
+        let mock_above = estimator_static(Some(threshold_bps + 1), 10.0);
         let c = AbrController::with_estimator(base_cfg, mock_above);
         let d = c.decide(Instant::now());
         assert_ne!(
@@ -851,14 +813,7 @@ mod tests {
         };
 
         // Buffer exactly at threshold → allowed
-        let mock_ok = Unimock::new((
-            EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(5_000_000)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(min_buffer),
-        ));
+        let mock_ok = estimator_static(Some(5_000_000), min_buffer);
         let c = AbrController::with_estimator(base_cfg.clone(), mock_ok);
         let d = c.decide(Instant::now());
         assert_eq!(
@@ -869,14 +824,7 @@ mod tests {
         assert!(d.changed);
 
         // Buffer slightly below threshold → rejected
-        let mock_low = Unimock::new((
-            EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(5_000_000)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(min_buffer - 0.001),
-        ));
+        let mock_low = estimator_static(Some(5_000_000), min_buffer - 0.001);
         let c = AbrController::with_estimator(base_cfg, mock_low);
         let d = c.decide(Instant::now());
         assert_eq!(
@@ -901,14 +849,7 @@ mod tests {
             ..AbrOptions::default()
         };
 
-        let mock = Unimock::new((
-            EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(5_000_000)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(20.0),
-        ));
+        let mock = estimator_static(Some(5_000_000), 20.0);
 
         let c = AbrController::with_estimator(cfg, mock);
         let d = c.decide(Instant::now());
@@ -930,14 +871,7 @@ mod tests {
             ..AbrOptions::default()
         };
 
-        let mock = Unimock::new((
-            EstimatorMock::estimate_bps
-                .each_call(matching!())
-                .returns(Some(5_000_000)),
-            EstimatorMock::buffer_level_secs
-                .each_call(matching!())
-                .returns(0.0),
-        ));
+        let mock = estimator_static(Some(5_000_000), 0.0);
 
         let mut c = AbrController::with_estimator(cfg, mock);
         // Use an instant well after reference_instant to avoid nanos edge cases

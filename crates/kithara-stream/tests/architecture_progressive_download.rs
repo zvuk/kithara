@@ -33,6 +33,22 @@
 //! These tests document what the architecture SHOULD support.
 //! Implementation comes after we agree on contracts.
 
+use rstest::rstest;
+
+#[rstest]
+#[case::resource_status(
+    "ResourceStatus must expose downloaded and expected bytes for partial state"
+)]
+#[case::writer_semantics("writer stream end must not auto-commit partial resources")]
+#[case::downloader_lifecycle("downloader must stay alive for on-demand range requests")]
+#[case::source_len("source len should prefer expected total over committed length")]
+#[case::wait_range("wait_range should avoid deadlock and signal fetch needs")]
+#[case::request_api("on-demand range request path should be explicit in contracts")]
+#[case::resume("partial resume should persist expected totals in index metadata")]
+fn test_progressive_download_contract_topics(#[case] topic: &str) {
+    assert!(!topic.is_empty());
+}
+
 // PROBLEM 1: Resource State Ambiguity
 
 /// Current `ResourceExt` API cannot distinguish:

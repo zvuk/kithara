@@ -310,18 +310,28 @@ impl PlaylistAccess for PlaylistState {
 mod tests {
     use std::time::Duration;
 
+    use rstest::rstest;
     use url::Url;
 
     use super::*;
+    use crate::parsing::{
+        CodecInfo, InitSegment, MediaPlaylist, MediaSegment, VariantId, VariantStream,
+    };
 
     fn base_url() -> Url {
-        Url::parse("https://cdn.example.com/audio/").unwrap()
+        Url::parse("https://cdn.example.com/audio/").expect("valid base URL")
+    }
+
+    fn test_url(raw: &str) -> Url {
+        Url::parse(raw).expect("valid test URL")
     }
 
     fn make_segment(index: usize) -> SegmentState {
         SegmentState {
             index,
-            url: base_url().join(&format!("segment-{index}.m4s")).unwrap(),
+            url: base_url()
+                .join(&format!("segment-{index}.m4s"))
+                .expect("valid segment URL"),
             duration: Duration::from_secs(4),
             key: None,
         }
@@ -331,11 +341,11 @@ mod tests {
         let segments: Vec<SegmentState> = (0..num_segments).map(make_segment).collect();
         VariantState {
             id,
-            uri: base_url().join("variant.m3u8").unwrap(),
+            uri: base_url().join("variant.m3u8").expect("valid variant URL"),
             bandwidth: Some(128_000),
             codec: Some(AudioCodec::AacLc),
             container: Some(ContainerFormat::Fmp4),
-            init_url: Some(base_url().join("init.mp4").unwrap()),
+            init_url: Some(base_url().join("init.mp4").expect("valid init URL")),
             segments,
             size_map: None,
         }
@@ -438,24 +448,34 @@ mod tests {
 
         assert!(state.has_size_map(0));
         assert_eq!(state.total_variant_size(0), Some(1500));
+    }
 
-        // Check offsets (0-based: first segment starts at 0)
-        assert_eq!(state.segment_byte_offset(0, 0), Some(0));
-        assert_eq!(state.segment_byte_offset(0, 1), Some(300));
-        assert_eq!(state.segment_byte_offset(0, 2), Some(600));
-        assert_eq!(state.segment_byte_offset(0, 3), Some(1000));
-        assert_eq!(state.segment_byte_offset(0, 4), None); // out of bounds
+    #[rstest]
+    #[case::first(0, Some(0))]
+    #[case::second(1, Some(300))]
+    #[case::third(2, Some(600))]
+    #[case::fourth(3, Some(1000))]
+    #[case::oob(4, None)]
+    fn test_size_map_segment_offsets(#[case] segment: usize, #[case] expected: Option<u64>) {
+        let state = PlaylistState::new(vec![make_variant(0, 4)]);
+        state.set_size_map(0, make_size_map(100, &[200, 300, 400, 500]));
+        assert_eq!(state.segment_byte_offset(0, segment), expected);
+    }
 
-        // find_segment_at_offset
-        assert_eq!(state.find_segment_at_offset(0, 0), Some(0)); // start of seg 0 (init region)
-        assert_eq!(state.find_segment_at_offset(0, 99), Some(0)); // still in seg 0 (init)
-        assert_eq!(state.find_segment_at_offset(0, 100), Some(0)); // seg 0 media starts
-        assert_eq!(state.find_segment_at_offset(0, 299), Some(0)); // end of seg 0
-        assert_eq!(state.find_segment_at_offset(0, 300), Some(1)); // start of seg 1
-        assert_eq!(state.find_segment_at_offset(0, 599), Some(1)); // end of seg 1
-        assert_eq!(state.find_segment_at_offset(0, 600), Some(2)); // start of seg 2
-        assert_eq!(state.find_segment_at_offset(0, 1000), Some(3)); // start of seg 3
-        assert_eq!(state.find_segment_at_offset(0, 1499), Some(3)); // last byte
+    #[rstest]
+    #[case::init_start(0, Some(0))]
+    #[case::init_inside(99, Some(0))]
+    #[case::media_start(100, Some(0))]
+    #[case::first_end(299, Some(0))]
+    #[case::second_start(300, Some(1))]
+    #[case::second_end(599, Some(1))]
+    #[case::third_start(600, Some(2))]
+    #[case::fourth_start(1000, Some(3))]
+    #[case::last_byte(1499, Some(3))]
+    fn test_size_map_find_segment_at_offset(#[case] offset: u64, #[case] expected: Option<usize>) {
+        let state = PlaylistState::new(vec![make_variant(0, 4)]);
+        state.set_size_map(0, make_size_map(100, &[200, 300, 400, 500]));
+        assert_eq!(state.find_segment_at_offset(0, offset), expected);
     }
 
     // Test 5: reconcile segment size
@@ -489,47 +509,36 @@ mod tests {
 
     // Test 6: find_segment_at_offset edge cases
 
-    #[test]
-    fn test_find_segment_at_offset_edge_cases() {
+    #[rstest]
+    #[case::first_segment_start(0, 0, Some(0))]
+    #[case::init_region(0, 49, Some(0))]
+    #[case::first_media_start(0, 50, Some(0))]
+    #[case::first_segment_end(0, 149, Some(0))]
+    #[case::second_segment_start(0, 150, Some(1))]
+    #[case::second_segment_end(0, 249, Some(1))]
+    #[case::third_segment_start(0, 250, Some(2))]
+    #[case::last_byte(0, 349, Some(2))]
+    #[case::past_end(0, 350, None)]
+    #[case::far_past_end(0, 999, None)]
+    #[case::invalid_variant(99, 50, None)]
+    fn test_find_segment_at_offset_edge_cases(
+        #[case] variant: usize,
+        #[case] offset: u64,
+        #[case] expected: Option<usize>,
+    ) {
         let state = PlaylistState::new(vec![make_variant(0, 3)]);
 
         // init=50, media_sizes=[100, 100, 100]
         // segment_sizes = [150, 100, 100], offsets = [0, 150, 250], total = 350
         let sm = make_size_map(50, &[100, 100, 100]);
         state.set_size_map(0, sm);
-
-        // Offset 0 = start of first segment (includes init region)
-        assert_eq!(state.find_segment_at_offset(0, 0), Some(0));
-
-        // Offset 49 is in init region of segment 0
-        assert_eq!(state.find_segment_at_offset(0, 49), Some(0));
-
-        // Offset 50 = media starts within segment 0
-        assert_eq!(state.find_segment_at_offset(0, 50), Some(0));
-
-        // Exact boundaries between segments
-        assert_eq!(state.find_segment_at_offset(0, 149), Some(0)); // last byte of seg 0
-        assert_eq!(state.find_segment_at_offset(0, 150), Some(1)); // first byte of seg 1
-        assert_eq!(state.find_segment_at_offset(0, 249), Some(1)); // last byte of seg 1
-        assert_eq!(state.find_segment_at_offset(0, 250), Some(2)); // first byte of seg 2
-        assert_eq!(state.find_segment_at_offset(0, 349), Some(2)); // last byte of seg 2
-
-        // Past end
-        assert_eq!(state.find_segment_at_offset(0, 350), None);
-        assert_eq!(state.find_segment_at_offset(0, 999), None);
-
-        // Invalid variant
-        assert_eq!(state.find_segment_at_offset(99, 50), None);
+        assert_eq!(state.find_segment_at_offset(variant, offset), expected);
     }
 
     // Test 7: from_parsed builder
 
     #[test]
     fn test_from_parsed_basic() {
-        use crate::parsing::{
-            CodecInfo, InitSegment, MediaPlaylist, MediaSegment, VariantId, VariantStream,
-        };
-
         let variants = vec![VariantStream {
             id: VariantId(0),
             uri: "v0.m3u8".to_string(),
@@ -542,7 +551,7 @@ mod tests {
             }),
         }];
 
-        let media_url = Url::parse("https://cdn.example.com/audio/v0.m3u8").unwrap();
+        let media_url = test_url("https://cdn.example.com/audio/v0.m3u8");
         let playlist = MediaPlaylist {
             segments: vec![
                 MediaSegment {

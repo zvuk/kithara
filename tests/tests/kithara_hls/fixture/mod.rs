@@ -6,18 +6,18 @@
 //! - Encryption/decryption utilities
 //! - ABR testing infrastructure
 
-pub mod abr;
-pub mod assets;
-pub mod crypto;
-pub mod scalable_server;
-pub mod server;
+pub(crate) mod abr;
+pub(crate) mod assets;
+pub(crate) mod crypto;
+pub(crate) mod scalable_server;
+pub(crate) mod server;
 
 // Re-export commonly used types
-pub use assets::*;
-pub use crypto::*;
+pub(crate) use assets::*;
+pub(crate) use crypto::*;
 // Common types
 use kithara::hls::HlsError;
-pub use scalable_server::*;
-pub use server::*;
+pub(crate) use scalable_server::*;
+pub(crate) use server::*;
 
-pub type HlsResult<T> = Result<T, HlsError>;
+pub(crate) type HlsResult<T> = Result<T, HlsError>;

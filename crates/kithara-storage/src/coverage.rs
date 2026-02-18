@@ -14,6 +14,7 @@ use rangemap::RangeSet;
 /// Not tied to Downloader — a standalone abstraction.
 /// Implementations may store the index in memory ([`MemCoverage`])
 /// or persist it to disk alongside the resource.
+#[cfg_attr(test, unimock::unimock(api = CoverageMock))]
 pub trait Coverage: Send + 'static {
     /// Mark a range as downloaded.
     fn mark(&mut self, range: Range<u64>);
@@ -69,12 +70,14 @@ impl Default for MemCoverage {
 }
 
 impl Coverage for MemCoverage {
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn mark(&mut self, range: Range<u64>) {
         if !range.is_empty() {
             self.ranges.insert(range);
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn is_complete(&self) -> bool {
         let Some(total) = self.total_size else {
             return false;
@@ -117,21 +120,20 @@ impl Coverage for MemCoverage {
 
 #[cfg(test)]
 mod tests {
+    use std::ops::Range;
+
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn mark_and_merge_adjacent() {
+    #[rstest]
+    #[case::adjacent(vec![0..50, 50..100])]
+    #[case::overlapping(vec![0..60, 40..100])]
+    fn mark_and_merge_ranges(#[case] ranges: Vec<Range<u64>>) {
         let mut c = MemCoverage::with_total_size(100);
-        c.mark(0..50);
-        c.mark(50..100);
-        assert!(c.is_complete());
-    }
-
-    #[test]
-    fn mark_and_merge_overlapping() {
-        let mut c = MemCoverage::with_total_size(100);
-        c.mark(0..60);
-        c.mark(40..100);
+        for range in ranges {
+            c.mark(range);
+        }
         assert!(c.is_complete());
     }
 
@@ -162,25 +164,14 @@ mod tests {
         assert!(!c.is_complete());
     }
 
-    #[test]
-    fn next_gap_with_max_size() {
+    #[rstest]
+    #[case::capped(200, Some(100..300))]
+    #[case::uncapped(u64::MAX, Some(100..500))]
+    fn next_gap_with_limits(#[case] max_size: u64, #[case] expected: Option<Range<u64>>) {
         let mut c = MemCoverage::with_total_size(1000);
         c.mark(0..100);
         c.mark(500..1000);
-
-        // Gap is 100..500 (400 bytes), but max_size=200 caps it.
-        let gap = c.next_gap(200).unwrap();
-        assert_eq!(gap, 100..300);
-    }
-
-    #[test]
-    fn next_gap_uncapped() {
-        let mut c = MemCoverage::with_total_size(1000);
-        c.mark(0..100);
-        c.mark(500..1000);
-
-        let gap = c.next_gap(u64::MAX).unwrap();
-        assert_eq!(gap, 100..500);
+        assert_eq!(c.next_gap(max_size), expected);
     }
 
     #[test]
@@ -240,5 +231,10 @@ mod tests {
         let mut c = MemCoverage::new();
         c.mark(0..50);
         assert!(c.next_gap(100).is_none());
+    }
+
+    #[test]
+    fn coverage_mock_api_is_generated() {
+        let _ = CoverageMock::mark;
     }
 }

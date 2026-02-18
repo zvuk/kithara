@@ -5,15 +5,15 @@
 use std::{collections::HashMap, sync::Arc};
 
 use axum::{Router, routing::get};
-use kithara::hls::HlsError;
-use tokio::net::TcpListener;
+use kithara_test_utils::TestHttpServer;
+use rstest::fixture;
 use url::Url;
 
 use super::{HlsResult, crypto::*};
 
 /// Test HTTP server for HLS content
-pub struct TestServer {
-    base_url: String,
+pub(crate) struct TestServer {
+    http: TestHttpServer,
     #[expect(
         dead_code,
         reason = "held for lifetime, used indirectly via middleware closure"
@@ -22,11 +22,7 @@ pub struct TestServer {
 }
 
 impl TestServer {
-    pub async fn new() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let base_url = format!("http://127.0.0.1:{}", addr.port());
-
+    pub(crate) async fn new() -> Self {
         let request_counts = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let request_counts_clone = request_counts.clone();
 
@@ -85,12 +81,10 @@ impl TestServer {
                 },
             ));
 
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
+        let http = TestHttpServer::new(app).await;
 
         Self {
-            base_url,
+            http,
             request_counts,
         }
     }
@@ -99,15 +93,18 @@ impl TestServer {
         clippy::result_large_err,
         reason = "test-only code, ergonomics over size"
     )]
-    pub fn url(&self, path: &str) -> HlsResult<Url> {
-        format!("{}{}", self.base_url, path)
-            .parse()
-            .map_err(|e| HlsError::InvalidUrl(format!("Invalid test URL: {}", e)))
+    pub(crate) fn url(&self, path: &str) -> HlsResult<Url> {
+        Ok(self.http.url(path))
     }
 }
 
+#[fixture]
+pub(crate) async fn test_server() -> TestServer {
+    TestServer::new().await
+}
+
 /// Master playlist with standard bitrates
-pub fn test_master_playlist() -> &'static str {
+pub(crate) fn test_master_playlist() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
@@ -120,7 +117,7 @@ v2.m3u8
 }
 
 /// Master playlist with init segments
-pub fn test_master_playlist_with_init() -> &'static str {
+pub(crate) fn test_master_playlist_with_init() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
@@ -133,7 +130,7 @@ v2-init.m3u8
 }
 
 /// Media playlist for variant
-pub fn test_media_playlist(variant: usize) -> String {
+pub(crate) fn test_media_playlist(variant: usize) -> String {
     format!(
         r#"#EXTM3U
 #EXT-X-VERSION:6
@@ -153,7 +150,7 @@ seg/v{}_2.bin
 }
 
 /// Media playlist with init segment
-pub fn test_media_playlist_with_init(variant: usize) -> String {
+pub(crate) fn test_media_playlist_with_init(variant: usize) -> String {
     format!(
         r#"#EXTM3U
 #EXT-X-VERSION:6
@@ -177,7 +174,7 @@ seg/v{}_2.bin
 ///
 /// Returns data with format "V{variant}-SEG-{segment}:TEST_SEGMENT_DATA" = 26 bytes prefix,
 /// padded to ~200KB for realistic HLS testing.
-pub fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
+pub(crate) fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
     let prefix = format!("V{}-SEG-{}:", variant, segment);
     let mut data = prefix.into_bytes();
     data.extend(b"TEST_SEGMENT_DATA");
@@ -210,7 +207,7 @@ async fn key_endpoint() -> Vec<u8> {
 }
 
 /// Master playlist with encrypted variant
-pub fn test_master_playlist_encrypted() -> &'static str {
+pub(crate) fn test_master_playlist_encrypted() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
@@ -219,7 +216,7 @@ v0-encrypted.m3u8
 }
 
 /// Media playlist with AES-128 encryption for testing
-pub fn test_media_playlist_encrypted(_variant: usize) -> String {
+pub(crate) fn test_media_playlist_encrypted(_variant: usize) -> String {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-TARGETDURATION:4

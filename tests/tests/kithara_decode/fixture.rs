@@ -12,7 +12,7 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use tokio::net::TcpListener;
+use kithara_test_utils::TestHttpServer;
 use url::Url;
 
 /// A tiny WAV file (0.1 seconds of silence, 44.1kHz, stereo)
@@ -23,18 +23,14 @@ const TINY_WAV_BYTES: &[u8] = include_bytes!("fixtures/silence_1s.wav");
 const TEST_MP3_BYTES: &[u8] = include_bytes!("fixtures/test.mp3");
 
 /// Test server for serving audio fixtures
-pub struct AudioTestServer {
-    base_url: String,
+pub(crate) struct AudioTestServer {
+    server: TestHttpServer,
     request_counts: Arc<std::sync::Mutex<HashMap<String, usize>>>,
 }
 
 impl AudioTestServer {
     /// Create a new test server
-    pub async fn new() -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let base_url = format!("http://127.0.0.1:{}", addr.port());
-
+    pub(crate) async fn new() -> Self {
         let request_counts = Arc::new(std::sync::Mutex::new(HashMap::new()));
         let request_counts_clone = request_counts.clone();
 
@@ -42,7 +38,7 @@ impl AudioTestServer {
             .route("/silence.wav", get(wav_endpoint))
             .route("/test.mp3", get(mp3_endpoint))
             .layer(axum::middleware::from_fn(
-                move |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
+                move |req: axum::http::Request<Body>, next: axum::middleware::Next| {
                     let counts = request_counts_clone.clone();
                     async move {
                         let path = req.uri().path().to_string();
@@ -54,15 +50,10 @@ impl AudioTestServer {
                 },
             ));
 
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
-
-        // Give server time to start
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        let server = TestHttpServer::new(app).await;
 
         Self {
-            base_url,
+            server,
             request_counts,
         }
     }
@@ -72,22 +63,22 @@ impl AudioTestServer {
         dead_code,
         reason = "test utility reserved for future integration tests"
     )]
-    pub fn base_url(&self) -> &str {
-        &self.base_url
+    pub(crate) fn base_url(&self) -> &str {
+        self.server.base_url().as_str()
     }
 
     /// Get the URL for the WAV fixture
-    pub fn wav_url(&self) -> Url {
-        Url::parse(&format!("{}/silence.wav", self.base_url)).unwrap()
+    pub(crate) fn wav_url(&self) -> Url {
+        self.server.url("/silence.wav")
     }
 
     /// Get the URL for the MP3 fixture
-    pub fn mp3_url(&self) -> Url {
-        Url::parse(&format!("{}/test.mp3", self.base_url)).unwrap()
+    pub(crate) fn mp3_url(&self) -> Url {
+        self.server.url("/test.mp3")
     }
 
     /// Get request count for a path
-    pub fn request_count(&self, path: &str) -> usize {
+    pub(crate) fn request_count(&self, path: &str) -> usize {
         self.request_counts
             .lock()
             .unwrap()
@@ -118,16 +109,16 @@ async fn mp3_endpoint() -> Response<Body> {
 }
 
 /// Embedded audio data for tests that don't need HTTP
-pub struct EmbeddedAudio {
+pub(crate) struct EmbeddedAudio {
     /// WAV data (0.1 seconds of silence)
-    pub wav: &'static [u8],
+    pub(crate) wav: &'static [u8],
     /// MP3 data (test audio clip)
-    pub mp3: &'static [u8],
+    pub(crate) mp3: &'static [u8],
 }
 
 impl EmbeddedAudio {
     /// Get the embedded audio data
-    pub fn get() -> Self {
+    pub(crate) fn get() -> Self {
         Self {
             wav: TINY_WAV_BYTES,
             mp3: TEST_MP3_BYTES,
@@ -135,12 +126,12 @@ impl EmbeddedAudio {
     }
 
     /// Get WAV data
-    pub fn wav(&self) -> &'static [u8] {
+    pub(crate) fn wav(&self) -> &'static [u8] {
         self.wav
     }
 
     /// Get MP3 data
-    pub fn mp3(&self) -> &'static [u8] {
+    pub(crate) fn mp3(&self) -> &'static [u8] {
         self.mp3
     }
 }

@@ -7,14 +7,14 @@ use std::{
 
 use axum::{Router, extract::Request, response::Response, routing::get};
 use bytes::Bytes;
-use kithara::assets::StoreOptions;
-use kithara::file::{File, FileConfig};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    file::{File, FileConfig},
+    stream::Stream,
+};
+use kithara_test_utils::{TestHttpServer, temp_dir};
 use rstest::{fixture, rstest};
 use tempfile::TempDir;
-use tokio::net::TcpListener;
-
-use kithara_test_utils::temp_dir;
 
 // Test Server Fixtures
 
@@ -77,24 +77,14 @@ fn test_app() -> Router {
         .route("/large.bin", get(test_large_endpoint))
 }
 
-async fn run_test_server() -> String {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    let app = test_app();
-    tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    format!("http://127.0.0.1:{}", addr.port())
+async fn run_test_server() -> TestHttpServer {
+    TestHttpServer::new(test_app()).await
 }
 
 // Fixtures
 
 #[fixture]
-async fn test_server() -> String {
+async fn test_server() -> TestHttpServer {
     run_test_server().await
 }
 
@@ -108,13 +98,13 @@ async fn test_server() -> String {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[timeout(Duration::from_secs(10))]
 async fn stream_file_seek_start_reads_correct_bytes(
-    #[future] test_server: String,
+    #[future] test_server: TestHttpServer,
     temp_dir: TempDir,
     #[case] seek_pos: u64,
     #[case] expected: &[u8],
 ) {
-    let server_url = test_server.await;
-    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+    let server = test_server.await;
+    let url = server.url("/audio.mp3");
 
     let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
@@ -146,9 +136,9 @@ async fn stream_file_seek_start_reads_correct_bytes(
 #[rstest]
 #[timeout(Duration::from_secs(10))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stream_file_seek_current_works(#[future] test_server: String, temp_dir: TempDir) {
-    let server_url = test_server.await;
-    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+async fn stream_file_seek_current_works(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
+    let server = test_server.await;
+    let url = server.url("/audio.mp3");
 
     let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
@@ -177,9 +167,9 @@ async fn stream_file_seek_current_works(#[future] test_server: String, temp_dir:
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[timeout(Duration::from_secs(10))]
-async fn stream_file_seek_end_works(#[future] test_server: String, temp_dir: TempDir) {
-    let server_url = test_server.await;
-    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+async fn stream_file_seek_end_works(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
+    let server = test_server.await;
+    let url = server.url("/audio.mp3");
 
     let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
@@ -203,9 +193,9 @@ async fn stream_file_seek_end_works(#[future] test_server: String, temp_dir: Tem
 #[rstest]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[timeout(Duration::from_secs(10))]
-async fn stream_file_seek_past_eof_fails(#[future] test_server: String, temp_dir: TempDir) {
-    let server_url = test_server.await;
-    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+async fn stream_file_seek_past_eof_fails(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
+    let server = test_server.await;
+    let url = server.url("/audio.mp3");
 
     let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
@@ -223,9 +213,9 @@ async fn stream_file_seek_past_eof_fails(#[future] test_server: String, temp_dir
 #[rstest]
 #[timeout(Duration::from_secs(10))]
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn stream_file_multiple_seeks_work(#[future] test_server: String, temp_dir: TempDir) {
-    let server_url = test_server.await;
-    let url: url::Url = format!("{}/audio.mp3", server_url).parse().unwrap();
+async fn stream_file_multiple_seeks_work(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
+    let server = test_server.await;
+    let url = server.url("/audio.mp3");
 
     let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();

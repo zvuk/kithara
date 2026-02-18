@@ -8,13 +8,14 @@
 
 use std::time::Duration;
 
-use kithara::audio::{Audio, AudioConfig};
-use kithara::file::{FileConfig, FileSrc};
-use kithara::stream::Stream;
+use kithara::{
+    audio::{Audio, AudioConfig},
+    file::{FileConfig, FileSrc},
+    stream::Stream,
+};
+use kithara_test_utils::wav::create_test_wav;
 use kithara_wasm::ring_buffer::PcmRingBuffer;
 use rstest::rstest;
-
-use kithara_test_utils::wav::create_test_wav;
 
 /// Create an `Audio<Stream<File>>` pipeline from a WAV file.
 ///

@@ -16,6 +16,7 @@
 #![allow(dead_code)]
 
 use std::{
+    cell::Cell,
     collections::VecDeque,
     ffi::c_void,
     io::{Read, Seek, SeekFrom},
@@ -404,9 +405,27 @@ struct AppleInner {
     prime_info: Option<AudioConverterPrimeInfo>,
     /// PCM buffer pool (resolved from config or global).
     pool: PcmPool,
+    /// Owner thread for FFI decoder state (set on first decoder operation in debug builds).
+    owner_thread: Cell<Option<std::thread::ThreadId>>,
 }
 
 impl AppleInner {
+    #[inline]
+    fn assert_thread_affinity(&self) {
+        #[cfg(debug_assertions)]
+        {
+            let current = std::thread::current().id();
+            if let Some(owner) = self.owner_thread.get() {
+                debug_assert_eq!(
+                    owner, current,
+                    "Apple decoder used from multiple threads; this backend requires thread affinity"
+                );
+            } else {
+                self.owner_thread.set(Some(current));
+            }
+        }
+    }
+
     fn new<R>(mut source: R, config: &AppleConfig) -> DecodeResult<Self>
     where
         R: Read + Seek + Send + 'static,
@@ -679,118 +698,126 @@ impl AppleInner {
             data_offset,
             prime_info,
             pool,
+            owner_thread: Cell::new(None),
         })
     }
 
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        // Ensure we have packets to decode
-        while self.parser_state.packet_buffer.len() < 4 && !self.source_eof {
-            self.feed_parser()?;
-        }
+        self.assert_thread_affinity();
+        loop {
+            // Ensure we have packets to decode
+            while self.parser_state.packet_buffer.len() < 4 && !self.source_eof {
+                self.feed_parser()?;
+            }
 
-        // Check if we have any packets
-        if self.parser_state.packet_buffer.is_empty() && self.source_eof {
-            debug!(
-                position = ?self.position,
-                frames_decoded = self.frames_decoded,
-                "Apple decoder: EOF reached"
+            // Check if we have any packets
+            if self.parser_state.packet_buffer.is_empty() && self.source_eof {
+                debug!(
+                    position = ?self.position,
+                    frames_decoded = self.frames_decoded,
+                    "Apple decoder: EOF reached"
+                );
+                return Ok(None);
+            }
+
+            // Get next packet for converter
+            let packet = match self.parser_state.packet_buffer.pop() {
+                Some(p) => p,
+                None => return Ok(None),
+            };
+
+            // Set up converter input
+            self.converter_input.current_packet = Some(packet);
+
+            // Prepare output buffer
+            let channels = self.spec.channels as usize;
+            let frames_per_packet = self
+                .parser_state
+                .format
+                .map(|f| f.mFramesPerPacket as usize)
+                .unwrap_or(1024);
+
+            let output_frames = frames_per_packet.max(1024);
+            if self.pcm_buffer.len() < output_frames * channels {
+                self.pcm_buffer.resize(output_frames * channels, 0.0);
+            }
+
+            let mut buffer_list = AudioBufferList {
+                mNumberBuffers: 1,
+                mBuffers: [AudioBuffer {
+                    mNumberChannels: self.spec.channels as u32,
+                    mDataByteSize: (self.pcm_buffer.len() * 4) as u32,
+                    mData: self.pcm_buffer.as_mut_ptr() as *mut c_void,
+                }],
+            };
+
+            let mut output_packets = output_frames as UInt32;
+            let input_ptr =
+                self.converter_input.as_mut() as *mut ConverterInputState as *mut c_void;
+
+            let status = unsafe {
+                AudioConverterFillComplexBuffer(
+                    self.converter,
+                    converter_input_callback,
+                    input_ptr,
+                    &mut output_packets,
+                    &mut buffer_list,
+                    ptr::null_mut(),
+                )
+            };
+
+            // Converter needs more input packets.
+            if status == kAudioConverterErr_NoDataNow {
+                trace!("Apple decoder: converter needs more data");
+                continue;
+            }
+
+            if status != noErr && output_packets == 0 {
+                let err_str = os_status_to_string(status);
+                warn!(
+                    status,
+                    err = %err_str,
+                    "Apple decoder: AudioConverterFillComplexBuffer failed"
+                );
+                return Err(DecodeError::Backend(Box::new(std::io::Error::other(
+                    format!("AudioConverterFillComplexBuffer failed: {}", err_str),
+                ))));
+            }
+
+            if output_packets == 0 {
+                // No output yet, need more input.
+                continue;
+            }
+
+            let frames = output_packets as usize;
+            let samples = frames * channels;
+            let pcm = self.pcm_buffer[..samples].to_vec();
+
+            let meta = PcmMeta {
+                spec: self.spec,
+                frame_offset: self.frame_offset,
+                timestamp: self.position,
+                segment_index: None,
+                variant_index: None,
+                epoch: 0,
+            };
+            let chunk = PcmChunk::new(meta, self.pool.attach(pcm));
+
+            // Update position and frame offset
+            self.frames_decoded += frames as u64;
+            self.frame_offset += frames as u64;
+            self.position =
+                Duration::from_secs_f64(self.frames_decoded as f64 / self.spec.sample_rate as f64);
+
+            trace!(
+                frames,
+                samples,
+                position_ms = self.position.as_millis(),
+                "Apple decoder: decoded chunk"
             );
-            return Ok(None);
+
+            return Ok(Some(chunk));
         }
-
-        // Get next packet for converter
-        let packet = match self.parser_state.packet_buffer.pop() {
-            Some(p) => p,
-            None => return Ok(None),
-        };
-
-        // Set up converter input
-        self.converter_input.current_packet = Some(packet);
-
-        // Prepare output buffer
-        let channels = self.spec.channels as usize;
-        let frames_per_packet = self
-            .parser_state
-            .format
-            .map(|f| f.mFramesPerPacket as usize)
-            .unwrap_or(1024);
-
-        let output_frames = frames_per_packet.max(1024);
-        if self.pcm_buffer.len() < output_frames * channels {
-            self.pcm_buffer.resize(output_frames * channels, 0.0);
-        }
-
-        let mut buffer_list = AudioBufferList {
-            mNumberBuffers: 1,
-            mBuffers: [AudioBuffer {
-                mNumberChannels: self.spec.channels as u32,
-                mDataByteSize: (self.pcm_buffer.len() * 4) as u32,
-                mData: self.pcm_buffer.as_mut_ptr() as *mut c_void,
-            }],
-        };
-
-        let mut output_packets = output_frames as UInt32;
-        let input_ptr = self.converter_input.as_mut() as *mut ConverterInputState as *mut c_void;
-
-        let status = unsafe {
-            AudioConverterFillComplexBuffer(
-                self.converter,
-                converter_input_callback,
-                input_ptr,
-                &mut output_packets,
-                &mut buffer_list,
-                ptr::null_mut(),
-            )
-        };
-
-        // Handle no data available (need more input)
-        if status == 0x21646174u32 as i32 {
-            // '!dat'
-            trace!("Apple decoder: converter needs more data");
-            return self.next_chunk(); // Recursive call to get more data
-        }
-
-        if status != noErr && output_packets == 0 {
-            let err_str = os_status_to_string(status);
-            warn!(status, err = %err_str, "Apple decoder: AudioConverterFillComplexBuffer failed");
-            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                format!("AudioConverterFillComplexBuffer failed: {}", err_str),
-            ))));
-        }
-
-        if output_packets == 0 {
-            // No output yet, need more input
-            return self.next_chunk();
-        }
-
-        let frames = output_packets as usize;
-        let samples = frames * channels;
-        let pcm = self.pcm_buffer[..samples].to_vec();
-
-        let meta = PcmMeta {
-            spec: self.spec,
-            frame_offset: self.frame_offset,
-            timestamp: self.position,
-            segment_index: None,
-            variant_index: None,
-            epoch: 0,
-        };
-        let chunk = PcmChunk::new(meta, self.pool.attach(pcm));
-
-        // Update position and frame offset
-        self.frames_decoded += frames as u64;
-        self.frame_offset += frames as u64;
-        self.position =
-            Duration::from_secs_f64(self.frames_decoded as f64 / self.spec.sample_rate as f64);
-
-        trace!(
-            frames,
-            samples,
-            position_ms = self.position.as_millis(),
-            "Apple decoder: decoded chunk"
-        );
-
-        Ok(Some(chunk))
     }
 
     fn feed_parser(&mut self) -> DecodeResult<()> {
@@ -838,6 +865,7 @@ impl AppleInner {
     }
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
+        self.assert_thread_affinity();
         let target_frame = (pos.as_secs_f64() * self.spec.sample_rate as f64) as u64;
 
         debug!(
@@ -932,6 +960,7 @@ impl AppleInner {
 
     /// Query kAudioConverterPrimeInfo from the converter.
     fn query_prime_info(&self) -> Option<(u32, u32)> {
+        self.assert_thread_affinity();
         if self.converter.is_null() {
             return None;
         }
@@ -974,11 +1003,17 @@ impl AppleInner {
     }
 }
 
-// SAFETY: The decoder is designed to be used from one thread at a time.
+// SAFETY:
+// - AudioToolbox handles (`AudioFileStreamID`, `AudioConverterRef`) are only touched
+//   by methods that require thread affinity (`next_chunk`, `seek`, `query_prime_info`).
+// - In debug builds we enforce this with `assert_thread_affinity()`.
+// - Cross-thread update path (`update_byte_len`) only writes to an `AtomicU64` and does
+//   not touch AudioToolbox state.
 unsafe impl Send for AppleInner {}
 
 impl Drop for AppleInner {
     fn drop(&mut self) {
+        self.assert_thread_affinity();
         debug!("Apple decoder: disposing");
         unsafe {
             if !self.converter.is_null() {
@@ -1251,10 +1286,6 @@ impl<C: CodecType> AudioDecoder for Apple<C> {
         self.inner.seek(pos)
     }
 
-    fn position(&self) -> Duration {
-        self.inner.position
-    }
-
     fn duration(&self) -> Option<Duration> {
         self.inner.duration
     }
@@ -1300,49 +1331,36 @@ pub type AppleAlac = Apple<Alac>;
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn test_apple_config_default() {
-        let config = AppleConfig::default();
-        assert!(config.byte_len_handle.is_none());
-        assert!(config.container.is_none());
-        assert!(config.pcm_pool.is_none());
-    }
-
-    #[test]
-    fn test_apple_config_with_container() {
+    #[rstest]
+    #[case::default(None)]
+    #[case::fmp4(Some(ContainerFormat::Fmp4))]
+    fn test_apple_config_container(#[case] container: Option<ContainerFormat>) {
         let config = AppleConfig {
-            container: Some(ContainerFormat::Fmp4),
+            container,
             pcm_pool: None,
             ..Default::default()
         };
-        assert_eq!(config.container, Some(ContainerFormat::Fmp4));
+        assert!(config.byte_len_handle.is_none());
+        assert_eq!(config.container, container);
+        assert!(config.pcm_pool.is_none());
     }
 
-    #[test]
-    fn test_container_to_file_type() {
-        assert_eq!(
-            container_to_file_type(ContainerFormat::Fmp4),
-            Some(kAudioFileM4AType)
-        );
-        assert_eq!(
-            container_to_file_type(ContainerFormat::Adts),
-            Some(kAudioFileAAC_ADTSType)
-        );
-        assert_eq!(
-            container_to_file_type(ContainerFormat::MpegAudio),
-            Some(kAudioFileMP3Type)
-        );
-        assert_eq!(
-            container_to_file_type(ContainerFormat::Flac),
-            Some(kAudioFileFLACType)
-        );
-        assert_eq!(
-            container_to_file_type(ContainerFormat::Caf),
-            Some(kAudioFileCAFType)
-        );
-        assert_eq!(container_to_file_type(ContainerFormat::Wav), None);
+    #[rstest]
+    #[case::fmp4(ContainerFormat::Fmp4, Some(kAudioFileM4AType))]
+    #[case::adts(ContainerFormat::Adts, Some(kAudioFileAAC_ADTSType))]
+    #[case::mpeg(ContainerFormat::MpegAudio, Some(kAudioFileMP3Type))]
+    #[case::flac(ContainerFormat::Flac, Some(kAudioFileFLACType))]
+    #[case::caf(ContainerFormat::Caf, Some(kAudioFileCAFType))]
+    #[case::wav(ContainerFormat::Wav, None)]
+    fn test_container_to_file_type(
+        #[case] container: ContainerFormat,
+        #[case] expected: Option<AudioFileTypeID>,
+    ) {
+        assert_eq!(container_to_file_type(container), expected);
     }
 
     #[test]

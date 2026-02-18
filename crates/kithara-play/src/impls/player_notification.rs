@@ -45,14 +45,29 @@ pub(crate) enum PlayerNotification {
 mod tests {
     use std::sync::Arc;
 
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn notification_debug_format() {
-        let n = PlayerNotification::TrackLoaded(Arc::from("test.mp3"));
+    #[rstest]
+    #[case(
+        PlayerNotification::TrackLoaded(Arc::from("test.mp3")),
+        "TrackLoaded",
+        "test.mp3"
+    )]
+    #[case(
+        PlayerNotification::TrackRequested(Arc::from("queued.mp3")),
+        "TrackRequested",
+        "queued.mp3"
+    )]
+    fn notification_debug_format(
+        #[case] n: PlayerNotification,
+        #[case] variant_name: &str,
+        #[case] src_hint: &str,
+    ) {
         let debug = format!("{n:?}");
-        assert!(debug.contains("TrackLoaded"));
-        assert!(debug.contains("test.mp3"));
+        assert!(debug.contains(variant_name));
+        assert!(debug.contains(src_hint));
     }
 
     #[test]
@@ -67,10 +82,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn notification_error_variant() {
+    #[rstest]
+    #[case("fail.mp3")]
+    #[case("broken.mp3")]
+    fn notification_error_variant(#[case] src: &str) {
         let err = PlayError::Internal("test error".into());
-        let n = PlayerNotification::TrackError(Arc::from("fail.mp3"), err);
-        assert!(matches!(n, PlayerNotification::TrackError(src, _) if &*src == "fail.mp3"));
+        let n = PlayerNotification::TrackError(Arc::from(src), err);
+        assert!(matches!(n, PlayerNotification::TrackError(track, _) if &*track == src));
     }
 }

@@ -24,8 +24,7 @@ use cbc::{
     Encryptor,
     cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara::hls::HlsError;
-use tokio::net::TcpListener;
+use kithara_test_utils::TestHttpServer;
 use url::Url;
 
 use super::HlsResult;
@@ -33,50 +32,50 @@ use super::HlsResult;
 // Config
 
 /// AES-128 encryption configuration for test server.
-pub struct EncryptionConfig {
+pub(crate) struct EncryptionConfig {
     /// 16-byte AES key.
-    pub key: [u8; 16],
+    pub(crate) key: [u8; 16],
     /// 16-byte IV. When `None`, derived from segment sequence (standard HLS).
-    pub iv: Option<[u8; 16]>,
+    pub(crate) iv: Option<[u8; 16]>,
 }
 
 /// Configuration for [`HlsTestServer`].
-pub struct HlsTestServerConfig {
+pub(crate) struct HlsTestServerConfig {
     /// Number of HLS variants (bitrate levels). Default: 1.
-    pub variant_count: usize,
+    pub(crate) variant_count: usize,
     /// Number of segments per variant. Default: 3.
-    pub segments_per_variant: usize,
+    pub(crate) segments_per_variant: usize,
     /// Segment size in bytes. Default: 200 000 (200 KB).
-    pub segment_size: usize,
+    pub(crate) segment_size: usize,
     /// Segment duration in seconds (for playlist `#EXTINF`). Default: 4.0.
-    pub segment_duration_secs: f64,
+    pub(crate) segment_duration_secs: f64,
     /// Custom binary data to serve instead of generated test patterns.
     ///
     /// When set, segments are sliced from this data: segment N serves
     /// `data[N * segment_size .. (N+1) * segment_size]`.
     /// Total length must equal `segments_per_variant * segment_size`.
-    pub custom_data: Option<Arc<Vec<u8>>>,
+    pub(crate) custom_data: Option<Arc<Vec<u8>>>,
     /// Per-variant binary data for media segments.
     ///
     /// Segment N of variant V serves:
     /// `data[V][N * segment_size .. (N+1) * segment_size]`.
     /// Takes priority over `custom_data` when set.
-    pub custom_data_per_variant: Option<Vec<Arc<Vec<u8>>>>,
+    pub(crate) custom_data_per_variant: Option<Vec<Arc<Vec<u8>>>>,
     /// Per-variant init segment data (served via `#EXT-X-MAP` route).
     ///
     /// When set, playlists include `#EXT-X-MAP:URI="../init/v{variant}_init.bin"`.
-    pub init_data_per_variant: Option<Vec<Arc<Vec<u8>>>>,
+    pub(crate) init_data_per_variant: Option<Vec<Arc<Vec<u8>>>>,
     /// Custom bandwidths for master playlist variants.
     ///
     /// When `None`, uses default `(v + 1) * 1_280_000`.
-    pub variant_bandwidths: Option<Vec<u64>>,
+    pub(crate) variant_bandwidths: Option<Vec<u64>>,
     /// Async delay function: `(variant, segment_index)` → `Duration` to sleep before serving.
     ///
     /// Used to simulate slow segments and trigger ABR switches.
-    pub segment_delay: Option<Arc<dyn Fn(usize, usize) -> Duration + Send + Sync>>,
+    pub(crate) segment_delay: Option<Arc<dyn Fn(usize, usize) -> Duration + Send + Sync>>,
     /// AES-128 encryption config. When set, segments are served encrypted
     /// and playlists include `#EXT-X-KEY` tag.
-    pub encryption: Option<EncryptionConfig>,
+    pub(crate) encryption: Option<EncryptionConfig>,
 }
 
 impl Default for HlsTestServerConfig {
@@ -101,21 +100,15 @@ impl Default for HlsTestServerConfig {
 /// Reusable HLS test server with parametric segment count and size.
 ///
 /// Uses dynamic Axum routes (`/seg/{filename}`) — scales to thousands of segments.
-pub struct HlsTestServer {
-    base_url: String,
+pub(crate) struct HlsTestServer {
     config: Arc<HlsTestServerConfig>,
+    http: TestHttpServer,
 }
 
 impl HlsTestServer {
     /// Spawn HTTP server on a random local port.
-    pub async fn new(config: HlsTestServerConfig) -> Self {
+    pub(crate) async fn new(config: HlsTestServerConfig) -> Self {
         let config = Arc::new(config);
-
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind HlsTestServer");
-        let addr = listener.local_addr().expect("local addr");
-        let base_url = format!("http://127.0.0.1:{}", addr.port());
 
         let cfg_master = Arc::clone(&config);
         let cfg_media = Arc::clone(&config);
@@ -161,13 +154,9 @@ impl HlsTestServer {
                 }),
             );
 
-        tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve HlsTestServer");
-        });
+        let http = TestHttpServer::new(app).await;
 
-        Self { base_url, config }
+        Self { config, http }
     }
 
     /// Build a full URL from a path.
@@ -175,10 +164,8 @@ impl HlsTestServer {
         clippy::result_large_err,
         reason = "test-only code, ergonomics over size"
     )]
-    pub fn url(&self, path: &str) -> HlsResult<Url> {
-        format!("{}{}", self.base_url, path)
-            .parse()
-            .map_err(|e| HlsError::InvalidUrl(format!("Invalid test URL: {e}")))
+    pub(crate) fn url(&self, path: &str) -> HlsResult<Url> {
+        Ok(self.http.url(path))
     }
 
     /// Access the configuration.
@@ -186,12 +173,12 @@ impl HlsTestServer {
         dead_code,
         reason = "test utility reserved for future integration tests"
     )]
-    pub fn config(&self) -> &HlsTestServerConfig {
+    pub(crate) fn config(&self) -> &HlsTestServerConfig {
         &self.config
     }
 
     /// Init segment length for variant 0 (0 if no init data configured).
-    pub fn init_len(&self) -> u64 {
+    pub(crate) fn init_len(&self) -> u64 {
         self.config
             .init_data_per_variant
             .as_ref()
@@ -200,7 +187,7 @@ impl HlsTestServer {
     }
 
     /// Total bytes across all segments for one variant (including init segment).
-    pub fn total_bytes(&self) -> u64 {
+    pub(crate) fn total_bytes(&self) -> u64 {
         self.init_len() + self.config.segments_per_variant as u64 * self.config.segment_size as u64
     }
 
@@ -209,7 +196,7 @@ impl HlsTestServer {
         dead_code,
         reason = "test utility reserved for future integration tests"
     )]
-    pub fn total_duration_secs(&self) -> f64 {
+    pub(crate) fn total_duration_secs(&self) -> f64 {
         self.config.segments_per_variant as f64 * self.config.segment_duration_secs
     }
 
@@ -217,7 +204,7 @@ impl HlsTestServer {
     ///
     /// When `custom_data` is set, returns the byte from that data.
     /// Otherwise returns bytes from the generated test pattern (prefix + `0xFF` padding).
-    pub fn expected_byte_at(&self, variant: usize, offset: u64) -> u8 {
+    pub(crate) fn expected_byte_at(&self, variant: usize, offset: u64) -> u8 {
         expected_byte_at_impl(&self.config, variant, offset)
     }
 }

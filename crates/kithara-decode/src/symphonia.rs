@@ -58,7 +58,6 @@ use crate::{
 };
 
 /// Configuration for Symphonia-based decoders.
-#[doc(hidden)]
 #[derive(Default)]
 pub(crate) struct SymphoniaConfig {
     /// Enable data verification (slower but safer).
@@ -537,7 +536,7 @@ impl SymphoniaInner {
 ///     // Process PCM samples
 /// }
 /// ```
-pub struct Symphonia<C: CodecType> {
+pub(crate) struct Symphonia<C: CodecType> {
     inner: SymphoniaInner,
     _codec: PhantomData<C>,
 }
@@ -604,16 +603,16 @@ impl<C: CodecType> InnerDecoder for Symphonia<C> {
 }
 
 /// Symphonia-based AAC decoder.
-pub type SymphoniaAac = Symphonia<Aac>;
+pub(crate) type SymphoniaAac = Symphonia<Aac>;
 
 /// Symphonia-based MP3 decoder.
-pub type SymphoniaMp3 = Symphonia<Mp3>;
+pub(crate) type SymphoniaMp3 = Symphonia<Mp3>;
 
 /// Symphonia-based FLAC decoder.
-pub type SymphoniaFlac = Symphonia<Flac>;
+pub(crate) type SymphoniaFlac = Symphonia<Flac>;
 
 /// Symphonia-based Vorbis decoder.
-pub type SymphoniaVorbis = Symphonia<Vorbis>;
+pub(crate) type SymphoniaVorbis = Symphonia<Vorbis>;
 
 /// Adapter that wraps a Read + Seek source as a Symphonia `MediaSource`.
 ///
@@ -712,9 +711,11 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for ReadSeek
 mod tests {
     use std::io::Cursor;
 
+    use kithara_test_utils::create_test_wav;
+    use rstest::rstest;
+
     use super::*;
     use crate::traits::AudioDecoder;
-    use kithara_test_utils::create_test_wav;
 
     #[test]
     fn test_symphonia_config_default() {
@@ -756,34 +757,21 @@ mod tests {
 
     type SymphoniaPcm = Symphonia<Pcm>;
 
-    #[test]
-    fn test_create_decoder_wav_with_container() {
+    #[rstest]
+    #[case(Some(ContainerFormat::Wav))]
+    #[case(None)]
+    fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
         let wav_data = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav_data);
 
-        // Create with explicit container format (no probe)
         let config = SymphoniaConfig {
-            container: Some(ContainerFormat::Wav),
+            container,
             ..Default::default()
         };
         let decoder = SymphoniaPcm::create(Box::new(cursor), config);
-        assert!(decoder.is_ok());
+        assert!(decoder.is_ok(), "decoder creation should succeed");
 
         let decoder = decoder.unwrap();
-        assert_eq!(AudioDecoder::spec(&decoder).sample_rate, 44100);
-        assert_eq!(AudioDecoder::spec(&decoder).channels, 2);
-    }
-
-    #[test]
-    fn test_create_decoder_without_container_uses_probe() {
-        let wav_data = create_test_wav(100, 44100, 2);
-        let cursor = Cursor::new(wav_data);
-
-        // Create without container - should succeed using probe fallback
-        let result = SymphoniaPcm::create(Box::new(cursor), SymphoniaConfig::default());
-        assert!(result.is_ok(), "probe fallback should detect WAV format");
-
-        let decoder = result.unwrap();
         assert_eq!(AudioDecoder::spec(&decoder).sample_rate, 44100);
         assert_eq!(AudioDecoder::spec(&decoder).channels, 2);
     }
@@ -926,23 +914,11 @@ mod tests {
         assert_eq!(config.hint, Some("mp4".to_string()));
     }
 
-    #[test]
-    fn test_empty_input_fails() {
-        let empty = Vec::new();
-        let cursor = Cursor::new(empty);
-
-        let config = SymphoniaConfig {
-            container: Some(ContainerFormat::Wav),
-            ..Default::default()
-        };
-        let result = SymphoniaPcm::create(Box::new(cursor), config);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_corrupted_input_fails() {
-        let corrupted = [0xDE, 0xAD, 0xBE, 0xEF].repeat(100);
-        let cursor = Cursor::new(corrupted);
+    #[rstest]
+    #[case(Vec::new())]
+    #[case([0xDE, 0xAD, 0xBE, 0xEF].repeat(100))]
+    fn test_invalid_input_fails(#[case] data: Vec<u8>) {
+        let cursor = Cursor::new(data);
 
         let config = SymphoniaConfig {
             container: Some(ContainerFormat::Wav),

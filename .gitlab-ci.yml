@@ -29,12 +29,25 @@ variables:
 
 lint:
   stage: lint
+  variables:
+    QUALITY_MIN_UNIMOCK_TRAITS: "22"
+    QUALITY_MIN_RSTEST_CASES: "485"
+    QUALITY_MIN_PERF_TEST_FILES: "5"
+    QUALITY_MIN_BENCH_TARGETS: "1"
+    QUALITY_MAX_LOCAL_HTTP_SERVERS: "0"
   before_script:
     - apt-get update -qq && apt-get install -y -qq libasound2-dev
     - rustup component add clippy
     - rustup toolchain install nightly --component rustfmt
   script:
     - bash scripts/ci/lint.sh
+  artifacts:
+    paths:
+      - target/quality-report.md
+      - target/trait-mock-audit.md
+      - target/trait-mock-exceptions.md
+      - target/rstest-audit.md
+    expire_in: 30 days
 
 deny:
   stage: lint
@@ -121,6 +134,8 @@ semver:
 coverage:
   stage: quality
   needs: [test]
+  variables:
+    COVERAGE_MIN: "80"
   before_script:
     - apt-get update -qq && apt-get install -y -qq libasound2-dev
     - test -f "$CARGO_HOME/bin/cargo-tarpaulin" || cargo install cargo-tarpaulin --locked
@@ -146,5 +161,20 @@ perf:
     - changes:
         - crates/**/*
         - tests/perf/**/*
+        - Cargo.toml
+        - Cargo.lock
+
+bench:
+  stage: quality
+  needs: [test]
+  script:
+    - bash scripts/ci/bench-test.sh
+  artifacts:
+    paths:
+      - bench-results.txt
+    expire_in: 30 days
+  rules:
+    - changes:
+        - crates/kithara-abr/**/*
         - Cargo.toml
         - Cargo.lock

@@ -6,16 +6,17 @@
 
 use std::{cell::RefCell, time::Duration};
 
+use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
 use kithara_events::EventBus;
-
-use crate::ring_buffer::PcmRingBuffer;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_platform::ThreadPool;
 use kithara_stream::Stream;
 use tracing::{debug, info, warn};
 use url::Url;
 use wasm_bindgen::prelude::*;
+
+use crate::ring_buffer::PcmRingBuffer;
 
 /// Buffer size for PCM transfer from decode pipeline to ring buffer.
 const PCM_BUF_SIZE: usize = 4096;
@@ -228,7 +229,7 @@ async fn load_hls_inner(
     let hls_config = HlsConfig::new(parsed_url)
         .with_thread_pool(pool)
         .with_events(bus)
-        .with_ephemeral(true)
+        .with_store(StoreOptions::default().with_ephemeral(true))
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..Default::default()

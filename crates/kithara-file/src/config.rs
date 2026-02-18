@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 
+use derivative::Derivative;
+use derive_setters::Setters;
 use kithara_assets::StoreOptions;
 use kithara_events::EventBus;
-use kithara_net::NetOptions;
+use kithara_net::{Headers, NetOptions};
 use kithara_platform::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -31,13 +33,17 @@ impl From<PathBuf> for FileSrc {
 /// Configuration for file streaming.
 ///
 /// Used with `Stream::<File>::new(config)`.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Derivative, Setters)]
+#[derivative(Default)]
+#[setters(prefix = "with_", strip_option)]
 pub struct FileConfig {
     /// Cancellation token for graceful shutdown.
     pub cancel: Option<CancellationToken>,
     /// Event bus channel capacity (used when `bus` is not provided).
+    #[derivative(Default(value = "16"))]
     pub event_channel_capacity: usize,
     /// Event bus (optional - if not provided, one is created internally).
+    #[setters(rename = "with_events")]
     pub bus: Option<EventBus>,
     /// Max bytes the downloader may be ahead of the reader before it pauses.
     ///
@@ -49,36 +55,23 @@ pub struct FileConfig {
     /// When multiple URLs share the same canonical form (e.g. differ only in
     /// query parameters), setting a unique `name` ensures each gets its own
     /// cache directory.
+    #[setters(skip)]
     pub name: Option<String>,
+    /// Additional HTTP headers to include in all requests.
+    pub headers: Option<Headers>,
     /// Network configuration.
     pub net: NetOptions,
     /// File source (remote URL or local path).
+    #[derivative(Default(
+        value = "FileSrc::Remote(Url::parse(\"http://localhost/audio.mp3\").expect(\"valid default URL\"))"
+    ))]
     pub src: FileSrc,
     /// Storage configuration.
     pub store: StoreOptions,
     /// Thread pool for background work.
     ///
-    /// Shared across all components. Defaults to the global rayon pool.
-    pub thread_pool: ThreadPool,
-}
-
-impl Default for FileConfig {
-    fn default() -> Self {
-        Self {
-            cancel: None,
-
-            event_channel_capacity: 16,
-            bus: None,
-            look_ahead_bytes: None,
-            name: None,
-            net: NetOptions::default(),
-            src: FileSrc::Remote(
-                Url::parse("http://localhost/audio.mp3").expect("valid default URL"),
-            ),
-            store: StoreOptions::default(),
-            thread_pool: ThreadPool::default(),
-        }
-    }
+    /// Shared across all components. When `None`, defaults to the global rayon pool.
+    pub thread_pool: Option<ThreadPool>,
 }
 
 impl FileConfig {
@@ -86,79 +79,14 @@ impl FileConfig {
     #[must_use]
     pub fn new(src: FileSrc) -> Self {
         Self {
-            cancel: None,
-
-            event_channel_capacity: 16,
-            bus: None,
-            look_ahead_bytes: None,
-            name: None,
-            net: NetOptions::default(),
             src,
-            store: StoreOptions::default(),
-            thread_pool: ThreadPool::default(),
+            ..Self::default()
         }
     }
 
     /// Set name for cache disambiguation.
-    ///
-    /// When multiple URLs share the same canonical form (differ only in query
-    /// parameters), a unique name ensures each gets its own cache directory.
     pub fn with_name<S: Into<String>>(mut self, name: S) -> Self {
         self.name = Some(name.into());
-        self
-    }
-
-    /// Set storage options.
-    #[must_use]
-    pub fn with_store(mut self, store: StoreOptions) -> Self {
-        self.store = store;
-        self
-    }
-
-    /// Set network options.
-    #[must_use]
-    pub fn with_net(mut self, net: NetOptions) -> Self {
-        self.net = net;
-        self
-    }
-
-    /// Set cancellation token.
-    #[must_use]
-    pub fn with_cancel(mut self, cancel: CancellationToken) -> Self {
-        self.cancel = Some(cancel);
-        self
-    }
-
-    /// Set event bus for subscribing to file events.
-    #[must_use]
-    pub fn with_events(mut self, bus: EventBus) -> Self {
-        self.bus = Some(bus);
-        self
-    }
-
-    /// Set event bus channel capacity.
-    #[must_use]
-    pub fn with_event_channel_capacity(mut self, capacity: usize) -> Self {
-        self.event_channel_capacity = capacity;
-        self
-    }
-
-    /// Set max bytes the downloader may be ahead of the reader before it pauses.
-    ///
-    /// - `Some(n)` — enable backpressure, pause when ahead by n bytes
-    /// - `None` — disable backpressure, download as fast as possible
-    #[must_use]
-    pub fn with_look_ahead_bytes(mut self, bytes: Option<u64>) -> Self {
-        self.look_ahead_bytes = bytes;
-        self
-    }
-
-    /// Set thread pool for background work.
-    ///
-    /// The pool is shared across all components. Defaults to the global rayon pool.
-    #[must_use]
-    pub fn with_thread_pool(mut self, pool: ThreadPool) -> Self {
-        self.thread_pool = pool;
         self
     }
 }
@@ -167,28 +95,26 @@ impl FileConfig {
 mod tests {
     use std::path::Path;
 
+    use rstest::rstest;
+
     use super::*;
 
     fn test_src() -> FileSrc {
         FileSrc::Remote(Url::parse("http://example.com/audio.mp3").unwrap())
     }
 
-    #[test]
-    fn test_file_config_new() {
-        let config = FileConfig::new(test_src());
+    #[rstest]
+    #[case(test_src())]
+    #[case(FileSrc::Local(PathBuf::from("/tmp/song.mp3")))]
+    fn test_file_config_new_preserves_source(#[case] src: FileSrc) {
+        let config = FileConfig::new(src.clone());
 
-        assert!(
-            matches!(&config.src, FileSrc::Remote(url) if url.as_str() == "http://example.com/audio.mp3")
-        );
+        assert_eq!(config.src, src);
         assert!(config.bus.is_none());
         assert!(config.cancel.is_none());
-    }
-
-    #[test]
-    fn test_local_src() {
-        let config = FileConfig::new(FileSrc::Local(PathBuf::from("/tmp/song.mp3")));
-
-        assert!(matches!(&config.src, FileSrc::Local(p) if p == Path::new("/tmp/song.mp3")));
+        if let FileSrc::Local(path) = &config.src {
+            assert_eq!(path, Path::new("/tmp/song.mp3"));
+        }
     }
 
     #[test]
@@ -207,20 +133,42 @@ mod tests {
         assert!(config.bus.is_none());
     }
 
-    #[test]
-    fn test_with_cancel() {
-        let cancel = CancellationToken::new();
-        let config = FileConfig::new(test_src()).with_cancel(cancel.clone());
-
-        assert!(config.cancel.is_some());
+    fn apply_cancel(config: FileConfig) -> FileConfig {
+        config.with_cancel(CancellationToken::new())
     }
 
-    #[test]
-    fn test_with_events() {
-        let bus = EventBus::new(32);
-        let config = FileConfig::new(test_src()).with_events(bus);
+    fn apply_events(config: FileConfig) -> FileConfig {
+        config.with_events(EventBus::new(32))
+    }
 
-        assert!(config.bus.is_some());
+    fn apply_headers(config: FileConfig) -> FileConfig {
+        let mut headers = Headers::new();
+        headers.insert("Authorization", "Bearer token123");
+        config.with_headers(headers)
+    }
+
+    fn has_cancel(config: &FileConfig) -> bool {
+        config.cancel.is_some()
+    }
+
+    fn has_bus(config: &FileConfig) -> bool {
+        config.bus.is_some()
+    }
+
+    fn has_auth_header(config: &FileConfig) -> bool {
+        config.headers.as_ref().and_then(|h| h.get("Authorization")) == Some("Bearer token123")
+    }
+
+    #[rstest]
+    #[case(apply_cancel, has_cancel)]
+    #[case(apply_events, has_bus)]
+    #[case(apply_headers, has_auth_header)]
+    fn test_optional_setters_update_expected_field(
+        #[case] apply: fn(FileConfig) -> FileConfig,
+        #[case] check: fn(&FileConfig) -> bool,
+    ) {
+        let config = apply(FileConfig::new(test_src()));
+        assert!(check(&config));
     }
 
     #[test]
@@ -238,6 +186,14 @@ mod tests {
 
         assert!(config.cancel.is_some());
         assert!(config.bus.is_some());
+    }
+
+    #[rstest]
+    #[case("stream-a")]
+    #[case("stream-b")]
+    fn test_with_name_sets_name(#[case] name: &str) {
+        let config = FileConfig::new(test_src()).with_name(name);
+        assert_eq!(config.name.as_deref(), Some(name));
     }
 
     #[test]

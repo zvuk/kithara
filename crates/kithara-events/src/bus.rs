@@ -46,8 +46,17 @@ impl EventBus {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
     use crate::FileEvent;
+
+    fn assert_file_event(event: Event, expected: FileEvent) {
+        match event {
+            Event::File(actual) => assert_eq!(actual, expected),
+            other => panic!("expected file event, got {other:?}"),
+        }
+    }
 
     #[test]
     fn publish_without_subscribers_does_not_panic() {
@@ -55,32 +64,31 @@ mod tests {
         bus.publish(FileEvent::EndOfStream);
     }
 
+    #[rstest]
+    #[case(FileEvent::DownloadComplete { total_bytes: 42 })]
+    #[case(FileEvent::EndOfStream)]
     #[tokio::test]
-    async fn publish_and_subscribe() {
+    async fn publish_and_subscribe(#[case] expected: FileEvent) {
         let bus = EventBus::new(16);
         let mut rx = bus.subscribe();
-        bus.publish(FileEvent::DownloadComplete { total_bytes: 42 });
+        bus.publish(expected.clone());
         let event = rx.recv().await.unwrap();
-        assert!(matches!(
-            event,
-            Event::File(FileEvent::DownloadComplete { total_bytes: 42 })
-        ));
+        assert_file_event(event, expected);
     }
 
+    #[rstest]
+    #[case(FileEvent::EndOfStream)]
+    #[case(FileEvent::DownloadError {
+        error: "network".to_string()
+    })]
     #[tokio::test]
-    async fn multiple_subscribers_each_receive() {
+    async fn multiple_subscribers_each_receive(#[case] expected: FileEvent) {
         let bus = EventBus::new(16);
         let mut rx1 = bus.subscribe();
         let mut rx2 = bus.subscribe();
-        bus.publish(FileEvent::EndOfStream);
-        assert!(matches!(
-            rx1.recv().await.unwrap(),
-            Event::File(FileEvent::EndOfStream)
-        ));
-        assert!(matches!(
-            rx2.recv().await.unwrap(),
-            Event::File(FileEvent::EndOfStream)
-        ));
+        bus.publish(expected.clone());
+        assert_file_event(rx1.recv().await.unwrap(), expected.clone());
+        assert_file_event(rx2.recv().await.unwrap(), expected);
     }
 
     #[tokio::test]
