@@ -24,11 +24,13 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
-use kithara::assets::StoreOptions;
-use kithara::file::{File, FileConfig, FileSrc};
-use kithara::stream::Stream;
+use kithara::{
+    assets::StoreOptions,
+    file::{File, FileConfig, FileSrc},
+    stream::Stream,
+};
+use kithara_test_utils::TestHttpServer;
 use tempfile::TempDir;
-use tokio::{net::TcpListener, sync::oneshot};
 use tokio_util::sync::CancellationToken;
 
 const TOTAL_SIZE: usize = 1_024_000;
@@ -135,7 +137,7 @@ async fn handle_request(
 }
 
 /// Shared server setup for tests.
-async fn setup_server(file_data: Vec<u8>) -> (url::Url, Arc<AtomicUsize>, oneshot::Sender<()>) {
+async fn setup_server(file_data: Vec<u8>) -> (url::Url, Arc<AtomicUsize>, TestHttpServer) {
     let state = ServerState {
         file_data,
         call_count: Arc::new(AtomicUsize::new(0)),
@@ -147,24 +149,10 @@ async fn setup_server(file_data: Vec<u8>) -> (url::Url, Arc<AtomicUsize>, onesho
         .route("/test.mp3", get(handle_request).head(handle_request))
         .with_state(state);
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    let url: url::Url = format!("http://{}/test.mp3", addr).parse().unwrap();
+    let server = TestHttpServer::new(app).await;
+    let url = server.url("/test.mp3");
 
-    let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-
-    tokio::spawn(async move {
-        axum::serve(listener, app)
-            .with_graceful_shutdown(async {
-                shutdown_rx.await.ok();
-            })
-            .await
-            .unwrap();
-    });
-
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    (url, call_count, shutdown_tx)
+    (url, call_count, server)
 }
 
 fn init_tracing() {
@@ -190,7 +178,7 @@ async fn file_stream_closes_early_seek_still_works() {
     init_tracing();
 
     let file_data: Vec<u8> = (0..TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
-    let (url, _call_count, shutdown_tx) = setup_server(file_data).await;
+    let (url, _call_count, _server) = setup_server(file_data).await;
 
     let config = FileConfig::new(FileSrc::Remote(url))
         .with_store(StoreOptions::new(clean_temp_dir.path()))
@@ -248,7 +236,6 @@ async fn file_stream_closes_early_seek_still_works() {
         ),
     };
 
-    let _ = shutdown_tx.send(());
     result.unwrap();
 }
 
@@ -262,7 +249,7 @@ async fn partial_cache_resume_works() {
     init_tracing();
 
     let file_data: Vec<u8> = (0..TOTAL_SIZE).map(|i| (i % 256) as u8).collect();
-    let (url, _call_count, shutdown_tx) = setup_server(file_data).await;
+    let (url, _call_count, _server) = setup_server(file_data).await;
 
     // Phase 1: partial download, then drop
     let cancel1 = CancellationToken::new();
@@ -337,7 +324,6 @@ async fn partial_cache_resume_works() {
         Err(_) => Err("DEADLOCK: resume seek hung. Partial cache resume not working.".to_string()),
     };
 
-    let _ = shutdown_tx.send(());
     cancel2.cancel();
     result.unwrap();
 }
