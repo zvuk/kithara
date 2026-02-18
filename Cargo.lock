@@ -2422,7 +2422,6 @@ dependencies = [
  "hotpath",
  "kithara-platform",
  "rstest",
- "unimock",
 ]
 
 [[package]]
@@ -2554,7 +2553,12 @@ dependencies = [
  "kanal",
  "kithara",
  "kithara-assets",
+ "kithara-audio",
+ "kithara-events",
+ "kithara-hls",
  "kithara-net",
+ "kithara-platform",
+ "kithara-stream",
  "kithara-test-utils",
  "kithara-wasm",
  "mmap-io",
@@ -2611,6 +2615,7 @@ dependencies = [
 name = "kithara-platform"
 version = "0.1.0"
 dependencies = [
+ "futures",
  "parking_lot",
  "rayon",
  "tokio",

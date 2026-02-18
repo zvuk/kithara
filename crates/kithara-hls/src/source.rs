@@ -3,8 +3,6 @@
 //! `HlsSource` implements `Source` — provides random-access reading from loaded segments.
 //! Shared state with `HlsDownloader` (in `downloader.rs`) via `SharedSegments`.
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Duration;
 use std::{
     collections::HashSet,
     ops::Range,
@@ -24,6 +22,7 @@ use kithara_stream::{MediaInfo, Source, StreamError, StreamResult};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
+use web_time::Duration;
 
 use crate::{
     HlsError,

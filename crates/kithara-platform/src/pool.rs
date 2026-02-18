@@ -13,8 +13,9 @@
 //! Rayon supports WASM via `wasm-bindgen-rayon`, mapping pool threads
 //! to Web Workers. This makes `ThreadPool` portable across native and web.
 
-use std::{fmt, sync::Arc};
+use std::{fmt, io, sync::Arc};
 
+use futures::channel::oneshot;
 /// Shared thread pool for blocking/CPU-bound work.
 ///
 /// Wraps an optional [`rayon::ThreadPool`]. When `None`, delegates to the
@@ -97,17 +98,17 @@ impl ThreadPool {
     /// # Errors
     ///
     /// Returns an error if the pool thread panics.
-    pub async fn spawn_async<F, R>(&self, f: F) -> Result<R, std::io::Error>
+    pub async fn spawn_async<F, R>(&self, f: F) -> Result<R, io::Error>
     where
         F: FnOnce() -> R + Send + 'static,
         R: Send + 'static,
     {
-        let (tx, rx) = tokio::sync::oneshot::channel();
+        let (tx, rx) = oneshot::channel();
         self.spawn(move || {
             let _ = tx.send(f());
         });
         rx.await
-            .map_err(|_| std::io::Error::other("thread pool task panicked"))
+            .map_err(|_| io::Error::other("thread pool task panicked"))
     }
 }
 

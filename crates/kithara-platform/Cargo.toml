@@ -12,6 +12,7 @@ description = "Platform-aware primitives (sync, traits, time) for native and was
 workspace = true
 
 [dependencies]
+futures = { workspace = true }
 parking_lot = { workspace = true }
 rayon = { workspace = true }
 

@@ -11,7 +11,6 @@ workspace = true
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-kithara = { workspace = true, features = ["full", "test-utils", "rodio"] }
 url = { workspace = true }
 tracing = { workspace = true }
 thiserror = { workspace = true }
@@ -19,6 +18,7 @@ futures = { workspace = true }
 
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+kithara = { workspace = true, features = ["full", "test-utils", "rodio"] }
 # Kithara crates not in facade
 kithara-test-utils = { workspace = true }
 kithara-wasm = { workspace = true }
@@ -82,6 +82,12 @@ hotpath = { workspace = true, optional = true }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-assets = { workspace = true }
+kithara-audio = { workspace = true }
+kithara-events = { workspace = true }
+kithara-hls = { workspace = true }
+kithara-platform = { workspace = true }
+kithara-stream = { workspace = true }
 kithara-wasm = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
