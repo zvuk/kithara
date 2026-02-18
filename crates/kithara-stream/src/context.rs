@@ -14,6 +14,7 @@ use std::sync::{
 ///
 /// Provides byte position and segment context. Implementations expose
 /// atomic state from Reader and Source without locking.
+#[cfg_attr(test, unimock::unimock(api = StreamContextMock))]
 pub trait StreamContext: Send + Sync {
     /// Current byte offset in the underlying data stream.
     fn byte_offset(&self) -> u64;
@@ -69,5 +70,10 @@ mod tests {
         let ctx = NullStreamContext::new(Arc::clone(&pos));
         pos.store(12345, Ordering::Relaxed);
         assert_eq!(ctx.byte_offset(), 12345);
+    }
+
+    #[test]
+    fn stream_context_mock_api_is_generated() {
+        let _ = StreamContextMock::byte_offset;
     }
 }
