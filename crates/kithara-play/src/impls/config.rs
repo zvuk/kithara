@@ -153,11 +153,18 @@ impl ResourceConfig {
         let trimmed = input.as_ref().trim();
 
         let src = match Url::parse(trimmed) {
+            #[cfg(not(target_arch = "wasm32"))]
             Ok(url) if url.scheme() == "file" => {
                 let path = url.to_file_path().map_err(|()| {
                     DecodeError::InvalidData(format!("invalid file URL: {trimmed}"))
                 })?;
                 ResourceSrc::Path(path)
+            }
+            #[cfg(target_arch = "wasm32")]
+            Ok(url) if url.scheme() == "file" => {
+                return Err(DecodeError::InvalidData(format!(
+                    "file:// URL is not supported on wasm: {trimmed}"
+                )));
             }
             Ok(url) => ResourceSrc::Url(url),
             Err(_) => {

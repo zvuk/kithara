@@ -13,37 +13,36 @@
 
 # kithara-wasm
 
-WASM HLS audio player for browser environments. Provides JavaScript bindings via `wasm-bindgen` to the kithara audio pipeline, enabling in-browser HLS playback through AudioWorklet with shared memory.
+WASM player bindings built on top of `kithara-play`.
 
 ## Usage
 
 ```js
-import init, { setup, load_hls, WasmPlayer } from "kithara-wasm";
+import init, { setup, WasmPlayer } from "kithara-wasm";
 
 await init();
 setup();
 
-const [channels, sampleRate, durationMs] = await load_hls(hlsUrl);
-const player = WasmPlayer.new();
-player.play();
+const player = new WasmPlayer();
+const index = player.add_track("https://example.com/track.mp3");
+await player.select_track(index); // starts playback with crossfade
 ```
 
-## Key Types
+## Key API
 
-<table>
-<tr><th>Type</th><th>Role</th></tr>
-<tr><td><code>WasmPlayer</code></td><td>Main player: <code>play()</code>, <code>pause()</code>, <code>seek()</code>, <code>fill_buffer()</code></td></tr>
-<tr><td><code>setup()</code></td><td>Initialize panic hook and tracing (call once before anything else)</td></tr>
-<tr><td><code>load_hls(url)</code></td><td>Load HLS playlist; returns <code>[channels, sample_rate, duration_ms]</code></td></tr>
-<tr><td><code>wasm_memory()</code></td><td>Expose WASM memory as <code>SharedArrayBuffer</code> for AudioWorklet</td></tr>
-<tr><td><code>init_thread_pool(n)</code></td><td>Initialize rayon thread pool (requires <code>threads</code> feature)</td></tr>
-</table>
+- `WasmPlayer::add_track(url)`
+- `WasmPlayer::select_track(index)`
+- `WasmPlayer::play()`, `pause()`, `stop()`, `seek(ms)`
+- `WasmPlayer::get_position_ms()`, `get_duration_ms()`
+- `WasmPlayer::set_eq_gain(band, db)`, `reset_eq()`
+- `setup()`
+- `init_thread_pool(n)` (feature `threads`)
 
 ## Architecture
 
-- PCM ring buffer is shared with AudioWorklet via direct WASM memory access
-- `WasmPlayer` state is stored in `thread_local!` to avoid `wasm-bindgen`'s `Rc<WasmRefCell<>>` wrapper (incompatible with shared memory / atomics)
-- Backpressure: `fill_buffer()` only writes as many samples as the ring buffer can accept
+- Playback core is `kithara-play::PlayerImpl`
+- Resource loading uses `kithara-play::Resource` / `ResourceConfig`
+- Crossfade and EQ are handled in the shared player pipeline, not in JS-specific DSP
 
 ## Features
 
@@ -54,4 +53,4 @@ player.play();
 
 ## Integration
 
-Wraps `kithara-audio` (with `web-audio` feature), `kithara-hls`, and `kithara-stream` into a browser-friendly API. Designed for use with a JavaScript AudioWorklet that reads PCM samples from the shared ring buffer.
+`kithara-wasm` is a wasm-bindgen wrapper around `kithara-play` so web and desktop follow the same playback logic.

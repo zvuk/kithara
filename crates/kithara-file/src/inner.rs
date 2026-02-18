@@ -4,13 +4,18 @@
 
 use std::sync::{Arc, atomic::AtomicU64};
 
-use kithara_assets::{AssetStoreBuilder, Assets, CoverageIndex, asset_root_for_url};
+use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::HttpClient;
 use kithara_platform::ThreadPool;
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{Backend, NullStreamContext, StreamContext, StreamType};
 use tokio_util::sync::CancellationToken;
+
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_assets::Assets;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_assets::CoverageIndex;
 
 use crate::{
     config::{FileConfig, FileSrc},
@@ -114,6 +119,7 @@ impl File {
 
         // Open coverage index for crash-safe download tracking.
         // Only available for disk-backed storage (ephemeral/mem doesn't need it).
+        #[cfg(not(target_arch = "wasm32"))]
         let coverage_index = match &backend {
             kithara_assets::AssetsBackend::Disk(store) => store
                 .open_coverage_index_resource()
@@ -121,6 +127,8 @@ impl File {
                 .map(|res| Arc::new(CoverageIndex::new(res))),
             kithara_assets::AssetsBackend::Mem(_) => None,
         };
+        #[cfg(target_arch = "wasm32")]
+        let coverage_index = None;
 
         let net_client = HttpClient::new(config.net.clone());
 

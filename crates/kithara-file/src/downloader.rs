@@ -6,14 +6,22 @@
 use std::{future::Future, sync::Arc};
 
 use futures::StreamExt;
-use kithara_assets::{AssetResource, CoverageIndex, DiskCoverage};
+use kithara_assets::{AssetResource, CoverageIndex};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, RangeSpec};
-use kithara_storage::{Coverage, MemCoverage, MmapResource, ResourceExt};
+use kithara_storage::{Coverage, MemCoverage, ResourceExt};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome, StepResult, Writer, WriterItem};
 use tokio_util::sync::CancellationToken;
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_assets::DiskCoverage;
+
 use crate::session::{FileStreamState, Progress, SharedFileState};
+
+#[cfg(not(target_arch = "wasm32"))]
+type CoverageRes = kithara_storage::MmapResource;
+#[cfg(target_arch = "wasm32")]
+type CoverageRes = kithara_storage::MemResource;
 
 // FileIo — pure I/O executor (Clone, no &mut self)
 
@@ -105,7 +113,8 @@ impl DownloaderIo for FileIo {
 /// use `Memory`.
 pub(crate) enum FileCoverage {
     Memory(MemCoverage),
-    Disk(DiskCoverage<MmapResource>),
+    #[cfg(not(target_arch = "wasm32"))]
+    Disk(DiskCoverage<CoverageRes>),
 }
 
 impl Coverage for FileCoverage {
@@ -113,6 +122,7 @@ impl Coverage for FileCoverage {
     fn mark(&mut self, range: std::ops::Range<u64>) {
         match self {
             Self::Memory(c) => c.mark(range),
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Disk(c) => c.mark(range),
         }
     }
@@ -121,6 +131,7 @@ impl Coverage for FileCoverage {
     fn is_complete(&self) -> bool {
         match self {
             Self::Memory(c) => c.is_complete(),
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Disk(c) => c.is_complete(),
         }
     }
@@ -128,6 +139,7 @@ impl Coverage for FileCoverage {
     fn next_gap(&self, max_size: u64) -> Option<std::ops::Range<u64>> {
         match self {
             Self::Memory(c) => c.next_gap(max_size),
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Disk(c) => c.next_gap(max_size),
         }
     }
@@ -135,6 +147,7 @@ impl Coverage for FileCoverage {
     fn gaps(&self) -> Vec<std::ops::Range<u64>> {
         match self {
             Self::Memory(c) => c.gaps(),
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Disk(c) => c.gaps(),
         }
     }
@@ -142,6 +155,7 @@ impl Coverage for FileCoverage {
     fn total_size(&self) -> Option<u64> {
         match self {
             Self::Memory(c) => c.total_size(),
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Disk(c) => c.total_size(),
         }
     }
@@ -149,6 +163,7 @@ impl Coverage for FileCoverage {
     fn set_total_size(&mut self, size: u64) {
         match self {
             Self::Memory(c) => c.set_total_size(size),
+            #[cfg(not(target_arch = "wasm32"))]
             Self::Disk(c) => c.set_total_size(size),
         }
     }
@@ -157,6 +172,7 @@ impl Coverage for FileCoverage {
 impl FileCoverage {
     /// Flush dirty coverage to disk (no-op for in-memory).
     fn flush(&mut self) {
+        #[cfg(not(target_arch = "wasm32"))]
         if let Self::Disk(c) = self {
             c.flush();
         }
@@ -205,7 +221,7 @@ impl FileDownloader {
         bus: EventBus,
         look_ahead_bytes: Option<u64>,
         shared: Arc<SharedFileState>,
-        coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
+        coverage_index: Option<Arc<CoverageIndex<CoverageRes>>>,
     ) -> Self {
         let url = state.url().clone();
         let total = state.len();
@@ -234,12 +250,21 @@ impl FileDownloader {
                 FileCoverage::Memory(mc)
             },
             |idx| {
-                let key = url.to_string();
-                let mut dc = DiskCoverage::open(idx, key);
-                if let Some(size) = total {
-                    dc.set_total_size(size);
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let key = url.to_string();
+                    let mut dc = DiskCoverage::open(idx, key);
+                    if let Some(size) = total {
+                        dc.set_total_size(size);
+                    }
+                    FileCoverage::Disk(dc)
                 }
-                FileCoverage::Disk(dc)
+                #[cfg(target_arch = "wasm32")]
+                {
+                    let _ = idx;
+                    let mc = total.map_or_else(MemCoverage::new, MemCoverage::with_total_size);
+                    FileCoverage::Memory(mc)
+                }
             },
         );
 

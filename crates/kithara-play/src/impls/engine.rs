@@ -2,7 +2,7 @@
 //!
 //! Graph topology (per slot):
 //! ```text
-//! PlayerNode[slotN] -> VolPanNode[slotN] -> MasterVolPanNode -> GraphOut
+//! PlayerNode[slotN] -> VolPanNode[slotN] -> EqBridgeNode[slotN] -> MasterVolPanNode -> GraphOut
 //! ```
 //!
 //! `FirewheelCtx` is `!Send`, so it lives on a dedicated rayon pool thread.
@@ -22,7 +22,12 @@ use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
-use super::{player_processor::PlayerCmd, shared_player_state::SharedPlayerState};
+use super::{
+    effect_bridge::EffectBridgeNode,
+    player_processor::PlayerCmd,
+    shared_eq::{SharedEq, SharedEqEffect},
+    shared_player_state::SharedPlayerState,
+};
 use crate::{
     error::PlayError,
     events::EngineEvent,
@@ -86,7 +91,12 @@ struct CmdMsg {
 /// Responses sent back from the engine thread.
 enum Reply {
     Ok,
-    SlotAllocated(SlotId, kanal::Sender<PlayerCmd>, Arc<SharedPlayerState>),
+    SlotAllocated(
+        SlotId,
+        kanal::Sender<PlayerCmd>,
+        Arc<SharedPlayerState>,
+        SharedEq,
+    ),
     SampleRate(u32),
     Err(String),
 }
@@ -95,6 +105,7 @@ enum Reply {
 pub(crate) struct SlotHandle {
     pub(crate) slot_id: SlotId,
     pub(crate) cmd_tx: kanal::Sender<PlayerCmd>,
+    pub(crate) eq: SharedEq,
     pub(crate) shared_state: Arc<SharedPlayerState>,
 }
 
@@ -141,6 +152,7 @@ impl EngineImpl {
         let (done_tx, done_rx) = kanal::bounded(1);
 
         let max_slots = config.max_slots;
+        let eq_bands = config.eq_bands;
         let thread_pool = config.thread_pool.clone().unwrap_or_default();
         let pcm_pool = config
             .pcm_pool
@@ -148,7 +160,7 @@ impl EngineImpl {
             .unwrap_or_else(|| pcm_pool().clone());
 
         thread_pool.spawn(move || {
-            engine_thread(&cmd_rx, max_slots, pcm_pool);
+            engine_thread(&cmd_rx, max_slots, eq_bands, pcm_pool);
             let _ = done_tx.send(());
         });
 
@@ -200,13 +212,20 @@ impl EngineImpl {
     }
 
     /// Get the shared state for a slot.
-    #[expect(dead_code, reason = "will be used when player polls position/duration")]
     pub(crate) fn slot_shared_state(&self, slot: SlotId) -> Option<Arc<SharedPlayerState>> {
         self.slot_handles
             .lock()
             .iter()
             .find(|h| h.slot_id == slot)
             .map(|h| Arc::clone(&h.shared_state))
+    }
+
+    pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq> {
+        self.slot_handles
+            .lock()
+            .iter()
+            .find(|h| h.slot_id == slot)
+            .map(|h| h.eq.clone())
     }
 }
 
@@ -284,7 +303,7 @@ impl Engine for EngineImpl {
         }
 
         let reply = self.call_ok(Cmd::AllocateSlot)?;
-        let Reply::SlotAllocated(slot_id, cmd_tx, shared_state) = reply else {
+        let Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) = reply else {
             return Err(PlayError::Internal(
                 "unexpected reply from engine thread".into(),
             ));
@@ -294,6 +313,7 @@ impl Engine for EngineImpl {
         self.slot_handles.lock().push(SlotHandle {
             slot_id,
             cmd_tx,
+            eq,
             shared_state,
         });
 
@@ -393,6 +413,7 @@ impl Engine for EngineImpl {
 /// Internal record keeping the Firewheel node IDs for one slot.
 #[derive(Debug, Clone, Copy)]
 struct SlotNodes {
+    eq_node_id: firewheel::node::NodeID,
     slot_id: SlotId,
     player_node_id: firewheel::node::NodeID,
     vol_pan_node_id: firewheel::node::NodeID,
@@ -401,6 +422,7 @@ struct SlotNodes {
 /// Mutable state owned by the engine thread.
 struct EngineThreadState {
     ctx: Option<firewheel::FirewheelCtx<firewheel::cpal::CpalBackend>>,
+    eq_bands: usize,
     max_slots: usize,
     /// Node ID of the master volume/pan node in the audio graph.
     master_vol_pan_id: Option<firewheel::node::NodeID>,
@@ -412,9 +434,15 @@ struct EngineThreadState {
 }
 
 /// The dedicated rayon pool thread that owns the `FirewheelCtx`.
-fn engine_thread(cmd_rx: &kanal::Receiver<CmdMsg>, max_slots: usize, pcm_pool: PcmPool) {
+fn engine_thread(
+    cmd_rx: &kanal::Receiver<CmdMsg>,
+    max_slots: usize,
+    eq_bands: usize,
+    pcm_pool: PcmPool,
+) {
     let mut state = EngineThreadState {
         ctx: None,
+        eq_bands,
         max_slots,
         master_vol_pan_id: None,
         master_vol_pan_memo: None,
@@ -530,22 +558,33 @@ fn handle_allocate_slot(state: &mut EngineThreadState) -> Reply {
     // Create command channel and shared state for this slot.
     let (cmd_tx, cmd_rx) = kanal::bounded(32);
     let shared_state = Arc::new(SharedPlayerState::new());
+    let shared_eq = SharedEq::new(state.eq_bands);
 
     let player_node =
         PlayerNode::with_channel(cmd_rx, Arc::clone(&shared_state), state.pcm_pool.clone());
+    let sample_rate = fw_ctx
+        .stream_info()
+        .map_or(44100, |info| info.sample_rate.get());
+    let eq_effect = SharedEqEffect::new(shared_eq.clone(), sample_rate, 2);
+    let eq_node = EffectBridgeNode::new(Box::new(eq_effect), state.pcm_pool.clone());
+
     let player_node_id = fw_ctx.add_node(player_node, None);
     let vol_pan_node_id = fw_ctx.add_node(VolumePanNode::from_volume(Volume::Linear(1.0)), None);
+    let eq_node_id = fw_ctx.add_node(eq_node, None);
 
     if let Err(e) = fw_ctx.connect(player_node_id, vol_pan_node_id, &[(0, 0), (1, 1)], false) {
         return Reply::Err(format!("connect player->volpan failed: {e}"));
+    }
+    if let Err(e) = fw_ctx.connect(vol_pan_node_id, eq_node_id, &[(0, 0), (1, 1)], false) {
+        return Reply::Err(format!("connect volpan->eq failed: {e}"));
     }
 
     // Connect per-slot volume node to the master volume node.
     let Some(master_id) = state.master_vol_pan_id else {
         return Reply::Err("master volume node not initialised".into());
     };
-    if let Err(e) = fw_ctx.connect(vol_pan_node_id, master_id, &[(0, 0), (1, 1)], false) {
-        return Reply::Err(format!("connect volpan->master_vol failed: {e}"));
+    if let Err(e) = fw_ctx.connect(eq_node_id, master_id, &[(0, 0), (1, 1)], false) {
+        return Reply::Err(format!("connect eq->master_vol failed: {e}"));
     }
 
     if let Err(e) = fw_ctx.update() {
@@ -553,12 +592,13 @@ fn handle_allocate_slot(state: &mut EngineThreadState) -> Reply {
     }
 
     state.slot_nodes.push(SlotNodes {
+        eq_node_id,
         slot_id,
         player_node_id,
         vol_pan_node_id,
     });
 
-    Reply::SlotAllocated(slot_id, cmd_tx, shared_state)
+    Reply::SlotAllocated(slot_id, cmd_tx, shared_state, shared_eq)
 }
 
 fn handle_release_slot(state: &mut EngineThreadState, slot: SlotId) -> Reply {
@@ -572,6 +612,9 @@ fn handle_release_slot(state: &mut EngineThreadState, slot: SlotId) -> Reply {
 
     let entry = state.slot_nodes.remove(idx);
 
+    if let Err(e) = fw_ctx.remove_node(entry.eq_node_id) {
+        warn!(?slot, ?e, "failed to remove eq node");
+    }
     if let Err(e) = fw_ctx.remove_node(entry.vol_pan_node_id) {
         warn!(?slot, ?e, "failed to remove vol_pan node");
     }
