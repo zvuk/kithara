@@ -95,28 +95,26 @@ impl FileConfig {
 mod tests {
     use std::path::Path;
 
+    use rstest::rstest;
+
     use super::*;
 
     fn test_src() -> FileSrc {
         FileSrc::Remote(Url::parse("http://example.com/audio.mp3").unwrap())
     }
 
-    #[test]
-    fn test_file_config_new() {
-        let config = FileConfig::new(test_src());
+    #[rstest]
+    #[case(test_src())]
+    #[case(FileSrc::Local(PathBuf::from("/tmp/song.mp3")))]
+    fn test_file_config_new_preserves_source(#[case] src: FileSrc) {
+        let config = FileConfig::new(src.clone());
 
-        assert!(
-            matches!(&config.src, FileSrc::Remote(url) if url.as_str() == "http://example.com/audio.mp3")
-        );
+        assert_eq!(config.src, src);
         assert!(config.bus.is_none());
         assert!(config.cancel.is_none());
-    }
-
-    #[test]
-    fn test_local_src() {
-        let config = FileConfig::new(FileSrc::Local(PathBuf::from("/tmp/song.mp3")));
-
-        assert!(matches!(&config.src, FileSrc::Local(p) if p == Path::new("/tmp/song.mp3")));
+        if let FileSrc::Local(path) = &config.src {
+            assert_eq!(path, Path::new("/tmp/song.mp3"));
+        }
     }
 
     #[test]
@@ -135,20 +133,42 @@ mod tests {
         assert!(config.bus.is_none());
     }
 
-    #[test]
-    fn test_with_cancel() {
-        let cancel = CancellationToken::new();
-        let config = FileConfig::new(test_src()).with_cancel(cancel.clone());
-
-        assert!(config.cancel.is_some());
+    fn apply_cancel(config: FileConfig) -> FileConfig {
+        config.with_cancel(CancellationToken::new())
     }
 
-    #[test]
-    fn test_with_events() {
-        let bus = EventBus::new(32);
-        let config = FileConfig::new(test_src()).with_events(bus);
+    fn apply_events(config: FileConfig) -> FileConfig {
+        config.with_events(EventBus::new(32))
+    }
 
-        assert!(config.bus.is_some());
+    fn apply_headers(config: FileConfig) -> FileConfig {
+        let mut headers = Headers::new();
+        headers.insert("Authorization", "Bearer token123");
+        config.with_headers(headers)
+    }
+
+    fn has_cancel(config: &FileConfig) -> bool {
+        config.cancel.is_some()
+    }
+
+    fn has_bus(config: &FileConfig) -> bool {
+        config.bus.is_some()
+    }
+
+    fn has_auth_header(config: &FileConfig) -> bool {
+        config.headers.as_ref().and_then(|h| h.get("Authorization")) == Some("Bearer token123")
+    }
+
+    #[rstest]
+    #[case(apply_cancel, has_cancel)]
+    #[case(apply_events, has_bus)]
+    #[case(apply_headers, has_auth_header)]
+    fn test_optional_setters_update_expected_field(
+        #[case] apply: fn(FileConfig) -> FileConfig,
+        #[case] check: fn(&FileConfig) -> bool,
+    ) {
+        let config = apply(FileConfig::new(test_src()));
+        assert!(check(&config));
     }
 
     #[test]
@@ -168,17 +188,12 @@ mod tests {
         assert!(config.bus.is_some());
     }
 
-    #[test]
-    fn test_with_headers() {
-        let mut headers = Headers::new();
-        headers.insert("Authorization", "Bearer token123");
-        let config = FileConfig::new(test_src()).with_headers(headers);
-
-        assert!(config.headers.is_some());
-        assert_eq!(
-            config.headers.as_ref().and_then(|h| h.get("Authorization")),
-            Some("Bearer token123")
-        );
+    #[rstest]
+    #[case("stream-a")]
+    #[case("stream-b")]
+    fn test_with_name_sets_name(#[case] name: &str) {
+        let config = FileConfig::new(test_src()).with_name(name);
+        assert_eq!(config.name.as_deref(), Some(name));
     }
 
     #[test]
