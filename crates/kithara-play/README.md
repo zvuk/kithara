@@ -77,40 +77,44 @@ graph TD
 
 ### AVPlayer API surface
 
-| Trait | AVPlayer equivalent | Key methods |
-|-------|-------------------|-------------|
-| `Asset` | `AVAsset` | `duration`, `is_playable`, `metadata`, `url` |
-| `PlayerItem` | `AVPlayerItem` | `status`, `current_time`, `duration`, `loaded_time_ranges`, `seek`, buffering state |
-| `Player` | `AVPlayer` | `play`, `pause`, `seek`, `rate`, `volume`, `replace_current_item`, time observers |
-| `QueuePlayer` | `AVQueuePlayer` | `items`, `advance_to_next_item`, `insert`, `remove` |
-| `AudioSession` | `AVAudioSession` | `category`, `mode`, `set_active`, `output_volume`, `current_route` |
+<table>
+<tr><th>Trait</th><th>AVPlayer equivalent</th><th>Key methods</th></tr>
+<tr><td><code>Asset</code></td><td><code>AVAsset</code></td><td><code>duration</code>, <code>is_playable</code>, <code>metadata</code>, <code>url</code></td></tr>
+<tr><td><code>PlayerItem</code></td><td><code>AVPlayerItem</code></td><td><code>status</code>, <code>current_time</code>, <code>duration</code>, <code>loaded_time_ranges</code>, <code>seek</code>, buffering state</td></tr>
+<tr><td><code>Player</code></td><td><code>AVPlayer</code></td><td><code>play</code>, <code>pause</code>, <code>seek</code>, <code>rate</code>, <code>volume</code>, <code>replace_current_item</code>, time observers</td></tr>
+<tr><td><code>QueuePlayer</code></td><td><code>AVQueuePlayer</code></td><td><code>items</code>, <code>advance_to_next_item</code>, <code>insert</code>, <code>remove</code></td></tr>
+<tr><td><code>AudioSession</code></td><td><code>AVAudioSession</code></td><td><code>category</code>, <code>mode</code>, <code>set_active</code>, <code>output_volume</code>, <code>current_route</code></td></tr>
+</table>
 
 `Player` and `QueuePlayer` use `Box<dyn Fn>` callbacks for time observers, which makes them unsuitable for unimock's matching ergonomics. They are tested through integration tests.
 
 ### Engine and mixing
 
-| Trait | Role |
-|-------|------|
-| `Engine` | Singleton lifecycle, arena slot management, master output, crossfade delegation |
-| `Mixer` | Per-channel gain/pan/mute/solo, master bus, per-channel 3-band EQ, hardware crossfader |
+<table>
+<tr><th>Trait</th><th>Role</th></tr>
+<tr><td><code>Engine</code></td><td>Singleton lifecycle, arena slot management, master output, crossfade delegation</td></tr>
+<tr><td><code>Mixer</code></td><td>Per-channel gain/pan/mute/solo, master bus, per-channel 3-band EQ, hardware crossfader</td></tr>
+</table>
 
 ### DJ subsystem
 
-| Trait | Role |
-|-------|------|
-| `CrossfadeController` | Start/cancel crossfade between two slots, curve control, progress |
-| `BpmAnalyzer` | BPM detection, beat grid, tap tempo |
-| `BpmSync` | Sync follower to leader BPM, phase offset, nudge, quantize |
-| `Equalizer` | Per-slot 3-band EQ with kill switches, configurable frequencies |
-| `DjEffect` | Pluggable effects (filter, echo, reverb, flanger, brake, etc.) |
+<table>
+<tr><th>Trait</th><th>Role</th></tr>
+<tr><td><code>CrossfadeController</code></td><td>Start/cancel crossfade between two slots, curve control, progress</td></tr>
+<tr><td><code>BpmAnalyzer</code></td><td>BPM detection, beat grid, tap tempo</td></tr>
+<tr><td><code>BpmSync</code></td><td>Sync follower to leader BPM, phase offset, nudge, quantize</td></tr>
+<tr><td><code>Equalizer</code></td><td>Per-slot 3-band EQ with kill switches, configurable frequencies</td></tr>
+<tr><td><code>DjEffect</code></td><td>Pluggable effects (filter, echo, reverb, flanger, brake, etc.)</td></tr>
+</table>
 
 ### Identity and time
 
-| Type | Role |
-|------|------|
-| `SlotId` | Arena position in the engine (opaque, `Copy`) |
-| `ObserverId` | Time observer handle (opaque, `Copy`) |
-| `MediaTime` | High-precision time with value/timescale (mirrors `CMTime`), supports arithmetic and `Ord` |
+<table>
+<tr><th>Type</th><th>Role</th></tr>
+<tr><td><code>SlotId</code></td><td>Arena position in the engine (opaque, <code>Copy</code>)</td></tr>
+<tr><td><code>ObserverId</code></td><td>Time observer handle (opaque, <code>Copy</code>)</td></tr>
+<tr><td><code>MediaTime</code></td><td>High-precision time with value/timescale (mirrors <code>CMTime</code>), supports arithmetic and <code>Ord</code></td></tr>
+</table>
 
 ### Status enums
 
@@ -141,13 +145,14 @@ graph TD
 
 Events use `tokio::sync::broadcast`. Subscribe via `player.subscribe()` or `engine.subscribe()`.
 
-| Enum | Scope |
-|------|-------|
-| `PlayerEvent` | Status, rate, volume, mute, current item changes |
-| `ItemEvent` | Item status, buffering, seek, end-of-stream, stall |
-| `EngineEvent` | Slot lifecycle, crossfade progress, master volume |
-| `SessionEvent` | Interruption, route change, media services |
-| `DjEvent` | BPM detection, beat tick, sync engage/disengage |
+<table>
+<tr><th>Enum</th><th>Scope</th></tr>
+<tr><td><code>PlayerEvent</code></td><td>Status, rate, volume, mute, current item changes</td></tr>
+<tr><td><code>ItemEvent</code></td><td>Item status, buffering, seek, end-of-stream, stall</td></tr>
+<tr><td><code>EngineEvent</code></td><td>Slot lifecycle, crossfade progress, master volume</td></tr>
+<tr><td><code>SessionEvent</code></td><td>Interruption, route change, media services</td></tr>
+<tr><td><code>DjEvent</code></td><td>BPM detection, beat tick, sync engage/disengage</td></tr>
+</table>
 
 ## Engine Lifecycle
 
@@ -191,9 +196,10 @@ gantt
 
 ## Feature Flags
 
-| Feature | Effect |
-|---------|--------|
-| `test-utils` | Mock trait generation via `unimock` |
+<table>
+<tr><th>Feature</th><th>Effect</th></tr>
+<tr><td><code>test-utils</code></td><td>Mock trait generation via <code>unimock</code></td></tr>
+</table>
 
 ## Invariants
 

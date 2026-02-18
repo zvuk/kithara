@@ -13,7 +13,7 @@
 
 # kithara
 
-Facade crate providing a unified API for audio streaming, decoding, and playback. Auto-detects source type from URL (`.m3u8` = HLS, everything else = progressive file) and exposes a type-erased `Resource` with a simple `read()`/`seek()` interface.
+Facade crate for the kithara audio engine. Auto-detects source type from URL (`.m3u8` = HLS, everything else = progressive file) and exposes a type-erased `Resource` with a simple `read()`/`seek()` interface. Re-exports all sub-crates as modules for convenient access to the full stack.
 
 ## Usage
 
@@ -55,25 +55,27 @@ graph TD
 
 ## Features
 
-| Feature | Enables |
-|---------|---------|
-| `file` | Progressive file download (`kithara-file`) |
-| `hls` | HLS streaming + ABR (`kithara-hls`, `kithara-abr`) |
-| `rodio` | `rodio::Source` adapter for direct playback |
-| `assets` | Re-export `kithara-assets` |
-| `net` | Re-export `kithara-net` |
-| `bufpool` | Re-export `kithara-bufpool` |
+<table>
+<tr><th>Feature</th><th>Enables</th></tr>
+<tr><td><code>file</code></td><td>Progressive file download (<code>kithara-file</code>)</td></tr>
+<tr><td><code>hls</code></td><td>HLS streaming + ABR (<code>kithara-hls</code>, <code>kithara-abr</code>)</td></tr>
+<tr><td><code>rodio</code></td><td><code>rodio::Source</code> adapter for direct playback</td></tr>
+<tr><td><code>assets</code></td><td>Re-export <code>kithara-assets</code></td></tr>
+<tr><td><code>net</code></td><td>Re-export <code>kithara-net</code></td></tr>
+<tr><td><code>bufpool</code></td><td>Re-export <code>kithara-bufpool</code></td></tr>
+</table>
 
 ## Key Types
 
-| Type | Role |
-|------|------|
-| `Resource` | Type-erased wrapper over `Box<dyn PcmReader>` — single entry point for PCM reading |
-| `ResourceConfig` | Builder holding URL/path, network, ABR, and cache options |
-| `ResourceSrc` | Source enum: `Url(Url)` or `Path(PathBuf)` |
-| `SourceType` | Auto-detection result: `RemoteFile`, `LocalFile`, or `HlsStream` |
-| `Event` | Unified event enum: `Audio(AudioEvent)`, `File(FileEvent)`, `Hls(HlsEvent)` |
-| `EventBus` | Clonable event publisher -- publish any event type, subscribe for unified `Event` stream |
+<table>
+<tr><th>Type</th><th>Role</th></tr>
+<tr><td><code>Resource</code></td><td>Type-erased wrapper over <code>Box&lt;dyn PcmReader&gt;</code> — single entry point for PCM reading</td></tr>
+<tr><td><code>ResourceConfig</code></td><td>Builder holding URL/path, network, ABR, and cache options</td></tr>
+<tr><td><code>ResourceSrc</code></td><td>Source enum: <code>Url(Url)</code> or <code>Path(PathBuf)</code></td></tr>
+<tr><td><code>SourceType</code></td><td>Auto-detection result: <code>RemoteFile</code>, <code>LocalFile</code>, or <code>HlsStream</code></td></tr>
+<tr><td><code>Event</code></td><td>Unified event enum: <code>Audio(AudioEvent)</code>, <code>File(FileEvent)</code>, <code>Hls(HlsEvent)</code></td></tr>
+<tr><td><code>EventBus</code></td><td>Clonable event publisher — publish any event type, subscribe for unified <code>Event</code> stream</td></tr>
+</table>
 
 ## Re-exports
 

@@ -124,13 +124,14 @@ graph LR
 
 ## Resampler Quality Levels
 
-| Quality | Algorithm | Use Case |
-|---------|-----------|----------|
-| Fast | Polynomial (cubic) | Low-power, previews |
-| Normal | 64-tap sinc, linear | Standard playback |
-| Good | 128-tap sinc, linear | Better quality |
-| High (default) | 256-tap sinc, cubic | Recommended for music |
-| Maximum | FFT-based | Offline / high-end |
+<table>
+<tr><th>Quality</th><th>Algorithm</th><th>Use Case</th></tr>
+<tr><td>Fast</td><td>Polynomial (cubic)</td><td>Low-power, previews</td></tr>
+<tr><td>Normal</td><td>64-tap sinc, linear</td><td>Standard playback</td></tr>
+<tr><td>Good</td><td>128-tap sinc, linear</td><td>Better quality</td></tr>
+<tr><td>High (default)</td><td>256-tap sinc, cubic</td><td>Recommended for music</td></tr>
+<tr><td>Maximum</td><td>FFT-based</td><td>Offline / high-end</td></tr>
+</table>
 
 ## Format Change Handling
 

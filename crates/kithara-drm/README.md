@@ -32,10 +32,11 @@ let decrypted = &output[..len];
 
 ## Key Types
 
-| Type | Role |
-|------|------|
-| `DecryptContext` | Holds 16-byte AES key and IV for a segment |
-| `aes128_cbc_process_chunk()` | Decrypts a chunk in-place; handles PKCS7 padding on final chunk |
+<table>
+<tr><th>Type</th><th>Role</th></tr>
+<tr><td><code>DecryptContext</code></td><td>Holds 16-byte AES key and IV for a segment</td></tr>
+<tr><td><code>aes128_cbc_process_chunk()</code></td><td>Decrypts a chunk in-place; handles PKCS7 padding on final chunk</td></tr>
+</table>
 
 ## How It Works
 
