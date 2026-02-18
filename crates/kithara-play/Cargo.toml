@@ -62,3 +62,4 @@ test-utils = ["unimock"]
 kithara-audio = { workspace = true, features = ["test-utils"] }
 unimock = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }
+rstest = { workspace = true }
