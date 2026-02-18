@@ -117,9 +117,9 @@ fn mock_stream(source: MockSource) -> Stream<MockStream> {
     };
     // Uses a simple blocking wrapper since MockStream::create is trivial.
     tokio::runtime::Runtime::new()
-        .unwrap()
+        .expect("runtime creation should succeed")
         .block_on(Stream::new(config))
-        .unwrap()
+        .expect("stream creation should succeed")
 }
 
 // Regression tests — document the seek bug from production (2026-02-01)
@@ -144,7 +144,9 @@ fn seek_epoch_10_corrupted_delta() {
 
     let source = MockSource::new(STREAM_LEN);
     let mut stream = mock_stream(source);
-    stream.seek(SeekFrom::Start(CURRENT_POS)).unwrap();
+    stream
+        .seek(SeekFrom::Start(CURRENT_POS))
+        .expect("seek to current position should succeed");
 
     // Symphonia sends this delta when seeking to ~80.9s in a 220s fMP4 stream.
     // The delta is wrong because byte_len() returned None.
@@ -175,7 +177,9 @@ fn seek_epoch_11_corrupted_delta() {
 
     let source = MockSource::new(STREAM_LEN);
     let mut stream = mock_stream(source);
-    stream.seek(SeekFrom::Start(CURRENT_POS)).unwrap();
+    stream
+        .seek(SeekFrom::Start(CURRENT_POS))
+        .expect("seek to current position should succeed");
 
     let result = stream.seek(SeekFrom::Current(SYMPHONIA_DELTA));
 
@@ -194,11 +198,13 @@ fn seek_current_normal_backward() {
     let source = MockSource::new(1_000_000);
     let mut stream = mock_stream(source);
 
-    stream.seek(SeekFrom::Start(500_000)).unwrap();
+    stream
+        .seek(SeekFrom::Start(500_000))
+        .expect("initial seek should succeed");
 
     let result = stream.seek(SeekFrom::Current(-100_000));
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 400_000);
+    assert_eq!(result.expect("seek should return new offset"), 400_000);
 }
 
 /// Normal forward seek via `SeekFrom::Current` with positive delta.
@@ -207,11 +213,13 @@ fn seek_current_normal_forward() {
     let source = MockSource::new(1_000_000);
     let mut stream = mock_stream(source);
 
-    stream.seek(SeekFrom::Start(100_000)).unwrap();
+    stream
+        .seek(SeekFrom::Start(100_000))
+        .expect("initial seek should succeed");
 
     let result = stream.seek(SeekFrom::Current(200_000));
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 300_000);
+    assert_eq!(result.expect("seek should return new offset"), 300_000);
 }
 
 /// Genuine seek past EOF returns error (graceful, no crash).
@@ -237,7 +245,7 @@ fn seek_from_end_backward() {
 
     let result = stream.seek(SeekFrom::End(-100));
     assert!(result.is_ok());
-    assert_eq!(result.unwrap(), 999_900);
+    assert_eq!(result.expect("seek should return new offset"), 999_900);
 }
 
 // ABR variant switch — unsynchronized decoder causes garbage seeks
@@ -273,7 +281,9 @@ fn variant_switch_stale_atoms_produce_garbage_seek() {
     let mut stream = mock_stream(source);
 
     // Stream position after decoding part of variant 3's first segment
-    stream.seek(SeekFrom::Start(1_165_770)).unwrap();
+    stream
+        .seek(SeekFrom::Start(1_165_770))
+        .expect("seek to replay position should succeed");
 
     // Symphonia's AtomIterator reads old variant 0 bytes as atom header,
     // gets atom.size ≈ 3.5 GB, calls ignore_bytes → this seek:
@@ -289,9 +299,13 @@ fn read_after_seek() {
     let source = MockSource::new(1_000);
     let mut stream = mock_stream(source);
 
-    stream.seek(SeekFrom::Start(500)).unwrap();
+    stream
+        .seek(SeekFrom::Start(500))
+        .expect("seek before read should succeed");
     let mut buf = [0u8; 16];
-    let n = stream.read(&mut buf).unwrap();
+    let n = stream
+        .read(&mut buf)
+        .expect("read after seek should succeed");
     assert!(n > 0);
     assert_eq!(&buf[..n], &vec![0xAA; n][..]);
 }

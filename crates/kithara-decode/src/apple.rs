@@ -683,114 +683,120 @@ impl AppleInner {
     }
 
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        // Ensure we have packets to decode
-        while self.parser_state.packet_buffer.len() < 4 && !self.source_eof {
-            self.feed_parser()?;
-        }
+        loop {
+            // Ensure we have packets to decode
+            while self.parser_state.packet_buffer.len() < 4 && !self.source_eof {
+                self.feed_parser()?;
+            }
 
-        // Check if we have any packets
-        if self.parser_state.packet_buffer.is_empty() && self.source_eof {
-            debug!(
-                position = ?self.position,
-                frames_decoded = self.frames_decoded,
-                "Apple decoder: EOF reached"
+            // Check if we have any packets
+            if self.parser_state.packet_buffer.is_empty() && self.source_eof {
+                debug!(
+                    position = ?self.position,
+                    frames_decoded = self.frames_decoded,
+                    "Apple decoder: EOF reached"
+                );
+                return Ok(None);
+            }
+
+            // Get next packet for converter
+            let packet = match self.parser_state.packet_buffer.pop() {
+                Some(p) => p,
+                None => return Ok(None),
+            };
+
+            // Set up converter input
+            self.converter_input.current_packet = Some(packet);
+
+            // Prepare output buffer
+            let channels = self.spec.channels as usize;
+            let frames_per_packet = self
+                .parser_state
+                .format
+                .map(|f| f.mFramesPerPacket as usize)
+                .unwrap_or(1024);
+
+            let output_frames = frames_per_packet.max(1024);
+            if self.pcm_buffer.len() < output_frames * channels {
+                self.pcm_buffer.resize(output_frames * channels, 0.0);
+            }
+
+            let mut buffer_list = AudioBufferList {
+                mNumberBuffers: 1,
+                mBuffers: [AudioBuffer {
+                    mNumberChannels: self.spec.channels as u32,
+                    mDataByteSize: (self.pcm_buffer.len() * 4) as u32,
+                    mData: self.pcm_buffer.as_mut_ptr() as *mut c_void,
+                }],
+            };
+
+            let mut output_packets = output_frames as UInt32;
+            let input_ptr =
+                self.converter_input.as_mut() as *mut ConverterInputState as *mut c_void;
+
+            let status = unsafe {
+                AudioConverterFillComplexBuffer(
+                    self.converter,
+                    converter_input_callback,
+                    input_ptr,
+                    &mut output_packets,
+                    &mut buffer_list,
+                    ptr::null_mut(),
+                )
+            };
+
+            // Converter needs more input packets.
+            if status == kAudioConverterErr_NoDataNow {
+                trace!("Apple decoder: converter needs more data");
+                continue;
+            }
+
+            if status != noErr && output_packets == 0 {
+                let err_str = os_status_to_string(status);
+                warn!(
+                    status,
+                    err = %err_str,
+                    "Apple decoder: AudioConverterFillComplexBuffer failed"
+                );
+                return Err(DecodeError::Backend(Box::new(std::io::Error::other(
+                    format!("AudioConverterFillComplexBuffer failed: {}", err_str),
+                ))));
+            }
+
+            if output_packets == 0 {
+                // No output yet, need more input.
+                continue;
+            }
+
+            let frames = output_packets as usize;
+            let samples = frames * channels;
+            let pcm = self.pcm_buffer[..samples].to_vec();
+
+            let meta = PcmMeta {
+                spec: self.spec,
+                frame_offset: self.frame_offset,
+                timestamp: self.position,
+                segment_index: None,
+                variant_index: None,
+                epoch: 0,
+            };
+            let chunk = PcmChunk::new(meta, self.pool.attach(pcm));
+
+            // Update position and frame offset
+            self.frames_decoded += frames as u64;
+            self.frame_offset += frames as u64;
+            self.position =
+                Duration::from_secs_f64(self.frames_decoded as f64 / self.spec.sample_rate as f64);
+
+            trace!(
+                frames,
+                samples,
+                position_ms = self.position.as_millis(),
+                "Apple decoder: decoded chunk"
             );
-            return Ok(None);
+
+            return Ok(Some(chunk));
         }
-
-        // Get next packet for converter
-        let packet = match self.parser_state.packet_buffer.pop() {
-            Some(p) => p,
-            None => return Ok(None),
-        };
-
-        // Set up converter input
-        self.converter_input.current_packet = Some(packet);
-
-        // Prepare output buffer
-        let channels = self.spec.channels as usize;
-        let frames_per_packet = self
-            .parser_state
-            .format
-            .map(|f| f.mFramesPerPacket as usize)
-            .unwrap_or(1024);
-
-        let output_frames = frames_per_packet.max(1024);
-        if self.pcm_buffer.len() < output_frames * channels {
-            self.pcm_buffer.resize(output_frames * channels, 0.0);
-        }
-
-        let mut buffer_list = AudioBufferList {
-            mNumberBuffers: 1,
-            mBuffers: [AudioBuffer {
-                mNumberChannels: self.spec.channels as u32,
-                mDataByteSize: (self.pcm_buffer.len() * 4) as u32,
-                mData: self.pcm_buffer.as_mut_ptr() as *mut c_void,
-            }],
-        };
-
-        let mut output_packets = output_frames as UInt32;
-        let input_ptr = self.converter_input.as_mut() as *mut ConverterInputState as *mut c_void;
-
-        let status = unsafe {
-            AudioConverterFillComplexBuffer(
-                self.converter,
-                converter_input_callback,
-                input_ptr,
-                &mut output_packets,
-                &mut buffer_list,
-                ptr::null_mut(),
-            )
-        };
-
-        // Handle no data available (need more input)
-        if status == 0x21646174u32 as i32 {
-            // '!dat'
-            trace!("Apple decoder: converter needs more data");
-            return self.next_chunk(); // Recursive call to get more data
-        }
-
-        if status != noErr && output_packets == 0 {
-            let err_str = os_status_to_string(status);
-            warn!(status, err = %err_str, "Apple decoder: AudioConverterFillComplexBuffer failed");
-            return Err(DecodeError::Backend(Box::new(std::io::Error::other(
-                format!("AudioConverterFillComplexBuffer failed: {}", err_str),
-            ))));
-        }
-
-        if output_packets == 0 {
-            // No output yet, need more input
-            return self.next_chunk();
-        }
-
-        let frames = output_packets as usize;
-        let samples = frames * channels;
-        let pcm = self.pcm_buffer[..samples].to_vec();
-
-        let meta = PcmMeta {
-            spec: self.spec,
-            frame_offset: self.frame_offset,
-            timestamp: self.position,
-            segment_index: None,
-            variant_index: None,
-            epoch: 0,
-        };
-        let chunk = PcmChunk::new(meta, self.pool.attach(pcm));
-
-        // Update position and frame offset
-        self.frames_decoded += frames as u64;
-        self.frame_offset += frames as u64;
-        self.position =
-            Duration::from_secs_f64(self.frames_decoded as f64 / self.spec.sample_rate as f64);
-
-        trace!(
-            frames,
-            samples,
-            position_ms = self.position.as_millis(),
-            "Apple decoder: decoded chunk"
-        );
-
-        Ok(Some(chunk))
     }
 
     fn feed_parser(&mut self) -> DecodeResult<()> {
@@ -1249,10 +1255,6 @@ impl<C: CodecType> AudioDecoder for Apple<C> {
 
     fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
         self.inner.seek(pos)
-    }
-
-    fn position(&self) -> Duration {
-        self.inner.position
     }
 
     fn duration(&self) -> Option<Duration> {

@@ -78,6 +78,12 @@ enum Cmd {
     Shutdown,
 }
 
+/// Command envelope with a dedicated reply channel.
+struct CmdMsg {
+    cmd: Cmd,
+    reply_tx: kanal::Sender<Reply>,
+}
+
 /// Responses sent back from the engine thread.
 enum Reply {
     Ok,
@@ -102,9 +108,7 @@ pub struct EngineImpl {
     config: EngineConfig,
 
     /// Sender half of the command channel to the engine thread.
-    cmd_tx: kanal::Sender<Cmd>,
-    /// Receiver half of the reply channel from the engine thread.
-    reply_rx: kanal::Receiver<Reply>,
+    cmd_tx: kanal::Sender<CmdMsg>,
 
     /// Per-slot tracking (owned by the main side, mirrored).
     active_slots: Mutex<Vec<SlotId>>,
@@ -135,7 +139,6 @@ impl EngineImpl {
         let (events_tx, _) = broadcast::channel(64);
 
         let (cmd_tx, cmd_rx) = kanal::bounded(8);
-        let (reply_tx, reply_rx) = kanal::bounded(8);
         let (done_tx, done_rx) = kanal::bounded(1);
 
         let max_slots = config.max_slots;
@@ -146,14 +149,13 @@ impl EngineImpl {
             .unwrap_or_else(|| pcm_pool().clone());
 
         thread_pool.spawn(move || {
-            engine_thread(&cmd_rx, &reply_tx, max_slots, pcm_pool);
+            engine_thread(&cmd_rx, max_slots, pcm_pool);
             let _ = done_tx.send(());
         });
 
         Self {
             config,
             cmd_tx,
-            reply_rx,
             active_slots: Mutex::new(Vec::new()),
             slot_handles: Mutex::new(Vec::new()),
             master_volume: AtomicF32::new(1.0),
@@ -171,10 +173,11 @@ impl EngineImpl {
 
     /// Send a command and wait for its reply.
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        let (reply_tx, reply_rx) = kanal::bounded(1);
         self.cmd_tx
-            .send(cmd)
+            .send(CmdMsg { cmd, reply_tx })
             .map_err(|_| PlayError::Internal("engine thread gone".into()))?;
-        self.reply_rx
+        reply_rx
             .recv()
             .map_err(|_| PlayError::Internal("engine thread gone (reply)".into()))
     }
@@ -211,7 +214,11 @@ impl EngineImpl {
 impl Drop for EngineImpl {
     fn drop(&mut self) {
         // Ask the engine thread to shut down.
-        let _ = self.cmd_tx.send(Cmd::Shutdown);
+        let (reply_tx, _) = kanal::bounded(1);
+        let _ = self.cmd_tx.send(CmdMsg {
+            cmd: Cmd::Shutdown,
+            reply_tx,
+        });
         // Wait for it to finish.
         let _ = self.done_rx.recv();
     }
@@ -406,12 +413,7 @@ struct EngineThreadState {
 }
 
 /// The dedicated rayon pool thread that owns the `FirewheelCtx`.
-fn engine_thread(
-    cmd_rx: &kanal::Receiver<Cmd>,
-    reply_tx: &kanal::Sender<Reply>,
-    max_slots: usize,
-    pcm_pool: PcmPool,
-) {
+fn engine_thread(cmd_rx: &kanal::Receiver<CmdMsg>, max_slots: usize, pcm_pool: PcmPool) {
     let mut state = EngineThreadState {
         ctx: None,
         max_slots,
@@ -422,7 +424,9 @@ fn engine_thread(
         slot_nodes: Vec::new(),
     };
 
-    while let Ok(cmd) = cmd_rx.recv() {
+    while let Ok(msg) = cmd_rx.recv() {
+        let CmdMsg { cmd, reply_tx } = msg;
+        let should_shutdown = matches!(cmd, Cmd::Shutdown);
         let reply = match cmd {
             Cmd::Start {
                 sample_rate,
@@ -437,10 +441,13 @@ fn engine_thread(
                 if let Some(ref mut fw_ctx) = state.ctx {
                     fw_ctx.stop_stream();
                 }
-                break;
+                Reply::Ok
             }
         };
         let _ = reply_tx.send(reply);
+        if should_shutdown {
+            break;
+        }
     }
 }
 
@@ -618,213 +625,5 @@ fn handle_query_sample_rate(state: &EngineThreadState) -> Reply {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_engine() -> EngineImpl {
-        EngineImpl::new(EngineConfig::default())
-    }
-
-    #[test]
-    fn engine_config_defaults() {
-        let config = EngineConfig::default();
-        assert_eq!(config.channels, 2);
-        assert_eq!(config.eq_bands, 10);
-        assert_eq!(config.max_slots, 4);
-        assert_eq!(config.sample_rate, 44100);
-    }
-
-    #[test]
-    fn engine_config_default_thread_pool_is_none() {
-        let config = EngineConfig::default();
-        assert!(config.thread_pool.is_none());
-    }
-
-    #[test]
-    fn engine_config_builder() {
-        let pool = ThreadPool::with_num_threads(1).unwrap();
-        let config = EngineConfig::default()
-            .with_max_slots(8)
-            .with_sample_rate(48000)
-            .with_channels(1)
-            .with_eq_bands(5)
-            .with_thread_pool(pool);
-        assert_eq!(config.max_slots, 8);
-        assert_eq!(config.sample_rate, 48000);
-        assert_eq!(config.channels, 1);
-        assert!(config.thread_pool.is_some());
-        assert_eq!(config.eq_bands, 5);
-    }
-
-    #[test]
-    fn engine_not_running_initially() {
-        let engine = make_engine();
-        assert!(!engine.is_running());
-    }
-
-    #[test]
-    fn engine_slot_count_zero_initially() {
-        let engine = make_engine();
-        assert_eq!(engine.slot_count(), 0);
-        assert_eq!(engine.max_slots(), 4);
-    }
-
-    #[test]
-    fn engine_subscribe_works() {
-        let engine = make_engine();
-        let _rx = engine.subscribe();
-    }
-
-    #[test]
-    fn engine_master_volume_default() {
-        let engine = make_engine();
-        assert!((engine.master_volume() - 1.0).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn engine_set_master_volume() {
-        let engine = make_engine();
-        engine.set_master_volume(0.5);
-        assert!((engine.master_volume() - 0.5).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn engine_set_master_volume_clamps() {
-        let engine = make_engine();
-        engine.set_master_volume(2.0);
-        assert!((engine.master_volume() - 1.0).abs() < f32::EPSILON);
-        engine.set_master_volume(-0.5);
-        assert!(engine.master_volume().abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn engine_set_master_volume_emits_event() {
-        let engine = make_engine();
-        let mut rx = engine.subscribe();
-        engine.set_master_volume(0.75);
-        let event = rx.try_recv().unwrap();
-        assert!(
-            matches!(event, EngineEvent::MasterVolumeChanged { volume } if (volume - 0.75).abs() < f32::EPSILON)
-        );
-    }
-
-    #[test]
-    fn engine_stop_when_not_running_returns_error() {
-        let engine = make_engine();
-        let err = engine.stop().unwrap_err();
-        assert!(matches!(err, PlayError::EngineNotRunning));
-    }
-
-    #[test]
-    fn engine_allocate_slot_when_not_running_returns_error() {
-        let engine = make_engine();
-        let err = engine.allocate_slot().unwrap_err();
-        assert!(matches!(err, PlayError::EngineNotRunning));
-    }
-
-    #[test]
-    fn engine_release_slot_when_not_running_returns_error() {
-        let engine = make_engine();
-        let err = engine.release_slot(SlotId(99)).unwrap_err();
-        assert!(matches!(err, PlayError::EngineNotRunning));
-    }
-
-    #[test]
-    fn engine_active_slots_empty_initially() {
-        let engine = make_engine();
-        assert!(engine.active_slots().is_empty());
-    }
-
-    #[test]
-    fn engine_crossfade_stub_returns_not_ready() {
-        let engine = make_engine();
-        let err = engine
-            .crossfade(SlotId(1), SlotId(2), CrossfadeConfig::default())
-            .unwrap_err();
-        assert!(matches!(err, PlayError::NotReady));
-    }
-
-    #[test]
-    fn engine_cancel_crossfade_stub_returns_no_crossfade() {
-        let engine = make_engine();
-        let err = engine.cancel_crossfade().unwrap_err();
-        assert!(matches!(err, PlayError::NoCrossfade));
-    }
-
-    #[test]
-    fn engine_is_crossfading_returns_false() {
-        let engine = make_engine();
-        assert!(!engine.is_crossfading());
-    }
-
-    #[test]
-    fn engine_config_thread_pool_used_by_engine() {
-        let pool = ThreadPool::with_num_threads(1).unwrap();
-        let config = EngineConfig::default().with_thread_pool(pool);
-        // Engine should accept a custom thread pool without panicking.
-        let engine = EngineImpl::new(config);
-        assert!(!engine.is_running());
-    }
-
-    #[test]
-    fn engine_master_sample_rate_returns_config_when_stopped() {
-        let config = EngineConfig {
-            sample_rate: 48000,
-            ..Default::default()
-        };
-        let engine = EngineImpl::new(config);
-        assert_eq!(engine.master_sample_rate(), 48000);
-    }
-
-    #[test]
-    fn engine_master_channels_returns_config() {
-        let engine = make_engine();
-        assert_eq!(engine.master_channels(), 2);
-    }
-
-    // Tests that require actual audio hardware should be marked #[ignore].
-    // They are run explicitly during local development or on hardware-capable CI.
-
-    #[test]
-    #[ignore = "requires audio hardware"]
-    fn engine_start_stop_roundtrip() {
-        let engine = make_engine();
-        engine.start().unwrap();
-        assert!(engine.is_running());
-        engine.stop().unwrap();
-        assert!(!engine.is_running());
-    }
-
-    #[test]
-    #[ignore = "requires audio hardware"]
-    fn engine_allocate_and_release_slot() {
-        let engine = make_engine();
-        engine.start().unwrap();
-
-        let slot_id = engine.allocate_slot().unwrap();
-        assert_eq!(engine.slot_count(), 1);
-        assert!(engine.active_slots().contains(&slot_id));
-
-        engine.release_slot(slot_id).unwrap();
-        assert_eq!(engine.slot_count(), 0);
-
-        engine.stop().unwrap();
-    }
-
-    #[test]
-    #[ignore = "requires audio hardware"]
-    fn engine_arena_full_error() {
-        let config = EngineConfig {
-            max_slots: 1,
-            ..Default::default()
-        };
-        let engine = EngineImpl::new(config);
-        engine.start().unwrap();
-
-        let _slot1 = engine.allocate_slot().unwrap();
-        let result = engine.allocate_slot();
-        assert!(matches!(result, Err(PlayError::ArenaFull)));
-
-        engine.stop().unwrap();
-    }
-}
+#[path = "engine_tests.rs"]
+mod tests;
