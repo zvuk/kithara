@@ -5,24 +5,19 @@
 use std::time::Duration;
 
 use axum::{Router, routing::get};
-use kithara::hls::HlsError;
+use kithara_test_utils::TestHttpServer;
 use rstest::fixture;
-use tokio::net::TcpListener;
 use url::Url;
 
 use super::{HlsResult, crypto::init_data};
 
 /// ABR test server with configurable delays and bitrates
 pub(crate) struct AbrTestServer {
-    base_url: String,
+    http: TestHttpServer,
 }
 
 impl AbrTestServer {
     pub(crate) async fn new(master_playlist: String, init: bool, segment0_delay: Duration) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let base_url = format!("http://127.0.0.1:{}", addr.port());
-
         let master = master_playlist;
 
         let app =
@@ -102,11 +97,9 @@ impl AbrTestServer {
                 .route("/init/v1.bin", get(|| async { init_data(1) }))
                 .route("/init/v2.bin", get(|| async { init_data(2) }));
 
-        tokio::spawn(async move {
-            axum::serve(listener, app).await.unwrap();
-        });
+        let http = TestHttpServer::new(app).await;
 
-        Self { base_url }
+        Self { http }
     }
 
     #[expect(
@@ -114,9 +107,7 @@ impl AbrTestServer {
         reason = "test-only code, ergonomics over size"
     )]
     pub(crate) fn url(&self, path: &str) -> HlsResult<Url> {
-        format!("{}{}", self.base_url, path)
-            .parse()
-            .map_err(|e| HlsError::InvalidUrl(format!("Invalid test URL: {}", e)))
+        Ok(self.http.url(path))
     }
 }
 
