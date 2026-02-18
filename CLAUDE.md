@@ -129,7 +129,7 @@ Dependencies flow downward. Each layer depends only on layers below it.
 - `Net` trait + `TimeoutNet` / `RetryNet` decorators
 
 **`kithara-assets`** — Persistent disk cache with lease/pin semantics and eviction
-- Decorator chain: `LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
+- Decorator chain: `CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
 
 **`kithara-storage`** — Unified `StorageResource` (`Mmap` | `Mem`) with `read_at`/`write_at`/`wait_range`
 
@@ -145,7 +145,7 @@ Dependencies flow downward. Each layer depends only on layers below it.
 `File` and `Hls` are marker types implementing `StreamType`. Used as `Stream<File>` or `Stream<Hls>` for unified `Read + Seek` access. `Decoder<Stream<Hls>>` composes decoding on top.
 
 ### Decorator pattern (assets)
-`AssetStore = LeaseAssets<CachedAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
+`AssetStore = CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>>>>`
 
 ### Event-driven architecture
 Protocol crates emit events via broadcast channel (`FileEvent`, `HlsEvent`). `DecoderEvent<E>` wraps both stream and decode events.

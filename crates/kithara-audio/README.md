@@ -58,7 +58,7 @@ graph TB
 
     subgraph "Shared State (lock-based)"
         StorageRes["StorageResource<br/><i>Mutex + Condvar</i>"]
-        SegIdx["SegmentIndex / SharedSegments<br/><i>Mutex + Condvar</i>"]
+        SegIdx["DownloadState / SharedSegments<br/><i>Mutex + Condvar</i>"]
         Progress["Progress<br/><i>AtomicU64 + Notify</i>"]
     end
 
