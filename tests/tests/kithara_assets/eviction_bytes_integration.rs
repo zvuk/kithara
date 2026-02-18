@@ -78,7 +78,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     }
 
     // Wait for async unpinning to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Asset B
     {
@@ -97,7 +97,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     }
 
     // Wait for async unpinning to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Asset C: triggers eviction
     {
@@ -114,7 +114,7 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     }
 
     // Wait for async eviction callback to complete
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Expect A evicted (oldest) to satisfy max_bytes.
     let asset_a_path = dir.join(asset_a_name).join("media/a.bin");

@@ -232,7 +232,7 @@ async fn aes128_key_decrypts_ciphertext(
 
     let key_url = server.url("/aes/key.bin")?;
     let cipher_url = server.url("/aes/seg0.bin")?;
-    let iv = fixture::aes128_iv();
+    let iv = aes128_iv();
 
     // Fetch key through KeyManager (the production path)
     let key_bytes = key_manager.get_raw_key(&key_url, Some(iv)).await?;
@@ -246,7 +246,7 @@ async fn aes128_key_decrypts_ciphertext(
     let written = kithara::drm::aes128_cbc_process_chunk(&cipher, &mut output, &mut ctx, true)
         .map_err(kithara::hls::HlsError::KeyProcessing)?;
 
-    assert!(output[..written].starts_with(fixture::aes128_plaintext_segment().as_slice()));
+    assert!(output[..written].starts_with(aes128_plaintext_segment().as_slice()));
 
     Ok(())
 }

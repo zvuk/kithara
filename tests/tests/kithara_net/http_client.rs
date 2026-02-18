@@ -160,7 +160,7 @@ async fn slow_body_endpoint() -> impl IntoResponse {
         chunk
     });
 
-    axum::response::Response::builder()
+    Response::builder()
         .status(StatusCode::OK)
         .body(axum::body::Body::from_stream(stream))
         .unwrap()
@@ -361,7 +361,7 @@ async fn test_server(test_router: Router) -> TestServer {
 
 #[fixture]
 fn http_client() -> HttpClient {
-    HttpClient::new(kithara::net::NetOptions::default())
+    HttpClient::new(NetOptions::default())
 }
 
 // Helper functions for testing

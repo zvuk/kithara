@@ -42,7 +42,7 @@ impl AudioTestServer {
             .route("/silence.wav", get(wav_endpoint))
             .route("/test.mp3", get(mp3_endpoint))
             .layer(axum::middleware::from_fn(
-                move |req: axum::http::Request<axum::body::Body>, next: axum::middleware::Next| {
+                move |req: axum::http::Request<Body>, next: axum::middleware::Next| {
                     let counts = request_counts_clone.clone();
                     async move {
                         let path = req.uri().path().to_string();

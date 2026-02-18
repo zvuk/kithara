@@ -75,7 +75,7 @@ async fn handle_request(
     let range_header = headers
         .get(header::RANGE)
         .and_then(|v| v.to_str().ok())
-        .map(std::string::ToString::to_string);
+        .map(ToString::to_string);
 
     tracing::info!(
         "Server: {} #{}, Range: {:?}",
