@@ -23,14 +23,14 @@ const TINY_WAV_BYTES: &[u8] = include_bytes!("fixtures/silence_1s.wav");
 const TEST_MP3_BYTES: &[u8] = include_bytes!("fixtures/test.mp3");
 
 /// Test server for serving audio fixtures
-pub struct AudioTestServer {
+pub(crate) struct AudioTestServer {
     base_url: String,
     request_counts: Arc<std::sync::Mutex<HashMap<String, usize>>>,
 }
 
 impl AudioTestServer {
     /// Create a new test server
-    pub async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let base_url = format!("http://127.0.0.1:{}", addr.port());
@@ -72,22 +72,22 @@ impl AudioTestServer {
         dead_code,
         reason = "test utility reserved for future integration tests"
     )]
-    pub fn base_url(&self) -> &str {
+    pub(crate) fn base_url(&self) -> &str {
         &self.base_url
     }
 
     /// Get the URL for the WAV fixture
-    pub fn wav_url(&self) -> Url {
+    pub(crate) fn wav_url(&self) -> Url {
         Url::parse(&format!("{}/silence.wav", self.base_url)).unwrap()
     }
 
     /// Get the URL for the MP3 fixture
-    pub fn mp3_url(&self) -> Url {
+    pub(crate) fn mp3_url(&self) -> Url {
         Url::parse(&format!("{}/test.mp3", self.base_url)).unwrap()
     }
 
     /// Get request count for a path
-    pub fn request_count(&self, path: &str) -> usize {
+    pub(crate) fn request_count(&self, path: &str) -> usize {
         self.request_counts
             .lock()
             .unwrap()
@@ -118,16 +118,16 @@ async fn mp3_endpoint() -> Response<Body> {
 }
 
 /// Embedded audio data for tests that don't need HTTP
-pub struct EmbeddedAudio {
+pub(crate) struct EmbeddedAudio {
     /// WAV data (0.1 seconds of silence)
-    pub wav: &'static [u8],
+    pub(crate) wav: &'static [u8],
     /// MP3 data (test audio clip)
-    pub mp3: &'static [u8],
+    pub(crate) mp3: &'static [u8],
 }
 
 impl EmbeddedAudio {
     /// Get the embedded audio data
-    pub fn get() -> Self {
+    pub(crate) fn get() -> Self {
         Self {
             wav: TINY_WAV_BYTES,
             mp3: TEST_MP3_BYTES,
@@ -135,12 +135,12 @@ impl EmbeddedAudio {
     }
 
     /// Get WAV data
-    pub fn wav(&self) -> &'static [u8] {
+    pub(crate) fn wav(&self) -> &'static [u8] {
         self.wav
     }
 
     /// Get MP3 data
-    pub fn mp3(&self) -> &'static [u8] {
+    pub(crate) fn mp3(&self) -> &'static [u8] {
         self.mp3
     }
 }

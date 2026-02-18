@@ -13,12 +13,12 @@ use url::Url;
 use super::{HlsResult, crypto::init_data};
 
 /// ABR test server with configurable delays and bitrates
-pub struct AbrTestServer {
+pub(crate) struct AbrTestServer {
     base_url: String,
 }
 
 impl AbrTestServer {
-    pub async fn new(master_playlist: String, init: bool, segment0_delay: Duration) -> Self {
+    pub(crate) async fn new(master_playlist: String, init: bool, segment0_delay: Duration) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let base_url = format!("http://127.0.0.1:{}", addr.port());
@@ -113,7 +113,7 @@ impl AbrTestServer {
         clippy::result_large_err,
         reason = "test-only code, ergonomics over size"
     )]
-    pub fn url(&self, path: &str) -> HlsResult<Url> {
+    pub(crate) fn url(&self, path: &str) -> HlsResult<Url> {
         format!("{}{}", self.base_url, path)
             .parse()
             .map_err(|e| HlsError::InvalidUrl(format!("Invalid test URL: {}", e)))
@@ -121,7 +121,7 @@ impl AbrTestServer {
 }
 
 /// Generate master playlist with custom bitrates
-pub fn master_playlist(v0_bw: u64, v1_bw: u64, v2_bw: u64) -> String {
+pub(crate) fn master_playlist(v0_bw: u64, v1_bw: u64, v2_bw: u64) -> String {
     format!(
         r#"#EXTM3U
 #EXT-X-VERSION:6
@@ -136,7 +136,7 @@ v2.m3u8
 }
 
 /// Generate media playlist for variant
-pub fn media_playlist(variant: usize, init: bool) -> String {
+pub(crate) fn media_playlist(variant: usize, init: bool) -> String {
     let mut s = String::new();
     s.push_str(
         r#"#EXTM3U
@@ -158,7 +158,7 @@ pub fn media_playlist(variant: usize, init: bool) -> String {
 }
 
 /// Generate segment data with configurable delay and size
-pub async fn segment_data(
+pub(crate) async fn segment_data(
     variant: usize,
     segment: usize,
     delay: Duration,
@@ -192,7 +192,7 @@ pub async fn segment_data(
 
 /// Fixture: default ABR test server
 #[fixture]
-pub async fn abr_server_default() -> AbrTestServer {
+pub(crate) async fn abr_server_default() -> AbrTestServer {
     AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
         false,

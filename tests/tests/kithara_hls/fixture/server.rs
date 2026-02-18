@@ -12,7 +12,7 @@ use url::Url;
 use super::{HlsResult, crypto::*};
 
 /// Test HTTP server for HLS content
-pub struct TestServer {
+pub(crate) struct TestServer {
     base_url: String,
     #[expect(
         dead_code,
@@ -22,7 +22,7 @@ pub struct TestServer {
 }
 
 impl TestServer {
-    pub async fn new() -> Self {
+    pub(crate) async fn new() -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let base_url = format!("http://127.0.0.1:{}", addr.port());
@@ -99,7 +99,7 @@ impl TestServer {
         clippy::result_large_err,
         reason = "test-only code, ergonomics over size"
     )]
-    pub fn url(&self, path: &str) -> HlsResult<Url> {
+    pub(crate) fn url(&self, path: &str) -> HlsResult<Url> {
         format!("{}{}", self.base_url, path)
             .parse()
             .map_err(|e| HlsError::InvalidUrl(format!("Invalid test URL: {}", e)))
@@ -107,7 +107,7 @@ impl TestServer {
 }
 
 /// Master playlist with standard bitrates
-pub fn test_master_playlist() -> &'static str {
+pub(crate) fn test_master_playlist() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
@@ -120,7 +120,7 @@ v2.m3u8
 }
 
 /// Master playlist with init segments
-pub fn test_master_playlist_with_init() -> &'static str {
+pub(crate) fn test_master_playlist_with_init() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
@@ -133,7 +133,7 @@ v2-init.m3u8
 }
 
 /// Media playlist for variant
-pub fn test_media_playlist(variant: usize) -> String {
+pub(crate) fn test_media_playlist(variant: usize) -> String {
     format!(
         r#"#EXTM3U
 #EXT-X-VERSION:6
@@ -153,7 +153,7 @@ seg/v{}_2.bin
 }
 
 /// Media playlist with init segment
-pub fn test_media_playlist_with_init(variant: usize) -> String {
+pub(crate) fn test_media_playlist_with_init(variant: usize) -> String {
     format!(
         r#"#EXTM3U
 #EXT-X-VERSION:6
@@ -177,7 +177,7 @@ seg/v{}_2.bin
 ///
 /// Returns data with format "V{variant}-SEG-{segment}:TEST_SEGMENT_DATA" = 26 bytes prefix,
 /// padded to ~200KB for realistic HLS testing.
-pub fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
+pub(crate) fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
     let prefix = format!("V{}-SEG-{}:", variant, segment);
     let mut data = prefix.into_bytes();
     data.extend(b"TEST_SEGMENT_DATA");
@@ -210,7 +210,7 @@ async fn key_endpoint() -> Vec<u8> {
 }
 
 /// Master playlist with encrypted variant
-pub fn test_master_playlist_encrypted() -> &'static str {
+pub(crate) fn test_master_playlist_encrypted() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
@@ -219,7 +219,7 @@ v0-encrypted.m3u8
 }
 
 /// Media playlist with AES-128 encryption for testing
-pub fn test_media_playlist_encrypted(_variant: usize) -> String {
+pub(crate) fn test_media_playlist_encrypted(_variant: usize) -> String {
     r#"#EXTM3U
 #EXT-X-VERSION:6
 #EXT-X-TARGETDURATION:4

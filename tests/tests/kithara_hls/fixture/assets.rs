@@ -12,24 +12,24 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 /// Wrapper for test assets with temp directory lifetime management
-pub struct TestAssets {
+pub(crate) struct TestAssets {
     assets: AssetStore<DecryptContext>,
     _temp_dir: Arc<TempDir>,
 }
 
 impl TestAssets {
-    pub fn assets(&self) -> &AssetStore<DecryptContext> {
+    pub(crate) fn assets(&self) -> &AssetStore<DecryptContext> {
         &self.assets
     }
 }
 
 /// Create test assets with default "test-hls" root
-pub fn create_test_assets() -> TestAssets {
+pub(crate) fn create_test_assets() -> TestAssets {
     create_test_assets_with_root("test-hls")
 }
 
 /// Create test assets with custom asset root
-pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
+pub(crate) fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     let temp_dir = TempDir::new().unwrap();
     let temp_dir = Arc::new(temp_dir);
 
@@ -53,25 +53,25 @@ pub fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
 }
 
 /// Create test HTTP client with default options
-pub fn create_test_net() -> HttpClient {
+pub(crate) fn create_test_net() -> HttpClient {
     let net_opts = NetOptions::default();
     HttpClient::new(net_opts)
 }
 
 /// Fixture: test assets
 #[fixture]
-pub fn assets_fixture() -> TestAssets {
+pub(crate) fn assets_fixture() -> TestAssets {
     create_test_assets()
 }
 
 /// Fixture: test HTTP client
 #[fixture]
-pub fn net_fixture() -> HttpClient {
+pub(crate) fn net_fixture() -> HttpClient {
     create_test_net()
 }
 
 /// Fixture: both assets and network client
 #[fixture]
-pub fn abr_cache_and_net() -> (TestAssets, HttpClient) {
+pub(crate) fn abr_cache_and_net() -> (TestAssets, HttpClient) {
     (create_test_assets(), create_test_net())
 }
