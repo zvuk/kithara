@@ -24,8 +24,7 @@ use cbc::{
     Encryptor,
     cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
 };
-use kithara::hls::HlsError;
-use tokio::net::TcpListener;
+use kithara_test_utils::TestHttpServer;
 use url::Url;
 
 use super::HlsResult;
@@ -102,20 +101,14 @@ impl Default for HlsTestServerConfig {
 ///
 /// Uses dynamic Axum routes (`/seg/{filename}`) — scales to thousands of segments.
 pub(crate) struct HlsTestServer {
-    base_url: String,
     config: Arc<HlsTestServerConfig>,
+    http: TestHttpServer,
 }
 
 impl HlsTestServer {
     /// Spawn HTTP server on a random local port.
     pub(crate) async fn new(config: HlsTestServerConfig) -> Self {
         let config = Arc::new(config);
-
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind HlsTestServer");
-        let addr = listener.local_addr().expect("local addr");
-        let base_url = format!("http://127.0.0.1:{}", addr.port());
 
         let cfg_master = Arc::clone(&config);
         let cfg_media = Arc::clone(&config);
@@ -161,13 +154,9 @@ impl HlsTestServer {
                 }),
             );
 
-        tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve HlsTestServer");
-        });
+        let http = TestHttpServer::new(app).await;
 
-        Self { base_url, config }
+        Self { config, http }
     }
 
     /// Build a full URL from a path.
@@ -176,9 +165,7 @@ impl HlsTestServer {
         reason = "test-only code, ergonomics over size"
     )]
     pub(crate) fn url(&self, path: &str) -> HlsResult<Url> {
-        format!("{}{}", self.base_url, path)
-            .parse()
-            .map_err(|e| HlsError::InvalidUrl(format!("Invalid test URL: {e}")))
+        Ok(self.http.url(path))
     }
 
     /// Access the configuration.

@@ -34,7 +34,7 @@ lint:
     QUALITY_MIN_RSTEST_CASES: "1"
     QUALITY_MIN_PERF_TEST_FILES: "1"
     QUALITY_MIN_BENCH_TARGETS: "1"
-    QUALITY_MAX_LOCAL_HTTP_SERVERS: "1"
+    QUALITY_MAX_LOCAL_HTTP_SERVERS: "0"
   before_script:
     - apt-get update -qq && apt-get install -y -qq libasound2-dev
     - rustup component add clippy
