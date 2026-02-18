@@ -159,3 +159,14 @@ perf:
         - tests/perf/**/*
         - Cargo.toml
         - Cargo.lock
+
+bench:
+  stage: quality
+  needs: [test]
+  script:
+    - bash scripts/ci/bench-test.sh
+  rules:
+    - changes:
+        - crates/kithara-abr/**/*
+        - Cargo.toml
+        - Cargo.lock

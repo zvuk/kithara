@@ -107,6 +107,11 @@ For deterministic microbenchmarks of algorithmic hot paths, use Criterion benche
 cargo bench -p kithara-abr --bench abr_estimator
 ```
 
+CI benchmark support:
+
+- `bench` job always runs compile-check (`--no-run`).
+- Set `RUN_BENCHMARKS=1` (and optional `BENCH_SAMPLE_SIZE`) to execute benchmark runs via `scripts/ci/bench-test.sh`.
+
 ## Guidelines
 
 1. **Always use `--release`** — Debug builds produce misleading results
