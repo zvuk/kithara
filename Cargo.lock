@@ -1558,8 +1558,21 @@ checksum = "e4e69d91f25cc3f0997191c0af80f192a4d151806db235fbd1a80b58d01e61b6"
 dependencies = [
  "bevy_platform",
  "firewheel-core",
- "fixed-resample",
  "symphonium",
+]
+
+[[package]]
+name = "firewheel-web-audio"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5ce3233a1a818a4f873fd0f9aae01691dc21945f2a0629669b35a0cf9067c86"
+dependencies = [
+ "firewheel",
+ "js-sys",
+ "log",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
 ]
 
 [[package]]
@@ -2631,6 +2644,7 @@ dependencies = [
  "derive_setters",
  "fast-interleave",
  "firewheel",
+ "firewheel-web-audio",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -4603,7 +4617,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eeb5f86fca091cd84bb3b946aae8ab823cbb01921a16b87273e8baa7199fac4c"
 dependencies = [
  "fast-interleave",
- "fixed-resample",
  "symphonia 0.5.5",
  "tracing",
 ]

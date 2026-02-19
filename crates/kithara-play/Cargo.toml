@@ -49,12 +49,17 @@ rodio = { workspace = true, optional = true }
 # Testing
 unimock = { workspace = true, optional = true }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+firewheel-web-audio = { workspace = true }
+
 [features]
-default = ["file", "hls"]
+default = ["file", "hls", "backend-cpal"]
 file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net"]
 hls = ["dep:kithara-hls", "dep:kithara-abr", "dep:kithara-assets", "dep:kithara-net"]
+backend-cpal = ["firewheel/cpal"]
+backend-web-audio = []
 rodio = ["dep:rodio", "kithara-audio/rodio"]
-wasm-bindgen = ["firewheel/wasm-bindgen"]
+wasm-bindgen = []
 test-utils = ["unimock"]
 
 [dev-dependencies]

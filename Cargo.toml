@@ -108,7 +108,7 @@ kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-platform = { path = "crates/kithara-platform", version = "0.1.0" }
-kithara-play = { path = "crates/kithara-play", version = "0.1.0" }
+kithara-play = { path = "crates/kithara-play", version = "0.1.0", default-features = false }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
 kithara-test-utils = { path = "crates/kithara-test-utils" }
@@ -155,7 +155,8 @@ audioadapter-buffers = "2.0"
 smallvec = "1"
 
 # audio engine
-firewheel = { version = "0.10.0", features = ["default", "pool", "all_nodes", "musical_transport", "scheduled_events"] }
+firewheel = { version = "0.10.0", default-features = false, features = ["std", "pool", "all_nodes", "musical_transport", "scheduled_events", "tracing"] }
+firewheel-web-audio = "0.4.0"
 biquad = "0.5.0"
 thunderdome = { version = "0.6.1", default-features = false }
 portable-atomic = { version = "1.11.1", default-features = false, features = ["fallback", "float"] }

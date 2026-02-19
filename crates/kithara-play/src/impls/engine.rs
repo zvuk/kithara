@@ -14,6 +14,9 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+#[cfg(target_arch = "wasm32")]
+use std::num::NonZeroU32;
+
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
@@ -53,7 +56,7 @@ pub struct EngineConfig {
     ///
     /// When `None`, the global PCM pool is used.
     pub pcm_pool: Option<PcmPool>,
-    /// Sample rate passed to `CpalBackend` as a hint. Default: 44100.
+    /// Sample rate passed to the runtime backend as a hint. Default: 44100.
     #[derivative(Default(value = "44100"))]
     pub sample_rate: u32,
     /// Thread pool for the engine thread and background work.
@@ -414,9 +417,15 @@ struct SlotNodes {
     vol_pan_node_id: firewheel::node::NodeID,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+type RuntimeBackend = firewheel::cpal::CpalBackend;
+#[cfg(target_arch = "wasm32")]
+type RuntimeBackend = firewheel_web_audio::WebAudioBackend;
+type RuntimeCtx = firewheel::FirewheelCtx<RuntimeBackend>;
+
 /// Mutable state owned by the engine thread.
 struct EngineThreadState {
-    ctx: Option<firewheel::FirewheelCtx<firewheel::cpal::CpalBackend>>,
+    ctx: Option<RuntimeCtx>,
     eq_bands: usize,
     max_slots: usize,
     /// Node ID of the master volume/pan node in the audio graph.
@@ -469,9 +478,7 @@ fn engine_thread(cmd_rx: &Receiver<CmdMsg>, max_slots: usize, eq_bands: usize, p
 }
 
 fn handle_start(state: &mut EngineThreadState, sample_rate: u32, master_volume: f32) -> Reply {
-    use firewheel::{
-        FirewheelConfig, Volume, cpal::CpalBackend, diff::Memo, nodes::volume_pan::VolumePanNode,
-    };
+    use firewheel::{FirewheelConfig, Volume, diff::Memo, nodes::volume_pan::VolumePanNode};
 
     if state.ctx.is_some() {
         return Reply::Err("already started".into());
@@ -482,17 +489,9 @@ fn handle_start(state: &mut EngineThreadState, sample_rate: u32, master_volume: 
         ..FirewheelConfig::default()
     };
 
-    let mut fw_ctx = firewheel::FirewheelCtx::<CpalBackend>::new(fw_config);
+    let mut fw_ctx = RuntimeCtx::new(fw_config);
 
-    let cpal_config = firewheel::cpal::CpalConfig {
-        output: firewheel::cpal::CpalOutputConfig {
-            desired_sample_rate: Some(sample_rate),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    match fw_ctx.start_stream(cpal_config) {
+    match start_stream(&mut fw_ctx, sample_rate) {
         Ok(()) => {
             // Create a master volume node and connect it to the graph output.
             let master_node = VolumePanNode::from_volume(Volume::Linear(master_volume));
@@ -516,6 +515,27 @@ fn handle_start(state: &mut EngineThreadState, sample_rate: u32, master_volume: 
         }
         Err(e) => Reply::Err(format!("failed to start audio stream: {e}")),
     }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn start_stream(ctx: &mut RuntimeCtx, sample_rate: u32) -> Result<(), String> {
+    let config = firewheel::cpal::CpalConfig {
+        output: firewheel::cpal::CpalOutputConfig {
+            desired_sample_rate: Some(sample_rate),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    ctx.start_stream(config).map_err(|err| err.to_string())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn start_stream(ctx: &mut RuntimeCtx, sample_rate: u32) -> Result<(), String> {
+    let config = firewheel_web_audio::WebAudioConfig {
+        request_input: false,
+        sample_rate: NonZeroU32::new(sample_rate),
+    };
+    ctx.start_stream(config).map_err(|err| err.to_string())
 }
 
 fn handle_stop(state: &mut EngineThreadState) -> Reply {
