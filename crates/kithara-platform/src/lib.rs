@@ -20,10 +20,12 @@
 //! [`sleep`] delegates to `tokio::time::sleep` on native and is a no-op on
 //! wasm32 (browser fetch has its own retry/timeout mechanisms).
 
+mod channel;
 mod maybe_send;
 mod pool;
 pub mod time;
 
+pub use channel::{ReceiveError, Receiver, SendError, Sender, bounded, unbounded};
 pub use maybe_send::{MaybeSend, MaybeSync};
 pub use pool::ThreadPool;
 

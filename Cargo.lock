@@ -2617,10 +2617,12 @@ name = "kithara-platform"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "kanal",
  "parking_lot",
  "rayon",
  "rstest",
  "tokio",
+ "web-time",
 ]
 
 [[package]]

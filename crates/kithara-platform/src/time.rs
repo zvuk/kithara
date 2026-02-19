@@ -4,6 +4,14 @@
 //! On wasm32: no-op (browser fetch has its own retry/timeout mechanisms,
 //! and `gloo_timers` is `Rc`-based / `!Send`).
 
+pub use std::time::Duration;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use std::time::Instant;
+
+#[cfg(target_arch = "wasm32")]
+pub use web_time::Instant;
+
 #[cfg(not(target_arch = "wasm32"))]
 pub use tokio::time::sleep;
 
@@ -12,4 +20,4 @@ pub use tokio::time::sleep;
 /// Browser fetch handles retries/timeouts natively. Avoids `Send` issues
 /// with `gloo_timers` (`Rc`-based, not `Send`).
 #[cfg(target_arch = "wasm32")]
-pub async fn sleep(_duration: std::time::Duration) {}
+pub async fn sleep(_duration: Duration) {}
