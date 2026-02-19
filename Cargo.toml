@@ -210,7 +210,7 @@ memory-stats = "1.2"
 
 # performance monitoring
 hotpath = "0.10.1"
-criterion = "0.5.1"
+criterion = "0.8.2"
 
 # fast interleave/deinterleave
 fast-interleave = "0.1"
