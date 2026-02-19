@@ -3,6 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use kithara_decode::PcmChunk;
+use kithara_platform::{Receiver, Sender};
 use kithara_stream::Fetch;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -29,10 +30,7 @@ pub(super) trait AudioWorkerSource: Send + 'static {
 const BACKOFF_BUSY: Duration = Duration::from_micros(100);
 const BACKOFF_EOF: Duration = Duration::from_millis(100);
 
-fn drain_commands<S: AudioWorkerSource>(
-    source: &mut S,
-    cmd_rx: &kanal::Receiver<S::Command>,
-) -> bool {
+fn drain_commands<S: AudioWorkerSource>(source: &mut S, cmd_rx: &Receiver<S::Command>) -> bool {
     let mut handled = false;
     while let Ok(Some(cmd)) = cmd_rx.try_recv() {
         source.handle_command(cmd);
@@ -43,8 +41,8 @@ fn drain_commands<S: AudioWorkerSource>(
 
 fn send_with_backpressure<S: AudioWorkerSource>(
     source: &mut S,
-    cmd_rx: &kanal::Receiver<S::Command>,
-    data_tx: &kanal::Sender<Fetch<S::Chunk>>,
+    cmd_rx: &Receiver<S::Command>,
+    data_tx: &Sender<Fetch<S::Chunk>>,
     cancel: &CancellationToken,
     fetch: Fetch<S::Chunk>,
 ) -> Result<bool, ()> {
@@ -88,8 +86,8 @@ fn send_with_backpressure<S: AudioWorkerSource>(
 )]
 pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     mut source: S,
-    cmd_rx: &kanal::Receiver<S::Command>,
-    data_tx: &kanal::Sender<Fetch<S::Chunk>>,
+    cmd_rx: &Receiver<S::Command>,
+    data_tx: &Sender<Fetch<S::Chunk>>,
     preload_notify: &Arc<Notify>,
     preload_chunks: usize,
     cancel: &CancellationToken,

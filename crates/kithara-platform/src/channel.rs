@@ -7,6 +7,7 @@
 //! Blocking operations are implemented via `try_*` loops, so behavior is
 //! consistent on native and wasm32.
 
+#[cfg(target_arch = "wasm32")]
 use std::hint::spin_loop;
 
 pub use kanal::{ReceiveError, SendError};
@@ -34,10 +35,26 @@ impl<T> Sender<T> {
         self.len() == 0
     }
 
-    /// Send an item, waiting until channel has capacity.
+    /// Send an item.
+    ///
+    /// On native platforms this is a blocking send.
+    /// On wasm32 this uses a `try_send` loop to avoid `Atomics.wait`.
     ///
     /// # Errors
     /// Returns [`SendError`] if the receiver side is closed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn send(&self, item: T) -> Result<(), SendError> {
+        self.0.send(item)
+    }
+
+    /// Send an item.
+    ///
+    /// On native platforms this is a blocking send.
+    /// On wasm32 this uses a `try_send` loop to avoid `Atomics.wait`.
+    ///
+    /// # Errors
+    /// Returns [`SendError`] if the receiver side is closed.
+    #[cfg(target_arch = "wasm32")]
     pub fn send(&self, item: T) -> Result<(), SendError> {
         let mut pending = Some(item);
         loop {
@@ -89,10 +106,26 @@ impl<T> Receiver<T> {
         self.len() == 0
     }
 
-    /// Receive one item, waiting until data becomes available.
+    /// Receive one item.
+    ///
+    /// On native platforms this is a blocking receive.
+    /// On wasm32 this uses a `try_recv` loop to avoid `Atomics.wait`.
     ///
     /// # Errors
     /// Returns [`ReceiveError`] if the sender side is closed.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn recv(&self) -> Result<T, ReceiveError> {
+        self.0.recv()
+    }
+
+    /// Receive one item.
+    ///
+    /// On native platforms this is a blocking receive.
+    /// On wasm32 this uses a `try_recv` loop to avoid `Atomics.wait`.
+    ///
+    /// # Errors
+    /// Returns [`ReceiveError`] if the sender side is closed.
+    #[cfg(target_arch = "wasm32")]
     pub fn recv(&self) -> Result<T, ReceiveError> {
         loop {
             match self.0.try_recv() {

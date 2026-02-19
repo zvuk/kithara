@@ -2385,7 +2385,6 @@ dependencies = [
  "fast-interleave",
  "hotpath",
  "js-sys",
- "kanal",
  "kithara-assets",
  "kithara-bufpool",
  "kithara-decode",

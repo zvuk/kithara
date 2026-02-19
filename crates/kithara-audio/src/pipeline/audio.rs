@@ -10,10 +10,10 @@ use std::{
     time::Duration,
 };
 
-use kanal::Receiver;
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus};
+use kithara_platform::{Receiver, Sender, bounded};
 use kithara_stream::{EpochValidator, Fetch, Stream, StreamType};
 use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -58,7 +58,7 @@ const DEFAULT_EVENT_CAPACITY: usize = 64;
 /// ```
 pub struct Audio<S> {
     /// Command sender for seek.
-    cmd_tx: kanal::Sender<AudioCommand>,
+    cmd_tx: Sender<AudioCommand>,
 
     /// PCM chunk receiver.
     pcm_rx: Receiver<Fetch<PcmChunk>>,
@@ -534,8 +534,8 @@ where
         let metadata = decoder.metadata();
 
         let cmd_capacity = command_channel_capacity.max(1);
-        let (cmd_tx, cmd_rx) = kanal::bounded(cmd_capacity);
-        let (data_tx, data_rx) = kanal::bounded(pcm_buffer_chunks.max(1));
+        let (cmd_tx, cmd_rx) = bounded(cmd_capacity);
+        let (data_tx, data_rx) = bounded(pcm_buffer_chunks.max(1));
 
         let epoch = Arc::new(AtomicU64::new(0));
         let (audio_events_tx, _) = broadcast::channel(DEFAULT_EVENT_CAPACITY);

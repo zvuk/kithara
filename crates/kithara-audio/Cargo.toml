@@ -24,7 +24,6 @@ audioadapter-buffers = { workspace = true }
 smallvec = { workspace = true }
 fallible-iterator = { workspace = true }
 thiserror = { workspace = true }
-kanal = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 rodio = { workspace = true, optional = true }
