@@ -1,19 +1,18 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::missing_errors_doc, clippy::ignored_unit_patterns)]
 
-#[cfg(all(feature = "backend-cpal", feature = "backend-web-audio"))]
-compile_error!(
-    "kithara-play: select exactly one backend feature: `backend-cpal` or `backend-web-audio`"
-);
-
 #[cfg(all(target_arch = "wasm32", feature = "backend-cpal"))]
 compile_error!("kithara-play: `backend-cpal` is forbidden on wasm32; use `backend-web-audio`");
 
 #[cfg(all(target_arch = "wasm32", not(feature = "backend-web-audio")))]
 compile_error!("kithara-play: wasm32 build requires `backend-web-audio`");
 
-#[cfg(all(not(target_arch = "wasm32"), feature = "backend-web-audio"))]
-compile_error!("kithara-play: `backend-web-audio` is wasm32-only");
+#[cfg(all(
+    not(target_arch = "wasm32"),
+    feature = "backend-web-audio",
+    not(feature = "backend-cpal")
+))]
+compile_error!("kithara-play: non-wasm build requires `backend-cpal`");
 
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "backend-cpal")))]
 compile_error!("kithara-play: non-wasm build requires `backend-cpal`");

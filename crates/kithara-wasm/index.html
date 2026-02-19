@@ -224,6 +224,8 @@
         let wasm;
         let player;
         let uiRaf = null;
+        let selectingTrack = false;
+        let uiSuspended = false;
 
         function renderPlaylist() {
             playlistEl.innerHTML = '';
@@ -235,15 +237,25 @@
                 li.textContent = `${i + 1}. ${url}`;
                 if (active === i) li.classList.add('active');
                 li.onclick = async () => {
+                    if (selectingTrack) return;
+
+                    selectingTrack = true;
+                    uiSuspended = true;
+                    setControlsEnabled(false);
                     statusEl.textContent = `Loading track ${i + 1}...`;
+
                     try {
                         await player.select_track(i);
                         statusEl.textContent = `Playing track ${i + 1}`;
                         log(`Track selected: ${url}`, 'info');
-                        renderPlaylist();
                     } catch (err) {
                         statusEl.textContent = `Track load failed: ${err}`;
                         log(`Track load failed: ${err}`, 'error');
+                    } finally {
+                        selectingTrack = false;
+                        uiSuspended = false;
+                        setControlsEnabled(true);
+                        renderPlaylist();
                     }
                 };
                 playlistEl.appendChild(li);
@@ -291,6 +303,10 @@
         }
 
         function updateUi() {
+            if (uiSuspended) {
+                uiRaf = requestAnimationFrame(updateUi);
+                return;
+            }
             const posMs = player.get_position_ms();
             const durMs = player.get_duration_ms();
             positionEl.textContent = formatTime(posMs);
@@ -318,7 +334,15 @@
             buildInfoEl.textContent = `(${build})`;
 
             statusEl.textContent = 'Initializing thread pool...';
-            await wasm.initThreadPool(1);
+            const workerCount = Math.min(4, Math.max(2, navigator.hardwareConcurrency || 2));
+            try {
+                await wasm.initThreadPool(workerCount);
+                log(`Thread pool initialized (${workerCount})`, 'info');
+            } catch (err) {
+                log(`Thread pool (${workerCount}) failed, fallback to 1: ${err}`, 'error');
+                await wasm.initThreadPool(1);
+                log('Thread pool initialized (1)', 'info');
+            }
 
             player = new wasm.WasmPlayer();
 
@@ -340,18 +364,21 @@
             };
 
             playBtn.onclick = () => {
+                if (selectingTrack) return;
                 player.play();
                 statusEl.textContent = 'Playing';
                 log('Play', 'info');
             };
 
             pauseBtn.onclick = () => {
+                if (selectingTrack) return;
                 player.pause();
                 statusEl.textContent = 'Paused';
                 log('Pause', 'info');
             };
 
             stopBtn.onclick = () => {
+                if (selectingTrack) return;
                 player.stop();
                 seekSlider.value = '0';
                 positionEl.textContent = '0:00';
@@ -364,6 +391,7 @@
             };
 
             seekSlider.onchange = () => {
+                if (selectingTrack) return;
                 try {
                     player.seek(Number(seekSlider.value));
                 } catch (err) {
@@ -372,6 +400,7 @@
             };
 
             eqResetBtn.onclick = () => {
+                if (selectingTrack) return;
                 try {
                     player.reset_eq();
                     renderEq();

@@ -20,7 +20,9 @@ use std::num::NonZeroU32;
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_platform::{Mutex, Receiver, Sender, ThreadPool, bounded};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_platform::Receiver;
+use kithara_platform::{Mutex, Sender, ThreadPool, bounded};
 use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
@@ -86,6 +88,7 @@ enum Cmd {
 }
 
 /// Command envelope with a dedicated reply channel.
+#[cfg(not(target_arch = "wasm32"))]
 struct CmdMsg {
     cmd: Cmd,
     reply_tx: Sender<Reply>,
@@ -115,8 +118,11 @@ pub(crate) struct SlotHandle {
 pub struct EngineImpl {
     config: EngineConfig,
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Sender half of the command channel to the engine thread.
     cmd_tx: Sender<CmdMsg>,
+    #[cfg(target_arch = "wasm32")]
+    state: Mutex<EngineThreadState>,
 
     /// Per-slot tracking (owned by the main side, mirrored).
     active_slots: Mutex<Vec<SlotId>>,
@@ -133,6 +139,7 @@ pub struct EngineImpl {
     /// Whether the engine is currently running.
     running: AtomicBool,
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Signals when the engine thread has finished (used for join on drop).
     done_rx: Receiver<()>,
 }
@@ -146,31 +153,47 @@ impl EngineImpl {
     pub fn new(config: EngineConfig) -> Self {
         let (events_tx, _) = broadcast::channel(64);
 
-        let (cmd_tx, cmd_rx) = bounded(8);
-        let (done_tx, done_rx) = bounded(1);
-
         let max_slots = config.max_slots;
         let eq_bands = config.eq_bands;
-        let thread_pool = config.thread_pool.clone().unwrap_or_default();
         let pcm_pool = config
             .pcm_pool
             .clone()
             .unwrap_or_else(|| pcm_pool().clone());
 
-        thread_pool.spawn(move || {
-            engine_thread(&cmd_rx, max_slots, eq_bands, pcm_pool);
-            let _ = done_tx.send(());
-        });
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let (cmd_tx, cmd_rx) = bounded(8);
+            let (done_tx, done_rx) = bounded(1);
+            let thread_pool = config.thread_pool.clone().unwrap_or_default();
 
-        Self {
-            config,
-            cmd_tx,
-            active_slots: Mutex::new(Vec::new()),
-            slot_handles: Mutex::new(Vec::new()),
-            master_volume: AtomicF32::new(1.0),
-            events_tx,
-            running: AtomicBool::new(false),
-            done_rx,
+            thread_pool.spawn(move || {
+                engine_thread(&cmd_rx, max_slots, eq_bands, pcm_pool);
+                let _ = done_tx.send(());
+            });
+
+            Self {
+                config,
+                cmd_tx,
+                active_slots: Mutex::new(Vec::new()),
+                slot_handles: Mutex::new(Vec::new()),
+                master_volume: AtomicF32::new(1.0),
+                events_tx,
+                running: AtomicBool::new(false),
+                done_rx,
+            }
+        }
+
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self {
+                config,
+                state: Mutex::new(new_state(max_slots, eq_bands, pcm_pool)),
+                active_slots: Mutex::new(Vec::new()),
+                slot_handles: Mutex::new(Vec::new()),
+                master_volume: AtomicF32::new(1.0),
+                events_tx,
+                running: AtomicBool::new(false),
+            }
         }
     }
 
@@ -180,6 +203,7 @@ impl EngineImpl {
         let _ = self.events_tx.send(event);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     /// Send a command and wait for its reply.
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
         let (reply_tx, reply_rx) = bounded(1);
@@ -189,6 +213,13 @@ impl EngineImpl {
         reply_rx
             .recv()
             .map_err(|_| PlayError::Internal("engine thread gone (reply)".into()))
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
+        let mut state = self.state.lock();
+        let (reply, _shutdown) = run_cmd(&mut state, &cmd);
+        Ok(reply)
     }
 
     /// Send a command, wait for reply, map `Reply::Err` to `PlayError`.
@@ -228,6 +259,7 @@ impl EngineImpl {
 }
 
 impl Drop for EngineImpl {
+    #[cfg(not(target_arch = "wasm32"))]
     fn drop(&mut self) {
         // Ask the engine thread to shut down.
         let (reply_tx, _) = bounded(1);
@@ -237,6 +269,12 @@ impl Drop for EngineImpl {
         });
         // Wait for it to finish.
         let _ = self.done_rx.recv();
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn drop(&mut self) {
+        let mut state = self.state.lock();
+        let _ = run_cmd(&mut state, &Cmd::Shutdown);
     }
 }
 
@@ -437,9 +475,8 @@ struct EngineThreadState {
     slot_nodes: Vec<SlotNodes>,
 }
 
-/// The dedicated rayon pool thread that owns the `FirewheelCtx`.
-fn engine_thread(cmd_rx: &Receiver<CmdMsg>, max_slots: usize, eq_bands: usize, pcm_pool: PcmPool) {
-    let mut state = EngineThreadState {
+fn new_state(max_slots: usize, eq_bands: usize, pcm_pool: PcmPool) -> EngineThreadState {
+    EngineThreadState {
         ctx: None,
         eq_bands,
         max_slots,
@@ -448,28 +485,37 @@ fn engine_thread(cmd_rx: &Receiver<CmdMsg>, max_slots: usize, eq_bands: usize, p
         next_slot_id: 1,
         pcm_pool,
         slot_nodes: Vec::new(),
-    };
+    }
+}
+
+fn run_cmd(state: &mut EngineThreadState, cmd: &Cmd) -> (Reply, bool) {
+    match cmd {
+        Cmd::Start {
+            sample_rate,
+            master_volume,
+        } => (handle_start(state, *sample_rate, *master_volume), false),
+        Cmd::Stop => (handle_stop(state), false),
+        Cmd::AllocateSlot => (handle_allocate_slot(state), false),
+        Cmd::ReleaseSlot { slot } => (handle_release_slot(state, *slot), false),
+        Cmd::SetMasterVolume { volume } => (handle_set_master_volume(state, *volume), false),
+        Cmd::QuerySampleRate => (handle_query_sample_rate(state), false),
+        Cmd::Shutdown => {
+            if let Some(ref mut fw_ctx) = state.ctx {
+                fw_ctx.stop_stream();
+            }
+            (Reply::Ok, true)
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The dedicated rayon pool thread that owns the `FirewheelCtx`.
+fn engine_thread(cmd_rx: &Receiver<CmdMsg>, max_slots: usize, eq_bands: usize, pcm_pool: PcmPool) {
+    let mut state = new_state(max_slots, eq_bands, pcm_pool);
 
     while let Ok(msg) = cmd_rx.recv() {
         let CmdMsg { cmd, reply_tx } = msg;
-        let should_shutdown = matches!(cmd, Cmd::Shutdown);
-        let reply = match cmd {
-            Cmd::Start {
-                sample_rate,
-                master_volume,
-            } => handle_start(&mut state, sample_rate, master_volume),
-            Cmd::Stop => handle_stop(&mut state),
-            Cmd::AllocateSlot => handle_allocate_slot(&mut state),
-            Cmd::ReleaseSlot { slot } => handle_release_slot(&mut state, slot),
-            Cmd::SetMasterVolume { volume } => handle_set_master_volume(&mut state, volume),
-            Cmd::QuerySampleRate => handle_query_sample_rate(&state),
-            Cmd::Shutdown => {
-                if let Some(ref mut fw_ctx) = state.ctx {
-                    fw_ctx.stop_stream();
-                }
-                Reply::Ok
-            }
-        };
+        let (reply, should_shutdown) = run_cmd(&mut state, &cmd);
         let _ = reply_tx.send(reply);
         if should_shutdown {
             break;
