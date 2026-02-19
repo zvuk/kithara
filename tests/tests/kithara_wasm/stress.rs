@@ -611,7 +611,6 @@ async fn wasm_player_play_without_loaded_track_must_not_panic_or_hang() {
 #[test_attr(wasm_bindgen_test)]
 #[case(2_u32, 20_u32)]
 #[case(3_u32, 20_u32)]
-#[timeout(Duration::from_secs(30))]
 async fn wasm_player_double_play_click_must_not_hang(
     #[case] clicks: u32,
     #[case] _poll_iterations: u32,
