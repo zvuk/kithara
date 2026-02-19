@@ -29,6 +29,7 @@ use crate::{
 pub struct MemAssetStore {
     asset_root: String,
     cancel: CancellationToken,
+    mem_resource_capacity: Option<usize>,
     resources: Arc<DashMap<ResourceKey, MemResource>>,
     root_dir: PathBuf,
 }
@@ -38,11 +39,13 @@ impl MemAssetStore {
     pub fn new<S: Into<String>>(
         asset_root: S,
         cancel: CancellationToken,
+        mem_resource_capacity: Option<usize>,
         root_dir: PathBuf,
     ) -> Self {
         Self {
             asset_root: asset_root.into(),
             cancel,
+            mem_resource_capacity,
             resources: Arc::new(DashMap::new()),
             root_dir,
         }
@@ -79,8 +82,13 @@ impl Assets for MemAssetStore {
             return Err(AssetsError::InvalidKey);
         }
 
-        let mem = Resource::open(self.cancel.clone(), MemOptions::default())
-            .map_err(AssetsError::Storage)?;
+        let mut options = MemOptions::default();
+        if let Some(capacity) = self.mem_resource_capacity
+            && capacity > 0
+        {
+            options.capacity = capacity;
+        }
+        let mem = Resource::open(self.cancel.clone(), options).map_err(AssetsError::Storage)?;
         self.resources.insert(key.clone(), mem.clone());
         Ok(StorageResource::Mem(mem))
     }
@@ -118,7 +126,12 @@ mod tests {
     use super::*;
 
     fn make_mem_store() -> MemAssetStore {
-        MemAssetStore::new("test_asset", CancellationToken::new(), std::env::temp_dir())
+        MemAssetStore::new(
+            "test_asset",
+            CancellationToken::new(),
+            None,
+            std::env::temp_dir(),
+        )
     }
 
     #[rstest]

@@ -8,12 +8,14 @@ use std::{
     time::Duration,
 };
 
+use futures::future::{Either, select};
 use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
 use kithara_events::EventBus;
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_platform::ThreadPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
+use rstest::rstest;
 use tracing::{info, warn};
 use url::Url;
 use wasm_bindgen_futures::JsFuture;
@@ -129,6 +131,17 @@ async fn read_with_yield_limit(
 /// Yield to event loop so async I/O and Web Workers can progress.
 async fn yield_ms(ms: u32) {
     gloo_timers::future::TimeoutFuture::new(ms).await;
+}
+
+async fn promise_settles(op_future: JsFuture, timeout_ms: u32, op: &str) {
+    let timeout_future = gloo_timers::future::TimeoutFuture::new(timeout_ms);
+    match select(Box::pin(op_future), Box::pin(timeout_future)).await {
+        Either::Left((Ok(_), _)) => {}
+        Either::Left((Err(_), _)) => {}
+        Either::Right(((), _)) => {
+            panic!("{op} timed out after {timeout_ms}ms (possible browser hang)");
+        }
+    }
 }
 
 async fn create_player_with_fixture() -> Option<kithara_wasm::WasmPlayer> {
@@ -576,6 +589,101 @@ async fn wasm_player_select_track_crossfade_switch() {
     if !wait_position_advance(&player, switch_pos).await {
         warn!("crossfade test: position did not advance after switch");
     }
+}
+
+#[wasm_bindgen_test]
+async fn wasm_player_transport_without_selected_track_is_safe() {
+    init().await;
+
+    let mut player = kithara_wasm::WasmPlayer::new();
+    assert_eq!(player.current_index(), -1);
+    assert!(!player.is_playing());
+    assert_eq!(player.get_position_ms(), 0.0);
+    assert_eq!(player.get_duration_ms(), 0.0);
+
+    player.play();
+    player.pause();
+    player.stop();
+    player
+        .seek(1_000.0)
+        .expect("seek without track must be no-op");
+
+    assert!(!player.is_playing());
+    assert_eq!(player.get_position_ms(), 0.0);
+    assert_eq!(player.get_duration_ms(), 0.0);
+}
+
+#[wasm_bindgen_test]
+async fn wasm_player_play_without_loaded_track_must_not_panic_or_hang() {
+    init().await;
+
+    let player = kithara_wasm::WasmPlayer::new();
+    assert_eq!(player.loaded_index(), -1, "new player must start unloaded");
+
+    player.play();
+    yield_ms(100).await;
+
+    let snapshot = player.snapshot(32);
+    assert!(
+        snapshot.engine_running() || !snapshot.is_playing(),
+        "play() without loaded track must not leave player in broken state: \
+         engine_running={}, is_playing={}",
+        snapshot.engine_running(),
+        snapshot.is_playing()
+    );
+}
+
+#[wasm_bindgen_test]
+async fn wasm_player_select_track_promise_must_settle_without_timeout() {
+    init().await;
+
+    let player = kithara_wasm::WasmPlayer::new();
+    let fixture_idx = player
+        .add_track(fixture_url().to_string())
+        .expect("must add local fixture track");
+    promise_settles(
+        JsFuture::from(player.select_track_promise(fixture_idx)),
+        10_000,
+        "select_track_promise",
+    )
+    .await;
+
+    let _ = player.snapshot(32);
+}
+
+#[rstest]
+#[test_attr(wasm_bindgen_test)]
+#[case(2_u32, 20_u32)]
+#[case(3_u32, 20_u32)]
+#[timeout(Duration::from_secs(30))]
+async fn wasm_player_double_play_click_must_not_hang(
+    #[case] clicks: u32,
+    #[case] poll_iterations: u32,
+) {
+    init().await;
+
+    let player = kithara_wasm::WasmPlayer::new();
+
+    for click in 0..clicks {
+        for _ in 0..poll_iterations {
+            let _ = player.snapshot(8);
+            yield_ms(10).await;
+        }
+        promise_settles(
+            JsFuture::from(player.play_active_promise()),
+            10_000,
+            if click == 0 {
+                "first play click"
+            } else if click == 1 {
+                "second play click"
+            } else {
+                "play click"
+            },
+        )
+        .await;
+    }
+
+    let _ = player.snapshot(32);
 }
 
 /// Lifecycle sanity for the browser player path (`WasmPlayer` over `kithara-play`).

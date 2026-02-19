@@ -2549,7 +2549,6 @@ dependencies = [
  "hex",
  "hls_m3u8",
  "hotpath",
- "kanal",
  "kithara",
  "kithara-assets",
  "kithara-audio",

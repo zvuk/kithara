@@ -32,7 +32,6 @@ tokio-util = { workspace = true, features = ["full"] }
 tokio-stream = { workspace = true }
 
 # Channels/buffers
-kanal = { workspace = true }
 bytes = { workspace = true }
 
 # HTTP/URL
@@ -89,6 +88,7 @@ kithara-hls = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-wasm = { workspace = true }
+rstest = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }

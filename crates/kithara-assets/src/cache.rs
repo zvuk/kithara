@@ -377,6 +377,7 @@ mod tests {
         let mem = Arc::new(crate::mem_store::MemAssetStore::new(
             "test_asset",
             CancellationToken::new(),
+            None,
             std::env::temp_dir(),
         ));
         let cached = CachedAssets::with_options(mem.clone(), capacity, true, remove_on_evict);

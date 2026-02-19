@@ -6,7 +6,7 @@ use std::sync::{Arc, atomic::AtomicU64};
 
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_events::{EventBus, FileEvent};
-use kithara_net::HttpClient;
+use kithara_net::{HttpClient, Net};
 use kithara_platform::ThreadPool;
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{Backend, NullStreamContext, StreamContext, StreamType};
@@ -108,14 +108,26 @@ impl File {
         cancel: CancellationToken,
     ) -> Result<FileSource, SourceError> {
         let asset_root = asset_root_for_url(&url, config.name.as_deref());
+        let net_client = HttpClient::new(config.net.clone());
+        let response_headers = net_client.head(url.clone(), config.headers.clone()).await?;
+        let expected_len = response_headers
+            .get("content-length")
+            .or_else(|| response_headers.get("Content-Length"))
+            .and_then(|value| value.parse::<u64>().ok());
 
-        let backend = AssetStoreBuilder::new()
+        let mut backend_builder = AssetStoreBuilder::new()
             .root_dir(&config.store.cache_dir)
             .asset_root(Some(asset_root.as_str()))
             .evict_config(config.store.to_evict_config())
             .ephemeral(config.store.ephemeral)
-            .cancel(cancel.clone())
-            .build();
+            .cancel(cancel.clone());
+        let uses_memory_backend = cfg!(target_arch = "wasm32") || config.store.ephemeral;
+        if uses_memory_backend
+            && let Some(capacity) = expected_len.and_then(|len| usize::try_from(len).ok())
+        {
+            backend_builder = backend_builder.mem_resource_capacity(capacity);
+        }
+        let backend = backend_builder.build();
 
         // Open coverage index for crash-safe download tracking.
         // Only available for disk-backed storage (ephemeral/mem doesn't need it).
@@ -129,8 +141,6 @@ impl File {
         };
         #[cfg(target_arch = "wasm32")]
         let coverage_index = None;
-
-        let net_client = HttpClient::new(config.net.clone());
 
         let state = FileStreamState::create(
             Arc::new(backend),

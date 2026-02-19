@@ -155,6 +155,7 @@ pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()
     evict_config: Option<EvictConfig>,
     evict_enabled: bool,
     lease_enabled: bool,
+    mem_resource_capacity: Option<usize>,
     pool: Option<BytePool>,
     process_fn: Option<ProcessChunkFn<Ctx>>,
     root_dir: Option<PathBuf>,
@@ -186,6 +187,7 @@ impl AssetStoreBuilder<()> {
             evict_config: None,
             evict_enabled: true,
             lease_enabled: true,
+            mem_resource_capacity: None,
             pool: None,
             process_fn: Some(dummy_process),
             root_dir: None,
@@ -246,6 +248,13 @@ where
     #[must_use]
     pub fn cancel(mut self, cancel: CancellationToken) -> Self {
         self.cancel = Some(cancel);
+        self
+    }
+
+    /// Set capacity of each in-memory resource for ephemeral backend.
+    #[must_use]
+    pub fn mem_resource_capacity(mut self, capacity: usize) -> Self {
+        self.mem_resource_capacity = Some(capacity);
         self
     }
 
@@ -382,7 +391,12 @@ where
             .expect("process_fn is required for AssetStoreBuilder");
         let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
-        let mem = Arc::new(MemAssetStore::new(asset_root, cancel.clone(), root_dir));
+        let mem = Arc::new(MemAssetStore::new(
+            asset_root,
+            cancel.clone(),
+            self.mem_resource_capacity,
+            root_dir,
+        ));
         let evict = Arc::new(EvictAssets::new(
             mem,
             EvictConfig::default(),
@@ -413,6 +427,7 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
             evict_config: self.evict_config,
             evict_enabled: self.evict_enabled,
             lease_enabled: self.lease_enabled,
+            mem_resource_capacity: self.mem_resource_capacity,
             pool: self.pool,
             process_fn: Some(f),
             root_dir: self.root_dir,

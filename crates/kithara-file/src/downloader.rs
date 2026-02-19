@@ -9,7 +9,7 @@ use futures::StreamExt;
 use kithara_assets::{AssetResource, CoverageIndex};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, RangeSpec};
-use kithara_storage::{Coverage, MemCoverage, ResourceExt};
+use kithara_storage::{Coverage, MemCoverage, ResourceExt, ResourceStatus};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome, StepResult, Writer, WriterItem};
 use tokio_util::sync::CancellationToken;
 
@@ -268,10 +268,11 @@ impl FileDownloader {
             },
         );
 
-        // If resource already has some data (partial cache) and coverage
-        // doesn't know about it yet, mark it. This handles legacy files
-        // (downloaded before coverage was introduced).
-        if let Some(len) = res.len()
+        // Bootstrap coverage only for fully committed resources.
+        // For active resources sparse write_at ranges may leave a head gap,
+        // and marking 0..len would hide that gap from wait_range/probe.
+        if matches!(res.status(), ResourceStatus::Committed { .. })
+            && let Some(len) = res.len()
             && len > 0
             && coverage.next_gap(len).is_some_and(|g| g.start == 0)
         {
