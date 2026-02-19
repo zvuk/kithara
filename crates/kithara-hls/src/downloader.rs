@@ -11,6 +11,7 @@ use kithara_assets::ResourceKey;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_assets::{CoverageIndex, DiskCoverage};
 use kithara_events::{EventBus, HlsEvent};
+use kithara_platform::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_storage::{Coverage, MmapResource};
 use kithara_storage::{ResourceExt, ResourceStatus};
@@ -18,7 +19,6 @@ use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
 use tokio::time::sleep;
 use tracing::debug;
 use url::Url;
-use web_time::Instant;
 
 use crate::{
     HlsError,

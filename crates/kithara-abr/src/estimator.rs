@@ -158,8 +158,8 @@ impl Ewma {
 mod tests {
     use std::time::Duration;
 
+    use kithara_platform::time::Instant;
     use rstest::rstest;
-    use web_time::Instant;
 
     use super::*;
 

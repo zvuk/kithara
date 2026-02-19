@@ -2336,10 +2336,10 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "derivative",
+ "kithara-platform",
  "rstest",
  "tracing",
  "unimock",
- "web-time",
 ]
 
 [[package]]
@@ -2530,7 +2530,6 @@ dependencies = [
  "tracing-subscriber",
  "unimock",
  "url",
- "web-time",
 ]
 
 [[package]]

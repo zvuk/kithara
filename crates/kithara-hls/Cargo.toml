@@ -35,7 +35,6 @@ kithara-platform = { workspace = true }
 crossbeam-queue = { workspace = true }
 rangemap = { workspace = true }
 hotpath = { workspace = true, optional = true }
-web-time = { workspace = true }
 
 [features]
 default = []

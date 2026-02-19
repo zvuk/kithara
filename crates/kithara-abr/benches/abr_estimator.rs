@@ -7,7 +7,7 @@ use kithara_abr::{
     AbrController, AbrMode, AbrOptions, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource, Variant,
 };
-use web_time::Instant;
+use kithara_platform::time::Instant;
 
 fn options() -> AbrOptions {
     AbrOptions {

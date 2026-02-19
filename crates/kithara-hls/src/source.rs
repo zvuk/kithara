@@ -16,13 +16,12 @@ use crossbeam_queue::SegQueue;
 use kithara_abr::Variant;
 use kithara_assets::ResourceKey;
 use kithara_events::{EventBus, HlsEvent};
-use kithara_platform::{Condvar, Mutex};
+use kithara_platform::{Condvar, Mutex, time::Duration};
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{MediaInfo, Source, StreamError, StreamResult};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
-use web_time::Duration;
 
 use crate::{
     HlsError,

@@ -15,7 +15,7 @@
 //!
 //! ```rust
 //! use kithara_abr::{AbrController, AbrOptions, AbrMode, Variant};
-//! use web_time::Instant;
+//! use kithara_platform::time::Instant;
 //!
 //! // Define your variants
 //! let variants = vec![

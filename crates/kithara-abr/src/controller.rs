@@ -6,7 +6,7 @@ use std::{
     time::Duration,
 };
 
-use web_time::Instant;
+use kithara_platform::time::Instant;
 
 use super::{AbrMode, AbrOptions, Estimator, ThroughputEstimator, ThroughputSample};
 
