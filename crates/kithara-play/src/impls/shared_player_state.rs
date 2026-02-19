@@ -10,6 +10,7 @@ use std::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use kithara_platform::{Receiver, Sender, bounded};
 use portable_atomic::{AtomicF64, AtomicU32};
 
 use super::player_notification::PlayerNotification;
@@ -17,7 +18,7 @@ use super::player_notification::PlayerNotification;
 /// Shared state that bridges the main thread and the audio processor.
 ///
 /// Position and duration are updated by the processor every render cycle.
-/// Notifications flow from the processor to the main thread via kanal.
+/// Notifications flow from the processor to the main thread via a bounded channel.
 #[derive(Debug)]
 pub(crate) struct SharedPlayerState {
     /// Whether playback is active.
@@ -29,10 +30,10 @@ pub(crate) struct SharedPlayerState {
     /// Current sample rate from the audio stream.
     pub(crate) sample_rate: AtomicU32,
     /// Sender for processor-to-main-thread notifications.
-    pub(crate) notification_tx: kanal::Sender<PlayerNotification>,
+    pub(crate) notification_tx: Sender<PlayerNotification>,
     /// Receiver for processor-to-main-thread notifications.
     #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
-    pub(crate) notification_rx: kanal::Receiver<PlayerNotification>,
+    pub(crate) notification_rx: Receiver<PlayerNotification>,
 }
 
 impl SharedPlayerState {
@@ -41,7 +42,7 @@ impl SharedPlayerState {
     /// The notification channel is bounded to 32 to avoid dropping
     /// notifications during high activity while keeping memory bounded.
     pub(crate) fn new() -> Self {
-        let (tx, rx) = kanal::bounded(32);
+        let (tx, rx) = bounded(32);
         Self {
             playing: AtomicBool::new(false),
             position: AtomicF64::new(0.0),

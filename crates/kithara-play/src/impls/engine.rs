@@ -17,7 +17,7 @@ use std::sync::{
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_platform::{Mutex, ThreadPool};
+use kithara_platform::{Mutex, Receiver, Sender, ThreadPool, bounded};
 use portable_atomic::AtomicF32;
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
@@ -85,18 +85,13 @@ enum Cmd {
 /// Command envelope with a dedicated reply channel.
 struct CmdMsg {
     cmd: Cmd,
-    reply_tx: kanal::Sender<Reply>,
+    reply_tx: Sender<Reply>,
 }
 
 /// Responses sent back from the engine thread.
 enum Reply {
     Ok,
-    SlotAllocated(
-        SlotId,
-        kanal::Sender<PlayerCmd>,
-        Arc<SharedPlayerState>,
-        SharedEq,
-    ),
+    SlotAllocated(SlotId, Sender<PlayerCmd>, Arc<SharedPlayerState>, SharedEq),
     SampleRate(u32),
     Err(String),
 }
@@ -104,7 +99,7 @@ enum Reply {
 /// Handle for a slot, providing command channel and shared state.
 pub(crate) struct SlotHandle {
     pub(crate) slot_id: SlotId,
-    pub(crate) cmd_tx: kanal::Sender<PlayerCmd>,
+    pub(crate) cmd_tx: Sender<PlayerCmd>,
     pub(crate) eq: SharedEq,
     pub(crate) shared_state: Arc<SharedPlayerState>,
 }
@@ -118,7 +113,7 @@ pub struct EngineImpl {
     config: EngineConfig,
 
     /// Sender half of the command channel to the engine thread.
-    cmd_tx: kanal::Sender<CmdMsg>,
+    cmd_tx: Sender<CmdMsg>,
 
     /// Per-slot tracking (owned by the main side, mirrored).
     active_slots: Mutex<Vec<SlotId>>,
@@ -136,7 +131,7 @@ pub struct EngineImpl {
     running: AtomicBool,
 
     /// Signals when the engine thread has finished (used for join on drop).
-    done_rx: kanal::Receiver<()>,
+    done_rx: Receiver<()>,
 }
 
 impl EngineImpl {
@@ -148,8 +143,8 @@ impl EngineImpl {
     pub fn new(config: EngineConfig) -> Self {
         let (events_tx, _) = broadcast::channel(64);
 
-        let (cmd_tx, cmd_rx) = kanal::bounded(8);
-        let (done_tx, done_rx) = kanal::bounded(1);
+        let (cmd_tx, cmd_rx) = bounded(8);
+        let (done_tx, done_rx) = bounded(1);
 
         let max_slots = config.max_slots;
         let eq_bands = config.eq_bands;
@@ -184,7 +179,7 @@ impl EngineImpl {
 
     /// Send a command and wait for its reply.
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        let (reply_tx, reply_rx) = kanal::bounded(1);
+        let (reply_tx, reply_rx) = bounded(1);
         self.cmd_tx
             .send(CmdMsg { cmd, reply_tx })
             .map_err(|_| PlayError::Internal("engine thread gone".into()))?;
@@ -203,7 +198,7 @@ impl EngineImpl {
     }
 
     /// Get the command sender for a slot.
-    pub(crate) fn slot_cmd_tx(&self, slot: SlotId) -> Option<kanal::Sender<PlayerCmd>> {
+    pub(crate) fn slot_cmd_tx(&self, slot: SlotId) -> Option<Sender<PlayerCmd>> {
         self.slot_handles
             .lock()
             .iter()
@@ -232,7 +227,7 @@ impl EngineImpl {
 impl Drop for EngineImpl {
     fn drop(&mut self) {
         // Ask the engine thread to shut down.
-        let (reply_tx, _) = kanal::bounded(1);
+        let (reply_tx, _) = bounded(1);
         let _ = self.cmd_tx.send(CmdMsg {
             cmd: Cmd::Shutdown,
             reply_tx,
@@ -434,12 +429,7 @@ struct EngineThreadState {
 }
 
 /// The dedicated rayon pool thread that owns the `FirewheelCtx`.
-fn engine_thread(
-    cmd_rx: &kanal::Receiver<CmdMsg>,
-    max_slots: usize,
-    eq_bands: usize,
-    pcm_pool: PcmPool,
-) {
+fn engine_thread(cmd_rx: &Receiver<CmdMsg>, max_slots: usize, eq_bands: usize, pcm_pool: PcmPool) {
     let mut state = EngineThreadState {
         ctx: None,
         eq_bands,
@@ -556,7 +546,7 @@ fn handle_allocate_slot(state: &mut EngineThreadState) -> Reply {
     state.next_slot_id += 1;
 
     // Create command channel and shared state for this slot.
-    let (cmd_tx, cmd_rx) = kanal::bounded(32);
+    let (cmd_tx, cmd_rx) = bounded(32);
     let shared_state = Arc::new(SharedPlayerState::new());
     let shared_eq = SharedEq::new(state.eq_bands);
 

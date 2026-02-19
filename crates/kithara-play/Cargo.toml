@@ -33,7 +33,6 @@ thunderdome = { workspace = true }
 # Async & channels
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-kanal = { workspace = true }
 
 # Utilities
 derivative = { workspace = true }

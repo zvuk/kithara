@@ -2634,7 +2634,6 @@ dependencies = [
  "derive_setters",
  "fast-interleave",
  "firewheel",
- "kanal",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",

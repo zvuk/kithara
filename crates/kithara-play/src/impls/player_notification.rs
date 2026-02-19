@@ -1,7 +1,7 @@
 //! Notification types emitted by the audio-thread processor.
 //!
 //! These are sent from `PlayerNodeProcessor` to the main thread via a
-//! `kanal` channel inside `SharedPlayerState`.
+//! bounded channel inside `SharedPlayerState`.
 
 use std::sync::Arc;
 

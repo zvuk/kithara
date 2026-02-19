@@ -2,7 +2,7 @@
 //!
 //! [`PlayerNodeProcessor`] runs on the audio thread and manages multiple
 //! [`PlayerTrack`]s in a thunderdome arena. It receives commands from the
-//! main thread via a kanal channel and renders mixed audio into the
+//! main thread via a bounded channel and renders mixed audio into the
 //! Firewheel output buffers.
 
 use std::{
@@ -18,7 +18,7 @@ use firewheel::{
     node::{AudioNodeProcessor, ProcBuffers, ProcExtra, ProcInfo, ProcStreamCtx, ProcessStatus},
 };
 use kithara_bufpool::{PcmBuf, PcmPool};
-use kithara_platform::Mutex;
+use kithara_platform::{Mutex, Receiver};
 use thunderdome::{Arena, Index};
 use tracing::warn;
 
@@ -67,7 +67,7 @@ pub(crate) enum PlayerCmd {
 /// Manages tracks in a thunderdome arena, handles transitions,
 /// and renders mixed stereo audio into the Firewheel output buffers.
 pub(crate) struct PlayerNodeProcessor {
-    cmd_rx: kanal::Receiver<PlayerCmd>,
+    cmd_rx: Receiver<PlayerCmd>,
     crossfade: CrossfadeSettings,
     sample_rate: NonZeroU32,
     scratch_bufs: [PcmBuf; 4],
@@ -80,7 +80,7 @@ pub(crate) struct PlayerNodeProcessor {
 impl PlayerNodeProcessor {
     /// Create a new processor with the given command receiver and shared state.
     pub(crate) fn new(
-        cmd_rx: kanal::Receiver<PlayerCmd>,
+        cmd_rx: Receiver<PlayerCmd>,
         shared_state: Arc<SharedPlayerState>,
         sample_rate: NonZeroU32,
         pool: &PcmPool,
@@ -455,9 +455,9 @@ mod tests {
         Arc::new(SharedPlayerState::new())
     }
 
-    fn make_processor() -> (PlayerNodeProcessor, kanal::Sender<PlayerCmd>) {
+    fn make_processor() -> (PlayerNodeProcessor, kithara_platform::Sender<PlayerCmd>) {
         let shared_state = make_shared_state();
-        let (tx, rx) = kanal::bounded(32);
+        let (tx, rx) = kithara_platform::bounded(32);
         let sample_rate = NonZeroU32::new(44100).expect("non-zero");
         let processor =
             PlayerNodeProcessor::new(rx, shared_state, sample_rate, kithara_bufpool::pcm_pool());

@@ -13,7 +13,7 @@ use firewheel::{
     },
     param::smoother::SmootherConfig,
 };
-use kithara_platform::Mutex;
+use kithara_platform::{Mutex, Sender};
 
 use super::{player_notification::PlayerNotification, player_resource::PlayerResource};
 
@@ -120,7 +120,7 @@ impl PlayerTrack {
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
         range: Range<usize>,
-        notification_tx: &kanal::Sender<PlayerNotification>,
+        notification_tx: &Sender<PlayerNotification>,
     ) {
         // Read data from resource inside a scoped lock
         let read_outcome = {
@@ -174,7 +174,7 @@ impl PlayerTrack {
     }
 
     /// Handle EOF or read error.
-    fn handle_eof(&mut self, notification_tx: &kanal::Sender<PlayerNotification>) {
+    fn handle_eof(&mut self, notification_tx: &Sender<PlayerNotification>) {
         if self.state == TrackState::Finished {
             return;
         }
@@ -187,7 +187,7 @@ impl PlayerTrack {
     }
 
     /// Check position-based notifications.
-    fn check_notifications(&mut self, notification_tx: &kanal::Sender<PlayerNotification>) {
+    fn check_notifications(&mut self, notification_tx: &Sender<PlayerNotification>) {
         let position = self.cached_position;
         let duration = self.cached_duration;
 
@@ -242,7 +242,7 @@ impl PlayerTrack {
     }
 
     /// Emit notification when state changes.
-    fn notify_state_change(&mut self, notification_tx: &kanal::Sender<PlayerNotification>) {
+    fn notify_state_change(&mut self, notification_tx: &Sender<PlayerNotification>) {
         if !self.state_dirty {
             return;
         }
