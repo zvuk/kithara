@@ -21,7 +21,7 @@ default = ["threads"]
 threads = ["dep:rayon", "dep:wasm-bindgen-rayon"]
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-kithara-play = { workspace = true, features = ["file", "hls", "backend-web-audio", "wasm-bindgen"] }
+kithara-play = { workspace = true, default-features = false, features = ["file", "hls", "backend-web-audio", "wasm-bindgen"] }
 tracing-wasm = { workspace = true }
 console_error_panic_hook = { workspace = true }
 wasm-bindgen = { workspace = true }
