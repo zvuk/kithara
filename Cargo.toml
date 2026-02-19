@@ -121,7 +121,7 @@ unimock = { version = "0.6", features = ["std"] }
 tokio = { version = "1.49.0", default-features = false, features = ["sync", "macros", "rt"] }
 tokio-util = { version = "0.7.18", default-features = false }
 tokio-stream = "0.1.18"
-futures = "0.3.31"
+futures = "0.3.32"
 
 # thread pool
 rayon = { version = "1.10", features = ["web_spin_lock"] }
