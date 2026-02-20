@@ -12,8 +12,7 @@ use tracing_subscriber::EnvFilter;
 
 const SWITCH_AFTER: Duration = Duration::from_secs(30);
 const CROSSFADE_SECONDS: f32 = 5.0;
-const FILE_URL_DEFAULT: &str = "http://www.hyperion-records.co.uk/audiotest/14 Clementi Piano Sonata in D major, Op 25 No \
-     6 - Movement 2 Un poco andante.MP3";
+const FILE_URL_DEFAULT: &str = "https://stream.silvercomet.top/track.mp3";
 const HLS_URL_DEFAULT: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 
 #[tokio::main(flavor = "current_thread")]

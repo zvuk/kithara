@@ -324,6 +324,27 @@ impl PlayerImpl {
         state.playing.load(Ordering::Relaxed)
     }
 
+    /// Pump audio backend/runtime state.
+    pub fn tick(&self) -> Result<(), PlayError> {
+        self.engine.tick()
+    }
+
+    /// Drain audio-thread notifications for the active slot.
+    pub fn drain_notifications(&self) -> Vec<String> {
+        let Some(slot_id) = *self.current_slot.lock() else {
+            return Vec::new();
+        };
+        let Some(state) = self.engine.slot_shared_state(slot_id) else {
+            return Vec::new();
+        };
+
+        let mut out = Vec::new();
+        while let Ok(Some(notification)) = state.notification_rx.try_recv() {
+            out.push(format!("{notification:?}"));
+        }
+        out
+    }
+
     /// Number of EQ bands available for this player.
     pub fn eq_band_count(&self) -> usize {
         self.config.eq_bands

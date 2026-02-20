@@ -28,11 +28,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
 
     let url: Url = args()
         .nth(1)
-        .unwrap_or_else(|| {
-            "http://www.hyperion-records.co.uk/audiotest/14 Clementi Piano Sonata in D major, Op 25 \
-             No 6 - Movement 2 Un poco andante.MP3"
-                .to_string()
-        })
+        .unwrap_or_else(|| "https://stream.silvercomet.top/track.mp3".to_string())
         .parse()?;
 
     info!("Opening file: {url}");

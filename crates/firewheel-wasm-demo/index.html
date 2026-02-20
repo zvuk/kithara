@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firewheel WASM Demo</title>
+    <style>
+        body {
+            background: #11151c;
+            color: #f2f5f8;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            margin: 0;
+            padding: 24px;
+        }
+        .panel {
+            border: 1px solid #2d3748;
+            border-radius: 10px;
+            background: #1a202c;
+            max-width: 760px;
+            margin: 0 auto;
+            padding: 16px;
+        }
+        .row {
+            align-items: center;
+            display: flex;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        button {
+            background: #e53e3e;
+            border: none;
+            border-radius: 6px;
+            color: #fff;
+            cursor: pointer;
+            padding: 8px 12px;
+        }
+        input[type="range"] {
+            flex: 1;
+        }
+        #status {
+            color: #8ad7b3;
+            margin: 8px 0 12px;
+        }
+        #log {
+            background: #0b0f15;
+            border: 1px solid #2d3748;
+            border-radius: 8px;
+            color: #a0aec0;
+            min-height: 180px;
+            overflow: auto;
+            padding: 10px;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="panel">
+        <h2>Firewheel Beep Demo (wasm)</h2>
+        <div id="status">Initializing...</div>
+
+        <div class="row">
+            <button id="start-btn" disabled>Start</button>
+            <button id="stop-btn" disabled>Stop</button>
+        </div>
+
+        <div class="row">
+            <span>Frequency</span>
+            <input id="freq" type="range" min="110" max="1760" value="440" step="1" disabled>
+            <span id="freq-value">440 Hz</span>
+        </div>
+
+        <div id="log"></div>
+    </div>
+
+    <script type="module">
+        const statusEl = document.getElementById("status");
+        const logEl = document.getElementById("log");
+        const startBtn = document.getElementById("start-btn");
+        const stopBtn = document.getElementById("stop-btn");
+        const freqEl = document.getElementById("freq");
+        const freqValueEl = document.getElementById("freq-value");
+
+        function appendLog(line) {
+            const ts = new Date().toISOString().substring(11, 23);
+            logEl.textContent += `[${ts}] ${line}\n`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        try {
+            const wasm = await import("/firewheel-wasm-demo.js");
+            await wasm.default();
+            wasm.setup();
+
+            const demo = new wasm.BeepDemo();
+            let timer = null;
+
+            const pollEvents = () => {
+                const chunk = demo.take_events();
+                if (!chunk) return;
+                for (const line of chunk.split("\n")) {
+                    if (line) appendLog(line);
+                }
+            };
+
+            const stopLoop = () => {
+                if (timer !== null) {
+                    clearInterval(timer);
+                    timer = null;
+                }
+            };
+
+            startBtn.onclick = () => {
+                try {
+                    demo.start();
+                    statusEl.textContent = "Running";
+                    freqEl.disabled = false;
+                    timer = setInterval(() => {
+                        try {
+                            demo.tick();
+                        } catch (err) {
+                            appendLog(`tick failed: ${err}`);
+                        }
+                        pollEvents();
+                    }, 100);
+                } catch (err) {
+                    appendLog(`start failed: ${err}`);
+                }
+            };
+
+            stopBtn.onclick = () => {
+                demo.stop();
+                stopLoop();
+                pollEvents();
+                statusEl.textContent = "Stopped";
+                freqEl.disabled = true;
+            };
+
+            freqEl.oninput = () => {
+                freqValueEl.textContent = `${freqEl.value} Hz`;
+            };
+
+            freqEl.onchange = () => {
+                try {
+                    demo.set_freq_hz(Number(freqEl.value));
+                    pollEvents();
+                } catch (err) {
+                    appendLog(`set_freq_hz failed: ${err}`);
+                }
+            };
+
+            startBtn.disabled = false;
+            stopBtn.disabled = false;
+            statusEl.textContent = "Ready";
+            pollEvents();
+        } catch (err) {
+            statusEl.textContent = `init failed: ${err}`;
+            appendLog(`init failed: ${err}`);
+            console.error(err);
+        }
+    </script>
+</body>
+</html>

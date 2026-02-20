@@ -1,12 +1,15 @@
 //! WASM player powered by `kithara-play`.
 
+use std::sync::{Arc, Mutex};
+
 use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig};
-use tracing::info;
+use tokio::sync::broadcast::{self, error::RecvError};
+use tracing::{info, warn};
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::spawn_local;
 
 const CROSSFADE_SECONDS: f32 = 5.0;
-const FILE_URL_DEFAULT: &str = "http://www.hyperion-records.co.uk/audiotest/14 Clementi Piano Sonata in D major, Op 25 No \
-     6 - Movement 2 Un poco andante.MP3";
+const FILE_URL_DEFAULT: &str = "https://stream.silvercomet.top/track.mp3";
 const HLS_URL_DEFAULT: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 
 fn js_error(message: impl Into<String>) -> JsValue {
@@ -15,7 +18,8 @@ fn js_error(message: impl Into<String>) -> JsValue {
 
 #[wasm_bindgen]
 pub struct WasmPlayer {
-    current_index: Option<usize>,
+    current_index: Mutex<Option<usize>>,
+    event_log: Arc<Mutex<Vec<String>>>,
     player: PlayerImpl,
     playlist: Vec<String>,
 }
@@ -25,11 +29,13 @@ impl WasmPlayer {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         info!("WasmPlayer created");
+        let player =
+            PlayerImpl::new(PlayerConfig::default().with_crossfade_duration(CROSSFADE_SECONDS));
+        let event_log = Arc::new(Mutex::new(Vec::new()));
         Self {
-            current_index: None,
-            player: PlayerImpl::new(
-                PlayerConfig::default().with_crossfade_duration(CROSSFADE_SECONDS),
-            ),
+            current_index: Mutex::new(None),
+            event_log,
+            player,
             playlist: vec![FILE_URL_DEFAULT.to_string(), HLS_URL_DEFAULT.to_string()],
         }
     }
@@ -56,7 +62,10 @@ impl WasmPlayer {
     }
 
     pub fn current_index(&self) -> i32 {
-        self.current_index.map_or(-1, |idx| idx as i32)
+        let Ok(current_index) = self.current_index.lock() else {
+            return -1;
+        };
+        current_index.map_or(-1, |idx| idx as i32)
     }
 
     pub fn add_track(&mut self, url: String) -> Result<u32, JsValue> {
@@ -72,7 +81,7 @@ impl WasmPlayer {
         Ok((self.playlist.len() - 1) as u32)
     }
 
-    pub async fn select_track(&mut self, index: u32) -> Result<(), JsValue> {
+    pub async fn select_track(&self, index: u32) -> Result<(), JsValue> {
         let idx = usize::try_from(index)
             .map_err(|_| js_error(format!("playlist index is too large: {index}")))?;
         let Some(url) = self.playlist.get(idx).cloned() else {
@@ -80,10 +89,19 @@ impl WasmPlayer {
         };
 
         let resource = load_resource(&url).await?;
+        log_resource_events(
+            resource.subscribe(),
+            url.clone(),
+            Arc::clone(&self.event_log),
+        );
         self.player
             .play_resource(resource)
             .map_err(|err| js_error(format!("failed to select track: {err}")))?;
-        self.current_index = Some(idx);
+        let mut current_index = self
+            .current_index
+            .lock()
+            .map_err(|_| js_error("failed to lock current_index"))?;
+        *current_index = Some(idx);
 
         Ok(())
     }
@@ -109,6 +127,24 @@ impl WasmPlayer {
 
     pub fn get_position_ms(&self) -> f64 {
         self.player.position_seconds().map_or(0.0, |s| s * 1000.0)
+    }
+
+    pub fn tick(&self) -> Result<(), JsValue> {
+        if self.current_index() < 0 {
+            return Ok(());
+        }
+
+        self.player
+            .tick()
+            .map_err(|err| js_error(format!("tick failed: {err}")))?;
+
+        for notification in self.player.drain_notifications() {
+            let line = format!("player notification={notification}");
+            info!("{line}");
+            push_event(&self.event_log, line);
+        }
+
+        Ok(())
     }
 
     pub fn get_duration_ms(&self) -> f64 {
@@ -142,6 +178,18 @@ impl WasmPlayer {
             .reset_eq()
             .map_err(|err| js_error(format!("reset_eq failed: {err}")))
     }
+
+    pub fn take_events(&self) -> String {
+        let Ok(mut events) = self.event_log.lock() else {
+            return String::new();
+        };
+        if events.is_empty() {
+            return String::new();
+        }
+        let out = events.join("\n");
+        events.clear();
+        out
+    }
 }
 
 async fn load_resource(url: &str) -> Result<Resource, JsValue> {
@@ -149,4 +197,52 @@ async fn load_resource(url: &str) -> Result<Resource, JsValue> {
     Resource::new(config)
         .await
         .map_err(|err| js_error(format!("failed to load resource: {err}")))
+}
+
+fn log_resource_events<T>(
+    mut events_rx: broadcast::Receiver<T>,
+    url: String,
+    event_log: Arc<Mutex<Vec<String>>>,
+) where
+    T: core::fmt::Debug + Clone + Send + 'static,
+{
+    spawn_local(async move {
+        loop {
+            match events_rx.recv().await {
+                Ok(ev) => {
+                    let event_dbg = format!("{ev:?}");
+                    if event_dbg.contains("PlaybackProgress")
+                        || event_dbg.contains("DownloadProgress")
+                    {
+                        let line = format!("resource src={url} event={event_dbg}");
+                        info!("{line}");
+                        push_event(&event_log, line);
+                    }
+                }
+                Err(RecvError::Lagged(n)) => {
+                    let line = format!("resource src={url} events lagged n={n}");
+                    warn!("{line}");
+                    push_event(&event_log, line);
+                }
+                Err(RecvError::Closed) => {
+                    let line = format!("resource src={url} event stream closed");
+                    warn!("{line}");
+                    push_event(&event_log, line);
+                    break;
+                }
+            }
+        }
+    });
+}
+
+fn push_event(event_log: &Arc<Mutex<Vec<String>>>, line: String) {
+    let Ok(mut events) = event_log.lock() else {
+        return;
+    };
+    events.push(line);
+    const MAX_EVENTS: usize = 1024;
+    if events.len() > MAX_EVENTS {
+        let keep_from = events.len() - MAX_EVENTS;
+        events.drain(0..keep_from);
+    }
 }

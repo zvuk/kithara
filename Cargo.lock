@@ -441,6 +441,7 @@ dependencies = [
  "spin",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "web-time",
 ]
 
 [[package]]
@@ -1562,17 +1563,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "firewheel-web-audio"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5ce3233a1a818a4f873fd0f9aae01691dc21945f2a0629669b35a0cf9067c86"
+name = "firewheel-wasm-demo"
+version = "0.1.0"
 dependencies = [
+ "bevy_platform",
+ "console_error_panic_hook",
  "firewheel",
- "js-sys",
- "log",
+ "tracing",
+ "tracing-log",
+ "tracing-wasm",
  "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
 ]
 
 [[package]]
@@ -2639,12 +2639,12 @@ dependencies = [
 name = "kithara-play"
 version = "0.1.0"
 dependencies = [
+ "bevy_platform",
  "biquad",
  "derivative",
  "derive_setters",
  "fast-interleave",
  "firewheel",
- "firewheel-web-audio",
  "kithara-abr",
  "kithara-assets",
  "kithara-audio",
@@ -2744,6 +2744,7 @@ dependencies = [
  "rstest",
  "tokio",
  "tracing",
+ "tracing-log",
  "tracing-wasm",
  "wasm-bindgen",
  "wasm-bindgen-futures",

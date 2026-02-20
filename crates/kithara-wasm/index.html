@@ -225,6 +225,7 @@
         let player;
         let uiRaf = null;
         let selectingTrack = false;
+        let tickFailed = false;
         let uiSuspended = false;
 
         function renderPlaylist() {
@@ -241,6 +242,10 @@
 
                     selectingTrack = true;
                     uiSuspended = true;
+                    if (uiRaf) {
+                        cancelAnimationFrame(uiRaf);
+                        uiRaf = null;
+                    }
                     setControlsEnabled(false);
                     statusEl.textContent = `Loading track ${i + 1}...`;
 
@@ -248,6 +253,7 @@
                         await player.select_track(i);
                         statusEl.textContent = `Playing track ${i + 1}`;
                         log(`Track selected: ${url}`, 'info');
+                        startUiLoop();
                     } catch (err) {
                         statusEl.textContent = `Track load failed: ${err}`;
                         log(`Track load failed: ${err}`, 'error');
@@ -307,6 +313,23 @@
                 uiRaf = requestAnimationFrame(updateUi);
                 return;
             }
+            if (!tickFailed && player.current_index() >= 0) {
+                try {
+                    player.tick();
+                } catch (err) {
+                    tickFailed = true;
+                    log(`Tick failed: ${err}`, 'error');
+                }
+            }
+            const eventsChunk = player.take_events();
+            if (eventsChunk) {
+                const lines = eventsChunk.split('\n');
+                for (const line of lines) {
+                    if (!line) continue;
+                    const cls = /error|failed|closed|lagged/i.test(line) ? 'error' : 'info';
+                    log(line, cls);
+                }
+            }
             const posMs = player.get_position_ms();
             const durMs = player.get_duration_ms();
             positionEl.textContent = formatTime(posMs);
@@ -333,22 +356,26 @@
             const build = wasm.build_info();
             buildInfoEl.textContent = `(${build})`;
 
-            statusEl.textContent = 'Initializing thread pool...';
-            const workerCount = Math.min(4, Math.max(2, navigator.hardwareConcurrency || 2));
-            try {
-                await wasm.initThreadPool(workerCount);
-                log(`Thread pool initialized (${workerCount})`, 'info');
-            } catch (err) {
-                log(`Thread pool (${workerCount}) failed, fallback to 1: ${err}`, 'error');
-                await wasm.initThreadPool(1);
-                log('Thread pool initialized (1)', 'info');
+            if (typeof wasm.initThreadPool === 'function') {
+                statusEl.textContent = 'Initializing thread pool...';
+                const workerCount = Math.min(4, Math.max(2, navigator.hardwareConcurrency || 2));
+                try {
+                    await wasm.initThreadPool(workerCount);
+                    log(`Thread pool initialized (${workerCount})`, 'info');
+                } catch (err) {
+                    log(`Thread pool (${workerCount}) failed, fallback to 1: ${err}`, 'error');
+                    await wasm.initThreadPool(1);
+                    log('Thread pool initialized (1)', 'info');
+                }
+            } else {
+                log('Thread pool disabled (single-thread wasm build)', 'info');
             }
 
             player = new wasm.WasmPlayer();
+            window.__player = player;
 
             renderPlaylist();
             renderEq();
-            startUiLoop();
 
             addBtn.onclick = () => {
                 const url = urlInput.value.trim();

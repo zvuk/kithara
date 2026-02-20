@@ -1,0 +1,23 @@
+[package]
+name = "firewheel-wasm-demo"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Minimal Firewheel wasm demo"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+bevy_platform = { workspace = true }
+console_error_panic_hook = { workspace = true }
+firewheel = { workspace = true, features = ["cpal", "wasm-bindgen", "beep_test_node"] }
+tracing = { workspace = true }
+tracing-log = { workspace = true }
+tracing-wasm = { workspace = true }
+wasm-bindgen = { workspace = true }
+
+[lints]
+workspace = true

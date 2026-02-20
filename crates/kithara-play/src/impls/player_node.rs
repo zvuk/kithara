@@ -62,7 +62,7 @@ impl PlayerNode {
     pub(crate) fn new() -> Self {
         let (_, rx) = kithara_platform::bounded(1);
         Self {
-            active: false,
+            active: true,
             cmd_rx: rx,
             pcm_pool: kithara_bufpool::pcm_pool().clone(),
             shared_state: Arc::new(SharedPlayerState::new()),
@@ -76,7 +76,7 @@ impl PlayerNode {
         pcm_pool: PcmPool,
     ) -> Self {
         Self {
-            active: false,
+            active: true,
             cmd_rx,
             pcm_pool,
             shared_state,
@@ -130,9 +130,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn player_node_defaults_inactive() {
+    fn player_node_defaults_active() {
         let node = PlayerNode::new();
-        assert!(!node.active);
+        assert!(node.active);
     }
 
     #[test]
@@ -152,7 +152,7 @@ mod tests {
         let (tx, rx) = kithara_platform::bounded(8);
         let shared_state = Arc::new(SharedPlayerState::new());
         let node = PlayerNode::with_channel(rx, shared_state, kithara_bufpool::pcm_pool().clone());
-        assert!(!node.active);
+        assert!(node.active);
 
         // Verify the channel is connected
         tx.send(cmd).ok();

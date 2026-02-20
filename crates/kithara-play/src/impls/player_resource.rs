@@ -100,7 +100,9 @@ impl PlayerResource {
 
             let n = self.resource.read_planar(&mut planar);
             if n == 0 {
-                eof_reached = true;
+                if self.resource.is_eof() {
+                    eof_reached = true;
+                }
                 break;
             }
             self.write_len += n;
@@ -195,9 +197,14 @@ impl PlayerResource {
     reason = "test mock code; values are small and positive by construction"
 )]
 mod tests {
+    use std::time::Duration;
+
+    use kithara_audio::PcmReader;
     use kithara_audio::mock::TestPcmReader;
-    use kithara_decode::PcmSpec;
+    use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
+    use kithara_events::AudioEvent;
     use rstest::rstest;
+    use tokio::sync::broadcast;
 
     use super::*;
 
@@ -212,6 +219,61 @@ mod tests {
         let reader = TestPcmReader::new(mock_spec(), 1.0);
         let resource = Resource::from_reader(reader);
         PlayerResource::new(resource, Arc::from("test.mp3"), kithara_bufpool::pcm_pool())
+    }
+
+    struct PendingReader {
+        events_tx: broadcast::Sender<AudioEvent>,
+        meta: TrackMetadata,
+        spec: PcmSpec,
+    }
+
+    impl PendingReader {
+        fn new() -> Self {
+            let (events_tx, _) = broadcast::channel(1);
+            Self {
+                events_tx,
+                meta: TrackMetadata::default(),
+                spec: mock_spec(),
+            }
+        }
+    }
+
+    impl PcmReader for PendingReader {
+        fn read(&mut self, _buf: &mut [f32]) -> usize {
+            0
+        }
+
+        fn read_planar<'a>(&mut self, _output: &'a mut [&'a mut [f32]]) -> usize {
+            0
+        }
+
+        fn seek(&mut self, _position: Duration) -> DecodeResult<()> {
+            Ok(())
+        }
+
+        fn spec(&self) -> PcmSpec {
+            self.spec
+        }
+
+        fn is_eof(&self) -> bool {
+            false
+        }
+
+        fn position(&self) -> Duration {
+            Duration::ZERO
+        }
+
+        fn duration(&self) -> Option<Duration> {
+            Some(Duration::from_secs(1))
+        }
+
+        fn metadata(&self) -> &TrackMetadata {
+            &self.meta
+        }
+
+        fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
+            self.events_tx.subscribe()
+        }
     }
 
     type AccessorAssertion = fn(&PlayerResource);
@@ -274,6 +336,21 @@ mod tests {
         pr.seek(0.5);
         assert_eq!(pr.write_len, 0);
         assert_eq!(pr.write_pos, 0);
+    }
+
+    #[tokio::test]
+    async fn resource_zero_read_without_eof_is_not_error() {
+        let reader = PendingReader::new();
+        let resource = Resource::from_reader(reader);
+        let mut pr =
+            PlayerResource::new(resource, Arc::from("pending"), kithara_bufpool::pcm_pool());
+
+        let mut left = vec![0.0f32; 128];
+        let mut right = vec![0.0f32; 128];
+        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
+
+        let result = pr.read(&mut output, 0..128);
+        assert!(result.is_ok());
     }
 
     #[tokio::test]

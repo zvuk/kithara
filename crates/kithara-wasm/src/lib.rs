@@ -14,6 +14,7 @@ pub use player::WasmPlayer;
 #[wasm_bindgen::prelude::wasm_bindgen]
 pub fn setup() {
     console_error_panic_hook::set_once();
+    let _ = tracing_log::LogTracer::init();
     tracing_wasm::set_as_global_default();
 }
 

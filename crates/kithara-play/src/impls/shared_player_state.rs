@@ -32,7 +32,6 @@ pub(crate) struct SharedPlayerState {
     /// Sender for processor-to-main-thread notifications.
     pub(crate) notification_tx: Sender<PlayerNotification>,
     /// Receiver for processor-to-main-thread notifications.
-    #[cfg_attr(not(test), expect(dead_code, reason = "used by Task 9 wiring"))]
     pub(crate) notification_rx: Receiver<PlayerNotification>,
 }
 
