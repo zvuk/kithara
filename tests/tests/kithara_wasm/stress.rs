@@ -12,7 +12,7 @@ use std::{
 use futures::future::{Either, select};
 use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
-use kithara_events::EventBus;
+use kithara_events::{AudioEvent, Event, EventBus, HlsEvent};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_platform::ThreadPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
@@ -34,6 +34,12 @@ static INITIALIZED: AtomicBool = AtomicBool::new(false);
 fn fixture_url() -> Url {
     let url_str = option_env!("HLS_TEST_URL").unwrap_or("http://127.0.0.1:3333/master.m3u8");
     url_str.parse().unwrap()
+}
+
+fn fixture_jitter_url() -> Url {
+    let mut url = fixture_url();
+    url.set_path("/master-jitter.m3u8");
+    url
 }
 
 /// Minimal xorshift64 PRNG for deterministic seek positions.
@@ -80,10 +86,14 @@ async fn init() {
 
 /// Create an `Audio<Stream<Hls>>` pipeline in ephemeral mode.
 async fn create_pipeline() -> Audio<Stream<Hls>> {
+    create_pipeline_with_url(fixture_url()).await
+}
+
+async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
     let pool = ThreadPool::global();
     let bus = EventBus::new(128);
 
-    let hls_config = HlsConfig::new(fixture_url())
+    let hls_config = HlsConfig::new(url)
         .with_thread_pool(pool)
         .with_events(bus)
         .with_store(StoreOptions::default().with_ephemeral(true))
@@ -97,6 +107,116 @@ async fn create_pipeline() -> Audio<Stream<Hls>> {
     let mut audio = Audio::<Stream<Hls>>::new(config).await.unwrap();
     audio.preload();
     audio
+}
+
+async fn run_seek_pcm_window_check(mut audio: Audio<Stream<Hls>>) {
+    let spec = audio.spec();
+    let channels = spec.channels as usize;
+    let sample_rate = spec.sample_rate as usize;
+    let mut buf = vec![0.0f32; 4096];
+
+    // Warmup.
+    let mut warmup = 0usize;
+    for _ in 0..20 {
+        let n = read_with_yield(&mut audio, &mut buf).await;
+        if n == 0 {
+            break;
+        }
+        warmup += n;
+    }
+    assert!(warmup > 0, "warmup must read some data");
+
+    // Seek to middle and read ~5s.
+    let duration_secs = audio
+        .duration()
+        .unwrap_or(Duration::from_secs(60))
+        .as_secs_f64();
+    let middle_secs = (duration_secs * 0.5).clamp(3.0, (duration_secs - 1.0).max(3.0));
+    audio
+        .seek(Duration::from_secs_f64(middle_secs))
+        .expect("seek to middle must succeed");
+
+    let mut played_frames = 0usize;
+    let target_frames = sample_rate * 5;
+    for _ in 0..600 {
+        let n = read_with_yield_limit(&mut audio, &mut buf, 50).await;
+        if n == 0 {
+            if audio.is_eof() {
+                break;
+            }
+            continue;
+        }
+        played_frames += n / channels;
+        if played_frames >= target_frames {
+            break;
+        }
+    }
+    assert!(
+        played_frames >= sample_rate * 3,
+        "expected at least ~3s playback before near-start seek"
+    );
+
+    // Seek near start and inspect early PCM window.
+    let near_start = Duration::from_secs_f64(0.2);
+    audio
+        .seek(near_start)
+        .expect("seek near start must succeed");
+
+    let inspect_frames = (sample_rate * 35) / 100; // ~350ms
+    let mut inspected = 0usize;
+    let mut discontinuities = 0usize;
+    let mut backward_jumps = 0usize;
+    let mut first_bad: Option<(usize, usize, usize)> = None;
+    let mut prev_phase: Option<usize> = None;
+
+    for _ in 0..400 {
+        let n = read_with_yield_limit(&mut audio, &mut buf, 100).await;
+        if n == 0 {
+            if audio.is_eof() {
+                break;
+            }
+            continue;
+        }
+
+        let frames = n / channels;
+        for f in 0..frames {
+            if inspected >= inspect_frames {
+                break;
+            }
+            let phase = phase_from_f32(buf[f * channels]);
+            if let Some(prev) = prev_phase {
+                let expected = (prev + 1) % SAW_PERIOD;
+                if phase != expected {
+                    discontinuities += 1;
+                    if phase < prev {
+                        backward_jumps += 1;
+                    }
+                    if first_bad.is_none() {
+                        first_bad = Some((prev, phase, expected));
+                    }
+                }
+            }
+            prev_phase = Some(phase);
+            inspected += 1;
+        }
+
+        if inspected >= inspect_frames {
+            break;
+        }
+    }
+
+    assert!(
+        inspected >= inspect_frames,
+        "inspected too few frames after seek: {inspected}/{inspect_frames}"
+    );
+    assert_eq!(
+        discontinuities, 0,
+        "discontinuities in early PCM window after seek: {discontinuities}, first_bad={first_bad:?}"
+    );
+    assert_eq!(
+        backward_jumps, 0,
+        "backward jumps in early PCM window after seek: {backward_jumps}, first_bad={first_bad:?}"
+    );
 }
 
 /// Non-blocking read that yields to the event loop between attempts.
@@ -1030,6 +1150,274 @@ async fn stress_seek_to_zero_after_pressure() {
         continuity_errors <= 5,
         "{continuity_errors} continuity breaks after seek-to-0 — non-contiguous data"
     );
+}
+
+/// Regression: after long playback from the middle, seek near start (but not 0)
+/// must land inside segment 0, not at segment 1 boundary.
+#[wasm_bindgen_test]
+async fn stress_seek_near_start_after_mid_playback_must_land_inside_first_segment() {
+    init().await;
+    info!("Starting stress_seek_near_start_after_mid_playback_must_land_inside_first_segment");
+
+    let mut audio = create_pipeline().await;
+    let spec = audio.spec();
+    let channels = spec.channels as usize;
+    let sample_rate = spec.sample_rate as usize;
+    let mut buf = vec![0.0f32; 4096];
+
+    let mut warmup = 0usize;
+    for _ in 0..20 {
+        let n = read_with_yield(&mut audio, &mut buf).await;
+        if n == 0 {
+            break;
+        }
+        warmup += n;
+    }
+    assert!(warmup > 0, "warmup must read some data");
+
+    let duration = audio.duration().unwrap_or(Duration::from_secs(60));
+    let duration_secs = duration.as_secs_f64();
+
+    let middle_secs = (duration_secs * 0.5).clamp(3.0, (duration_secs - 1.0).max(3.0));
+    audio
+        .seek(Duration::from_secs_f64(middle_secs))
+        .expect("seek to middle must succeed");
+
+    // Emulate "listen ~5s from middle".
+    let mut played_frames = 0usize;
+    let target_frames = sample_rate * 5;
+    for _ in 0..600 {
+        let n = read_with_yield_limit(&mut audio, &mut buf, 50).await;
+        if n == 0 {
+            if audio.is_eof() {
+                break;
+            }
+            continue;
+        }
+        played_frames += n / channels;
+        if played_frames >= target_frames {
+            break;
+        }
+    }
+    assert!(
+        played_frames >= sample_rate * 3,
+        "expected at least ~3s playback before near-start seek, got {} frames",
+        played_frames
+    );
+
+    let near_start_secs = 0.2_f64;
+    audio
+        .seek(Duration::from_secs_f64(near_start_secs))
+        .expect("seek near start must succeed");
+
+    let expected_frame = (near_start_secs * spec.sample_rate as f64).round() as usize;
+    let expected_phase = expected_frame % SAW_PERIOD;
+    let seg1_start_frames = 200_000 / (channels * 2);
+    let seg1_start_phase = seg1_start_frames % SAW_PERIOD;
+
+    let mut checked = false;
+    for _ in 0..200 {
+        let n = read_with_yield_limit(&mut audio, &mut buf, 100).await;
+        if n == 0 {
+            continue;
+        }
+        let frames = n / channels;
+        if frames == 0 {
+            continue;
+        }
+
+        let actual_phase = phase_from_f32(buf[0]);
+        let dist_expected = phase_distance(actual_phase, expected_phase);
+        let dist_seg1 = phase_distance(actual_phase, seg1_start_phase);
+
+        info!(
+            near_start_secs,
+            expected_phase,
+            actual_phase,
+            dist_expected,
+            seg1_start_phase,
+            dist_seg1,
+            "phase after middle->near-start seek"
+        );
+
+        assert!(
+            dist_expected <= 1200,
+            "near-start seek landed in wrong place: \
+             expected_phase={expected_phase}, actual_phase={actual_phase}, dist={dist_expected}"
+        );
+        assert!(
+            dist_seg1 > 3000,
+            "near-start seek suspiciously close to segment-1 boundary: \
+             actual_phase={actual_phase}, seg1_phase={seg1_start_phase}, dist={dist_seg1}"
+        );
+
+        checked = true;
+        break;
+    }
+
+    assert!(
+        checked,
+        "failed to decode samples after near-start seek following middle playback"
+    );
+}
+
+/// Event-level regression guard for seek behavior in browser path:
+/// one seek command should produce one seek-complete, and playback progress
+/// after that seek should advance without extra backward resets.
+#[wasm_bindgen_test]
+async fn stress_seek_events_single_reset_and_monotonic_progress() {
+    init().await;
+    info!("Starting stress_seek_events_single_reset_and_monotonic_progress");
+
+    let mut audio = create_pipeline().await;
+    let mut events_rx = audio.events();
+    let spec = audio.spec();
+    let channels = spec.channels as usize;
+    let mut buf = vec![0.0f32; 4096];
+
+    // Warmup.
+    let mut warmup = 0usize;
+    for _ in 0..20 {
+        let n = read_with_yield(&mut audio, &mut buf).await;
+        if n == 0 {
+            break;
+        }
+        warmup += n;
+    }
+    assert!(warmup > 0, "warmup must read some data");
+
+    // Drain old events before seek scenario.
+    while events_rx.try_recv().is_ok() {}
+
+    // Seek to middle and "play" a few seconds first.
+    let duration_secs = audio
+        .duration()
+        .unwrap_or(Duration::from_secs(60))
+        .as_secs_f64();
+    let middle_secs = (duration_secs * 0.5).clamp(3.0, (duration_secs - 1.0).max(3.0));
+    audio
+        .seek(Duration::from_secs_f64(middle_secs))
+        .expect("seek to middle must succeed");
+
+    let mut played_frames = 0usize;
+    let target_frames = spec.sample_rate as usize * 5;
+    for _ in 0..600 {
+        let n = read_with_yield_limit(&mut audio, &mut buf, 50).await;
+        if n == 0 {
+            if audio.is_eof() {
+                break;
+            }
+            continue;
+        }
+        played_frames += n / channels;
+        if played_frames >= target_frames {
+            break;
+        }
+    }
+    assert!(
+        played_frames >= spec.sample_rate as usize * 3,
+        "expected at least ~3s playback before test seek"
+    );
+
+    // Drain events again to isolate one seek window.
+    while events_rx.try_recv().is_ok() {}
+
+    let near_start_secs = 0.2_f64;
+    let near_start = Duration::from_secs_f64(near_start_secs);
+    let target_ms = near_start.as_millis();
+    audio
+        .seek(near_start)
+        .expect("seek near start must succeed");
+
+    let mut seek_complete_for_target = 0usize;
+    let mut seek_complete_seen = false;
+    let mut playback_positions = Vec::with_capacity(64);
+
+    for _ in 0..300 {
+        let _ = read_with_yield_limit(&mut audio, &mut buf, 50).await;
+
+        loop {
+            match events_rx.try_recv() {
+                Ok(Event::Audio(AudioEvent::SeekComplete { position })) => {
+                    let pos_ms = position.as_millis();
+                    if pos_ms.abs_diff(target_ms) <= 3 {
+                        seek_complete_for_target += 1;
+                        seek_complete_seen = true;
+                        // Keep only post-seek-complete playback progress.
+                        playback_positions.clear();
+                    }
+                }
+                Ok(Event::Hls(HlsEvent::PlaybackProgress { position, .. })) => {
+                    if seek_complete_seen {
+                        playback_positions.push(position);
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    break;
+                }
+            }
+        }
+
+        if seek_complete_seen && playback_positions.len() >= 12 {
+            break;
+        }
+    }
+
+    assert!(
+        seek_complete_for_target >= 1,
+        "no AudioEvent::SeekComplete for target seek"
+    );
+    assert_eq!(
+        seek_complete_for_target, 1,
+        "single seek produced multiple seek-complete events for same target"
+    );
+    assert!(
+        playback_positions.len() >= 8,
+        "insufficient PlaybackProgress events after seek: {}",
+        playback_positions.len()
+    );
+
+    let mut regressions = 0usize;
+    let mut prev = None;
+    for pos in playback_positions {
+        if let Some(prev_pos) = prev
+            && pos < prev_pos
+        {
+            regressions += 1;
+        }
+        prev = Some(pos);
+    }
+
+    assert_eq!(
+        regressions, 0,
+        "PlaybackProgress moved backward {regressions} times after a single seek"
+    );
+}
+
+/// PCM-level regression guard for audible "micro-loop" after seek.
+///
+/// Scenario:
+/// - Seek to middle, read ~5s
+/// - Seek near start (non-zero)
+/// - Inspect the first ~350ms of decoded PCM after seek
+///
+/// For the deterministic saw-tooth fixture, this early window must be strictly
+/// contiguous frame-by-frame (no tiny backward jumps / repeated fragments).
+#[wasm_bindgen_test]
+async fn stress_seek_pcm_window_after_seek_must_not_loop_fragment() {
+    init().await;
+    info!("Starting stress_seek_pcm_window_after_seek_must_not_loop_fragment");
+
+    run_seek_pcm_window_check(create_pipeline().await).await;
+}
+
+#[wasm_bindgen_test]
+async fn stress_seek_pcm_window_after_seek_must_not_loop_fragment_jitter() {
+    init().await;
+    info!("Starting stress_seek_pcm_window_after_seek_must_not_loop_fragment_jitter");
+
+    run_seek_pcm_window_check(create_pipeline_with_url(fixture_jitter_url()).await).await;
 }
 
 /// Full `WasmPlayer` lifecycle under pressure: play → rapid seeks → pause →

@@ -30,13 +30,21 @@ mod server {
     pub(crate) const PORT: u16 = 3333;
     const SAMPLE_RATE: u32 = 44100;
     const CHANNELS: u16 = 2;
-    const SEGMENT_SIZE: usize = 200_000;
     const SEGMENT_COUNT: usize = 100;
-    const TOTAL_BYTES: usize = SEGMENT_COUNT * SEGMENT_SIZE;
+    const UNIFORM_SEGMENT_SIZE: usize = 200_000;
+    const JITTER_MIN_SEGMENT_SIZE: usize = 140_000;
+    const JITTER_SIZE_SPAN: usize = 120_000;
+
+    #[derive(Clone, Copy)]
+    enum FixtureKind {
+        Jitter,
+        Uniform,
+    }
 
     struct ServerState {
+        segment_durations_secs: Vec<f64>,
+        segment_ranges: Vec<(usize, usize)>,
         wav_data: Vec<u8>,
-        segment_duration_secs: f64,
     }
 
     fn create_saw_wav(total_bytes: usize) -> Vec<u8> {
@@ -78,16 +86,27 @@ mod server {
         wav
     }
 
-    fn master_playlist() -> &'static str {
+    fn master_playlist_uniform() -> &'static str {
         "#EXTM3U\n\
          #EXT-X-VERSION:6\n\
          #EXT-X-STREAM-INF:BANDWIDTH=1280000\n\
          playlist/v0.m3u8\n"
     }
 
-    fn media_playlist(state: &ServerState) -> String {
-        let dur = state.segment_duration_secs;
-        let target_dur = dur.ceil() as u64;
+    fn master_playlist_jitter() -> &'static str {
+        "#EXTM3U\n\
+         #EXT-X-VERSION:6\n\
+         #EXT-X-STREAM-INF:BANDWIDTH=1280000\n\
+         playlist/jitter.m3u8\n"
+    }
+
+    fn media_playlist(state: &ServerState, prefix: &str) -> String {
+        let target_dur = state
+            .segment_durations_secs
+            .iter()
+            .copied()
+            .fold(0.0_f64, f64::max)
+            .ceil() as u64;
         let mut pl = format!(
             "#EXTM3U\n\
              #EXT-X-VERSION:6\n\
@@ -95,63 +114,120 @@ mod server {
              #EXT-X-MEDIA-SEQUENCE:0\n\
              #EXT-X-PLAYLIST-TYPE:VOD\n",
         );
-        for seg in 0..SEGMENT_COUNT {
-            pl.push_str(&format!("#EXTINF:{dur:.1},\n../seg/v0_{seg}.bin\n"));
+        for (seg, dur) in state.segment_durations_secs.iter().copied().enumerate() {
+            pl.push_str(&format!("#EXTINF:{dur:.3},\n../seg/{prefix}{seg}.bin\n"));
         }
         pl.push_str("#EXT-X-ENDLIST\n");
         pl
     }
 
-    fn serve_segment(state: &ServerState, filename: &str) -> Vec<u8> {
-        let segment = parse_segment_index(filename).unwrap_or(0);
-        let start = segment * SEGMENT_SIZE;
-        let end = (start + SEGMENT_SIZE).min(state.wav_data.len());
-        if start >= state.wav_data.len() {
+    fn serve_segment(state: &ServerState, segment: usize) -> Vec<u8> {
+        let Some((start, end)) = state.segment_ranges.get(segment).copied() else {
             return Vec::new();
-        }
+        };
         state.wav_data[start..end].to_vec()
     }
 
-    fn parse_segment_index(filename: &str) -> Option<usize> {
+    fn parse_uniform_segment_index(filename: &str) -> Option<usize> {
         let name = filename.strip_suffix(".bin")?;
         let name = name.strip_prefix("v0_")?;
         name.parse().ok()
     }
 
-    pub(crate) async fn run() {
-        let wav_data = create_saw_wav(TOTAL_BYTES);
-        let segment_duration =
-            SEGMENT_SIZE as f64 / (f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * 2.0);
+    fn parse_jitter_segment_index(filename: &str) -> Option<usize> {
+        let name = filename.strip_suffix(".bin")?;
+        let name = name.strip_prefix("j0_")?;
+        name.parse().ok()
+    }
 
-        let state = Arc::new(ServerState {
+    fn parse_segment_request(filename: &str) -> Option<(FixtureKind, usize)> {
+        if let Some(idx) = parse_uniform_segment_index(filename) {
+            return Some((FixtureKind::Uniform, idx));
+        }
+        parse_jitter_segment_index(filename).map(|idx| (FixtureKind::Jitter, idx))
+    }
+
+    fn jitter_segment_sizes() -> Vec<usize> {
+        (0..SEGMENT_COUNT)
+            .map(|i| JITTER_MIN_SEGMENT_SIZE + ((i * 7919) % JITTER_SIZE_SPAN))
+            .collect()
+    }
+
+    fn build_state(segment_sizes: &[usize]) -> ServerState {
+        let total_bytes: usize = segment_sizes.iter().copied().sum();
+        let wav_data = create_saw_wav(total_bytes);
+        let bytes_per_second = f64::from(SAMPLE_RATE) * f64::from(CHANNELS) * 2.0;
+
+        let mut segment_ranges = Vec::with_capacity(segment_sizes.len());
+        let mut segment_durations_secs = Vec::with_capacity(segment_sizes.len());
+        let mut start = 0usize;
+        for size in segment_sizes {
+            let end = (start + *size).min(wav_data.len());
+            segment_ranges.push((start, end));
+            segment_durations_secs.push((end.saturating_sub(start)) as f64 / bytes_per_second);
+            start = end;
+        }
+
+        ServerState {
+            segment_durations_secs,
+            segment_ranges,
             wav_data,
-            segment_duration_secs: segment_duration,
-        });
+        }
+    }
 
-        let st_master = Arc::clone(&state);
-        let st_media = Arc::clone(&state);
-        let st_seg = Arc::clone(&state);
+    pub(crate) async fn run() {
+        let uniform_sizes = vec![UNIFORM_SEGMENT_SIZE; SEGMENT_COUNT];
+        let uniform_state = Arc::new(build_state(&uniform_sizes));
+        let jitter_state = Arc::new(build_state(&jitter_segment_sizes()));
+
+        let st_master_uniform = Arc::clone(&uniform_state);
+        let st_master_jitter = Arc::clone(&jitter_state);
+        let st_media_uniform = Arc::clone(&uniform_state);
+        let st_media_jitter = Arc::clone(&jitter_state);
+        let st_seg_uniform = Arc::clone(&uniform_state);
+        let st_seg_jitter = Arc::clone(&jitter_state);
 
         let app = Router::new()
             .route(
                 "/master.m3u8",
                 get(move || {
-                    let _s = Arc::clone(&st_master);
-                    async move { master_playlist() }
+                    let _s = Arc::clone(&st_master_uniform);
+                    async move { master_playlist_uniform() }
+                }),
+            )
+            .route(
+                "/master-jitter.m3u8",
+                get(move || {
+                    let _s = Arc::clone(&st_master_jitter);
+                    async move { master_playlist_jitter() }
                 }),
             )
             .route(
                 "/playlist/{filename}",
-                get(move |Path(_filename): Path<String>| {
-                    let s = Arc::clone(&st_media);
-                    async move { media_playlist(&s) }
+                get(move |Path(filename): Path<String>| {
+                    let uniform = Arc::clone(&st_media_uniform);
+                    let jitter = Arc::clone(&st_media_jitter);
+                    async move {
+                        if filename == "jitter.m3u8" {
+                            media_playlist(&jitter, "j0_")
+                        } else {
+                            media_playlist(&uniform, "v0_")
+                        }
+                    }
                 }),
             )
             .route(
                 "/seg/{filename}",
                 get(move |Path(filename): Path<String>| {
-                    let s = Arc::clone(&st_seg);
-                    async move { serve_segment(&s, &filename) }
+                    let uniform = Arc::clone(&st_seg_uniform);
+                    let jitter = Arc::clone(&st_seg_jitter);
+                    async move {
+                        match parse_segment_request(&filename) {
+                            Some((FixtureKind::Uniform, seg)) => serve_segment(&uniform, seg),
+                            Some((FixtureKind::Jitter, seg)) => serve_segment(&jitter, seg),
+                            None => Vec::new(),
+                        }
+                    }
                 }),
             )
             .layer(CorsLayer::permissive());
@@ -162,10 +238,15 @@ mod server {
             .unwrap_or_else(|e| panic!("failed to bind {addr}: {e}"));
 
         println!("HLS fixture server listening on http://{addr}");
-        println!("Master playlist: http://{addr}/master.m3u8");
+        println!("Master playlist (uniform): http://{addr}/master.m3u8");
+        println!("Master playlist (jitter):  http://{addr}/master-jitter.m3u8");
         println!(
-            "Segments: {SEGMENT_COUNT} x {SEGMENT_SIZE} bytes = {} MB",
-            TOTAL_BYTES / 1_000_000
+            "Uniform segments: {SEGMENT_COUNT} x {UNIFORM_SEGMENT_SIZE} bytes = {} MB",
+            uniform_sizes.iter().sum::<usize>() / 1_000_000
+        );
+        println!(
+            "Jitter segments:  {SEGMENT_COUNT} variable bytes = {} MB",
+            jitter_state.wav_data.len() / 1_000_000
         );
         println!("Press Ctrl+C to stop");
 
