@@ -28,7 +28,7 @@ use crate::{
     events::PlayerEvent,
     impls::resource::Resource,
     traits::engine::Engine,
-    types::{ActionAtItemEnd, PlayerStatus, SlotId},
+    types::{ActionAtItemEnd, PlayerStatus, SessionDuckingMode, SlotId},
 };
 
 // -- PlayerConfig -----------------------------------------------------------------
@@ -221,6 +221,16 @@ impl PlayerImpl {
         let _ = self
             .events_tx
             .send(PlayerEvent::VolumeChanged { volume: clamped });
+    }
+
+    /// Get process-wide session ducking mode.
+    pub fn session_ducking(&self) -> SessionDuckingMode {
+        EngineImpl::session_ducking()
+    }
+
+    /// Set process-wide session ducking mode.
+    pub fn set_session_ducking(&self, mode: SessionDuckingMode) -> Result<(), PlayError> {
+        EngineImpl::set_session_ducking(mode)
     }
 
     /// Returns `true` if the player is muted.
@@ -608,6 +618,17 @@ mod tests {
         assert!(!player.is_muted());
         player.set_muted(true);
         assert!(player.is_muted());
+    }
+
+    #[test]
+    fn player_session_ducking_roundtrip() {
+        let _lock = crate::impls::engine::ducking_test_lock().lock().unwrap();
+        let player = PlayerImpl::new(PlayerConfig::default());
+        player
+            .set_session_ducking(SessionDuckingMode::Soft)
+            .unwrap();
+        assert_eq!(player.session_ducking(), SessionDuckingMode::Soft);
+        player.set_session_ducking(SessionDuckingMode::Off).unwrap();
     }
 
     #[test]

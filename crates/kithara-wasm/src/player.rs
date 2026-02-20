@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig};
+use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDuckingMode};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tracing::{info, warn};
 use wasm_bindgen::prelude::*;
@@ -189,6 +189,27 @@ impl WasmPlayer {
         self.player
             .reset_eq()
             .map_err(|err| js_error(format!("reset_eq failed: {err}")))
+    }
+
+    pub fn get_session_ducking(&self) -> u32 {
+        match self.player.session_ducking() {
+            SessionDuckingMode::Off => 0,
+            SessionDuckingMode::Soft => 1,
+            SessionDuckingMode::Hard => 2,
+            _ => 0,
+        }
+    }
+
+    pub fn set_session_ducking(&self, mode: u32) -> Result<(), JsValue> {
+        let mode = match mode {
+            0 => SessionDuckingMode::Off,
+            1 => SessionDuckingMode::Soft,
+            2 => SessionDuckingMode::Hard,
+            _ => return Err(js_error(format!("invalid ducking mode: {mode}"))),
+        };
+        self.player
+            .set_session_ducking(mode)
+            .map_err(|err| js_error(format!("set_session_ducking failed: {err}")))
     }
 
     pub fn take_events(&self) -> String {

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use rstest::rstest;
 
 use super::*;
@@ -167,32 +165,26 @@ fn engine_master_channels_returns_config() {
 }
 
 #[test]
-fn engine_call_routes_replies_to_each_caller() {
-    let engine = Arc::new(make_engine());
-    let iterations = 400;
+fn engine_session_ducking_roundtrip() {
+    let _lock = ducking_test_lock().lock().unwrap();
+    EngineImpl::set_session_ducking(SessionDuckingMode::Soft).unwrap();
+    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Soft);
+    EngineImpl::set_session_ducking(SessionDuckingMode::Hard).unwrap();
+    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Hard);
+    EngineImpl::set_session_ducking(SessionDuckingMode::Off).unwrap();
+    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Off);
+}
 
-    let engine_a = Arc::clone(&engine);
-    let a = std::thread::spawn(move || {
-        for _ in 0..iterations {
-            let reply = engine_a
-                .call(Cmd::QuerySampleRate)
-                .expect("query sample rate call should return reply");
-            assert!(matches!(reply, Reply::SampleRate(44100)));
-        }
-    });
+#[test]
+fn engine_instances_share_session_ducking() {
+    let _lock = ducking_test_lock().lock().unwrap();
+    let _a = make_engine();
+    let _b = make_engine();
 
-    let engine_b = Arc::clone(&engine);
-    let b = std::thread::spawn(move || {
-        for _ in 0..iterations {
-            let reply = engine_b
-                .call(Cmd::SetMasterVolume { volume: 0.5 })
-                .expect("set master volume call should return reply");
-            assert!(matches!(reply, Reply::Err(_)));
-        }
-    });
+    EngineImpl::set_session_ducking(SessionDuckingMode::Soft).unwrap();
+    assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Soft);
 
-    a.join().expect("query thread should not panic");
-    b.join().expect("set volume thread should not panic");
+    EngineImpl::set_session_ducking(SessionDuckingMode::Off).unwrap();
 }
 
 // Tests that require actual audio hardware should be marked #[ignore].

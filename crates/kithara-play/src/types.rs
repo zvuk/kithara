@@ -83,3 +83,12 @@ pub enum EqBand {
     Mid,
     High,
 }
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum SessionDuckingMode {
+    #[default]
+    Off,
+    Soft,
+    Hard,
+}
