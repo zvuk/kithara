@@ -203,14 +203,21 @@ impl PlayerNodeProcessor {
 
         // Process the transition queue
         self.tracks_transitions.retain(|transition| {
-            let (track_src, action): (_, fn(&mut PlayerTrack)) = match transition {
-                TrackTransition::FadeIn(src) => (Arc::clone(src), PlayerTrack::fade_in),
-                TrackTransition::FadeOut(src) => (Arc::clone(src), PlayerTrack::fade_out),
+            let track_src = match transition {
+                TrackTransition::FadeIn(src) | TrackTransition::FadeOut(src) => Arc::clone(src),
             };
             if let Some(track_index) = self.tracks_index.get(&track_src)
                 && let Some(track) = self.tracks.get_mut(*track_index)
             {
-                (action)(track);
+                match transition {
+                    TrackTransition::FadeIn(_) => {
+                        track.seek(0.0);
+                        track.fade_in();
+                    }
+                    TrackTransition::FadeOut(_) => {
+                        track.fade_out();
+                    }
+                }
                 return false; // Applied, remove from queue
             }
             true // Track not found, keep in queue for retry
@@ -552,6 +559,42 @@ mod tests {
         tx.send(PlayerCmd::SetPaused(true)).ok();
         processor.drain_commands();
         assert!(!processor.shared_state.playing.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn processor_fade_in_restarts_track_from_zero() {
+        let (mut processor, tx) = make_processor();
+        let src = Arc::from("track1.mp3");
+
+        tx.send(PlayerCmd::LoadTrack {
+            resource: create_mock_player_resource("track1.mp3"),
+            src: Arc::clone(&src),
+        })
+        .ok();
+        processor.drain_commands();
+
+        if let Some(idx) = processor.tracks_index.get(&src)
+            && let Some(track) = processor.tracks.get_mut(*idx)
+        {
+            track.seek(12.0);
+            assert!(track.position() >= 11.9);
+        } else {
+            panic!("track must be loaded");
+        }
+
+        tx.send(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+            &src,
+        ))))
+        .ok();
+        processor.drain_commands();
+
+        if let Some(idx) = processor.tracks_index.get(&src)
+            && let Some(track) = processor.tracks.get(*idx)
+        {
+            assert!(track.position() <= 0.001);
+        } else {
+            panic!("track must remain loaded");
+        }
     }
 
     #[tokio::test]
