@@ -135,8 +135,12 @@ impl PlayerNodeProcessor {
 
     /// Load a new track into the arena.
     fn load_track(&mut self, resource: Arc<Mutex<PlayerResource>>, src: Arc<str>) {
-        if self.tracks_index.contains_key(&src) {
-            return; // Already loaded
+        if let Some(idx) = self.tracks_index.remove(&src) {
+            self.tracks.remove(idx);
+            self.shared_state
+                .notification_tx
+                .try_send(PlayerNotification::TrackUnloaded(Arc::clone(&src)))
+                .ok();
         }
 
         self.evict_tracks_if_needed();
@@ -514,6 +518,20 @@ mod tests {
             processor.tracks_index.contains_key("track1.mp3"),
             should_contain_track
         );
+
+        if matches!(scenario, TrackCommandScenario::DuplicateLoad) {
+            let mut loaded = 0usize;
+            let mut unloaded = false;
+            while let Ok(Some(notification)) = processor.shared_state.notification_rx.try_recv() {
+                match notification {
+                    PlayerNotification::TrackLoaded(_) => loaded += 1,
+                    PlayerNotification::TrackUnloaded(_) => unloaded = true,
+                    _ => {}
+                }
+            }
+            assert!(unloaded);
+            assert!(loaded >= 2);
+        }
     }
 
     #[test]
