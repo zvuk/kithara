@@ -88,6 +88,17 @@
         }
         #playlist li:hover { border-color: #ff8989; }
         input[type="range"] { flex: 1; accent-color: #ff5d5d; }
+        .setting-label {
+            min-width: 74px;
+            color: #9bb0c8;
+            font-size: 13px;
+        }
+        .setting-value {
+            min-width: 64px;
+            color: #9bb0c8;
+            font-family: monospace;
+            text-align: right;
+        }
         .time { min-width: 46px; color: #9bb0c8; font-family: monospace; }
         #status {
             font-size: 13px;
@@ -170,6 +181,19 @@
     </div>
 
     <div class="card">
+        <div class="row">
+            <label class="setting-label" for="volume-slider">Volume</label>
+            <input type="range" id="volume-slider" min="0" max="1" value="1" step="0.01" disabled>
+            <span class="setting-value" id="volume-value">100%</span>
+        </div>
+        <div class="row">
+            <label class="setting-label" for="crossfade-slider">Crossfade</label>
+            <input type="range" id="crossfade-slider" min="0" max="10" value="5" step="0.1" disabled>
+            <span class="setting-value" id="crossfade-value">5.0s</span>
+        </div>
+    </div>
+
+    <div class="card">
         <div class="row" style="justify-content: space-between;">
             <strong style="font-size: 13px; color:#c9d4e5;">Equalizer</strong>
             <button id="eq-reset-btn" disabled>Reset EQ</button>
@@ -193,6 +217,10 @@
         const seekSlider = document.getElementById('seek-slider');
         const positionEl = document.getElementById('position');
         const durationEl = document.getElementById('duration');
+        const volumeSlider = document.getElementById('volume-slider');
+        const volumeValueEl = document.getElementById('volume-value');
+        const crossfadeSlider = document.getElementById('crossfade-slider');
+        const crossfadeValueEl = document.getElementById('crossfade-value');
         const eqGrid = document.getElementById('eq-grid');
         const eqResetBtn = document.getElementById('eq-reset-btn');
 
@@ -218,14 +246,34 @@
             pauseBtn.disabled = !enabled;
             stopBtn.disabled = !enabled;
             seekSlider.disabled = !enabled;
+            volumeSlider.disabled = !enabled;
+            crossfadeSlider.disabled = !enabled;
             eqResetBtn.disabled = !enabled;
+        }
+
+        function formatVolume(volume) {
+            return `${Math.round(Math.max(0, Math.min(1, volume)) * 100)}%`;
+        }
+
+        function formatCrossfade(seconds) {
+            return seconds <= 0 ? 'Off' : `${seconds.toFixed(1)}s`;
+        }
+
+        function renderOutputSettings() {
+            const volume = player.get_volume();
+            volumeSlider.value = String(volume);
+            volumeValueEl.textContent = formatVolume(volume);
+
+            const crossfade = player.get_crossfade_seconds();
+            crossfadeSlider.value = String(crossfade);
+            crossfadeValueEl.textContent = formatCrossfade(crossfade);
         }
 
         let wasm;
         let player;
         let uiRaf = null;
         let selectingTrack = false;
-        let tickFailed = false;
+        let lastTickErrorAt = 0;
         let uiSuspended = false;
 
         function renderPlaylist() {
@@ -313,12 +361,15 @@
                 uiRaf = requestAnimationFrame(updateUi);
                 return;
             }
-            if (!tickFailed && player.current_index() >= 0) {
+            if (player.current_index() >= 0) {
                 try {
                     player.tick();
                 } catch (err) {
-                    tickFailed = true;
-                    log(`Tick failed: ${err}`, 'error');
+                    const now = Date.now();
+                    if (now - lastTickErrorAt > 1000) {
+                        lastTickErrorAt = now;
+                        log(`Tick failed: ${err}`, 'error');
+                    }
                 }
             }
             const eventsChunk = player.take_events();
@@ -380,6 +431,7 @@
             window.__player = player;
 
             renderPlaylist();
+            renderOutputSettings();
             renderEq();
 
             addBtn.onclick = () => {
@@ -428,6 +480,50 @@
                     player.seek(Number(seekSlider.value));
                 } catch (err) {
                     log(`Seek failed: ${err}`, 'error');
+                }
+            };
+
+            function applyVolume(logResult) {
+                if (selectingTrack) return;
+                try {
+                    player.set_volume(Number(volumeSlider.value));
+                    const volume = player.get_volume();
+                    volumeSlider.value = String(volume);
+                    volumeValueEl.textContent = formatVolume(volume);
+                    if (logResult) {
+                        log(`Volume set: ${formatVolume(volume)}`, 'info');
+                    }
+                } catch (err) {
+                    log(`Volume update failed: ${err}`, 'error');
+                }
+            }
+
+            volumeSlider.oninput = () => {
+                applyVolume(false);
+            };
+
+            volumeSlider.onchange = () => {
+                applyVolume(true);
+            };
+
+            crossfadeSlider.oninput = () => {
+                crossfadeValueEl.textContent = formatCrossfade(Number(crossfadeSlider.value));
+            };
+
+            crossfadeSlider.onchange = () => {
+                if (selectingTrack) return;
+                try {
+                    player.set_crossfade_seconds(Number(crossfadeSlider.value));
+                    const seconds = player.get_crossfade_seconds();
+                    crossfadeSlider.value = String(seconds);
+                    crossfadeValueEl.textContent = formatCrossfade(seconds);
+                    if (seconds <= 0) {
+                        log('Crossfade disabled (0s)', 'info');
+                    } else {
+                        log(`Crossfade set: ${seconds.toFixed(1)}s`, 'info');
+                    }
+                } catch (err) {
+                    log(`Crossfade update failed: ${err}`, 'error');
                 }
             };
 

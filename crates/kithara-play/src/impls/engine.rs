@@ -2,7 +2,7 @@
 //!
 //! Graph topology (per slot):
 //! ```text
-//! PlayerNode[slotN] -> VolPanNode[slotN] -> EqBridgeNode[slotN] -> MasterVolPanNode -> GraphOut
+//! PlayerNode[slotN] -> VolPanNode[slotN] -> MasterEqNode -> MasterVolPanNode -> GraphOut
 //! ```
 //!
 //! `FirewheelCtx` is `!Send`, so it lives on a dedicated rayon pool thread.
@@ -25,9 +25,7 @@ use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
 use super::{
-    effect_bridge::EffectBridgeNode,
-    player_processor::PlayerCmd,
-    shared_eq::{SharedEq, SharedEqEffect},
+    master_eq_node::MasterEqNode, player_processor::PlayerCmd, shared_eq::SharedEq,
     shared_player_state::SharedPlayerState,
 };
 use crate::{
@@ -78,6 +76,14 @@ enum Cmd {
     /// Update the master volume node in the audio graph.
     SetMasterVolume {
         volume: f32,
+    },
+    SetSlotVolume {
+        slot: SlotId,
+        volume: f32,
+    },
+    SetMasterEqGain {
+        band: usize,
+        gain_db: f32,
     },
     /// Query the actual sample rate from `StreamInfo`.
     QuerySampleRate,
@@ -154,6 +160,7 @@ impl EngineImpl {
 
         let max_slots = config.max_slots;
         let eq_bands = config.eq_bands;
+        let master_eq = SharedEq::new(eq_bands);
         let pcm_pool = config
             .pcm_pool
             .clone()
@@ -164,9 +171,10 @@ impl EngineImpl {
             let (cmd_tx, cmd_rx) = bounded(8);
             let (done_tx, done_rx) = bounded(1);
             let thread_pool = config.thread_pool.clone().unwrap_or_default();
+            let master_eq_for_thread = master_eq.clone();
 
             thread_pool.spawn(move || {
-                engine_thread(&cmd_rx, max_slots, eq_bands, pcm_pool);
+                engine_thread(&cmd_rx, max_slots, eq_bands, pcm_pool, master_eq_for_thread);
                 let _ = done_tx.send(());
             });
 
@@ -186,7 +194,7 @@ impl EngineImpl {
         {
             Self {
                 config,
-                state: Mutex::new(new_state(max_slots, eq_bands, pcm_pool)),
+                state: Mutex::new(new_state(max_slots, eq_bands, pcm_pool, master_eq.clone())),
                 active_slots: Mutex::new(Vec::new()),
                 slot_handles: Mutex::new(Vec::new()),
                 master_volume: AtomicF32::new(1.0),
@@ -232,6 +240,19 @@ impl EngineImpl {
 
     pub(crate) fn tick(&self) -> Result<(), PlayError> {
         self.call_ok(Cmd::Tick).map(|_| ())
+    }
+
+    pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
+        self.call_ok(Cmd::SetSlotVolume {
+            slot,
+            volume: volume.clamp(0.0, 1.0),
+        })
+        .map(|_| ())
+    }
+
+    pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
+        self.call_ok(Cmd::SetMasterEqGain { band, gain_db })
+            .map(|_| ())
     }
 
     /// Get the command sender for a slot.
@@ -405,7 +426,9 @@ impl Engine for EngineImpl {
         let clamped = volume.clamp(0.0, 1.0);
         self.master_volume.store(clamped, Ordering::Relaxed);
         if self.running.load(Ordering::Acquire) {
-            let _ = self.call(Cmd::SetMasterVolume { volume: clamped });
+            if let Err(err) = self.call_ok(Cmd::SetMasterVolume { volume: clamped }) {
+                warn!(?err, volume = clamped, "failed to apply master vol_pan");
+            }
         }
         self.emit(EngineEvent::MasterVolumeChanged { volume: clamped });
     }
@@ -450,11 +473,11 @@ impl Engine for EngineImpl {
 }
 
 /// Internal record keeping the Firewheel node IDs for one slot.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 struct SlotNodes {
-    eq_node_id: firewheel::node::NodeID,
     slot_id: SlotId,
     player_node_id: firewheel::node::NodeID,
+    vol_pan_memo: firewheel::diff::Memo<firewheel::nodes::volume_pan::VolumePanNode>,
     vol_pan_node_id: firewheel::node::NodeID,
 }
 
@@ -466,6 +489,9 @@ struct EngineThreadState {
     ctx: Option<RuntimeCtx>,
     eq_bands: usize,
     max_slots: usize,
+    master_eq: SharedEq,
+    master_eq_node_id: Option<firewheel::node::NodeID>,
+    master_eq_memo: Option<firewheel::diff::Memo<MasterEqNode>>,
     /// Node ID of the master volume/pan node in the audio graph.
     master_vol_pan_id: Option<firewheel::node::NodeID>,
     /// Memo for diffing master volume changes and sending patches.
@@ -475,11 +501,19 @@ struct EngineThreadState {
     slot_nodes: Vec<SlotNodes>,
 }
 
-fn new_state(max_slots: usize, eq_bands: usize, pcm_pool: PcmPool) -> EngineThreadState {
+fn new_state(
+    max_slots: usize,
+    eq_bands: usize,
+    pcm_pool: PcmPool,
+    master_eq: SharedEq,
+) -> EngineThreadState {
     EngineThreadState {
         ctx: None,
         eq_bands,
         max_slots,
+        master_eq,
+        master_eq_node_id: None,
+        master_eq_memo: None,
         master_vol_pan_id: None,
         master_vol_pan_memo: None,
         next_slot_id: 1,
@@ -498,6 +532,12 @@ fn run_cmd(state: &mut EngineThreadState, cmd: &Cmd) -> (Reply, bool) {
         Cmd::AllocateSlot => (handle_allocate_slot(state), false),
         Cmd::ReleaseSlot { slot } => (handle_release_slot(state, *slot), false),
         Cmd::SetMasterVolume { volume } => (handle_set_master_volume(state, *volume), false),
+        Cmd::SetSlotVolume { slot, volume } => {
+            (handle_set_slot_volume(state, *slot, *volume), false)
+        }
+        Cmd::SetMasterEqGain { band, gain_db } => {
+            (handle_set_master_eq_gain(state, *band, *gain_db), false)
+        }
         Cmd::QuerySampleRate => (handle_query_sample_rate(state), false),
         Cmd::Tick => {
             if let Some(ref mut fw_ctx) = state.ctx
@@ -518,8 +558,14 @@ fn run_cmd(state: &mut EngineThreadState, cmd: &Cmd) -> (Reply, bool) {
 
 #[cfg(not(target_arch = "wasm32"))]
 /// The dedicated rayon pool thread that owns the `FirewheelCtx`.
-fn engine_thread(cmd_rx: &Receiver<CmdMsg>, max_slots: usize, eq_bands: usize, pcm_pool: PcmPool) {
-    let mut state = new_state(max_slots, eq_bands, pcm_pool);
+fn engine_thread(
+    cmd_rx: &Receiver<CmdMsg>,
+    max_slots: usize,
+    eq_bands: usize,
+    pcm_pool: PcmPool,
+    master_eq: SharedEq,
+) {
+    let mut state = new_state(max_slots, eq_bands, pcm_pool, master_eq);
 
     while let Ok(msg) = cmd_rx.recv() {
         let CmdMsg { cmd, reply_tx } = msg;
@@ -547,12 +593,22 @@ fn handle_start(state: &mut EngineThreadState, sample_rate: u32, master_volume: 
 
     match start_stream(&mut fw_ctx, sample_rate) {
         Ok(()) => {
-            // Create a master volume node and connect it to the graph output.
+            let mut master_eq_node = MasterEqNode::new(state.eq_bands);
+            for (idx, gain) in state.master_eq.snapshot().iter().copied().enumerate() {
+                master_eq_node.set_gain(idx, gain);
+            }
+            let master_eq_memo = Memo::new(master_eq_node.clone());
+            let master_eq_id = fw_ctx.add_node(master_eq_node, None);
+
+            // Create a master volume node and connect it to graph output.
             let master_node = VolumePanNode::from_volume(Volume::Linear(master_volume));
             let master_memo = Memo::new(master_node);
             let master_id = fw_ctx.add_node(master_node, None);
 
             let graph_out = fw_ctx.graph_out_node_id();
+            if let Err(e) = fw_ctx.connect(master_eq_id, master_id, &[(0, 0), (1, 1)], false) {
+                return Reply::Err(format!("connect master_eq->master_vol failed: {e}"));
+            }
             if let Err(e) = fw_ctx.connect(master_id, graph_out, &[(0, 0), (1, 1)], false) {
                 return Reply::Err(format!("connect master_vol->graph_out failed: {e}"));
             }
@@ -561,6 +617,8 @@ fn handle_start(state: &mut EngineThreadState, sample_rate: u32, master_volume: 
                 warn!("graph update after master vol_pan creation failed: {e:?}");
             }
 
+            state.master_eq_node_id = Some(master_eq_id);
+            state.master_eq_memo = Some(master_eq_memo);
             state.master_vol_pan_id = Some(master_id);
             state.master_vol_pan_memo = Some(master_memo);
             state.ctx = Some(fw_ctx);
@@ -588,13 +646,15 @@ fn handle_stop(state: &mut EngineThreadState) -> Reply {
     }
     state.ctx = None;
     state.slot_nodes.clear();
+    state.master_eq_node_id = None;
+    state.master_eq_memo = None;
     state.master_vol_pan_id = None;
     state.master_vol_pan_memo = None;
     Reply::Ok
 }
 
 fn handle_allocate_slot(state: &mut EngineThreadState) -> Reply {
-    use firewheel::{Volume, nodes::volume_pan::VolumePanNode};
+    use firewheel::{Volume, diff::Memo, nodes::volume_pan::VolumePanNode};
 
     use crate::impls::player_node::PlayerNode;
 
@@ -612,33 +672,25 @@ fn handle_allocate_slot(state: &mut EngineThreadState) -> Reply {
     // Create command channel and shared state for this slot.
     let (cmd_tx, cmd_rx) = bounded(32);
     let shared_state = Arc::new(SharedPlayerState::new());
-    let shared_eq = SharedEq::new(state.eq_bands);
+    let shared_eq = state.master_eq.clone();
 
     let player_node =
         PlayerNode::with_channel(cmd_rx, Arc::clone(&shared_state), state.pcm_pool.clone());
-    let sample_rate = fw_ctx
-        .stream_info()
-        .map_or(44100, |info| info.sample_rate.get());
-    let eq_effect = SharedEqEffect::new(shared_eq.clone(), sample_rate, 2);
-    let eq_node = EffectBridgeNode::new(Box::new(eq_effect), state.pcm_pool.clone());
 
     let player_node_id = fw_ctx.add_node(player_node, None);
-    let vol_pan_node_id = fw_ctx.add_node(VolumePanNode::from_volume(Volume::Linear(1.0)), None);
-    let eq_node_id = fw_ctx.add_node(eq_node, None);
-
+    let vol_pan_node = VolumePanNode::from_volume(Volume::Linear(1.0));
+    let vol_pan_memo = Memo::new(vol_pan_node);
+    let vol_pan_node_id = fw_ctx.add_node(vol_pan_node, None);
     if let Err(e) = fw_ctx.connect(player_node_id, vol_pan_node_id, &[(0, 0), (1, 1)], false) {
         return Reply::Err(format!("connect player->volpan failed: {e}"));
     }
-    if let Err(e) = fw_ctx.connect(vol_pan_node_id, eq_node_id, &[(0, 0), (1, 1)], false) {
-        return Reply::Err(format!("connect volpan->eq failed: {e}"));
-    }
 
-    // Connect per-slot volume node to the master volume node.
-    let Some(master_id) = state.master_vol_pan_id else {
-        return Reply::Err("master volume node not initialised".into());
+    // Connect slot volume to master EQ node.
+    let Some(master_eq_id) = state.master_eq_node_id else {
+        return Reply::Err("master eq node not initialised".into());
     };
-    if let Err(e) = fw_ctx.connect(eq_node_id, master_id, &[(0, 0), (1, 1)], false) {
-        return Reply::Err(format!("connect eq->master_vol failed: {e}"));
+    if let Err(e) = fw_ctx.connect(vol_pan_node_id, master_eq_id, &[(0, 0), (1, 1)], false) {
+        return Reply::Err(format!("connect volpan->master_eq failed: {e}"));
     }
 
     if let Err(e) = fw_ctx.update() {
@@ -646,9 +698,9 @@ fn handle_allocate_slot(state: &mut EngineThreadState) -> Reply {
     }
 
     state.slot_nodes.push(SlotNodes {
-        eq_node_id,
         slot_id,
         player_node_id,
+        vol_pan_memo,
         vol_pan_node_id,
     });
 
@@ -666,9 +718,6 @@ fn handle_release_slot(state: &mut EngineThreadState, slot: SlotId) -> Reply {
 
     let entry = state.slot_nodes.remove(idx);
 
-    if let Err(e) = fw_ctx.remove_node(entry.eq_node_id) {
-        warn!(?slot, ?e, "failed to remove eq node");
-    }
     if let Err(e) = fw_ctx.remove_node(entry.vol_pan_node_id) {
         warn!(?slot, ?e, "failed to remove vol_pan node");
     }
@@ -704,8 +753,53 @@ fn handle_set_master_volume(state: &mut EngineThreadState, volume: f32) -> Reply
         memo.update_memo(&mut queue);
     }
 
-    if let Err(e) = fw_ctx.update() {
-        warn!("graph update after set_master_volume failed: {e:?}");
+    Reply::Ok
+}
+
+fn handle_set_slot_volume(state: &mut EngineThreadState, slot: SlotId, volume: f32) -> Reply {
+    use firewheel::Volume;
+
+    let Some(ref mut fw_ctx) = state.ctx else {
+        return Reply::Err("engine not running".into());
+    };
+
+    let Some(slot_nodes) = state.slot_nodes.iter_mut().find(|s| s.slot_id == slot) else {
+        return Reply::Err(format!("slot not found: {slot:?}"));
+    };
+
+    slot_nodes.vol_pan_memo.volume = Volume::Linear(volume.clamp(0.0, 1.0));
+    {
+        let mut queue = fw_ctx.event_queue(slot_nodes.vol_pan_node_id);
+        slot_nodes.vol_pan_memo.update_memo(&mut queue);
+    }
+
+    Reply::Ok
+}
+
+fn handle_set_master_eq_gain(state: &mut EngineThreadState, band: usize, gain_db: f32) -> Reply {
+    let Some(ref mut fw_ctx) = state.ctx else {
+        return Reply::Err("engine not running".into());
+    };
+
+    let Some(master_eq_id) = state.master_eq_node_id else {
+        return Reply::Err("master eq node not initialised".into());
+    };
+
+    let Some(ref mut memo) = state.master_eq_memo else {
+        return Reply::Err("master eq memo not initialised".into());
+    };
+
+    if band >= memo.bands.len() {
+        return Reply::Err(format!(
+            "eq band out of range: {band} (bands: {})",
+            memo.bands.len()
+        ));
+    }
+
+    memo.set_gain(band, gain_db);
+    {
+        let mut queue = fw_ctx.event_queue(master_eq_id);
+        memo.update_memo(&mut queue);
     }
 
     Reply::Ok

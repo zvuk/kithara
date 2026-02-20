@@ -155,6 +155,18 @@ impl WasmPlayer {
         self.player.is_playing()
     }
 
+    pub fn get_volume(&self) -> f32 {
+        self.player.volume()
+    }
+
+    pub fn set_volume(&self, volume: f32) {
+        self.player.set_volume(volume);
+    }
+
+    pub fn get_crossfade_seconds(&self) -> f32 {
+        self.player.crossfade_duration()
+    }
+
     pub fn set_crossfade_seconds(&self, seconds: f32) {
         self.player.set_crossfade_duration(seconds);
     }

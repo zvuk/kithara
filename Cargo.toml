@@ -1,7 +1,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/firewheel-wasm-demo",
     "crates/kithara",
     "crates/kithara-abr",
     "crates/kithara-drm",

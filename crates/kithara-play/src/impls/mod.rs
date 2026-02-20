@@ -1,7 +1,7 @@
 pub mod config;
 pub(crate) mod crossfade;
-pub(crate) mod effect_bridge;
 pub mod engine;
+pub(crate) mod master_eq_node;
 pub mod player;
 pub(crate) mod player_node;
 pub(crate) mod player_notification;

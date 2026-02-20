@@ -217,6 +217,7 @@ impl PlayerImpl {
     pub fn set_volume(&self, volume: f32) {
         let clamped = volume.clamp(0.0, 1.0);
         self.volume.store(clamped, Ordering::Relaxed);
+        self.engine.set_master_volume(clamped);
         let _ = self
             .events_tx
             .send(PlayerEvent::VolumeChanged { volume: clamped });
@@ -364,7 +365,8 @@ impl PlayerImpl {
             .engine
             .slot_eq(slot_id)
             .ok_or_else(|| PlayError::Internal("eq state not found".into()))?;
-        eq.set_gain(band, gain_db).map(|_| ())
+        let clamped = eq.set_gain(band, gain_db)?;
+        self.engine.set_master_eq_gain(band, clamped)
     }
 
     /// Reset EQ gains to 0 dB for all bands.
@@ -376,6 +378,9 @@ impl PlayerImpl {
             .slot_eq(slot_id)
             .ok_or_else(|| PlayError::Internal("eq state not found".into()))?;
         eq.reset();
+        for band in 0..eq.len() {
+            self.engine.set_master_eq_gain(band, 0.0)?;
+        }
         Ok(())
     }
 
@@ -450,6 +455,7 @@ impl PlayerImpl {
         let id = self.engine.allocate_slot()?;
         *slot = Some(id);
         drop(slot);
+        self.engine.set_slot_volume(id, 1.0)?;
         Ok(id)
     }
 
@@ -461,9 +467,11 @@ impl PlayerImpl {
             .engine
             .slot_cmd_tx(slot_id)
             .ok_or_else(|| PlayError::Internal("slot handle not found".into()))?;
-        tx.try_send(cmd)
-            .map(|_| ())
-            .map_err(|_| PlayError::Internal("slot channel full".into()))
+        match tx.try_send(cmd) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(PlayError::Internal("slot channel full".into())),
+            Err(_) => Err(PlayError::Internal("slot channel closed".into())),
+        }
     }
 
     /// Load the current queue item into the active slot.
@@ -588,8 +596,10 @@ mod tests {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_volume(2.0);
         assert!((player.volume() - 1.0).abs() < f32::EPSILON);
+        assert!((player.engine().master_volume() - 1.0).abs() < f32::EPSILON);
         player.set_volume(-1.0);
         assert!((player.volume() - 0.0).abs() < f32::EPSILON);
+        assert!((player.engine().master_volume() - 0.0).abs() < f32::EPSILON);
     }
 
     #[test]
