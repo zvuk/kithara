@@ -2728,7 +2728,6 @@ dependencies = [
  "console_error_panic_hook",
  "kithara-play",
  "rayon",
- "rstest",
  "tokio",
  "tracing",
  "tracing-log",

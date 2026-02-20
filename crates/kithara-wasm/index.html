@@ -265,7 +265,6 @@
 
         function runtimeDiagnostics() {
             return {
-                audioWorklet: typeof AudioWorkletNode !== 'undefined',
                 crossOriginIsolated: self.crossOriginIsolated === true,
                 secureContext: self.isSecureContext === true,
                 sharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined',
@@ -277,13 +276,12 @@
             if (d.crossOriginIsolated) {
                 sessionStorage.removeItem(coiReloadKey);
             }
-            if (d.audioWorklet && d.secureContext && d.sharedArrayBuffer && d.crossOriginIsolated) {
+            if (d.secureContext && d.sharedArrayBuffer && d.crossOriginIsolated) {
                 return true;
             }
 
             const waitingForCoiReload =
                 d.secureContext &&
-                d.audioWorklet &&
                 !d.crossOriginIsolated &&
                 typeof navigator.serviceWorker !== 'undefined' &&
                 !navigator.serviceWorker.controller;
@@ -315,7 +313,7 @@
             setControlsEnabled(false);
             statusEl.textContent = 'Environment is not ready for WASM audio playback';
             log(
-                `Runtime check failed: secureContext=${d.secureContext} crossOriginIsolated=${d.crossOriginIsolated} sharedArrayBuffer=${d.sharedArrayBuffer} audioWorklet=${d.audioWorklet}`,
+                `Runtime check failed: secureContext=${d.secureContext} crossOriginIsolated=${d.crossOriginIsolated} sharedArrayBuffer=${d.sharedArrayBuffer}`,
                 'error',
             );
             log(

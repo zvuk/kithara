@@ -1,7 +1,5 @@
 // WASM HLS player library entry point.
 
-pub mod ring_buffer;
-
 #[cfg(target_arch = "wasm32")]
 mod player;
 
@@ -28,13 +26,6 @@ pub fn build_info() -> String {
         env!("BUILD_GIT_HASH"),
         env!("BUILD_TIMESTAMP"),
     )
-}
-
-// Re-export wasm_memory for JS to access SharedArrayBuffer.
-#[cfg(target_arch = "wasm32")]
-#[wasm_bindgen::prelude::wasm_bindgen]
-pub fn wasm_memory() -> wasm_bindgen::JsValue {
-    wasm_bindgen::memory()
 }
 
 // Re-export initThreadPool from wasm-bindgen-rayon.

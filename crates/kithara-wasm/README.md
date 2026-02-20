@@ -53,7 +53,7 @@ await player.select_track(index); // starts playback with crossfade
 
 ## Browser requirements
 
-The player uses `AudioWorklet` + shared memory paths and requires:
+The player uses shared-memory threading and requires:
 
 - secure context (`https:` or localhost)
 - `SharedArrayBuffer`
