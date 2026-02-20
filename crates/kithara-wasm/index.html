@@ -6,6 +6,7 @@
     <title>Kithara Play WASM</title>
     <link data-trunk rel="copy-file" href="../../logo.svg" />
     <link data-trunk rel="copy-file" href="_headers" />
+    <link data-trunk rel="copy-file" href="coi-serviceworker.js" />
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -205,6 +206,7 @@
     <div id="status">Initializing WASM...</div>
     <div id="event-log"></div>
 
+    <script src="./coi-serviceworker.js"></script>
     <script type="module">
         const logEl = document.getElementById('event-log');
         const statusEl = document.getElementById('status');
@@ -224,6 +226,7 @@
         const crossfadeValueEl = document.getElementById('crossfade-value');
         const eqGrid = document.getElementById('eq-grid');
         const eqResetBtn = document.getElementById('eq-reset-btn');
+        const coiReloadKey = 'kithara_coi_wait_reloaded';
 
         function log(message, cls = '') {
             const line = document.createElement('div');
@@ -271,8 +274,42 @@
 
         function ensureRuntimeSupport() {
             const d = runtimeDiagnostics();
+            if (d.crossOriginIsolated) {
+                sessionStorage.removeItem(coiReloadKey);
+            }
             if (d.audioWorklet && d.secureContext && d.sharedArrayBuffer && d.crossOriginIsolated) {
                 return true;
+            }
+
+            const waitingForCoiReload =
+                d.secureContext &&
+                d.audioWorklet &&
+                !d.crossOriginIsolated &&
+                typeof navigator.serviceWorker !== 'undefined' &&
+                !navigator.serviceWorker.controller;
+            if (waitingForCoiReload) {
+                setControlsEnabled(false);
+                statusEl.textContent = 'Waiting for cross-origin isolation (service worker reload)...';
+                log('Waiting for COI service worker to activate and reload the page.', 'info');
+
+                navigator.serviceWorker.ready
+                    .then(() => {
+                        if (navigator.serviceWorker.controller || self.crossOriginIsolated === true) {
+                            sessionStorage.removeItem(coiReloadKey);
+                            return;
+                        }
+                        const alreadyReloaded = sessionStorage.getItem(coiReloadKey) === '1';
+                        if (alreadyReloaded) {
+                            log('COI service worker is active but page is still uncontrolled. Reload manually.', 'error');
+                            return;
+                        }
+                        sessionStorage.setItem(coiReloadKey, '1');
+                        window.location.reload();
+                    })
+                    .catch((err) => {
+                        log(`Service worker ready failed: ${err}`, 'error');
+                    });
+                return false;
             }
 
             setControlsEnabled(false);
@@ -433,151 +470,149 @@
         }
 
         try {
-            if (!ensureRuntimeSupport()) {
-                throw new Error('runtime requirements are not satisfied');
-            }
+            if (ensureRuntimeSupport()) {
+                wasm = await import('./kithara-wasm.js');
+                await wasm.default();
+                wasm.setup();
 
-            wasm = await import('/kithara-wasm.js');
-            await wasm.default();
-            wasm.setup();
+                const build = wasm.build_info();
+                buildInfoEl.textContent = `(${build})`;
 
-            const build = wasm.build_info();
-            buildInfoEl.textContent = `(${build})`;
+                if (typeof wasm.initThreadPool === 'function') {
+                    statusEl.textContent = 'Initializing thread pool...';
+                    const workerCount = Math.min(4, Math.max(2, navigator.hardwareConcurrency || 2));
+                    try {
+                        await wasm.initThreadPool(workerCount);
+                        log(`Thread pool initialized (${workerCount})`, 'info');
+                    } catch (err) {
+                        log(`Thread pool (${workerCount}) failed: ${err}`, 'error');
+                        const fallbackCount = 2;
+                        if (fallbackCount !== workerCount) {
+                            await wasm.initThreadPool(fallbackCount);
+                            log(`Thread pool initialized (${fallbackCount})`, 'info');
+                        } else {
+                            throw err;
+                        }
+                    }
+                } else {
+                    log('Thread pool disabled (single-thread wasm build)', 'info');
+                }
 
-            if (typeof wasm.initThreadPool === 'function') {
-                statusEl.textContent = 'Initializing thread pool...';
-                const workerCount = Math.min(4, Math.max(2, navigator.hardwareConcurrency || 2));
-                try {
-                    await wasm.initThreadPool(workerCount);
-                    log(`Thread pool initialized (${workerCount})`, 'info');
-                } catch (err) {
-                    log(`Thread pool (${workerCount}) failed: ${err}`, 'error');
-                    const fallbackCount = 2;
-                    if (fallbackCount !== workerCount) {
-                        await wasm.initThreadPool(fallbackCount);
-                        log(`Thread pool initialized (${fallbackCount})`, 'info');
-                    } else {
-                        throw err;
+                player = new wasm.WasmPlayer();
+                window.__player = player;
+
+                renderPlaylist();
+                renderOutputSettings();
+                renderEq();
+
+                addBtn.onclick = () => {
+                    const url = urlInput.value.trim();
+                    if (!url) return;
+                    try {
+                        const index = player.add_track(url);
+                        log(`Added track ${index + 1}: ${url}`, 'info');
+                        urlInput.value = '';
+                        renderPlaylist();
+                    } catch (err) {
+                        log(`Add track failed: ${err}`, 'error');
+                    }
+                };
+
+                playBtn.onclick = () => {
+                    if (selectingTrack) return;
+                    player.play();
+                    statusEl.textContent = 'Playing';
+                    log('Play', 'info');
+                };
+
+                pauseBtn.onclick = () => {
+                    if (selectingTrack) return;
+                    player.pause();
+                    statusEl.textContent = 'Paused';
+                    log('Pause', 'info');
+                };
+
+                stopBtn.onclick = () => {
+                    if (selectingTrack) return;
+                    player.stop();
+                    seekSlider.value = '0';
+                    positionEl.textContent = '0:00';
+                    statusEl.textContent = 'Stopped';
+                    log('Stop', 'info');
+                };
+
+                seekSlider.oninput = () => {
+                    positionEl.textContent = formatTime(Number(seekSlider.value));
+                };
+
+                seekSlider.onchange = () => {
+                    if (selectingTrack) return;
+                    try {
+                        player.seek(Number(seekSlider.value));
+                    } catch (err) {
+                        log(`Seek failed: ${err}`, 'error');
+                    }
+                };
+
+                function applyVolume(logResult) {
+                    if (selectingTrack) return;
+                    try {
+                        player.set_volume(Number(volumeSlider.value));
+                        const volume = player.get_volume();
+                        volumeSlider.value = String(volume);
+                        volumeValueEl.textContent = formatVolume(volume);
+                        if (logResult) {
+                            log(`Volume set: ${formatVolume(volume)}`, 'info');
+                        }
+                    } catch (err) {
+                        log(`Volume update failed: ${err}`, 'error');
                     }
                 }
-            } else {
-                log('Thread pool disabled (single-thread wasm build)', 'info');
-            }
 
-            player = new wasm.WasmPlayer();
-            window.__player = player;
+                volumeSlider.oninput = () => {
+                    applyVolume(false);
+                };
 
-            renderPlaylist();
-            renderOutputSettings();
-            renderEq();
+                volumeSlider.onchange = () => {
+                    applyVolume(true);
+                };
 
-            addBtn.onclick = () => {
-                const url = urlInput.value.trim();
-                if (!url) return;
-                try {
-                    const index = player.add_track(url);
-                    log(`Added track ${index + 1}: ${url}`, 'info');
-                    urlInput.value = '';
-                    renderPlaylist();
-                } catch (err) {
-                    log(`Add track failed: ${err}`, 'error');
-                }
-            };
+                crossfadeSlider.oninput = () => {
+                    crossfadeValueEl.textContent = formatCrossfade(Number(crossfadeSlider.value));
+                };
 
-            playBtn.onclick = () => {
-                if (selectingTrack) return;
-                player.play();
-                statusEl.textContent = 'Playing';
-                log('Play', 'info');
-            };
-
-            pauseBtn.onclick = () => {
-                if (selectingTrack) return;
-                player.pause();
-                statusEl.textContent = 'Paused';
-                log('Pause', 'info');
-            };
-
-            stopBtn.onclick = () => {
-                if (selectingTrack) return;
-                player.stop();
-                seekSlider.value = '0';
-                positionEl.textContent = '0:00';
-                statusEl.textContent = 'Stopped';
-                log('Stop', 'info');
-            };
-
-            seekSlider.oninput = () => {
-                positionEl.textContent = formatTime(Number(seekSlider.value));
-            };
-
-            seekSlider.onchange = () => {
-                if (selectingTrack) return;
-                try {
-                    player.seek(Number(seekSlider.value));
-                } catch (err) {
-                    log(`Seek failed: ${err}`, 'error');
-                }
-            };
-
-            function applyVolume(logResult) {
-                if (selectingTrack) return;
-                try {
-                    player.set_volume(Number(volumeSlider.value));
-                    const volume = player.get_volume();
-                    volumeSlider.value = String(volume);
-                    volumeValueEl.textContent = formatVolume(volume);
-                    if (logResult) {
-                        log(`Volume set: ${formatVolume(volume)}`, 'info');
+                crossfadeSlider.onchange = () => {
+                    if (selectingTrack) return;
+                    try {
+                        player.set_crossfade_seconds(Number(crossfadeSlider.value));
+                        const seconds = player.get_crossfade_seconds();
+                        crossfadeSlider.value = String(seconds);
+                        crossfadeValueEl.textContent = formatCrossfade(seconds);
+                        if (seconds <= 0) {
+                            log('Crossfade disabled (0s)', 'info');
+                        } else {
+                            log(`Crossfade set: ${seconds.toFixed(1)}s`, 'info');
+                        }
+                    } catch (err) {
+                        log(`Crossfade update failed: ${err}`, 'error');
                     }
-                } catch (err) {
-                    log(`Volume update failed: ${err}`, 'error');
-                }
-            }
+                };
 
-            volumeSlider.oninput = () => {
-                applyVolume(false);
-            };
-
-            volumeSlider.onchange = () => {
-                applyVolume(true);
-            };
-
-            crossfadeSlider.oninput = () => {
-                crossfadeValueEl.textContent = formatCrossfade(Number(crossfadeSlider.value));
-            };
-
-            crossfadeSlider.onchange = () => {
-                if (selectingTrack) return;
-                try {
-                    player.set_crossfade_seconds(Number(crossfadeSlider.value));
-                    const seconds = player.get_crossfade_seconds();
-                    crossfadeSlider.value = String(seconds);
-                    crossfadeValueEl.textContent = formatCrossfade(seconds);
-                    if (seconds <= 0) {
-                        log('Crossfade disabled (0s)', 'info');
-                    } else {
-                        log(`Crossfade set: ${seconds.toFixed(1)}s`, 'info');
+                eqResetBtn.onclick = () => {
+                    if (selectingTrack) return;
+                    try {
+                        player.reset_eq();
+                        renderEq();
+                        log('EQ reset', 'info');
+                    } catch (err) {
+                        log(`EQ reset failed: ${err}`, 'error');
                     }
-                } catch (err) {
-                    log(`Crossfade update failed: ${err}`, 'error');
-                }
-            };
+                };
 
-            eqResetBtn.onclick = () => {
-                if (selectingTrack) return;
-                try {
-                    player.reset_eq();
-                    renderEq();
-                    log('EQ reset', 'info');
-                } catch (err) {
-                    log(`EQ reset failed: ${err}`, 'error');
-                }
-            };
-
-            setControlsEnabled(true);
-            statusEl.textContent = 'Ready';
-            log('WASM player initialized', 'info');
+                setControlsEnabled(true);
+                statusEl.textContent = 'Ready';
+                log('WASM player initialized', 'info');
+            }
         } catch (err) {
             statusEl.textContent = `Initialization failed: ${err}`;
             log(`Initialization failed: ${err}`, 'error');

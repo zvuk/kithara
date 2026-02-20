@@ -70,13 +70,15 @@ For production hosting, configure:
 For `gh-pages`, response headers are not reliably configurable for this case. Use one of:
 
 - host the demo behind a proxy/CDN that injects COOP/COEP
-- use `coi-serviceworker` fallback for demo-only scenarios
+- use `coi-serviceworker` fallback for demo-only scenarios (already wired in `index.html`)
 
-Minimal fallback bootstrap (demo only):
+This crate ships `coi-serviceworker.js` and includes:
 
 ```html
 <script src="./coi-serviceworker.js"></script>
 ```
+
+`index.html` loads wasm via a relative path (`./kithara-wasm.js`), so it works under `https://<user>.github.io/<repo>/`.
 
 At runtime, the demo checks these requirements and prints a clear error in the event log if isolation is missing.
 
