@@ -425,10 +425,10 @@ impl Engine for EngineImpl {
     fn set_master_volume(&self, volume: f32) {
         let clamped = volume.clamp(0.0, 1.0);
         self.master_volume.store(clamped, Ordering::Relaxed);
-        if self.running.load(Ordering::Acquire) {
-            if let Err(err) = self.call_ok(Cmd::SetMasterVolume { volume: clamped }) {
-                warn!(?err, volume = clamped, "failed to apply master vol_pan");
-            }
+        if self.running.load(Ordering::Acquire)
+            && let Err(err) = self.call_ok(Cmd::SetMasterVolume { volume: clamped })
+        {
+            warn!(?err, volume = clamped, "failed to apply master vol_pan");
         }
         self.emit(EngineEvent::MasterVolumeChanged { volume: clamped });
     }

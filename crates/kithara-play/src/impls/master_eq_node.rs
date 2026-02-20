@@ -109,12 +109,17 @@ impl MasterEqProcessor {
         }
 
         for (idx, band) in self.params.bands.iter().enumerate() {
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "Firewheel sample rates are far below f32 integer precision bounds"
+            )]
+            let sample_rate_hz = (self.sample_rate.get() as f32).hz();
             let coeffs = if band.gain_db.abs() < 0.01 {
                 PASSTHROUGH
             } else {
                 Coefficients::<f32>::from_params(
                     Type::PeakingEQ(band.gain_db),
-                    (self.sample_rate.get() as f32).hz(),
+                    sample_rate_hz,
                     band.frequency.hz(),
                     band.q_factor,
                 )
@@ -150,8 +155,8 @@ impl AudioNodeProcessor for MasterEqProcessor {
         }
 
         if !self.params.enabled || info.in_silence_mask.all_channels_silent(2) {
-            buffers.outputs[0].copy_from_slice(&buffers.inputs[0]);
-            buffers.outputs[1].copy_from_slice(&buffers.inputs[1]);
+            buffers.outputs[0].copy_from_slice(buffers.inputs[0]);
+            buffers.outputs[1].copy_from_slice(buffers.inputs[1]);
             return ProcessStatus::OutputsModifiedWithMask(MaskType::Silence(info.in_silence_mask));
         }
 
