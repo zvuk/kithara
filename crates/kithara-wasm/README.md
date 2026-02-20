@@ -51,6 +51,35 @@ await player.select_track(index); // starts playback with crossfade
 <tr><td><code>threads</code></td><td>yes</td><td><code>wasm-bindgen-rayon</code> thread pool (requires <code>atomics</code> + <code>bulk-memory</code> target features)</td></tr>
 </table>
 
+## Browser requirements
+
+The player uses `AudioWorklet` + shared memory paths and requires:
+
+- secure context (`https:` or localhost)
+- `SharedArrayBuffer`
+- `crossOriginIsolated === true`
+
+For production hosting, configure:
+
+- `Cross-Origin-Opener-Policy: same-origin`
+- `Cross-Origin-Embedder-Policy: require-corp`
+- for Netlify/Cloudflare Pages, `_headers` file is included in this crate root
+
+`Trunk.toml` already sets these headers for `trunk serve`.
+
+For `gh-pages`, response headers are not reliably configurable for this case. Use one of:
+
+- host the demo behind a proxy/CDN that injects COOP/COEP
+- use `coi-serviceworker` fallback for demo-only scenarios
+
+Minimal fallback bootstrap (demo only):
+
+```html
+<script src="./coi-serviceworker.js"></script>
+```
+
+At runtime, the demo checks these requirements and prints a clear error in the event log if isolation is missing.
+
 ## Integration
 
 `kithara-wasm` is a wasm-bindgen wrapper around `kithara-play` so web and desktop follow the same playback logic.

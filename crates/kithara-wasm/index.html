@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Kithara Play WASM</title>
     <link data-trunk rel="copy-file" href="../../logo.svg" />
+    <link data-trunk rel="copy-file" href="_headers" />
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -259,6 +260,38 @@
             return seconds <= 0 ? 'Off' : `${seconds.toFixed(1)}s`;
         }
 
+        function runtimeDiagnostics() {
+            return {
+                audioWorklet: typeof AudioWorkletNode !== 'undefined',
+                crossOriginIsolated: self.crossOriginIsolated === true,
+                secureContext: self.isSecureContext === true,
+                sharedArrayBuffer: typeof SharedArrayBuffer !== 'undefined',
+            };
+        }
+
+        function ensureRuntimeSupport() {
+            const d = runtimeDiagnostics();
+            if (d.audioWorklet && d.secureContext && d.sharedArrayBuffer && d.crossOriginIsolated) {
+                return true;
+            }
+
+            setControlsEnabled(false);
+            statusEl.textContent = 'Environment is not ready for WASM audio playback';
+            log(
+                `Runtime check failed: secureContext=${d.secureContext} crossOriginIsolated=${d.crossOriginIsolated} sharedArrayBuffer=${d.sharedArrayBuffer} audioWorklet=${d.audioWorklet}`,
+                'error',
+            );
+            log(
+                'This demo requires COOP=same-origin and COEP=require-corp to enable SharedArrayBuffer.',
+                'error',
+            );
+            log(
+                'For GitHub Pages use coi-serviceworker fallback, or host behind proxy/CDN with those headers.',
+                'error',
+            );
+            return false;
+        }
+
         function renderOutputSettings() {
             const volume = player.get_volume();
             volumeSlider.value = String(volume);
@@ -400,6 +433,10 @@
         }
 
         try {
+            if (!ensureRuntimeSupport()) {
+                throw new Error('runtime requirements are not satisfied');
+            }
+
             wasm = await import('/kithara-wasm.js');
             await wasm.default();
             wasm.setup();
