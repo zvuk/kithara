@@ -363,9 +363,14 @@
                     await wasm.initThreadPool(workerCount);
                     log(`Thread pool initialized (${workerCount})`, 'info');
                 } catch (err) {
-                    log(`Thread pool (${workerCount}) failed, fallback to 1: ${err}`, 'error');
-                    await wasm.initThreadPool(1);
-                    log('Thread pool initialized (1)', 'info');
+                    log(`Thread pool (${workerCount}) failed: ${err}`, 'error');
+                    const fallbackCount = 2;
+                    if (fallbackCount !== workerCount) {
+                        await wasm.initThreadPool(fallbackCount);
+                        log(`Thread pool initialized (${fallbackCount})`, 'info');
+                    } else {
+                        throw err;
+                    }
                 }
             } else {
                 log('Thread pool disabled (single-thread wasm build)', 'info');
