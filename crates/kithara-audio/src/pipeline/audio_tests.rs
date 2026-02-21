@@ -200,9 +200,9 @@ async fn test_seek_with_epoch_emits_matching_playback_progress() {
     let mut events = audio.decode_events();
     let mut buf = [0.0f32; 256];
 
-    audio
-        .seek_with_epoch(std::time::Duration::from_secs_f64(2.5), 77)
-        .unwrap();
+    // Epoch comes from Timeline now, not from caller.
+    audio.seek(std::time::Duration::from_secs_f64(2.5)).unwrap();
+    let expected_epoch = audio.validator.epoch;
     let _ = audio.read(&mut buf);
 
     let deadline = time::Instant::now() + Duration::from_millis(300);
@@ -217,7 +217,7 @@ async fn test_seek_with_epoch_emits_matching_playback_progress() {
         }
     }
 
-    assert_eq!(matched_epoch, Some(77));
+    assert_eq!(matched_epoch, Some(expected_epoch));
 }
 
 #[tokio::test]
@@ -228,9 +228,9 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
         .unwrap();
 
     let mut events = audio.decode_events();
-    audio
-        .seek_with_epoch(std::time::Duration::from_secs_f64(1.5), 91)
-        .unwrap();
+    // Epoch comes from Timeline now, not from caller.
+    audio.seek(std::time::Duration::from_secs_f64(1.5)).unwrap();
+    let expected_epoch = audio.validator.epoch;
 
     let mut saw_seek_complete_before_read = false;
     while let Ok(event) = events.try_recv() {
@@ -258,11 +258,11 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
                 seek_epoch,
                 ..
             })) => {
-                assert_eq!(seek_epoch, 91);
+                assert_eq!(seek_epoch, expected_epoch);
                 saw_output_committed = true;
             }
             Ok(Ok(AudioEvent::SeekComplete { seek_epoch, .. })) => {
-                assert_eq!(seek_epoch, 91);
+                assert_eq!(seek_epoch, expected_epoch);
                 saw_seek_complete = true;
                 break;
             }

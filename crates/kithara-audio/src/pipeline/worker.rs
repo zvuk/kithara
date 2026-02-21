@@ -4,18 +4,19 @@ use std::{sync::Arc, time::Duration};
 
 use kithara_decode::PcmChunk;
 use kithara_platform::{Receiver, Sender};
-use kithara_stream::Fetch;
+use kithara_stream::{Fetch, Timeline};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::trace;
 
 use crate::traits::AudioEffect;
 
-/// Command for audio worker.
+/// Command for audio worker (non-seek commands only).
+///
+/// Seek flows entirely through [`Timeline`] atomics.
 #[derive(Debug)]
 pub(crate) enum AudioCommand {
-    /// Seek to position with new epoch.
-    Seek { position: Duration, epoch: u64 },
+    // Seek removed — flows through Timeline::initiate_seek / complete_seek.
 }
 
 /// Trait for audio sources processed in a blocking worker thread.
@@ -25,6 +26,16 @@ pub(super) trait AudioWorkerSource: Send + 'static {
 
     fn fetch_next(&mut self) -> Fetch<Self::Chunk>;
     fn handle_command(&mut self, cmd: Self::Command);
+
+    /// Access the shared timeline for flushing checks.
+    fn timeline(&self) -> &Timeline;
+
+    /// Apply a pending seek read from the Timeline.
+    ///
+    /// Called by the worker loop when `timeline().is_flushing()` is true.
+    /// Reads target/epoch from Timeline, performs the seek on the decoder,
+    /// then calls `timeline().complete_seek(epoch)`.
+    fn apply_pending_seek(&mut self);
 }
 
 const BACKOFF_BUSY: Duration = Duration::from_micros(100);
@@ -63,6 +74,11 @@ fn send_with_backpressure<S: AudioWorkerSource>(
             return Err(());
         }
 
+        // Drop chunk and return to main loop if a seek is pending.
+        if source.timeline().is_flushing() {
+            return Ok(false);
+        }
+
         match data_tx.try_send_option(&mut item) {
             Ok(true) => return Ok(true), // sent
             Ok(false) => {
@@ -81,6 +97,10 @@ fn send_with_backpressure<S: AudioWorkerSource>(
                 if cancel.is_cancelled() {
                     trace!("audio worker cancelled during backpressure");
                     return Err(());
+                }
+                // Also check flushing during backpressure spin.
+                if source.timeline().is_flushing() {
+                    return Ok(false);
                 }
                 std::thread::sleep(BACKOFF_BUSY); // back off and retry
             }
@@ -118,13 +138,25 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
             return;
         }
 
+        // 1. Seek check via Timeline (single source of truth).
+        if source.timeline().is_flushing() {
+            source.apply_pending_seek();
+            at_eof = false;
+            continue;
+        }
+
         // Apply pending commands eagerly.
         if drain_commands(&mut source, cmd_rx) {
             at_eof = false;
         }
 
         if at_eof {
-            // Idle until a new command or cancellation.
+            // Idle until a new command, seek, or cancellation.
+            if source.timeline().is_flushing() {
+                source.apply_pending_seek();
+                at_eof = false;
+                continue;
+            }
             match cmd_rx.try_recv() {
                 Ok(Some(cmd)) => {
                     source.handle_command(cmd);

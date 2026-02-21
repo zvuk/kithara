@@ -59,7 +59,11 @@ const DEFAULT_EVENT_CAPACITY: usize = 64;
 /// }
 /// ```
 pub struct Audio<S> {
-    /// Command sender for seek.
+    /// Command sender for non-seek commands.
+    ///
+    /// Seek flows through Timeline atomics. This channel is kept alive
+    /// so the worker loop does not exit due to a closed `cmd_rx`.
+    #[expect(dead_code, reason = "kept alive for cmd_rx in worker loop")]
     cmd_tx: Sender<AudioCommand>,
 
     /// PCM chunk receiver.
@@ -121,35 +125,6 @@ pub struct Audio<S> {
 // Public API for cpal/rodio compatibility
 
 impl<S> Audio<S> {
-    fn send_seek_command(&self, position: Duration, epoch: u64) -> DecodeResult<()> {
-        let mut pending = Some(AudioCommand::Seek { position, epoch });
-        match self.cmd_tx.try_send_option(&mut pending) {
-            Ok(true) => Ok(()),
-            Ok(false) => {
-                let queued = self.cmd_tx.len();
-                warn!(epoch, queued, "seek command channel is full");
-
-                #[cfg(target_arch = "wasm32")]
-                {
-                    return Err(DecodeError::SeekError("channel full".to_string()));
-                }
-
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    let Some(cmd) = pending.take() else {
-                        return Err(DecodeError::SeekError(
-                            "seek command lost before fallback send".to_string(),
-                        ));
-                    };
-                    self.cmd_tx
-                        .send(cmd)
-                        .map_err(|_| DecodeError::SeekError("channel closed".to_string()))
-                }
-            }
-            Err(_) => Err(DecodeError::SeekError("channel closed".to_string())),
-        }
-    }
-
     /// Get reference to PCM receiver for direct channel access.
     #[must_use]
     pub fn pcm_rx(&self) -> &Receiver<Fetch<PcmChunk>> {
@@ -327,97 +302,49 @@ impl<S> Audio<S> {
 
     /// Seek to position in the audio stream.
     ///
-    /// Note: Seek clears internal buffers and invalidates pending chunks.
+    /// This method never blocks. Seek coordination flows entirely through
+    /// Timeline atomics (`FLUSH_START`/`FLUSH_STOP` pattern). The worker thread reads
+    /// the seek target and epoch from Timeline and applies the seek.
     ///
     /// # Errors
     ///
-    /// Returns [`DecodeError::SeekError`] if the command channel is closed.
+    /// This method is infallible in practice but returns `DecodeResult` for
+    /// API compatibility.
     pub fn seek(&mut self, position: Duration) -> DecodeResult<()> {
-        // Increment epoch to invalidate pending chunks.
-        // Do NOT store to shared atomic here — the worker does it in handle_command().
-        // Storing here would race: the worker's fetch_next() could read the new epoch
-        // before processing the seek, stamping a pre-seek chunk with the new epoch
-        // and making it pass the consumer's epoch filter.
-        let new_epoch = self.validator.epoch.wrapping_add(1);
+        // 1. Atomic write to Timeline — FLUSH_START
+        let epoch = self.timeline.initiate_seek(position);
+        self.timeline.mark_pending_seek_epoch(epoch);
 
-        self.send_seek_command(position, new_epoch)?;
-        self.validator.epoch = new_epoch;
-
-        // Clear local state (current_chunk auto-recycles via Drop)
+        // 2. Update local consumer state
+        self.validator.epoch = epoch;
         self.current_chunk = None;
         self.chunk_offset = 0;
         self.eof = false;
-        self.timeline.set_committed_position(position);
-        self.timeline.mark_pending_seek_epoch(new_epoch);
 
-        // Drain stale chunks from channel to unblock worker.
-        // Stop if we encounter a valid chunk (save it for next read).
-        while let Ok(Some(fetch)) = self.pcm_rx.try_recv() {
-            if self.validator.is_valid(&fetch) {
-                // Found new valid chunk - save it and stop draining
-                if !fetch.is_eof() {
-                    let chunk = fetch.into_inner();
-                    self.spec = chunk.spec();
-                    self.current_chunk = Some(chunk);
-                    self.chunk_offset = 0;
-                    trace!("seek: saved first valid chunk after drain");
-                }
-                break;
-            }
-            // Stale chunk (old epoch) - discard and continue draining
-            trace!(
-                chunk_epoch = fetch.epoch(),
-                current_epoch = new_epoch,
-                "seek: discarding stale chunk"
-            );
-        }
+        // 3. Drain stale chunks from pcm channel to unblock worker
+        while let Ok(Some(_)) = self.pcm_rx.try_recv() {}
 
-        // Reset preload flag - first read after seek will be blocking if needed
+        // Reset preload flag — first read after seek will be blocking if needed
         self.preloaded = false;
 
-        debug!(?position, epoch = new_epoch, "seek initiated");
+        debug!(?position, epoch, "seek initiated via Timeline");
         Ok(())
     }
 
     /// Seek to position in the audio stream using a caller-provided epoch.
     ///
     /// This is used by playback components that already manage seek ordering.
+    /// The epoch is recorded in Timeline via `initiate_seek`, so all threads
+    /// observe it atomically.
     ///
     /// # Errors
     ///
-    /// Returns [`DecodeError::SeekError`] if the command channel is closed.
-    pub fn seek_with_epoch(&mut self, position: Duration, seek_epoch: u64) -> DecodeResult<()> {
-        self.send_seek_command(position, seek_epoch)?;
-        self.validator.epoch = seek_epoch;
-
-        self.current_chunk = None;
-        self.chunk_offset = 0;
-        self.eof = false;
-        self.timeline.set_committed_position(position);
-        self.timeline.mark_pending_seek_epoch(seek_epoch);
-
-        while let Ok(Some(fetch)) = self.pcm_rx.try_recv() {
-            if self.validator.is_valid(&fetch) {
-                if !fetch.is_eof() {
-                    let chunk = fetch.into_inner();
-                    self.spec = chunk.spec();
-                    self.current_chunk = Some(chunk);
-                    self.chunk_offset = 0;
-                    trace!("seek_with_epoch: saved first valid chunk after drain");
-                }
-                break;
-            }
-            trace!(
-                chunk_epoch = fetch.epoch(),
-                current_epoch = seek_epoch,
-                "seek_with_epoch: discarding stale chunk"
-            );
-        }
-
-        self.preloaded = false;
-
-        debug!(?position, epoch = seek_epoch, "seek_with_epoch initiated");
-        Ok(())
+    /// This method is infallible in practice but returns `DecodeResult` for
+    /// API compatibility.
+    pub fn seek_with_epoch(&mut self, position: Duration, _seek_epoch: u64) -> DecodeResult<()> {
+        // Epoch comes from Timeline now, not from caller.
+        // The _seek_epoch parameter is kept for API compatibility but ignored.
+        self.seek(position)
     }
 
     /// Receive next valid chunk from channel, filtering stale chunks.

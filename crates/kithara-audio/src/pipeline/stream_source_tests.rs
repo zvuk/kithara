@@ -9,6 +9,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use rstest::rstest;
+
 use kithara_bufpool::pcm_pool;
 use kithara_decode::{
     DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec,
@@ -19,10 +21,8 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, MediaInfo, Source, SourceSeekAnchor, Stream, StreamResult, StreamType, Timeline,
 };
-use rstest::rstest;
 
 use super::*;
-use crate::pipeline::worker::AudioCommand;
 
 // TestSource + TestStream
 
@@ -282,7 +282,8 @@ fn v3_info() -> MediaInfo {
 /// so `current_segment_range()` would return segment 20 (no init data).
 /// Using `format_change_segment_range()` returns segment 19 where
 /// ftyp/moov lives, allowing decoder to be recreated correctly.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 fn apply_format_change_must_use_first_new_format_segment_offset() {
     // Use production-like offsets from the log
     const V3_SEGMENT_19_START: u64 = 964431;
@@ -344,7 +345,8 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
     );
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 fn basic_decode_to_eof() {
     let (shared, _state) = make_shared_stream(vec![0u8; 1000], Some(1000));
     let chunks = vec![make_chunk(v0_spec(), 1024); 3];
@@ -362,7 +364,8 @@ fn basic_decode_to_eof() {
     assert!(fetch.is_eof);
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 fn format_change_recreates_decoder() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
     let v0_chunks = vec![make_chunk(v0_spec(), 1024); 2];
@@ -424,12 +427,10 @@ fn seek_updates_epoch_and_decoder_and_controls_byte_len_update(
 
     source.base_offset = base_offset;
 
-    source.handle_command(AudioCommand::Seek {
-        position: Duration::from_secs(10),
-        epoch: 42,
-    });
+    let seek_epoch = source.timeline.initiate_seek(Duration::from_secs(10));
+    source.apply_pending_seek();
 
-    assert_eq!(epoch.load(Ordering::Acquire), 42);
+    assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
 
     let seeks = seek_log.lock();
     assert_eq!(seeks.len(), 1);
@@ -442,7 +443,8 @@ fn seek_updates_epoch_and_decoder_and_controls_byte_len_update(
     }
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 fn seek_uses_segment_start_anchor_without_decoder_recreate() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
@@ -477,12 +479,10 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
         });
     }
 
-    source.handle_command(AudioCommand::Seek {
-        position: Duration::from_millis(8_250),
-        epoch: 42,
-    });
+    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
+    source.apply_pending_seek();
 
-    assert_eq!(epoch.load(Ordering::Acquire), 42);
+    assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
     assert_eq!(
         source.current_base_offset(),
         0,
@@ -516,7 +516,8 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
     );
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 fn seek_anchor_failure_falls_back_to_legacy_seek() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
@@ -557,10 +558,8 @@ fn seek_anchor_failure_falls_back_to_legacy_seek() {
         });
     }
 
-    source.handle_command(AudioCommand::Seek {
-        position: Duration::from_millis(8_250),
-        epoch: 42,
-    });
+    let _seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
+    source.apply_pending_seek();
 
     let created_offsets = offsets.lock();
     assert!(
@@ -586,7 +585,8 @@ fn seek_anchor_failure_falls_back_to_legacy_seek() {
     assert_eq!(fetch.data.pcm.len(), 100);
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 fn failed_seek_without_pending_format_change_does_not_recreate_decoder() {
     let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
@@ -616,10 +616,8 @@ fn failed_seek_without_pending_format_change_does_not_recreate_decoder() {
     source.base_offset = 863137;
     source.cached_media_info = Some(v3_info());
 
-    source.handle_command(AudioCommand::Seek {
-        position: Duration::from_secs(10),
-        epoch: 1,
-    });
+    let _seek_epoch = source.timeline.initiate_seek(Duration::from_secs(10));
+    source.apply_pending_seek();
 
     let _ = source.fetch_next();
 
@@ -630,7 +628,8 @@ fn failed_seek_without_pending_format_change_does_not_recreate_decoder() {
     );
 }
 
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 fn seek_clears_variant_fence() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
@@ -653,10 +652,8 @@ fn seek_clears_variant_fence() {
         source_state.variant_fence = Some(3);
     }
 
-    source.handle_command(AudioCommand::Seek {
-        position: Duration::from_millis(250),
-        epoch: 1,
-    });
+    let _seek_epoch = source.timeline.initiate_seek(Duration::from_millis(250));
+    source.apply_pending_seek();
 
     assert!(
         state.lock().variant_fence.is_none(),
@@ -675,7 +672,8 @@ fn seek_clears_variant_fence() {
 /// 6. Seek position is lost — V3 decoder never receives it
 ///
 /// Expected: pending format change is applied, seek retried on V3 decoder.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 fn seek_during_pending_format_change_retries_on_new_decoder() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
@@ -726,10 +724,8 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
     // Seek arrives BEFORE format change is applied.
     // Old V0 decoder seek fails. base_offset=0.
     let seek_pos = Duration::from_secs_f64(147.48);
-    source.handle_command(AudioCommand::Seek {
-        position: seek_pos,
-        epoch: 1,
-    });
+    let _seek_epoch = source.timeline.initiate_seek(seek_pos);
+    source.apply_pending_seek();
 
     // EXPECTED: format change was applied, V3 decoder received the seek
     assert_eq!(
@@ -759,7 +755,8 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
 /// Audio dies permanently — every subsequent `fetch_next` returns EOF.
 ///
 /// 30-second timeout catches deadlocks.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(30))]
 fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
     const V3_SEGMENT_19_START: u64 = 964431;
     const V3_SEGMENT_20_START: u64 = 1732515;
@@ -808,12 +805,8 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
         while start.elapsed() < Duration::from_secs(20) {
             let pos_idx = (epoch as usize) % seek_positions.len();
             let seek_pos = Duration::from_secs_f64(seek_positions[pos_idx]);
-            epoch += 1;
-
-            source.handle_command(AudioCommand::Seek {
-                position: seek_pos,
-                epoch,
-            });
+            epoch = source.timeline.initiate_seek(seek_pos);
+            source.apply_pending_seek();
 
             // Fetch a few chunks but don't drain (simulating rapid scrubbing)
             for _ in 0..3 {
@@ -883,7 +876,8 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
 /// - First read in V0 → fence auto-detects V0
 /// - Seek to V3 offset → read returns 0 (fence blocks)
 /// - `clear_variant_fence()` → read V3 → fence auto-detects V3
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 fn source_variant_fence_blocks_cross_variant_reads() {
     let mut data = vec![0xAA; 2000];
     data[1000..].fill(0xBB);
@@ -1160,7 +1154,8 @@ fn v1_info() -> MediaInfo {
 ///   Grand total: 768000 bytes, 76800 samples
 ///
 /// Catches: wrong `base_offset`, forgotten seek, cross-variant data, sample gaps.
-#[test]
+#[rstest]
+#[timeout(Duration::from_secs(10))]
 fn abr_switch_must_not_lose_samples() {
     let spv = SEGMENTS_PER_VARIANT;
     let sps = SAMPLES_PER_SEGMENT;

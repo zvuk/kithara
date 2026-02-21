@@ -13,7 +13,7 @@ use fallible_iterator::FallibleIterator;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, SeekLifecycleStage};
 use kithara_platform::Mutex;
-use kithara_stream::{Fetch, MediaInfo, SourceSeekAnchor, Stream, StreamType};
+use kithara_stream::{Fetch, MediaInfo, SourceSeekAnchor, Stream, StreamType, Timeline};
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -80,6 +80,11 @@ impl<T: StreamType> SharedStream<T> {
     ) -> Arc<dyn kithara_stream::StreamContext> {
         let stream = self.inner.lock();
         T::build_stream_context(stream.source(), stream.timeline())
+    }
+
+    /// Get the shared timeline for flushing checks.
+    pub(in crate::pipeline) fn timeline(&self) -> Timeline {
+        self.inner.lock().timeline()
     }
 }
 
@@ -185,6 +190,8 @@ pub(in crate::pipeline) struct StreamAudioSource<T: StreamType> {
     base_offset: u64,
     pending_decode_started_epoch: Option<u64>,
     pending_seek_skip: Option<(u64, Duration)>,
+    /// Cached timeline for lock-free flushing checks.
+    timeline: Timeline,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -196,6 +203,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         epoch: Arc<AtomicU64>,
         effects: Vec<Box<dyn AudioEffect>>,
     ) -> Self {
+        let timeline = shared_stream.timeline();
         Self {
             shared_stream,
             decoder,
@@ -211,6 +219,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             base_offset: 0,
             pending_decode_started_epoch: None,
             pending_seek_skip: None,
+            timeline,
         }
     }
 
@@ -726,123 +735,138 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         }
     }
 
+    fn handle_command(&mut self, _cmd: Self::Command) {
+        // No commands left to handle. Seek flows through Timeline.
+        // This match is intentionally empty; AudioCommand currently has no variants.
+        // Future non-seek commands will be dispatched here.
+    }
+
+    fn timeline(&self) -> &Timeline {
+        &self.timeline
+    }
+
     #[expect(
         clippy::cognitive_complexity,
-        reason = "command dispatch with multiple variants"
+        reason = "seek dispatch with multiple fallback paths"
     )]
-    fn handle_command(&mut self, cmd: Self::Command) {
-        match cmd {
-            AudioCommand::Seek { position, epoch } => {
-                let current_epoch = self.epoch.load(Ordering::Acquire);
-                if epoch < current_epoch {
-                    trace!(
-                        current_epoch,
-                        stale_epoch = epoch,
-                        "seek: dropping stale command"
+    fn apply_pending_seek(&mut self) {
+        let epoch = self.timeline.seek_epoch();
+        let Some(position) = self.timeline.seek_target() else {
+            // No target set — another thread already cleared it. Complete anyway.
+            self.timeline.complete_seek(epoch);
+            return;
+        };
+
+        let current_epoch = self.epoch.load(Ordering::Acquire);
+        if epoch <= current_epoch {
+            trace!(
+                current_epoch,
+                stale_epoch = epoch,
+                "apply_pending_seek: dropping stale seek"
+            );
+            self.timeline.complete_seek(epoch);
+            return;
+        }
+
+        let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
+        self.emit_seek_lifecycle(
+            SeekLifecycleStage::SeekRequest,
+            epoch,
+            epoch,
+            variant,
+            segment_index,
+            byte_range_start,
+            byte_range_end,
+        );
+
+        self.shared_stream.set_seek_epoch(epoch);
+        self.epoch.store(epoch, Ordering::Release);
+
+        // Clear any variant fence so seek can move to any timeline
+        // position, including positions in previous variants.
+        self.shared_stream.clear_variant_fence();
+        self.pending_seek_skip = None;
+
+        match self.shared_stream.seek_time_anchor(position) {
+            Ok(Some(anchor)) => {
+                if !self.align_decoder_with_seek_anchor(anchor) {
+                    warn!(
+                        "seek anchor path: decoder alignment failed, falling back to legacy decoder seek"
                     );
+                }
+                if self.apply_time_anchor_seek(position, epoch, anchor) {
+                    self.timeline.complete_seek(epoch);
                     return;
                 }
+                warn!("seek anchor path failed, falling back to legacy decoder seek");
+            }
+            Ok(None) => {}
+            Err(err) => {
+                warn!(
+                    ?err,
+                    "seek anchor resolution failed, using legacy decoder seek"
+                );
+            }
+        }
 
+        let stream_pos = self.shared_stream.position();
+        let segment_range = self.shared_stream.current_segment_range();
+
+        // Only update byte_len for original decoder (no ABR switch).
+        // After ABR switch (base_offset > 0), byte_len is intentionally 0
+        // to prevent mismatch between byte_len and moov duration.
+        // Symphonia uses moof seek index for fMP4, not byte_len.
+        if self.base_offset == 0
+            && let Some(len) = self.shared_stream.len()
+            && len > 0
+        {
+            self.decoder.update_byte_len(len);
+        }
+
+        debug!(
+            ?position,
+            epoch,
+            stream_pos,
+            ?segment_range,
+            base_offset = self.base_offset,
+            "seek: about to call decoder.seek()"
+        );
+        if let Err(e) = self.decoder.seek(position) {
+            warn!(?e, "seek failed");
+            let recovered = if self.pending_format_change.is_some() {
+                // Seek failed while format change is pending (ABR switch
+                // detected but not yet applied). Apply it now and retry
+                // seek on the new decoder.
+                debug!("seek failed during pending format change, applying now");
+                self.apply_format_change() && self.decoder.seek(position).is_ok()
+            } else {
+                false
+            };
+
+            if recovered {
+                reset_effects(&mut self.effects);
                 let (variant, segment_index, byte_range_start, byte_range_end) =
                     self.seek_context();
-                self.emit_seek_lifecycle(
-                    SeekLifecycleStage::SeekRequest,
-                    epoch,
+                self.apply_seek_applied(
                     epoch,
                     variant,
                     segment_index,
                     byte_range_start,
                     byte_range_end,
                 );
-
-                self.shared_stream.set_seek_epoch(epoch);
-                self.epoch.store(epoch, Ordering::Release);
-
-                // Clear any variant fence so seek can move to any timeline
-                // position, including positions in previous variants.
-                self.shared_stream.clear_variant_fence();
-                self.pending_seek_skip = None;
-
-                match self.shared_stream.seek_time_anchor(position) {
-                    Ok(Some(anchor)) => {
-                        if !self.align_decoder_with_seek_anchor(anchor) {
-                            warn!(
-                                "seek anchor path: decoder alignment failed, falling back to legacy decoder seek"
-                            );
-                        }
-                        if self.apply_time_anchor_seek(position, epoch, anchor) {
-                            return;
-                        }
-                        warn!("seek anchor path failed, falling back to legacy decoder seek");
-                    }
-                    Ok(None) => {}
-                    Err(err) => {
-                        warn!(
-                            ?err,
-                            "seek anchor resolution failed, using legacy decoder seek"
-                        );
-                    }
-                }
-
-                let stream_pos = self.shared_stream.position();
-                let segment_range = self.shared_stream.current_segment_range();
-
-                // Only update byte_len for original decoder (no ABR switch).
-                // After ABR switch (base_offset > 0), byte_len is intentionally 0
-                // to prevent mismatch between byte_len and moov duration.
-                // Symphonia uses moof seek index for fMP4, not byte_len.
-                if self.base_offset == 0
-                    && let Some(len) = self.shared_stream.len()
-                    && len > 0
-                {
-                    self.decoder.update_byte_len(len);
-                }
-
-                debug!(
-                    ?position,
-                    epoch,
-                    stream_pos,
-                    ?segment_range,
-                    base_offset = self.base_offset,
-                    "seek: about to call decoder.seek()"
-                );
-                if let Err(e) = self.decoder.seek(position) {
-                    warn!(?e, "seek failed");
-                    let recovered = if self.pending_format_change.is_some() {
-                        // Seek failed while format change is pending (ABR switch
-                        // detected but not yet applied). Apply it now and retry
-                        // seek on the new decoder.
-                        debug!("seek failed during pending format change, applying now");
-                        self.apply_format_change() && self.decoder.seek(position).is_ok()
-                    } else {
-                        false
-                    };
-
-                    if recovered {
-                        reset_effects(&mut self.effects);
-                        let (variant, segment_index, byte_range_start, byte_range_end) =
-                            self.seek_context();
-                        self.apply_seek_applied(
-                            epoch,
-                            variant,
-                            segment_index,
-                            byte_range_start,
-                            byte_range_end,
-                        );
-                    }
-                } else {
-                    let (variant, segment_index, byte_range_start, byte_range_end) =
-                        self.seek_context();
-                    self.apply_seek_applied(
-                        epoch,
-                        variant,
-                        segment_index,
-                        byte_range_start,
-                        byte_range_end,
-                    );
-                }
             }
+        } else {
+            let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
+            self.apply_seek_applied(
+                epoch,
+                variant,
+                segment_index,
+                byte_range_start,
+                byte_range_end,
+            );
         }
+
+        self.timeline.complete_seek(epoch);
     }
 }
 
