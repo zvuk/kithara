@@ -1263,3 +1263,96 @@ fn abr_switch_must_not_lose_samples() {
         );
     }
 }
+
+/// Integration test: seek during active decode completes without hang.
+///
+/// Verifies the full flush protocol:
+/// 1. Decode a few chunks (active playback)
+/// 2. `initiate_seek()` sets flushing=true
+/// 3. Worker detects flushing, calls `apply_pending_seek()`
+/// 4. `complete_seek()` clears flushing
+/// 5. Subsequent `fetch_next()` returns data (not stuck)
+///
+/// 10-second timeout catches deadlocks.
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn seek_during_active_decode_completes_without_hang() {
+    let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+    let spec = v0_spec();
+    let chunks = vec![make_chunk(spec, 1024); 20];
+    let (decoder, _logs) = scripted_inner_decoder_loose(spec, chunks, vec![], None);
+    let factory = make_factory(vec![]);
+    let mut source = make_source(shared, decoder, factory, Some(v0_info()));
+
+    // Phase 1: decode a few chunks (active playback)
+    let mut decoded_before_seek = 0;
+    for _ in 0..3 {
+        let fetch = source.fetch_next();
+        if !fetch.is_eof {
+            decoded_before_seek += 1;
+        }
+    }
+    assert!(decoded_before_seek > 0, "should decode chunks before seek");
+
+    // Phase 2: initiate seek via Timeline (FLUSH_START)
+    let epoch = source.timeline.initiate_seek(Duration::from_secs(5));
+    assert!(source.timeline.is_flushing(), "flushing flag must be set");
+
+    // Phase 3: apply_pending_seek (worker would call this)
+    source.apply_pending_seek();
+
+    // Phase 4: flushing should be cleared (FLUSH_STOP)
+    assert!(
+        !source.timeline.is_flushing(),
+        "flushing must be cleared after apply_pending_seek"
+    );
+    assert_eq!(source.timeline.seek_epoch(), epoch, "epoch must match");
+
+    // Phase 5: subsequent decode must produce data (not stuck)
+    let mut decoded_after_seek = 0;
+    for _ in 0..3 {
+        let fetch = source.fetch_next();
+        if !fetch.is_eof {
+            decoded_after_seek += 1;
+        }
+    }
+    assert!(
+        decoded_after_seek > 0,
+        "should decode chunks after seek (flush protocol complete)"
+    );
+}
+
+/// Integration test: multiple rapid seeks via Timeline all complete.
+///
+/// Simulates rapid slider scrubbing: 10 seeks in a row, each followed
+/// by apply_pending_seek + a few decode cycles. None should hang.
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn rapid_seeks_via_timeline_all_complete() {
+    let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+    let spec = v0_spec();
+    let chunks = vec![make_chunk(spec, 1024); 100];
+    let (decoder, _logs) = scripted_inner_decoder_loose(spec, chunks, vec![], None);
+    let factory = make_factory(vec![]);
+    let mut source = make_source(shared, decoder, factory, Some(v0_info()));
+
+    let seek_positions = [1.0, 5.0, 0.5, 8.0, 3.0, 10.0, 0.1, 7.5, 2.0, 6.0];
+
+    for (i, &secs) in seek_positions.iter().enumerate() {
+        let epoch = source.timeline.initiate_seek(Duration::from_secs_f64(secs));
+        assert!(source.timeline.is_flushing());
+
+        source.apply_pending_seek();
+
+        assert!(
+            !source.timeline.is_flushing(),
+            "seek #{i} to {secs}s: flushing not cleared"
+        );
+        assert_eq!(source.timeline.seek_epoch(), epoch);
+
+        // Decode a few chunks to confirm pipeline is alive
+        let fetch = source.fetch_next();
+        // May be EOF if decoder ran out of scripted chunks, but must not hang
+        let _ = fetch;
+    }
+}
