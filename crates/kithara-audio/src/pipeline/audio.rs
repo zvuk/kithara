@@ -118,6 +118,12 @@ pub struct Audio<S> {
     /// Whether `preload()` has been called (enables non-blocking mode).
     preloaded: bool,
 
+    /// Callback to wake blocked `wait_range()` calls on seek.
+    ///
+    /// Set during construction for sources with blocking condvar waits (HLS).
+    /// Called from `seek()` after `initiate_seek()` for instant wakeup.
+    notify_waiting: Option<Box<dyn Fn() + Send + Sync>>,
+
     /// Marker for source type.
     _marker: std::marker::PhantomData<S>,
 }
@@ -324,27 +330,16 @@ impl<S> Audio<S> {
         // 3. Drain stale chunks from pcm channel to unblock worker
         while let Ok(Some(_)) = self.pcm_rx.try_recv() {}
 
+        // 4. Wake blocked wait_range() calls for instant seek response
+        if let Some(ref notify) = self.notify_waiting {
+            notify();
+        }
+
         // Reset preload flag — first read after seek will be blocking if needed
         self.preloaded = false;
 
         debug!(?position, epoch, "seek initiated via Timeline");
         Ok(())
-    }
-
-    /// Seek to position in the audio stream using a caller-provided epoch.
-    ///
-    /// This is used by playback components that already manage seek ordering.
-    /// The epoch is recorded in Timeline via `initiate_seek`, so all threads
-    /// observe it atomically.
-    ///
-    /// # Errors
-    ///
-    /// This method is infallible in practice but returns `DecodeResult` for
-    /// API compatibility.
-    pub fn seek_with_epoch(&mut self, position: Duration, _seek_epoch: u64) -> DecodeResult<()> {
-        // Epoch comes from Timeline now, not from caller.
-        // The _seek_epoch parameter is kept for API compatibility but ignored.
-        self.seek(position)
     }
 
     /// Receive next valid chunk from channel, filtering stale chunks.
@@ -683,6 +678,11 @@ where
         // Pass stream_media_info (not initial_media_info) so format change detection
         // compares against what the stream actually reports, avoiding false positives
         // when the user overrides media_info (e.g., WAV over HLS).
+        // Create notify callback that wakes blocked wait_range() on seek.
+        let notify_stream = shared_stream.clone();
+        let notify_waiting: Option<Box<dyn Fn() + Send + Sync>> =
+            Some(Box::new(move || notify_stream.notify_waiting()));
+
         let audio_source = StreamAudioSource::new(
             shared_stream,
             decoder,
@@ -727,6 +727,7 @@ where
             host_sample_rate,
             preload_notify,
             preloaded: false,
+            notify_waiting,
             _marker: std::marker::PhantomData,
         })
     }
@@ -789,10 +790,6 @@ impl<S: Send> PcmReader for Audio<S> {
 
     fn seek(&mut self, position: Duration) -> DecodeResult<()> {
         Self::seek(self, position)
-    }
-
-    fn seek_with_epoch(&mut self, position: Duration, seek_epoch: u64) -> DecodeResult<()> {
-        Self::seek_with_epoch(self, position, seek_epoch)
     }
 
     fn spec(&self) -> PcmSpec {

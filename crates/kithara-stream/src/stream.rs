@@ -142,6 +142,13 @@ impl<T: StreamType> Stream<T> {
         self.source.set_seek_epoch(seek_epoch);
     }
 
+    /// Wake any blocked `wait_range()` calls.
+    ///
+    /// Called after `Timeline::initiate_seek()` for instant wakeup.
+    pub fn notify_waiting(&self) {
+        self.source.notify_waiting();
+    }
+
     /// Resolve a deterministic time-based seek anchor and move the stream position.
     ///
     /// Returns `None` for sources without segmented time mapping.

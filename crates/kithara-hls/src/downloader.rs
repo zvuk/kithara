@@ -711,6 +711,13 @@ impl Downloader for HlsDownloader {
         reason = "on-demand segment resolution is inherently complex"
     )]
     async fn poll_demand(&mut self) -> Option<HlsPlan> {
+        // Pause during seek — planning downloads is pointless while the seek
+        // target is being resolved. The outer loop will retry.
+        if self.shared.timeline.is_flushing() {
+            sleep(Duration::from_millis(5)).await;
+            return None;
+        }
+
         let req = loop {
             match self.shared.segment_requests.pop() {
                 Some(req) => {
@@ -1007,6 +1014,10 @@ impl Downloader for HlsDownloader {
     }
 
     fn should_throttle(&self) -> bool {
+        // Never throttle during seek — downloader must be free to respond.
+        if self.shared.timeline.is_flushing() {
+            return false;
+        }
         let Some(limit) = self.look_ahead_bytes else {
             return false;
         };
@@ -1018,7 +1029,19 @@ impl Downloader for HlsDownloader {
     }
 
     async fn wait_ready(&self) {
-        self.shared.reader_advanced.notified().await;
+        loop {
+            tokio::select! {
+                () = self.shared.reader_advanced.notified() => {
+                    return;
+                }
+                () = sleep(Duration::from_millis(50)) => {
+                    // Check flushing periodically as a safety net.
+                    if self.shared.timeline.is_flushing() || !self.should_throttle() {
+                        return;
+                    }
+                }
+            }
+        }
     }
 }
 

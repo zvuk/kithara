@@ -527,6 +527,10 @@ impl Source for HlsSource {
         self.variant_fence = None;
     }
 
+    fn notify_waiting(&self) {
+        self.shared.condvar.notify_all();
+    }
+
     fn set_seek_epoch(&mut self, _seek_epoch: u64) {
         // seek_epoch is now managed by Timeline.initiate_seek()
         self.shared.timeline.set_eof(false);

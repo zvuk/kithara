@@ -166,23 +166,6 @@ impl PlayerResource {
         }
     }
 
-    /// Seek to the given position with a specific epoch.
-    ///
-    /// Epoch is passed through to the inner audio source when supported.
-    /// Some sources ignore epoch for backwards compatibility.
-    pub(crate) fn seek_with_epoch(&mut self, seconds: f64, seek_epoch: u64) {
-        let position = Duration::from_secs_f64(seconds);
-        match self.resource.seek_with_epoch(position, seek_epoch) {
-            Ok(()) => {
-                self.write_len = 0;
-                self.write_pos = 0;
-            }
-            Err(err) => {
-                warn!("failed to seek_with_epoch: {err}");
-            }
-        }
-    }
-
     /// Current playback position in seconds.
     pub(crate) fn position(&self) -> f64 {
         self.resource.position().as_secs_f64()
@@ -351,22 +334,6 @@ mod tests {
 
         // Seek resets internal buffer state
         pr.seek(0.5);
-        assert_eq!(pr.write_len, 0);
-        assert_eq!(pr.write_pos, 0);
-    }
-
-    #[tokio::test]
-    async fn resource_seek_with_epoch_clears_buffer() {
-        let mut pr = make_player_resource();
-
-        // Read some data first to fill buffers
-        let mut left = vec![0.0f32; 128];
-        let mut right = vec![0.0f32; 128];
-        let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
-        let _ = pr.read(&mut output, 0..128);
-
-        // Epoch-aware seek also resets internal buffer state
-        pr.seek_with_epoch(0.5, 7);
         assert_eq!(pr.write_len, 0);
         assert_eq!(pr.write_pos, 0);
     }

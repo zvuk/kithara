@@ -94,6 +94,13 @@ pub trait Source: Send + 'static {
     /// Default no-op for non-HLS sources.
     fn clear_variant_fence(&mut self) {}
 
+    /// Wake any blocked `wait_range()` calls.
+    ///
+    /// Called after `Timeline::initiate_seek()` to ensure immediate response
+    /// from threads sleeping on condvars. Default no-op for sources without
+    /// blocking waits.
+    fn notify_waiting(&self) {}
+
     /// Set current seek epoch for stale request invalidation.
     ///
     /// HLS uses this to drop in-flight network/segment requests that belong

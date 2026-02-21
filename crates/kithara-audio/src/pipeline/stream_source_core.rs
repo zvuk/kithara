@@ -86,6 +86,11 @@ impl<T: StreamType> SharedStream<T> {
     pub(in crate::pipeline) fn timeline(&self) -> Timeline {
         self.inner.lock().timeline()
     }
+
+    /// Wake any blocked `wait_range()` calls for instant seek response.
+    pub(in crate::pipeline) fn notify_waiting(&self) {
+        self.inner.lock().notify_waiting();
+    }
 }
 
 impl<T: StreamType> Clone for SharedStream<T> {

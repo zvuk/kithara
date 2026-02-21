@@ -191,7 +191,7 @@ async fn test_audio_playback_progress_uses_output_commit() {
 }
 
 #[tokio::test]
-async fn test_seek_with_epoch_emits_matching_playback_progress() {
+async fn test_seek_emits_matching_playback_progress() {
     let (_tmp, config) = test_wav_config(10_000);
     let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await

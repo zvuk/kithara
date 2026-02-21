@@ -203,8 +203,10 @@ impl Timeline {
         if self.seek_epoch.load(Ordering::SeqCst) != epoch {
             return;
         }
-        self.seek_target_ns
-            .store(Self::NO_SEEK_TARGET, Ordering::SeqCst);
+        // NOTE: we do NOT clear seek_target_ns here.
+        // A concurrent initiate_seek() may have already written a new target;
+        // clearing it would lose that target. Stale targets are harmless
+        // because apply_pending_seek() always gates on seek_epoch.
         self.flushing.store(false, Ordering::SeqCst);
         // Double-check: if a newer seek arrived while we were clearing,
         // its initiate_seek may have already set flushing=true which we
@@ -283,7 +285,9 @@ mod tests {
         let epoch = tl.initiate_seek(Duration::from_secs(5));
         tl.complete_seek(epoch);
         assert!(!tl.is_flushing());
-        assert!(tl.seek_target().is_none());
+        // seek_target is intentionally NOT cleared — stale targets are
+        // harmless because consumers gate on seek_epoch.
+        assert_eq!(tl.seek_target(), Some(Duration::from_secs(5)));
     }
 
     #[test]
@@ -311,10 +315,22 @@ mod tests {
     }
 
     #[test]
+    fn complete_seek_does_not_clobber_concurrent_target() {
+        let tl = Timeline::new();
+        let epoch1 = tl.initiate_seek(Duration::from_secs(5));
+        // Simulate concurrent initiate_seek before complete_seek runs
+        let _epoch2 = tl.initiate_seek(Duration::from_secs(15));
+        // complete_seek with stale epoch must not touch seek_target
+        tl.complete_seek(epoch1);
+        assert!(tl.is_flushing());
+        assert_eq!(tl.seek_target(), Some(Duration::from_secs(15)));
+    }
+
+    #[test]
     fn initiate_seek_is_visible_across_clones() {
         let tl = Timeline::new();
         let clone = tl.clone();
-        tl.initiate_seek(Duration::from_secs(7));
+        let _ = tl.initiate_seek(Duration::from_secs(7));
         assert!(clone.is_flushing());
         assert_eq!(clone.seek_target(), Some(Duration::from_secs(7)));
     }

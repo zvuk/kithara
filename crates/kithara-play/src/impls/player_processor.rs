@@ -290,7 +290,7 @@ impl PlayerNodeProcessor {
         for (_, track) in &mut self.tracks {
             match track.state() {
                 TrackState::FadingIn | TrackState::Playing => {
-                    track.seek_with_epoch(seconds, seek_epoch);
+                    track.seek(seconds);
                     track.play();
                 }
                 TrackState::FadingOut => {
@@ -682,19 +682,14 @@ mod tests {
                 0
             }
 
-            fn seek(&mut self, _position: std::time::Duration) -> DecodeResult<()> {
-                Ok(())
-            }
-
-            fn seek_with_epoch(
-                &mut self,
-                _position: std::time::Duration,
-                seek_epoch: u64,
-            ) -> DecodeResult<()> {
+            fn seek(&mut self, position: std::time::Duration) -> DecodeResult<()> {
+                // Log position in millis to distinguish seek sources.
+                #[expect(clippy::cast_possible_truncation, reason = "test values fit in u64")]
+                let ms = position.as_millis() as u64;
                 self.seek_log
                     .lock()
                     .expect("seek log mutex poisoned")
-                    .push(seek_epoch);
+                    .push(ms);
                 Ok(())
             }
 
@@ -792,7 +787,9 @@ mod tests {
         processor.drain_commands();
 
         let seek_log = seek_log.lock().expect("seek log mutex poisoned");
-        assert_eq!(seek_log.as_slice(), [third]);
+        // FadeIn calls seek(0.0) → 0ms, then only the last seek epoch passes → 30000ms.
+        // Seeks with stale epochs (1, 2) are dropped.
+        assert_eq!(seek_log.as_slice(), [0, 30000]);
         assert_eq!(shared_state.seek_epoch.load(Ordering::SeqCst), third);
     }
 }

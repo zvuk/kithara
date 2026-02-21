@@ -63,18 +63,6 @@ pub trait PcmReader: Send {
     /// Returns [`DecodeError`] if the seek operation fails.
     fn seek(&mut self, position: Duration) -> DecodeResult<()>;
 
-    /// Seek to the given position using an explicit epoch token.
-    ///
-    /// Implementations can ignore this token if epoch-aware invalidation is
-    /// unsupported. By default, this is a legacy-compatible passthrough.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DecodeError`] if the underlying seek fails.
-    fn seek_with_epoch(&mut self, position: Duration, _seek_epoch: u64) -> DecodeResult<()> {
-        self.seek(position)
-    }
-
     /// Get the current PCM specification.
     fn spec(&self) -> PcmSpec;
 
