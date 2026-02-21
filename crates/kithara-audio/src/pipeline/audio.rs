@@ -678,10 +678,10 @@ where
         // Pass stream_media_info (not initial_media_info) so format change detection
         // compares against what the stream actually reports, avoiding false positives
         // when the user overrides media_info (e.g., WAV over HLS).
-        // Create notify callback that wakes blocked wait_range() on seek.
-        let notify_stream = shared_stream.clone();
-        let notify_waiting: Option<Box<dyn Fn() + Send + Sync>> =
-            Some(Box::new(move || notify_stream.notify_waiting()));
+        // Create lock-free notify callback from source before SharedStream wraps it.
+        // This avoids deadlock: SharedStream::notify_waiting() would take the inner
+        // mutex which the worker thread holds during read() → wait_range().
+        let notify_waiting = shared_stream.make_notify_fn();
 
         let audio_source = StreamAudioSource::new(
             shared_stream,

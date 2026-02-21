@@ -149,6 +149,14 @@ impl<T: StreamType> Stream<T> {
         self.source.notify_waiting();
     }
 
+    /// Create a lock-free callback for waking blocked `wait_range()`.
+    ///
+    /// The returned closure captures only the condvar/notify primitive,
+    /// so it can be called without holding the `SharedStream` mutex.
+    pub fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
+        self.source.make_notify_fn()
+    }
+
     /// Resolve a deterministic time-based seek anchor and move the stream position.
     ///
     /// Returns `None` for sources without segmented time mapping.

@@ -87,9 +87,15 @@ impl<T: StreamType> SharedStream<T> {
         self.inner.lock().timeline()
     }
 
-    /// Wake any blocked `wait_range()` calls for instant seek response.
-    pub(in crate::pipeline) fn notify_waiting(&self) {
-        self.inner.lock().notify_waiting();
+    /// Create a lock-free callback for waking blocked `wait_range()`.
+    ///
+    /// Called once during `Audio::new()` (before the worker starts),
+    /// so the inner mutex lock is safe. The returned closure captures
+    /// only the condvar/notify primitive — it never takes the inner
+    /// mutex, preventing deadlock when called from `Audio::seek()`
+    /// while the worker holds the lock inside `read()`.
+    pub(in crate::pipeline) fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
+        self.inner.lock().make_notify_fn()
     }
 }
 

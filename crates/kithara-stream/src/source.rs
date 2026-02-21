@@ -101,6 +101,18 @@ pub trait Source: Send + 'static {
     /// blocking waits.
     fn notify_waiting(&self) {}
 
+    /// Create a callback that wakes blocked `wait_range()` without holding
+    /// the `SharedStream` mutex.
+    ///
+    /// The returned closure captures only the underlying condvar/notify
+    /// primitive, so calling it from the main thread cannot deadlock even
+    /// when the worker thread holds the `SharedStream` lock inside `read()`.
+    ///
+    /// Default returns `None` (no blocking waits to wake).
+    fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
+        None
+    }
+
     /// Set current seek epoch for stale request invalidation.
     ///
     /// HLS uses this to drop in-flight network/segment requests that belong

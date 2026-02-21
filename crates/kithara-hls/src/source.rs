@@ -531,6 +531,13 @@ impl Source for HlsSource {
         self.shared.condvar.notify_all();
     }
 
+    fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
+        let shared = Arc::clone(&self.shared);
+        Some(Box::new(move || {
+            shared.condvar.notify_all();
+        }))
+    }
+
     fn set_seek_epoch(&mut self, _seek_epoch: u64) {
         // seek_epoch is now managed by Timeline.initiate_seek()
         self.shared.timeline.set_eof(false);
