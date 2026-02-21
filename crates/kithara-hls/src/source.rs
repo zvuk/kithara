@@ -871,10 +871,10 @@ mod tests {
             Arc::clone(&playlist_state),
             Timeline::new(),
         ));
-        shared.timeline.initiate_seek(Duration::ZERO); // epoch = 1
+        let _ = shared.timeline.initiate_seek(Duration::ZERO); // epoch = 1
         // Bump to epoch 9 by calling initiate_seek 8 more times
         for _ in 0..8 {
-            shared.timeline.initiate_seek(Duration::ZERO);
+            let _ = shared.timeline.initiate_seek(Duration::ZERO);
         }
         shared.timeline.complete_seek(9);
         shared.current_variant_index.store(0, Ordering::Relaxed);
@@ -975,7 +975,7 @@ mod tests {
         shared.timeline.set_download_position(200);
         // Set epoch to 3 via Timeline
         for _ in 0..3 {
-            shared.timeline.initiate_seek(Duration::ZERO);
+            let _ = shared.timeline.initiate_seek(Duration::ZERO);
         }
         shared.timeline.complete_seek(3);
 
