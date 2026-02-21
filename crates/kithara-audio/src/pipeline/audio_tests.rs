@@ -1,6 +1,8 @@
+use kithara_events::{AudioEvent, SeekLifecycleStage};
 use kithara_stream::Stream;
 use kithara_test_utils::create_test_wav;
 use rstest::rstest;
+use tokio::time::{self, Duration};
 
 use super::*;
 
@@ -149,6 +151,133 @@ async fn test_audio_seek() {
 
     // Should be able to read again
     assert!(!audio.is_eof());
+}
+
+#[tokio::test]
+async fn test_audio_playback_progress_uses_output_commit() {
+    let (_tmp, config) = test_wav_config(1024);
+    let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
+        .await
+        .unwrap();
+
+    let mut events = audio.decode_events();
+    let mut buf = [0.0f32; 256];
+
+    let _ = audio.read(&mut buf);
+
+    let mut saw_progress = false;
+    let deadline = time::Instant::now() + Duration::from_millis(300);
+    while time::Instant::now() < deadline {
+        match time::timeout(Duration::from_millis(40), events.recv()).await {
+            Ok(Ok(event)) => {
+                if let AudioEvent::PlaybackProgress {
+                    position_ms,
+                    total_ms,
+                    seek_epoch,
+                } = event
+                {
+                    assert!(position_ms > 0);
+                    assert!(total_ms.is_some());
+                    assert_eq!(seek_epoch, 0);
+                    saw_progress = true;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    assert!(saw_progress, "playback progress event was not observed");
+}
+
+#[tokio::test]
+async fn test_seek_with_epoch_emits_matching_playback_progress() {
+    let (_tmp, config) = test_wav_config(10_000);
+    let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
+        .await
+        .unwrap();
+
+    let mut events = audio.decode_events();
+    let mut buf = [0.0f32; 256];
+
+    audio
+        .seek_with_epoch(std::time::Duration::from_secs_f64(2.5), 77)
+        .unwrap();
+    let _ = audio.read(&mut buf);
+
+    let deadline = time::Instant::now() + Duration::from_millis(300);
+    let mut matched_epoch = None;
+    while time::Instant::now() < deadline {
+        match time::timeout(Duration::from_millis(40), events.recv()).await {
+            Ok(Ok(AudioEvent::PlaybackProgress { seek_epoch, .. })) => {
+                matched_epoch = Some(seek_epoch);
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(matched_epoch, Some(77));
+}
+
+#[tokio::test]
+async fn test_seek_complete_emitted_only_after_output_commit() {
+    let (_tmp, config) = test_wav_config(10_000);
+    let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
+        .await
+        .unwrap();
+
+    let mut events = audio.decode_events();
+    audio
+        .seek_with_epoch(std::time::Duration::from_secs_f64(1.5), 91)
+        .unwrap();
+
+    let mut saw_seek_complete_before_read = false;
+    while let Ok(event) = events.try_recv() {
+        if matches!(event, AudioEvent::SeekComplete { .. }) {
+            saw_seek_complete_before_read = true;
+            break;
+        }
+    }
+    assert!(
+        !saw_seek_complete_before_read,
+        "SeekComplete must not be emitted before output commit"
+    );
+
+    let mut buf = [0.0f32; 512];
+    let n = audio.read(&mut buf);
+    assert!(n > 0, "read must commit PCM output");
+
+    let deadline = time::Instant::now() + Duration::from_millis(400);
+    let mut saw_seek_complete = false;
+    let mut saw_output_committed = false;
+    while time::Instant::now() < deadline {
+        match time::timeout(Duration::from_millis(40), events.recv()).await {
+            Ok(Ok(AudioEvent::SeekLifecycle {
+                stage: SeekLifecycleStage::OutputCommitted,
+                seek_epoch,
+                ..
+            })) => {
+                assert_eq!(seek_epoch, 91);
+                saw_output_committed = true;
+            }
+            Ok(Ok(AudioEvent::SeekComplete { seek_epoch, .. })) => {
+                assert_eq!(seek_epoch, 91);
+                saw_seek_complete = true;
+                break;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        saw_output_committed,
+        "expected OutputCommitted lifecycle event"
+    );
+    assert!(
+        saw_seek_complete,
+        "expected SeekComplete after output commit"
+    );
 }
 
 #[rstest]

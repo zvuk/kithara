@@ -12,7 +12,7 @@ use std::{
 use futures::future::{Either, select};
 use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
-use kithara_events::{AudioEvent, Event, EventBus, HlsEvent};
+use kithara_events::{AudioEvent, Event, EventBus, SeekLifecycleStage};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_platform::ThreadPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
@@ -26,6 +26,7 @@ wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
 /// Number of rayon worker threads for the thread pool.
 const THREAD_COUNT: usize = 2;
+const EVENT_BUS_CAPACITY: usize = 4096;
 
 /// Guard: `init_thread_pool` panics if called twice in the same page.
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -91,7 +92,7 @@ async fn create_pipeline() -> Audio<Stream<Hls>> {
 
 async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
     let pool = ThreadPool::global();
-    let bus = EventBus::new(128);
+    let bus = EventBus::new(EVENT_BUS_CAPACITY);
 
     let hls_config = HlsConfig::new(url)
         .with_thread_pool(pool)
@@ -1324,11 +1325,11 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
 
     let near_start_secs = 0.2_f64;
     let near_start = Duration::from_secs_f64(near_start_secs);
-    let target_ms = near_start.as_millis();
     audio
         .seek(near_start)
         .expect("seek near start must succeed");
 
+    let mut target_seek_epoch = None;
     let mut seek_complete_for_target = 0usize;
     let mut seek_complete_seen = false;
     let mut playback_positions = Vec::with_capacity(64);
@@ -1338,18 +1339,28 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
 
         loop {
             match events_rx.try_recv() {
-                Ok(Event::Audio(AudioEvent::SeekComplete { position })) => {
-                    let pos_ms = position.as_millis();
-                    if pos_ms.abs_diff(target_ms) <= 3 {
+                Ok(Event::Audio(AudioEvent::SeekLifecycle {
+                    stage: SeekLifecycleStage::SeekRequest,
+                    seek_epoch,
+                    ..
+                })) => {
+                    target_seek_epoch = Some(seek_epoch);
+                }
+                Ok(Event::Audio(AudioEvent::SeekComplete { seek_epoch, .. })) => {
+                    if target_seek_epoch == Some(seek_epoch) {
                         seek_complete_for_target += 1;
                         seek_complete_seen = true;
                         // Keep only post-seek-complete playback progress.
                         playback_positions.clear();
                     }
                 }
-                Ok(Event::Hls(HlsEvent::PlaybackProgress { position, .. })) => {
-                    if seek_complete_seen {
-                        playback_positions.push(position);
+                Ok(Event::Audio(AudioEvent::PlaybackProgress {
+                    position_ms,
+                    seek_epoch,
+                    ..
+                })) => {
+                    if seek_complete_seen && target_seek_epoch == Some(seek_epoch) {
+                        playback_positions.push(position_ms);
                     }
                 }
                 Ok(_) => {}
@@ -1364,6 +1375,10 @@ async fn stress_seek_events_single_reset_and_monotonic_progress() {
         }
     }
 
+    assert!(
+        target_seek_epoch.is_some(),
+        "no AudioEvent::SeekLifecycle::SeekRequest for target seek"
+    );
     assert!(
         seek_complete_for_target >= 1,
         "no AudioEvent::SeekComplete for target seek"

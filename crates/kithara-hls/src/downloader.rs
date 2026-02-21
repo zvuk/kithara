@@ -6,11 +6,14 @@ use std::{
     time::Duration,
 };
 
-use kithara_abr::{AbrController, ThroughputEstimator, ThroughputSample, ThroughputSampleSource};
+use kithara_abr::{
+    AbrController, AbrDecision, AbrReason, ThroughputEstimator, ThroughputSample,
+    ThroughputSampleSource,
+};
 use kithara_assets::ResourceKey;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_assets::{CoverageIndex, DiskCoverage};
-use kithara_events::{EventBus, HlsEvent};
+use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_storage::{Coverage, MmapResource};
@@ -22,11 +25,37 @@ use url::Url;
 
 use crate::{
     HlsError,
-    download_state::{DownloadProgress, LoadedSegment},
+    download_state::{DownloadProgress, DownloadState, LoadedSegment},
     fetch::{DefaultFetchManager, Loader, SegmentMeta},
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
     source::SharedSegments,
 };
+
+fn is_stale_epoch(fetch_epoch: SeekEpoch, current_epoch: SeekEpoch) -> bool {
+    fetch_epoch != current_epoch
+}
+
+fn is_cross_codec_switch(
+    playlist_state: &PlaylistState,
+    from_variant: usize,
+    to_variant: usize,
+) -> bool {
+    matches!(
+        (
+            playlist_state.variant_codec(from_variant),
+            playlist_state.variant_codec(to_variant),
+        ),
+        (Some(from_codec), Some(to_codec)) if from_codec != to_codec
+    )
+}
+
+fn first_missing_segment(
+    state: &DownloadState,
+    variant: usize,
+    num_segments: usize,
+) -> Option<usize> {
+    (0..num_segments).find(|&segment_index| !state.is_segment_loaded(variant, segment_index))
+}
 
 /// Pure I/O executor for HLS segment fetching.
 #[derive(Clone)]
@@ -45,6 +74,7 @@ pub(crate) struct HlsPlan {
     pub(crate) variant: usize,
     pub(crate) segment_index: usize,
     pub(crate) need_init: bool,
+    pub(crate) seek_epoch: SeekEpoch,
 }
 
 /// Result of downloading a single HLS segment.
@@ -55,6 +85,7 @@ pub(crate) struct HlsFetch {
     pub(crate) segment_index: usize,
     pub(crate) variant: usize,
     pub(crate) duration: Duration,
+    pub(crate) seek_epoch: SeekEpoch,
 }
 
 impl DownloaderIo for HlsIo {
@@ -101,12 +132,14 @@ impl DownloaderIo for HlsIo {
             segment_index: plan.segment_index,
             variant: plan.variant,
             duration,
+            seek_epoch: plan.seek_epoch,
         })
     }
 }
 
 /// HLS downloader: fetches segments and maintains ABR state.
 pub(crate) struct HlsDownloader {
+    pub(crate) active_seek_epoch: SeekEpoch,
     pub(crate) io: HlsIo,
     pub(crate) fetch: Arc<DefaultFetchManager>,
     pub(crate) playlist_state: Arc<PlaylistState>,
@@ -126,6 +159,35 @@ pub(crate) struct HlsDownloader {
 }
 
 impl HlsDownloader {
+    fn reset_for_seek_epoch(&mut self, seek_epoch: SeekEpoch, variant: usize, segment_index: usize) {
+        self.active_seek_epoch = seek_epoch;
+        self.shared.eof.store(false, Ordering::Release);
+        self.shared
+            .had_midstream_switch
+            .store(false, Ordering::Release);
+        self.current_segment_index = segment_index;
+        self.byte_offset = self
+            .playlist_state
+            .segment_byte_offset(variant, segment_index)
+            .unwrap_or(0);
+        self.sent_init_for_variant.clear();
+        self.shared
+            .expected_total_length
+            .store(0, Ordering::Release);
+
+        let current_variant = self.abr.get_current_variant_index();
+        if current_variant != variant {
+            self.abr.apply(
+                &AbrDecision {
+                    target_variant_index: variant,
+                    reason: AbrReason::ManualOverride,
+                    changed: true,
+                },
+                Instant::now(),
+            );
+        }
+    }
+
     fn publish_download_error(&self, context: &str, error: &HlsError) {
         debug!(?error, context, "hls downloader error");
         self.bus.publish(HlsEvent::DownloadError {
@@ -544,14 +606,21 @@ impl HlsDownloader {
         Ok((is_variant_switch, is_midstream_switch))
     }
 
-    fn make_abr_decision(&mut self) -> kithara_abr::AbrDecision {
+    fn make_abr_decision(&mut self) -> AbrDecision {
         let now = Instant::now();
+        let current_variant = self.abr.get_current_variant_index();
         let decision = self.abr.decide(now);
 
         if decision.changed {
+            let cross_codec = is_cross_codec_switch(
+                &self.playlist_state,
+                current_variant,
+                decision.target_variant_index,
+            );
             debug!(
-                from = self.abr.get_current_variant_index(),
+                from = current_variant,
                 to = decision.target_variant_index,
+                cross_codec,
                 reason = ?decision.reason,
                 "ABR variant switch"
             );
@@ -617,7 +686,40 @@ impl Downloader for HlsDownloader {
         reason = "on-demand segment resolution is inherently complex"
     )]
     async fn poll_demand(&mut self) -> Option<HlsPlan> {
-        let req = self.shared.segment_requests.pop()?;
+        let req = loop {
+            match self.shared.segment_requests.pop() {
+                Some(req) => {
+                    let current_epoch = self.shared.seek_epoch.load(Ordering::Acquire);
+                    if req.seek_epoch == current_epoch {
+                        if req.seek_epoch != self.active_seek_epoch {
+                            self.reset_for_seek_epoch(
+                                req.seek_epoch,
+                                req.variant,
+                                req.segment_index,
+                            );
+                        }
+                        break req;
+                    }
+
+                    debug!(
+                        req_epoch = req.seek_epoch,
+                        current_epoch,
+                        variant = req.variant,
+                        segment_index = req.segment_index,
+                        "dropping stale on-demand request"
+                    );
+                    self.bus.publish(HlsEvent::StaleRequestDropped {
+                        seek_epoch: req.seek_epoch,
+                        current_epoch,
+                        variant: req.variant,
+                        segment_index: req.segment_index,
+                    });
+                    self.shared.condvar.notify_all();
+                    continue;
+                }
+                None => return None,
+            }
+        };
 
         debug!(
             variant = req.variant,
@@ -715,6 +817,7 @@ impl Downloader for HlsDownloader {
             variant: req.variant,
             segment_index: req.segment_index,
             need_init: is_variant_switch || !self.sent_init_for_variant.contains(&req.variant),
+            seek_epoch: req.seek_epoch,
         })
     }
 
@@ -734,11 +837,38 @@ impl Downloader for HlsDownloader {
         };
 
         if self.current_segment_index >= num_segments {
-            debug!("reached end of playlist, stopping downloader");
-            self.bus.publish(HlsEvent::EndOfStream);
-            self.shared.eof.store(true, Ordering::Release);
+            let had_midstream_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
+            if !had_midstream_switch {
+                let missing_segment = {
+                    let segments = self.shared.segments.lock();
+                    first_missing_segment(&segments, variant, num_segments)
+                };
+                if let Some(segment_index) = missing_segment {
+                    debug!(
+                        variant,
+                        segment_index,
+                        num_segments,
+                        "playlist tail reached with gaps; rewinding to first missing segment"
+                    );
+                    self.current_segment_index = segment_index;
+                    self.shared.condvar.notify_all();
+                    return PlanOutcome::Batch(Vec::new());
+                }
+            } else {
+                debug!(
+                    variant,
+                    num_segments,
+                    "playlist tail reached after midstream switch; skip automatic backfill"
+                );
+            }
+
+            debug!("reached end of playlist");
+            if !self.shared.eof.swap(true, Ordering::AcqRel) {
+                self.bus.publish(HlsEvent::EndOfStream);
+            }
             self.shared.condvar.notify_all();
-            return PlanOutcome::Complete;
+            self.wait_ready().await;
+            return PlanOutcome::Batch(Vec::new());
         }
 
         if decision.changed {
@@ -764,6 +894,7 @@ impl Downloader for HlsDownloader {
 
         // Build batch of plans.
         let batch_end = (self.current_segment_index + self.prefetch_count).min(num_segments);
+        let seek_epoch = self.shared.seek_epoch.load(Ordering::Acquire);
         let mut plans = Vec::new();
         let mut need_init = is_variant_switch;
 
@@ -798,6 +929,7 @@ impl Downloader for HlsDownloader {
                 variant,
                 segment_index: seg_idx,
                 need_init,
+                seek_epoch,
             });
             need_init = false;
         }
@@ -812,6 +944,25 @@ impl Downloader for HlsDownloader {
     }
 
     fn commit(&mut self, fetch: HlsFetch) {
+        let current_epoch = self.shared.seek_epoch.load(Ordering::Acquire);
+        if is_stale_epoch(fetch.seek_epoch, current_epoch) {
+            debug!(
+                fetch_epoch = fetch.seek_epoch,
+                current_epoch,
+                variant = fetch.variant,
+                segment_index = fetch.segment_index,
+                "dropping stale fetch before commit"
+            );
+            self.bus.publish(HlsEvent::StaleFetchDropped {
+                seek_epoch: fetch.seek_epoch,
+                current_epoch,
+                variant: fetch.variant,
+                segment_index: fetch.segment_index,
+            });
+            self.shared.condvar.notify_all();
+            return;
+        }
+
         let is_variant_switch = !self.sent_init_for_variant.contains(&fetch.variant);
         let is_midstream_switch = is_variant_switch && fetch.segment_index > 0;
 
@@ -838,5 +989,92 @@ impl Downloader for HlsDownloader {
 
     async fn wait_ready(&self) {
         self.shared.reader_advanced.notified().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use kithara_stream::AudioCodec;
+    use url::Url;
+
+    use super::{
+        DownloadState, LoadedSegment, first_missing_segment, is_cross_codec_switch, is_stale_epoch,
+    };
+    use crate::playlist::{PlaylistState, SegmentState, VariantState};
+
+    #[test]
+    fn commit_drops_stale_fetch_epoch() {
+        assert!(is_stale_epoch(7, 8));
+        assert!(!is_stale_epoch(9, 9));
+    }
+
+    #[test]
+    fn first_missing_segment_detects_gap() {
+        let mut state = DownloadState::new();
+        let media_url = Url::parse("https://example.com/seg.m4s").expect("valid URL");
+        state.push(LoadedSegment {
+            variant: 0,
+            segment_index: 0,
+            byte_offset: 0,
+            init_len: 0,
+            media_len: 100,
+            init_url: None,
+            media_url: media_url.clone(),
+        });
+        state.push(LoadedSegment {
+            variant: 0,
+            segment_index: 2,
+            byte_offset: 200,
+            init_len: 0,
+            media_len: 100,
+            init_url: None,
+            media_url,
+        });
+
+        assert_eq!(first_missing_segment(&state, 0, 3), Some(1));
+        assert_eq!(first_missing_segment(&state, 0, 1), None);
+    }
+
+    fn make_variant_state(id: usize, codec: Option<AudioCodec>) -> VariantState {
+        let base = Url::parse("https://example.com/").expect("valid base URL");
+        VariantState {
+            id,
+            uri: base
+                .join(&format!("v{id}.m3u8"))
+                .expect("valid playlist URL"),
+            bandwidth: Some(128_000),
+            codec,
+            container: None,
+            init_url: None,
+            segments: vec![SegmentState {
+                index: 0,
+                url: base
+                    .join(&format!("seg-{id}.m4s"))
+                    .expect("valid segment URL"),
+                duration: Duration::from_secs(4),
+                key: None,
+            }],
+            size_map: None,
+        }
+    }
+
+    #[test]
+    fn cross_codec_switch_detects_incompatible_variants() {
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state(0, Some(AudioCodec::AacLc)),
+            make_variant_state(1, Some(AudioCodec::Flac)),
+        ]));
+        assert!(is_cross_codec_switch(&playlist_state, 0, 1));
+    }
+
+    #[test]
+    fn cross_codec_switch_allows_same_codec_variants() {
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state(0, Some(AudioCodec::AacLc)),
+            make_variant_state(1, Some(AudioCodec::AacLc)),
+        ]));
+        assert!(!is_cross_codec_switch(&playlist_state, 0, 1));
     }
 }

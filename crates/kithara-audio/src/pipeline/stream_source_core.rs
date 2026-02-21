@@ -6,13 +6,14 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use fallible_iterator::FallibleIterator;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
-use kithara_events::AudioEvent;
+use kithara_events::{AudioEvent, SeekLifecycleStage};
 use kithara_platform::Mutex;
-use kithara_stream::{Fetch, MediaInfo, Stream, StreamType};
+use kithara_stream::{Fetch, MediaInfo, SourceSeekAnchor, Stream, StreamType};
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -60,6 +61,17 @@ impl<T: StreamType> SharedStream<T> {
 
     fn clear_variant_fence(&self) {
         self.inner.lock().clear_variant_fence();
+    }
+
+    pub(in crate::pipeline) fn set_seek_epoch(&self, seek_epoch: u64) {
+        self.inner.lock().set_seek_epoch(seek_epoch);
+    }
+
+    fn seek_time_anchor(
+        &self,
+        position: Duration,
+    ) -> Result<Option<SourceSeekAnchor>, std::io::Error> {
+        self.inner.lock().seek_time_anchor(position)
     }
 
     /// Build a `StreamContext` from the inner stream's source.
@@ -171,6 +183,8 @@ pub(in crate::pipeline) struct StreamAudioSource<T: StreamType> {
     /// Used to adjust `update_byte_len` after ABR variant switch:
     /// symphonia sees `total_len - base_offset` as byte length.
     base_offset: u64,
+    pending_decode_started_epoch: Option<u64>,
+    pending_seek_skip: Option<(u64, Duration)>,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
@@ -195,6 +209,8 @@ impl<T: StreamType> StreamAudioSource<T> {
             emit: None,
             effects,
             base_offset: 0,
+            pending_decode_started_epoch: None,
+            pending_seek_skip: None,
         }
     }
 
@@ -215,29 +231,35 @@ impl<T: StreamType> StreamAudioSource<T> {
         let Some(current_info) = self.shared_stream.media_info() else {
             return;
         };
-        if Some(&current_info) != self.cached_media_info.as_ref() {
-            // Prefer format_change_segment_range() which returns the FIRST segment
-            // of the new format (where init data lives). Fall back to current_segment_range()
-            // if the source doesn't support format_change_segment_range().
-            let seg_range = self
-                .shared_stream
-                .format_change_segment_range()
-                .or_else(|| self.shared_stream.current_segment_range());
+        let codec_changed = self
+            .cached_media_info
+            .as_ref()
+            .is_some_and(|cached| cached.codec != current_info.codec);
+        if !codec_changed {
+            return;
+        }
 
-            if let Some(seg_range) = seg_range {
-                let current_pos = self.shared_stream.position();
-                let remaining_bytes = seg_range.start.saturating_sub(current_pos);
+        // Prefer format_change_segment_range() which returns the FIRST segment
+        // of the new format (where init data lives). Fall back to current_segment_range()
+        // if the source doesn't support format_change_segment_range().
+        let seg_range = self
+            .shared_stream
+            .format_change_segment_range()
+            .or_else(|| self.shared_stream.current_segment_range());
 
-                debug!(
-                    old = ?self.cached_media_info,
-                    new = ?current_info,
-                    current_pos,
-                    new_segment_start = seg_range.start,
-                    remaining_bytes,
-                    "Format change detected"
-                );
-                self.pending_format_change = Some((current_info, seg_range.start));
-            }
+        if let Some(seg_range) = seg_range {
+            let current_pos = self.shared_stream.position();
+            let remaining_bytes = seg_range.start.saturating_sub(current_pos);
+
+            debug!(
+                old = ?self.cached_media_info,
+                new = ?current_info,
+                current_pos,
+                new_segment_start = seg_range.start,
+                remaining_bytes,
+                "Format change detected"
+            );
+            self.pending_format_change = Some((current_info, seg_range.start));
         }
     }
 
@@ -300,6 +322,38 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    fn emit_seek_lifecycle(
+        &self,
+        stage: SeekLifecycleStage,
+        seek_epoch: u64,
+        task_id: u64,
+        variant: Option<usize>,
+        segment_index: Option<u32>,
+        byte_range_start: Option<u64>,
+        byte_range_end: Option<u64>,
+    ) {
+        self.emit_event(AudioEvent::SeekLifecycle {
+            stage,
+            seek_epoch,
+            task_id,
+            variant,
+            segment_index,
+            byte_range_start,
+            byte_range_end,
+        });
+    }
+
+    fn seek_context(&self) -> (Option<usize>, Option<u32>, Option<u64>, Option<u64>) {
+        let stream_ctx = self.shared_stream.build_stream_context();
+        let segment_range = self.shared_stream.current_segment_range();
+        (
+            stream_ctx.variant_index(),
+            stream_ctx.segment_index(),
+            segment_range.as_ref().map(|range| range.start),
+            segment_range.as_ref().map(|range| range.end),
+        )
+    }
+
     /// Check if decode error occurred near a format boundary and recover.
     ///
     /// Returns true if the decoder was recreated at the boundary.
@@ -359,6 +413,135 @@ impl<T: StreamType> StreamAudioSource<T> {
             false
         }
     }
+
+    fn apply_seek_applied(
+        &mut self,
+        epoch: u64,
+        variant: Option<usize>,
+        segment_index: Option<u32>,
+        byte_range_start: Option<u64>,
+        byte_range_end: Option<u64>,
+    ) {
+        reset_effects(&mut self.effects);
+        self.emit_seek_lifecycle(
+            SeekLifecycleStage::SeekApplied,
+            epoch,
+            epoch,
+            variant,
+            segment_index,
+            byte_range_start,
+            byte_range_end,
+        );
+        self.pending_decode_started_epoch = Some(epoch);
+    }
+
+    fn apply_time_anchor_seek(
+        &mut self,
+        position: Duration,
+        epoch: u64,
+        anchor: SourceSeekAnchor,
+    ) -> bool {
+        self.shared_stream.clear_variant_fence();
+        if let Err(err) = self.decoder.seek(anchor.segment_start) {
+            warn!(
+                ?err,
+                ?position,
+                anchor_start = ?anchor.segment_start,
+                "seek anchor path: decoder seek to segment start failed"
+            );
+            return false;
+        }
+
+        let relative = position.saturating_sub(anchor.segment_start);
+        self.pending_seek_skip = if relative.is_zero() {
+            None
+        } else {
+            Some((epoch, relative))
+        };
+
+        self.apply_seek_applied(
+            epoch,
+            anchor.variant_index,
+            anchor.segment_index,
+            Some(anchor.byte_offset),
+            None,
+        );
+        true
+    }
+
+    fn duration_for_frames(spec: PcmSpec, frames: usize) -> Duration {
+        if spec.sample_rate == 0 {
+            return Duration::ZERO;
+        }
+        let nanos = (frames as u128)
+            .saturating_mul(1_000_000_000)
+            .saturating_div(spec.sample_rate as u128);
+        Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
+    }
+
+    fn frames_for_duration(spec: PcmSpec, duration: Duration) -> usize {
+        if spec.sample_rate == 0 {
+            return 0;
+        }
+        let frames = duration
+            .as_nanos()
+            .saturating_mul(spec.sample_rate as u128)
+            .saturating_div(1_000_000_000);
+        frames.min(usize::MAX as u128) as usize
+    }
+
+    fn apply_seek_skip(&mut self, epoch: u64, mut chunk: PcmChunk) -> Option<PcmChunk> {
+        let Some((skip_epoch, remaining)) = self.pending_seek_skip else {
+            return Some(chunk);
+        };
+        if skip_epoch != epoch {
+            self.pending_seek_skip = None;
+            return Some(chunk);
+        }
+        if remaining.is_zero() {
+            self.pending_seek_skip = None;
+            return Some(chunk);
+        }
+
+        let spec = chunk.spec();
+        let channels = usize::from(spec.channels.max(1));
+        let chunk_frames = chunk.frames();
+        if chunk_frames == 0 {
+            return None;
+        }
+
+        let mut drop_frames = Self::frames_for_duration(spec, remaining);
+        if drop_frames == 0 {
+            drop_frames = 1;
+        }
+
+        if drop_frames >= chunk_frames {
+            let dropped = Self::duration_for_frames(spec, chunk_frames);
+            let next_remaining = remaining.saturating_sub(dropped);
+            self.pending_seek_skip = if next_remaining.is_zero() {
+                None
+            } else {
+                Some((skip_epoch, next_remaining))
+            };
+            return None;
+        }
+
+        let drop_samples = drop_frames.saturating_mul(channels);
+        let len = chunk.pcm.len();
+        chunk.pcm.copy_within(drop_samples..len, 0);
+        chunk.pcm.truncate(len - drop_samples);
+
+        #[expect(clippy::cast_possible_truncation, reason = "frame count fits in u64")]
+        {
+            chunk.meta.frame_offset = chunk.meta.frame_offset.saturating_add(drop_frames as u64);
+        }
+        chunk.meta.timestamp = chunk
+            .meta
+            .timestamp
+            .saturating_add(Self::duration_for_frames(spec, drop_frames));
+        self.pending_seek_skip = None;
+        Some(chunk)
+    }
 }
 
 /// Test-only accessors.
@@ -383,6 +566,10 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
 
             match self.decoder.next_chunk() {
                 Ok(Some(chunk)) => {
+                    let current_epoch = self.epoch.load(Ordering::Acquire);
+                    let Some(chunk) = self.apply_seek_skip(current_epoch, chunk) else {
+                        continue;
+                    };
                     if chunk.pcm.is_empty() {
                         continue;
                     }
@@ -465,7 +652,22 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
         let current_epoch = self.epoch.load(Ordering::Acquire);
         match FallibleIterator::next(self) {
-            Ok(Some(chunk)) => Fetch::new(chunk, false, current_epoch),
+            Ok(Some(chunk)) => {
+                if self.pending_decode_started_epoch == Some(current_epoch) {
+                    let segment_range = self.shared_stream.current_segment_range();
+                    self.emit_seek_lifecycle(
+                        SeekLifecycleStage::DecodeStarted,
+                        current_epoch,
+                        current_epoch,
+                        chunk.meta.variant_index,
+                        chunk.meta.segment_index,
+                        segment_range.as_ref().map(|range| range.start),
+                        segment_range.as_ref().map(|range| range.end),
+                    );
+                    self.pending_decode_started_epoch = None;
+                }
+                Fetch::new(chunk, false, current_epoch)
+            }
             Ok(None) | Err(_) => Fetch::new(PcmChunk::default(), true, current_epoch),
         }
     }
@@ -477,33 +679,54 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     fn handle_command(&mut self, cmd: Self::Command) {
         match cmd {
             AudioCommand::Seek { position, epoch } => {
+                let current_epoch = self.epoch.load(Ordering::Acquire);
+                if epoch < current_epoch {
+                    trace!(
+                        current_epoch,
+                        stale_epoch = epoch,
+                        "seek: dropping stale command"
+                    );
+                    return;
+                }
+
+                let (variant, segment_index, byte_range_start, byte_range_end) =
+                    self.seek_context();
+                self.emit_seek_lifecycle(
+                    SeekLifecycleStage::SeekRequest,
+                    epoch,
+                    epoch,
+                    variant,
+                    segment_index,
+                    byte_range_start,
+                    byte_range_end,
+                );
+
+                self.shared_stream.set_seek_epoch(epoch);
+                self.epoch.store(epoch, Ordering::Release);
+
+                // Clear any variant fence so seek can move to any timeline
+                // position, including positions in previous variants.
+                self.shared_stream.clear_variant_fence();
+                self.pending_seek_skip = None;
+
+                match self.shared_stream.seek_time_anchor(position) {
+                    Ok(Some(anchor)) => {
+                        if self.apply_time_anchor_seek(position, epoch, anchor) {
+                            return;
+                        }
+                        warn!("seek anchor path failed, falling back to legacy decoder seek");
+                    }
+                    Ok(None) => {}
+                    Err(err) => {
+                        warn!(
+                            ?err,
+                            "seek anchor resolution failed, using legacy decoder seek"
+                        );
+                    }
+                }
+
                 let stream_pos = self.shared_stream.position();
                 let segment_range = self.shared_stream.current_segment_range();
-
-                // Seek to beginning after ABR switch: reset decoder to offset 0
-                // so V0 segments are accessible. Format change detection will
-                // naturally handle V0→V1 transition at the variant boundary.
-                if position.is_zero() && self.base_offset > 0 {
-                    debug!(
-                        base_offset = self.base_offset,
-                        "seek to start: resetting decoder to offset 0"
-                    );
-                    self.shared_stream.clear_variant_fence();
-                    let probe_info = MediaInfo::new(None, None);
-                    if let Some(new_decoder) =
-                        (self.decoder_factory)(self.shared_stream.clone(), &probe_info, 0)
-                    {
-                        self.decoder = new_decoder;
-                        self.base_offset = 0;
-                        self.cached_media_info = None;
-                        self.pending_format_change = None;
-                        self.epoch.store(epoch, Ordering::Release);
-                        reset_effects(&mut self.effects);
-                        self.emit_event(AudioEvent::SeekComplete { position });
-                        return;
-                    }
-                    warn!("Failed to reset decoder to offset 0, falling through to normal seek");
-                }
 
                 // Only update byte_len for original decoder (no ABR switch).
                 // After ABR switch (base_offset > 0), byte_len is intentionally 0
@@ -524,7 +747,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                     base_offset = self.base_offset,
                     "seek: about to call decoder.seek()"
                 );
-                self.epoch.store(epoch, Ordering::Release);
                 if let Err(e) = self.decoder.seek(position) {
                     warn!(?e, "seek failed");
                     let recovered = if self.pending_format_change.is_some() {
@@ -533,32 +755,32 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                         // seek on the new decoder.
                         debug!("seek failed during pending format change, applying now");
                         self.apply_format_change() && self.decoder.seek(position).is_ok()
-                    } else if self.base_offset > 0 {
-                        // After ABR switch (no pending change), failed seek can
-                        // corrupt Symphonia's internal state. Recreate decoder.
-                        debug!("recovering from failed seek after ABR switch");
-                        self.cached_media_info.clone().is_some_and(|info| {
-                            self.shared_stream.clear_variant_fence();
-                            self.shared_stream
-                                .seek(SeekFrom::Start(self.base_offset))
-                                .is_ok()
-                                && self.recreate_decoder(&info, self.base_offset)
-                        })
                     } else {
                         false
                     };
 
                     if recovered {
                         reset_effects(&mut self.effects);
-                        if let Some(ref emit) = self.emit {
-                            emit(AudioEvent::SeekComplete { position });
-                        }
+                        let (variant, segment_index, byte_range_start, byte_range_end) =
+                            self.seek_context();
+                        self.apply_seek_applied(
+                            epoch,
+                            variant,
+                            segment_index,
+                            byte_range_start,
+                            byte_range_end,
+                        );
                     }
                 } else {
-                    reset_effects(&mut self.effects);
-                    if let Some(ref emit) = self.emit {
-                        emit(AudioEvent::SeekComplete { position });
-                    }
+                    let (variant, segment_index, byte_range_start, byte_range_end) =
+                        self.seek_context();
+                    self.apply_seek_applied(
+                        epoch,
+                        variant,
+                        segment_index,
+                        byte_range_start,
+                        byte_range_end,
+                    );
                 }
             }
         }

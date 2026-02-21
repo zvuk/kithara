@@ -191,6 +191,15 @@ impl Resource {
         self.inner.seek(position)
     }
 
+    /// Seek with a caller-provided epoch.
+    ///
+    /// The epoch is passed to backends that support seek token filtering
+    /// (for example HLS source). Sources that do not support seek epochs
+    /// ignore it and retain legacy behavior.
+    pub fn seek_with_epoch(&mut self, position: Duration, seek_epoch: u64) -> DecodeResult<()> {
+        self.inner.seek_with_epoch(position, seek_epoch)
+    }
+
     /// Get current PCM specification.
     #[must_use]
     pub fn spec(&self) -> PcmSpec {

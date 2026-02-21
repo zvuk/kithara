@@ -4,6 +4,18 @@ use std::time::Duration;
 
 use kithara_decode::PcmSpec;
 
+use crate::{SeekEpoch, SeekTaskId};
+
+/// Seek lifecycle stage used for end-to-end diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SeekLifecycleStage {
+    SeekRequest,
+    SeekApplied,
+    DecodeStarted,
+    OutputCommitted,
+}
+
 /// Events from the audio pipeline.
 #[derive(Debug, Clone)]
 pub enum AudioEvent {
@@ -11,8 +23,27 @@ pub enum AudioEvent {
     FormatDetected { spec: PcmSpec },
     /// Audio format changed (ABR switch).
     FormatChanged { old: PcmSpec, new: PcmSpec },
+    /// PCM output progress committed by playback sink.
+    PlaybackProgress {
+        position_ms: u64,
+        total_ms: Option<u64>,
+        seek_epoch: SeekEpoch,
+    },
+    /// Seek lifecycle diagnostics.
+    SeekLifecycle {
+        stage: SeekLifecycleStage,
+        seek_epoch: SeekEpoch,
+        task_id: SeekTaskId,
+        variant: Option<usize>,
+        segment_index: Option<u32>,
+        byte_range_start: Option<u64>,
+        byte_range_end: Option<u64>,
+    },
     /// Seek completed.
-    SeekComplete { position: Duration },
+    SeekComplete {
+        position: Duration,
+        seek_epoch: SeekEpoch,
+    },
     /// Decoding finished (EOF).
     EndOfStream,
 }

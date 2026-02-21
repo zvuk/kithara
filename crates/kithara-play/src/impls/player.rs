@@ -307,7 +307,22 @@ impl PlayerImpl {
 
     /// Seek active tracks to position in seconds.
     pub fn seek_seconds(&self, seconds: f64) -> Result<(), PlayError> {
-        self.send_to_slot(PlayerCmd::Seek(seconds.max(0.0)))
+        let slot_id = *self.current_slot.lock();
+        let Some(slot_id) = slot_id else {
+            return Err(PlayError::NotReady);
+        };
+
+        let Some(shared_state) = self.engine.slot_shared_state(slot_id) else {
+            return Err(PlayError::SlotNotFound(slot_id));
+        };
+
+        let seek_epoch = shared_state.next_seek_epoch();
+        shared_state.seek_epoch.store(seek_epoch, Ordering::SeqCst);
+
+        self.send_to_slot(PlayerCmd::Seek {
+            seconds: seconds.max(0.0),
+            seek_epoch,
+        })
     }
 
     /// Current playback position in seconds.

@@ -4,6 +4,8 @@ use std::time::Duration;
 
 use kithara_abr::{AbrReason, VariantInfo};
 
+use crate::SeekEpoch;
+
 /// Events emitted during HLS playback.
 #[derive(Clone, Debug)]
 pub enum HlsEvent {
@@ -39,8 +41,30 @@ pub enum HlsEvent {
     DownloadComplete { total_bytes: u64 },
     /// Download failed.
     DownloadError { error: String },
-    /// Playback progress update.
+    /// Byte-level read progress from HLS source (`read_at`), not sink playback truth.
+    ByteProgress { position: u64, total: Option<u64> },
+    /// Deprecated alias retained for compatibility with old consumers.
     PlaybackProgress { position: u64, total: Option<u64> },
+    /// Stale seek request dropped before planning.
+    StaleRequestDropped {
+        seek_epoch: SeekEpoch,
+        current_epoch: SeekEpoch,
+        variant: usize,
+        segment_index: usize,
+    },
+    /// Stale fetch result dropped before commit.
+    StaleFetchDropped {
+        seek_epoch: SeekEpoch,
+        current_epoch: SeekEpoch,
+        variant: usize,
+        segment_index: usize,
+    },
+    /// Seek-time metadata lookup failed in `wait_range`.
+    SeekMetadataMiss {
+        seek_epoch: SeekEpoch,
+        offset: u64,
+        variant: usize,
+    },
     /// Error occurred.
     Error { error: String, recoverable: bool },
     /// Stream ended.

@@ -174,6 +174,7 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
                 let audio_codec = c
                     .split(',')
                     .map(str::trim)
+                    .map(|codec| codec.trim_matches('"'))
                     .find_map(AudioCodec::from_hls_codec);
 
                 // Determine container format from URI extension
@@ -413,6 +414,14 @@ segment0.m4s
 video.m3u8"
     }
 
+    #[fixture]
+    fn master_playlist_with_mixed_case_flac_codec_data() -> &'static [u8] {
+        b"#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-STREAM-INF:BANDWIDTH=1000000,CODECS=\"fLaC\"
+audio_flac.m3u8"
+    }
+
     // Test Cases
 
     #[rstest]
@@ -538,6 +547,22 @@ video.m3u8"
         let codecs_str = codec.codecs.as_deref().unwrap_or("");
         assert!(codecs_str.contains("mp4a.40.2"));
         assert!(codecs_str.contains("avc1.64001f"));
+        assert_eq!(codec.audio_codec, Some(AudioCodec::AacLc));
+    }
+
+    #[rstest]
+    fn test_master_playlist_with_mixed_case_flac_codec(
+        master_playlist_with_mixed_case_flac_codec_data: &[u8],
+    ) {
+        let result = parse_master_playlist(master_playlist_with_mixed_case_flac_codec_data);
+        assert!(result.is_ok());
+
+        let master = result.unwrap();
+        assert_eq!(master.variants.len(), 1);
+
+        let variant = &master.variants[0];
+        let codec = variant.codec.as_ref().expect("codec info");
+        assert_eq!(codec.audio_codec, Some(AudioCodec::Flac));
     }
 
     #[rstest]

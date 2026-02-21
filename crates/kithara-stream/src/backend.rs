@@ -11,6 +11,8 @@
 //! - Cancellation via `CancellationToken`
 
 use kithara_platform::ThreadPool;
+#[cfg(test)]
+use std::future::Future;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -357,11 +359,11 @@ mod tests {
             false
         }
 
-        fn wait_ready(&self) -> impl std::future::Future<Output = ()> {
+        fn wait_ready(&self) -> impl Future<Output = ()> {
             std::future::pending()
         }
 
-        fn demand_signal(&self) -> impl std::future::Future<Output = ()> + use<> {
+        fn demand_signal(&self) -> impl Future<Output = ()> + use<> {
             let notify = Arc::clone(&self.demand_notify);
             async move {
                 notify.notified().await;

@@ -115,6 +115,17 @@ impl DownloadState {
             .and_then(|offset| self.entries.get(&offset))
     }
 
+    /// Find an already loaded segment by `(variant, segment_index)`.
+    pub(crate) fn find_loaded_segment(
+        &self,
+        variant: usize,
+        segment_index: usize,
+    ) -> Option<&LoadedSegment> {
+        self.entries
+            .values()
+            .find(|seg| seg.variant == variant && seg.segment_index == segment_index)
+    }
+
     /// First segment of the given variant by byte offset (`BTreeMap` is ordered).
     ///
     /// Used to find the start of a new variant after ABR switch -- this is where
@@ -166,6 +177,14 @@ impl DownloadState {
             remaining = self.entries.len(),
             "download_state::fence_at"
         );
+    }
+
+    /// Remove all indexed segments while keeping persisted byte-cache intact.
+    pub(crate) fn clear(&mut self) {
+        self.entries.clear();
+        self.loaded_keys.clear();
+        self.loaded_ranges.clear();
+        self.last_offset = None;
     }
 }
 
@@ -488,6 +507,26 @@ mod tests {
 
         state.push(make_segment(0, 1, 100, 50, 150));
         assert_eq!(state.total_loaded_bytes(), 300); // 100 + (50 + 150)
+    }
+
+    #[test]
+    fn test_clear_removes_all_loaded_segments() {
+        let mut state = DownloadState::new();
+        state.push(make_segment(0, 0, 0, 0, 100));
+        state.push(make_segment(3, 1, 100, 10, 90));
+
+        assert_eq!(state.num_entries(), 2);
+        assert!(state.is_segment_loaded(0, 0));
+        assert!(state.is_segment_loaded(3, 1));
+
+        state.clear();
+
+        assert_eq!(state.num_entries(), 0);
+        assert!(!state.is_segment_loaded(0, 0));
+        assert!(!state.is_segment_loaded(3, 1));
+        assert_eq!(state.total_loaded_bytes(), 0);
+        assert_eq!(state.max_end_offset(), 0);
+        assert!(state.find_at_offset(0).is_none());
     }
 
     // Test 9: LoadedSegment methods

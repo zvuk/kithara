@@ -16,7 +16,9 @@ use kithara_decode::{
 };
 use kithara_platform::Mutex;
 use kithara_storage::WaitOutcome;
-use kithara_stream::{MediaInfo, Source, Stream, StreamResult, StreamType};
+use kithara_stream::{
+    AudioCodec, MediaInfo, Source, SourceSeekAnchor, Stream, StreamResult, StreamType,
+};
 use rstest::rstest;
 
 use super::*;
@@ -36,6 +38,7 @@ struct TestSourceState {
     variant_fence: Option<usize>,
     /// Mapping of byte ranges to variant indices (for fence logic).
     variant_map: Vec<(Range<u64>, usize)>,
+    seek_anchor: Option<SourceSeekAnchor>,
 }
 
 struct TestSource {
@@ -53,6 +56,7 @@ impl TestSource {
                 format_change_range: None,
                 variant_fence: None,
                 variant_map: Vec::new(),
+                seek_anchor: None,
             })),
         }
     }
@@ -131,6 +135,13 @@ impl Source for TestSource {
 
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         self.state.lock().format_change_range.clone()
+    }
+
+    fn seek_time_anchor(
+        &mut self,
+        _position: Duration,
+    ) -> StreamResult<Option<SourceSeekAnchor>, Self::Error> {
+        Ok(self.state.lock().seek_anchor)
     }
 }
 
@@ -238,12 +249,14 @@ fn v3_spec() -> PcmSpec {
 
 fn v0_info() -> MediaInfo {
     MediaInfo::default()
+        .with_codec(AudioCodec::AacLc)
         .with_sample_rate(44100)
         .with_channels(2)
 }
 
 fn v3_info() -> MediaInfo {
     MediaInfo::default()
+        .with_codec(AudioCodec::Flac)
         .with_sample_rate(96000)
         .with_channels(2)
 }
@@ -280,7 +293,7 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
     let (v0_decoder, _) = scripted_inner_decoder_loose(v0_spec(), v0_chunks, vec![], None);
 
     // V3 decoder the factory will create
-    let v3_chunks = vec![make_chunk(v3_spec(), 2048); 5];
+    let v3_chunks = vec![];
     let (v3_decoder, _) = scripted_inner_decoder_loose(v3_spec(), v3_chunks, vec![], None);
     let (factory, factory_offsets) = make_tracking_factory(vec![v3_decoder]);
 
@@ -424,7 +437,151 @@ fn seek_updates_epoch_and_decoder_and_controls_byte_len_update(
 }
 
 #[test]
-fn failed_seek_after_abr_switch_recovers() {
+fn seek_uses_segment_start_anchor_without_decoder_recreate() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, logs) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+    let seek_log = logs.seek_log();
+
+    let (factory, offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock();
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(1),
+        });
+    }
+
+    source.handle_command(AudioCommand::Seek {
+        position: Duration::from_millis(8_250),
+        epoch: 42,
+    });
+
+    assert_eq!(epoch.load(Ordering::Acquire), 42);
+    assert_eq!(
+        source.current_base_offset(),
+        0,
+        "seek must not recreate decoder in anchor path"
+    );
+
+    let created_offsets = offsets.lock();
+    assert!(
+        created_offsets.is_empty(),
+        "decoder factory must not be used for anchor seek"
+    );
+
+    let anchored_seeks = seek_log.lock();
+    assert_eq!(
+        anchored_seeks.len(),
+        1,
+        "current decoder should receive seek"
+    );
+    assert_eq!(
+        anchored_seeks[0],
+        Duration::from_secs(8),
+        "anchor seek must deterministically seek to segment start"
+    );
+
+    let fetch = source.fetch_next();
+    assert!(!fetch.is_eof);
+    assert_eq!(
+        fetch.data.pcm.len(),
+        75,
+        "anchor seek should trim decoded PCM by relative in-segment offset"
+    );
+}
+
+#[test]
+fn seek_anchor_failure_falls_back_to_legacy_seek() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, logs) = scripted_inner_decoder_loose(
+        seek_spec,
+        vec![make_chunk(seek_spec, 100); 3],
+        vec![
+            Err(DecodeError::SeekError("direct seek failed".to_string())),
+            Ok(()),
+        ],
+        None,
+    );
+    let seek_log = logs.seek_log();
+    let (factory, offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock();
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(1),
+        });
+    }
+
+    source.handle_command(AudioCommand::Seek {
+        position: Duration::from_millis(8_250),
+        epoch: 42,
+    });
+
+    let created_offsets = offsets.lock();
+    assert!(
+        created_offsets.is_empty(),
+        "decoder factory must not be used for seek fallback"
+    );
+
+    let seeks = seek_log.lock();
+    assert_eq!(seeks.len(), 2);
+    assert_eq!(
+        seeks[0],
+        Duration::from_secs(8),
+        "anchor path should first seek to segment start"
+    );
+    assert_eq!(
+        seeks[1],
+        Duration::from_millis(8_250),
+        "legacy fallback should preserve original seek target"
+    );
+
+    let fetch = source.fetch_next();
+    assert!(!fetch.is_eof);
+    assert_eq!(fetch.data.pcm.len(), 100);
+}
+
+#[test]
+fn failed_seek_without_pending_format_change_does_not_recreate_decoder() {
     let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
     let v3_chunks = vec![make_chunk(v3_spec(), 2048); 5];
@@ -438,7 +595,7 @@ fn failed_seek_after_abr_switch_recovers() {
     let recovery_chunks = vec![make_chunk(v3_spec(), 2048); 5];
     let (recovery_decoder, _) =
         scripted_inner_decoder_loose(v3_spec(), recovery_chunks, vec![], None);
-    let factory = make_factory(vec![recovery_decoder]);
+    let (factory, factory_offsets) = make_tracking_factory(vec![recovery_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
     let mut source = StreamAudioSource::new(
@@ -458,67 +615,47 @@ fn failed_seek_after_abr_switch_recovers() {
         epoch: 1,
     });
 
-    let fetch = source.fetch_next();
-    assert!(!fetch.is_eof, "Should produce data after seek recovery");
+    let _ = source.fetch_next();
+
+    let offsets = factory_offsets.lock();
+    assert!(
+        offsets.is_empty(),
+        "decoder factory must not be called when no format change is pending"
+    );
 }
 
-/// Seek to 0 after ABR switch resets decoder to offset 0.
-///
-/// After ABR switch (base_offset > 0), seeking to time=0 should:
-/// 1. Clear variant fence
-/// 2. Recreate decoder at offset 0 (not base_offset)
-/// 3. Reset cached_media_info so format change detection picks up V0→V1
-/// 4. Reset base_offset to 0
-///
-/// Without this, OffsetReader translates seek(0) to base_offset, making
-/// V0 segments unreachable — the flaky test root cause.
 #[test]
-fn seek_to_zero_after_abr_switch_resets_to_full_track() {
-    let (shared, _state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+fn seek_clears_variant_fence() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
-    // Current decoder: V3 at base_offset 863137
-    let v3_chunks = vec![make_chunk(v3_spec(), 2048); 3];
-    let (v3_decoder, _) = scripted_inner_decoder_loose(v3_spec(), v3_chunks, vec![], None);
-
-    // Factory: V0 decoder at offset 0
-    let v0_chunks = vec![make_chunk(v0_spec(), 1024); 5];
-    let (v0_decoder, _) = scripted_inner_decoder_loose(v0_spec(), v0_chunks, vec![], None);
-    let (factory, factory_offsets) = make_tracking_factory(vec![v0_decoder]);
+    let chunks = vec![make_chunk(v3_spec(), 2048); 2];
+    let (decoder, _) = scripted_inner_decoder_loose(v3_spec(), chunks, vec![], None);
+    let factory = make_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
     let mut source = StreamAudioSource::new(
         shared,
-        v3_decoder,
+        decoder,
         factory,
         Some(v3_info()),
         Arc::clone(&epoch),
         vec![],
     );
 
-    // Simulate that ABR switch already happened
-    source.base_offset = 863137;
-    source.cached_media_info = Some(v3_info());
+    {
+        let mut source_state = state.lock();
+        source_state.variant_fence = Some(3);
+    }
 
-    // Seek to 0 — should reset decoder to offset 0
     source.handle_command(AudioCommand::Seek {
-        position: Duration::ZERO,
+        position: Duration::from_millis(250),
         epoch: 1,
     });
 
-    assert_eq!(
-        source.current_base_offset(),
-        0,
-        "base_offset should be reset to 0 after seek-to-zero"
+    assert!(
+        state.lock().variant_fence.is_none(),
+        "seek must clear variant fence to allow cross-variant navigation"
     );
-    assert_eq!(epoch.load(Ordering::Acquire), 1);
-
-    let offsets = factory_offsets.lock();
-    assert_eq!(offsets.len(), 1, "Factory should be called once");
-    assert_eq!(offsets[0], 0, "Factory should be called with offset 0");
-
-    // Should be able to produce data from V0 decoder
-    let fetch = source.fetch_next();
-    assert!(!fetch.is_eof, "Should produce V0 data after reset");
 }
 
 /// **BASELINE TEST** — reproduces the exact production bug.
@@ -1000,6 +1137,7 @@ fn v1_spec() -> PcmSpec {
 
 fn v1_info() -> MediaInfo {
     MediaInfo::default()
+        .with_codec(AudioCodec::Flac)
         .with_sample_rate(48000)
         .with_channels(1)
 }
@@ -1063,6 +1201,7 @@ fn abr_switch_must_not_lose_samples() {
         sample_rate: 44100,
     };
     let v0_mono_info = MediaInfo::default()
+        .with_codec(AudioCodec::AacLc)
         .with_sample_rate(44100)
         .with_channels(1);
     let initial_decoder = {

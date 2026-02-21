@@ -300,8 +300,17 @@ impl PlayerTrack {
 
     /// Seek the underlying resource.
     pub(crate) fn seek(&mut self, seconds: f64) {
+        self.seek_with_epoch(seconds, 0);
+    }
+
+    /// Seek the underlying resource with a specific seek epoch.
+    pub(crate) fn seek_with_epoch(&mut self, seconds: f64, seek_epoch: u64) {
         if let Some(mut resource) = self.resource.try_lock() {
-            resource.seek(seconds);
+            if seek_epoch == 0 {
+                resource.seek(seconds);
+            } else {
+                resource.seek_with_epoch(seconds, seek_epoch);
+            }
             self.cached_position = seconds;
         }
     }

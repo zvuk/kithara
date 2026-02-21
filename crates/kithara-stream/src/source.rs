@@ -7,13 +7,26 @@
 //! Sources provide sync random-access via `wait_range()` and `read_at()`.
 //! Reader wraps this directly for `Read + Seek`.
 
-use std::ops::Range;
+use std::{ops::Range, time::Duration};
 
 use kithara_storage::WaitOutcome;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
 use crate::{error::StreamResult, media::MediaInfo};
+
+/// Time-first seek anchor resolved by a segmented source.
+///
+/// Represents a deterministic mapping from target playback time to a byte
+/// position and segment context inside the source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SourceSeekAnchor {
+    pub byte_offset: u64,
+    pub segment_start: Duration,
+    pub segment_end: Option<Duration>,
+    pub segment_index: Option<u32>,
+    pub variant_index: Option<usize>,
+}
 
 /// Sync random-access source.
 ///
@@ -80,6 +93,26 @@ pub trait Source: Send + 'static {
     /// Called when the decoder is recreated after ABR switch.
     /// Default no-op for non-HLS sources.
     fn clear_variant_fence(&mut self) {}
+
+    /// Set current seek epoch for stale request invalidation.
+    ///
+    /// HLS uses this to drop in-flight network/segment requests that belong
+    /// to previous seeks. Non-seek-aware sources keep the default no-op.
+    fn set_seek_epoch(&mut self, _seek_epoch: u64) {}
+
+    /// Resolve `position` to a source-specific seek anchor.
+    ///
+    /// Segmented sources (HLS) should map time to a deterministic segment
+    /// boundary and byte offset. Non-segmented sources return `Ok(None)`.
+    ///
+    /// The caller is expected to set stream position to `byte_offset` and
+    /// perform decoder reset/recreation using this anchor.
+    fn seek_time_anchor(
+        &mut self,
+        _position: Duration,
+    ) -> StreamResult<Option<SourceSeekAnchor>, Self::Error> {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]

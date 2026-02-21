@@ -73,3 +73,29 @@ impl Default for EpochValidator {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn epoch_validator_keeps_matching_chunks() {
+        let mut validator = EpochValidator::new();
+        let item = Fetch::new(vec![1u8, 2, 3], false, 1);
+        validator.epoch = 1;
+        assert!(validator.is_valid(&item));
+    }
+
+    #[test]
+    fn epoch_validator_rejects_stale_chunks_after_seek() {
+        let mut validator = EpochValidator::new();
+        let stale = Fetch::new(vec![3u8], false, validator.epoch);
+        let first = Fetch::new(vec![1u8], false, validator.epoch);
+        let next_epoch = validator.next_epoch();
+        let next = Fetch::new(vec![2u8], false, next_epoch);
+
+        assert!(!validator.is_valid(&first));
+        assert!(!validator.is_valid(&stale));
+        assert!(validator.is_valid(&next));
+    }
+}

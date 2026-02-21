@@ -53,7 +53,7 @@ pub(crate) enum PlayerCmd {
     /// Add a track transition (fade in / fade out).
     Transition(TrackTransition),
     /// Seek active tracks to the given position in seconds.
-    Seek(f64),
+    Seek { seconds: f64, seek_epoch: u64 },
     /// Set the paused state.
     SetPaused(bool),
     /// Update the fade duration.
@@ -112,8 +112,11 @@ impl PlayerNodeProcessor {
                 PlayerCmd::Transition(transition) => {
                     self.handle_transition(transition);
                 }
-                PlayerCmd::Seek(seconds) => {
-                    self.apply_seek(seconds);
+                PlayerCmd::Seek {
+                    seconds,
+                    seek_epoch,
+                } => {
+                    self.apply_seek(seconds, seek_epoch);
                 }
                 PlayerCmd::SetPaused(paused) => {
                     let playing = !paused;
@@ -279,11 +282,15 @@ impl PlayerNodeProcessor {
     }
 
     /// Apply seek to active tracks.
-    fn apply_seek(&mut self, seconds: f64) {
+    fn apply_seek(&mut self, seconds: f64, seek_epoch: u64) {
+        if seek_epoch != self.shared_state.seek_epoch.load(Ordering::SeqCst) {
+            return;
+        }
+
         for (_, track) in &mut self.tracks {
             match track.state() {
                 TrackState::FadingIn | TrackState::Playing => {
-                    track.seek(seconds);
+                    track.seek_with_epoch(seconds, seek_epoch);
                     track.play();
                 }
                 TrackState::FadingOut => {
@@ -452,8 +459,16 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use std::sync::{Arc as TestArc, Mutex};
+    use tokio::sync::broadcast;
 
     use super::*;
+
+    use crate::impls::resource::Resource;
+    use kithara_audio::{DecodeResult, PcmReader};
+    use kithara_decode::{PcmSpec, TrackMetadata};
+    use kithara_events::AudioEvent;
+    use kithara_platform::Mutex as PlatformMutex;
 
     #[derive(Clone, Copy)]
     enum TrackCommandScenario {
@@ -544,7 +559,11 @@ mod tests {
     #[test]
     fn processor_seek_without_tracks_does_not_panic() {
         let (mut processor, tx) = make_processor();
-        tx.send(PlayerCmd::Seek(30.0)).ok();
+        tx.send(PlayerCmd::Seek {
+            seconds: 30.0,
+            seek_epoch: 1,
+        })
+        .ok();
         processor.drain_commands();
     }
 
@@ -621,7 +640,7 @@ mod tests {
         assert_eq!(processor.tracks.len(), 0);
     }
 
-    fn create_mock_player_resource(src: &str) -> Arc<Mutex<PlayerResource>> {
+    fn create_mock_player_resource(src: &str) -> Arc<PlatformMutex<PlayerResource>> {
         use kithara_audio::mock::TestPcmReader;
         use kithara_decode::PcmSpec;
 
@@ -634,10 +653,146 @@ mod tests {
         let reader = TestPcmReader::new(spec, 60.0);
 
         let resource = Resource::from_reader(reader);
-        Arc::new(Mutex::new(PlayerResource::new(
+        Arc::new(PlatformMutex::new(PlayerResource::new(
             resource,
             Arc::from(src),
             kithara_bufpool::pcm_pool(),
         )))
+    }
+
+    fn create_tracking_player_resource(
+        src: &str,
+        seek_log: TestArc<Mutex<Vec<u64>>>,
+    ) -> Arc<PlatformMutex<PlayerResource>> {
+        #[derive(Clone)]
+        struct SeekTrackingReader {
+            spec: PcmSpec,
+            metadata: TrackMetadata,
+            seek_log: TestArc<Mutex<Vec<u64>>>,
+            events_tx: broadcast::Sender<AudioEvent>,
+        }
+
+        impl PcmReader for SeekTrackingReader {
+            fn read(&mut self, _buf: &mut [f32]) -> usize {
+                0
+            }
+
+            fn read_planar<'a>(&mut self, output: &'a mut [&'a mut [f32]]) -> usize {
+                let _ = output;
+                0
+            }
+
+            fn seek(&mut self, _position: std::time::Duration) -> DecodeResult<()> {
+                Ok(())
+            }
+
+            fn seek_with_epoch(
+                &mut self,
+                _position: std::time::Duration,
+                seek_epoch: u64,
+            ) -> DecodeResult<()> {
+                self.seek_log
+                    .lock()
+                    .expect("seek log mutex poisoned")
+                    .push(seek_epoch);
+                Ok(())
+            }
+
+            fn spec(&self) -> PcmSpec {
+                self.spec
+            }
+
+            fn is_eof(&self) -> bool {
+                false
+            }
+
+            fn position(&self) -> std::time::Duration {
+                std::time::Duration::ZERO
+            }
+
+            fn duration(&self) -> Option<std::time::Duration> {
+                None
+            }
+
+            fn metadata(&self) -> &TrackMetadata {
+                &self.metadata
+            }
+
+            fn decode_events(&self) -> broadcast::Receiver<AudioEvent> {
+                self.events_tx.subscribe()
+            }
+        }
+
+        let (events_tx, _) = broadcast::channel(1);
+        let reader = SeekTrackingReader {
+            spec: PcmSpec {
+                channels: 2,
+                sample_rate: 44_100,
+            },
+            metadata: TrackMetadata {
+                album: None,
+                artist: None,
+                artwork: None,
+                title: Some("Tracking".to_owned()),
+            },
+            seek_log,
+            events_tx,
+        };
+
+        let resource = Resource::from_reader(reader);
+        Arc::new(PlatformMutex::new(PlayerResource::new(
+            resource,
+            Arc::from(src),
+            kithara_bufpool::pcm_pool(),
+        )))
+    }
+
+    #[tokio::test]
+    async fn processor_multiple_seek_epochs_only_last_applies() {
+        let seek_log = TestArc::new(Mutex::new(Vec::new()));
+        let resource = create_tracking_player_resource("track1.mp3", Arc::clone(&seek_log));
+
+        let (mut processor, tx) = make_processor();
+        let src = Arc::from("track1.mp3");
+        tx.send(PlayerCmd::LoadTrack {
+            resource,
+            src: Arc::clone(&src),
+        })
+        .ok();
+        processor.drain_commands();
+        tx.send(PlayerCmd::Transition(TrackTransition::FadeIn(Arc::clone(
+            &src,
+        ))))
+        .ok();
+        processor.drain_commands();
+
+        let shared_state = Arc::clone(&processor.shared_state);
+        let first = shared_state.next_seek_epoch();
+        shared_state.seek_epoch.store(first, Ordering::SeqCst);
+        tx.send(PlayerCmd::Seek {
+            seconds: 10.0,
+            seek_epoch: first,
+        })
+        .ok();
+        let second = shared_state.next_seek_epoch();
+        shared_state.seek_epoch.store(second, Ordering::SeqCst);
+        tx.send(PlayerCmd::Seek {
+            seconds: 20.0,
+            seek_epoch: second,
+        })
+        .ok();
+        let third = shared_state.next_seek_epoch();
+        shared_state.seek_epoch.store(third, Ordering::SeqCst);
+        tx.send(PlayerCmd::Seek {
+            seconds: 30.0,
+            seek_epoch: third,
+        })
+        .ok();
+
+        processor.drain_commands();
+
+        let seek_log = seek_log.lock().expect("seek log mutex poisoned");
+        assert_eq!(seek_log.as_slice(), [third]);
+        assert_eq!(shared_state.seek_epoch.load(Ordering::SeqCst), third);
     }
 }

@@ -11,8 +11,8 @@ use std::{
 };
 
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_decode::{PcmChunk, PcmSpec, TrackMetadata};
-use kithara_events::{AudioEvent, EventBus};
+use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
+use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
 use kithara_platform::{Receiver, Sender, bounded};
 use kithara_stream::{EpochValidator, Fetch, Stream, StreamType};
 use tokio::sync::{Notify, broadcast};
@@ -87,6 +87,9 @@ pub struct Audio<S> {
     /// Base position after last seek.
     seek_base: Duration,
 
+    /// Pending seek epoch waiting for first post-seek output commit.
+    pending_seek_complete_epoch: Option<u64>,
+
     /// Total duration from format metadata.
     pub(crate) total_duration: Option<Duration>,
 
@@ -157,6 +160,52 @@ impl<S> Audio<S> {
         self.spec
     }
 
+    fn emit_playback_progress(&self) {
+        let position_ms = self.position().as_millis().min(u128::from(u64::MAX)) as u64;
+        let total_ms = self
+            .total_duration
+            .map(|duration| duration.as_millis() as u64);
+
+        self.emit_audio_event(AudioEvent::PlaybackProgress {
+            position_ms,
+            total_ms,
+            seek_epoch: self.validator.epoch,
+        });
+    }
+
+    fn emit_audio_event(&self, event: AudioEvent) {
+        self.bus.publish(event.clone());
+        let _ = self.audio_events_tx.send(event);
+    }
+
+    fn emit_post_seek_output_commit(&mut self, meta: Option<PcmMeta>) {
+        let Some(seek_epoch) = self.pending_seek_complete_epoch else {
+            return;
+        };
+        if seek_epoch != self.validator.epoch {
+            return;
+        }
+
+        let variant = meta.as_ref().and_then(|m| m.variant_index);
+        let segment_index = meta.as_ref().and_then(|m| m.segment_index);
+
+        self.emit_audio_event(AudioEvent::SeekLifecycle {
+            stage: SeekLifecycleStage::OutputCommitted,
+            seek_epoch,
+            task_id: seek_epoch,
+            variant,
+            segment_index,
+            byte_range_start: None,
+            byte_range_end: None,
+        });
+
+        self.emit_audio_event(AudioEvent::SeekComplete {
+            position: (&*self).position(),
+            seek_epoch,
+        });
+        self.pending_seek_complete_epoch = None;
+    }
+
     /// Check if end of stream has been reached.
     #[must_use]
     pub fn is_eof(&self) -> bool {
@@ -207,6 +256,7 @@ impl<S> Audio<S> {
         }
 
         let mut written = 0;
+        let mut last_output_meta: Option<PcmMeta> = None;
 
         while written < buf.len() {
             // Try to read from current chunk
@@ -216,6 +266,7 @@ impl<S> Audio<S> {
 
                 buf[written..written + to_copy]
                     .copy_from_slice(&chunk.pcm[self.chunk_offset..self.chunk_offset + to_copy]);
+                last_output_meta = Some(chunk.meta);
 
                 written += to_copy;
                 self.chunk_offset += to_copy;
@@ -237,6 +288,10 @@ impl<S> Audio<S> {
         }
 
         self.samples_read += written as u64;
+        if written > 0 {
+            self.emit_playback_progress();
+            self.emit_post_seek_output_commit(last_output_meta);
+        }
         written
     }
 
@@ -280,6 +335,7 @@ impl<S> Audio<S> {
         self.eof = false;
         self.samples_read = 0;
         self.seek_base = position;
+        self.pending_seek_complete_epoch = Some(new_epoch);
 
         // Drain stale chunks from channel to unblock worker.
         // Stop if we encounter a valid chunk (save it for next read).
@@ -307,6 +363,63 @@ impl<S> Audio<S> {
         self.preloaded = false;
 
         debug!(?position, epoch = new_epoch, "seek initiated");
+        Ok(())
+    }
+
+    /// Seek to position in the audio stream using a caller-provided epoch.
+    ///
+    /// This is used by playback components that already manage seek ordering.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError::SeekError`] if the command channel is closed.
+    pub fn seek_with_epoch(&mut self, position: Duration, seek_epoch: u64) -> DecodeResult<()> {
+        self.validator.epoch = seek_epoch;
+
+        #[cfg(target_arch = "wasm32")]
+        self.cmd_tx
+            .try_send(AudioCommand::Seek {
+                position,
+                epoch: seek_epoch,
+            })
+            .map_err(|_| DecodeError::SeekError("channel closed or full".to_string()))?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        self.cmd_tx
+            .send(AudioCommand::Seek {
+                position,
+                epoch: seek_epoch,
+            })
+            .map_err(|_| DecodeError::SeekError("channel closed".to_string()))?;
+
+        self.current_chunk = None;
+        self.chunk_offset = 0;
+        self.eof = false;
+        self.samples_read = 0;
+        self.seek_base = position;
+        self.pending_seek_complete_epoch = Some(seek_epoch);
+
+        while let Ok(Some(fetch)) = self.pcm_rx.try_recv() {
+            if self.validator.is_valid(&fetch) {
+                if !fetch.is_eof() {
+                    let chunk = fetch.into_inner();
+                    self.spec = chunk.spec();
+                    self.current_chunk = Some(chunk);
+                    self.chunk_offset = 0;
+                    trace!("seek_with_epoch: saved first valid chunk after drain");
+                }
+                break;
+            }
+            trace!(
+                chunk_epoch = fetch.epoch(),
+                current_epoch = seek_epoch,
+                "seek_with_epoch: discarding stale chunk"
+            );
+        }
+
+        self.preloaded = false;
+
+        debug!(?position, epoch = seek_epoch, "seek_with_epoch initiated");
         Ok(())
     }
 
@@ -676,6 +789,7 @@ where
             eof: false,
             samples_read: 0,
             seek_base: Duration::ZERO,
+            pending_seek_complete_epoch: None,
             total_duration,
             metadata,
             audio_events_tx,
@@ -747,6 +861,10 @@ impl<S: Send> PcmReader for Audio<S> {
 
     fn seek(&mut self, position: Duration) -> DecodeResult<()> {
         Self::seek(self, position)
+    }
+
+    fn seek_with_epoch(&mut self, position: Duration, seek_epoch: u64) -> DecodeResult<()> {
+        Self::seek_with_epoch(self, position, seek_epoch)
     }
 
     fn spec(&self) -> PcmSpec {

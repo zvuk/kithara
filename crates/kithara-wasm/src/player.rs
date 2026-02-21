@@ -244,13 +244,9 @@ fn log_resource_events<T>(
             match events_rx.recv().await {
                 Ok(ev) => {
                     let event_dbg = format!("{ev:?}");
-                    if event_dbg.contains("PlaybackProgress")
-                        || event_dbg.contains("DownloadProgress")
-                    {
-                        let line = format!("resource src={url} event={event_dbg}");
-                        info!("{line}");
-                        push_event(&event_log, line);
-                    }
+                    let line = format!("resource src={url} event={event_dbg}");
+                    info!("{line}");
+                    push_event(&event_log, line);
                 }
                 Err(RecvError::Lagged(n)) => {
                     let line = format!("resource src={url} events lagged n={n}");

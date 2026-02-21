@@ -7,7 +7,7 @@
 
 use std::{
     num::NonZeroU32,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
 use kithara_platform::{Receiver, Sender, bounded};
@@ -23,6 +23,8 @@ use super::player_notification::PlayerNotification;
 pub(crate) struct SharedPlayerState {
     /// Whether playback is active.
     pub(crate) playing: AtomicBool,
+    /// Current seek epoch used to invalidate stale seek requests.
+    pub(crate) seek_epoch: AtomicU64,
     /// Current playback position in seconds.
     pub(crate) position: AtomicF64,
     /// Total duration in seconds.
@@ -44,6 +46,7 @@ impl SharedPlayerState {
         let (tx, rx) = bounded(32);
         Self {
             playing: AtomicBool::new(false),
+            seek_epoch: AtomicU64::new(0),
             position: AtomicF64::new(0.0),
             duration: AtomicF64::new(0.0),
             sample_rate: AtomicU32::new(0),
@@ -57,6 +60,12 @@ impl SharedPlayerState {
     pub(crate) fn sample_rate(&self) -> Option<NonZeroU32> {
         NonZeroU32::new(self.sample_rate.load(Ordering::Relaxed))
     }
+
+    pub(crate) fn next_seek_epoch(&self) -> u64 {
+        self.seek_epoch
+            .fetch_add(1, Ordering::AcqRel)
+            .wrapping_add(1)
+    }
 }
 
 #[cfg(test)]
@@ -69,9 +78,18 @@ mod tests {
     fn shared_state_defaults() {
         let state = SharedPlayerState::new();
         assert!(!state.playing.load(Ordering::Relaxed));
+        assert_eq!(state.seek_epoch.load(Ordering::Relaxed), 0);
         assert_eq!(state.position.load(Ordering::Relaxed), 0.0);
         assert_eq!(state.duration.load(Ordering::Relaxed), 0.0);
         assert_eq!(state.sample_rate.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn shared_state_seek_epoch_increments() {
+        let state = SharedPlayerState::new();
+        assert_eq!(state.next_seek_epoch(), 1);
+        assert_eq!(state.next_seek_epoch(), 2);
+        assert_eq!(state.next_seek_epoch(), 3);
     }
 
     #[rstest]

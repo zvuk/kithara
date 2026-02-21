@@ -14,12 +14,13 @@ use std::{
         Arc,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use kithara_platform::{MaybeSend, MaybeSync, ThreadPool};
 use kithara_storage::WaitOutcome;
 
-use crate::{MediaInfo, StreamContext, source::Source};
+use crate::{MediaInfo, SourceSeekAnchor, StreamContext, source::Source};
 
 /// Defines a stream type and how to create it.
 ///
@@ -142,6 +143,32 @@ impl<T: StreamType> Stream<T> {
     /// Clear variant fence, allowing reads from the next variant.
     pub fn clear_variant_fence(&mut self) {
         self.source.clear_variant_fence();
+    }
+
+    /// Set seek epoch for stale request invalidation.
+    pub fn set_seek_epoch(&mut self, seek_epoch: u64) {
+        self.source.set_seek_epoch(seek_epoch);
+    }
+
+    /// Resolve a deterministic time-based seek anchor and move the stream position.
+    ///
+    /// Returns `None` for sources without segmented time mapping.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source failed to resolve the anchor.
+    pub fn seek_time_anchor(
+        &mut self,
+        position: Duration,
+    ) -> Result<Option<SourceSeekAnchor>, std::io::Error> {
+        let anchor = self
+            .source
+            .seek_time_anchor(position)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        if let Some(anchor) = anchor {
+            self.pos.store(anchor.byte_offset, Ordering::Relaxed);
+        }
+        Ok(anchor)
     }
 }
 
