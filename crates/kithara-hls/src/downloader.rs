@@ -714,7 +714,7 @@ impl Downloader for HlsDownloader {
         let req = loop {
             match self.shared.segment_requests.pop() {
                 Some(req) => {
-                    let current_epoch = self.shared.seek_epoch.load(Ordering::Acquire);
+                    let current_epoch = self.shared.timeline.seek_epoch();
                     if req.seek_epoch == current_epoch {
                         if req.seek_epoch != self.active_seek_epoch {
                             self.reset_for_seek_epoch(
@@ -924,7 +924,7 @@ impl Downloader for HlsDownloader {
 
         // Build batch of plans.
         let batch_end = (self.current_segment_index + self.prefetch_count).min(num_segments);
-        let seek_epoch = self.shared.seek_epoch.load(Ordering::Acquire);
+        let seek_epoch = self.shared.timeline.seek_epoch();
         let mut plans = Vec::new();
         let mut need_init = is_variant_switch;
 
@@ -974,7 +974,7 @@ impl Downloader for HlsDownloader {
     }
 
     fn commit(&mut self, fetch: HlsFetch) {
-        let current_epoch = self.shared.seek_epoch.load(Ordering::Acquire);
+        let current_epoch = self.shared.timeline.seek_epoch();
         if is_stale_epoch(fetch.seek_epoch, current_epoch) {
             debug!(
                 fetch_epoch = fetch.seek_epoch,

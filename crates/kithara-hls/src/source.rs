@@ -8,7 +8,7 @@ use std::{
     ops::Range,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering},
     },
 };
 
@@ -63,8 +63,6 @@ pub(crate) struct SharedSegments {
     pub(crate) current_segment_index: Arc<AtomicU32>,
     /// Current variant index (updated by Source on each `read_at`).
     pub(crate) current_variant_index: Arc<AtomicUsize>,
-    /// Current seek generation used by pending requests.
-    pub(crate) seek_epoch: AtomicU64,
 }
 
 impl SharedSegments {
@@ -81,7 +79,6 @@ impl SharedSegments {
             segment_requests: SegQueue::new(),
             playlist_state,
             had_midstream_switch: AtomicBool::new(false),
-            seek_epoch: AtomicU64::new(0),
             cancel,
             stopped: AtomicBool::new(false),
             current_segment_index: Arc::new(AtomicU32::new(0)),
@@ -263,6 +260,11 @@ impl Source for HlsSource {
 
         // Wait until the range is covered by loaded segments or EOF.
         loop {
+            // FLUSH_START check: abort immediately if a seek is pending.
+            if self.shared.timeline.is_flushing() {
+                return Ok(WaitOutcome::Interrupted);
+            }
+
             let mut segments = self.shared.segments.lock();
 
             // Check cancellation (mirrors kithara-storage driver.rs:261)
@@ -341,7 +343,7 @@ impl Source for HlsSource {
                         self.shared.segment_requests.push(SegmentRequest {
                             segment_index,
                             variant: current_variant,
-                            seek_epoch: self.shared.seek_epoch.load(Ordering::Acquire),
+                            seek_epoch: self.shared.timeline.seek_epoch(),
                         });
 
                         self.shared.reader_advanced.notify_one();
@@ -360,14 +362,14 @@ impl Source for HlsSource {
                         self.shared.segment_requests.push(SegmentRequest {
                             segment_index,
                             variant: current_variant,
-                            seek_epoch: self.shared.seek_epoch.load(Ordering::Acquire),
+                            seek_epoch: self.shared.timeline.seek_epoch(),
                         });
 
                         self.shared.reader_advanced.notify_one();
                         on_demand_requested = true;
                     } else {
                         metadata_miss_count = metadata_miss_count.saturating_add(1);
-                        let seek_epoch = self.shared.seek_epoch.load(Ordering::Acquire);
+                        let seek_epoch = self.shared.timeline.seek_epoch();
                         debug!(
                             offset = range.start,
                             variant = current_variant,
@@ -407,10 +409,19 @@ impl Source for HlsSource {
             self.shared
                 .condvar
                 .wait_for(&mut segments, Duration::from_millis(50));
+
+            // FLUSH_START check after wakeup.
+            if self.shared.timeline.is_flushing() {
+                return Ok(WaitOutcome::Interrupted);
+            }
         }
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, HlsError> {
+        if self.shared.timeline.is_flushing() {
+            return Ok(0);
+        }
+
         let seg = {
             let segments = self.shared.segments.lock();
             segments.find_at_offset(offset).cloned()
@@ -516,8 +527,8 @@ impl Source for HlsSource {
         self.variant_fence = None;
     }
 
-    fn set_seek_epoch(&mut self, seek_epoch: u64) {
-        self.shared.seek_epoch.store(seek_epoch, Ordering::Release);
+    fn set_seek_epoch(&mut self, _seek_epoch: u64) {
+        // seek_epoch is now managed by Timeline.initiate_seek()
         self.shared.timeline.set_eof(false);
         self.shared.timeline.set_download_position(0);
         while self.shared.segment_requests.pop().is_some() {}
@@ -541,7 +552,7 @@ impl Source for HlsSource {
             .map_err(StreamError::Source)?;
         let variant = anchor.variant_index.unwrap_or(0);
         let segment_index = anchor.segment_index.unwrap_or(0) as usize;
-        let seek_epoch = self.shared.seek_epoch.load(Ordering::Acquire);
+        let seek_epoch = self.shared.timeline.seek_epoch();
 
         while self.shared.segment_requests.pop().is_some() {}
         self.shared.segment_requests.push(SegmentRequest {
@@ -860,7 +871,12 @@ mod tests {
             Arc::clone(&playlist_state),
             Timeline::new(),
         ));
-        shared.seek_epoch.store(9, Ordering::Release);
+        shared.timeline.initiate_seek(Duration::ZERO); // epoch = 1
+        // Bump to epoch 9 by calling initiate_seek 8 more times
+        for _ in 0..8 {
+            shared.timeline.initiate_seek(Duration::ZERO);
+        }
+        shared.timeline.complete_seek(9);
         shared.current_variant_index.store(0, Ordering::Relaxed);
 
         let mut source = make_test_source(Arc::clone(&shared), cancel);
@@ -957,12 +973,16 @@ mod tests {
         }
         shared.timeline.set_eof(true);
         shared.timeline.set_download_position(200);
-        shared.seek_epoch.store(3, Ordering::Release);
+        // Set epoch to 3 via Timeline
+        for _ in 0..3 {
+            shared.timeline.initiate_seek(Duration::ZERO);
+        }
+        shared.timeline.complete_seek(3);
 
         let mut source = make_test_source(Arc::clone(&shared), cancel);
         Source::set_seek_epoch(&mut source, 4);
 
-        assert_eq!(shared.seek_epoch.load(Ordering::Acquire), 4);
+        assert_eq!(shared.timeline.seek_epoch(), 3); // epoch stays 3, set_seek_epoch no longer writes it
         assert!(!shared.timeline.eof());
         assert_eq!(shared.timeline.download_position(), 0);
         assert_eq!(shared.current_segment_index.load(Ordering::Acquire), 0);
