@@ -190,6 +190,14 @@ impl<T: StreamType> Read for Stream<T> {
             }
         }
 
+        // Check flushing again before read (race window between wait_range return and read)
+        if self.source.timeline().is_flushing() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "seek pending",
+            ));
+        }
+
         // Read data directly from source
         let n = self
             .source

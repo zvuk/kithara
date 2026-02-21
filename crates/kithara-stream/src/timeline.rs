@@ -196,12 +196,21 @@ impl Timeline {
     /// Clears flushing flag only if `epoch` is still current.
     /// A superseding `initiate_seek` will have incremented the epoch,
     /// preventing an older completion from clearing the new seek.
+    ///
+    /// Uses a double-check to guard against the race where a new
+    /// `initiate_seek` fires between our epoch load and flushing store.
     pub fn complete_seek(&self, epoch: u64) {
-        let current = self.seek_epoch.load(Ordering::Acquire);
-        if current == epoch {
-            self.seek_target_ns
-                .store(Self::NO_SEEK_TARGET, Ordering::Release);
-            self.flushing.store(false, Ordering::Release);
+        if self.seek_epoch.load(Ordering::SeqCst) != epoch {
+            return;
+        }
+        self.seek_target_ns
+            .store(Self::NO_SEEK_TARGET, Ordering::SeqCst);
+        self.flushing.store(false, Ordering::SeqCst);
+        // Double-check: if a newer seek arrived while we were clearing,
+        // its initiate_seek may have already set flushing=true which we
+        // just overwrote. Re-set flushing to avoid losing the seek.
+        if self.seek_epoch.load(Ordering::SeqCst) != epoch {
+            self.flushing.store(true, Ordering::SeqCst);
         }
     }
 
