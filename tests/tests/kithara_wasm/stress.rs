@@ -6,7 +6,7 @@
 use std::{
     future::Future,
     sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use futures::future::{Either, select};
@@ -1055,6 +1055,7 @@ async fn stress_seek_to_zero_after_pressure() {
     let mut position_checked = false;
     let mut continuity_errors = 0u64;
     let mut prev_last_phase: Option<usize> = None;
+    let mut stall_deadline = Instant::now() + Duration::from_secs(25);
 
     for attempt in 0..target_chunks * 20 {
         let n = read_with_yield_limit(&mut audio, &mut buf, 100).await;
@@ -1063,9 +1064,9 @@ async fn stress_seek_to_zero_after_pressure() {
                 info!(chunks_from_zero, total_from_zero, "EOF reached");
                 break;
             }
-            if attempt > target_chunks * 10 {
+            if Instant::now() >= stall_deadline {
                 panic!(
-                    "STUCK after seek-to-0: read returned 0 for {attempt} attempts, \
+                    "STUCK after seek-to-0: read returned 0 for {attempt} attempts before deadline, \
                      chunks_from_zero={chunks_from_zero}, \
                      position={:.3}s",
                     audio.position().as_secs_f64()
@@ -1073,6 +1074,9 @@ async fn stress_seek_to_zero_after_pressure() {
             }
             continue;
         }
+
+        // Reset stall timer on each successful post-seek chunk.
+        stall_deadline = Instant::now() + Duration::from_secs(5);
 
         chunks_from_zero += 1;
         total_from_zero += n;

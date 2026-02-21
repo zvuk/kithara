@@ -25,9 +25,13 @@ pub(crate) struct SharedPlayerState {
     pub(crate) playing: AtomicBool,
     /// Current seek epoch used to invalidate stale seek requests.
     pub(crate) seek_epoch: AtomicU64,
-    /// Current playback position in seconds.
+    /// Last observed playback position snapshot in seconds.
+    ///
+    /// Source of truth is the per-track `Timeline` in the audio pipeline.
     pub(crate) position: AtomicF64,
-    /// Total duration in seconds.
+    /// Last observed total duration snapshot in seconds.
+    ///
+    /// Source of truth is the per-track `Timeline` in the audio pipeline.
     pub(crate) duration: AtomicF64,
     /// Current sample rate from the audio stream.
     pub(crate) sample_rate: AtomicU32,

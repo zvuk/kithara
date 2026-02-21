@@ -12,7 +12,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum DecodeError {
     #[error("IO error: {0}")]
-    Io(#[from] io::Error),
+    Io(io::Error),
 
     #[error("Unsupported codec: {0:?}")]
     UnsupportedCodec(AudioCodec),
@@ -33,8 +33,23 @@ pub enum DecodeError {
     #[error("Probe failed: could not detect codec")]
     ProbeFailed,
 
+    /// A seek interrupted the decode operation. Not a real error —
+    /// the caller should check for pending seeks and retry.
+    #[error("Interrupted by seek")]
+    Interrupted,
+
     #[error("Decoder error: {0}")]
     Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl From<io::Error> for DecodeError {
+    fn from(err: io::Error) -> Self {
+        if err.kind() == io::ErrorKind::Interrupted {
+            Self::Interrupted
+        } else {
+            Self::Io(err)
+        }
+    }
 }
 
 /// Result type for decode operations.
@@ -84,5 +99,19 @@ mod tests {
     fn test_decode_error_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<DecodeError>();
+    }
+
+    #[test]
+    fn test_io_interrupted_becomes_decode_interrupted() {
+        let io_err = io::Error::new(io::ErrorKind::Interrupted, "seek pending");
+        let decode_err: DecodeError = io_err.into();
+        assert!(matches!(decode_err, DecodeError::Interrupted));
+    }
+
+    #[test]
+    fn test_io_other_stays_io_variant() {
+        let io_err = io::Error::new(io::ErrorKind::NotFound, "missing");
+        let decode_err: DecodeError = io_err.into();
+        assert!(matches!(decode_err, DecodeError::Io(_)));
     }
 }

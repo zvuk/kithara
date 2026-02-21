@@ -18,6 +18,7 @@ mod fetch;
 mod media;
 mod source;
 mod stream;
+mod timeline;
 mod writer;
 
 #[cfg(any(test, feature = "test-utils"))]
@@ -31,4 +32,5 @@ pub use fetch::{EpochValidator, Fetch};
 pub use media::{AudioCodec, ContainerFormat, MediaInfo};
 pub use source::{Source, SourceSeekAnchor};
 pub use stream::{Stream, StreamType};
+pub use timeline::Timeline;
 pub use writer::{Writer, WriterError, WriterItem};

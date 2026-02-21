@@ -150,7 +150,7 @@ async fn test_hls_timeline_segment_tracking() {
 
     // Create HLS stream and build StreamContext before moving stream to decoder
     let stream = Stream::<Hls>::new(hls_config).await.unwrap();
-    let stream_ctx = Hls::build_stream_context(stream.source(), stream.position_handle());
+    let stream_ctx = Hls::build_stream_context(stream.source(), stream.timeline());
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
     let decoder_config = DecoderConfig {

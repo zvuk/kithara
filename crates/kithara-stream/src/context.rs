@@ -5,10 +5,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
+use crate::Timeline;
 
 /// Read-only view of stream state for the decoder.
 ///
@@ -28,18 +25,19 @@ pub trait StreamContext: Send + Sync {
 ///
 /// Always returns `None` for segment/variant.
 pub struct NullStreamContext {
-    byte_offset: Arc<AtomicU64>,
+    timeline: Timeline,
 }
 
 impl NullStreamContext {
-    pub fn new(byte_offset: Arc<AtomicU64>) -> Self {
-        Self { byte_offset }
+    #[must_use]
+    pub fn new(timeline: Timeline) -> Self {
+        Self { timeline }
     }
 }
 
 impl StreamContext for NullStreamContext {
     fn byte_offset(&self) -> u64 {
-        self.byte_offset.load(Ordering::Relaxed)
+        self.timeline.byte_position()
     }
 
     fn segment_index(&self) -> Option<u32> {
@@ -61,9 +59,9 @@ mod tests {
     #[case::initial(0)]
     #[case::advanced(12_345)]
     fn test_null_stream_context_reads_byte_offset(#[case] offset: u64) {
-        let pos = Arc::new(AtomicU64::new(0));
-        let ctx = NullStreamContext::new(Arc::clone(&pos));
-        pos.store(offset, Ordering::Relaxed);
+        let timeline = Timeline::new();
+        let ctx = NullStreamContext::new(timeline.clone());
+        timeline.set_byte_position(offset);
         assert_eq!(ctx.byte_offset(), offset);
         assert_eq!(ctx.segment_index(), None);
         assert_eq!(ctx.variant_index(), None);

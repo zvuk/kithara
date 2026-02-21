@@ -13,8 +13,10 @@ use std::{
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::unbounded;
 use kithara_platform::{Receiver, Sender, bounded};
-use kithara_stream::{EpochValidator, Fetch, Stream, StreamType};
+use kithara_stream::{EpochValidator, Fetch, Stream, StreamType, Timeline};
 use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
@@ -75,23 +77,17 @@ pub struct Audio<S> {
     /// Current chunk being read (auto-recycles to pool on drop).
     pub(crate) current_chunk: Option<PcmChunk>,
 
-    /// Current position in chunk.
+    /// Current position in the in-memory chunk only.
+    ///
+    /// This is not a global playback position and must not be used as timeline
+    /// source-of-truth. Timeline advances only after samples are committed to output.
     pub(crate) chunk_offset: usize,
 
     /// End of stream reached.
     pub(crate) eof: bool,
 
-    /// Number of interleaved samples read since last seek.
-    pub(crate) samples_read: u64,
-
-    /// Base position after last seek.
-    seek_base: Duration,
-
-    /// Pending seek epoch waiting for first post-seek output commit.
-    pending_seek_complete_epoch: Option<u64>,
-
-    /// Total duration from format metadata.
-    pub(crate) total_duration: Option<Duration>,
+    /// Shared stream timeline for committed playback position.
+    pub(crate) timeline: Timeline,
 
     /// Track metadata (title, artist, album, artwork).
     metadata: TrackMetadata,
@@ -125,6 +121,35 @@ pub struct Audio<S> {
 // Public API for cpal/rodio compatibility
 
 impl<S> Audio<S> {
+    fn send_seek_command(&self, position: Duration, epoch: u64) -> DecodeResult<()> {
+        let mut pending = Some(AudioCommand::Seek { position, epoch });
+        match self.cmd_tx.try_send_option(&mut pending) {
+            Ok(true) => Ok(()),
+            Ok(false) => {
+                let queued = self.cmd_tx.len();
+                warn!(epoch, queued, "seek command channel is full");
+
+                #[cfg(target_arch = "wasm32")]
+                {
+                    return Err(DecodeError::SeekError("channel full".to_string()));
+                }
+
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    let Some(cmd) = pending.take() else {
+                        return Err(DecodeError::SeekError(
+                            "seek command lost before fallback send".to_string(),
+                        ));
+                    };
+                    self.cmd_tx
+                        .send(cmd)
+                        .map_err(|_| DecodeError::SeekError("channel closed".to_string()))
+                }
+            }
+            Err(_) => Err(DecodeError::SeekError("channel closed".to_string())),
+        }
+    }
+
     /// Get reference to PCM receiver for direct channel access.
     #[must_use]
     pub fn pcm_rx(&self) -> &Receiver<Fetch<PcmChunk>> {
@@ -161,10 +186,20 @@ impl<S> Audio<S> {
     }
 
     fn emit_playback_progress(&self) {
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "clamped to u64::MAX before cast"
+        )]
         let position_ms = self.position().as_millis().min(u128::from(u64::MAX)) as u64;
-        let total_ms = self
-            .total_duration
-            .map(|duration| duration.as_millis() as u64);
+        let total_ms = self.timeline.total_duration().map(|duration| {
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "millis fits in u64 for practical durations"
+            )]
+            {
+                duration.as_millis() as u64
+            }
+        });
 
         self.emit_audio_event(AudioEvent::PlaybackProgress {
             position_ms,
@@ -179,7 +214,7 @@ impl<S> Audio<S> {
     }
 
     fn emit_post_seek_output_commit(&mut self, meta: Option<PcmMeta>) {
-        let Some(seek_epoch) = self.pending_seek_complete_epoch else {
+        let Some(seek_epoch) = self.timeline.pending_seek_epoch() else {
             return;
         };
         if seek_epoch != self.validator.epoch {
@@ -200,10 +235,10 @@ impl<S> Audio<S> {
         });
 
         self.emit_audio_event(AudioEvent::SeekComplete {
-            position: (&*self).position(),
+            position: (*self).position(),
             seek_epoch,
         });
-        self.pending_seek_complete_epoch = None;
+        let _ = self.timeline.clear_pending_seek_epoch(seek_epoch);
     }
 
     /// Check if end of stream has been reached.
@@ -217,16 +252,7 @@ impl<S> Audio<S> {
     /// Calculated from samples read since last seek plus the seek base.
     #[must_use]
     pub fn position(&self) -> Duration {
-        let rate = f64::from(self.spec.sample_rate) * f64::from(self.spec.channels.max(1));
-        if rate == 0.0 {
-            return self.seek_base;
-        }
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "sample count precision loss is negligible"
-        )]
-        let samples = self.samples_read as f64;
-        self.seek_base + Duration::from_secs_f64(samples / rate)
+        self.timeline.committed_position()
     }
 
     /// Get total duration of the audio stream.
@@ -234,7 +260,7 @@ impl<S> Audio<S> {
     /// Returns `None` for streaming sources where duration is unknown.
     #[must_use]
     pub fn duration(&self) -> Option<Duration> {
-        self.total_duration
+        self.timeline.total_duration()
     }
 
     /// Get track metadata (title, artist, album, artwork).
@@ -287,10 +313,14 @@ impl<S> Audio<S> {
             }
         }
 
-        self.samples_read += written as u64;
         if written > 0 {
-            self.emit_playback_progress();
+            self.timeline.advance_committed_samples(
+                written as u64,
+                self.spec.sample_rate,
+                self.spec.channels,
+            );
             self.emit_post_seek_output_commit(last_output_meta);
+            self.emit_playback_progress();
         }
         written
     }
@@ -308,34 +338,17 @@ impl<S> Audio<S> {
         // Storing here would race: the worker's fetch_next() could read the new epoch
         // before processing the seek, stamping a pre-seek chunk with the new epoch
         // and making it pass the consumer's epoch filter.
-        let new_epoch = self.validator.next_epoch();
+        let new_epoch = self.validator.epoch.wrapping_add(1);
 
-        // Send seek command to worker with new epoch.
-        // On wasm32 main thread, `Atomics.wait` is forbidden, so use `try_send()`
-        // to avoid blocking.  The command channel should always have capacity
-        // (bounded(1+) and the worker consumes commands promptly).
-        #[cfg(target_arch = "wasm32")]
-        self.cmd_tx
-            .try_send(AudioCommand::Seek {
-                position,
-                epoch: new_epoch,
-            })
-            .map_err(|_| DecodeError::SeekError("channel closed or full".to_string()))?;
-        #[cfg(not(target_arch = "wasm32"))]
-        self.cmd_tx
-            .send(AudioCommand::Seek {
-                position,
-                epoch: new_epoch,
-            })
-            .map_err(|_| DecodeError::SeekError("channel closed".to_string()))?;
+        self.send_seek_command(position, new_epoch)?;
+        self.validator.epoch = new_epoch;
 
         // Clear local state (current_chunk auto-recycles via Drop)
         self.current_chunk = None;
         self.chunk_offset = 0;
         self.eof = false;
-        self.samples_read = 0;
-        self.seek_base = position;
-        self.pending_seek_complete_epoch = Some(new_epoch);
+        self.timeline.set_committed_position(position);
+        self.timeline.mark_pending_seek_epoch(new_epoch);
 
         // Drain stale chunks from channel to unblock worker.
         // Stop if we encounter a valid chunk (save it for next read).
@@ -374,30 +387,14 @@ impl<S> Audio<S> {
     ///
     /// Returns [`DecodeError::SeekError`] if the command channel is closed.
     pub fn seek_with_epoch(&mut self, position: Duration, seek_epoch: u64) -> DecodeResult<()> {
+        self.send_seek_command(position, seek_epoch)?;
         self.validator.epoch = seek_epoch;
-
-        #[cfg(target_arch = "wasm32")]
-        self.cmd_tx
-            .try_send(AudioCommand::Seek {
-                position,
-                epoch: seek_epoch,
-            })
-            .map_err(|_| DecodeError::SeekError("channel closed or full".to_string()))?;
-
-        #[cfg(not(target_arch = "wasm32"))]
-        self.cmd_tx
-            .send(AudioCommand::Seek {
-                position,
-                epoch: seek_epoch,
-            })
-            .map_err(|_| DecodeError::SeekError("channel closed".to_string()))?;
 
         self.current_chunk = None;
         self.chunk_offset = 0;
         self.eof = false;
-        self.samples_read = 0;
-        self.seek_base = position;
-        self.pending_seek_complete_epoch = Some(seek_epoch);
+        self.timeline.set_committed_position(position);
+        self.timeline.mark_pending_seek_epoch(seek_epoch);
 
         while let Ok(Some(fetch)) = self.pcm_rx.try_recv() {
             if self.validator.is_valid(&fetch) {
@@ -596,6 +593,7 @@ where
         // For format change tracking: always use stream-detected (so ABR switches
         // are detected correctly even when user overrides the format).
         let stream_media_info = stream.media_info();
+        let timeline = stream.timeline();
         let initial_media_info = user_media_info.or_else(|| stream_media_info.clone());
         debug!(?initial_media_info, "Initial MediaInfo from stream");
 
@@ -644,9 +642,15 @@ where
 
         let initial_spec = decoder.spec();
         let total_duration = decoder.duration();
+        timeline.set_total_duration(total_duration);
         let metadata = decoder.metadata();
 
         let cmd_capacity = command_channel_capacity.max(1);
+        #[cfg(target_arch = "wasm32")]
+        let _ = cmd_capacity;
+        #[cfg(target_arch = "wasm32")]
+        let (cmd_tx, cmd_rx) = unbounded();
+        #[cfg(not(target_arch = "wasm32"))]
         let (cmd_tx, cmd_rx) = bounded(cmd_capacity);
         let (data_tx, data_rx) = bounded(pcm_buffer_chunks.max(1));
 
@@ -787,10 +791,7 @@ where
             current_chunk: None,
             chunk_offset: 0,
             eof: false,
-            samples_read: 0,
-            seek_base: Duration::ZERO,
-            pending_seek_complete_epoch: None,
-            total_duration,
+            timeline,
             metadata,
             audio_events_tx,
             bus,
@@ -911,7 +912,11 @@ impl<S: Send> PcmReader for Audio<S> {
 
         let chunk = self.recv_valid_chunk()?;
         self.spec = chunk.spec();
-        self.samples_read += chunk.pcm.len() as u64;
+        self.timeline.advance_committed_samples(
+            chunk.pcm.len() as u64,
+            self.spec.sample_rate,
+            self.spec.channels,
+        );
         Some(chunk)
     }
 }

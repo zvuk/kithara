@@ -38,6 +38,9 @@ pub enum WaitOutcome {
     Ready,
     /// The resource has been committed and the requested range starts at/after EOF.
     Eof,
+    /// A seek or flush interrupted the wait. The caller should abort the current
+    /// read and check for pending seeks.
+    Interrupted,
 }
 
 /// Status of a resource.

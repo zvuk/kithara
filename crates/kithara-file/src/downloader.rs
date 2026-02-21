@@ -590,7 +590,7 @@ mod tests {
             io,
             writer,
             res,
-            progress: Arc::new(Progress::new()),
+            progress: Arc::new(Progress::new(kithara_stream::Timeline::new())),
             bus: EventBus::new(16),
             total: Some(total),
             look_ahead_bytes: None,

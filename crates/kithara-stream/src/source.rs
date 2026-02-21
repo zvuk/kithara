@@ -13,7 +13,7 @@ use kithara_storage::WaitOutcome;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
-use crate::{error::StreamResult, media::MediaInfo};
+use crate::{Timeline, error::StreamResult, media::MediaInfo};
 
 /// Time-first seek anchor resolved by a segmented source.
 ///
@@ -100,6 +100,12 @@ pub trait Source: Send + 'static {
     /// to previous seeks. Non-seek-aware sources keep the default no-op.
     fn set_seek_epoch(&mut self, _seek_epoch: u64) {}
 
+    /// Get shared playback timeline.
+    ///
+    /// Timeline is the single source of truth for playback state across all
+    /// stream types (segmented and non-segmented).
+    fn timeline(&self) -> Timeline;
+
     /// Resolve `position` to a source-specific seek anchor.
     ///
     /// Segmented sources (HLS) should map time to a deterministic segment
@@ -107,6 +113,10 @@ pub trait Source: Send + 'static {
     ///
     /// The caller is expected to set stream position to `byte_offset` and
     /// perform decoder reset/recreation using this anchor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the source cannot resolve the anchor.
     fn seek_time_anchor(
         &mut self,
         _position: Duration,

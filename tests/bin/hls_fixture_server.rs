@@ -21,9 +21,15 @@ fn main() {}
     reason = "WAV header construction uses fixed-size fields; values are small and safe"
 )]
 mod server {
-    use std::sync::Arc;
+    use std::{ops::Range, sync::Arc};
 
-    use axum::{Router, extract::Path, routing::get};
+    use axum::{
+        Router,
+        body::Body,
+        extract::Path,
+        http::{HeaderMap, Response, StatusCode, header},
+        routing::get,
+    };
     use tokio::net::TcpListener;
     use tower_http::cors::CorsLayer;
 
@@ -128,6 +134,13 @@ mod server {
         state.wav_data[start..end].to_vec()
     }
 
+    fn segment_size(state: &ServerState, segment: usize) -> Option<usize> {
+        state
+            .segment_ranges
+            .get(segment)
+            .map(|(start, end)| end - start)
+    }
+
     fn parse_uniform_segment_index(filename: &str) -> Option<usize> {
         let name = filename.strip_suffix(".bin")?;
         let name = name.strip_prefix("v0_")?;
@@ -145,6 +158,104 @@ mod server {
             return Some((FixtureKind::Uniform, idx));
         }
         parse_jitter_segment_index(filename).map(|idx| (FixtureKind::Jitter, idx))
+    }
+
+    fn parse_range_header(headers: &HeaderMap) -> Option<(u64, Option<u64>)> {
+        let value = headers.get(header::RANGE)?;
+        let value = value.to_str().ok()?.trim();
+        let range = value.strip_prefix("bytes=")?;
+        let mut parts = range.splitn(2, '-');
+        let start_str = parts.next()?.trim();
+        let end_str = parts.next()?.trim();
+        let start = start_str.parse::<u64>().ok()?;
+        let end = if end_str.is_empty() {
+            None
+        } else {
+            Some(end_str.parse::<u64>().ok()?.saturating_add(1))
+        };
+        Some((start, end))
+    }
+
+    fn range_not_satisfiable(total: usize) -> Response<Body> {
+        Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header(header::ACCEPT_RANGES, "bytes")
+            .header(header::CONTENT_RANGE, format!("bytes */{total}"))
+            .body(Body::empty())
+            .expect("valid range-not-satisfiable response")
+    }
+
+    #[expect(
+        clippy::result_large_err,
+        reason = "test binary; Response used as error for early return"
+    )]
+    fn select_range(
+        total_len: usize,
+        range: Option<(u64, Option<u64>)>,
+    ) -> Result<(Range<usize>, StatusCode, Option<String>), Response<Body>> {
+        if let Some((start, end_opt)) = range {
+            if start >= total_len as u64 {
+                return Err(range_not_satisfiable(total_len));
+            }
+            let end = end_opt.unwrap_or(total_len as u64).min(total_len as u64);
+            if start >= end {
+                return Err(range_not_satisfiable(total_len));
+            }
+            let status = if start == 0 && end == total_len as u64 {
+                StatusCode::OK
+            } else {
+                StatusCode::PARTIAL_CONTENT
+            };
+            let content_range = if status == StatusCode::PARTIAL_CONTENT {
+                Some(format!(
+                    "bytes {}-{}/{}",
+                    start,
+                    end.saturating_sub(1),
+                    total_len
+                ))
+            } else {
+                None
+            };
+            Ok(((start as usize)..(end as usize), status, content_range))
+        } else {
+            Ok(((0..total_len), StatusCode::OK, None))
+        }
+    }
+
+    fn build_segment_response(
+        data: &[u8],
+        headers: &HeaderMap,
+        include_body: bool,
+    ) -> Response<Body> {
+        let total = data.len();
+        match select_range(total, parse_range_header(headers)) {
+            Ok((range, status, content_range)) => {
+                let mut builder = Response::builder().status(status);
+                builder = builder
+                    .header(
+                        header::CONTENT_LENGTH,
+                        (range.end - range.start).to_string(),
+                    )
+                    .header(header::ACCEPT_RANGES, "bytes");
+                if let Some(content_range_header) = content_range {
+                    builder = builder.header(header::CONTENT_RANGE, content_range_header);
+                }
+                let body = if include_body {
+                    Body::from(data[range].to_vec())
+                } else {
+                    Body::empty()
+                };
+                builder.body(body).expect("valid segment response")
+            }
+            Err(resp) => resp,
+        }
+    }
+
+    fn not_found_response() -> Response<Body> {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .body(Body::empty())
+            .expect("valid not-found response")
     }
 
     fn jitter_segment_sizes() -> Vec<usize> {
@@ -184,8 +295,10 @@ mod server {
         let st_master_jitter = Arc::clone(&jitter_state);
         let st_media_uniform = Arc::clone(&uniform_state);
         let st_media_jitter = Arc::clone(&jitter_state);
-        let st_seg_uniform = Arc::clone(&uniform_state);
-        let st_seg_jitter = Arc::clone(&jitter_state);
+        let st_seg_uniform_get = Arc::clone(&uniform_state);
+        let st_seg_jitter_get = Arc::clone(&jitter_state);
+        let st_seg_uniform_head = Arc::clone(&uniform_state);
+        let st_seg_jitter_head = Arc::clone(&jitter_state);
 
         let app = Router::new()
             .route(
@@ -218,15 +331,38 @@ mod server {
             )
             .route(
                 "/seg/{filename}",
-                get(move |Path(filename): Path<String>| {
-                    let uniform = Arc::clone(&st_seg_uniform);
-                    let jitter = Arc::clone(&st_seg_jitter);
+                get(move |Path(filename): Path<String>, headers: HeaderMap| {
+                    let uniform = Arc::clone(&st_seg_uniform_get);
+                    let jitter = Arc::clone(&st_seg_jitter_get);
                     async move {
-                        match parse_segment_request(&filename) {
+                        let data = match parse_segment_request(&filename) {
                             Some((FixtureKind::Uniform, seg)) => serve_segment(&uniform, seg),
                             Some((FixtureKind::Jitter, seg)) => serve_segment(&jitter, seg),
-                            None => Vec::new(),
+                            None => return not_found_response(),
+                        };
+                        if data.is_empty() {
+                            return not_found_response();
                         }
+                        build_segment_response(&data, &headers, true)
+                    }
+                })
+                .head(move |Path(filename): Path<String>, headers: HeaderMap| {
+                    let uniform = Arc::clone(&st_seg_uniform_head);
+                    let jitter = Arc::clone(&st_seg_jitter_head);
+                    async move {
+                        let data_len = match parse_segment_request(&filename) {
+                            Some((FixtureKind::Uniform, seg)) => {
+                                segment_size(&uniform, seg).unwrap_or(0)
+                            }
+                            Some((FixtureKind::Jitter, seg)) => {
+                                segment_size(&jitter, seg).unwrap_or(0)
+                            }
+                            None => return not_found_response(),
+                        };
+                        if data_len == 0 {
+                            return not_found_response();
+                        }
+                        build_segment_response(&vec![0u8; data_len], &headers, false)
                     }
                 }),
             )

@@ -2,7 +2,7 @@
 //!
 //! Provides `Hls` marker type implementing `StreamType` trait.
 
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::Arc;
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_assets::CoverageIndex;
@@ -13,7 +13,7 @@ use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_net::HttpClient;
 use kithara_platform::ThreadPool;
-use kithara_stream::{StreamContext, StreamType};
+use kithara_stream::{StreamContext, StreamType, Timeline};
 
 use crate::{
     HlsStreamContext,
@@ -161,12 +161,9 @@ impl StreamType for Hls {
         Ok(source)
     }
 
-    fn build_stream_context(
-        source: &Self::Source,
-        position: Arc<AtomicU64>,
-    ) -> Arc<dyn StreamContext> {
+    fn build_stream_context(source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
         Arc::new(HlsStreamContext::new(
-            position,
+            timeline,
             source.segment_index_handle(),
             source.variant_index_handle(),
         ))

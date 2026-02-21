@@ -181,6 +181,22 @@ impl PlaylistState {
         let last_idx = size_map.segment_sizes.len() - 1;
         size_map.total = size_map.offsets[last_idx] + size_map.segment_sizes[last_idx];
     }
+
+    /// Total media duration across parsed variants.
+    ///
+    /// Variants are expected to describe the same timeline. We keep the
+    /// maximum duration to tolerate incomplete alternate renditions.
+    pub fn track_duration(&self) -> Option<Duration> {
+        self.variants
+            .iter()
+            .map(|lock| {
+                let state = lock.read();
+                state.segments.iter().fold(Duration::ZERO, |acc, segment| {
+                    acc.saturating_add(segment.duration)
+                })
+            })
+            .max()
+    }
 }
 
 // PlaylistAccess trait
@@ -626,6 +642,12 @@ mod tests {
         assert_eq!(seek_point.0, 2);
         assert_eq!(seek_point.1, Duration::from_secs(8));
         assert_eq!(seek_point.2, Duration::from_secs(12));
+    }
+
+    #[test]
+    fn test_track_duration_uses_longest_variant() {
+        let state = PlaylistState::new(vec![make_variant(0, 4), make_variant(1, 3)]);
+        assert_eq!(state.track_duration(), Some(Duration::from_secs(16)));
     }
 
     // Test 8: from_parsed builder

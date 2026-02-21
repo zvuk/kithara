@@ -74,8 +74,14 @@ pub(crate) struct PlayerTrack {
     notified_track_requested: bool,
     mix: MixDSP,
     fade_curve: FadeCurve,
-    cached_position: f64,
-    cached_duration: f64,
+    /// Last observed playback position snapshot.
+    ///
+    /// This is a fallback value only. Source of truth is `PlayerResource`.
+    observed_position: f64,
+    /// Last observed duration snapshot.
+    ///
+    /// This is a fallback value only. Source of truth is `PlayerResource`.
+    observed_duration: f64,
     src: Arc<str>,
 }
 
@@ -103,8 +109,8 @@ impl PlayerTrack {
             notified_track_requested: false,
             mix: MixDSP::new(Mix::FULLY_WET, fade_curve, fade_conf, sample_rate),
             fade_curve,
-            cached_position: 0.0,
-            cached_duration: 0.0,
+            observed_position: 0.0,
+            observed_duration: 0.0,
             src,
         }
     }
@@ -140,8 +146,8 @@ impl PlayerTrack {
 
         // Process outcome outside the lock
         if let Ok((position, duration)) = read_outcome {
-            self.cached_position = position;
-            self.cached_duration = duration;
+            self.observed_position = position;
+            self.observed_duration = duration;
 
             if scratch_bufs.len() >= 2 && mix_bufs.len() >= 2 {
                 let (output_l_slice, output_r_slice) = mix_bufs.split_at_mut(1);
@@ -188,8 +194,8 @@ impl PlayerTrack {
 
     /// Check position-based notifications.
     fn check_notifications(&mut self, notification_tx: &Sender<PlayerNotification>) {
-        let position = self.cached_position;
-        let duration = self.cached_duration;
+        let position = self.observed_position;
+        let duration = self.observed_duration;
 
         if duration <= 0.0 {
             return;
@@ -311,18 +317,27 @@ impl PlayerTrack {
             } else {
                 resource.seek_with_epoch(seconds, seek_epoch);
             }
-            self.cached_position = seconds;
         }
     }
 
-    /// Cached position in seconds.
+    /// Current position in seconds.
+    ///
+    /// Source of truth is `PlayerResource` (`Timeline` underneath).
+    /// Uses snapshot fallback only if lock is temporarily unavailable.
     pub(crate) fn position(&self) -> f64 {
-        self.cached_position
+        self.resource
+            .try_lock()
+            .map_or(self.observed_position, |resource| resource.position())
     }
 
-    /// Cached duration in seconds.
+    /// Current duration in seconds.
+    ///
+    /// Source of truth is `PlayerResource` (`Timeline` underneath).
+    /// Uses snapshot fallback only if lock is temporarily unavailable.
     pub(crate) fn duration(&self) -> f64 {
-        self.cached_duration
+        self.resource
+            .try_lock()
+            .map_or(self.observed_duration, |resource| resource.duration())
     }
 
     /// Current track state.
@@ -457,6 +472,6 @@ mod tests {
     async fn track_initial_position_and_duration() {
         let track = make_track();
         assert_eq!(track.position(), 0.0);
-        assert_eq!(track.duration(), 0.0);
+        assert!((track.duration() - 60.0).abs() < f64::EPSILON);
     }
 }

@@ -1,13 +1,10 @@
 //! In-memory Source implementation for testing.
 
-use std::{
-    ops::Range,
-    sync::{Arc, atomic::AtomicU64},
-};
+use std::{ops::Range, sync::Arc};
 
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    MediaInfo, NullStreamContext, Source, Stream, StreamContext, StreamResult, StreamType,
+    MediaInfo, NullStreamContext, Source, Stream, StreamContext, StreamResult, StreamType, Timeline,
 };
 
 /// Error type for memory-backed sources.
@@ -18,12 +15,16 @@ pub struct MemorySourceError;
 /// In-memory source for testing Source-based readers.
 pub struct MemorySource {
     data: Vec<u8>,
+    timeline: Timeline,
 }
 
 impl MemorySource {
     #[must_use]
     pub fn new(data: Vec<u8>) -> Self {
-        Self { data }
+        Self {
+            data,
+            timeline: Timeline::new(),
+        }
     }
 }
 
@@ -56,17 +57,25 @@ impl Source for MemorySource {
     fn media_info(&self) -> Option<MediaInfo> {
         None
     }
+
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
 }
 
 /// Source without known length for testing `SeekFrom::End` error.
 pub struct UnknownLenSource {
     data: Vec<u8>,
+    timeline: Timeline,
 }
 
 impl UnknownLenSource {
     #[must_use]
     pub fn new(data: Vec<u8>) -> Self {
-        Self { data }
+        Self {
+            data,
+            timeline: Timeline::new(),
+        }
     }
 }
 
@@ -95,6 +104,10 @@ impl Source for UnknownLenSource {
     fn len(&self) -> Option<u64> {
         None
     }
+
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
 }
 
 // StreamType markers for testing Read+Seek behavior with Stream<T>.
@@ -114,11 +127,8 @@ impl StreamType for MemStream {
             .ok_or_else(|| std::io::Error::other("no source"))
     }
 
-    fn build_stream_context(
-        _source: &Self::Source,
-        position: Arc<AtomicU64>,
-    ) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(position))
+    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
+        Arc::new(NullStreamContext::new(timeline))
     }
 }
 
@@ -142,11 +152,8 @@ impl StreamType for UnknownLenStream {
             .ok_or_else(|| std::io::Error::other("no source"))
     }
 
-    fn build_stream_context(
-        _source: &Self::Source,
-        position: Arc<AtomicU64>,
-    ) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(position))
+    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
+        Arc::new(NullStreamContext::new(timeline))
     }
 }
 

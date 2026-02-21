@@ -17,7 +17,7 @@ use kithara_decode::{
 use kithara_platform::Mutex;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, MediaInfo, Source, SourceSeekAnchor, Stream, StreamResult, StreamType,
+    AudioCodec, MediaInfo, Source, SourceSeekAnchor, Stream, StreamResult, StreamType, Timeline,
 };
 use rstest::rstest;
 
@@ -43,6 +43,7 @@ struct TestSourceState {
 
 struct TestSource {
     state: Arc<Mutex<TestSourceState>>,
+    timeline: Timeline,
 }
 
 impl TestSource {
@@ -58,6 +59,7 @@ impl TestSource {
                 variant_map: Vec::new(),
                 seek_anchor: None,
             })),
+            timeline: Timeline::new(),
         }
     }
 
@@ -143,6 +145,10 @@ impl Source for TestSource {
     ) -> StreamResult<Option<SourceSeekAnchor>, Self::Error> {
         Ok(self.state.lock().seek_anchor)
     }
+
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
 }
 
 #[derive(Default)]
@@ -166,9 +172,9 @@ impl StreamType for TestStream {
 
     fn build_stream_context(
         _source: &Self::Source,
-        position: Arc<AtomicU64>,
+        timeline: Timeline,
     ) -> Arc<dyn kithara_stream::StreamContext> {
-        Arc::new(kithara_stream::NullStreamContext::new(position))
+        Arc::new(kithara_stream::NullStreamContext::new(timeline))
     }
 }
 

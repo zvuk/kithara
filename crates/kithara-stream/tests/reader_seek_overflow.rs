@@ -28,11 +28,13 @@
 use std::{
     io::{Read, Seek, SeekFrom},
     ops::Range,
-    sync::{Arc, atomic::AtomicU64},
+    sync::Arc,
 };
 
 use kithara_storage::WaitOutcome;
-use kithara_stream::{NullStreamContext, Source, Stream, StreamContext, StreamResult, StreamType};
+use kithara_stream::{
+    NullStreamContext, Source, Stream, StreamContext, StreamResult, StreamType, Timeline,
+};
 use rstest::rstest;
 
 /// Minimal mock source with known length.
@@ -41,6 +43,7 @@ struct MockSource {
     /// Reported length (may differ from actual data size).
     /// Simulates `expected_total_length` in HLS which is metadata-derived.
     reported_len: u64,
+    timeline: Timeline,
 }
 
 impl MockSource {
@@ -48,6 +51,7 @@ impl MockSource {
         Self {
             reported_len: len as u64,
             data: vec![0xAA; len],
+            timeline: Timeline::new(),
         }
     }
 
@@ -57,6 +61,7 @@ impl MockSource {
         Self {
             data: Vec::new(),
             reported_len,
+            timeline: Timeline::new(),
         }
     }
 }
@@ -82,6 +87,10 @@ impl Source for MockSource {
     fn len(&self) -> Option<u64> {
         Some(self.reported_len)
     }
+
+    fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
 }
 
 /// StreamType marker for MockSource.
@@ -99,11 +108,8 @@ impl StreamType for MockStream {
             .ok_or_else(|| std::io::Error::other("no source"))
     }
 
-    fn build_stream_context(
-        _source: &Self::Source,
-        position: Arc<AtomicU64>,
-    ) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(position))
+    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
+        Arc::new(NullStreamContext::new(timeline))
     }
 }
 

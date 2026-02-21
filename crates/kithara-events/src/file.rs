@@ -9,7 +9,9 @@ pub enum FileEvent {
     DownloadComplete { total_bytes: u64 },
     /// Download failed.
     DownloadError { error: String },
-    /// Bytes consumed by the playback reader.
+    /// Bytes consumed by the file reader (not sink playback truth).
+    ByteProgress { position: u64, total: Option<u64> },
+    /// Deprecated alias retained for compatibility with old consumers.
     PlaybackProgress { position: u64, total: Option<u64> },
     /// General error.
     Error { error: String, recoverable: bool },

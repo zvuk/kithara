@@ -2,14 +2,14 @@
 //!
 //! Provides `File` marker type implementing `StreamType` trait.
 
-use std::sync::{Arc, atomic::AtomicU64};
+use std::sync::Arc;
 
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{HttpClient, Net};
 use kithara_platform::ThreadPool;
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{Backend, NullStreamContext, StreamContext, StreamType};
+use kithara_stream::{Backend, NullStreamContext, StreamContext, StreamType, Timeline};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -51,11 +51,8 @@ impl StreamType for File {
         }
     }
 
-    fn build_stream_context(
-        _source: &Self::Source,
-        position: Arc<AtomicU64>,
-    ) -> Arc<dyn StreamContext> {
-        Arc::new(NullStreamContext::new(position))
+    fn build_stream_context(_source: &Self::Source, timeline: Timeline) -> Arc<dyn StreamContext> {
+        Arc::new(NullStreamContext::new(timeline))
     }
 }
 
@@ -92,13 +89,15 @@ impl File {
             .bus
             .unwrap_or_else(|| EventBus::new(config.event_channel_capacity));
 
-        let progress = Arc::new(Progress::new());
+        let timeline = Timeline::new();
+        timeline.set_total_bytes(len);
+        let progress = Arc::new(Progress::new(timeline.clone()));
         // Local file is fully available — mark download as complete.
         let total = len.unwrap_or(0);
         progress.set_download_pos(total);
         bus.publish(FileEvent::DownloadComplete { total_bytes: total });
 
-        Ok(FileSource::new(res, progress, bus, len))
+        Ok(FileSource::new(res, progress, bus))
     }
 
     /// Create a source for a remote file (HTTP/HTTPS).
@@ -153,7 +152,8 @@ impl File {
         )
         .await?;
 
-        let progress = Arc::new(Progress::new());
+        let timeline = state.timeline();
+        let progress = Arc::new(Progress::new(timeline));
         let shared = Arc::new(SharedFileState::new());
 
         // Determine if the resource is a complete cache or needs downloading.
@@ -207,7 +207,6 @@ impl File {
                 state.res().clone(),
                 progress,
                 state.bus().clone(),
-                state.len(),
                 shared,
                 backend,
             );
@@ -216,12 +215,7 @@ impl File {
         }
 
         // Fully cached — create source without backend (no downloader needed).
-        let source = FileSource::new(
-            state.res().clone(),
-            progress,
-            state.bus().clone(),
-            state.len(),
-        );
+        let source = FileSource::new(state.res().clone(), progress, state.bus().clone());
 
         Ok(source)
     }

@@ -79,7 +79,7 @@ impl<T: StreamType> SharedStream<T> {
         &self,
     ) -> Arc<dyn kithara_stream::StreamContext> {
         let stream = self.inner.lock();
-        T::build_stream_context(stream.source(), stream.position_handle())
+        T::build_stream_context(stream.source(), stream.timeline())
     }
 }
 
@@ -322,6 +322,10 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "mirrors AudioEvent::SeekLifecycle fields"
+    )]
     fn emit_seek_lifecycle(
         &self,
         stage: SeekLifecycleStage,
@@ -469,14 +473,67 @@ impl<T: StreamType> StreamAudioSource<T> {
         true
     }
 
+    fn align_decoder_with_seek_anchor(&mut self, anchor: SourceSeekAnchor) -> bool {
+        // After cross-codec switch the decoder can be anchored at a later byte range
+        // (`base_offset > 0`). Seeking to an earlier range requires decoder
+        // recreation with the target codec context.
+        if self.base_offset <= anchor.byte_offset {
+            return true;
+        }
+
+        let Some(target_info) = self.shared_stream.media_info() else {
+            warn!(
+                base_offset = self.base_offset,
+                target_offset = anchor.byte_offset,
+                "seek anchor alignment: media info unavailable"
+            );
+            return false;
+        };
+
+        let current_codec = self.cached_media_info.as_ref().and_then(|info| info.codec);
+        let target_codec = target_info.codec;
+
+        // Hard rule: recreate decoder only when codec changes.
+        if current_codec == target_codec {
+            return true;
+        }
+
+        self.shared_stream.clear_variant_fence();
+        if let Err(err) = self.shared_stream.seek(SeekFrom::Start(anchor.byte_offset)) {
+            warn!(
+                ?err,
+                target_offset = anchor.byte_offset,
+                "seek anchor alignment: failed to seek stream"
+            );
+            return false;
+        }
+
+        if !self.recreate_decoder(&target_info, anchor.byte_offset) {
+            warn!(
+                target_offset = anchor.byte_offset,
+                "seek anchor alignment: decoder recreation failed"
+            );
+            return false;
+        }
+
+        self.pending_format_change = None;
+        true
+    }
+
     fn duration_for_frames(spec: PcmSpec, frames: usize) -> Duration {
         if spec.sample_rate == 0 {
             return Duration::ZERO;
         }
         let nanos = (frames as u128)
             .saturating_mul(1_000_000_000)
-            .saturating_div(spec.sample_rate as u128);
-        Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
+            .saturating_div(u128::from(spec.sample_rate));
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "clamped to u64::MAX before cast"
+        )]
+        {
+            Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
+        }
     }
 
     fn frames_for_duration(spec: PcmSpec, duration: Duration) -> usize {
@@ -485,7 +542,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
         let frames = duration
             .as_nanos()
-            .saturating_mul(spec.sample_rate as u128)
+            .saturating_mul(u128::from(spec.sample_rate))
             .saturating_div(1_000_000_000);
         frames.min(usize::MAX as u128) as usize
     }
@@ -531,10 +588,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         chunk.pcm.copy_within(drop_samples..len, 0);
         chunk.pcm.truncate(len - drop_samples);
 
-        #[expect(clippy::cast_possible_truncation, reason = "frame count fits in u64")]
-        {
-            chunk.meta.frame_offset = chunk.meta.frame_offset.saturating_add(drop_frames as u64);
-        }
+        chunk.meta.frame_offset = chunk.meta.frame_offset.saturating_add(drop_frames as u64);
         chunk.meta.timestamp = chunk
             .meta
             .timestamp
@@ -711,6 +765,11 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 
                 match self.shared_stream.seek_time_anchor(position) {
                     Ok(Some(anchor)) => {
+                        if !self.align_decoder_with_seek_anchor(anchor) {
+                            warn!(
+                                "seek anchor path: decoder alignment failed, falling back to legacy decoder seek"
+                            );
+                        }
                         if self.apply_time_anchor_seek(position, epoch, anchor) {
                             return;
                         }

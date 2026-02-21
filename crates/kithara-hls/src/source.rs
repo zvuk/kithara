@@ -18,7 +18,7 @@ use kithara_assets::ResourceKey;
 use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::{Condvar, Mutex, time::Duration};
 use kithara_storage::{ResourceExt, WaitOutcome};
-use kithara_stream::{MediaInfo, Source, SourceSeekAnchor, StreamError, StreamResult};
+use kithara_stream::{MediaInfo, Source, SourceSeekAnchor, StreamError, StreamResult, Timeline};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -44,18 +44,14 @@ pub(crate) struct SharedSegments {
     pub(crate) segments: Mutex<DownloadState>,
     /// Downloader → Source: new segment available (for sync blocking in Source).
     pub(crate) condvar: Condvar,
-    pub(crate) eof: AtomicBool,
-    /// Current reader byte offset (updated by Source on every `read_at`).
-    pub(crate) reader_offset: AtomicU64,
+    /// Shared stream timeline (single source of truth for byte position).
+    pub(crate) timeline: Timeline,
     /// Source → Downloader: reader advanced, may resume downloading.
     pub(crate) reader_advanced: Notify,
     /// Segment load requests (on-demand from seek or sequential).
     pub(crate) segment_requests: SegQueue<SegmentRequest>,
     /// Parsed playlist data (variant info, segment URLs, size maps).
     pub(crate) playlist_state: Arc<PlaylistState>,
-    /// Expected total length of current variant's theoretical stream.
-    /// Used for seek bounds checking by Symphonia.
-    pub(crate) expected_total_length: AtomicU64,
     /// True after a mid-stream variant switch. On-demand loading should
     /// just wake the sequential downloader instead of using metadata lookups.
     pub(crate) had_midstream_switch: AtomicBool,
@@ -72,16 +68,18 @@ pub(crate) struct SharedSegments {
 }
 
 impl SharedSegments {
-    pub(crate) fn new(cancel: CancellationToken, playlist_state: Arc<PlaylistState>) -> Self {
+    pub(crate) fn new(
+        cancel: CancellationToken,
+        playlist_state: Arc<PlaylistState>,
+        timeline: Timeline,
+    ) -> Self {
         Self {
             segments: Mutex::new(DownloadState::new()),
             condvar: Condvar::new(),
-            eof: AtomicBool::new(false),
-            reader_offset: AtomicU64::new(0),
+            timeline,
             reader_advanced: Notify::new(),
             segment_requests: SegQueue::new(),
             playlist_state,
-            expected_total_length: AtomicU64::new(0),
             had_midstream_switch: AtomicBool::new(false),
             seek_epoch: AtomicU64::new(0),
             cancel,
@@ -110,7 +108,7 @@ pub struct HlsSource {
 
 impl HlsSource {
     fn current_loaded_segment(&self) -> Option<LoadedSegment> {
-        let reader_offset = self.shared.reader_offset.load(Ordering::Acquire);
+        let reader_offset = self.shared.timeline.byte_position();
         let segments = self.shared.segments.lock();
         segments
             .find_at_offset(reader_offset)
@@ -132,6 +130,24 @@ impl HlsSource {
                     .find_loaded_segment(variant, segment_index)
                     .map(|seg| seg.byte_offset)
             })
+    }
+
+    fn fallback_segment_index_for_offset(&self, variant: usize, offset: u64) -> Option<usize> {
+        let num_segments = self.playlist_state.num_segments(variant)?;
+        if num_segments == 0 {
+            return None;
+        }
+
+        if let Some(total) = self.shared.timeline.total_bytes()
+            && total > 0
+        {
+            let estimate = ((u128::from(offset) * num_segments as u128) / u128::from(total))
+                .min((num_segments - 1) as u128);
+            return Some(estimate as usize);
+        }
+
+        let hinted = self.shared.current_segment_index.load(Ordering::Acquire) as usize;
+        Some(hinted.min(num_segments - 1))
     }
 
     fn resolve_seek_anchor(&self, position: Duration) -> Result<SourceSeekAnchor, HlsError> {
@@ -241,9 +257,9 @@ impl Source for HlsSource {
         reason = "lock must be held for condvar wait"
     )]
     fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
+        const MAX_METADATA_MISS_SPINS: usize = 20;
         let mut on_demand_requested = false;
         let mut metadata_miss_count = 0usize;
-        const MAX_METADATA_MISS_SPINS: usize = 20;
 
         // Wait until the range is covered by loaded segments or EOF.
         loop {
@@ -262,7 +278,7 @@ impl Source for HlsSource {
                 && !segments.is_range_loaded(&range)
                 && segments.find_at_offset(range.start).is_none()
             {
-                let eof = self.shared.eof.load(Ordering::Acquire);
+                let eof = self.shared.timeline.eof();
                 let total = segments.max_end_offset();
                 if eof && range.start >= total {
                     return Ok(WaitOutcome::Eof);
@@ -270,8 +286,9 @@ impl Source for HlsSource {
                 return Err(StreamError::Source(HlsError::Cancelled));
             }
 
-            let eof = self.shared.eof.load(Ordering::Acquire);
+            let eof = self.shared.timeline.eof();
             let total = segments.max_end_offset();
+            let has_range_start = segments.find_at_offset(range.start).is_some();
 
             // Check if range is already loaded (using loaded_ranges from DownloadState)
             if segments.is_range_loaded(&range) {
@@ -279,12 +296,12 @@ impl Source for HlsSource {
             }
 
             // Fallback check for partial coverage
-            if segments.find_at_offset(range.start).is_some() {
+            if has_range_start {
                 return Ok(WaitOutcome::Ready);
             }
 
             if eof && range.start >= total {
-                let expected = self.shared.expected_total_length.load(Ordering::Acquire);
+                let expected = self.shared.timeline.total_bytes().unwrap_or(0);
                 debug!(
                     range_start = range.start,
                     total_bytes = total,
@@ -321,8 +338,24 @@ impl Source for HlsSource {
                             "wait_range: requesting on-demand segment load"
                         );
 
-                        // Clear queue (cancel sequential loads, prioritize seek)
-                        while self.shared.segment_requests.pop().is_some() {}
+                        self.shared.segment_requests.push(SegmentRequest {
+                            segment_index,
+                            variant: current_variant,
+                            seek_epoch: self.shared.seek_epoch.load(Ordering::Acquire),
+                        });
+
+                        self.shared.reader_advanced.notify_one();
+                        on_demand_requested = true;
+                    } else if let Some(segment_index) =
+                        self.fallback_segment_index_for_offset(current_variant, range.start)
+                    {
+                        metadata_miss_count = 0;
+                        debug!(
+                            variant = current_variant,
+                            segment_index,
+                            offset = range.start,
+                            "wait_range: metadata miss fallback segment load"
+                        );
 
                         self.shared.segment_requests.push(SegmentRequest {
                             segment_index,
@@ -415,7 +448,7 @@ impl Source for HlsSource {
 
         if bytes > 0 {
             let new_pos = offset.saturating_add(bytes as u64);
-            self.shared.reader_offset.store(new_pos, Ordering::Release);
+            self.shared.timeline.set_byte_position(new_pos);
             self.shared.reader_advanced.notify_one();
 
             let total = self.shared.segments.lock().max_end_offset();
@@ -429,8 +462,7 @@ impl Source for HlsSource {
     }
 
     fn len(&self) -> Option<u64> {
-        let expected = self.shared.expected_total_length.load(Ordering::Acquire);
-        if expected > 0 { Some(expected) } else { None }
+        self.shared.timeline.total_bytes()
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
@@ -469,7 +501,7 @@ impl Source for HlsSource {
             return Some(seg.byte_offset..seg.end_offset());
         }
 
-        let reader_offset = self.shared.reader_offset.load(Ordering::Acquire);
+        let reader_offset = self.shared.timeline.byte_position();
         let fallback_variant = segments
             .find_at_offset(reader_offset)
             .or_else(|| segments.last())
@@ -486,7 +518,8 @@ impl Source for HlsSource {
 
     fn set_seek_epoch(&mut self, seek_epoch: u64) {
         self.shared.seek_epoch.store(seek_epoch, Ordering::Release);
-        self.shared.eof.store(false, Ordering::Release);
+        self.shared.timeline.set_eof(false);
+        self.shared.timeline.set_download_position(0);
         while self.shared.segment_requests.pop().is_some() {}
         {
             let mut segments = self.shared.segments.lock();
@@ -517,9 +550,7 @@ impl Source for HlsSource {
             seek_epoch,
         });
 
-        self.shared
-            .reader_offset
-            .store(anchor.byte_offset, Ordering::Release);
+        self.shared.timeline.set_byte_position(anchor.byte_offset);
         self.shared.reader_advanced.notify_one();
         self.shared.condvar.notify_all();
 
@@ -540,6 +571,10 @@ impl Source for HlsSource {
         );
 
         Ok(Some(anchor))
+    }
+
+    fn timeline(&self) -> Timeline {
+        self.shared.timeline.clone()
     }
 }
 
@@ -567,7 +602,13 @@ pub(crate) fn build_pair(
 
     let cancel = config.cancel.clone().unwrap_or_default();
     let abr = kithara_abr::AbrController::new(abr_opts);
-    let shared = Arc::new(SharedSegments::new(cancel, Arc::clone(&playlist_state)));
+    let timeline = Timeline::new();
+    timeline.set_total_duration(playlist_state.track_duration());
+    let shared = Arc::new(SharedSegments::new(
+        cancel,
+        Arc::clone(&playlist_state),
+        timeline,
+    ));
 
     let downloader = HlsDownloader {
         active_seek_epoch: 0,
@@ -575,6 +616,7 @@ pub(crate) fn build_pair(
         fetch: Arc::clone(&fetch),
         playlist_state: Arc::clone(&playlist_state),
         current_segment_index: 0,
+        last_committed_variant: None,
         sent_init_for_variant: HashSet::new(),
         abr,
         byte_offset: 0,
@@ -629,6 +671,7 @@ mod tests {
 
     use super::*;
     use crate::fetch::FetchManager;
+    use crate::parsing::{VariantId, VariantStream};
     use crate::playlist::{SegmentState, VariantSizeMap, VariantState};
 
     #[derive(Clone, Copy)]
@@ -749,6 +792,37 @@ mod tests {
         ]))
     }
 
+    fn playlist_state_without_size_map() -> Arc<PlaylistState> {
+        Arc::new(PlaylistState::new(vec![make_variant_state(0, 24)]))
+    }
+
+    fn parsed_variants(count: usize) -> Vec<VariantStream> {
+        (0..count)
+            .map(|index| VariantStream {
+                id: VariantId(index),
+                uri: format!("v{index}.m3u8"),
+                bandwidth: Some(128_000),
+                name: None,
+                codec: None,
+            })
+            .collect()
+    }
+
+    fn test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
+        let noop_drm: ProcessChunkFn<DecryptContext> =
+            Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
+                output[..input.len()].copy_from_slice(input);
+                Ok(input.len())
+            });
+        let backend = AssetStoreBuilder::new()
+            .ephemeral(true)
+            .cancel(cancel.clone())
+            .process_fn(noop_drm)
+            .build();
+        let net = HttpClient::new(NetOptions::default());
+        Arc::new(FetchManager::new(backend, net, cancel))
+    }
+
     async fn wait_range_and_take_request(
         shared: Arc<SharedSegments>,
         mut source: HlsSource,
@@ -784,6 +858,7 @@ mod tests {
         let shared = Arc::new(SharedSegments::new(
             cancel.clone(),
             Arc::clone(&playlist_state),
+            Timeline::new(),
         ));
         shared.seek_epoch.store(9, Ordering::Release);
         shared.current_variant_index.store(0, Ordering::Relaxed);
@@ -816,6 +891,7 @@ mod tests {
         let shared = Arc::new(SharedSegments::new(
             cancel.clone(),
             Arc::clone(&playlist_state),
+            Timeline::new(),
         ));
         {
             let mut segments = shared.segments.lock();
@@ -825,16 +901,16 @@ mod tests {
 
         let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-        shared.reader_offset.store(0, Ordering::Release);
+        shared.timeline.set_byte_position(0);
         let info_at_start = Source::media_info(&source).expect("media info at start");
         assert_eq!(info_at_start.codec, Some(AudioCodec::AacLc));
 
-        shared.reader_offset.store(100, Ordering::Release);
+        shared.timeline.set_byte_position(100);
         let info_after_switch = Source::media_info(&source).expect("media info at switch");
         assert_eq!(info_after_switch.codec, Some(AudioCodec::Flac));
 
         // Variant fence path can expose the target variant before reader_offset advances.
-        shared.reader_offset.store(0, Ordering::Release);
+        shared.timeline.set_byte_position(0);
         shared.current_variant_index.store(1, Ordering::Release);
         source.variant_fence = Some(0);
         let hinted_info = Source::media_info(&source).expect("media info from hinted variant");
@@ -848,6 +924,7 @@ mod tests {
         let shared = Arc::new(SharedSegments::new(
             cancel.clone(),
             Arc::clone(&playlist_state),
+            Timeline::new(),
         ));
         {
             let mut segments = shared.segments.lock();
@@ -857,10 +934,10 @@ mod tests {
 
         let source = make_test_source(Arc::clone(&shared), cancel);
 
-        shared.reader_offset.store(0, Ordering::Release);
+        shared.timeline.set_byte_position(0);
         assert_eq!(Source::current_segment_range(&source), Some(0..100));
 
-        shared.reader_offset.store(120, Ordering::Release);
+        shared.timeline.set_byte_position(120);
         assert_eq!(Source::current_segment_range(&source), Some(100..200));
     }
 
@@ -871,20 +948,23 @@ mod tests {
         let shared = Arc::new(SharedSegments::new(
             cancel.clone(),
             Arc::clone(&playlist_state),
+            Timeline::new(),
         ));
         {
             let mut segments = shared.segments.lock();
             segments.push(make_loaded_segment(0, 0, 0, 100));
             segments.push(make_loaded_segment(0, 1, 100, 100));
         }
-        shared.eof.store(true, Ordering::Release);
+        shared.timeline.set_eof(true);
+        shared.timeline.set_download_position(200);
         shared.seek_epoch.store(3, Ordering::Release);
 
         let mut source = make_test_source(Arc::clone(&shared), cancel);
         Source::set_seek_epoch(&mut source, 4);
 
         assert_eq!(shared.seek_epoch.load(Ordering::Acquire), 4);
-        assert!(!shared.eof.load(Ordering::Acquire));
+        assert!(!shared.timeline.eof());
+        assert_eq!(shared.timeline.download_position(), 0);
         assert_eq!(shared.current_segment_index.load(Ordering::Acquire), 0);
         assert_eq!(shared.segments.lock().num_entries(), 0);
     }
@@ -894,7 +974,11 @@ mod tests {
         let cancel = CancellationToken::new();
         let playlist_state =
             playlist_state_with_codecs(Some(AudioCodec::AacLc), Some(AudioCodec::AacLc));
-        let shared = Arc::new(SharedSegments::new(cancel.clone(), playlist_state));
+        let shared = Arc::new(SharedSegments::new(
+            cancel.clone(),
+            playlist_state,
+            Timeline::new(),
+        ));
         let source = make_test_source(shared, cancel);
 
         assert!(source.can_cross_variant_without_reset(0, 1));
@@ -905,10 +989,52 @@ mod tests {
         let cancel = CancellationToken::new();
         let playlist_state =
             playlist_state_with_codecs(Some(AudioCodec::AacLc), Some(AudioCodec::Flac));
-        let shared = Arc::new(SharedSegments::new(cancel.clone(), playlist_state));
+        let shared = Arc::new(SharedSegments::new(
+            cancel.clone(),
+            playlist_state,
+            Timeline::new(),
+        ));
         let source = make_test_source(shared, cancel);
 
         assert!(!source.can_cross_variant_without_reset(0, 1));
+    }
+
+    #[test]
+    fn build_pair_seeds_timeline_total_duration_from_playlist() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state(0, 4),
+            make_variant_state(1, 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = crate::config::HlsConfig {
+            cancel: Some(cancel),
+            ..crate::config::HlsConfig::default()
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let (_, source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            None,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+        #[cfg(target_arch = "wasm32")]
+        let (_, source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        assert_eq!(
+            Source::timeline(&source).total_duration(),
+            Some(Duration::from_secs(16))
+        );
     }
 
     #[test]
@@ -1062,7 +1188,7 @@ mod tests {
     #[test]
     fn test_had_midstream_switch_flag() {
         let ps = dummy_playlist_state();
-        let shared = SharedSegments::new(CancellationToken::new(), ps);
+        let shared = SharedSegments::new(CancellationToken::new(), ps, Timeline::new());
         assert!(!shared.had_midstream_switch.load(Ordering::Acquire));
 
         shared.had_midstream_switch.store(true, Ordering::Release);
@@ -1095,7 +1221,7 @@ mod tests {
     async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) {
         let cancel = CancellationToken::new();
         let ps = dummy_playlist_state();
-        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps));
+        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
         let shared2 = Arc::clone(&shared);
         let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
@@ -1128,7 +1254,7 @@ mod tests {
         // Normal scenario: push segment data, wait_range returns Ready.
         let cancel = CancellationToken::new();
         let ps = dummy_playlist_state();
-        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps));
+        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
         let shared2 = Arc::clone(&shared);
         let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
@@ -1155,7 +1281,7 @@ mod tests {
         // Downloader stopped + eof -- wait_range at past-end offset returns Eof.
         let cancel = CancellationToken::new();
         let ps = dummy_playlist_state();
-        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps));
+        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
         let shared2 = Arc::clone(&shared);
 
         // Push one segment
@@ -1164,7 +1290,7 @@ mod tests {
             segments.push(make_loaded_segment(0, 0, 0, 100));
         }
         // Mark eof + stopped
-        shared2.eof.store(true, Ordering::Release);
+        shared2.timeline.set_eof(true);
         shared2.stopped.store(true, Ordering::Release);
 
         let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
@@ -1177,7 +1303,7 @@ mod tests {
     async fn test_wait_range_uses_active_variant_for_seek_request() {
         let cancel = CancellationToken::new();
         let ps = playlist_state_with_size_maps();
-        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps));
+        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
         let source = make_test_source(Arc::clone(&shared), cancel.clone());
 
         // Last pushed segment is from variant 1, but active playback variant is 0.
@@ -1193,10 +1319,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_wait_range_without_size_map_uses_segment_zero_fallback() {
+        let cancel = CancellationToken::new();
+        let ps = playlist_state_without_size_map();
+        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+        shared.current_variant_index.store(0, Ordering::Release);
+        let source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+        let request = wait_range_and_take_request(Arc::clone(&shared), source, 0..128).await;
+        assert_eq!(request.variant, 0);
+        assert_eq!(request.segment_index, 0);
+    }
+
+    #[tokio::test]
     async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
         let cancel = CancellationToken::new();
         let ps = dummy_playlist_state();
-        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps));
+        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
         let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
         let mut events = source.bus.subscribe();
 

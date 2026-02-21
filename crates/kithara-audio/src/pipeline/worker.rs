@@ -31,12 +31,22 @@ const BACKOFF_BUSY: Duration = Duration::from_micros(100);
 const BACKOFF_EOF: Duration = Duration::from_millis(100);
 
 fn drain_commands<S: AudioWorkerSource>(source: &mut S, cmd_rx: &Receiver<S::Command>) -> bool {
-    let mut handled = false;
+    let mut dropped = 0usize;
+    let mut latest = None;
     while let Ok(Some(cmd)) = cmd_rx.try_recv() {
-        source.handle_command(cmd);
-        handled = true;
+        if latest.is_some() {
+            dropped += 1;
+        }
+        latest = Some(cmd);
     }
-    handled
+    if dropped > 0 {
+        trace!(dropped, "audio worker coalesced pending commands");
+    }
+    if let Some(cmd) = latest {
+        source.handle_command(cmd);
+        return true;
+    }
+    false
 }
 
 fn send_with_backpressure<S: AudioWorkerSource>(
@@ -55,20 +65,25 @@ fn send_with_backpressure<S: AudioWorkerSource>(
 
         match data_tx.try_send_option(&mut item) {
             Ok(true) => return Ok(true), // sent
-            Ok(false) => match cmd_rx.try_recv() {
-                Ok(Some(cmd)) => {
+            Ok(false) => {
+                let mut latest_cmd = None;
+                loop {
+                    match cmd_rx.try_recv() {
+                        Ok(Some(cmd)) => latest_cmd = Some(cmd),
+                        Ok(None) => break,
+                        Err(_) => return Err(()), // channel closed
+                    }
+                }
+                if let Some(cmd) = latest_cmd {
                     source.handle_command(cmd);
                     return Ok(false); // command handled, refetch
                 }
-                Ok(None) => {
-                    if cancel.is_cancelled() {
-                        trace!("audio worker cancelled during backpressure");
-                        return Err(());
-                    }
-                    std::thread::sleep(BACKOFF_BUSY); // back off and retry
+                if cancel.is_cancelled() {
+                    trace!("audio worker cancelled during backpressure");
+                    return Err(());
                 }
-                Err(_) => return Err(()), // channel closed
-            },
+                std::thread::sleep(BACKOFF_BUSY); // back off and retry
+            }
             Err(_) => return Err(()), // channel closed
         }
     }

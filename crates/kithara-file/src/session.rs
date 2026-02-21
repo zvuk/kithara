@@ -7,6 +7,7 @@ use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
+use kithara_stream::Timeline;
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, trace};
@@ -21,7 +22,7 @@ pub(crate) struct FileStreamState {
     pub(crate) res: AssetResource,
     pub(crate) bus: EventBus,
     pub(crate) headers: Option<Headers>,
-    pub(crate) len: Option<u64>,
+    pub(crate) timeline: Timeline,
 }
 
 impl FileStreamState {
@@ -39,6 +40,8 @@ impl FileStreamState {
             .get("content-length")
             .or_else(|| resp_headers.get("Content-Length"))
             .and_then(|v| v.parse::<u64>().ok());
+        let timeline = Timeline::new();
+        timeline.set_total_bytes(len);
 
         let key = ResourceKey::from_url(&url);
         let res = assets.open_resource(&key).map_err(SourceError::Assets)?;
@@ -51,7 +54,7 @@ impl FileStreamState {
             res,
             bus,
             headers,
-            len,
+            timeline,
         }))
     }
 
@@ -72,53 +75,51 @@ impl FileStreamState {
     }
 
     pub(crate) fn len(&self) -> Option<u64> {
-        self.len
+        self.timeline.total_bytes()
     }
 
     pub(crate) fn cancel(&self) -> &CancellationToken {
         &self.cancel
     }
+
+    pub(crate) fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
 }
 
 /// Progress tracker for download and playback positions.
 pub(crate) struct Progress {
-    read_pos: std::sync::atomic::AtomicU64,
-    download_pos: std::sync::atomic::AtomicU64,
+    timeline: Timeline,
     /// Source -> Downloader: reader advanced, may resume downloading.
     reader_advanced: Notify,
 }
 
 impl Progress {
     #[must_use]
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(timeline: Timeline) -> Self {
         Self {
-            read_pos: std::sync::atomic::AtomicU64::new(0),
-            download_pos: std::sync::atomic::AtomicU64::new(0),
+            timeline,
             reader_advanced: Notify::new(),
         }
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn read_pos(&self) -> u64 {
-        use std::sync::atomic::Ordering;
-        self.read_pos.load(Ordering::Acquire)
+        self.timeline.byte_position()
     }
 
     pub(crate) fn download_pos(&self) -> u64 {
-        use std::sync::atomic::Ordering;
-        self.download_pos.load(Ordering::Acquire)
+        self.timeline.download_position()
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
     pub(crate) fn set_read_pos(&self, v: u64) {
-        use std::sync::atomic::Ordering;
-        self.read_pos.store(v, Ordering::Release);
+        self.timeline.set_byte_position(v);
         self.reader_advanced.notify_one();
     }
 
     pub(crate) fn set_download_pos(&self, v: u64) {
-        use std::sync::atomic::Ordering;
-        self.download_pos.store(v, Ordering::Release);
+        self.timeline.set_download_position(v);
     }
 
     /// Register for reader advance notification.
@@ -126,11 +127,15 @@ impl Progress {
     pub(crate) fn notified_reader_advance(&self) -> tokio::sync::futures::Notified<'_> {
         self.reader_advanced.notified()
     }
+
+    pub(crate) fn timeline(&self) -> Timeline {
+        self.timeline.clone()
+    }
 }
 
 impl Default for Progress {
     fn default() -> Self {
-        Self::new()
+        Self::new(Timeline::new())
     }
 }
 
@@ -181,7 +186,6 @@ pub struct FileSource {
     res: AssetResource,
     progress: Arc<Progress>,
     bus: EventBus,
-    len: Option<u64>,
     shared: Option<Arc<SharedFileState>>,
     /// Downloader backend. Dropped with this source, cancelling the downloader.
     _backend: Option<kithara_stream::Backend>,
@@ -189,17 +193,11 @@ pub struct FileSource {
 
 impl FileSource {
     /// Create new file source (no on-demand support — for local files).
-    pub(crate) fn new(
-        res: AssetResource,
-        progress: Arc<Progress>,
-        bus: EventBus,
-        len: Option<u64>,
-    ) -> Self {
+    pub(crate) fn new(res: AssetResource, progress: Arc<Progress>, bus: EventBus) -> Self {
         Self {
             res,
             progress,
             bus,
-            len,
             shared: None,
             _backend: None,
         }
@@ -210,7 +208,6 @@ impl FileSource {
         res: AssetResource,
         progress: Arc<Progress>,
         bus: EventBus,
-        len: Option<u64>,
         shared: Arc<SharedFileState>,
         backend: kithara_stream::Backend,
     ) -> Self {
@@ -218,7 +215,6 @@ impl FileSource {
             res,
             progress,
             bus,
-            len,
             shared: Some(shared),
             _backend: Some(backend),
         }
@@ -285,10 +281,11 @@ impl kithara_stream::Source for FileSource {
             // Update progress
             let new_pos = offset.saturating_add(n as u64);
             self.progress.set_read_pos(new_pos);
+            let total = self.progress.timeline().total_bytes();
 
-            self.bus.publish(FileEvent::PlaybackProgress {
+            self.bus.publish(FileEvent::ByteProgress {
                 position: new_pos,
-                total: self.len,
+                total,
             });
 
             trace!(offset, bytes = n, "FileSource read complete");
@@ -298,10 +295,14 @@ impl kithara_stream::Source for FileSource {
     }
 
     fn len(&self) -> Option<u64> {
-        // For partial downloads, return expected total (from Content-Length HEAD)
-        // so decoder can calculate correct duration and seek bounds.
-        // For committed files, resource.len() == expected total anyway.
-        self.len.or_else(|| self.res.len())
+        self.progress
+            .timeline()
+            .total_bytes()
+            .or_else(|| self.res.len())
+    }
+
+    fn timeline(&self) -> Timeline {
+        self.progress.timeline()
     }
 }
 
@@ -322,7 +323,7 @@ mod tests {
 
     #[test]
     fn test_progress_initial_state() {
-        let p = Progress::new();
+        let p = Progress::new(Timeline::new());
         assert_eq!(p.read_pos(), 0);
         assert_eq!(p.download_pos(), 0);
     }
@@ -331,7 +332,7 @@ mod tests {
     #[case::read(100, true)]
     #[case::download(500, false)]
     fn test_progress_set_and_get_positions(#[case] value: u64, #[case] read_pos: bool) {
-        let p = Progress::new();
+        let p = Progress::new(Timeline::new());
         if read_pos {
             p.set_read_pos(value);
             assert_eq!(p.read_pos(), value);
@@ -339,13 +340,14 @@ mod tests {
         } else {
             p.set_download_pos(value);
             assert_eq!(p.download_pos(), value);
+            assert_eq!(p.timeline().download_position(), value);
             assert_eq!(p.read_pos(), 0);
         }
     }
 
     #[tokio::test]
     async fn test_progress_signal_reader_advanced() {
-        let progress = Arc::new(Progress::new());
+        let progress = Arc::new(Progress::new(Timeline::new()));
 
         // Register the notified future BEFORE signaling (Notify protocol).
         let notified = progress.notified_reader_advance();
@@ -423,10 +425,11 @@ mod tests {
         let data = b"hello world from kithara";
         let res = create_committed_resource(&dir, data);
 
-        let progress = Arc::new(Progress::new());
+        let progress = Arc::new(Progress::new(Timeline::new()));
         let bus = EventBus::new(16);
 
-        let mut source = FileSource::new(res, Arc::clone(&progress), bus, Some(data.len() as u64));
+        progress.timeline().set_total_bytes(Some(data.len() as u64));
+        let mut source = FileSource::new(res, Arc::clone(&progress), bus);
 
         let mut buf = [0u8; 11];
         let n = source.read_at(0, &mut buf).unwrap();
@@ -445,16 +448,66 @@ mod tests {
     }
 
     #[test]
+    fn file_source_emits_byte_progress_not_playback_truth() {
+        let dir = TempDir::new().unwrap();
+        let data = b"abcdef";
+        let res = create_committed_resource(&dir, data);
+
+        let progress = Arc::new(Progress::new(Timeline::new()));
+        let bus = EventBus::new(16);
+        let mut events = bus.subscribe();
+
+        progress.timeline().set_total_bytes(Some(data.len() as u64));
+        let mut source = FileSource::new(res, progress, bus);
+
+        let mut buf = [0u8; 3];
+        let n = source.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 3);
+
+        let event = events.try_recv().expect("expected file event");
+        match event {
+            kithara_events::Event::File(FileEvent::ByteProgress { position, total }) => {
+                assert_eq!(position, 3);
+                assert_eq!(total, Some(6));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
     fn test_file_source_len() {
         let dir = TempDir::new().unwrap();
         let res = create_committed_resource(&dir, b"abc");
 
-        let progress = Arc::new(Progress::new());
+        let progress = Arc::new(Progress::new(Timeline::new()));
         let bus = EventBus::new(16);
 
-        let source = FileSource::new(res, progress, bus, Some(12345));
+        progress.timeline().set_total_bytes(Some(12345));
+        let source = FileSource::new(res, progress, bus);
 
         // len() should return the explicit value provided at construction.
         assert_eq!(source.len(), Some(12345));
+    }
+
+    #[test]
+    fn file_source_uses_progress_timeline_as_single_source_of_truth() {
+        let dir = TempDir::new().unwrap();
+        let res = create_committed_resource(&dir, b"abcdef");
+
+        let timeline = Timeline::new();
+        let progress = Arc::new(Progress::new(timeline.clone()));
+        let bus = EventBus::new(16);
+        progress.timeline().set_total_bytes(Some(6));
+        let mut source = FileSource::new(res, Arc::clone(&progress), bus);
+
+        let mut buf = [0u8; 2];
+        let n = source.read_at(0, &mut buf).unwrap();
+        assert_eq!(n, 2);
+
+        assert_eq!(progress.read_pos(), 2);
+        assert_eq!(source.timeline().byte_position(), 2);
+
+        progress.set_read_pos(5);
+        assert_eq!(source.timeline().byte_position(), 5);
     }
 }

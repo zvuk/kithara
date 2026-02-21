@@ -16,7 +16,8 @@ impl<S> Iterator for Audio<S> {
         {
             let sample = chunk.pcm[self.chunk_offset];
             self.chunk_offset += 1;
-            self.samples_read += 1;
+            self.timeline
+                .advance_committed_samples(1, self.spec.sample_rate, self.spec.channels);
             return Some(sample);
         }
 
@@ -27,7 +28,8 @@ impl<S> Iterator for Audio<S> {
         {
             let sample = chunk.pcm[self.chunk_offset];
             self.chunk_offset += 1;
-            self.samples_read += 1;
+            self.timeline
+                .advance_committed_samples(1, self.spec.sample_rate, self.spec.channels);
             return Some(sample);
         }
 
@@ -54,6 +56,6 @@ impl<S> ::rodio::Source for Audio<S> {
     }
 
     fn total_duration(&self) -> Option<std::time::Duration> {
-        self.total_duration
+        self.timeline.total_duration()
     }
 }

@@ -57,6 +57,20 @@ fn first_missing_segment(
     (0..num_segments).find(|&segment_index| !state.is_segment_loaded(variant, segment_index))
 }
 
+fn classify_variant_transition(
+    last_committed_variant: Option<usize>,
+    sent_init_for_variant: &HashSet<usize>,
+    variant: usize,
+    segment_index: usize,
+) -> (bool, bool) {
+    let variant_changed = last_committed_variant.is_some_and(|previous| previous != variant);
+    let is_initial_start =
+        last_committed_variant.is_none() && !sent_init_for_variant.contains(&variant);
+    let is_variant_switch = variant_changed || is_initial_start;
+    let is_midstream_switch = variant_changed && segment_index > 0;
+    (is_variant_switch, is_midstream_switch)
+}
+
 /// Pure I/O executor for HLS segment fetching.
 #[derive(Clone)]
 pub(crate) struct HlsIo {
@@ -144,6 +158,7 @@ pub(crate) struct HlsDownloader {
     pub(crate) fetch: Arc<DefaultFetchManager>,
     pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) current_segment_index: usize,
+    pub(crate) last_committed_variant: Option<usize>,
     pub(crate) sent_init_for_variant: HashSet<usize>,
     pub(crate) abr: AbrController<ThroughputEstimator>,
     pub(crate) byte_offset: u64,
@@ -159,9 +174,23 @@ pub(crate) struct HlsDownloader {
 }
 
 impl HlsDownloader {
-    fn reset_for_seek_epoch(&mut self, seek_epoch: SeekEpoch, variant: usize, segment_index: usize) {
+    fn classify_variant_transition(&self, variant: usize, segment_index: usize) -> (bool, bool) {
+        classify_variant_transition(
+            self.last_committed_variant,
+            &self.sent_init_for_variant,
+            variant,
+            segment_index,
+        )
+    }
+
+    fn reset_for_seek_epoch(
+        &mut self,
+        seek_epoch: SeekEpoch,
+        variant: usize,
+        segment_index: usize,
+    ) {
         self.active_seek_epoch = seek_epoch;
-        self.shared.eof.store(false, Ordering::Release);
+        self.shared.timeline.set_eof(false);
         self.shared
             .had_midstream_switch
             .store(false, Ordering::Release);
@@ -171,9 +200,8 @@ impl HlsDownloader {
             .segment_byte_offset(variant, segment_index)
             .unwrap_or(0);
         self.sent_init_for_variant.clear();
-        self.shared
-            .expected_total_length
-            .store(0, Ordering::Release);
+        self.shared.timeline.set_total_bytes(None);
+        self.shared.timeline.set_download_position(0);
 
         let current_variant = self.abr.get_current_variant_index();
         if current_variant != variant {
@@ -403,6 +431,7 @@ impl HlsDownloader {
         if is_variant_switch {
             self.sent_init_for_variant.insert(dl.variant);
         }
+        self.last_committed_variant = Some(dl.variant);
 
         let actual_init_len = if is_midstream_switch || is_variant_switch {
             dl.init_len
@@ -441,6 +470,7 @@ impl HlsDownloader {
         if end > self.byte_offset {
             self.byte_offset = end;
         }
+        self.shared.timeline.set_download_position(self.byte_offset);
 
         // Reconcile metadata: update this segment's size and recalculate subsequent
         // byte_offsets using the actual (possibly decrypted) size. For non-DRM streams
@@ -451,7 +481,7 @@ impl HlsDownloader {
             .reconcile_segment_size(dl.variant, dl.segment_index, actual_size);
         let post_total = self.playlist_state.total_variant_size(dl.variant);
 
-        // Update expected_total_length if reconciliation changed the variant total.
+        // Update timeline total_bytes if reconciliation changed the variant total.
         // This handles cases where actual sizes differ from HEAD predictions:
         // - Larger: HTTP auto-decompression returns more bytes than Content-Length
         // - Smaller: DRM decryption removes PKCS7 padding
@@ -459,15 +489,13 @@ impl HlsDownloader {
         if let (Some(pre), Some(post)) = (pre_total, post_total)
             && pre != post
         {
-            let current = self.shared.expected_total_length.load(Ordering::Acquire);
+            let current = self.shared.timeline.total_bytes().unwrap_or(0);
             let new_expected = if post > pre {
                 current.saturating_add(post - pre)
             } else {
                 current.saturating_sub(pre - post)
             };
-            self.shared
-                .expected_total_length
-                .store(new_expected, Ordering::Release);
+            self.shared.timeline.set_total_bytes(Some(new_expected));
         }
 
         self.bus.publish(HlsEvent::DownloadProgress {
@@ -506,8 +534,8 @@ impl HlsDownloader {
         variant: usize,
         segment_index: usize,
     ) -> Result<(bool, bool), HlsError> {
-        let is_variant_switch = !self.sent_init_for_variant.contains(&variant);
-        let is_midstream_switch = is_variant_switch && segment_index > 0;
+        let (is_variant_switch, is_midstream_switch) =
+            self.classify_variant_transition(variant, segment_index);
 
         if is_midstream_switch {
             self.shared
@@ -516,7 +544,7 @@ impl HlsDownloader {
             while self.shared.segment_requests.pop().is_some() {}
         }
 
-        let current_length = self.shared.expected_total_length.load(Ordering::Acquire);
+        let current_length = self.shared.timeline.total_bytes().unwrap_or(0);
         if is_variant_switch || current_length == 0 {
             let needs_calculation = !self.playlist_state.has_size_map(variant);
 
@@ -543,6 +571,7 @@ impl HlsDownloader {
                             if cached_end_offset > self.byte_offset {
                                 self.byte_offset = cached_end_offset;
                             }
+                            self.shared.timeline.set_download_position(self.byte_offset);
                             if cached_count > self.current_segment_index {
                                 self.current_segment_index = cached_count;
                             }
@@ -581,9 +610,7 @@ impl HlsDownloader {
                         };
 
                         if effective_total > 0 {
-                            self.shared
-                                .expected_total_length
-                                .store(effective_total, Ordering::Release);
+                            self.shared.timeline.set_total_bytes(Some(effective_total));
                         }
                     }
                     Err(e) => {
@@ -595,9 +622,7 @@ impl HlsDownloader {
                 if let Some(cached_total) = self.playlist_state.total_variant_size(variant) {
                     debug!(variant, total = cached_total, "using cached variant length");
                     if cached_total > 0 {
-                        self.shared
-                            .expected_total_length
-                            .store(cached_total, Ordering::Release);
+                        self.shared.timeline.set_total_bytes(Some(cached_total));
                     }
                 }
             }
@@ -821,6 +846,10 @@ impl Downloader for HlsDownloader {
         })
     }
 
+    #[expect(
+        clippy::cognitive_complexity,
+        reason = "download planning with variant and segment logic"
+    )]
     async fn plan(&mut self) -> PlanOutcome<HlsPlan> {
         let old_variant = self.abr.get_current_variant_index();
         let decision = self.make_abr_decision();
@@ -863,7 +892,8 @@ impl Downloader for HlsDownloader {
             }
 
             debug!("reached end of playlist");
-            if !self.shared.eof.swap(true, Ordering::AcqRel) {
+            if !self.shared.timeline.eof() {
+                self.shared.timeline.set_eof(true);
                 self.bus.publish(HlsEvent::EndOfStream);
             }
             self.shared.condvar.notify_all();
@@ -981,7 +1011,7 @@ impl Downloader for HlsDownloader {
             return false;
         };
 
-        let reader_pos = self.shared.reader_offset.load(Ordering::Acquire);
+        let reader_pos = self.shared.timeline.byte_position();
         let downloaded = self.shared.segments.lock().max_end_offset();
 
         downloaded.saturating_sub(reader_pos) > limit
@@ -994,13 +1024,14 @@ impl Downloader for HlsDownloader {
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::{collections::HashSet, sync::Arc, time::Duration};
 
     use kithara_stream::AudioCodec;
     use url::Url;
 
     use super::{
-        DownloadState, LoadedSegment, first_missing_segment, is_cross_codec_switch, is_stale_epoch,
+        DownloadState, LoadedSegment, classify_variant_transition, first_missing_segment,
+        is_cross_codec_switch, is_stale_epoch,
     };
     use crate::playlist::{PlaylistState, SegmentState, VariantState};
 
@@ -1076,5 +1107,56 @@ mod tests {
             make_variant_state(1, Some(AudioCodec::AacLc)),
         ]));
         assert!(!is_cross_codec_switch(&playlist_state, 0, 1));
+    }
+
+    #[test]
+    fn classify_same_variant_seek_is_not_midstream_switch() {
+        let mut sent_init_for_variant = HashSet::new();
+        let variant = 1;
+        let segment_index = 37;
+        let last_committed_variant = Some(variant);
+
+        let (is_variant_switch, is_midstream_switch) = classify_variant_transition(
+            last_committed_variant,
+            &sent_init_for_variant,
+            variant,
+            segment_index,
+        );
+
+        assert!(
+            !is_variant_switch,
+            "seek within same variant must not trigger variant-switch init path"
+        );
+        assert!(
+            !is_midstream_switch,
+            "seek within same variant must not trigger midstream switch path"
+        );
+
+        sent_init_for_variant.insert(variant);
+        let (is_variant_switch, is_midstream_switch) = classify_variant_transition(
+            last_committed_variant,
+            &sent_init_for_variant,
+            variant,
+            segment_index,
+        );
+        assert!(!is_variant_switch);
+        assert!(!is_midstream_switch);
+    }
+
+    #[test]
+    fn classify_real_variant_change_marks_midstream_switch_only_after_segment_zero() {
+        let sent_init_for_variant = HashSet::new();
+        let from_variant = Some(0);
+        let to_variant = 1;
+
+        let (is_variant_switch, is_midstream_switch) =
+            classify_variant_transition(from_variant, &sent_init_for_variant, to_variant, 0);
+        assert!(is_variant_switch);
+        assert!(!is_midstream_switch);
+
+        let (is_variant_switch, is_midstream_switch) =
+            classify_variant_transition(from_variant, &sent_init_for_variant, to_variant, 5);
+        assert!(is_variant_switch);
+        assert!(is_midstream_switch);
     }
 }

@@ -67,6 +67,10 @@ pub trait PcmReader: Send {
     ///
     /// Implementations can ignore this token if epoch-aware invalidation is
     /// unsupported. By default, this is a legacy-compatible passthrough.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError`] if the underlying seek fails.
     fn seek_with_epoch(&mut self, position: Duration, _seek_epoch: u64) -> DecodeResult<()> {
         self.seek(position)
     }
