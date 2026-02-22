@@ -145,6 +145,9 @@ fn detect_container_from_uri(uri: &str) -> Option<ContainerFormat> {
 }
 
 /// Parses a master playlist (M3U8) into [`MasterPlaylist`].
+///
+/// # Errors
+/// Returns an error when UTF-8 decoding or playlist parsing fails.
 pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
     let input =
         std::str::from_utf8(data).map_err(|e| crate::HlsError::PlaylistParse(e.to_string()))?;
@@ -201,6 +204,9 @@ pub fn parse_master_playlist(data: &[u8]) -> HlsResult<MasterPlaylist> {
 }
 
 /// Parses a media playlist (M3U8) into [`MediaPlaylist`].
+///
+/// # Errors
+/// Returns an error when UTF-8 decoding or playlist parsing fails.
 pub fn parse_media_playlist(data: &[u8], variant_id: VariantId) -> HlsResult<MediaPlaylist> {
     fn map_encryption_method(m: hls_m3u8::types::EncryptionMethod) -> EncryptionMethod {
         match m {

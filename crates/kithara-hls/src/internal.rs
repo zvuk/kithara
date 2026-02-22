@@ -24,7 +24,11 @@ pub use crate::{
     download_state::{DownloadState, LoadedSegment},
     error::HlsError,
     fetch::{DefaultFetchManager, FetchManager},
-    parsing::{VariantId, VariantStream},
+    keys::KeyManager,
+    parsing::{
+        MasterPlaylist, MediaPlaylist, VariantId, VariantStream, parse_master_playlist,
+        parse_media_playlist, variant_info_from_master,
+    },
     playlist::{PlaylistState, SegmentState, VariantSizeMap, VariantState},
     source::{HlsSource, SegmentRequest, SharedSegments},
 };
@@ -44,16 +48,21 @@ fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
     Arc::new(FetchManager::new(backend, net, cancel))
 }
 
+/// Build a test-friendly `HlsSource` with an in-memory backend.
+///
+/// # Panics
+/// Panics when the coverage manager cannot be opened from the ephemeral backend.
 pub fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> HlsSource {
     let fetch = make_test_fetch(cancel);
     let coverage = fetch
         .backend()
         .open_coverage_manager()
         .expect("coverage manager should open");
+    let playlist_state = Arc::clone(&shared.playlist_state);
     HlsSource {
         fetch,
-        shared: Arc::clone(&shared),
-        playlist_state: Arc::clone(&shared.playlist_state),
+        shared,
+        playlist_state,
         bus: EventBus::new(16),
         coverage,
         variant_fence: None,
@@ -61,6 +70,7 @@ pub fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) 
     }
 }
 
+#[must_use]
 pub fn build_source(
     fetch: Arc<DefaultFetchManager>,
     variants: &[VariantStream],
@@ -77,6 +87,7 @@ pub fn set_source_coverage(source: &mut HlsSource, coverage: CoverageManager<Sto
     source.coverage = coverage;
 }
 
+#[must_use]
 pub fn source_coverage(source: &HlsSource) -> CoverageManager<StorageResource> {
     source.coverage.clone()
 }
@@ -85,10 +96,12 @@ pub fn set_source_variant_fence(source: &mut HlsSource, fence: Option<usize>) {
     source.variant_fence = fence;
 }
 
+#[must_use]
 pub fn subscribe_source_events(source: &HlsSource) -> broadcast::Receiver<Event> {
     source.bus.subscribe()
 }
 
+#[must_use]
 pub fn source_can_cross_variant(
     source: &HlsSource,
     from_variant: usize,
@@ -97,6 +110,7 @@ pub fn source_can_cross_variant(
     source.can_cross_variant_without_reset(from_variant, to_variant)
 }
 
+#[must_use]
 pub fn source_range_ready_from_segments(
     source: &HlsSource,
     segments: &DownloadState,
@@ -105,10 +119,12 @@ pub fn source_range_ready_from_segments(
     source.range_ready_from_segments(segments, range)
 }
 
+#[must_use]
 pub fn source_segment_index_handle(source: &HlsSource) -> Arc<AtomicU32> {
     source.segment_index_handle()
 }
 
+#[must_use]
 pub fn source_variant_index_handle(source: &HlsSource) -> Arc<AtomicUsize> {
     source.variant_index_handle()
 }

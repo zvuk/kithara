@@ -205,11 +205,19 @@ impl<N: Net> FetchManager<N> {
 
     // Low-level fetch
 
+    /// Fetch a playlist-like resource and cache it in the assets backend.
+    ///
+    /// # Errors
+    /// Returns an error when cache access, network fetch, or URL/resource handling fails.
     pub async fn fetch_playlist(&self, url: &Url, rel_path: &str) -> HlsResult<Bytes> {
         self.fetch_atomic_internal(url, rel_path, self.headers.clone(), "playlist")
             .await
     }
 
+    /// Fetch a key resource and cache it in the assets backend.
+    ///
+    /// # Errors
+    /// Returns an error when cache access, network fetch, or URL/resource handling fails.
     pub async fn fetch_key(
         &self,
         url: &Url,
@@ -308,6 +316,10 @@ impl<N: Net> FetchManager<N> {
 
     // Playlist management
 
+    /// Load and parse the master playlist.
+    ///
+    /// # Errors
+    /// Returns an error when fetching/parsing fails or the URL basename cannot be derived.
     pub async fn master_playlist(&self, url: &Url) -> HlsResult<MasterPlaylist> {
         let master = self
             .master
@@ -320,6 +332,10 @@ impl<N: Net> FetchManager<N> {
         Ok(master.clone())
     }
 
+    /// Load and parse the media playlist for a specific variant.
+    ///
+    /// # Errors
+    /// Returns an error when fetching/parsing fails or the URL basename cannot be derived.
     pub async fn media_playlist(
         &self,
         url: &Url,
@@ -349,6 +365,10 @@ impl<N: Net> FetchManager<N> {
         self.master.get().map(|m| m.variants.clone())
     }
 
+    /// Resolve a possibly relative target URL.
+    ///
+    /// # Errors
+    /// Returns an error when URL joining fails.
     pub fn resolve_url(&self, base: &Url, target: &str) -> HlsResult<Url> {
         let resolved = if let Some(ref base_url) = self.base_url {
             base_url.join(target).map_err(|e| {
@@ -502,6 +522,9 @@ impl<N: Net> FetchManager<N> {
     ///
     /// First caller downloads, concurrent callers wait on the same cell.
     /// Pattern matches `media_playlist()`.
+    ///
+    /// # Errors
+    /// Returns an error when playlist loading, URL resolution, fetch, or content-length detection fails.
     pub async fn load_init_segment(&self, variant: usize) -> HlsResult<SegmentMeta> {
         let cell = {
             let mut guard = self.init_segments.write();
@@ -619,6 +642,9 @@ impl<N: Net> FetchManager<N> {
     /// Get Content-Length for a URL using HEAD request.
     ///
     /// Returns the size in bytes if Content-Length header is present and parseable.
+    ///
+    /// # Errors
+    /// Returns an error when the request fails, header is missing, or header value cannot be parsed.
     pub async fn get_content_length(&self, url: &Url) -> HlsResult<u64> {
         let resp = self.net.head(url.clone(), self.headers.clone()).await?;
         let content_length = resp

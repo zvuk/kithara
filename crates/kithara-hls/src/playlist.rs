@@ -84,6 +84,7 @@ impl PlaylistState {
     /// Each entry in `media_playlists` corresponds to the variant at the same
     /// index in `variants`. Segment URIs are resolved against the media
     /// playlist URL; failures fall back to the media URL itself.
+    #[must_use]
     pub fn from_parsed(
         variants: &[crate::parsing::VariantStream],
         media_playlists: &[(Url, crate::parsing::MediaPlaylist)],
@@ -186,6 +187,7 @@ impl PlaylistState {
     ///
     /// Variants are expected to describe the same timeline. We keep the
     /// maximum duration to tolerate incomplete alternate renditions.
+    #[must_use]
     pub fn track_duration(&self) -> Option<Duration> {
         self.variants
             .iter()

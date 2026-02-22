@@ -64,6 +64,10 @@ impl KeyManager {
         }
     }
 
+    /// Load, optionally preprocess, and return the raw key bytes.
+    ///
+    /// # Errors
+    /// Returns an error when key fetch fails or custom key processing fails.
     pub async fn get_raw_key(&self, url: &Url, iv: Option<[u8; 16]>) -> HlsResult<Bytes> {
         let mut fetch_url = url.clone();
         if let Some(ref params) = self.key_query_params {

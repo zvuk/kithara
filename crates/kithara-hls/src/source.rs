@@ -71,6 +71,7 @@ pub struct SharedSegments {
 }
 
 impl SharedSegments {
+    #[must_use]
     pub fn new(
         cancel: CancellationToken,
         playlist_state: Arc<PlaylistState>,

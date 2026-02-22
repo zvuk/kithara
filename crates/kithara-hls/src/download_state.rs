@@ -37,16 +37,19 @@ pub struct LoadedSegment {
 
 impl LoadedSegment {
     /// Total size of this segment (init + media).
+    #[must_use]
     pub fn total_len(&self) -> u64 {
         self.init_len + self.media_len
     }
 
     /// Byte offset just past the end of this segment.
+    #[must_use]
     pub fn end_offset(&self) -> u64 {
         self.byte_offset + self.total_len()
     }
 
     /// Whether the given byte offset falls within this segment.
+    #[must_use]
     pub fn contains(&self, offset: u64) -> bool {
         offset >= self.byte_offset && offset < self.end_offset()
     }
@@ -64,6 +67,12 @@ pub struct DownloadState {
     loaded_ranges: RangeSet<u64>,
     /// Byte offset of the most recently pushed entry.
     last_offset: Option<u64>,
+}
+
+impl Default for DownloadState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DownloadState {
@@ -84,6 +93,7 @@ impl DownloadState {
     }
 
     /// Create an empty download state.
+    #[must_use]
     pub fn new() -> Self {
         Self {
             entries: BTreeMap::new(),
@@ -128,6 +138,7 @@ impl DownloadState {
     ///
     /// Uses `BTreeMap::range(..=offset)` to find the last entry at or before
     /// the offset, then checks if the offset falls within that segment.
+    #[must_use]
     pub fn find_at_offset(&self, offset: u64) -> Option<&LoadedSegment> {
         self.entries
             .range(..=offset)
@@ -137,12 +148,14 @@ impl DownloadState {
     }
 
     /// The most recently pushed segment.
+    #[must_use]
     pub fn last(&self) -> Option<&LoadedSegment> {
         self.last_offset
             .and_then(|offset| self.entries.get(&offset))
     }
 
     /// Find an already loaded segment by `(variant, segment_index)`.
+    #[must_use]
     pub fn find_loaded_segment(
         &self,
         variant: usize,
@@ -157,6 +170,7 @@ impl DownloadState {
     ///
     /// Used to find the start of a new variant after ABR switch -- this is where
     /// init data (ftyp/moov) lives for the new variant.
+    #[must_use]
     pub fn first_segment_of_variant(&self, variant: usize) -> Option<&LoadedSegment> {
         self.entries.values().find(|seg| seg.variant == variant)
     }
@@ -166,6 +180,7 @@ impl DownloadState {
     /// Used when decoder recreation requires init data (ftyp/moov). A plain
     /// first segment is not sufficient after seeks that start from a non-zero
     /// segment index where init was not requested.
+    #[must_use]
     pub fn first_init_segment_of_variant(&self, variant: usize) -> Option<&LoadedSegment> {
         self.entries
             .values()
@@ -173,6 +188,7 @@ impl DownloadState {
     }
 
     /// Number of loaded segments.
+    #[must_use]
     pub fn num_entries(&self) -> usize {
         self.entries.len()
     }
@@ -216,11 +232,13 @@ impl DownloadState {
     }
 
     /// Whether a specific segment has been loaded.
+    #[must_use]
     pub fn is_segment_loaded(&self, variant: usize, segment_index: usize) -> bool {
         self.loaded_keys.contains(&(variant, segment_index))
     }
 
     /// Whether the entire byte range is loaded (no gaps).
+    #[must_use]
     pub fn is_range_loaded(&self, range: &Range<u64>) -> bool {
         !self.loaded_ranges.gaps(range).any(|_| true)
     }
