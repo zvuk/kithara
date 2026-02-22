@@ -134,6 +134,14 @@ flowchart LR
 - `#EXT-X-ALLOW-CACHE` flag respected.
 - `CoverageIndex` tracks per-segment byte-range coverage for crash recovery.
 
+## Seek and wait_range contract
+
+- `wait_range(start..end)` returns `Ready` only when the requested bytes are readable in current virtual layout.
+- Coverage is checked at media-byte level for segment resources; partial segment files are not treated as ready until marked.
+- On seek miss, source enqueues an explicit on-demand segment request for the active variant and seek epoch.
+- On ABR mid-stream switch, metadata offsets are no longer trusted for old layout, so source wakes sequential downloader instead of forcing stale offset lookup.
+- `Eof` is returned only when timeline is marked EOF and requested range starts at/after effective total bytes.
+
 ## Integration
 
 Depends on `kithara-net` for HTTP, `kithara-assets` for caching (disk or in-memory via `AssetsBackend`), and `kithara-abr` for ABR algorithm. Composes with `kithara-audio` as `Audio<Stream<Hls>>`. Emits `HlsEvent` via broadcast channel for monitoring.

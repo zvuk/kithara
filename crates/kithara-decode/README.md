@@ -45,6 +45,13 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 1. **Direct reader creation** (`container` specified): Creates format reader directly without probing. Used for HLS fMP4 where format is known but byte length is unknown. Seek is disabled during init to prevent `IsoMp4Reader` from seeking to end.
 2. **Probe** (`container` not specified): Uses Symphonia's auto-detection. Supports `probe_no_seek` for ABR variant switches where reported byte length may not match.
 
+## Decoder recreate strategy
+
+- `create_for_recreate` is used for seek-time decoder rebuild.
+- First attempt: create from `MediaInfo` hints (codec/container from stream metadata).
+- Fallback: native Symphonia probe on a fresh reader if metadata-driven creation fails.
+- If both fail, error is surfaced to caller; decoder layer does not silently switch to unrelated formats.
+
 ## Feature Flags
 
 <table>

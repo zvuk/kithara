@@ -143,6 +143,13 @@ On ABR variant switch, `StreamAudioSource` detects the format change via `media_
 3. Recreates the decoder via factory.
 4. Resets the effects chain to avoid audio artifacts.
 
+### Decoder recreate policy
+
+- Decoder is **not** recreated on every seek.
+- Decoder is recreated when stream format changes (codec/container boundary) or when post-seek decode reports a recoverable format mismatch.
+- Recreate path is metadata-first (`MediaInfo`) with native Symphonia probe fallback from a fresh source.
+- Decoder recreate always uses seek target anchor/base offset from timeline/source, so new decoder starts from stream timeline truth.
+
 ## Epoch-Based Seek
 
 On seek, epoch is incremented atomically. The worker tags each decoded chunk with the current epoch. The consumer discards stale chunks (old epoch), preventing leftover data from reaching output after a seek.

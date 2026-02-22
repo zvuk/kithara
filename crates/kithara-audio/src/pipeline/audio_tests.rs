@@ -1,3 +1,5 @@
+use std::{fs::File, io::Write};
+
 use kithara_events::{AudioEvent, SeekLifecycleStage};
 use kithara_stream::Stream;
 use kithara_test_utils::create_test_wav;
@@ -12,7 +14,10 @@ fn test_wav_config(
 ) -> (tempfile::NamedTempFile, AudioConfig<kithara_file::File>) {
     let wav_data = create_test_wav(sample_count, 44100, 2);
     let tmp = tempfile::NamedTempFile::new().unwrap();
-    std::io::Write::write_all(&mut std::fs::File::create(tmp.path()).unwrap(), &wav_data).unwrap();
+    File::create(tmp.path())
+        .unwrap()
+        .write_all(&wav_data)
+        .unwrap();
     let file_config =
         kithara_file::FileConfig::new(kithara_file::FileSrc::Local(tmp.path().to_path_buf()));
     let config = AudioConfig::<kithara_file::File>::new(file_config).with_hint("wav");

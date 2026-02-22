@@ -642,6 +642,10 @@ mod tests {
     use kithara_storage::StorageResource;
     use kithara_stream::AudioCodec;
     use rstest::rstest;
+    use tokio::{
+        task,
+        time::{self, Instant},
+    };
     use url::Url;
 
     use super::*;
@@ -829,22 +833,22 @@ mod tests {
         mut source: HlsSource,
         range: Range<u64>,
     ) -> SegmentRequest {
-        let handle = tokio::task::spawn_blocking(move || source.wait_range(range));
+        let handle = task::spawn_blocking(move || source.wait_range(range));
 
-        let deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+        let deadline = Instant::now() + Duration::from_millis(300);
         let request = loop {
             if let Some(request) = shared.segment_requests.pop() {
                 break request;
             }
-            if tokio::time::Instant::now() > deadline {
+            if Instant::now() > deadline {
                 panic!("expected on-demand segment request");
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         };
 
         shared.cancel.cancel();
         shared.condvar.notify_all();
-        let _ = tokio::time::timeout(Duration::from_millis(400), handle)
+        let _ = time::timeout(Duration::from_millis(400), handle)
             .await
             .expect("wait_range task should complete")
             .expect("wait_range task should not panic");
@@ -1411,9 +1415,9 @@ mod tests {
         );
 
         let shared_for_task = Arc::clone(&shared);
-        let handle = tokio::task::spawn_blocking(move || source.wait_range(0..80));
+        let handle = task::spawn_blocking(move || source.wait_range(0..80));
 
-        tokio::time::sleep(Duration::from_millis(120)).await;
+        time::sleep(Duration::from_millis(120)).await;
         assert!(
             !handle.is_finished(),
             "wait_range returned early even though coverage is incomplete"
@@ -1421,7 +1425,7 @@ mod tests {
 
         cancel.cancel();
         shared_for_task.condvar.notify_all();
-        let result = tokio::time::timeout(Duration::from_millis(300), handle)
+        let result = time::timeout(Duration::from_millis(300), handle)
             .await
             .expect("wait_range task should complete")
             .expect("wait_range task should not panic");
@@ -1441,10 +1445,10 @@ mod tests {
         let shared2 = Arc::clone(&shared);
         let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-        let handle = tokio::task::spawn_blocking(move || source.wait_range(0..1024));
+        let handle = task::spawn_blocking(move || source.wait_range(0..1024));
 
         // Give wait_range time to enter the loop
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
 
         match unblock {
             WaitRangeUnblock::Cancel => cancel.cancel(),
@@ -1454,7 +1458,7 @@ mod tests {
             }
         }
 
-        let result = tokio::time::timeout(Duration::from_millis(200), handle)
+        let result = time::timeout(Duration::from_millis(200), handle)
             .await
             .expect("task should complete within 200ms")
             .expect("task should not panic");
@@ -1474,17 +1478,17 @@ mod tests {
         let shared2 = Arc::clone(&shared);
         let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-        let handle = tokio::task::spawn_blocking(move || source.wait_range(0..100));
+        let handle = task::spawn_blocking(move || source.wait_range(0..100));
 
         // Push a segment covering 0..100
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
         {
             let mut segments = shared2.segments.lock();
             segments.push(make_loaded_segment(0, 0, 0, 100));
         }
         shared2.condvar.notify_all();
 
-        let result = tokio::time::timeout(Duration::from_millis(200), handle)
+        let result = time::timeout(Duration::from_millis(200), handle)
             .await
             .expect("task should complete within 200ms")
             .expect("task should not panic");
@@ -1521,9 +1525,9 @@ mod tests {
         // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
         shared2.timeline.set_eof(true);
 
-        let handle = tokio::task::spawn_blocking(move || source.wait_range(3_488_300..3_489_324));
+        let handle = task::spawn_blocking(move || source.wait_range(3_488_300..3_489_324));
 
-        tokio::time::sleep(Duration::from_millis(20)).await;
+        time::sleep(Duration::from_millis(20)).await;
         {
             let mut segments = shared2.segments.lock();
             segments.push(make_loaded_segment(0, 17, 3_400_000, 200_000));
@@ -1531,7 +1535,7 @@ mod tests {
         shared2.timeline.set_eof(false);
         shared2.condvar.notify_all();
 
-        let result = tokio::time::timeout(Duration::from_millis(200), handle)
+        let result = time::timeout(Duration::from_millis(200), handle)
             .await
             .expect("task should complete within 200ms")
             .expect("task should not panic");
@@ -1591,18 +1595,18 @@ mod tests {
         shared.timeline.complete_seek(first_epoch);
 
         let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-        let handle = tokio::task::spawn_blocking(move || source.wait_range(150..170));
+        let handle = task::spawn_blocking(move || source.wait_range(150..170));
 
-        let first_deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+        let first_deadline = Instant::now() + Duration::from_millis(300);
         let first_request = loop {
             if let Some(request) = shared.segment_requests.pop() {
                 break request;
             }
             assert!(
-                tokio::time::Instant::now() <= first_deadline,
+                Instant::now() <= first_deadline,
                 "expected initial on-demand request"
             );
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         };
         assert_eq!(first_request.seek_epoch, first_epoch);
 
@@ -1610,7 +1614,7 @@ mod tests {
         shared.timeline.complete_seek(second_epoch);
         shared.condvar.notify_all();
 
-        let second_deadline = tokio::time::Instant::now() + Duration::from_millis(700);
+        let second_deadline = Instant::now() + Duration::from_millis(700);
         let second_request = loop {
             if let Some(request) = shared.segment_requests.pop()
                 && request.seek_epoch == second_epoch
@@ -1618,10 +1622,10 @@ mod tests {
                 break request;
             }
             assert!(
-                tokio::time::Instant::now() <= second_deadline,
+                Instant::now() <= second_deadline,
                 "expected re-queued on-demand request for updated seek epoch"
             );
-            tokio::time::sleep(Duration::from_millis(10)).await;
+            time::sleep(Duration::from_millis(10)).await;
         };
 
         assert_eq!(second_request.variant, 0);
@@ -1630,7 +1634,7 @@ mod tests {
 
         cancel.cancel();
         shared.condvar.notify_all();
-        let result = tokio::time::timeout(Duration::from_millis(400), handle)
+        let result = time::timeout(Duration::from_millis(400), handle)
             .await
             .expect("wait_range task should complete")
             .expect("wait_range task should not panic");
@@ -1658,11 +1662,11 @@ mod tests {
         let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
         let mut events = source.bus.subscribe();
 
-        let handle = tokio::task::spawn_blocking(move || source.wait_range(1024..2048));
+        let handle = task::spawn_blocking(move || source.wait_range(1024..2048));
         let mut saw_metadata_miss = false;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
-        while tokio::time::Instant::now() < deadline {
-            match tokio::time::timeout(Duration::from_millis(50), events.recv()).await {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            match time::timeout(Duration::from_millis(50), events.recv()).await {
                 Ok(Ok(Event::Hls(HlsEvent::SeekMetadataMiss { .. }))) => {
                     saw_metadata_miss = true;
                     break;
@@ -1671,7 +1675,7 @@ mod tests {
             }
         }
 
-        let result = tokio::time::timeout(Duration::from_secs(3), handle)
+        let result = time::timeout(Duration::from_secs(3), handle)
             .await
             .expect("wait_range should fail fast")
             .expect("wait_range task should not panic");

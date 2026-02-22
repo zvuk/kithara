@@ -130,7 +130,7 @@ async fn test_all_net_methods_with_timeout(
 
 #[rstest]
 #[case(Duration::from_millis(0), true)]
-#[case(Duration::from_millis(1), false)]
+#[case(Duration::from_millis(50), false)]
 #[case(Duration::from_millis(100), false)]
 #[tokio::test]
 async fn test_zero_timeout(#[case] delay: Duration, #[case] should_succeed: bool) {

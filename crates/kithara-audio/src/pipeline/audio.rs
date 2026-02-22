@@ -1,7 +1,7 @@
 //! Audio pipeline struct and public API.
 
 use std::{
-    io::{Read, Seek, SeekFrom},
+    io::{self, Read, Seek, SeekFrom},
     num::NonZeroU32,
     sync::{
         Arc,
@@ -488,7 +488,7 @@ where
         debug!("Audio::new — creating Stream...");
         let stream = Stream::<T>::new(stream_config)
             .await
-            .map_err(|e| DecodeError::Io(std::io::Error::other(e.to_string())))?;
+            .map_err(|e| DecodeError::Io(io::Error::other(e.to_string())))?;
         debug!("Audio::new — Stream created");
 
         // Resolve byte pool: config overrides global.
@@ -506,7 +506,7 @@ where
             })
             .await
             .map_err(|e| {
-                DecodeError::Io(std::io::Error::other(format!("probe task panicked: {e}")))
+                DecodeError::Io(io::Error::other(format!("probe task panicked: {e}")))
             })??;
         debug!("Audio::new — probe task done");
 
@@ -558,7 +558,7 @@ where
             })
             .await
             .map_err(|e| {
-                DecodeError::Io(std::io::Error::other(format!("decoder task panicked: {e}")))
+                DecodeError::Io(io::Error::other(format!("decoder task panicked: {e}")))
             })??;
         debug!("Audio::new — decoder created");
 

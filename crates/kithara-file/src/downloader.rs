@@ -3,7 +3,7 @@
 //! Contains `FileDownloader` implementing `Downloader` trait,
 //! `FileIo` implementing `DownloaderIo`, and supporting types.
 
-use std::{future::Future, sync::Arc};
+use std::{error::Error, fmt, future::Future, ops::Range, sync::Arc};
 
 use futures::StreamExt;
 use kithara_assets::AssetResource;
@@ -30,7 +30,7 @@ pub(crate) struct FileIo {
 
 /// Plan for downloading a file range.
 pub(crate) struct FilePlan {
-    pub(crate) range: std::ops::Range<u64>,
+    pub(crate) range: Range<u64>,
 }
 
 /// Result of a file download operation.
@@ -38,7 +38,7 @@ pub(crate) enum FileFetch {
     /// A chunk was written during sequential streaming.
     Chunk { offset: u64, len: u64 },
     /// A range request completed.
-    RangeDone { range: std::ops::Range<u64> },
+    RangeDone { range: Range<u64> },
     /// Sequential stream ended.
     StreamEnded { total_bytes: u64 },
 }
@@ -49,13 +49,13 @@ pub(crate) struct FileDownloadError {
     msg: String,
 }
 
-impl std::fmt::Display for FileDownloadError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for FileDownloadError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "file download error: {}", self.msg)
     }
 }
 
-impl std::error::Error for FileDownloadError {}
+impl Error for FileDownloadError {}
 
 impl DownloaderIo for FileIo {
     type Plan = FilePlan;

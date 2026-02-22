@@ -16,6 +16,7 @@ use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
+use tokio::task::yield_now;
 use tracing::debug;
 use url::Url;
 
@@ -74,7 +75,7 @@ fn should_request_init(is_variant_switch: bool, segment_index: usize) -> bool {
 }
 
 async fn yield_once() {
-    tokio::task::yield_now().await;
+    yield_now().await;
 }
 
 /// Pure I/O executor for HLS segment fetching.
