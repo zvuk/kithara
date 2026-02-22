@@ -80,9 +80,9 @@ fn test_shard_saturation_drops_excess() {
     let shard = pool.shard_index();
 
     // Return 3 buffers to the same shard
-    for i in 0..3 {
+    for i in 0u8..3 {
         let mut buf = Vec::with_capacity(128);
-        buf.resize(10, i as u8);
+        buf.resize(10, i);
         pool.put(buf, shard);
     }
 
@@ -201,8 +201,8 @@ fn test_multi_threaded_contention() {
     use std::{sync::Arc, thread};
 
     let pool = Arc::new(Pool::<4, Vec<u8>>::new(64, 4096));
-    let num_threads = 8;
-    let iterations = 1000;
+    let num_threads = 8usize;
+    let iterations = 1000usize;
 
     let handles: Vec<_> = (0..num_threads)
         .map(|t| {
@@ -211,7 +211,8 @@ fn test_multi_threaded_contention() {
                 for i in 0..iterations {
                     let mut buf = pool.get_with(|b| b.resize(64, 0));
                     // Write a pattern unique to this thread+iteration
-                    let tag = ((t * iterations + i) & 0xFF) as u8;
+                    let tag =
+                        u8::try_from((t * iterations + i) & 0xFF).expect("tag must fit into u8");
                     buf.fill(tag);
                     // Verify no corruption from other threads
                     assert!(buf.iter().all(|&b| b == tag), "data corruption detected");

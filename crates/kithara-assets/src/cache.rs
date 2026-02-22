@@ -288,8 +288,7 @@ mod tests {
         }
 
         // Cache should have exactly 3 entries (capacity)
-        let cache = cached.cache.lock();
-        assert_eq!(cache.len(), 3);
+        assert_eq!(cached.cache.lock().len(), 3);
     }
 
     #[rstest]
@@ -328,8 +327,7 @@ mod tests {
             h.join().unwrap();
         }
 
-        let cache = cached.cache.lock();
-        assert_eq!(cache.len(), 4);
+        assert_eq!(cached.cache.lock().len(), 4);
     }
 
     #[rstest]
@@ -347,8 +345,7 @@ mod tests {
         }
 
         // Cache should be empty when disabled
-        let cache = cached.cache.lock();
-        assert_eq!(cache.len(), 0);
+        assert_eq!(cached.cache.lock().len(), 0);
     }
 
     #[rstest]

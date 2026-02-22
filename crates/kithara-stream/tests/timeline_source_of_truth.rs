@@ -30,7 +30,9 @@ impl Source for TimelineSource {
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
-        let start = offset as usize;
+        let Ok(start) = usize::try_from(offset) else {
+            return Ok(0);
+        };
         if start >= self.data.len() {
             return Ok(0);
         }
@@ -42,7 +44,7 @@ impl Source for TimelineSource {
     }
 
     fn len(&self) -> Option<u64> {
-        Some(self.data.len() as u64)
+        u64::try_from(self.data.len()).ok()
     }
 
     fn timeline(&self) -> Timeline {

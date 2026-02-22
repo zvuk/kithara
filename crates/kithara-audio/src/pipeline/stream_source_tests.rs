@@ -700,7 +700,7 @@ fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
 
 #[rstest]
 #[timeout(Duration::from_secs(10))]
-fn seek_anchor_failure_uses_recovery_without_legacy_fallback_seek() {
+fn seek_anchor_failure_falls_back_to_direct_seek_without_decoder_recreate() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
     let seek_spec = PcmSpec {
@@ -745,16 +745,21 @@ fn seek_anchor_failure_uses_recovery_without_legacy_fallback_seek() {
 
     let created_offsets = offsets.lock();
     assert!(
-        created_offsets.as_slice() == [500],
-        "seek recovery should attempt decoder recreate at anchor offset"
+        created_offsets.is_empty(),
+        "anchor failure fallback should not recreate decoder when direct seek succeeds"
     );
 
     let seeks = seek_log.lock();
-    assert_eq!(seeks.len(), 1);
+    assert_eq!(seeks.len(), 2);
     assert_eq!(
         seeks[0],
         Duration::from_secs(8),
         "anchor path should first seek to segment start"
+    );
+    assert_eq!(
+        seeks[1],
+        Duration::from_millis(8_250),
+        "on anchor failure, fallback should try direct seek to requested time"
     );
 }
 
@@ -803,7 +808,59 @@ fn failed_seek_without_pending_format_change_does_not_recreate_decoder() {
 
 #[rstest]
 #[timeout(Duration::from_secs(10))]
-fn seek_recovery_same_codec_uses_current_segment_offset_for_recreate() {
+fn seek_recovery_same_codec_without_init_range_uses_current_segment_offset() {
+    let (shared, state) = make_shared_stream(vec![0u8; 1024], Some(30_000_000));
+
+    let (decoder, _) = scripted_inner_decoder_loose(v3_spec(), vec![], vec![], None);
+    let (recovery_decoder, logs) = scripted_inner_decoder_loose(
+        v3_spec(),
+        vec![make_chunk(v3_spec(), 256)],
+        vec![Ok(())],
+        None,
+    );
+    let recovery_seek_log = logs.seek_log();
+    let (factory, factory_offsets) = make_tracking_factory(vec![recovery_decoder]);
+
+    let epoch = Arc::new(AtomicU64::new(1));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(v3_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+    source.base_offset = 152_859;
+    source.pending_decode_started_epoch = Some(1);
+    source.pending_seek_recover_target = Some((1, Duration::from_secs(174)));
+    source.pending_seek_recover_attempts = 1;
+
+    {
+        let mut s = state.lock();
+        s.media_info = Some(v3_info());
+        s.segment_range = Some(2_152_2009..2_227_6140);
+        s.format_change_range = None;
+    }
+
+    assert!(
+        source.retry_decode_error_after_seek(),
+        "seek recovery should recreate decoder"
+    );
+
+    let offsets = factory_offsets.lock();
+    assert_eq!(
+        offsets.as_slice(),
+        &[2_152_2009],
+        "without init-bearing range, same-codec recovery must recreate at current segment"
+    );
+
+    let seeks = recovery_seek_log.lock();
+    assert_eq!(seeks.as_slice(), &[Duration::from_secs(174)]);
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn seek_recovery_prefers_init_bearing_offset_when_available() {
     let (shared, state) = make_shared_stream(vec![0u8; 1024], Some(30_000_000));
 
     let (decoder, _) = scripted_inner_decoder_loose(v3_spec(), vec![], vec![], None);
@@ -845,8 +902,8 @@ fn seek_recovery_same_codec_uses_current_segment_offset_for_recreate() {
     let offsets = factory_offsets.lock();
     assert_eq!(
         offsets.as_slice(),
-        &[2_152_2009],
-        "same-codec recovery must recreate at current segment, not format_change offset"
+        &[0],
+        "init-bearing segment start must be used for decoder recovery when available"
     );
 
     let seeks = recovery_seek_log.lock();
@@ -1570,6 +1627,36 @@ impl InnerDecoder for SeekSkipThenTransientErrorDecoder {
     }
 }
 
+struct PanicOnNextChunkDecoder {
+    spec: PcmSpec,
+}
+
+impl PanicOnNextChunkDecoder {
+    fn new(spec: PcmSpec) -> Self {
+        Self { spec }
+    }
+}
+
+impl InnerDecoder for PanicOnNextChunkDecoder {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        panic!("test panic from decoder next_chunk");
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+
+    fn seek(&mut self, _pos: Duration) -> DecodeResult<()> {
+        Ok(())
+    }
+
+    fn update_byte_len(&self, _len: u64) {}
+
+    fn duration(&self) -> Option<Duration> {
+        None
+    }
+}
+
 fn make_encoded_factory(spec: PcmSpec, sample_size: usize) -> DecoderFactory<TestStream> {
     Box::new(move |stream, _info, base_offset| {
         let reader = OffsetReader::new(stream, base_offset);
@@ -1923,6 +2010,33 @@ fn repeated_seek_program_config_error_recovers_via_decoder_recreate() {
         offsets.as_slice(),
         &[0],
         "recovery path must recreate decoder at init-bearing offset"
+    );
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn decoder_panic_in_next_chunk_is_converted_to_decode_error() {
+    let (shared, _state) = make_shared_stream(vec![0u8; 1024], Some(1024));
+    let decoder: Box<dyn InnerDecoder> = Box::new(PanicOnNextChunkDecoder::new(v0_spec()));
+    let (factory, offsets) = make_tracking_factory(vec![]);
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    let fetch = source.fetch_next();
+    assert!(
+        fetch.is_eof,
+        "decoder panic should surface as EOF fetch error"
+    );
+    assert!(
+        offsets.lock().is_empty(),
+        "panic conversion should not trigger decoder recreation by itself"
     );
 }
 

@@ -507,7 +507,7 @@ mod tests {
         .unwrap();
 
         // Write 200 bytes at offset 0.
-        res.write_at(0, &vec![0xAA; 200]).unwrap();
+        res.write_at(0, &[0xAA; 200]).unwrap();
 
         // Verify data is readable.
         let mut buf = [0u8; 10];
@@ -517,7 +517,7 @@ mod tests {
 
         // Write 200 bytes at offset 200 — this wraps, evicting first 144 bytes.
         // window_start advances to (200+200) - 256 = 144
-        res.write_at(200, &vec![0xBB; 200]).unwrap();
+        res.write_at(200, &[0xBB; 200]).unwrap();
 
         // Offset 0..144 is evicted — read returns 0 bytes.
         let n = res.read_at(0, &mut buf).unwrap();
@@ -526,7 +526,10 @@ mod tests {
         // Offset 144..200 should still have 0xAA data.
         let n = res.read_at(144, &mut buf).unwrap();
         assert!(n > 0, "data within window should be readable");
-        assert_eq!(&buf[..n], &vec![0xAA; n][..]);
+        assert!(
+            buf[..n].iter().all(|b| *b == 0xAA),
+            "expected 0xAA bytes in preserved range"
+        );
 
         // Offset 200..400 should have 0xBB data.
         let n = res.read_at(200, &mut buf).unwrap();
@@ -549,11 +552,11 @@ mod tests {
         .unwrap();
 
         // Write 0..200 — should be available.
-        res.write_at(0, &vec![0xAA; 200]).unwrap();
+        res.write_at(0, &[0xAA; 200]).unwrap();
         assert_eq!(res.wait_range(0..200).unwrap(), WaitOutcome::Ready);
 
         // Write 200..400 — evicts 0..144.
-        res.write_at(200, &vec![0xBB; 200]).unwrap();
+        res.write_at(200, &[0xBB; 200]).unwrap();
 
         // 144..400 should still be available.
         assert_eq!(res.wait_range(144..400).unwrap(), WaitOutcome::Ready);
@@ -582,7 +585,7 @@ mod tests {
         // Write 3 rounds of 128 bytes each.
         for round in 0u8..3 {
             let offset = u64::from(round) * 128;
-            res.write_at(offset, &vec![round; 128]).unwrap();
+            res.write_at(offset, &[round; 128]).unwrap();
         }
 
         // Only the last 128 bytes (offset 256..384) should be readable.
@@ -631,7 +634,7 @@ mod tests {
         .unwrap();
 
         // Write 128 bytes (the rounded-up capacity).
-        res.write_at(0, &vec![0xFF; 128]).unwrap();
+        res.write_at(0, &[0xFF; 128]).unwrap();
         let mut buf = [0u8; 128];
         let n = res.read_at(0, &mut buf).unwrap();
         assert_eq!(n, 128);

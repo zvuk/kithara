@@ -384,10 +384,8 @@ mod tests {
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {
         let disk = DiskAssetStore::new(dir, "test_asset", CancellationToken::new());
-        match PinsIndex::open(&disk, crate::byte_pool().clone()) {
-            Ok(idx) => idx.load().unwrap_or_default(),
-            Err(_) => HashSet::new(),
-        }
+        PinsIndex::open(&disk, crate::byte_pool().clone())
+            .map_or_else(|_| HashSet::new(), |idx| idx.load().unwrap_or_default())
     }
 
     #[rstest]
@@ -505,8 +503,7 @@ mod tests {
         let _res = lease.open_resource(&key).unwrap();
 
         // Pins should be empty when disabled
-        let pins = lease.pins.lock();
-        assert!(pins.is_empty(), "bypass should not pin");
+        assert!(lease.pins.lock().is_empty(), "bypass should not pin");
     }
 
     #[rstest]

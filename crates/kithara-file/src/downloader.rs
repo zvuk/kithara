@@ -442,7 +442,7 @@ mod tests {
 
     use kithara_assets::AssetStoreBuilder;
     use kithara_events::EventBus;
-    use kithara_net::HttpClient;
+    use kithara_net::{HttpClient, NetOptions};
     use kithara_storage::{MemResource, StorageResource};
     use kithara_stream::Coverage;
     use tempfile::TempDir;
@@ -454,7 +454,7 @@ mod tests {
     /// After a demand (on-demand range request) is polled during Sequential phase,
     /// the downloader should cancel sequential and switch to gap-filling.
     ///
-    /// Currently FAILS: poll_demand does not change phase, so plan() still returns
+    /// Currently FAILS: `poll_demand` does not change phase, so `plan()` still returns
     /// Step and the sequential download continues wasting bandwidth.
     #[tokio::test]
     async fn sequential_stops_after_demand() {
@@ -478,7 +478,7 @@ mod tests {
         let writer = Writer::new(stream, res.clone(), cancel.clone());
 
         let io = FileIo {
-            net_client: HttpClient::new(Default::default()),
+            net_client: HttpClient::new(NetOptions::default()),
             url: url.clone(),
             res: res.clone(),
             cancel: cancel.clone(),

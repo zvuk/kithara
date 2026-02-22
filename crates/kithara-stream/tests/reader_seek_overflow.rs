@@ -14,7 +14,8 @@
 //! Two fixes prevent this:
 //!   1. `probe_byte_len()` in decoder.rs — adapters now report `byte_len() -> Some(len)`,
 //!      so symphonia computes correct deltas (even in the legacy seek path).
-//!   2. `seek_time_anchor` (seek refactoring) — HLS seek resolves time→segment→byte_offset
+//!   2. `seek_time_anchor` (seek refactoring) — HLS seek resolves
+//!      `time→segment→byte_offset`
 //!      at the application layer. Symphonia receives `SeekTo::Time { segment_start }`
 //!      with the stream already positioned at the segment boundary. Symphonia never
 //!      computes byte offsets from sidx → corrupted deltas are architecturally impossible.
@@ -54,7 +55,7 @@ struct MockSource {
 impl MockSource {
     fn new(len: usize) -> Self {
         Self {
-            reported_len: len as u64,
+            reported_len: u64::try_from(len).unwrap_or(u64::MAX),
             data: vec![0xAA; len],
             timeline: Timeline::new(),
         }
@@ -79,7 +80,9 @@ impl Source for MockSource {
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
-        let offset = offset as usize;
+        let Ok(offset) = usize::try_from(offset) else {
+            return Ok(0);
+        };
         if offset >= self.data.len() {
             return Ok(0);
         }
@@ -98,7 +101,7 @@ impl Source for MockSource {
     }
 }
 
-/// StreamType marker for MockSource.
+/// `StreamType` marker for `MockSource`.
 struct MockStream;
 
 impl StreamType for MockStream {

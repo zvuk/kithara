@@ -713,7 +713,7 @@ mod tests {
         let safety = 1.5;
         let up_hysteresis = 1.3;
         let candidate_bw: u64 = 1_024_000;
-        let threshold_bps: u64 = (candidate_bw as f64 * up_hysteresis * safety) as u64;
+        let threshold_bps: u64 = candidate_bw * 195 / 100;
 
         let base_cfg = AbrOptions {
             min_buffer_for_up_switch_secs: 0.0,
@@ -761,7 +761,7 @@ mod tests {
         let safety = 1.5;
         let down_hysteresis = 0.8;
         let current_bw: u64 = 1_024_000;
-        let threshold_bps: u64 = (current_bw as f64 * down_hysteresis * safety) as u64;
+        let threshold_bps: u64 = current_bw * 120 / 100;
 
         let base_cfg = AbrOptions {
             down_hysteresis_ratio: down_hysteresis,

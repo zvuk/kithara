@@ -17,7 +17,7 @@ fn create_test_resource(dir: &TempDir, name: &str) -> MmapResource {
             mode: OpenMode::ReadWrite,
         },
     )
-    .unwrap()
+    .expect("failed to open mmap coverage resource")
 }
 
 #[rstest]

@@ -377,9 +377,9 @@ mod tests {
     ///
     /// Scenario: sequential download stalls (slow server), user seeks forward.
     /// The reader queues a demand. The downloader should process it immediately,
-    /// not wait for the current step() to finish.
+    /// not wait for the current `step()` to finish.
     ///
-    /// Timeout: 2s — step() blocks for 30s, so if demand waits for step,
+    /// Timeout: 2s — `step()` blocks for 30s, so if demand waits for `step`,
     /// the test will be killed by rstest timeout.
     #[rstest]
     #[timeout(Duration::from_secs(2))]

@@ -805,7 +805,7 @@ mod tests {
         Stopped,
     }
 
-    /// Create a dummy PlaylistState for tests (no real playlists needed).
+    /// Create a dummy `PlaylistState` for tests (no real playlists needed).
     fn dummy_playlist_state() -> Arc<PlaylistState> {
         Arc::new(PlaylistState::new(vec![]))
     }
@@ -1505,7 +1505,13 @@ mod tests {
             segments.push(segment);
         }
 
-        set_segment_coverage(&coverage_index, &segment_url, 100, &[0..40]);
+        let partial_mark = 0..40;
+        set_segment_coverage(
+            &coverage_index,
+            &segment_url,
+            100,
+            std::slice::from_ref(&partial_mark),
+        );
         let segments = shared.segments.lock();
         assert!(
             !source.range_ready_from_segments(&segments, &(0..80)),
@@ -1513,7 +1519,13 @@ mod tests {
         );
         drop(segments);
 
-        set_segment_coverage(&coverage_index, &segment_url, 100, &[0..100]);
+        let full_mark = 0..100;
+        set_segment_coverage(
+            &coverage_index,
+            &segment_url,
+            100,
+            std::slice::from_ref(&full_mark),
+        );
         let segments = shared.segments.lock();
         assert!(
             source.range_ready_from_segments(&segments, &(0..80)),
@@ -1536,7 +1548,13 @@ mod tests {
             let mut segments = shared.segments.lock();
             segments.push(segment);
         }
-        set_segment_coverage(&coverage_index, &segment_url, 100, &[0..32]);
+        let initial_mark = 0..32;
+        set_segment_coverage(
+            &coverage_index,
+            &segment_url,
+            100,
+            std::slice::from_ref(&initial_mark),
+        );
 
         let shared_for_task = Arc::clone(&shared);
         let handle = tokio::task::spawn_blocking(move || source.wait_range(0..80));
@@ -1777,9 +1795,7 @@ mod tests {
                     saw_metadata_miss = true;
                     break;
                 }
-                Ok(Ok(_)) => {}
-                Ok(Err(_)) => {}
-                Err(_) => {}
+                Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {}
             }
         }
 

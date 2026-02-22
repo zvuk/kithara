@@ -310,16 +310,6 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn byte_recorder_mock_api_is_generated() {
-        let _ = ByteRecorderMock::record_bytes;
-    }
-}
-
 impl<A> ByteRecorder for EvictAssets<A>
 where
     A: Assets,
@@ -327,5 +317,15 @@ where
     fn record_bytes(&self, asset_root: &str, bytes: u64) {
         let _ = self.record_asset_bytes(asset_root, bytes);
         self.check_and_evict_if_over_limit();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn byte_recorder_mock_api_is_generated() {
+        let _ = ByteRecorderMock::record_bytes;
     }
 }

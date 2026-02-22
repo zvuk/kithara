@@ -1,7 +1,9 @@
 //! Stream-based audio source with format change detection.
 
 use std::{
+    any::Any,
     io::{Read, Seek, SeekFrom},
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -13,9 +15,7 @@ use fallible_iterator::FallibleIterator;
 use kithara_decode::{DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmSpec};
 use kithara_events::{AudioEvent, SeekLifecycleStage};
 use kithara_platform::Mutex;
-use kithara_stream::{
-    ContainerFormat, Fetch, MediaInfo, SourceSeekAnchor, Stream, StreamType, Timeline,
-};
+use kithara_stream::{Fetch, MediaInfo, SourceSeekAnchor, Stream, StreamType, Timeline};
 use tracing::{debug, trace, warn};
 
 use crate::{
@@ -384,6 +384,36 @@ impl<T: StreamType> StreamAudioSource<T> {
         )
     }
 
+    fn decode_panic_message(payload: Box<dyn Any + Send>) -> String {
+        match payload.downcast::<String>() {
+            Ok(msg) => *msg,
+            Err(payload) => payload.downcast::<&'static str>().map_or_else(
+                |_| "unknown panic payload".to_string(),
+                |msg| (*msg).to_string(),
+            ),
+        }
+    }
+
+    fn decoder_seek_safe(&mut self, position: Duration) -> DecodeResult<()> {
+        match catch_unwind(AssertUnwindSafe(|| self.decoder.seek(position))) {
+            Ok(result) => result,
+            Err(payload) => Err(DecodeError::InvalidData(format!(
+                "decoder panic during seek: {}",
+                Self::decode_panic_message(payload)
+            ))),
+        }
+    }
+
+    fn decoder_next_chunk_safe(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        match catch_unwind(AssertUnwindSafe(|| self.decoder.next_chunk())) {
+            Ok(result) => result,
+            Err(payload) => Err(DecodeError::InvalidData(format!(
+                "decoder panic during next_chunk: {}",
+                Self::decode_panic_message(payload)
+            ))),
+        }
+    }
+
     /// Check if decode error occurred near a format boundary and recover.
     ///
     /// Returns true if the decoder was recreated at the boundary.
@@ -489,7 +519,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                 base_offset = self.base_offset,
                 "seek: about to call decoder.seek()"
             );
-            if let Err(err) = self.decoder.seek(position) {
+            if let Err(err) = self.decoder_seek_safe(position) {
                 warn!(?err, "seek failed");
             } else {
                 let (variant, segment_index, byte_range_start, byte_range_end) =
@@ -535,7 +565,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             target_offset = anchor.byte_offset,
             "seek anchor path: starting decoder seek to segment start"
         );
-        if let Err(err) = self.decoder.seek(anchor.segment_start) {
+        if let Err(err) = self.decoder_seek_safe(anchor.segment_start) {
             warn!(
                 ?err,
                 ?position,
@@ -567,6 +597,25 @@ impl<T: StreamType> StreamAudioSource<T> {
             None,
         );
         true
+    }
+
+    fn apply_anchor_seek_with_fallback(
+        &mut self,
+        epoch: u64,
+        position: Duration,
+        anchor: SourceSeekAnchor,
+    ) -> bool {
+        if !self.align_decoder_with_seek_anchor(anchor) {
+            warn!("seek anchor path: decoder alignment failed, falling back to direct seek");
+            return self.apply_seek_from_decoder(epoch, position, Some(anchor.byte_offset), true);
+        }
+
+        if self.apply_time_anchor_seek(position, epoch, anchor) {
+            return true;
+        }
+
+        warn!("seek anchor path failed, falling back to direct seek");
+        self.apply_seek_from_decoder(epoch, position, Some(anchor.byte_offset), true)
     }
 
     fn align_decoder_with_seek_anchor(&mut self, anchor: SourceSeekAnchor) -> bool {
@@ -637,27 +686,13 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 
     fn decoder_recreate_offset(&self, preferred: Option<u64>) -> u64 {
-        let current_info = self.shared_stream.media_info();
-        let current_container = self
-            .cached_media_info
-            .as_ref()
-            .and_then(|info| info.container)
-            .or_else(|| current_info.as_ref().and_then(|info| info.container));
-        let current_codec = self.cached_media_info.as_ref().and_then(|info| info.codec);
-        let target_codec = current_info.as_ref().and_then(|info| info.codec);
-        let codec_changed =
-            matches!((current_codec, target_codec), (Some(from), Some(to)) if from != to);
-        let needs_init_recreate =
-            codec_changed || matches!(current_container, Some(ContainerFormat::Fmp4));
-
-        preferred
-            .or_else(|| {
-                needs_init_recreate.then(|| {
-                    self.shared_stream
-                        .format_change_segment_range()
-                        .map(|range| range.start)
-                })?
-            })
+        // Recovery seeks must start from an init-bearing segment when available.
+        // For segmented formats (notably fMP4), recreating from a media-only
+        // offset often fails ("missing ftyp"/probe failure).
+        self.shared_stream
+            .format_change_segment_range()
+            .map(|range| range.start)
+            .or(preferred)
             .or_else(|| {
                 self.shared_stream
                     .current_segment_range()
@@ -693,7 +728,7 @@ impl<T: StreamType> StreamAudioSource<T> {
             return false;
         }
 
-        match self.decoder.seek(seek_position) {
+        match self.decoder_seek_safe(seek_position) {
             Ok(()) => {
                 self.pending_format_change = None;
                 debug!(
@@ -722,7 +757,7 @@ impl<T: StreamType> StreamAudioSource<T> {
     ) -> bool {
         if self.pending_format_change.is_some() {
             debug!("seek failed during pending format change, applying now");
-            if self.apply_format_change() && self.decoder.seek(seek_position).is_ok() {
+            if self.apply_format_change() && self.decoder_seek_safe(seek_position).is_ok() {
                 return true;
             }
         }
@@ -863,7 +898,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         // If error repeats in the same seek epoch, escalate to decoder recreate.
         if self.pending_seek_recover_attempts == 0 {
             self.pending_seek_recover_attempts = 1;
-            match self.decoder.seek(retry_pos) {
+            match self.decoder_seek_safe(retry_pos) {
                 Ok(()) => {
                     debug!(
                         epoch = seek_epoch,
@@ -929,7 +964,7 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
         loop {
             self.detect_format_change();
 
-            match self.decoder.next_chunk() {
+            match self.decoder_next_chunk_safe() {
                 Ok(Some(chunk)) => {
                     let current_epoch = self.epoch.load(Ordering::Acquire);
                     let Some(chunk) = self.apply_seek_skip(current_epoch, chunk) else {
@@ -1053,10 +1088,6 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         &self.timeline
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "seek dispatch with retries and recovery"
-    )]
     fn apply_pending_seek(&mut self) {
         let epoch = self.timeline.seek_epoch();
         let Some(position) = self.timeline.seek_target() else {
@@ -1099,36 +1130,20 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         // Complete flush first so wait_range can block and request data.
         self.timeline.complete_seek(epoch);
 
-        match self.shared_stream.seek_time_anchor(position) {
-            Ok(Some(anchor)) => {
-                if !self.align_decoder_with_seek_anchor(anchor) {
-                    warn!("seek anchor path: decoder alignment failed, using seek recovery");
-                    let _ = self.apply_seek_from_decoder(
-                        epoch,
-                        position,
-                        Some(anchor.byte_offset),
-                        false,
-                    );
-                    return;
-                }
-                if self.apply_time_anchor_seek(position, epoch, anchor) {
-                    return;
-                }
-                warn!("seek anchor path failed, using seek recovery");
-                let _ =
-                    self.apply_seek_from_decoder(epoch, position, Some(anchor.byte_offset), false);
-                return;
-            }
-            Ok(None) => {
-                let _ = self.apply_seek_from_decoder(epoch, position, None, true);
-            }
+        let applied = match self.shared_stream.seek_time_anchor(position) {
+            Ok(Some(anchor)) => self.apply_anchor_seek_with_fallback(epoch, position, anchor),
+            Ok(None) => self.apply_seek_from_decoder(epoch, position, None, true),
             Err(err) => {
                 warn!(
                     ?err,
                     "seek anchor resolution failed, using direct seek path"
                 );
-                let _ = self.apply_seek_from_decoder(epoch, position, None, true);
+                self.apply_seek_from_decoder(epoch, position, None, true)
             }
+        };
+
+        if !applied {
+            warn!(epoch, ?position, "failed to apply pending seek");
         }
     }
 }

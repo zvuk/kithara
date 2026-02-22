@@ -978,9 +978,12 @@ mod tests {
 
     fn stream_with_timeout(
         _mock: &Unimock,
-        _url: Url,
+        url: Url,
         _headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
+        if url.host_str().is_none() {
+            return Err(NetError::Unimplemented);
+        }
         let stream = stream::iter(vec![
             Ok(Bytes::from(vec![0xFF; 1000])),
             Err(NetError::Timeout),
@@ -990,9 +993,12 @@ mod tests {
 
     fn empty_stream(
         _mock: &Unimock,
-        _url: Url,
+        url: Url,
         _headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
+        if url.host_str().is_none() {
+            return Err(NetError::Unimplemented);
+        }
         let stream = stream::empty::<Result<Bytes, NetError>>();
         Ok(Box::pin(stream) as ByteStream)
     }

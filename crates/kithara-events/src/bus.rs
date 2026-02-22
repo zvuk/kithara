@@ -51,9 +51,9 @@ mod tests {
     use super::*;
     use crate::FileEvent;
 
-    fn assert_file_event(event: Event, expected: FileEvent) {
+    fn assert_file_event(event: Event, expected: &FileEvent) {
         match event {
-            Event::File(actual) => assert_eq!(actual, expected),
+            Event::File(actual) => assert_eq!(&actual, expected),
             other => panic!("expected file event, got {other:?}"),
         }
     }
@@ -73,7 +73,7 @@ mod tests {
         let mut rx = bus.subscribe();
         bus.publish(expected.clone());
         let event = rx.recv().await.unwrap();
-        assert_file_event(event, expected);
+        assert_file_event(event, &expected);
     }
 
     #[rstest]
@@ -87,8 +87,8 @@ mod tests {
         let mut rx1 = bus.subscribe();
         let mut rx2 = bus.subscribe();
         bus.publish(expected.clone());
-        assert_file_event(rx1.recv().await.unwrap(), expected.clone());
-        assert_file_event(rx2.recv().await.unwrap(), expected);
+        assert_file_event(rx1.recv().await.unwrap(), &expected);
+        assert_file_event(rx2.recv().await.unwrap(), &expected);
     }
 
     #[tokio::test]
