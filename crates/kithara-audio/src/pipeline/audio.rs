@@ -512,9 +512,11 @@ where
         stream_ctx: Arc<dyn StreamContext>,
     ) -> Result<Box<dyn kithara_decode::InnerDecoder>, DecodeError> {
         debug!("Audio::new — spawning decoder creation on thread pool...");
+        let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
         let decoder_config = kithara_decode::DecoderConfig {
             prefer_hardware,
             hint: hint.clone(),
+            byte_len_handle: Some(Arc::clone(&byte_len_handle)),
             pcm_pool: Some(pcm_pool),
             stream_ctx: Some(stream_ctx),
             ..Default::default()
@@ -573,15 +575,22 @@ where
         prefer_hardware: bool,
         stream_ctx: &Arc<dyn StreamContext>,
         epoch: &Arc<AtomicU64>,
+        byte_len_handle: &Arc<AtomicU64>,
         pool: &PcmPool,
     ) -> super::source::DecoderFactory<T> {
         let factory_stream_ctx = Arc::clone(stream_ctx);
         let factory_epoch = Arc::clone(epoch);
+        let factory_byte_len = Arc::clone(byte_len_handle);
         let factory_pool = pool.clone();
         Box::new(move |stream, info, base_offset| {
+            let byte_len = stream
+                .len()
+                .map_or(0, |len| len.saturating_sub(base_offset));
+            factory_byte_len.store(byte_len, Ordering::Release);
             let current_epoch = factory_epoch.load(Ordering::Acquire);
             let config = kithara_decode::DecoderConfig {
                 prefer_hardware,
+                byte_len_handle: Some(Arc::clone(&factory_byte_len)),
                 pcm_pool: Some(factory_pool.clone()),
                 stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
                 epoch: current_epoch,
@@ -593,7 +602,7 @@ where
                 config,
             ) {
                 Ok(d) => {
-                    d.update_byte_len(0);
+                    d.update_byte_len(byte_len);
                     Some(d)
                 }
                 Err(e) => {
@@ -668,11 +677,13 @@ where
         let stream = Self::create_stream_with_probe(&thread_pool, stream_config, byte_pool).await?;
 
         let stream_media_info = stream.media_info();
+        let initial_byte_len = stream.len().unwrap_or(0);
         let timeline = stream.timeline();
         let initial_media_info = user_media_info.or_else(|| stream_media_info.clone());
         debug!(?initial_media_info, "Initial MediaInfo from stream");
 
         let shared_stream = SharedStream::new(stream);
+        let byte_len_handle = Arc::new(AtomicU64::new(initial_byte_len));
         let stream_ctx = shared_stream.build_stream_context();
 
         let pool = pool.get_or_insert_with(|| pcm_pool().clone());
@@ -688,7 +699,7 @@ where
         .await?;
 
         let initial_spec = decoder.spec();
-        let total_duration = decoder.duration();
+        let total_duration = decoder.duration().or_else(|| timeline.total_duration());
         timeline.set_total_duration(total_duration);
         let metadata = decoder.metadata();
 
@@ -716,8 +727,13 @@ where
         );
 
         let emit = Self::create_emit(&bus, &audio_events_tx);
-        let decoder_factory =
-            Self::create_decoder_factory(prefer_hardware, &stream_ctx, &epoch, pool);
+        let decoder_factory = Self::create_decoder_factory(
+            prefer_hardware,
+            &stream_ctx,
+            &epoch,
+            &byte_len_handle,
+            pool,
+        );
         let notify_waiting = shared_stream.make_notify_fn();
 
         let audio_source = StreamAudioSource::new(

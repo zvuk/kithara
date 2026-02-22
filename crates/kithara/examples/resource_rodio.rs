@@ -12,28 +12,31 @@
 
 use std::{env::args, error::Error};
 
+#[path = "common/events.rs"]
+mod events;
+#[path = "common/playback.rs"]
+mod playback;
+#[path = "common/tracing.rs"]
+mod tracing_support;
+
 use kithara::prelude::{Resource, ResourceConfig, ThreadPool};
-use tracing::{info, metadata::LevelFilter};
-use tracing_subscriber::EnvFilter;
+use tracing::info;
 
 #[tokio::main(flavor = "current_thread")]
 #[cfg_attr(feature = "perf", hotpath::main)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::default()
-                .add_directive("kithara=info".parse()?)
-                .add_directive("kithara_decode=info".parse()?)
-                .add_directive("kithara_file=info".parse()?)
-                .add_directive("kithara_hls=info".parse()?)
-                .add_directive("kithara_stream=info".parse()?)
-                .add_directive("kithara_net=warn".parse()?)
-                .add_directive("symphonia_format_isomp4=warn".parse()?)
-                .add_directive(LevelFilter::INFO.into()),
-        )
-        .with_line_number(false)
-        .with_file(false)
-        .init();
+    tracing_support::init_tracing(
+        &[
+            "kithara=info",
+            "kithara_decode=info",
+            "kithara_file=info",
+            "kithara_hls=info",
+            "kithara_stream=info",
+            "kithara_net=warn",
+            "symphonia_format_isomp4=warn",
+        ],
+        false,
+    )?;
 
     let url = args().nth(1).unwrap_or_else(|| {
         "http://www.hyperion-records.co.uk/audiotest/14 Clementi Piano Sonata in D major, Op 25 No \
@@ -41,38 +44,15 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
             .to_string()
     });
 
-    info!("Opening: {}", url);
+    info!("Opening: {url}");
 
     let pool = ThreadPool::with_num_threads(2)?;
     let config = ResourceConfig::new(&url)?.with_thread_pool(pool);
     let resource = Resource::new(config).await?;
-
     info!(spec = ?resource.spec(), "Format detected");
 
-    // Subscribe to events
-    let mut events = resource.subscribe();
-    tokio::spawn(async move {
-        while let Ok(ev) = events.recv().await {
-            info!(?ev);
-        }
-    });
+    events::spawn_event_logger(resource.subscribe());
 
     info!("Starting playback...");
-
-    let handle = tokio::task::spawn_blocking(move || {
-        let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
-        let sink = rodio::Sink::connect_new(stream_handle.mixer());
-        sink.set_volume(1.0);
-        sink.append(resource);
-
-        info!("Playing...");
-        sink.sleep_until_end();
-
-        info!("Playback complete");
-        Ok::<_, Box<dyn Error + Send + Sync>>(())
-    });
-
-    handle.await??;
-
-    Ok(())
+    playback::play_until_end(resource).await
 }

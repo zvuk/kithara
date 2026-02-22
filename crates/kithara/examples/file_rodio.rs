@@ -11,67 +11,46 @@
 
 use std::{env::args, error::Error};
 
+#[path = "common/controls.rs"]
+mod controls;
+#[path = "common/tracing.rs"]
+mod tracing_support;
+#[path = "common/tui.rs"]
+mod tui;
+
 use kithara::prelude::*;
-use tracing::{info, metadata::LevelFilter};
-use tracing_subscriber::EnvFilter;
+use rodio::Source as _;
+use tracing::info;
 use url::Url;
 
 #[tokio::main(flavor = "current_thread")]
 #[cfg_attr(feature = "perf", hotpath::main)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::default()
-                .add_directive("kithara_file=info".parse()?)
-                .add_directive("kithara_stream=info".parse()?)
-                .add_directive("kithara_net=info".parse()?)
-                .add_directive("symphonia_format_isomp4=warn".parse()?)
-                .add_directive(LevelFilter::INFO.into()),
-        )
-        .with_line_number(false)
-        .with_file(false)
-        .init();
+    tracing_support::init_tracing(&["off"], true)?;
 
-    let url = args().nth(1).unwrap_or_else(|| {
-        "http://www.hyperion-records.co.uk/audiotest/14 Clementi Piano Sonata in D major, Op 25 No \
-         6 - Movement 2 Un poco andante.MP3"
-            .to_string()
-    });
-    let url: Url = url.parse()?;
+    let url: Url = args()
+        .nth(1)
+        .unwrap_or_else(|| "https://stream.silvercomet.top/track.mp3".to_string())
+        .parse()?;
 
-    info!("Opening file: {}", url);
+    info!("Opening file: {url}");
 
-    let bus = EventBus::new(32);
-    let mut events_rx = bus.subscribe();
+    let track = url.to_string();
+    let bus = EventBus::new(128);
 
     let pool = ThreadPool::with_num_threads(2)?;
     let config = FileConfig::new(url.into())
         .with_thread_pool(pool)
-        .with_events(bus);
+        .with_events(bus.clone());
     let stream = Stream::<File>::new(config).await?;
+    let decoder = rodio::Decoder::new(stream)?;
+    let total_duration = decoder.total_duration();
 
-    tokio::spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
-            info!(?ev);
-        }
-    });
-
-    info!("Starting playback...");
-
-    let handle = tokio::task::spawn_blocking(move || {
-        let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
-        let sink = rodio::Sink::connect_new(stream_handle.mixer());
-        sink.set_volume(1.0);
-        sink.append(rodio::Decoder::new(stream)?);
-
-        info!("Playing...");
-        sink.sleep_until_end();
-
-        info!("Playback complete");
-        Ok::<_, Box<dyn Error + Send + Sync>>(())
-    });
-
-    handle.await??;
-
-    Ok(())
+    info!("Starting playback... (Press Ctrl+C to stop)");
+    controls::play_with_controls(
+        decoder,
+        bus.subscribe(),
+        controls::UiConfig::new("file-rodio", track).with_total_duration(total_duration),
+    )
+    .await
 }

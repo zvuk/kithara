@@ -108,7 +108,7 @@ cargo run -p kithara --example hls_audio --features rodio -- <MASTER_PLAYLIST_UR
 cargo run -p kithara --example hls_drm_audio --features rodio -- <MASTER_PLAYLIST_URL>
 
 # Crossfade from file to HLS
-cargo run -p kithara --example play_crossfade_audio --features file,hls -- [FILE_URL] [HLS_URL]
+cargo run -p kithara --example player --features file,hls -- [FILE_URL] [HLS_URL]
 ```
 
 ## Contributing

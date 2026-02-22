@@ -121,6 +121,21 @@ struct SymphoniaInner {
 }
 
 impl SymphoniaInner {
+    fn refresh_duration(&mut self) {
+        if self.duration.is_some() {
+            return;
+        }
+        let Some(track) = self
+            .format_reader
+            .tracks()
+            .iter()
+            .find(|track| track.id == self.track_id)
+        else {
+            return;
+        };
+        self.duration = Self::calculate_duration(track);
+    }
+
     /// Create a new inner decoder from a Read + Seek source.
     ///
     /// When `container` is specified in config, creates the format reader
@@ -400,6 +415,7 @@ impl SymphoniaInner {
 
     /// Decode the next chunk of PCM data.
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        self.refresh_duration();
         loop {
             // Read next packet
             let packet = match self.format_reader.next_packet() {

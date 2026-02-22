@@ -9,76 +9,52 @@
 //! cargo run -p kithara --example hls_rodio --features rodio [URL]
 //! ```
 
-use std::{env::args, error::Error, time::Duration};
+use std::{env::args, error::Error};
+
+#[path = "common/controls.rs"]
+mod controls;
+#[path = "common/tracing.rs"]
+mod tracing_support;
+#[path = "common/tui.rs"]
+mod tui;
 
 use kithara::prelude::*;
-use tracing::{info, metadata::LevelFilter};
-use tracing_subscriber::EnvFilter;
+use rodio::Source as _;
+use tracing::info;
 use url::Url;
 
 #[tokio::main(flavor = "current_thread")]
 #[cfg_attr(feature = "perf", hotpath::main)]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::default()
-                .add_directive("kithara_hls=info".parse()?)
-                .add_directive("kithara_abr=debug".parse()?)
-                .add_directive("kithara_stream=info".parse()?)
-                .add_directive("kithara_net=info".parse()?)
-                .add_directive("symphonia_format_isomp4=warn".parse()?)
-                .add_directive(LevelFilter::INFO.into()),
-        )
-        .with_line_number(false)
-        .with_file(false)
-        .init();
+    tracing_support::init_tracing(&["off"], true)?;
 
-    let url = args()
+    let url: Url = args()
         .nth(1)
-        .unwrap_or_else(|| "https://stream.silvercomet.top/hls/master.m3u8".to_string());
-    let url: Url = url.parse()?;
+        .unwrap_or_else(|| "https://stream.silvercomet.top/hls/master.m3u8".to_string())
+        .parse()?;
 
-    info!("Opening HLS stream: {}", url);
+    info!("Opening HLS stream: {url}");
 
-    let bus = EventBus::new(32);
-    let mut events_rx = bus.subscribe();
+    let track = url.to_string();
+    let bus = EventBus::new(128);
 
     let pool = ThreadPool::with_num_threads(2)?;
     let config = HlsConfig::new(url)
         .with_thread_pool(pool)
         .with_abr(AbrOptions {
-            min_buffer_for_up_switch_secs: 0.0,
-            min_switch_interval: Duration::from_secs(3),
             mode: AbrMode::Auto(Some(0)),
-            throughput_safety_factor: 1.1,
-            up_hysteresis_ratio: 1.05,
             ..Default::default()
         })
-        .with_events(bus);
+        .with_events(bus.clone());
     let stream = Stream::<Hls>::new(config).await?;
+    let decoder = rodio::Decoder::new(stream)?;
+    let total_duration = decoder.total_duration();
 
-    tokio::spawn(async move {
-        while let Ok(ev) = events_rx.recv().await {
-            info!(?ev);
-        }
-    });
-
-    info!("Starting playback...");
-
-    let handle = tokio::task::spawn_blocking(move || {
-        let stream_handle = rodio::OutputStreamBuilder::open_default_stream()?;
-        let sink = rodio::Sink::connect_new(stream_handle.mixer());
-        sink.set_volume(1.0);
-        sink.append(rodio::Decoder::new(stream)?);
-
-        info!("Playing...");
-        sink.sleep_until_end();
-
-        info!("Playback complete");
-        Ok::<_, Box<dyn Error + Send + Sync>>(())
-    });
-
-    handle.await??;
-
-    Ok(())
+    info!("Starting playback... (Press Ctrl+C to stop)");
+    controls::play_with_controls(
+        decoder,
+        bus.subscribe(),
+        controls::UiConfig::new("hls-rodio", track).with_total_duration(total_duration),
+    )
+    .await
 }

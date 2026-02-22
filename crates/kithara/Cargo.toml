@@ -68,7 +68,7 @@ rstest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 rodio = { workspace = true }
-crossterm = { workspace = true }
+ratatui = { workspace = true }
 url = { workspace = true }
 
 [[example]]
@@ -96,5 +96,5 @@ name = "hls_rodio"
 required-features = ["rodio"]
 
 [[example]]
-name = "play_crossfade_audio"
+name = "player"
 required-features = ["file", "hls"]

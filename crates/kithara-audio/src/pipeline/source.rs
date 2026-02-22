@@ -45,7 +45,7 @@ impl<T: StreamType> SharedStream<T> {
         self.inner.lock().position()
     }
 
-    fn len(&self) -> Option<u64> {
+    pub(crate) fn len(&self) -> Option<u64> {
         self.inner.lock().len()
     }
 
@@ -1042,6 +1042,12 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
     type Command = AudioCommand;
 
     fn fetch_next(&mut self) -> Fetch<Self::Chunk> {
+        if self.timeline.total_duration().is_none() {
+            let duration = self.decoder.duration();
+            if duration.is_some() {
+                self.timeline.set_total_duration(duration);
+            }
+        }
         let current_epoch = self.epoch.load(Ordering::Acquire);
         match FallibleIterator::next(self) {
             Ok(Some(chunk)) => {

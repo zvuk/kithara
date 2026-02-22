@@ -84,6 +84,9 @@ semgrep-advisory:
 arch:
     bash scripts/ci/check-arch.sh
 
+machete:
+    cargo machete
+
 perf-compare-selftest:
     bash scripts/ci/test-compare-perf.sh
 
