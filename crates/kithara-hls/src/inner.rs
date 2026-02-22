@@ -4,16 +4,12 @@
 
 use std::sync::Arc;
 
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_assets::CoverageIndex;
-use kithara_assets::{
-    AssetStoreBuilder, Assets, AssetsBackend, ProcessChunkFn, asset_root_for_url,
-};
+use kithara_assets::{AssetStoreBuilder, AssetsBackend, ProcessChunkFn, asset_root_for_url};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_net::HttpClient;
 use kithara_platform::ThreadPool;
-use kithara_stream::{StreamContext, StreamType, Timeline};
+use kithara_stream::{StreamContext, StreamType, Timeline, open_coverage_index};
 
 use crate::{
     HlsStreamContext,
@@ -127,15 +123,8 @@ impl StreamType for Hls {
             initial_variant,
         });
 
-        // Create coverage index for crash-safe segment tracking (disk only).
-        #[cfg(not(target_arch = "wasm32"))]
-        let coverage_index = match fetch_manager.backend() {
-            AssetsBackend::Disk(store) => store
-                .open_coverage_index_resource()
-                .ok()
-                .map(|res| Arc::new(CoverageIndex::new(res))),
-            AssetsBackend::Mem(_) => None,
-        };
+        let coverage_index =
+            open_coverage_index(fetch_manager.backend()).map_err(HlsError::Assets)?;
 
         // Create HlsDownloader + HlsSource pair
         let playlist_state = fetch_manager
@@ -146,7 +135,6 @@ impl StreamType for Hls {
             Arc::clone(&fetch_manager),
             &master.variants,
             &config,
-            #[cfg(not(target_arch = "wasm32"))]
             coverage_index,
             playlist_state,
             bus,

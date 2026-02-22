@@ -10,15 +10,12 @@ use kithara_abr::{
     AbrController, AbrDecision, AbrReason, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource,
 };
-use kithara_assets::ResourceKey;
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_assets::{CoverageIndex, DiskCoverage};
+use kithara_assets::{DiskCoverage, ResourceKey};
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_storage::{Coverage, MmapResource};
+use kithara_storage::Coverage;
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
+use kithara_stream::{CoverageIndexHandle, Downloader, DownloaderIo, PlanOutcome};
 use tracing::debug;
 use url::Url;
 
@@ -183,8 +180,7 @@ pub(crate) struct HlsDownloader {
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
     /// Coverage index for crash-safe segment tracking.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
+    pub(crate) coverage_index: Arc<CoverageIndexHandle>,
 }
 
 impl HlsDownloader {
@@ -342,9 +338,7 @@ impl HlsDownloader {
         shared: &SharedSegments,
         fetch: &DefaultFetchManager,
         variant: usize,
-        #[cfg(not(target_arch = "wasm32"))] coverage_index: &Option<
-            Arc<CoverageIndex<MmapResource>>,
-        >,
+        coverage_index: &Arc<CoverageIndexHandle>,
     ) -> (usize, u64) {
         // Ephemeral backend has no persistent cache to scan.
         if fetch.backend().is_ephemeral() {
@@ -414,12 +408,9 @@ impl HlsDownloader {
                 // Validate against coverage if available.
                 // No entry -> legacy file, treat as valid.
                 // Entry exists but incomplete -> partially written, skip.
-                #[cfg(not(target_arch = "wasm32"))]
-                if let Some(idx) = coverage_index {
-                    let cov = DiskCoverage::open(Arc::clone(idx), segment_url.to_string());
-                    if cov.total_size().is_some() && !cov.is_complete() {
-                        break;
-                    }
+                let cov = DiskCoverage::open(Arc::clone(coverage_index), segment_url.to_string());
+                if cov.total_size().is_some() && !cov.is_complete() {
+                    break;
                 }
 
                 // Init only for the first segment (init-once layout matches metadata)
@@ -554,13 +545,10 @@ impl HlsDownloader {
         }
         self.shared.condvar.notify_all();
 
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(ref idx) = self.coverage_index {
-            let mut cov = DiskCoverage::open(Arc::clone(idx), media_url.to_string());
-            cov.set_total_size(media_len);
-            cov.mark(0..media_len);
-            // flush happens via Drop, or explicitly in commit()
-        }
+        let mut cov = DiskCoverage::open(Arc::clone(&self.coverage_index), media_url.to_string());
+        cov.set_total_size(media_len);
+        cov.mark(0..media_len);
+        // flush happens via Drop, or explicitly in commit()
     }
 
     /// Prepare variant for download: detect switches, calculate metadata, populate cache.
@@ -601,7 +589,6 @@ impl HlsDownloader {
                                 &self.shared,
                                 &self.fetch,
                                 variant,
-                                #[cfg(not(target_arch = "wasm32"))]
                                 &self.coverage_index,
                             )
                         } else {
@@ -1147,11 +1134,12 @@ impl Downloader for HlsDownloader {
 mod tests {
     use std::{collections::HashSet, sync::Arc, time::Duration};
 
-    use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
+    use kithara_assets::{AssetStoreBuilder, CoverageIndex, ProcessChunkFn};
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
-    use kithara_stream::{AudioCodec, Downloader, PlanOutcome};
+    use kithara_storage::{MemResource, StorageResource};
+    use kithara_stream::{AudioCodec, CoverageIndexHandle, Downloader, PlanOutcome};
     use tokio_util::sync::CancellationToken;
     use url::Url;
 
@@ -1261,6 +1249,12 @@ mod tests {
         Arc::new(FetchManager::new(backend, net, cancel))
     }
 
+    fn make_coverage_index() -> Arc<CoverageIndexHandle> {
+        Arc::new(CoverageIndex::new(StorageResource::from(MemResource::new(
+            CancellationToken::new(),
+        ))))
+    }
+
     #[test]
     fn cross_codec_switch_detects_incompatible_variants() {
         let playlist_state = Arc::new(PlaylistState::new(vec![
@@ -1343,21 +1337,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-
-        #[cfg(not(target_arch = "wasm32"))]
+        let coverage_index = make_coverage_index();
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            None,
-            Arc::clone(&playlist_state),
-            EventBus::new(16),
-        );
-        #[cfg(target_arch = "wasm32")]
-        let (mut downloader, _source) = build_pair(
-            fetch,
-            &variants,
-            &config,
+            coverage_index,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1391,21 +1376,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-
-        #[cfg(not(target_arch = "wasm32"))]
+        let coverage_index = make_coverage_index();
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            None,
-            Arc::clone(&playlist_state),
-            EventBus::new(16),
-        );
-        #[cfg(target_arch = "wasm32")]
-        let (mut downloader, _source) = build_pair(
-            fetch,
-            &variants,
-            &config,
+            coverage_index,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1445,21 +1421,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-
-        #[cfg(not(target_arch = "wasm32"))]
+        let coverage_index = make_coverage_index();
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            None,
-            Arc::clone(&playlist_state),
-            EventBus::new(16),
-        );
-        #[cfg(target_arch = "wasm32")]
-        let (mut downloader, _source) = build_pair(
-            fetch,
-            &variants,
-            &config,
+            coverage_index,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1494,21 +1461,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-
-        #[cfg(not(target_arch = "wasm32"))]
+        let coverage_index = make_coverage_index();
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            None,
-            Arc::clone(&playlist_state),
-            EventBus::new(16),
-        );
-        #[cfg(target_arch = "wasm32")]
-        let (mut downloader, _source) = build_pair(
-            fetch,
-            &variants,
-            &config,
+            coverage_index,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1547,21 +1505,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-
-        #[cfg(not(target_arch = "wasm32"))]
+        let coverage_index = make_coverage_index();
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            None,
-            Arc::clone(&playlist_state),
-            EventBus::new(16),
-        );
-        #[cfg(target_arch = "wasm32")]
-        let (mut downloader, _source) = build_pair(
-            fetch,
-            &variants,
-            &config,
+            coverage_index,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1613,21 +1562,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-
-        #[cfg(not(target_arch = "wasm32"))]
+        let coverage_index = make_coverage_index();
         let (downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            None,
-            Arc::clone(&playlist_state),
-            EventBus::new(16),
-        );
-        #[cfg(target_arch = "wasm32")]
-        let (downloader, _source) = build_pair(
-            fetch,
-            &variants,
-            &config,
+            coverage_index,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );

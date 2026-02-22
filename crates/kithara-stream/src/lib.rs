@@ -12,6 +12,7 @@
 
 mod backend;
 mod context;
+mod coverage;
 mod downloader;
 mod error;
 mod fetch;
@@ -26,6 +27,7 @@ pub mod mock;
 
 pub use backend::Backend;
 pub use context::{NullStreamContext, StreamContext};
+pub use coverage::{CoverageIndexHandle, CoverageState, open_coverage_index};
 pub use downloader::{Downloader, DownloaderIo, PlanOutcome, StepResult};
 pub use error::{StreamError, StreamResult};
 pub use fetch::{EpochValidator, Fetch};

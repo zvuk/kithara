@@ -9,13 +9,10 @@ use kithara_events::{EventBus, FileEvent};
 use kithara_net::{HttpClient, Net};
 use kithara_platform::ThreadPool;
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{Backend, NullStreamContext, StreamContext, StreamType, Timeline};
+use kithara_stream::{
+    Backend, NullStreamContext, StreamContext, StreamType, Timeline, open_coverage_index,
+};
 use tokio_util::sync::CancellationToken;
-
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_assets::Assets;
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_assets::CoverageIndex;
 
 use crate::{
     config::{FileConfig, FileSrc},
@@ -128,18 +125,7 @@ impl File {
         }
         let backend = backend_builder.build();
 
-        // Open coverage index for crash-safe download tracking.
-        // Only available for disk-backed storage (ephemeral/mem doesn't need it).
-        #[cfg(not(target_arch = "wasm32"))]
-        let coverage_index = match &backend {
-            kithara_assets::AssetsBackend::Disk(store) => store
-                .open_coverage_index_resource()
-                .ok()
-                .map(|res| Arc::new(CoverageIndex::new(res))),
-            kithara_assets::AssetsBackend::Mem(_) => None,
-        };
-        #[cfg(target_arch = "wasm32")]
-        let coverage_index = None;
+        let coverage_index = open_coverage_index(&backend).map_err(SourceError::Assets)?;
 
         let state = FileStreamState::create(
             Arc::new(backend),

@@ -14,15 +14,13 @@ use std::{
 
 use crossbeam_queue::SegQueue;
 use kithara_abr::Variant;
-use kithara_assets::ResourceKey;
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_assets::{CoverageIndex, DiskCoverage};
+use kithara_assets::{DiskCoverage, ResourceKey};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::{Condvar, Mutex, time::Duration};
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_storage::{Coverage, MmapResource};
-use kithara_storage::{ResourceExt, WaitOutcome};
-use kithara_stream::{MediaInfo, Source, SourceSeekAnchor, StreamError, StreamResult, Timeline};
+use kithara_storage::{Coverage, ResourceExt, WaitOutcome};
+use kithara_stream::{
+    CoverageIndexHandle, MediaInfo, Source, SourceSeekAnchor, StreamError, StreamResult, Timeline,
+};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -101,8 +99,7 @@ pub struct HlsSource {
     shared: Arc<SharedSegments>,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
-    #[cfg(not(target_arch = "wasm32"))]
-    coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
+    coverage_index: Arc<CoverageIndexHandle>,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
     variant_fence: Option<usize>,
     /// Downloader backend. Dropped with this source, cancelling the downloader.
@@ -273,13 +270,8 @@ impl HlsSource {
         Some(local_start..local_end)
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn media_range_covered_by_index(&self, seg: &LoadedSegment, range: Range<u64>) -> bool {
-        let Some(index) = &self.coverage_index else {
-            return true;
-        };
-
-        let cov = DiskCoverage::open(Arc::clone(index), seg.media_url.to_string());
+        let cov = DiskCoverage::open(Arc::clone(&self.coverage_index), seg.media_url.to_string());
         let Some(total) = cov.total_size() else {
             // Legacy cache entry without coverage metadata.
             return true;
@@ -293,11 +285,6 @@ impl HlsSource {
         !cov.gaps()
             .into_iter()
             .any(|gap| gap.start < end && gap.end > range.start)
-    }
-
-    #[cfg(target_arch = "wasm32")]
-    fn media_range_covered_by_index(&self, _seg: &LoadedSegment, _range: Range<u64>) -> bool {
-        true
     }
 
     fn segment_ready_for_range(&self, seg: &LoadedSegment, range: &Range<u64>) -> bool {
@@ -712,7 +699,7 @@ pub(crate) fn build_pair(
     fetch: Arc<DefaultFetchManager>,
     variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
-    #[cfg(not(target_arch = "wasm32"))] coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
+    coverage_index: Arc<CoverageIndexHandle>,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
 ) -> (HlsDownloader, HlsSource) {
@@ -740,7 +727,6 @@ pub(crate) fn build_pair(
     shared
         .current_variant_index
         .store(initial_variant, Ordering::Relaxed);
-    #[cfg(not(target_arch = "wasm32"))]
     let source_coverage_index = coverage_index.clone();
 
     let downloader = HlsDownloader {
@@ -759,7 +745,6 @@ pub(crate) fn build_pair(
         bus: bus.clone(),
         look_ahead_bytes: config.look_ahead_bytes,
         prefetch_count: config.download_batch_size.max(1),
-        #[cfg(not(target_arch = "wasm32"))]
         coverage_index,
     };
 
@@ -768,7 +753,6 @@ pub(crate) fn build_pair(
         shared,
         playlist_state,
         bus,
-        #[cfg(not(target_arch = "wasm32"))]
         coverage_index: source_coverage_index,
         variant_fence: None,
         _backend: None,
@@ -798,18 +782,13 @@ impl HlsSource {
 mod tests {
     use std::{ops::Range, sync::Arc, time::Duration};
 
-    use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
-    #[cfg(not(target_arch = "wasm32"))]
-    use kithara_assets::{CoverageIndex, DiskCoverage};
+    use kithara_assets::{AssetStoreBuilder, CoverageIndex, DiskCoverage, ProcessChunkFn};
     use kithara_drm::DecryptContext;
     use kithara_events::Event;
     use kithara_net::{HttpClient, NetOptions};
-    #[cfg(not(target_arch = "wasm32"))]
-    use kithara_storage::{Coverage, MmapOptions, MmapResource, OpenMode, Resource};
-    use kithara_stream::AudioCodec;
+    use kithara_storage::{Coverage, MemResource, StorageResource};
+    use kithara_stream::{AudioCodec, CoverageIndexHandle, open_coverage_index};
     use rstest::rstest;
-    #[cfg(not(target_arch = "wasm32"))]
-    use tempfile::TempDir;
     use url::Url;
 
     use super::*;
@@ -842,14 +821,14 @@ mod tests {
             .build();
         let net = HttpClient::new(NetOptions::default());
         let fetch = Arc::new(FetchManager::new(backend, net, cancel));
+        let coverage_index = open_coverage_index(fetch.backend()).unwrap();
         let playlist_state = Arc::clone(&shared.playlist_state);
         HlsSource {
             fetch,
             shared,
             playlist_state,
             bus: EventBus::new(16),
-            #[cfg(not(target_arch = "wasm32"))]
-            coverage_index: None,
+            coverage_index,
             variant_fence: None,
             _backend: None,
         }
@@ -872,25 +851,14 @@ mod tests {
         }
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    fn make_coverage_index() -> (TempDir, Arc<CoverageIndex<MmapResource>>) {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("cov.bin");
-        let res = Resource::open(
+    fn make_coverage_index() -> Arc<CoverageIndexHandle> {
+        Arc::new(CoverageIndex::new(StorageResource::from(MemResource::new(
             CancellationToken::new(),
-            MmapOptions {
-                path,
-                initial_len: Some(4096),
-                mode: OpenMode::ReadWrite,
-            },
-        )
-        .unwrap();
-        (dir, Arc::new(CoverageIndex::new(res)))
+        ))))
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     fn set_segment_coverage(
-        index: &Arc<CoverageIndex<MmapResource>>,
+        index: &Arc<CoverageIndexHandle>,
         url: &Url,
         total: u64,
         marks: &[Range<u64>],
@@ -1293,21 +1261,12 @@ mod tests {
             cancel: Some(cancel),
             ..crate::config::HlsConfig::default()
         };
-
-        #[cfg(not(target_arch = "wasm32"))]
+        let coverage_index = make_coverage_index();
         let (_, source) = build_pair(
             fetch,
             &variants,
             &config,
-            None,
-            Arc::clone(&playlist_state),
-            EventBus::new(16),
-        );
-        #[cfg(target_arch = "wasm32")]
-        let (_, source) = build_pair(
-            fetch,
-            &variants,
-            &config,
+            coverage_index,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1335,21 +1294,12 @@ mod tests {
             cancel: Some(cancel),
             ..crate::config::HlsConfig::default()
         };
-
-        #[cfg(not(target_arch = "wasm32"))]
+        let coverage_index = make_coverage_index();
         let (_, source) = build_pair(
             fetch,
             &variants,
             &config,
-            None,
-            Arc::clone(&playlist_state),
-            EventBus::new(16),
-        );
-        #[cfg(target_arch = "wasm32")]
-        let (_, source) = build_pair(
-            fetch,
-            &variants,
-            &config,
+            coverage_index,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1536,15 +1486,14 @@ mod tests {
         assert_eq!(state.max_end_offset(), 600);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn range_ready_uses_coverage_for_disk_segments() {
         let cancel = CancellationToken::new();
         let ps = dummy_playlist_state();
         let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
         let mut source = make_test_source(Arc::clone(&shared), cancel);
-        let (_dir, coverage_index) = make_coverage_index();
-        source.coverage_index = Some(Arc::clone(&coverage_index));
+        let coverage_index = make_coverage_index();
+        source.coverage_index = Arc::clone(&coverage_index);
 
         let segment = make_loaded_segment(0, 0, 0, 100);
         let segment_url = segment.media_url.clone();
@@ -1569,15 +1518,14 @@ mod tests {
         );
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[tokio::test]
     async fn wait_range_waits_until_coverage_is_complete() {
         let cancel = CancellationToken::new();
         let ps = dummy_playlist_state();
         let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
         let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-        let (_dir, coverage_index) = make_coverage_index();
-        source.coverage_index = Some(Arc::clone(&coverage_index));
+        let coverage_index = make_coverage_index();
+        source.coverage_index = Arc::clone(&coverage_index);
 
         let segment = make_loaded_segment(0, 0, 0, 100);
         let segment_url = segment.media_url.clone();
