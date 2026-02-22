@@ -9,6 +9,43 @@ use kithara_storage::StorageResource;
 pub type CoverageIndexHandle = CoverageIndex<StorageResource>;
 pub type CoverageState = DiskCoverage<StorageResource>;
 
+#[derive(Clone)]
+pub struct CoverageManager {
+    index: Arc<CoverageIndexHandle>,
+}
+
+impl CoverageManager {
+    #[must_use]
+    pub fn from_index(index: Arc<CoverageIndexHandle>) -> Self {
+        Self { index }
+    }
+
+    #[must_use]
+    pub fn index(&self) -> Arc<CoverageIndexHandle> {
+        Arc::clone(&self.index)
+    }
+
+    #[must_use]
+    pub fn open_state<K>(&self, key: K) -> CoverageState
+    where
+        K: Into<String>,
+    {
+        CoverageState::open(self.index(), key.into())
+    }
+
+    /// Open coverage manager for the provided assets backend.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` when coverage index resource cannot be opened.
+    pub fn open<Ctx>(backend: &AssetsBackend<Ctx>) -> Result<Self, AssetsError>
+    where
+        Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
+    {
+        Ok(Self::from_index(open_coverage_index(backend)?))
+    }
+}
+
 /// Open coverage index storage for the provided assets backend.
 ///
 /// # Errors

@@ -11,8 +11,8 @@ use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, RangeSpec};
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
-    Coverage, CoverageIndexHandle, CoverageState, Downloader, DownloaderIo, PlanOutcome,
-    StepResult, Writer, WriterItem,
+    Coverage, CoverageManager, CoverageState, Downloader, DownloaderIo, PlanOutcome, StepResult,
+    Writer, WriterItem,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -142,7 +142,7 @@ impl FileDownloader {
         bus: EventBus,
         look_ahead_bytes: Option<u64>,
         shared: Arc<SharedFileState>,
-        coverage_index: Arc<CoverageIndexHandle>,
+        coverage_manager: CoverageManager,
     ) -> Self {
         let url = state.url().clone();
         let total = state.len();
@@ -165,7 +165,7 @@ impl FileDownloader {
             }
         };
 
-        let mut coverage = CoverageState::open(coverage_index, url.to_string());
+        let mut coverage = coverage_manager.open_state(url.to_string());
         if let Some(size) = total {
             coverage.set_total_size(size);
         }
@@ -443,8 +443,7 @@ mod tests {
     use kithara_assets::AssetStoreBuilder;
     use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
-    use kithara_storage::{MemResource, StorageResource};
-    use kithara_stream::Coverage;
+    use kithara_stream::{Coverage, CoverageManager};
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -486,10 +485,8 @@ mod tests {
         };
 
         let shared = Arc::new(SharedFileState::new());
-        let coverage_index = Arc::new(CoverageIndexHandle::new(StorageResource::from(
-            MemResource::new(cancel.clone()),
-        )));
-        let mut coverage = CoverageState::open(coverage_index, url.to_string());
+        let coverage_manager = CoverageManager::open(&store).unwrap();
+        let mut coverage = coverage_manager.open_state(url.to_string());
         coverage.set_total_size(total);
         coverage.mark(0..1000); // Sequential downloaded first 1KB.
 

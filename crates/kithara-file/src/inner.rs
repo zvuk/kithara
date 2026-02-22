@@ -10,7 +10,7 @@ use kithara_net::{HttpClient, Net};
 use kithara_platform::ThreadPool;
 use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
-    Backend, NullStreamContext, StreamContext, StreamType, Timeline, open_coverage_index,
+    Backend, CoverageManager, NullStreamContext, StreamContext, StreamType, Timeline,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -125,7 +125,7 @@ impl File {
         }
         let backend = backend_builder.build();
 
-        let coverage_index = open_coverage_index(&backend).map_err(SourceError::Assets)?;
+        let coverage_manager = CoverageManager::open(&backend).map_err(SourceError::Assets)?;
 
         let state = FileStreamState::create(
             Arc::new(backend),
@@ -179,7 +179,7 @@ impl File {
                 state.bus().clone(),
                 config.look_ahead_bytes,
                 shared.clone(),
-                coverage_index,
+                coverage_manager,
             )
             .await;
 

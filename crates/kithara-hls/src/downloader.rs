@@ -14,9 +14,7 @@ use kithara_assets::ResourceKey;
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{
-    Coverage, CoverageIndexHandle, CoverageState, Downloader, DownloaderIo, PlanOutcome,
-};
+use kithara_stream::{Coverage, CoverageManager, Downloader, DownloaderIo, PlanOutcome};
 use tracing::debug;
 use url::Url;
 
@@ -181,7 +179,7 @@ pub(crate) struct HlsDownloader {
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
     /// Coverage index for crash-safe segment tracking.
-    pub(crate) coverage_index: Arc<CoverageIndexHandle>,
+    pub(crate) coverage: CoverageManager,
 }
 
 impl HlsDownloader {
@@ -339,7 +337,7 @@ impl HlsDownloader {
         shared: &SharedSegments,
         fetch: &DefaultFetchManager,
         variant: usize,
-        coverage_index: &Arc<CoverageIndexHandle>,
+        coverage: &CoverageManager,
     ) -> (usize, u64) {
         // Ephemeral backend has no persistent cache to scan.
         if fetch.backend().is_ephemeral() {
@@ -409,7 +407,7 @@ impl HlsDownloader {
                 // Validate against coverage if available.
                 // No entry -> legacy file, treat as valid.
                 // Entry exists but incomplete -> partially written, skip.
-                let cov = CoverageState::open(Arc::clone(coverage_index), segment_url.to_string());
+                let cov = coverage.open_state(segment_url.to_string());
                 if cov.total_size().is_some() && !cov.is_complete() {
                     break;
                 }
@@ -546,7 +544,7 @@ impl HlsDownloader {
         }
         self.shared.condvar.notify_all();
 
-        let mut cov = CoverageState::open(Arc::clone(&self.coverage_index), media_url.to_string());
+        let mut cov = self.coverage.open_state(media_url.to_string());
         cov.set_total_size(media_len);
         cov.mark(0..media_len);
         // flush happens via Drop, or explicitly in commit()
@@ -590,7 +588,7 @@ impl HlsDownloader {
                                 &self.shared,
                                 &self.fetch,
                                 variant,
-                                &self.coverage_index,
+                                &self.coverage,
                             )
                         } else {
                             (0, 0)
@@ -1139,8 +1137,7 @@ mod tests {
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
-    use kithara_storage::{MemResource, StorageResource};
-    use kithara_stream::{AudioCodec, CoverageIndexHandle, Downloader, PlanOutcome};
+    use kithara_stream::{AudioCodec, CoverageManager, Downloader, PlanOutcome};
     use tokio_util::sync::CancellationToken;
     use url::Url;
 
@@ -1250,10 +1247,12 @@ mod tests {
         Arc::new(FetchManager::new(backend, net, cancel))
     }
 
-    fn make_coverage_index() -> Arc<CoverageIndexHandle> {
-        Arc::new(CoverageIndexHandle::new(StorageResource::from(
-            MemResource::new(CancellationToken::new()),
-        )))
+    fn make_coverage_manager() -> CoverageManager {
+        let backend = AssetStoreBuilder::new()
+            .ephemeral(true)
+            .cancel(CancellationToken::new())
+            .build();
+        CoverageManager::open(&backend).expect("coverage manager should open")
     }
 
     #[test]
@@ -1338,12 +1337,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage_index = make_coverage_index();
+        let coverage = make_coverage_manager();
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage_index,
+            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1377,12 +1376,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage_index = make_coverage_index();
+        let coverage = make_coverage_manager();
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage_index,
+            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1422,12 +1421,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage_index = make_coverage_index();
+        let coverage = make_coverage_manager();
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage_index,
+            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1462,12 +1461,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage_index = make_coverage_index();
+        let coverage = make_coverage_manager();
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage_index,
+            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1506,12 +1505,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage_index = make_coverage_index();
+        let coverage = make_coverage_manager();
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage_index,
+            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1563,12 +1562,12 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage_index = make_coverage_index();
+        let coverage = make_coverage_manager();
         let (downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage_index,
+            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );

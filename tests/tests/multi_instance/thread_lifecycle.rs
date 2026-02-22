@@ -39,6 +39,9 @@ const SAMPLE_RATE: u32 = 44100;
 const CHANNELS: u16 = 2;
 const SEGMENT_SIZE: usize = 200_000;
 const SEGMENT_COUNT: usize = 10;
+const POOL_AVAILABILITY_PROBE_HOLD: Duration = Duration::from_millis(120);
+const POOL_AVAILABILITY_RETRY: Duration = Duration::from_millis(100);
+const POOL_AVAILABILITY_TIMEOUT: Duration = Duration::from_secs(5);
 
 fn generate_wav_data() -> Arc<Vec<u8>> {
     let total_bytes = SEGMENT_COUNT * SEGMENT_SIZE;
@@ -53,12 +56,11 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
 ///
 /// If any thread is stuck from a previous instance, the concurrent count
 /// will be less than `expected_threads`.
-async fn assert_pool_threads_available(pool: &ThreadPool, expected_threads: usize) {
+async fn pool_max_concurrency(pool: &ThreadPool, expected_threads: usize) -> usize {
     let running = Arc::new(AtomicUsize::new(0));
     let max_concurrent = Arc::new(AtomicUsize::new(0));
-    let _barrier = Arc::new(tokio::sync::Barrier::new(expected_threads));
 
-    let mut handles = Vec::new();
+    let mut handles = Vec::with_capacity(expected_threads);
     for _ in 0..expected_threads {
         let running = Arc::clone(&running);
         let max_concurrent = Arc::clone(&max_concurrent);
@@ -68,12 +70,7 @@ async fn assert_pool_threads_available(pool: &ThreadPool, expected_threads: usiz
             let cur = running.fetch_add(1, Ordering::SeqCst) + 1;
             max_concurrent.fetch_max(cur, Ordering::SeqCst);
 
-            // Block until all threads arrive — proves they're all free.
-            // Use a spin-wait with channel since we're on rayon threads.
-            // Actually we use tokio::sync::Barrier from the async side instead.
-            // But we're on a rayon thread, so just sleep briefly to let all
-            // threads register their presence.
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(POOL_AVAILABILITY_PROBE_HOLD);
 
             running.fetch_sub(1, Ordering::SeqCst);
             let _ = tx.send(cur);
@@ -85,12 +82,32 @@ async fn assert_pool_threads_available(pool: &ThreadPool, expected_threads: usiz
         let _ = rx.await;
     }
 
-    let observed_max = max_concurrent.load(Ordering::SeqCst);
-    assert!(
-        observed_max >= expected_threads,
-        "only {observed_max}/{expected_threads} threads were free concurrently — \
-         some threads are still occupied by a previous instance"
-    );
+    max_concurrent.load(Ordering::SeqCst)
+}
+
+async fn assert_pool_threads_available(pool: &ThreadPool, expected_threads: usize) {
+    let deadline = tokio::time::Instant::now() + POOL_AVAILABILITY_TIMEOUT;
+    let mut best_observed = 0usize;
+
+    loop {
+        let observed_max = pool_max_concurrency(pool, expected_threads).await;
+        best_observed = best_observed.max(observed_max);
+
+        if observed_max >= expected_threads {
+            return;
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            assert!(
+                best_observed >= expected_threads,
+                "only {best_observed}/{expected_threads} threads were free concurrently \
+                 within {:?} — some threads are still occupied by a previous instance",
+                POOL_AVAILABILITY_TIMEOUT
+            );
+        }
+
+        tokio::time::sleep(POOL_AVAILABILITY_RETRY).await;
+    }
 }
 
 /// Read some PCM data (not to EOF), then drop the instance.
@@ -449,5 +466,37 @@ async fn pool_recovers_after_saturation() {
     info!(
         total_samples = total,
         "pool recovered and new instance completed"
+    );
+}
+
+/// Probe helper should tolerate delayed thread release and not fail
+/// on a single transient snapshot.
+#[rstest]
+#[timeout(Duration::from_secs(20))]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pool_availability_waits_for_delayed_release() {
+    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+
+    for _ in 0..2 {
+        let tx = ready_tx.clone();
+        pool.spawn(move || {
+            let _ = tx.send(());
+            std::thread::sleep(Duration::from_millis(700));
+        });
+    }
+    drop(ready_tx);
+
+    for _ in 0..2 {
+        ready_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("busy task should start");
+    }
+
+    let started = tokio::time::Instant::now();
+    assert_pool_threads_available(&pool, 4).await;
+    assert!(
+        started.elapsed() >= Duration::from_millis(400),
+        "availability check should wait for delayed release"
     );
 }
