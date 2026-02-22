@@ -166,7 +166,7 @@ mod tests {
         // No tmp files should remain (they have unique suffixes like index.tmp.0).
         let tmp_files: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
-            .filter_map(std::result::Result::ok)
+            .filter_map(Result::ok)
             .filter(|e| e.path().to_str().is_some_and(|s| s.contains(".tmp.")))
             .collect();
         assert!(

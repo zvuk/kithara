@@ -14,7 +14,6 @@ use rangemap::RangeSet;
 /// Not tied to Downloader — a standalone abstraction.
 /// Implementations may store the index in memory ([`MemCoverage`])
 /// or persist it to disk alongside the resource.
-#[cfg_attr(test, unimock::unimock(api = CoverageMock))]
 pub trait Coverage: Send + 'static {
     /// Mark a range as downloaded.
     fn mark(&mut self, range: Range<u64>);
@@ -70,14 +69,12 @@ impl Default for MemCoverage {
 }
 
 impl Coverage for MemCoverage {
-    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn mark(&mut self, range: Range<u64>) {
         if !range.is_empty() {
             self.ranges.insert(range);
         }
     }
 
-    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn is_complete(&self) -> bool {
         let Some(total) = self.total_size else {
             return false;
@@ -231,10 +228,5 @@ mod tests {
         let mut c = MemCoverage::new();
         c.mark(0..50);
         assert!(c.next_gap(100).is_none());
-    }
-
-    #[test]
-    fn coverage_mock_api_is_generated() {
-        let _ = CoverageMock::mark;
     }
 }

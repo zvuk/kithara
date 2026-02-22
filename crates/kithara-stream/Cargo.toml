@@ -16,6 +16,7 @@ bytes = { workspace = true }
 derive_setters = { workspace = true }
 futures = { workspace = true }
 kithara-assets = { workspace = true }
+kithara-coverage = { workspace = true }
 kithara-net = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-storage = { workspace = true }

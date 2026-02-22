@@ -10,12 +10,13 @@ use kithara_abr::{
     AbrController, AbrDecision, AbrReason, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource,
 };
-use kithara_assets::{DiskCoverage, ResourceKey};
+use kithara_assets::ResourceKey;
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
-use kithara_storage::Coverage;
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{CoverageIndexHandle, Downloader, DownloaderIo, PlanOutcome};
+use kithara_stream::{
+    Coverage, CoverageIndexHandle, CoverageState, Downloader, DownloaderIo, PlanOutcome,
+};
 use tracing::debug;
 use url::Url;
 
@@ -408,7 +409,7 @@ impl HlsDownloader {
                 // Validate against coverage if available.
                 // No entry -> legacy file, treat as valid.
                 // Entry exists but incomplete -> partially written, skip.
-                let cov = DiskCoverage::open(Arc::clone(coverage_index), segment_url.to_string());
+                let cov = CoverageState::open(Arc::clone(coverage_index), segment_url.to_string());
                 if cov.total_size().is_some() && !cov.is_complete() {
                     break;
                 }
@@ -535,7 +536,7 @@ impl HlsDownloader {
             total: None,
         });
 
-        // Mark segment coverage for crash-safe tracking via DiskCoverage.
+        // Mark segment coverage for crash-safe tracking via CoverageState.
         {
             let mut segments = self.shared.segments.lock();
             if is_variant_switch {
@@ -545,7 +546,7 @@ impl HlsDownloader {
         }
         self.shared.condvar.notify_all();
 
-        let mut cov = DiskCoverage::open(Arc::clone(&self.coverage_index), media_url.to_string());
+        let mut cov = CoverageState::open(Arc::clone(&self.coverage_index), media_url.to_string());
         cov.set_total_size(media_len);
         cov.mark(0..media_len);
         // flush happens via Drop, or explicitly in commit()
@@ -1134,7 +1135,7 @@ impl Downloader for HlsDownloader {
 mod tests {
     use std::{collections::HashSet, sync::Arc, time::Duration};
 
-    use kithara_assets::{AssetStoreBuilder, CoverageIndex, ProcessChunkFn};
+    use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
@@ -1250,9 +1251,9 @@ mod tests {
     }
 
     fn make_coverage_index() -> Arc<CoverageIndexHandle> {
-        Arc::new(CoverageIndex::new(StorageResource::from(MemResource::new(
-            CancellationToken::new(),
-        ))))
+        Arc::new(CoverageIndexHandle::new(StorageResource::from(
+            MemResource::new(CancellationToken::new()),
+        )))
     }
 
     #[test]

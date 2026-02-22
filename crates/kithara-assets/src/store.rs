@@ -442,6 +442,7 @@ mod tests {
 
     use kithara_storage::ResourceExt;
     use rstest::rstest;
+    use tempfile::tempdir;
 
     use super::*;
     use crate::key::ResourceKey;
@@ -449,7 +450,7 @@ mod tests {
     #[rstest]
     #[timeout(Duration::from_secs(5))]
     fn builder_all_decorators_disabled() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(Some("test_asset"))
@@ -474,7 +475,7 @@ mod tests {
     #[rstest]
     #[timeout(Duration::from_secs(5))]
     fn builder_defaults_all_enabled() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(Some("test_asset"))
@@ -493,7 +494,7 @@ mod tests {
     #[rstest]
     #[timeout(Duration::from_secs(5))]
     fn builder_no_asset_root_with_absolute_key() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let file_path = dir.path().join("song.mp3");
         std::fs::write(&file_path, b"test data").unwrap();
 
@@ -516,7 +517,7 @@ mod tests {
     #[rstest]
     #[timeout(Duration::from_secs(5))]
     fn builder_no_asset_root_rejects_relative_key() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
 
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
@@ -544,7 +545,7 @@ mod tests {
     #[rstest]
     #[timeout(Duration::from_secs(5))]
     fn build_disk_returns_disk() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let backend = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(Some("test"))
@@ -591,7 +592,7 @@ mod tests {
     #[rstest]
     #[timeout(Duration::from_secs(5))]
     fn from_asset_store() {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(Some("test"))

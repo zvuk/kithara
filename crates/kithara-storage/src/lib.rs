@@ -14,7 +14,6 @@
 //! The consumer-facing trait is [`ResourceExt`].
 
 mod atomic;
-mod coverage;
 mod driver;
 mod error;
 mod memory;
@@ -26,7 +25,6 @@ mod unified;
 pub use atomic::Atomic;
 #[cfg(not(target_arch = "wasm32"))]
 pub use atomic::AtomicMmap;
-pub use coverage::{Coverage, MemCoverage};
 pub use driver::{Driver, DriverIo, Resource};
 pub use error::{StorageError, StorageResult};
 pub use memory::{MemDriver, MemOptions, MemResource};

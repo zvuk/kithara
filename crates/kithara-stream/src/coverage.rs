@@ -2,7 +2,8 @@
 
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
-use kithara_assets::{Assets, AssetsBackend, AssetsError, CoverageIndex, DiskCoverage};
+use kithara_assets::{Assets, AssetsBackend, AssetsError};
+use kithara_coverage::{CoverageIndex, DiskCoverage};
 use kithara_storage::StorageResource;
 
 pub type CoverageIndexHandle = CoverageIndex<StorageResource>;

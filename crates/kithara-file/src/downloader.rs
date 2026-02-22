@@ -9,10 +9,10 @@ use futures::StreamExt;
 use kithara_assets::AssetResource;
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, RangeSpec};
-use kithara_storage::{Coverage, ResourceExt, ResourceStatus};
+use kithara_storage::{ResourceExt, ResourceStatus};
 use kithara_stream::{
-    CoverageIndexHandle, CoverageState, Downloader, DownloaderIo, PlanOutcome, StepResult, Writer,
-    WriterItem,
+    Coverage, CoverageIndexHandle, CoverageState, Downloader, DownloaderIo, PlanOutcome,
+    StepResult, Writer, WriterItem,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -440,10 +440,11 @@ impl Downloader for FileDownloader {
 mod tests {
     use std::sync::Arc;
 
-    use kithara_assets::{AssetStoreBuilder, CoverageIndex};
+    use kithara_assets::AssetStoreBuilder;
     use kithara_events::EventBus;
     use kithara_net::HttpClient;
-    use kithara_storage::{Coverage, MemResource, StorageResource};
+    use kithara_storage::{MemResource, StorageResource};
+    use kithara_stream::Coverage;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -485,9 +486,9 @@ mod tests {
         };
 
         let shared = Arc::new(SharedFileState::new());
-        let coverage_index = Arc::new(CoverageIndex::new(StorageResource::from(MemResource::new(
-            cancel.clone(),
-        ))));
+        let coverage_index = Arc::new(CoverageIndexHandle::new(StorageResource::from(
+            MemResource::new(cancel.clone()),
+        )));
         let mut coverage = CoverageState::open(coverage_index, url.to_string());
         coverage.set_total_size(total);
         coverage.mark(0..1000); // Sequential downloaded first 1KB.

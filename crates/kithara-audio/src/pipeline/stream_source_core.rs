@@ -468,6 +468,60 @@ impl<T: StreamType> StreamAudioSource<T> {
         self.pending_seek_recover_attempts = 0;
     }
 
+    fn apply_seek_from_decoder(
+        &mut self,
+        epoch: u64,
+        position: Duration,
+        preferred_recreate_offset: Option<u64>,
+        allow_direct_seek: bool,
+    ) -> bool {
+        if allow_direct_seek {
+            let stream_pos = self.shared_stream.position();
+            let segment_range = self.shared_stream.current_segment_range();
+
+            self.update_decoder_len_for_seek();
+
+            debug!(
+                ?position,
+                epoch,
+                stream_pos,
+                ?segment_range,
+                base_offset = self.base_offset,
+                "seek: about to call decoder.seek()"
+            );
+            if let Err(err) = self.decoder.seek(position) {
+                warn!(?err, "seek failed");
+            } else {
+                let (variant, segment_index, byte_range_start, byte_range_end) =
+                    self.seek_context();
+                self.apply_seek_applied(
+                    epoch,
+                    position,
+                    variant,
+                    segment_index,
+                    byte_range_start,
+                    byte_range_end,
+                );
+                return true;
+            }
+        }
+
+        if self.recover_seek_after_failed_seek(position, preferred_recreate_offset) {
+            let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
+            self.apply_seek_applied(
+                epoch,
+                position,
+                variant,
+                segment_index,
+                byte_range_start,
+                byte_range_end,
+            );
+            return true;
+        }
+
+        false
+    }
+
     fn apply_time_anchor_seek(
         &mut self,
         position: Duration,
@@ -1001,7 +1055,7 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
 
     #[expect(
         clippy::cognitive_complexity,
-        reason = "seek dispatch with multiple fallback paths"
+        reason = "seek dispatch with retries and recovery"
     )]
     fn apply_pending_seek(&mut self) {
         let epoch = self.timeline.seek_epoch();
@@ -1041,78 +1095,40 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         self.shared_stream.clear_variant_fence();
         self.pending_seek_skip = None;
 
-        let mut seek_completed = false;
+        // Decoder alignment may read from the stream (decoder recreate path).
+        // Complete flush first so wait_range can block and request data.
+        self.timeline.complete_seek(epoch);
+
         match self.shared_stream.seek_time_anchor(position) {
             Ok(Some(anchor)) => {
-                // Decoder alignment may read from the stream (decoder recreate path).
-                // Complete flush first so wait_range can block and request data.
-                if !seek_completed {
-                    self.timeline.complete_seek(epoch);
-                    seek_completed = true;
-                }
                 if !self.align_decoder_with_seek_anchor(anchor) {
-                    warn!(
-                        "seek anchor path: decoder alignment failed, falling back to legacy decoder seek"
+                    warn!("seek anchor path: decoder alignment failed, using seek recovery");
+                    let _ = self.apply_seek_from_decoder(
+                        epoch,
+                        position,
+                        Some(anchor.byte_offset),
+                        false,
                     );
+                    return;
                 }
                 if self.apply_time_anchor_seek(position, epoch, anchor) {
                     return;
                 }
-                warn!("seek anchor path failed, falling back to legacy decoder seek");
+                warn!("seek anchor path failed, using seek recovery");
+                let _ =
+                    self.apply_seek_from_decoder(epoch, position, Some(anchor.byte_offset), false);
+                return;
             }
-            Ok(None) => {}
+            Ok(None) => {
+                let _ = self.apply_seek_from_decoder(epoch, position, None, true);
+            }
             Err(err) => {
                 warn!(
                     ?err,
-                    "seek anchor resolution failed, using legacy decoder seek"
+                    "seek anchor resolution failed, using direct seek path"
                 );
+                let _ = self.apply_seek_from_decoder(epoch, position, None, true);
             }
-        }
-
-        if !seek_completed {
-            self.timeline.complete_seek(epoch);
-        }
-
-        let stream_pos = self.shared_stream.position();
-        let segment_range = self.shared_stream.current_segment_range();
-
-        self.update_decoder_len_for_seek();
-
-        debug!(
-            ?position,
-            epoch,
-            stream_pos,
-            ?segment_range,
-            base_offset = self.base_offset,
-            "seek: about to call decoder.seek()"
-        );
-        if let Err(e) = self.decoder.seek(position) {
-            warn!(?e, "seek failed");
-            let recovered = self.recover_seek_after_failed_seek(position, None);
-
-            if recovered {
-                reset_effects(&mut self.effects);
-                let (variant, segment_index, byte_range_start, byte_range_end) =
-                    self.seek_context();
-                self.apply_seek_applied(
-                    epoch,
-                    position,
-                    variant,
-                    segment_index,
-                    byte_range_start,
-                    byte_range_end,
-                );
-            }
-        } else {
-            let (variant, segment_index, byte_range_start, byte_range_end) = self.seek_context();
-            self.apply_seek_applied(
-                epoch,
-                position,
-                variant,
-                segment_index,
-                byte_range_start,
-                byte_range_end,
-            );
         }
     }
 }

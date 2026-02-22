@@ -14,12 +14,13 @@ use std::{
 
 use crossbeam_queue::SegQueue;
 use kithara_abr::Variant;
-use kithara_assets::{DiskCoverage, ResourceKey};
+use kithara_assets::ResourceKey;
 use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::{Condvar, Mutex, time::Duration};
-use kithara_storage::{Coverage, ResourceExt, WaitOutcome};
+use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{
-    CoverageIndexHandle, MediaInfo, Source, SourceSeekAnchor, StreamError, StreamResult, Timeline,
+    Coverage, CoverageIndexHandle, CoverageState, MediaInfo, Source, SourceSeekAnchor, StreamError,
+    StreamResult, Timeline,
 };
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -271,7 +272,7 @@ impl HlsSource {
     }
 
     fn media_range_covered_by_index(&self, seg: &LoadedSegment, range: Range<u64>) -> bool {
-        let cov = DiskCoverage::open(Arc::clone(&self.coverage_index), seg.media_url.to_string());
+        let cov = CoverageState::open(Arc::clone(&self.coverage_index), seg.media_url.to_string());
         let Some(total) = cov.total_size() else {
             // Legacy cache entry without coverage metadata.
             return true;
@@ -782,12 +783,14 @@ impl HlsSource {
 mod tests {
     use std::{ops::Range, sync::Arc, time::Duration};
 
-    use kithara_assets::{AssetStoreBuilder, CoverageIndex, DiskCoverage, ProcessChunkFn};
+    use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
     use kithara_drm::DecryptContext;
     use kithara_events::Event;
     use kithara_net::{HttpClient, NetOptions};
-    use kithara_storage::{Coverage, MemResource, StorageResource};
-    use kithara_stream::{AudioCodec, CoverageIndexHandle, open_coverage_index};
+    use kithara_storage::{MemResource, StorageResource};
+    use kithara_stream::{
+        AudioCodec, Coverage, CoverageIndexHandle, CoverageState, open_coverage_index,
+    };
     use rstest::rstest;
     use url::Url;
 
@@ -852,9 +855,9 @@ mod tests {
     }
 
     fn make_coverage_index() -> Arc<CoverageIndexHandle> {
-        Arc::new(CoverageIndex::new(StorageResource::from(MemResource::new(
-            CancellationToken::new(),
-        ))))
+        Arc::new(CoverageIndexHandle::new(StorageResource::from(
+            MemResource::new(CancellationToken::new()),
+        )))
     }
 
     fn set_segment_coverage(
@@ -863,7 +866,7 @@ mod tests {
         total: u64,
         marks: &[Range<u64>],
     ) {
-        let mut cov = DiskCoverage::open(Arc::clone(index), url.to_string());
+        let mut cov = CoverageState::open(Arc::clone(index), url.to_string());
         cov.set_total_size(total);
         for range in marks {
             cov.mark(range.clone());

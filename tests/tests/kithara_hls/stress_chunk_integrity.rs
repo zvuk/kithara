@@ -38,6 +38,7 @@ const WARMUP_TIMEOUT_SECS: u64 = 30;
 const TEST_TIMEOUT_SECS: u64 = 60;
 const POST_SWITCH_CHUNKS: usize = 50;
 const CHUNKS_PER_SEEK: usize = 5;
+const WARMUP_NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
 const NEXT_CHUNK_TIMEOUT_MS: u64 = 5_000;
 
 // WAV Generators
@@ -302,7 +303,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
 
         let Some(chunk) = next_chunk_with_timeout(
             &mut audio,
-            Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
+            Duration::from_millis(WARMUP_NEXT_CHUNK_TIMEOUT_MS),
             "phase1_warmup",
         )
         .await

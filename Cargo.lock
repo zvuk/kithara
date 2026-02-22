@@ -2390,10 +2390,10 @@ dependencies = [
  "hex",
  "kithara-assets",
  "kithara-bufpool",
+ "kithara-coverage",
  "kithara-platform",
  "kithara-storage",
  "lru",
- "rangemap",
  "rstest",
  "serde",
  "serial_test",
@@ -2459,6 +2459,20 @@ dependencies = [
  "kithara-platform",
  "rstest",
  "unimock",
+]
+
+[[package]]
+name = "kithara-coverage"
+version = "0.1.0"
+dependencies = [
+ "bincode",
+ "dashmap",
+ "kithara-storage",
+ "rangemap",
+ "rstest",
+ "serde",
+ "tempfile",
+ "tokio-util",
 ]
 
 [[package]]
@@ -2724,6 +2738,7 @@ dependencies = [
  "futures",
  "hotpath",
  "kithara-assets",
+ "kithara-coverage",
  "kithara-net",
  "kithara-platform",
  "kithara-storage",

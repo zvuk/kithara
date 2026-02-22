@@ -700,7 +700,7 @@ fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
 
 #[rstest]
 #[timeout(Duration::from_secs(10))]
-fn seek_anchor_failure_falls_back_to_legacy_seek() {
+fn seek_anchor_failure_uses_recovery_without_legacy_fallback_seek() {
     let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
 
     let seek_spec = PcmSpec {
@@ -745,26 +745,17 @@ fn seek_anchor_failure_falls_back_to_legacy_seek() {
 
     let created_offsets = offsets.lock();
     assert!(
-        created_offsets.is_empty(),
-        "decoder factory must not be used for seek fallback"
+        created_offsets.as_slice() == [500],
+        "seek recovery should attempt decoder recreate at anchor offset"
     );
 
     let seeks = seek_log.lock();
-    assert_eq!(seeks.len(), 2);
+    assert_eq!(seeks.len(), 1);
     assert_eq!(
         seeks[0],
         Duration::from_secs(8),
         "anchor path should first seek to segment start"
     );
-    assert_eq!(
-        seeks[1],
-        Duration::from_millis(8_250),
-        "legacy fallback should preserve original seek target"
-    );
-
-    let fetch = source.fetch_next();
-    assert!(!fetch.is_eof);
-    assert_eq!(fetch.data.pcm.len(), 100);
 }
 
 #[rstest]

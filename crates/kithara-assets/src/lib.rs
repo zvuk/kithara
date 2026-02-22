@@ -60,16 +60,18 @@ pub use cache::CachedAssets;
 pub use error::{AssetsError, AssetsResult};
 #[doc(hidden)]
 pub use evict::EvictAssets;
-pub use index::CoverageIndex;
+#[doc(hidden)]
+pub use index::EvictConfig;
 #[cfg(feature = "internal")]
 pub use index::PinsIndex;
-#[doc(hidden)]
-pub use index::{DiskCoverage, EvictConfig};
 #[cfg(feature = "internal")]
 pub use key::canonicalize_for_asset;
 pub use key::{ResourceKey, asset_root_for_url};
 #[doc(hidden)]
 pub use kithara_bufpool::{BytePool, byte_pool};
+pub use kithara_coverage::CoverageIndex;
+#[doc(hidden)]
+pub use kithara_coverage::DiskCoverage;
 #[doc(hidden)]
 pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
 #[doc(hidden)]
