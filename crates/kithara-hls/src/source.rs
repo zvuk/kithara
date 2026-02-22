@@ -36,6 +36,10 @@ use crate::{
 mod source_wait_range;
 use source_wait_range::{WaitRangeDecision, WaitRangeState};
 
+#[cfg(test)]
+#[path = "../tests/source_internal_cases.rs"]
+mod tests;
+
 /// Request to load a specific segment (on-demand or sequential).
 #[derive(Debug, Clone)]
 pub(crate) struct SegmentRequest {
@@ -628,6 +632,3 @@ impl HlsSource {
         Arc::clone(&self.shared.current_variant_index)
     }
 }
-
-#[cfg(test)]
-mod tests;

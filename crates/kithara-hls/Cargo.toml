@@ -6,6 +6,7 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "HLS VOD orchestration with ABR, segment caching, and offline support"
+autotests = false
 
 [lints]
 workspace = true
