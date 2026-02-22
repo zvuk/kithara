@@ -37,6 +37,7 @@ unimock = { workspace = true, optional = true }
 [features]
 default = []
 test-utils = ["unimock"]
+internal = []
 # Enable rodio::Source adapter for playback
 rodio = ["dep:rodio"]
 # Enable performance monitoring with hotpath-rs (timing only, minimal overhead)
@@ -59,6 +60,7 @@ web-sys = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
+kithara-audio = { path = ".", default-features = false, features = ["internal"] }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 axum = { workspace = true }

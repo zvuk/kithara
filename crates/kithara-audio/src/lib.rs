@@ -46,10 +46,11 @@ mod resampler;
 mod rodio;
 mod traits;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 // Public API exports
 pub use effects::eq::{EqBandConfig, EqEffect, generate_log_spaced_bands};
 pub use pipeline::{Audio, AudioConfig};
 pub use resampler::ResamplerQuality;
-#[doc(hidden)]
-pub use resampler::{ResamplerParams, ResamplerProcessor};
 pub use traits::{AudioEffect, DecodeError, DecodeResult, PcmReader};

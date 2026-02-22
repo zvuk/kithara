@@ -13,6 +13,7 @@ workspace = true
 [features]
 test-utils = ["unimock"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
+internal = []
 
 [dependencies]
 derivative = { workspace = true }
@@ -40,6 +41,7 @@ gloo-timers = { workspace = true }
 
 [dev-dependencies]
 # Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
+kithara-net = { path = ".", default-features = false, features = ["internal"] }
 axum = { workspace = true }
 tower = { workspace = true }
 futures = { workspace = true }

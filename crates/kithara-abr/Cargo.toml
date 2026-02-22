@@ -12,7 +12,11 @@ derivative = { workspace = true }
 kithara-platform = { workspace = true }
 tracing = { workspace = true }
 
+[features]
+internal = []
+
 [dev-dependencies]
+kithara-abr = { path = ".", default-features = false, features = ["internal"] }
 unimock = { workspace = true }
 rstest = { workspace = true }
 criterion = { workspace = true }

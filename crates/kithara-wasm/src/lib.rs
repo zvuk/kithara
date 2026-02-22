@@ -1,5 +1,8 @@
 // WASM HLS player library entry point.
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 #[cfg(target_arch = "wasm32")]
 mod bindings;
 

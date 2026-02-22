@@ -19,7 +19,8 @@ mod error;
 mod inner;
 mod session;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 pub use config::{FileConfig, FileSrc};
-#[doc(hidden)]
-pub use error::SourceError;
 pub use inner::File;

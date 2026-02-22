@@ -55,8 +55,10 @@ perf = [
     "kithara-net/perf",
 ]
 full = ["file", "hls", "assets", "net", "bufpool"]
+internal = []
 
 [dev-dependencies]
+kithara = { path = ".", default-features = false, features = ["internal"] }
 tokio = { workspace = true }
 rstest = { workspace = true }
 tracing = { workspace = true }

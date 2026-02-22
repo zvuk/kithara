@@ -16,6 +16,9 @@ mod context;
 mod decrypt;
 mod error;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 pub use context::DecryptContext;
 pub use decrypt::aes128_cbc_process_chunk;
 pub use error::DrmError;

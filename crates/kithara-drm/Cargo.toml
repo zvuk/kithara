@@ -10,6 +10,9 @@ description = "DRM decryption support for kithara (AES-128-CBC and extensible ke
 [lints]
 workspace = true
 
+[features]
+internal = []
+
 [dependencies]
 aes = { workspace = true }
 cbc = { workspace = true }
@@ -19,4 +22,5 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
+kithara-drm = { path = ".", default-features = false, features = ["internal"] }
 rstest = { workspace = true }

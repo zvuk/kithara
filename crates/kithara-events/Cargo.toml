@@ -20,10 +20,12 @@ kithara-decode = { workspace = true, optional = true }
 default = ["hls", "audio"]
 hls = ["dep:kithara-abr"]
 audio = ["dep:kithara-decode"]
+internal = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
+kithara-events = { path = ".", default-features = false, features = ["internal"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 rstest = { workspace = true }

@@ -30,6 +30,7 @@ unimock = { workspace = true, optional = true }
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 test-utils = ["unimock"]
+internal = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["full"] }
@@ -39,6 +40,7 @@ tokio-util = { workspace = true, features = ["full"] }
 wasm-bindgen-futures = { workspace = true }
 
 [dev-dependencies]
+kithara-stream = { path = ".", default-features = false, features = ["internal"] }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 rstest = { workspace = true }

@@ -8,7 +8,8 @@ use std::{
 
 use kithara_platform::time::Instant;
 
-use super::{AbrMode, AbrOptions, Estimator, ThroughputEstimator, ThroughputSample};
+use super::{AbrMode, AbrOptions, ThroughputEstimator, ThroughputSample};
+use crate::estimator::Estimator;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AbrReason {

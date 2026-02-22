@@ -16,6 +16,9 @@ mod metadata;
 mod time;
 mod types;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 pub mod impls;
 pub mod traits;
 

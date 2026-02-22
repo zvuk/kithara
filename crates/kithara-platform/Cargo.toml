@@ -11,6 +11,9 @@ description = "Platform-aware primitives (sync, traits, time) for native and was
 [lints]
 workspace = true
 
+[features]
+internal = []
+
 [dependencies]
 futures = { workspace = true }
 kanal = { workspace = true }
@@ -22,4 +25,5 @@ web-time = { workspace = true }
 tokio = { workspace = true, features = ["time", "sync"] }
 
 [dev-dependencies]
+kithara-platform = { path = ".", default-features = false, features = ["internal"] }
 rstest = { workspace = true }

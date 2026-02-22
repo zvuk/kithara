@@ -8,11 +8,12 @@ mod timeout;
 mod traits;
 mod types;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
 
-#[doc(hidden)]
-pub use crate::timeout::TimeoutNet;
 pub use crate::{
     client::HttpClient,
     error::{NetError, NetResult},

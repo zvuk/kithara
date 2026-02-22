@@ -30,8 +30,10 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 apple = ["dep:core-foundation", "dep:core-foundation-sys"]
 android = []
 test-utils = ["unimock"]
+internal = []
 
 [dev-dependencies]
+kithara-decode = { path = ".", default-features = false, features = ["internal"] }
 kithara-test-utils = { workspace = true }
 rstest = { workspace = true }
 unimock = { workspace = true }

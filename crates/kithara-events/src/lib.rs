@@ -11,6 +11,8 @@ mod seek;
 mod audio;
 #[cfg(feature = "hls")]
 mod hls;
+#[cfg(feature = "internal")]
+pub mod internal;
 
 #[cfg(feature = "audio")]
 pub use audio::{AudioEvent, SeekLifecycleStage};

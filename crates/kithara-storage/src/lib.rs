@@ -22,6 +22,9 @@ mod mmap;
 mod resource;
 mod unified;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 pub use atomic::Atomic;
 #[cfg(not(target_arch = "wasm32"))]
 pub use atomic::AtomicMmap;

@@ -7,6 +7,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
+use kithara_bufpool::byte_pool;
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, HttpClient, Net};
 use kithara_platform::{MaybeSend, MaybeSync, RwLock};
@@ -230,7 +231,7 @@ impl<N: Net> FetchManager<N> {
         let key = ResourceKey::from_url(url);
         let res = self.backend.open_resource(&key)?;
 
-        let mut buf = kithara_assets::byte_pool().get();
+        let mut buf = byte_pool().get();
         let n = res.read_into(&mut buf)?;
         if n > 0 {
             debug!(

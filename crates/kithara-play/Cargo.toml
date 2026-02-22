@@ -60,8 +60,10 @@ backend-cpal = ["firewheel/cpal"]
 rodio = ["dep:rodio", "kithara-audio/rodio"]
 wasm-bindgen = ["firewheel/wasm-bindgen"]
 test-utils = ["unimock"]
+internal = []
 
 [dev-dependencies]
+kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "internal"] }
 kithara-audio = { workspace = true, features = ["test-utils"] }
 unimock = { workspace = true }
 tokio = { workspace = true, features = ["full", "test-util"] }

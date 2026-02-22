@@ -19,6 +19,7 @@ rayon = { workspace = true, optional = true }
 default = ["threads"]
 # Enable wasm-bindgen-rayon thread pool (requires atomics + bulk-memory target features).
 threads = ["dep:rayon", "dep:wasm-bindgen-rayon"]
+internal = []
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-play = { workspace = true, default-features = false, features = ["file", "hls", "backend-cpal", "wasm-bindgen"] }
@@ -31,3 +32,6 @@ wasm-bindgen-rayon = { workspace = true, optional = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+kithara-wasm = { path = ".", default-features = false, features = ["internal"] }

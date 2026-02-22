@@ -23,22 +23,16 @@
 pub mod config;
 pub mod error;
 
-// Internal modules (exposed for testing, use with caution)
-#[doc(hidden)]
-pub mod fetch;
-#[doc(hidden)]
-pub mod keys;
-#[doc(hidden)]
-pub mod parsing;
-
-// Re-export from kithara-assets
-#[doc(hidden)]
-pub use kithara_assets::AssetsBackend;
+#[cfg(feature = "internal")]
+pub mod internal;
 
 mod context;
 pub(crate) mod download_state;
 mod downloader;
+mod fetch;
 mod inner;
+mod keys;
+mod parsing;
 pub(crate) mod playlist;
 mod source;
 

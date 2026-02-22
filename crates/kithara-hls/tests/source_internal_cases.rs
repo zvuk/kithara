@@ -1,25 +1,31 @@
-use std::{ops::Range, slice, sync::Arc, time::Duration};
+use std::{
+    ops::Range,
+    slice,
+    sync::{Arc, atomic::Ordering},
+    time::Duration,
+};
 
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
 use kithara_coverage::{Coverage, CoverageManager};
 use kithara_drm::DecryptContext;
-use kithara_events::Event;
+use kithara_events::{Event, EventBus, HlsEvent};
+use kithara_hls::internal::{
+    AbrMode, AbrOptions, DefaultFetchManager, DownloadState, FetchManager, HlsConfig, HlsError,
+    HlsSource, LoadedSegment, PlaylistState, SegmentRequest, SegmentState, SharedSegments,
+    VariantId, VariantSizeMap, VariantState, VariantStream, build_source, make_test_source,
+    set_source_coverage, set_source_variant_fence, source_can_cross_variant, source_coverage,
+    source_range_ready_from_segments, source_variant_index_handle, subscribe_source_events,
+};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_storage::StorageResource;
-use kithara_stream::AudioCodec;
+use kithara_storage::{StorageResource, WaitOutcome};
+use kithara_stream::{AudioCodec, Source, StreamError, Timeline};
 use rstest::rstest;
 use tokio::{
     task,
     time::{self, Instant},
 };
+use tokio_util::sync::CancellationToken;
 use url::Url;
-
-use super::*;
-use crate::{
-    fetch::FetchManager,
-    parsing::{VariantId, VariantStream},
-    playlist::{SegmentState, VariantSizeMap, VariantState},
-};
 
 #[derive(Clone, Copy)]
 enum WaitRangeUnblock {
@@ -30,33 +36,6 @@ enum WaitRangeUnblock {
 /// Create a dummy `PlaylistState` for tests (no real playlists needed).
 fn dummy_playlist_state() -> Arc<PlaylistState> {
     Arc::new(PlaylistState::new(vec![]))
-}
-
-/// Create a minimal `HlsSource` for testing `wait_range` behavior.
-fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> HlsSource {
-    let noop_drm: ProcessChunkFn<DecryptContext> =
-        Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
-            output[..input.len()].copy_from_slice(input);
-            Ok(input.len())
-        });
-    let backend = AssetStoreBuilder::new()
-        .ephemeral(true)
-        .cancel(cancel.clone())
-        .process_fn(noop_drm)
-        .build();
-    let net = HttpClient::new(NetOptions::default());
-    let fetch = Arc::new(FetchManager::new(backend, net, cancel));
-    let coverage = fetch.backend().open_coverage_manager().unwrap();
-    let playlist_state = Arc::clone(&shared.playlist_state);
-    HlsSource {
-        fetch,
-        shared,
-        playlist_state,
-        bus: EventBus::new(16),
-        coverage,
-        variant_fence: None,
-        _backend: None,
-    }
 }
 
 fn make_loaded_segment(
@@ -290,7 +269,7 @@ fn media_info_uses_reader_offset_variant_instead_of_last_loaded_segment() {
     // Variant fence path can expose the target variant before reader_offset advances.
     shared.timeline.set_byte_position(0);
     shared.current_variant_index.store(1, Ordering::Release);
-    source.variant_fence = Some(0);
+    set_source_variant_fence(&mut source, Some(0));
     let hinted_info = Source::media_info(&source).expect("media info from hinted variant");
     assert_eq!(hinted_info.codec, Some(AudioCodec::Flac));
 }
@@ -459,7 +438,7 @@ fn codec_fence_allows_cross_variant_reads_when_codec_matches() {
     ));
     let source = make_test_source(shared, cancel);
 
-    assert!(source.can_cross_variant_without_reset(0, 1));
+    assert!(source_can_cross_variant(&source, 0, 1));
 }
 
 #[test]
@@ -474,7 +453,7 @@ fn codec_fence_blocks_cross_variant_reads_when_codec_changes() {
     ));
     let source = make_test_source(shared, cancel);
 
-    assert!(!source.can_cross_variant_without_reset(0, 1));
+    assert!(!source_can_cross_variant(&source, 0, 1));
 }
 
 #[test]
@@ -486,12 +465,12 @@ fn build_pair_seeds_timeline_total_duration_from_playlist() {
     ]));
     let variants = parsed_variants(2);
     let fetch = test_fetch_manager(cancel.clone());
-    let config = crate::config::HlsConfig {
+    let config = HlsConfig {
         cancel: Some(cancel),
-        ..crate::config::HlsConfig::default()
+        ..HlsConfig::default()
     };
     let coverage = make_coverage_manager();
-    let (_, source) = build_pair(
+    let source = build_source(
         fetch,
         &variants,
         &config,
@@ -515,16 +494,16 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
     ]));
     let variants = parsed_variants(2);
     let fetch = test_fetch_manager(cancel.clone());
-    let config = crate::config::HlsConfig {
-        abr: crate::config::AbrOptions {
-            mode: crate::config::AbrMode::Manual(1),
-            ..crate::config::AbrOptions::default()
+    let config = HlsConfig {
+        abr: AbrOptions {
+            mode: AbrMode::Manual(1),
+            ..AbrOptions::default()
         },
         cancel: Some(cancel),
-        ..crate::config::HlsConfig::default()
+        ..HlsConfig::default()
     };
     let coverage = make_coverage_manager();
-    let (_, source) = build_pair(
+    let source = build_source(
         fetch,
         &variants,
         &config,
@@ -534,7 +513,7 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
     );
 
     assert_eq!(
-        source.variant_index_handle().load(Ordering::Relaxed),
+        source_variant_index_handle(&source).load(Ordering::Relaxed),
         1,
         "initial source variant should match ABR manual mode"
     );
@@ -722,7 +701,7 @@ fn range_ready_uses_coverage_for_disk_segments() {
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let mut source = make_test_source(Arc::clone(&shared), cancel);
     let coverage = make_coverage_manager();
-    source.coverage = coverage.clone();
+    set_source_coverage(&mut source, coverage.clone());
 
     let segment = make_loaded_segment(0, 0, 0, 100);
     let segment_url = segment.media_url.clone();
@@ -735,7 +714,7 @@ fn range_ready_uses_coverage_for_disk_segments() {
     set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&partial_mark));
     let segments = shared.segments.lock();
     assert!(
-        !source.range_ready_from_segments(&segments, &(0..80)),
+        !source_range_ready_from_segments(&source, &segments, &(0..80)),
         "incomplete coverage must not be treated as ready"
     );
     drop(segments);
@@ -744,7 +723,7 @@ fn range_ready_uses_coverage_for_disk_segments() {
     set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&full_mark));
     let segments = shared.segments.lock();
     assert!(
-        source.range_ready_from_segments(&segments, &(0..80)),
+        source_range_ready_from_segments(&source, &segments, &(0..80)),
         "full coverage must be treated as ready"
     );
 }
@@ -763,7 +742,7 @@ fn range_ready_requires_coverage_metadata() {
 
     let segments = shared.segments.lock();
     assert!(
-        !source.range_ready_from_segments(&segments, &(0..80)),
+        !source_range_ready_from_segments(&source, &segments, &(0..80)),
         "segment without coverage metadata must not be treated as ready"
     );
 }
@@ -775,7 +754,7 @@ async fn wait_range_waits_until_coverage_is_complete() {
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
     let coverage = make_coverage_manager();
-    source.coverage = coverage.clone();
+    set_source_coverage(&mut source, coverage.clone());
 
     let segment = make_loaded_segment(0, 0, 0, 100);
     let segment_url = segment.media_url.clone();
@@ -849,7 +828,7 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let coverage = source.coverage.clone();
+    let coverage = source_coverage(&source);
 
     let handle = task::spawn_blocking(move || source.wait_range(0..100));
 
@@ -898,7 +877,7 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let coverage = source.coverage.clone();
+    let coverage = source_coverage(&source);
 
     // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
     shared2.timeline.set_eof(true);
@@ -1047,7 +1026,7 @@ async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
     let ps = dummy_playlist_state();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let mut events = source.bus.subscribe();
+    let mut events = subscribe_source_events(&source);
 
     let handle = task::spawn_blocking(move || source.wait_range(1024..2048));
     let mut saw_metadata_miss = false;

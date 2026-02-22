@@ -27,6 +27,9 @@
 mod global;
 mod pool;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 pub use global::{BytePool, PcmBuf, PcmPool, byte_pool, pcm_pool};
 // Low-level pool internals (used by type aliases above; prefer BytePool/PcmPool/PcmBuf)
 #[doc(hidden)]

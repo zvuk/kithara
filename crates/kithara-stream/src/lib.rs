@@ -21,6 +21,9 @@ mod stream;
 mod timeline;
 mod writer;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
 

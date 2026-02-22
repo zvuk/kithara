@@ -25,6 +25,9 @@ mod maybe_send;
 mod pool;
 pub mod time;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 pub use channel::{ReceiveError, Receiver, SendError, Sender, bounded, unbounded};
 pub use maybe_send::{MaybeSend, MaybeSync};
 pub use pool::ThreadPool;

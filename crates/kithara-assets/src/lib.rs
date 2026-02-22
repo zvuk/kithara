@@ -46,39 +46,18 @@ mod mem_store;
 mod process;
 mod store;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 // Public API - used by other crates
 pub use backend::AssetsBackend;
-#[cfg(target_arch = "wasm32")]
-#[doc(hidden)]
-pub use base::Assets;
-// Hidden re-exports (needed by type aliases or cross-crate internals, not end-user API)
-#[cfg(not(target_arch = "wasm32"))]
-#[doc(hidden)]
-pub use base::{Assets, DiskAssetStore};
-#[doc(hidden)]
-pub use cache::CachedAssets;
 pub use error::{AssetsError, AssetsResult};
-#[doc(hidden)]
-pub use evict::EvictAssets;
-#[doc(hidden)]
 pub use index::EvictConfig;
-#[cfg(feature = "internal")]
-pub use index::PinsIndex;
-#[cfg(feature = "internal")]
-pub use key::canonicalize_for_asset;
 pub use key::{ResourceKey, asset_root_for_url};
 #[doc(hidden)]
 pub use kithara_bufpool::{BytePool, byte_pool};
 pub use kithara_coverage::CoverageIndex;
-#[doc(hidden)]
-pub use kithara_coverage::DiskCoverage;
-#[doc(hidden)]
-pub use lease::{LeaseAssets, LeaseGuard, LeaseResource};
-#[doc(hidden)]
-pub use mem_store::MemAssetStore;
 pub use process::ProcessChunkFn;
-#[doc(hidden)]
-pub use process::{ProcessedResource, ProcessingAssets};
 #[cfg(not(target_arch = "wasm32"))]
 pub use store::{AssetResource, AssetStore, AssetStoreBuilder, MemStore, StoreOptions};
 #[cfg(target_arch = "wasm32")]

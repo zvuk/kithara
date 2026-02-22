@@ -25,6 +25,9 @@ mod symphonia;
 mod traits;
 mod types;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;
 

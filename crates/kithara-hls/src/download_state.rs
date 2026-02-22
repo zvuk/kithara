@@ -18,36 +18,36 @@ use url::Url;
 
 /// A segment that has been downloaded and placed in the virtual byte stream.
 #[derive(Debug, Clone)]
-pub(crate) struct LoadedSegment {
+pub struct LoadedSegment {
     /// Variant index in the master playlist.
-    pub(crate) variant: usize,
+    pub variant: usize,
     /// Segment index within the variant's media playlist.
-    pub(crate) segment_index: usize,
+    pub segment_index: usize,
     /// Byte offset of this segment in the virtual stream.
-    pub(crate) byte_offset: u64,
+    pub byte_offset: u64,
     /// Size of the init segment in bytes (0 if no init).
-    pub(crate) init_len: u64,
+    pub init_len: u64,
     /// Size of the media segment in bytes.
-    pub(crate) media_len: u64,
+    pub media_len: u64,
     /// Absolute URL of the init segment (fMP4 only).
-    pub(crate) init_url: Option<Url>,
+    pub init_url: Option<Url>,
     /// Absolute URL of the media segment.
-    pub(crate) media_url: Url,
+    pub media_url: Url,
 }
 
 impl LoadedSegment {
     /// Total size of this segment (init + media).
-    pub(crate) fn total_len(&self) -> u64 {
+    pub fn total_len(&self) -> u64 {
         self.init_len + self.media_len
     }
 
     /// Byte offset just past the end of this segment.
-    pub(crate) fn end_offset(&self) -> u64 {
+    pub fn end_offset(&self) -> u64 {
         self.byte_offset + self.total_len()
     }
 
     /// Whether the given byte offset falls within this segment.
-    pub(crate) fn contains(&self, offset: u64) -> bool {
+    pub fn contains(&self, offset: u64) -> bool {
         offset >= self.byte_offset && offset < self.end_offset()
     }
 }
@@ -55,7 +55,7 @@ impl LoadedSegment {
 // DownloadState
 
 /// Index of loaded segments, ordered by byte offset for O(log n) lookups.
-pub(crate) struct DownloadState {
+pub struct DownloadState {
     /// `byte_offset` -> segment (ordered, O(log n) lookup).
     entries: BTreeMap<u64, LoadedSegment>,
     /// (variant, `segment_index`) for O(1) "is loaded?" checks.
@@ -84,7 +84,7 @@ impl DownloadState {
     }
 
     /// Create an empty download state.
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self {
             entries: BTreeMap::new(),
             loaded_keys: HashSet::new(),
@@ -94,7 +94,7 @@ impl DownloadState {
     }
 
     /// Add a loaded segment to the index.
-    pub(crate) fn push(&mut self, segment: LoadedSegment) {
+    pub fn push(&mut self, segment: LoadedSegment) {
         let offset = segment.byte_offset;
         let end = segment.end_offset();
         let key = (segment.variant, segment.segment_index);
@@ -128,7 +128,7 @@ impl DownloadState {
     ///
     /// Uses `BTreeMap::range(..=offset)` to find the last entry at or before
     /// the offset, then checks if the offset falls within that segment.
-    pub(crate) fn find_at_offset(&self, offset: u64) -> Option<&LoadedSegment> {
+    pub fn find_at_offset(&self, offset: u64) -> Option<&LoadedSegment> {
         self.entries
             .range(..=offset)
             .next_back()
@@ -137,13 +137,13 @@ impl DownloadState {
     }
 
     /// The most recently pushed segment.
-    pub(crate) fn last(&self) -> Option<&LoadedSegment> {
+    pub fn last(&self) -> Option<&LoadedSegment> {
         self.last_offset
             .and_then(|offset| self.entries.get(&offset))
     }
 
     /// Find an already loaded segment by `(variant, segment_index)`.
-    pub(crate) fn find_loaded_segment(
+    pub fn find_loaded_segment(
         &self,
         variant: usize,
         segment_index: usize,
@@ -157,7 +157,7 @@ impl DownloadState {
     ///
     /// Used to find the start of a new variant after ABR switch -- this is where
     /// init data (ftyp/moov) lives for the new variant.
-    pub(crate) fn first_segment_of_variant(&self, variant: usize) -> Option<&LoadedSegment> {
+    pub fn first_segment_of_variant(&self, variant: usize) -> Option<&LoadedSegment> {
         self.entries.values().find(|seg| seg.variant == variant)
     }
 
@@ -166,14 +166,14 @@ impl DownloadState {
     /// Used when decoder recreation requires init data (ftyp/moov). A plain
     /// first segment is not sufficient after seeks that start from a non-zero
     /// segment index where init was not requested.
-    pub(crate) fn first_init_segment_of_variant(&self, variant: usize) -> Option<&LoadedSegment> {
+    pub fn first_init_segment_of_variant(&self, variant: usize) -> Option<&LoadedSegment> {
         self.entries
             .values()
             .find(|seg| seg.variant == variant && seg.init_len > 0)
     }
 
     /// Number of loaded segments.
-    pub(crate) fn num_entries(&self) -> usize {
+    pub fn num_entries(&self) -> usize {
         self.entries.len()
     }
 
@@ -181,7 +181,7 @@ impl DownloadState {
     ///
     /// This is the "watermark" — the furthest byte position in the virtual stream.
     /// Used for throttling and EOF detection (replaces old `SegmentIndex::total_bytes()`).
-    pub(crate) fn max_end_offset(&self) -> u64 {
+    pub fn max_end_offset(&self) -> u64 {
         self.entries
             .values()
             .next_back()
@@ -193,7 +193,7 @@ impl DownloadState {
     /// Keeps all entries of `keep_variant` regardless of offset, and all entries
     /// from other variants that are strictly before the fence. Rebuilds
     /// `loaded_keys` and `loaded_ranges` from remaining entries.
-    pub(crate) fn fence_at(&mut self, offset: u64, keep_variant: usize) {
+    pub fn fence_at(&mut self, offset: u64, keep_variant: usize) {
         self.entries
             .retain(|_, seg| seg.byte_offset < offset || seg.variant == keep_variant);
 
@@ -208,11 +208,21 @@ impl DownloadState {
     }
 
     /// Remove all indexed segments while keeping persisted byte-cache intact.
-    pub(crate) fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.entries.clear();
         self.loaded_keys.clear();
         self.loaded_ranges.clear();
         self.last_offset = None;
+    }
+
+    /// Whether a specific segment has been loaded.
+    pub fn is_segment_loaded(&self, variant: usize, segment_index: usize) -> bool {
+        self.loaded_keys.contains(&(variant, segment_index))
+    }
+
+    /// Whether the entire byte range is loaded (no gaps).
+    pub fn is_range_loaded(&self, range: &Range<u64>) -> bool {
+        !self.loaded_ranges.gaps(range).any(|_| true)
     }
 }
 

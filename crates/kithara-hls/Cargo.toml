@@ -6,7 +6,6 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "HLS VOD orchestration with ABR, segment caching, and offline support"
-autotests = false
 
 [lints]
 workspace = true
@@ -14,6 +13,7 @@ workspace = true
 [dependencies]
 kithara-abr = { workspace = true }
 kithara-assets = { workspace = true }
+kithara-bufpool = { workspace = true }
 kithara-coverage = { workspace = true }
 kithara-events = { workspace = true, features = ["hls"] }
 kithara-drm = { workspace = true }
@@ -41,12 +41,14 @@ hotpath = { workspace = true, optional = true }
 [features]
 default = []
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
+internal = []
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
+kithara-hls = { path = ".", default-features = false, features = ["internal"] }
 kithara-net = { workspace = true, features = ["test-utils"] }
 axum = { workspace = true }
 tempfile = { workspace = true }

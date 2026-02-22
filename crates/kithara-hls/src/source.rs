@@ -36,46 +36,42 @@ use crate::{
 mod source_wait_range;
 use source_wait_range::{WaitRangeDecision, WaitRangeState};
 
-#[cfg(test)]
-#[path = "../tests/source_internal_cases.rs"]
-mod tests;
-
 /// Request to load a specific segment (on-demand or sequential).
 #[derive(Debug, Clone)]
-pub(crate) struct SegmentRequest {
-    pub(crate) segment_index: usize,
-    pub(crate) variant: usize,
-    pub(crate) seek_epoch: u64,
+pub struct SegmentRequest {
+    pub segment_index: usize,
+    pub variant: usize,
+    pub seek_epoch: u64,
 }
 
 /// Shared state between `HlsDownloader` and `HlsSource`.
-pub(crate) struct SharedSegments {
-    pub(crate) segments: Mutex<DownloadState>,
+pub struct SharedSegments {
+    pub segments: Mutex<DownloadState>,
     /// Downloader → Source: new segment available (for sync blocking in Source).
-    pub(crate) condvar: Condvar,
+    pub condvar: Condvar,
     /// Shared stream timeline (single source of truth for byte position).
-    pub(crate) timeline: Timeline,
+    pub timeline: Timeline,
     /// Source → Downloader: reader advanced, may resume downloading.
-    pub(crate) reader_advanced: Notify,
+    pub reader_advanced: Notify,
     /// Segment load requests (on-demand from seek or sequential).
-    pub(crate) segment_requests: SegQueue<SegmentRequest>,
+    pub segment_requests: SegQueue<SegmentRequest>,
     /// Parsed playlist data (variant info, segment URLs, size maps).
-    pub(crate) playlist_state: Arc<PlaylistState>,
+    pub playlist_state: Arc<PlaylistState>,
     /// True after a mid-stream variant switch. On-demand loading should
     /// just wake the sequential downloader instead of using metadata lookups.
-    pub(crate) had_midstream_switch: AtomicBool,
+    pub had_midstream_switch: AtomicBool,
     /// Cancellation token for interrupting `wait_range`.
-    pub(crate) cancel: CancellationToken,
+    pub cancel: CancellationToken,
     /// Downloader has exited (normally or with error).
-    pub(crate) stopped: AtomicBool,
+    pub stopped: AtomicBool,
     /// Current segment index (updated by Source on each `read_at`).
-    pub(crate) current_segment_index: Arc<AtomicU32>,
+    pub current_segment_index: Arc<AtomicU32>,
     /// Current variant index (updated by Source on each `read_at`).
-    pub(crate) current_variant_index: Arc<AtomicUsize>,
+    pub current_variant_index: Arc<AtomicUsize>,
 }
 
 impl SharedSegments {
-    pub(crate) fn new(
+    pub fn new(
         cancel: CancellationToken,
         playlist_state: Arc<PlaylistState>,
         timeline: Timeline,
@@ -102,15 +98,15 @@ impl SharedSegments {
 /// downloader lifecycle: when this source is dropped, the backend is dropped,
 /// cancelling the downloader task automatically.
 pub struct HlsSource {
-    fetch: Arc<DefaultFetchManager>,
-    shared: Arc<SharedSegments>,
-    playlist_state: Arc<PlaylistState>,
-    bus: EventBus,
-    coverage: CoverageManager<StorageResource>,
+    pub(crate) fetch: Arc<DefaultFetchManager>,
+    pub(crate) shared: Arc<SharedSegments>,
+    pub(crate) playlist_state: Arc<PlaylistState>,
+    pub(crate) bus: EventBus,
+    pub(crate) coverage: CoverageManager<StorageResource>,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
-    variant_fence: Option<usize>,
+    pub(crate) variant_fence: Option<usize>,
     /// Downloader backend. Dropped with this source, cancelling the downloader.
-    _backend: Option<kithara_stream::Backend>,
+    pub(crate) _backend: Option<kithara_stream::Backend>,
 }
 
 const WAIT_RANGE_MAX_METADATA_MISS_SPINS: usize = 20;
@@ -127,7 +123,11 @@ impl HlsSource {
             .cloned()
     }
 
-    fn can_cross_variant_without_reset(&self, from_variant: usize, to_variant: usize) -> bool {
+    pub(crate) fn can_cross_variant_without_reset(
+        &self,
+        from_variant: usize,
+        to_variant: usize,
+    ) -> bool {
         self.playlist_state.variant_codec(from_variant)
             == self.playlist_state.variant_codec(to_variant)
     }
@@ -286,7 +286,11 @@ impl HlsSource {
         self.media_range_covered_by_index(seg, media_range)
     }
 
-    fn range_ready_from_segments(&self, segments: &DownloadState, range: &Range<u64>) -> bool {
+    pub(crate) fn range_ready_from_segments(
+        &self,
+        segments: &DownloadState,
+        range: &Range<u64>,
+    ) -> bool {
         let start_segment = segments.find_at_offset(range.start);
         if let Some(seg) = start_segment
             && !self.segment_ready_for_range(seg, range)
@@ -623,12 +627,12 @@ impl HlsSource {
     }
 
     /// Handle to current segment index atomic.
-    pub fn segment_index_handle(&self) -> Arc<AtomicU32> {
+    pub(crate) fn segment_index_handle(&self) -> Arc<AtomicU32> {
         Arc::clone(&self.shared.current_segment_index)
     }
 
     /// Handle to current variant index atomic.
-    pub fn variant_index_handle(&self) -> Arc<AtomicUsize> {
+    pub(crate) fn variant_index_handle(&self) -> Arc<AtomicUsize> {
         Arc::clone(&self.shared.current_variant_index)
     }
 }

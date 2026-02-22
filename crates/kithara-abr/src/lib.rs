@@ -44,9 +44,10 @@ mod controller;
 mod estimator;
 mod types;
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 pub use controller::{AbrController, AbrDecision, AbrReason};
-#[doc(hidden)]
-pub use estimator::Estimator;
 pub use estimator::ThroughputEstimator;
 pub use types::{
     AbrMode, AbrOptions, ThroughputSample, ThroughputSampleSource, Variant, VariantInfo,

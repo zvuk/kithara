@@ -14,11 +14,13 @@ hotpath = { workspace = true, optional = true }
 
 [features]
 perf = ["dep:hotpath", "hotpath/hotpath"]
+internal = []
 
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+kithara-bufpool = { path = ".", default-features = false, features = ["internal"] }
 rstest = { workspace = true }
 unimock = { workspace = true }

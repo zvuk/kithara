@@ -19,6 +19,9 @@
 //! resource.read(&mut buf);
 //! ```
 
+#[cfg(feature = "internal")]
+pub mod internal;
+
 // Virtual modules — namespaced access to all subcrates.
 
 pub mod audio {
