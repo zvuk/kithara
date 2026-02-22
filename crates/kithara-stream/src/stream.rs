@@ -205,15 +205,9 @@ impl<T: StreamType> Read for Stream<T> {
             }
         }
 
-        // Check flushing again before read (race window between wait_range return and read)
-        if self.source.timeline().is_flushing() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "seek pending",
-            ));
-        }
-
-        // Read data directly from source
+        // Read data directly from source.
+        // No flushing check here: wait_range already handles interruption,
+        // and the decoder must be able to read during apply_pending_seek().
         let n = self
             .source
             .read_at(pos, buf)

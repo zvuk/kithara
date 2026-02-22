@@ -131,6 +131,7 @@ impl Backend {
             match outcome {
                 PlanOutcome::Batch(plans) => {
                     if plans.is_empty() {
+                        tokio::task::yield_now().await;
                         continue;
                     }
 

@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    io::SeekFrom,
+    io::{self, SeekFrom},
     ops::Range,
     sync::{
         Arc,
@@ -69,7 +69,7 @@ impl TestSource {
 }
 
 impl Source for TestSource {
-    type Error = std::io::Error;
+    type Error = io::Error;
 
     fn wait_range(&mut self, _range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
         Ok(WaitOutcome::Ready)
@@ -161,13 +161,11 @@ struct TestStream;
 impl StreamType for TestStream {
     type Config = TestConfig;
     type Source = TestSource;
-    type Error = std::io::Error;
+    type Error = io::Error;
     type Events = ();
 
     async fn create(config: Self::Config) -> Result<Self::Source, Self::Error> {
-        config
-            .source
-            .ok_or_else(|| std::io::Error::other("no source"))
+        config.source.ok_or_else(|| io::Error::other("no source"))
     }
 
     fn build_stream_context(
@@ -265,6 +263,14 @@ fn v3_info() -> MediaInfo {
         .with_codec(AudioCodec::Flac)
         .with_sample_rate(96000)
         .with_channels(2)
+}
+
+fn aac_variant_info(variant_index: u32) -> MediaInfo {
+    MediaInfo::default()
+        .with_codec(AudioCodec::AacLc)
+        .with_sample_rate(44100)
+        .with_channels(2)
+        .with_variant_index(variant_index)
 }
 
 // Tests
@@ -470,6 +476,7 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
 
     {
         let mut s = state.lock();
+        s.media_info = Some(v0_info());
         s.seek_anchor = Some(SourceSeekAnchor {
             byte_offset: 500,
             segment_start: Duration::from_secs(8),
@@ -513,6 +520,181 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
         fetch.data.pcm.len(),
         75,
         "anchor seek should trim decoded PCM by relative in-segment offset"
+    );
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn seek_anchor_recreates_decoder_when_codec_changes() {
+    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, _) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+
+    let (recreated_decoder, logs) =
+        scripted_inner_decoder_loose(v3_spec(), vec![make_chunk(v3_spec(), 256); 2], vec![], None);
+    let recreated_seek_log = logs.seek_log();
+    let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock();
+        s.media_info = Some(v3_info());
+        s.format_change_range = Some(120..980);
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(1),
+        });
+    }
+
+    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
+    source.apply_pending_seek();
+
+    assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
+    assert_eq!(
+        source.current_base_offset(),
+        120,
+        "codec change on seek must recreate decoder at init-bearing format boundary"
+    );
+
+    let created_offsets = offsets.lock();
+    assert_eq!(created_offsets.as_slice(), &[120]);
+
+    let recreated_seeks = recreated_seek_log.lock();
+    assert_eq!(
+        recreated_seeks.as_slice(),
+        &[Duration::from_secs(8)],
+        "recreated decoder should seek to anchor segment start"
+    );
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn seek_anchor_codec_change_without_format_boundary_uses_anchor_offset() {
+    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, _) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+
+    let (recreated_decoder, _) =
+        scripted_inner_decoder_loose(v3_spec(), vec![make_chunk(v3_spec(), 256); 2], vec![], None);
+    let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock();
+        s.media_info = Some(v3_info());
+        s.format_change_range = None;
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(1),
+        });
+    }
+
+    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
+    source.apply_pending_seek();
+
+    assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
+    assert_eq!(
+        source.current_base_offset(),
+        500,
+        "when format boundary is unknown, seek anchor offset must be used"
+    );
+
+    let created_offsets = offsets.lock();
+    assert_eq!(created_offsets.as_slice(), &[500]);
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
+    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, logs) =
+        scripted_inner_decoder_loose(seek_spec, vec![make_chunk(seek_spec, 100); 3], vec![], None);
+    let seek_log = logs.seek_log();
+
+    let (factory, offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(aac_variant_info(0)),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock();
+        s.media_info = Some(aac_variant_info(1));
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(1),
+        });
+    }
+
+    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
+    source.apply_pending_seek();
+
+    assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
+    assert_eq!(
+        source.current_base_offset(),
+        0,
+        "variant change with same codec must not recreate decoder"
+    );
+
+    let created_offsets = offsets.lock();
+    assert!(
+        created_offsets.is_empty(),
+        "variant-only seek must not create a replacement decoder"
+    );
+
+    let recreated_seeks = seek_log.lock();
+    assert_eq!(
+        recreated_seeks.as_slice(),
+        &[Duration::from_secs(8)],
+        "current decoder should seek to anchor segment start"
     );
 }
 
@@ -626,6 +808,58 @@ fn failed_seek_without_pending_format_change_does_not_recreate_decoder() {
         offsets.is_empty(),
         "decoder factory must not be called when no format change is pending"
     );
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn seek_recovery_same_codec_uses_current_segment_offset_for_recreate() {
+    let (shared, state) = make_shared_stream(vec![0u8; 1024], Some(30_000_000));
+
+    let (decoder, _) = scripted_inner_decoder_loose(v3_spec(), vec![], vec![], None);
+    let (recovery_decoder, logs) = scripted_inner_decoder_loose(
+        v3_spec(),
+        vec![make_chunk(v3_spec(), 256)],
+        vec![Ok(())],
+        None,
+    );
+    let recovery_seek_log = logs.seek_log();
+    let (factory, factory_offsets) = make_tracking_factory(vec![recovery_decoder]);
+
+    let epoch = Arc::new(AtomicU64::new(1));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(v3_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+    source.base_offset = 152_859;
+    source.pending_decode_started_epoch = Some(1);
+    source.pending_seek_recover_target = Some((1, Duration::from_secs(174)));
+    source.pending_seek_recover_attempts = 1;
+
+    {
+        let mut s = state.lock();
+        s.media_info = Some(v3_info());
+        s.segment_range = Some(2_152_2009..2_227_6140);
+        s.format_change_range = Some(0..664_488);
+    }
+
+    assert!(
+        source.retry_decode_error_after_seek(),
+        "seek recovery should recreate decoder"
+    );
+
+    let offsets = factory_offsets.lock();
+    assert_eq!(
+        offsets.as_slice(),
+        &[2_152_2009],
+        "same-codec recovery must recreate at current segment, not format_change offset"
+    );
+
+    let seeks = recovery_seek_log.lock();
+    assert_eq!(seeks.as_slice(), &[Duration::from_secs(174)]);
 }
 
 #[rstest]
@@ -1021,7 +1255,7 @@ impl EncodedDecoder {
         }
     }
 
-    fn read_exact_or_eof(&mut self, buf: &mut [u8]) -> std::io::Result<bool> {
+    fn read_exact_or_eof(&mut self, buf: &mut [u8]) -> io::Result<bool> {
         let mut filled = 0;
         while filled < buf.len() {
             match self.reader.read(&mut buf[filled..]) {
@@ -1118,6 +1352,230 @@ impl InnerDecoder for EncodedDecoder {
 
     fn duration(&self) -> Option<Duration> {
         None
+    }
+}
+
+struct SeekTransientBitstreamDecoder {
+    chunks_left: usize,
+    error_after_seek: bool,
+    seek_count: usize,
+    spec: PcmSpec,
+}
+
+impl SeekTransientBitstreamDecoder {
+    fn new(spec: PcmSpec) -> Self {
+        Self {
+            chunks_left: 0,
+            error_after_seek: false,
+            seek_count: 0,
+            spec,
+        }
+    }
+}
+
+impl InnerDecoder for SeekTransientBitstreamDecoder {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        if self.error_after_seek {
+            self.error_after_seek = false;
+            return Err(DecodeError::Backend(Box::new(io::Error::other(
+                "unexpected end of bitstream",
+            ))));
+        }
+
+        if self.chunks_left == 0 {
+            return Ok(None);
+        }
+
+        self.chunks_left -= 1;
+        Ok(Some(make_chunk(self.spec, 128)))
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+
+    fn seek(&mut self, _pos: Duration) -> DecodeResult<()> {
+        self.seek_count += 1;
+        self.chunks_left = 4;
+        if self.seek_count == 2 {
+            self.error_after_seek = true;
+        }
+        Ok(())
+    }
+
+    fn update_byte_len(&self, _len: u64) {}
+
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(220))
+    }
+}
+
+struct SeekPoisonedProgramConfigDecoder {
+    chunks_left: usize,
+    poisoned: bool,
+    seek_count: usize,
+    spec: PcmSpec,
+}
+
+impl SeekPoisonedProgramConfigDecoder {
+    fn new(spec: PcmSpec) -> Self {
+        Self {
+            chunks_left: 0,
+            poisoned: false,
+            seek_count: 0,
+            spec,
+        }
+    }
+}
+
+impl InnerDecoder for SeekPoisonedProgramConfigDecoder {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        if self.poisoned {
+            return Err(DecodeError::Backend(Box::new(io::Error::other(
+                "aac: program config",
+            ))));
+        }
+
+        if self.chunks_left == 0 {
+            return Ok(None);
+        }
+
+        self.chunks_left -= 1;
+        Ok(Some(make_chunk(self.spec, 128)))
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+
+    fn seek(&mut self, _pos: Duration) -> DecodeResult<()> {
+        self.seek_count += 1;
+        self.chunks_left = 4;
+        if self.seek_count >= 2 {
+            // Simulate a demuxer that got into a bad state after repeated seek:
+            // plain decoder.seek retries won't recover; recreate is required.
+            self.poisoned = true;
+        }
+        Ok(())
+    }
+
+    fn update_byte_len(&self, _len: u64) {}
+
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(220))
+    }
+}
+
+struct AnchorOnlyTransientSeekDecoder {
+    chunks_left: usize,
+    injected_error: bool,
+    pending_error: bool,
+    spec: PcmSpec,
+}
+
+impl AnchorOnlyTransientSeekDecoder {
+    fn new(spec: PcmSpec) -> Self {
+        Self {
+            chunks_left: 0,
+            injected_error: false,
+            pending_error: false,
+            spec,
+        }
+    }
+}
+
+impl InnerDecoder for AnchorOnlyTransientSeekDecoder {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        if self.pending_error {
+            self.pending_error = false;
+            return Err(DecodeError::Backend(Box::new(io::Error::other(
+                "aac: predictor data",
+            ))));
+        }
+
+        if self.chunks_left == 0 {
+            return Ok(None);
+        }
+
+        self.chunks_left -= 1;
+        Ok(Some(make_chunk(self.spec, 128)))
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+
+    fn seek(&mut self, pos: Duration) -> DecodeResult<()> {
+        if pos != Duration::from_secs(8) {
+            return Err(DecodeError::SeekError(format!(
+                "unexpected seek target {pos:?}"
+            )));
+        }
+        self.chunks_left = 4;
+        if !self.injected_error {
+            self.injected_error = true;
+            self.pending_error = true;
+        }
+        Ok(())
+    }
+
+    fn update_byte_len(&self, _len: u64) {}
+
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(220))
+    }
+}
+
+struct SeekSkipThenTransientErrorDecoder {
+    chunks_left: usize,
+    injected_once: bool,
+    post_seek_chunks: usize,
+    spec: PcmSpec,
+}
+
+impl SeekSkipThenTransientErrorDecoder {
+    fn new(spec: PcmSpec) -> Self {
+        Self {
+            chunks_left: 0,
+            injected_once: false,
+            post_seek_chunks: 0,
+            spec,
+        }
+    }
+}
+
+impl InnerDecoder for SeekSkipThenTransientErrorDecoder {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        if self.chunks_left == 0 {
+            return Ok(None);
+        }
+
+        if self.post_seek_chunks == 1 && !self.injected_once {
+            self.injected_once = true;
+            return Err(DecodeError::Backend(Box::new(io::Error::other(
+                "aac: program config",
+            ))));
+        }
+
+        self.chunks_left -= 1;
+        self.post_seek_chunks = self.post_seek_chunks.saturating_add(1);
+        Ok(Some(make_chunk(self.spec, 128)))
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+
+    fn seek(&mut self, _pos: Duration) -> DecodeResult<()> {
+        self.chunks_left = 8;
+        self.post_seek_chunks = 0;
+        Ok(())
+    }
+
+    fn update_byte_len(&self, _len: u64) {}
+
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(220))
     }
 }
 
@@ -1355,4 +1813,299 @@ fn rapid_seeks_via_timeline_all_complete() {
         // May be EOF if decoder ran out of scripted chunks, but must not hang
         let _ = fetch;
     }
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn repeated_seek_after_eof_must_not_stop_on_transient_bitstream_error() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+    let spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let decoder: Box<dyn InnerDecoder> = Box::new(SeekTransientBitstreamDecoder::new(spec));
+    let factory = make_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock();
+        s.media_info = Some(v0_info());
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(0),
+        });
+    }
+
+    let first_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
+    source.apply_pending_seek();
+    assert_eq!(epoch.load(Ordering::Acquire), first_epoch);
+
+    loop {
+        let fetch = source.fetch_next();
+        if fetch.is_eof {
+            break;
+        }
+    }
+
+    let second_epoch = source.timeline.initiate_seek(Duration::from_millis(11_651));
+    source.apply_pending_seek();
+    assert_eq!(epoch.load(Ordering::Acquire), second_epoch);
+
+    let fetch = source.fetch_next();
+    assert!(
+        !fetch.is_eof,
+        "transient 'unexpected end of bitstream' right after repeated seek must not terminate playback"
+    );
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn repeated_seek_program_config_error_recovers_via_decoder_recreate() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+    let spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let decoder: Box<dyn InnerDecoder> = Box::new(SeekPoisonedProgramConfigDecoder::new(spec));
+    let (recreated_decoder, _) =
+        scripted_inner_decoder_loose(spec, vec![make_chunk(spec, 128); 8], vec![], None);
+    let (factory, created_offsets) = make_tracking_factory(vec![recreated_decoder]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock();
+        s.media_info = Some(v0_info());
+        s.format_change_range = Some(0..51_258);
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(0),
+        });
+    }
+
+    let first_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
+    source.apply_pending_seek();
+    assert_eq!(epoch.load(Ordering::Acquire), first_epoch);
+
+    loop {
+        let fetch = source.fetch_next();
+        if fetch.is_eof {
+            break;
+        }
+    }
+
+    let second_epoch = source.timeline.initiate_seek(Duration::from_millis(11_651));
+    source.apply_pending_seek();
+    assert_eq!(epoch.load(Ordering::Acquire), second_epoch);
+
+    let fetch = source.fetch_next();
+    assert!(
+        !fetch.is_eof,
+        "program-config decode failure after repeated seek must recover via decoder recreate"
+    );
+
+    let offsets = created_offsets.lock();
+    assert_eq!(
+        offsets.as_slice(),
+        &[0],
+        "recovery path must recreate decoder at init-bearing offset"
+    );
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn seek_recovery_uses_applied_target_even_if_timeline_target_changes() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+    let spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let decoder: Box<dyn InnerDecoder> = Box::new(AnchorOnlyTransientSeekDecoder::new(spec));
+    let (factory, created_offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock();
+        s.media_info = Some(v0_info());
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(0),
+        });
+    }
+
+    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
+    source.apply_pending_seek();
+    assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
+
+    let stale_epoch = source.timeline.initiate_seek(Duration::from_secs(99));
+    source.timeline.complete_seek(stale_epoch);
+
+    let fetch = source.fetch_next();
+    assert!(
+        !fetch.is_eof,
+        "recovery must use applied seek target and ignore unrelated timeline target updates"
+    );
+
+    let offsets = created_offsets.lock();
+    assert!(
+        offsets.is_empty(),
+        "transient post-seek error must recover without decoder recreate"
+    );
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn seek_skip_then_decode_error_still_recovers_as_post_seek_error() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+    let spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let decoder: Box<dyn InnerDecoder> = Box::new(SeekSkipThenTransientErrorDecoder::new(spec));
+    let (factory, created_offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock();
+        s.media_info = Some(v0_info());
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(0),
+        });
+    }
+
+    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(9_500));
+    source.apply_pending_seek();
+    assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
+
+    let fetch = source.fetch_next();
+    assert!(
+        !fetch.is_eof,
+        "decode error after fully-skipped first chunk must still be treated as post-seek recoverable"
+    );
+
+    let offsets = created_offsets.lock();
+    assert!(
+        offsets.is_empty(),
+        "transient post-seek recovery should not recreate decoder"
+    );
+}
+
+#[rstest]
+#[timeout(Duration::from_secs(10))]
+fn stress_variant_only_seeks_do_not_recreate_decoder() {
+    let (shared, state) = make_shared_stream(vec![0u8; 4000], Some(4000));
+
+    let seek_spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let (decoder, logs) = scripted_inner_decoder_loose(
+        seek_spec,
+        vec![make_chunk(seek_spec, 64); 256],
+        vec![],
+        None,
+    );
+    let seek_log = logs.seek_log();
+    let (factory, offsets) = make_tracking_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = StreamAudioSource::new(
+        shared,
+        decoder,
+        factory,
+        Some(aac_variant_info(0)),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock();
+        s.media_info = Some(aac_variant_info(1));
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(1),
+        });
+    }
+
+    const SEEK_ITERATIONS: usize = 200;
+    for _ in 0..SEEK_ITERATIONS {
+        let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
+        source.apply_pending_seek();
+        assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
+        let _ = source.fetch_next();
+    }
+
+    assert_eq!(
+        source.current_base_offset(),
+        0,
+        "variant-only seek stress must keep the original decoder base offset"
+    );
+
+    let created_offsets = offsets.lock();
+    assert!(
+        created_offsets.is_empty(),
+        "variant-only seek stress must not recreate decoder"
+    );
+
+    let seeks = seek_log.lock();
+    assert_eq!(
+        seeks.len(),
+        SEEK_ITERATIONS,
+        "current decoder must process every stress seek"
+    );
+    assert!(
+        seeks.iter().all(|&seek| seek == Duration::from_secs(8)),
+        "all stress seeks must use anchor segment start"
+    );
 }

@@ -153,6 +153,24 @@ async fn test_audio_seek() {
     assert!(!audio.is_eof());
 }
 
+#[cfg(feature = "rodio")]
+#[tokio::test]
+async fn test_rodio_source_try_seek() {
+    let (_tmp, config) = test_wav_config(44100);
+    let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
+        .await
+        .unwrap();
+
+    let result = ::rodio::Source::try_seek(&mut audio, Duration::from_millis(250));
+    assert!(
+        result.is_ok(),
+        "rodio::Source::try_seek must delegate to Audio::seek"
+    );
+
+    let mut buf = [0.0f32; 256];
+    assert!(audio.read(&mut buf) > 0);
+}
+
 #[tokio::test]
 async fn test_audio_playback_progress_uses_output_commit() {
     let (_tmp, config) = test_wav_config(1024);

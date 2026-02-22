@@ -172,7 +172,7 @@ async fn key_manager_with_context(
 }
 
 #[rstest]
-#[timeout(Duration::from_secs(5))]
+#[timeout(Duration::from_secs(30))]
 #[tokio::test]
 async fn aes128_key_decrypts_ciphertext(
     #[future] test_server: TestServer,

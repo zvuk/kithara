@@ -9,6 +9,7 @@ mod deferred_abr_debug;
 mod driver_test;
 mod ephemeral;
 mod keys_integration;
+mod live_stress_real_stream;
 mod playlist_integration;
 mod seek_past_eof;
 mod smoke_test;

@@ -62,6 +62,7 @@ rstest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 rodio = { workspace = true }
+crossterm = { workspace = true }
 url = { workspace = true }
 
 [[example]]

@@ -1,5 +1,7 @@
 //! Shared async HTTP test server helpers.
 
+use std::{io, time::Duration};
+
 use axum::Router;
 use tokio::net::TcpListener;
 use url::Url;
@@ -17,9 +19,31 @@ impl TestHttpServer {
     ///
     /// Panics if listener bind or URL parsing fails.
     pub async fn new(router: Router) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind test HTTP listener");
+        const BIND_RETRIES: usize = 25;
+        const BIND_RETRY_DELAY_MS: u64 = 40;
+
+        let mut attempts = 0usize;
+        let listener = loop {
+            match TcpListener::bind("127.0.0.1:0").await {
+                Ok(listener) => break listener,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::PermissionDenied
+                            | io::ErrorKind::AddrInUse
+                            | io::ErrorKind::AddrNotAvailable
+                    ) =>
+                {
+                    attempts = attempts.saturating_add(1);
+                    if attempts >= BIND_RETRIES {
+                        panic!("bind test HTTP listener after retries: {error}");
+                    }
+                }
+                Err(error) => panic!("bind test HTTP listener: {error}"),
+            }
+
+            tokio::time::sleep(Duration::from_millis(BIND_RETRY_DELAY_MS)).await;
+        };
         let addr = listener
             .local_addr()
             .expect("read test listener local addr");
@@ -33,7 +57,7 @@ impl TestHttpServer {
             server.await.expect("run test HTTP server");
         });
 
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
 
         Self {
             base_url: Url::parse(&format!("http://{}", addr)).expect("parse base URL"),

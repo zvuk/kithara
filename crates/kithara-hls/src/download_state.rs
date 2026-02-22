@@ -67,6 +67,22 @@ pub(crate) struct DownloadState {
 }
 
 impl DownloadState {
+    fn rebuild_indexes(&mut self) {
+        self.loaded_keys.clear();
+        self.loaded_ranges.clear();
+        for seg in self.entries.values() {
+            self.loaded_keys.insert((seg.variant, seg.segment_index));
+            self.loaded_ranges.insert(seg.byte_offset..seg.end_offset());
+        }
+
+        if self
+            .last_offset
+            .is_some_and(|offset| !self.entries.contains_key(&offset))
+        {
+            self.last_offset = self.entries.keys().next_back().copied();
+        }
+    }
+
     /// Create an empty download state.
     pub(crate) fn new() -> Self {
         Self {
@@ -81,6 +97,7 @@ impl DownloadState {
     pub(crate) fn push(&mut self, segment: LoadedSegment) {
         let offset = segment.byte_offset;
         let end = segment.end_offset();
+        let key = (segment.variant, segment.segment_index);
 
         debug!(
             variant = segment.variant,
@@ -90,11 +107,21 @@ impl DownloadState {
             "download_state::push"
         );
 
-        self.loaded_ranges.insert(offset..end);
-        self.loaded_keys
-            .insert((segment.variant, segment.segment_index));
+        if let Some(previous_offset) =
+            self.entries
+                .iter()
+                .find_map(|(segment_offset, loaded_segment)| {
+                    ((loaded_segment.variant, loaded_segment.segment_index) == key)
+                        .then_some(*segment_offset)
+                })
+            && previous_offset != offset
+        {
+            self.entries.remove(&previous_offset);
+        }
+
         self.last_offset = Some(offset);
         self.entries.insert(offset, segment);
+        self.rebuild_indexes();
     }
 
     /// Find the segment containing the given byte offset (O(log n)).
@@ -134,6 +161,17 @@ impl DownloadState {
         self.entries.values().find(|seg| seg.variant == variant)
     }
 
+    /// First segment of the given variant that contains init bytes.
+    ///
+    /// Used when decoder recreation requires init data (ftyp/moov). A plain
+    /// first segment is not sufficient after seeks that start from a non-zero
+    /// segment index where init was not requested.
+    pub(crate) fn first_init_segment_of_variant(&self, variant: usize) -> Option<&LoadedSegment> {
+        self.entries
+            .values()
+            .find(|seg| seg.variant == variant && seg.init_len > 0)
+    }
+
     /// Number of loaded segments.
     pub(crate) fn num_entries(&self) -> usize {
         self.entries.len()
@@ -159,17 +197,7 @@ impl DownloadState {
         self.entries
             .retain(|_, seg| seg.byte_offset < offset || seg.variant == keep_variant);
 
-        // Rebuild loaded_keys from remaining entries.
-        self.loaded_keys.clear();
-        for seg in self.entries.values() {
-            self.loaded_keys.insert((seg.variant, seg.segment_index));
-        }
-
-        // Rebuild loaded_ranges from remaining entries.
-        self.loaded_ranges.clear();
-        for seg in self.entries.values() {
-            self.loaded_ranges.insert(seg.byte_offset..seg.end_offset());
-        }
+        self.rebuild_indexes();
 
         debug!(
             offset,
@@ -448,6 +476,23 @@ mod tests {
         assert!(state.first_segment_of_variant(99).is_none());
     }
 
+    #[test]
+    fn test_first_init_segment_of_variant() {
+        let mut state = DownloadState::new();
+
+        // Variant 3 has non-init segments first, then init-bearing segment.
+        state.push(make_segment(3, 1, 100, 0, 100));
+        state.push(make_segment(3, 2, 200, 0, 100));
+        state.push(make_segment(3, 3, 300, 50, 100));
+
+        let first_init = state.first_init_segment_of_variant(3).unwrap();
+        assert_eq!(first_init.segment_index, 3);
+        assert_eq!(first_init.byte_offset, 300);
+        assert_eq!(first_init.init_len, 50);
+
+        assert!(state.first_init_segment_of_variant(0).is_none());
+    }
+
     // Test 7: find_at_offset BTreeMap performance
 
     #[test]
@@ -527,6 +572,25 @@ mod tests {
         assert_eq!(state.total_loaded_bytes(), 0);
         assert_eq!(state.max_end_offset(), 0);
         assert!(state.find_at_offset(0).is_none());
+    }
+
+    #[test]
+    fn test_push_replaces_existing_segment_with_new_offset() {
+        let mut state = DownloadState::new();
+
+        state.push(make_segment(3, 29, 21522009, 0, 754131));
+        assert!(state.find_at_offset(21522010).is_some());
+        assert!(state.is_segment_loaded(3, 29));
+        assert_eq!(state.num_entries(), 1);
+
+        state.push(make_segment(3, 29, 21521386, 0, 754131));
+
+        assert_eq!(state.num_entries(), 1);
+        assert!(state.find_at_offset(21522010).is_some());
+        let seg = state
+            .find_loaded_segment(3, 29)
+            .expect("segment must exist");
+        assert_eq!(seg.byte_offset, 21521386);
     }
 
     // Test 9: LoadedSegment methods

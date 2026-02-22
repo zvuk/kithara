@@ -122,6 +122,10 @@ mod tests {
         ct.to_vec()
     }
 
+    fn repeating_bytes(len: usize) -> Vec<u8> {
+        (0u8..=u8::MAX).cycle().take(len).collect()
+    }
+
     /// Roundtrip: encrypt → decrypt single chunk.
     #[rstest]
     #[case::hello(b"Hello, DRM world! This is a test of AES-128-CBC.".as_slice(), [0x42u8; 16], [0x13u8; 16])]
@@ -144,7 +148,7 @@ mod tests {
     fn test_single_chunk_roundtrip_large() {
         let key = [0x01u8; 16];
         let iv = [0x02u8; 16];
-        let plaintext: Vec<u8> = (0..1000).map(|i| (i % 256) as u8).collect();
+        let plaintext = repeating_bytes(1000);
 
         let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
         let mut ctx = DecryptContext::new(key, iv);
@@ -182,7 +186,7 @@ mod tests {
         let key = [0x77u8; 16];
         let iv = [0x33u8; 16];
 
-        let plaintext: Vec<u8> = (0..plaintext_len).map(|i| (i % 256) as u8).collect();
+        let plaintext = repeating_bytes(plaintext_len);
         let ciphertext = encrypt_aes128_cbc(&plaintext, &key, &iv);
 
         let mut ctx = DecryptContext::new(key, iv);

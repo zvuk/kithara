@@ -31,6 +31,7 @@ pub enum HlsEvent {
         variant: usize,
         segment_index: usize,
         bytes_transferred: u64,
+        cached: bool,
         duration: Duration,
     },
     /// Throughput measurement.

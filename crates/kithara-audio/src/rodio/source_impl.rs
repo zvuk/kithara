@@ -58,4 +58,9 @@ impl<S> ::rodio::Source for Audio<S> {
     fn total_duration(&self) -> Option<std::time::Duration> {
         self.timeline.total_duration()
     }
+
+    fn try_seek(&mut self, pos: std::time::Duration) -> Result<(), ::rodio::source::SeekError> {
+        self.seek(pos)
+            .map_err(|err| ::rodio::source::SeekError::Other(Box::new(err)))
+    }
 }

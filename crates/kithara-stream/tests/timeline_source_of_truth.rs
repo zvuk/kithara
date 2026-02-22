@@ -103,3 +103,44 @@ fn stream_must_use_source_timeline_as_single_position_truth() {
     assert_eq!(pos, 1);
     assert_eq!(timeline.byte_position(), 1);
 }
+
+/// Reads must succeed while the timeline is flushing.
+///
+/// During `apply_pending_seek()`, the decoder calls `symphonia.seek()` which
+/// reads data through `Stream::read()`. At this point `flushing == true`
+/// (set by `initiate_seek()`, cleared by `complete_seek()` at the end).
+/// If `read()` blocks on flushing, the seek deadlocks.
+#[test]
+fn read_must_succeed_while_flushing() {
+    let data: Vec<u8> = (0..=255).collect();
+    let timeline = Timeline::new();
+    let config = TimelineConfig {
+        source: Some(TimelineSource::new(data, timeline.clone())),
+    };
+
+    let mut stream = tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(Stream::<TimelineStream>::new(config))
+        .expect("stream");
+
+    // Simulate FLUSH_START — flushing is now true
+    let _epoch = timeline.initiate_seek(std::time::Duration::from_secs(10));
+    assert!(
+        timeline.is_flushing(),
+        "flushing must be set after initiate_seek"
+    );
+
+    // Decoder seeks to byte offset 100 (inside apply_pending_seek)
+    let pos = stream
+        .seek(std::io::SeekFrom::Start(100))
+        .expect("seek must succeed while flushing");
+    assert_eq!(pos, 100);
+
+    // Decoder reads data at the new position — must NOT return Interrupted
+    let mut buf = [0u8; 4];
+    let n = stream
+        .read(&mut buf)
+        .expect("read must succeed while flushing");
+    assert!(n > 0, "read must return data, got 0 bytes");
+    assert_eq!(buf[0], 100, "first byte must be data at offset 100");
+}

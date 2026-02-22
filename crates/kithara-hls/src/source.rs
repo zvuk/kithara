@@ -15,8 +15,12 @@ use std::{
 use crossbeam_queue::SegQueue;
 use kithara_abr::Variant;
 use kithara_assets::ResourceKey;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_assets::{CoverageIndex, DiskCoverage};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::{Condvar, Mutex, time::Duration};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_storage::{Coverage, MmapResource};
 use kithara_storage::{ResourceExt, WaitOutcome};
 use kithara_stream::{MediaInfo, Source, SourceSeekAnchor, StreamError, StreamResult, Timeline};
 use tokio::sync::Notify;
@@ -97,6 +101,8 @@ pub struct HlsSource {
     shared: Arc<SharedSegments>,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
+    #[cfg(not(target_arch = "wasm32"))]
+    coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
     variant_fence: Option<usize>,
     /// Downloader backend. Dropped with this source, cancelling the downloader.
@@ -244,6 +250,164 @@ impl HlsSource {
         let bytes_read = resource.read_at(media_offset, buf)?;
         Ok(bytes_read)
     }
+
+    fn request_media_range(seg: &LoadedSegment, range: &Range<u64>) -> Option<Range<u64>> {
+        let segment_start = seg.byte_offset;
+        let segment_end = seg.end_offset();
+        let request_start = range.start.max(segment_start);
+        let request_end = range.end.min(segment_end);
+        if request_start >= request_end {
+            return None;
+        }
+
+        let media_start = segment_start.saturating_add(seg.init_len);
+        if request_end <= media_start {
+            return None;
+        }
+
+        let local_start = request_start.saturating_sub(media_start);
+        let local_end = request_end.saturating_sub(media_start);
+        if local_start >= local_end {
+            return None;
+        }
+        Some(local_start..local_end)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn media_range_covered_by_index(&self, seg: &LoadedSegment, range: Range<u64>) -> bool {
+        let Some(index) = &self.coverage_index else {
+            return true;
+        };
+
+        let cov = DiskCoverage::open(Arc::clone(index), seg.media_url.to_string());
+        let Some(total) = cov.total_size() else {
+            // Legacy cache entry without coverage metadata.
+            return true;
+        };
+
+        let end = range.end.min(total);
+        if range.start >= end {
+            return true;
+        }
+
+        !cov.gaps()
+            .into_iter()
+            .any(|gap| gap.start < end && gap.end > range.start)
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn media_range_covered_by_index(&self, _seg: &LoadedSegment, _range: Range<u64>) -> bool {
+        true
+    }
+
+    fn segment_ready_for_range(&self, seg: &LoadedSegment, range: &Range<u64>) -> bool {
+        let Some(media_range) = Self::request_media_range(seg, range) else {
+            return true;
+        };
+        self.media_range_covered_by_index(seg, media_range)
+    }
+
+    fn range_ready_from_segments(&self, segments: &DownloadState, range: &Range<u64>) -> bool {
+        let start_segment = segments.find_at_offset(range.start);
+        if let Some(seg) = start_segment
+            && !self.segment_ready_for_range(seg, range)
+        {
+            return false;
+        }
+
+        if segments.is_range_loaded(range) {
+            return true;
+        }
+
+        start_segment.is_some()
+    }
+
+    fn push_segment_request(&self, variant: usize, segment_index: usize, seek_epoch: u64) {
+        self.shared.segment_requests.push(SegmentRequest {
+            segment_index,
+            variant,
+            seek_epoch,
+        });
+        self.shared.reader_advanced.notify_one();
+    }
+
+    #[expect(
+        clippy::result_large_err,
+        reason = "Stream source APIs use StreamResult<_, HlsError> consistently"
+    )]
+    fn request_on_demand_segment(
+        &self,
+        range_start: u64,
+        seek_epoch: u64,
+        metadata_miss_count: &mut usize,
+        max_metadata_miss_spins: usize,
+    ) -> StreamResult<bool, HlsError> {
+        if self.shared.had_midstream_switch.load(Ordering::Acquire) {
+            // After variant switch metadata offsets diverge from runtime offsets.
+            // Let sequential downloader catch up from current position.
+            self.shared.reader_advanced.notify_one();
+            return Ok(true);
+        }
+
+        let current_variant = self.shared.current_variant_index.load(Ordering::Acquire);
+        if let Some(segment_index) = self
+            .playlist_state
+            .find_segment_at_offset(current_variant, range_start)
+        {
+            *metadata_miss_count = 0;
+            debug!(
+                variant = current_variant,
+                segment_index,
+                offset = range_start,
+                "wait_range: requesting on-demand segment load"
+            );
+            self.push_segment_request(current_variant, segment_index, seek_epoch);
+            return Ok(true);
+        }
+
+        if let Some(segment_index) =
+            self.fallback_segment_index_for_offset(current_variant, range_start)
+        {
+            *metadata_miss_count = 0;
+            debug!(
+                variant = current_variant,
+                segment_index,
+                offset = range_start,
+                "wait_range: metadata miss fallback segment load"
+            );
+            self.push_segment_request(current_variant, segment_index, seek_epoch);
+            return Ok(true);
+        }
+
+        *metadata_miss_count = metadata_miss_count.saturating_add(1);
+        debug!(
+            offset = range_start,
+            variant = current_variant,
+            seek_epoch,
+            metadata_miss_count = *metadata_miss_count,
+            "wait_range: no metadata to find segment"
+        );
+        self.bus.publish(HlsEvent::SeekMetadataMiss {
+            seek_epoch,
+            offset: range_start,
+            variant: current_variant,
+        });
+        self.shared.reader_advanced.notify_one();
+
+        if *metadata_miss_count >= max_metadata_miss_spins {
+            let error = format!(
+                "seek metadata miss: offset={} variant={} epoch={} misses={}",
+                range_start, current_variant, seek_epoch, *metadata_miss_count
+            );
+            self.bus.publish(HlsEvent::Error {
+                error: error.clone(),
+                recoverable: false,
+            });
+            return Err(StreamError::Source(HlsError::SegmentNotFound(error)));
+        }
+
+        Ok(false)
+    }
 }
 
 impl Source for HlsSource {
@@ -255,59 +419,55 @@ impl Source for HlsSource {
     )]
     fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
         const MAX_METADATA_MISS_SPINS: usize = 20;
-        let mut on_demand_requested = false;
+        const ON_DEMAND_RETRY_SPINS: usize = 10;
+        let mut on_demand_request_epoch: Option<u64> = None;
+        let mut on_demand_wait_spins = 0usize;
         let mut metadata_miss_count = 0usize;
 
-        // Wait until the range is covered by loaded segments or EOF.
+        // State-machine loop:
+        // check cancellation/stopped -> check readiness -> check EOF -> request on-demand -> wait.
         loop {
-            // FLUSH_START check: abort immediately if a seek is pending.
-            if self.shared.timeline.is_flushing() {
-                return Ok(WaitOutcome::Interrupted);
+            let mut segments = self.shared.segments.lock();
+            let seek_epoch = self.shared.timeline.seek_epoch();
+
+            if on_demand_request_epoch.is_some_and(|epoch| epoch != seek_epoch) {
+                on_demand_request_epoch = None;
+                on_demand_wait_spins = 0;
             }
 
-            let mut segments = self.shared.segments.lock();
+            let on_demand_requested = on_demand_request_epoch.is_some_and(|epoch| {
+                epoch == seek_epoch && on_demand_wait_spins < ON_DEMAND_RETRY_SPINS
+            });
 
-            // Check cancellation (mirrors kithara-storage driver.rs:261)
             if self.shared.cancel.is_cancelled() {
                 return Err(StreamError::Source(HlsError::Cancelled));
             }
 
-            // Check if downloader has exited (normally or abnormally).
-            // When stopped=true, no more data will be delivered.
-            // If the requested range is already loaded, fall through to normal checks.
-            // Otherwise, return Eof (past end) or Cancelled (gap / abnormal exit).
-            if self.shared.stopped.load(Ordering::Acquire)
-                && !segments.is_range_loaded(&range)
-                && segments.find_at_offset(range.start).is_none()
-            {
+            let range_ready = self.range_ready_from_segments(&segments, &range);
+            let eof = self.shared.timeline.eof();
+            let total = segments.max_end_offset();
+            let expected_total = self.shared.timeline.total_bytes().unwrap_or(0);
+            let effective_total = total.max(expected_total);
+
+            if self.shared.stopped.load(Ordering::Acquire) && !range_ready {
                 let eof = self.shared.timeline.eof();
-                let total = segments.max_end_offset();
-                if eof && range.start >= total {
+                if eof && effective_total > 0 && range.start >= effective_total {
                     return Ok(WaitOutcome::Eof);
                 }
                 return Err(StreamError::Source(HlsError::Cancelled));
             }
 
-            let eof = self.shared.timeline.eof();
-            let total = segments.max_end_offset();
-            let has_range_start = segments.find_at_offset(range.start).is_some();
-
-            // Check if range is already loaded (using loaded_ranges from DownloadState)
-            if segments.is_range_loaded(&range) {
+            if range_ready {
                 return Ok(WaitOutcome::Ready);
             }
 
-            // Fallback check for partial coverage
-            if has_range_start {
-                return Ok(WaitOutcome::Ready);
-            }
-
-            if eof && range.start >= total {
+            if eof && effective_total > 0 && range.start >= effective_total {
                 let expected = self.shared.timeline.total_bytes().unwrap_or(0);
                 debug!(
                     range_start = range.start,
                     total_bytes = total,
                     expected_total_length = expected,
+                    effective_total_length = effective_total,
                     num_entries = segments.num_entries(),
                     had_midstream_switch = self.shared.had_midstream_switch.load(Ordering::Acquire),
                     "wait_range: EOF"
@@ -315,113 +475,41 @@ impl Source for HlsSource {
                 return Ok(WaitOutcome::Eof);
             }
 
-            // On-demand loading: request specific segment ONCE.
-            if !on_demand_requested && !segments.is_range_loaded(&range) {
-                if self.shared.had_midstream_switch.load(Ordering::Acquire) {
-                    // After variant switch, metadata offsets don't match storage.
-                    // Just wake the sequential downloader — it will fill the gap.
-                    drop(segments);
-                    self.shared.reader_advanced.notify_one();
-                    on_demand_requested = true;
-                    segments = self.shared.segments.lock();
-                } else {
-                    let current_variant = self.shared.current_variant_index.load(Ordering::Acquire);
+            if self.shared.timeline.is_flushing() {
+                return Ok(WaitOutcome::Interrupted);
+            }
 
-                    drop(segments);
-                    if let Some(segment_index) = self
-                        .playlist_state
-                        .find_segment_at_offset(current_variant, range.start)
-                    {
-                        metadata_miss_count = 0;
-                        debug!(
-                            variant = current_variant,
-                            segment_index,
-                            offset = range.start,
-                            "wait_range: requesting on-demand segment load"
-                        );
-
-                        self.shared.segment_requests.push(SegmentRequest {
-                            segment_index,
-                            variant: current_variant,
-                            seek_epoch: self.shared.timeline.seek_epoch(),
-                        });
-
-                        self.shared.reader_advanced.notify_one();
-                        on_demand_requested = true;
-                    } else if let Some(segment_index) =
-                        self.fallback_segment_index_for_offset(current_variant, range.start)
-                    {
-                        metadata_miss_count = 0;
-                        debug!(
-                            variant = current_variant,
-                            segment_index,
-                            offset = range.start,
-                            "wait_range: metadata miss fallback segment load"
-                        );
-
-                        self.shared.segment_requests.push(SegmentRequest {
-                            segment_index,
-                            variant: current_variant,
-                            seek_epoch: self.shared.timeline.seek_epoch(),
-                        });
-
-                        self.shared.reader_advanced.notify_one();
-                        on_demand_requested = true;
-                    } else {
-                        metadata_miss_count = metadata_miss_count.saturating_add(1);
-                        let seek_epoch = self.shared.timeline.seek_epoch();
-                        debug!(
-                            offset = range.start,
-                            variant = current_variant,
-                            seek_epoch,
-                            metadata_miss_count,
-                            "wait_range: no metadata to find segment"
-                        );
-                        self.bus.publish(HlsEvent::SeekMetadataMiss {
-                            seek_epoch,
-                            offset: range.start,
-                            variant: current_variant,
-                        });
-                        self.shared.reader_advanced.notify_one();
-
-                        if metadata_miss_count >= MAX_METADATA_MISS_SPINS {
-                            let error = format!(
-                                "seek metadata miss: offset={} variant={} epoch={} misses={}",
-                                range.start, current_variant, seek_epoch, metadata_miss_count
-                            );
-                            self.bus.publish(HlsEvent::Error {
-                                error: error.clone(),
-                                recoverable: false,
-                            });
-                            return Err(StreamError::Source(HlsError::SegmentNotFound(error)));
-                        }
-                    }
-                    segments = self.shared.segments.lock();
+            if !on_demand_requested {
+                drop(segments);
+                let requested = self.request_on_demand_segment(
+                    range.start,
+                    seek_epoch,
+                    &mut metadata_miss_count,
+                    MAX_METADATA_MISS_SPINS,
+                )?;
+                if requested {
+                    on_demand_request_epoch = Some(seek_epoch);
+                    on_demand_wait_spins = 0;
                 }
-            } else if !on_demand_requested {
+                segments = self.shared.segments.lock();
+            } else {
                 self.shared.reader_advanced.notify_one();
             }
 
-            // Wait for new data with a 50ms timeout as a safety net against
-            // missed notifications. On wasm32 the timeout is ignored by the
-            // platform Condvar (Instant::now panics), but notifications from
-            // the downloader are reliable.
             self.shared
                 .condvar
                 .wait_for(&mut segments, Duration::from_millis(50));
 
-            // FLUSH_START check after wakeup.
             if self.shared.timeline.is_flushing() {
                 return Ok(WaitOutcome::Interrupted);
+            }
+            if on_demand_request_epoch.is_some() {
+                on_demand_wait_spins = on_demand_wait_spins.saturating_add(1);
             }
         }
     }
 
     fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, HlsError> {
-        if self.shared.timeline.is_flushing() {
-            return Ok(0);
-        }
-
         let seg = {
             let segments = self.shared.segments.lock();
             segments.find_at_offset(offset).cloned()
@@ -490,6 +578,7 @@ impl Source for HlsSource {
             Some(reader) if self.variant_fence.is_some() && has_hinted_variant => hinted_variant,
             Some(reader) => reader,
             None if has_hinted_variant => hinted_variant,
+            None if hinted_variant < self.playlist_state.num_variants() => hinted_variant,
             None => return None,
         };
         let codec = self.playlist_state.variant_codec(variant);
@@ -504,23 +593,41 @@ impl Source for HlsSource {
     }
 
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
-        let segments = self.shared.segments.lock();
         let current_variant = self.shared.current_variant_index.load(Ordering::Acquire);
-        // Find the first segment of the current variant.
-        // This is where init data (ftyp/moov) lives after an ABR switch.
-        if let Some(seg) = segments.first_segment_of_variant(current_variant) {
-            return Some(seg.byte_offset..seg.end_offset());
+        {
+            let segments = self.shared.segments.lock();
+            // Decoder recreate needs init-bearing segment (ftyp/moov),
+            // not just the first loaded segment of the variant.
+            if let Some(seg) = segments.first_init_segment_of_variant(current_variant) {
+                return Some(seg.byte_offset..seg.end_offset());
+            }
+
+            let reader_offset = self.shared.timeline.byte_position();
+            let fallback_variant = segments
+                .find_at_offset(reader_offset)
+                .or_else(|| segments.last())
+                .map(|seg| seg.variant);
+            if let Some(fallback_variant) = fallback_variant
+                && let Some(seg) = segments.first_init_segment_of_variant(fallback_variant)
+            {
+                return Some(seg.byte_offset..seg.end_offset());
+            }
         }
 
-        let reader_offset = self.shared.timeline.byte_position();
-        let fallback_variant = segments
-            .find_at_offset(reader_offset)
-            .or_else(|| segments.last())
-            .map(|seg| seg.variant)?;
-
-        segments
-            .first_segment_of_variant(fallback_variant)
-            .map(|seg| seg.byte_offset..seg.end_offset())
+        // After seek flush, no segments may be loaded yet.
+        // Fall back to metadata offsets so decoder recreation can start
+        // from the variant's init-bearing first segment.
+        if current_variant >= self.playlist_state.num_variants() {
+            return None;
+        }
+        let start = self
+            .playlist_state
+            .segment_byte_offset(current_variant, 0)?;
+        let end = self
+            .playlist_state
+            .segment_byte_offset(current_variant, 1)
+            .or_else(|| self.playlist_state.total_variant_size(current_variant))?;
+        if end > start { Some(start..end) } else { None }
     }
 
     fn clear_variant_fence(&mut self) {
@@ -605,9 +712,7 @@ pub(crate) fn build_pair(
     fetch: Arc<DefaultFetchManager>,
     variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
-    #[cfg(not(target_arch = "wasm32"))] coverage_index: Option<
-        Arc<kithara_assets::CoverageIndex<kithara_storage::MmapResource>>,
-    >,
+    #[cfg(not(target_arch = "wasm32"))] coverage_index: Option<Arc<CoverageIndex<MmapResource>>>,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
 ) -> (HlsDownloader, HlsSource) {
@@ -624,6 +729,7 @@ pub(crate) fn build_pair(
 
     let cancel = config.cancel.clone().unwrap_or_default();
     let abr = kithara_abr::AbrController::new(abr_opts);
+    let initial_variant = abr.get_current_variant_index();
     let timeline = Timeline::new();
     timeline.set_total_duration(playlist_state.track_duration());
     let shared = Arc::new(SharedSegments::new(
@@ -631,6 +737,11 @@ pub(crate) fn build_pair(
         Arc::clone(&playlist_state),
         timeline,
     ));
+    shared
+        .current_variant_index
+        .store(initial_variant, Ordering::Relaxed);
+    #[cfg(not(target_arch = "wasm32"))]
+    let source_coverage_index = coverage_index.clone();
 
     let downloader = HlsDownloader {
         active_seek_epoch: 0,
@@ -638,7 +749,9 @@ pub(crate) fn build_pair(
         fetch: Arc::clone(&fetch),
         playlist_state: Arc::clone(&playlist_state),
         current_segment_index: 0,
+        gap_scan_start_segment: 0,
         last_committed_variant: None,
+        force_init_for_seek: false,
         sent_init_for_variant: HashSet::new(),
         abr,
         byte_offset: 0,
@@ -655,6 +768,8 @@ pub(crate) fn build_pair(
         shared,
         playlist_state,
         bus,
+        #[cfg(not(target_arch = "wasm32"))]
+        coverage_index: source_coverage_index,
         variant_fence: None,
         _backend: None,
     };
@@ -684,11 +799,17 @@ mod tests {
     use std::{ops::Range, sync::Arc, time::Duration};
 
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
+    #[cfg(not(target_arch = "wasm32"))]
+    use kithara_assets::{CoverageIndex, DiskCoverage};
     use kithara_drm::DecryptContext;
     use kithara_events::Event;
     use kithara_net::{HttpClient, NetOptions};
+    #[cfg(not(target_arch = "wasm32"))]
+    use kithara_storage::{Coverage, MmapOptions, MmapResource, OpenMode, Resource};
     use kithara_stream::AudioCodec;
     use rstest::rstest;
+    #[cfg(not(target_arch = "wasm32"))]
+    use tempfile::TempDir;
     use url::Url;
 
     use super::*;
@@ -727,6 +848,8 @@ mod tests {
             shared,
             playlist_state,
             bus: EventBus::new(16),
+            #[cfg(not(target_arch = "wasm32"))]
+            coverage_index: None,
             variant_fence: None,
             _backend: None,
         }
@@ -747,6 +870,37 @@ mod tests {
             init_url: None,
             media_url: Url::parse("https://example.com/seg").unwrap(),
         }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn make_coverage_index() -> (TempDir, Arc<CoverageIndex<MmapResource>>) {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("cov.bin");
+        let res = Resource::open(
+            CancellationToken::new(),
+            MmapOptions {
+                path,
+                initial_len: Some(4096),
+                mode: OpenMode::ReadWrite,
+            },
+        )
+        .unwrap();
+        (dir, Arc::new(CoverageIndex::new(res)))
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn set_segment_coverage(
+        index: &Arc<CoverageIndex<MmapResource>>,
+        url: &Url,
+        total: u64,
+        marks: &[Range<u64>],
+    ) {
+        let mut cov = DiskCoverage::open(Arc::clone(index), url.to_string());
+        cov.set_total_size(total);
+        for range in marks {
+            cov.mark(range.clone());
+        }
+        cov.flush();
     }
 
     fn make_variant_state_with_codec(
@@ -945,6 +1099,23 @@ mod tests {
     }
 
     #[test]
+    fn media_info_uses_hinted_variant_when_segments_are_flushed() {
+        let cancel = CancellationToken::new();
+        let playlist_state =
+            playlist_state_with_codecs(Some(AudioCodec::AacLc), Some(AudioCodec::Flac));
+        let shared = Arc::new(SharedSegments::new(
+            cancel.clone(),
+            Arc::clone(&playlist_state),
+            Timeline::new(),
+        ));
+        let source = make_test_source(Arc::clone(&shared), cancel);
+
+        shared.current_variant_index.store(1, Ordering::Release);
+        let info = Source::media_info(&source).expect("media info from hinted variant");
+        assert_eq!(info.codec, Some(AudioCodec::Flac));
+    }
+
+    #[test]
     fn current_segment_range_uses_reader_offset_not_last_segment() {
         let cancel = CancellationToken::new();
         let playlist_state = playlist_state_with_codecs(None, None);
@@ -966,6 +1137,85 @@ mod tests {
 
         shared.timeline.set_byte_position(120);
         assert_eq!(Source::current_segment_range(&source), Some(100..200));
+    }
+
+    #[test]
+    fn format_change_segment_range_uses_metadata_when_segments_are_flushed() {
+        let cancel = CancellationToken::new();
+        let playlist_state = playlist_state_with_size_maps();
+        let shared = Arc::new(SharedSegments::new(
+            cancel.clone(),
+            Arc::clone(&playlist_state),
+            Timeline::new(),
+        ));
+        let source = make_test_source(Arc::clone(&shared), cancel);
+
+        shared.current_variant_index.store(1, Ordering::Release);
+        assert_eq!(Source::format_change_segment_range(&source), Some(0..100));
+    }
+
+    #[test]
+    fn format_change_segment_range_prefers_loaded_init_bearing_segment() {
+        let cancel = CancellationToken::new();
+        let playlist_state = playlist_state_with_size_maps();
+        let shared = Arc::new(SharedSegments::new(
+            cancel.clone(),
+            Arc::clone(&playlist_state),
+            Timeline::new(),
+        ));
+        {
+            let mut segments = shared.segments.lock();
+            segments.push(LoadedSegment {
+                variant: 1,
+                segment_index: 1,
+                byte_offset: 100,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: Url::parse("https://example.com/seg1").unwrap(),
+            });
+            segments.push(LoadedSegment {
+                variant: 1,
+                segment_index: 2,
+                byte_offset: 300,
+                init_len: 40,
+                media_len: 100,
+                init_url: Some(Url::parse("https://example.com/init").unwrap()),
+                media_url: Url::parse("https://example.com/seg2").unwrap(),
+            });
+        }
+        let source = make_test_source(Arc::clone(&shared), cancel);
+
+        shared.current_variant_index.store(1, Ordering::Release);
+        assert_eq!(Source::format_change_segment_range(&source), Some(300..440));
+    }
+
+    #[test]
+    fn format_change_segment_range_falls_back_to_metadata_without_loaded_init() {
+        let cancel = CancellationToken::new();
+        let playlist_state = playlist_state_with_size_maps();
+        let shared = Arc::new(SharedSegments::new(
+            cancel.clone(),
+            Arc::clone(&playlist_state),
+            Timeline::new(),
+        ));
+        {
+            let mut segments = shared.segments.lock();
+            segments.push(LoadedSegment {
+                variant: 1,
+                segment_index: 1,
+                byte_offset: 100,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: Url::parse("https://example.com/seg1").unwrap(),
+            });
+        }
+        let source = make_test_source(Arc::clone(&shared), cancel);
+
+        shared.current_variant_index.store(1, Ordering::Release);
+        // Metadata for variant 1 is still the source of init-bearing segment range.
+        assert_eq!(Source::format_change_segment_range(&source), Some(0..100));
     }
 
     #[test]
@@ -1065,6 +1315,49 @@ mod tests {
         assert_eq!(
             Source::timeline(&source).total_duration(),
             Some(Duration::from_secs(16))
+        );
+    }
+
+    #[test]
+    fn build_pair_seeds_current_variant_from_abr_mode() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state(0, 4),
+            make_variant_state(1, 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = crate::config::HlsConfig {
+            abr: crate::config::AbrOptions {
+                mode: crate::config::AbrMode::Manual(1),
+                ..crate::config::AbrOptions::default()
+            },
+            cancel: Some(cancel),
+            ..crate::config::HlsConfig::default()
+        };
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let (_, source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            None,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+        #[cfg(target_arch = "wasm32")]
+        let (_, source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        assert_eq!(
+            source.variant_index_handle().load(Ordering::Relaxed),
+            1,
+            "initial source variant should match ABR manual mode"
         );
     }
 
@@ -1243,6 +1536,75 @@ mod tests {
         assert_eq!(state.max_end_offset(), 600);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn range_ready_uses_coverage_for_disk_segments() {
+        let cancel = CancellationToken::new();
+        let ps = dummy_playlist_state();
+        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+        let mut source = make_test_source(Arc::clone(&shared), cancel);
+        let (_dir, coverage_index) = make_coverage_index();
+        source.coverage_index = Some(Arc::clone(&coverage_index));
+
+        let segment = make_loaded_segment(0, 0, 0, 100);
+        let segment_url = segment.media_url.clone();
+        {
+            let mut segments = shared.segments.lock();
+            segments.push(segment);
+        }
+
+        set_segment_coverage(&coverage_index, &segment_url, 100, &[0..40]);
+        let segments = shared.segments.lock();
+        assert!(
+            !source.range_ready_from_segments(&segments, &(0..80)),
+            "incomplete coverage must not be treated as ready"
+        );
+        drop(segments);
+
+        set_segment_coverage(&coverage_index, &segment_url, 100, &[0..100]);
+        let segments = shared.segments.lock();
+        assert!(
+            source.range_ready_from_segments(&segments, &(0..80)),
+            "full coverage must be treated as ready"
+        );
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[tokio::test]
+    async fn wait_range_waits_until_coverage_is_complete() {
+        let cancel = CancellationToken::new();
+        let ps = dummy_playlist_state();
+        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+        let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+        let (_dir, coverage_index) = make_coverage_index();
+        source.coverage_index = Some(Arc::clone(&coverage_index));
+
+        let segment = make_loaded_segment(0, 0, 0, 100);
+        let segment_url = segment.media_url.clone();
+        {
+            let mut segments = shared.segments.lock();
+            segments.push(segment);
+        }
+        set_segment_coverage(&coverage_index, &segment_url, 100, &[0..32]);
+
+        let shared_for_task = Arc::clone(&shared);
+        let handle = tokio::task::spawn_blocking(move || source.wait_range(0..80));
+
+        tokio::time::sleep(Duration::from_millis(120)).await;
+        assert!(
+            !handle.is_finished(),
+            "wait_range returned early even though coverage is incomplete"
+        );
+
+        cancel.cancel();
+        shared_for_task.condvar.notify_all();
+        let result = tokio::time::timeout(Duration::from_millis(300), handle)
+            .await
+            .expect("wait_range task should complete")
+            .expect("wait_range task should not panic");
+        assert!(result.is_err(), "wait_range should stop after cancellation");
+    }
+
     // wait_range cancellation tests
 
     #[rstest]
@@ -1308,6 +1670,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
+        let cancel = CancellationToken::new();
+        let ps = dummy_playlist_state();
+        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+        let shared2 = Arc::clone(&shared);
+        let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+        // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
+        shared2.timeline.set_eof(true);
+
+        let handle = tokio::task::spawn_blocking(move || source.wait_range(3_488_300..3_489_324));
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        {
+            let mut segments = shared2.segments.lock();
+            segments.push(make_loaded_segment(0, 17, 3_400_000, 200_000));
+        }
+        shared2.timeline.set_eof(false);
+        shared2.condvar.notify_all();
+
+        let result = tokio::time::timeout(Duration::from_millis(200), handle)
+            .await
+            .expect("task should complete within 200ms")
+            .expect("task should not panic");
+
+        assert!(matches!(result, Ok(WaitOutcome::Ready)));
+    }
+
+    #[tokio::test]
     async fn test_wait_range_eof_when_stopped_and_past_end() {
         // Downloader stopped + eof -- wait_range at past-end offset returns Eof.
         let cancel = CancellationToken::new();
@@ -1347,6 +1738,62 @@ mod tests {
         let request = wait_range_and_take_request(Arc::clone(&shared), source, 150..170).await;
         assert_eq!(request.variant, 0);
         assert_eq!(request.segment_index, 1);
+    }
+
+    #[tokio::test]
+    async fn test_wait_range_requeues_request_after_seek_epoch_change() {
+        let cancel = CancellationToken::new();
+        let ps = playlist_state_with_size_maps();
+        let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+        shared.current_variant_index.store(0, Ordering::Release);
+        let first_epoch = shared.timeline.initiate_seek(Duration::ZERO);
+        shared.timeline.complete_seek(first_epoch);
+
+        let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+        let handle = tokio::task::spawn_blocking(move || source.wait_range(150..170));
+
+        let first_deadline = tokio::time::Instant::now() + Duration::from_millis(300);
+        let first_request = loop {
+            if let Some(request) = shared.segment_requests.pop() {
+                break request;
+            }
+            assert!(
+                tokio::time::Instant::now() <= first_deadline,
+                "expected initial on-demand request"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+        assert_eq!(first_request.seek_epoch, first_epoch);
+
+        let second_epoch = shared.timeline.initiate_seek(Duration::from_millis(1));
+        shared.timeline.complete_seek(second_epoch);
+        shared.condvar.notify_all();
+
+        let second_deadline = tokio::time::Instant::now() + Duration::from_millis(700);
+        let second_request = loop {
+            if let Some(request) = shared.segment_requests.pop()
+                && request.seek_epoch == second_epoch
+            {
+                break request;
+            }
+            assert!(
+                tokio::time::Instant::now() <= second_deadline,
+                "expected re-queued on-demand request for updated seek epoch"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        };
+
+        assert_eq!(second_request.variant, 0);
+        assert_eq!(second_request.segment_index, 1);
+        assert_eq!(second_request.seek_epoch, second_epoch);
+
+        cancel.cancel();
+        shared.condvar.notify_all();
+        let result = tokio::time::timeout(Duration::from_millis(400), handle)
+            .await
+            .expect("wait_range task should complete")
+            .expect("wait_range task should not panic");
+        assert!(result.is_err(), "wait_range should stop after cancellation");
     }
 
     #[tokio::test]

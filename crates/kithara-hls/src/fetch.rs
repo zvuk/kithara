@@ -517,6 +517,81 @@ impl<N: Net> FetchManager<N> {
         Ok(meta.clone())
     }
 
+    pub(crate) async fn load_media_segment_with_source(
+        &self,
+        variant: usize,
+        segment_index: usize,
+    ) -> HlsResult<(SegmentMeta, bool)> {
+        let (media_url, playlist) = self.load_media_playlist(variant).await?;
+
+        let container = if playlist.init_segment.is_some() {
+            Some(ContainerFormat::Fmp4)
+        } else {
+            Some(ContainerFormat::MpegTs)
+        };
+
+        let segment = playlist.segments.get(segment_index).ok_or_else(|| {
+            HlsError::SegmentNotFound(format!(
+                "segment {segment_index} not found in variant {variant} playlist",
+            ))
+        })?;
+
+        let segment_url = media_url
+            .join(&segment.uri)
+            .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {e}")))?;
+
+        // Resolve DRM context for encrypted segments
+        let decrypt_ctx = self
+            .resolve_decrypt_context(segment.key.as_ref(), &segment_url, segment.sequence)
+            .await?;
+
+        let fetch_result = self.start_fetch(&segment_url, decrypt_ctx).await?;
+
+        let (segment_len, cached) = match fetch_result {
+            FetchResult::Cached { bytes } => (bytes, true),
+            FetchResult::Active(mut writer, res) => {
+                let mut total = 0u64;
+                while let Some(result) = writer.next().await {
+                    match result {
+                        Ok(WriterItem::ChunkWritten { len, .. }) => {
+                            total += len as u64;
+                        }
+                        Ok(WriterItem::StreamEnded { total_bytes }) => {
+                            total = total_bytes;
+                            break;
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+                }
+                if total == 0 {
+                    res.fail("segment: 0 bytes downloaded".to_string());
+                    return Err(HlsError::SegmentNotFound(format!(
+                        "segment {segment_index} download yielded 0 bytes",
+                    )));
+                }
+                // Commit — ProcessingAssets decrypts on commit if ctx was provided.
+                // Committed length may be shorter (PKCS7 padding removed).
+                let committed_len = {
+                    res.commit(Some(total)).map_err(HlsError::from)?;
+                    res.len().unwrap_or(total)
+                };
+                (committed_len, false)
+            }
+        };
+
+        let meta = SegmentMeta {
+            variant,
+            segment_type: SegmentType::Media(segment_index),
+            sequence: segment.sequence,
+            url: segment_url,
+            duration: Some(segment.duration),
+            key: segment.key.clone(),
+            len: segment_len,
+            container,
+        };
+        Ok((meta, cached))
+    }
+
     // Loader helpers
 
     fn master_url(&self) -> HlsResult<&Url> {
@@ -572,70 +647,10 @@ impl<N: Net> Loader for FetchManager<N> {
         variant: usize,
         segment_index: usize,
     ) -> HlsResult<SegmentMeta> {
-        let (media_url, playlist) = self.load_media_playlist(variant).await?;
-
-        let container = if playlist.init_segment.is_some() {
-            Some(ContainerFormat::Fmp4)
-        } else {
-            Some(ContainerFormat::MpegTs)
-        };
-
-        let segment = playlist.segments.get(segment_index).ok_or_else(|| {
-            HlsError::SegmentNotFound(format!(
-                "segment {segment_index} not found in variant {variant} playlist",
-            ))
-        })?;
-
-        let segment_url = media_url
-            .join(&segment.uri)
-            .map_err(|e| HlsError::InvalidUrl(format!("Failed to resolve segment URL: {e}")))?;
-
-        // Resolve DRM context for encrypted segments
-        let decrypt_ctx = self
-            .resolve_decrypt_context(segment.key.as_ref(), &segment_url, segment.sequence)
+        let (meta, _cached) = self
+            .load_media_segment_with_source(variant, segment_index)
             .await?;
-
-        let fetch_result = self.start_fetch(&segment_url, decrypt_ctx).await?;
-
-        let segment_len = match fetch_result {
-            FetchResult::Cached { bytes } => bytes,
-            FetchResult::Active(mut writer, res) => {
-                let mut total = 0u64;
-                while let Some(result) = writer.next().await {
-                    match result {
-                        Ok(WriterItem::ChunkWritten { len, .. }) => {
-                            total += len as u64;
-                        }
-                        Ok(WriterItem::StreamEnded { total_bytes }) => {
-                            total = total_bytes;
-                            break;
-                        }
-                        Err(e) => return Err(e.into()),
-                    }
-                }
-                if total == 0 {
-                    res.fail("segment: 0 bytes downloaded".to_string());
-                    return Err(HlsError::SegmentNotFound(format!(
-                        "segment {segment_index} download yielded 0 bytes",
-                    )));
-                }
-                // Commit — ProcessingAssets decrypts on commit if ctx was provided.
-                // Committed length may be shorter (PKCS7 padding removed).
-                res.commit(Some(total)).map_err(HlsError::from)?;
-                res.len().unwrap_or(total)
-            }
-        };
-
-        Ok(SegmentMeta {
-            variant,
-            segment_type: SegmentType::Media(segment_index),
-            sequence: segment.sequence,
-            url: segment_url,
-            duration: Some(segment.duration),
-            key: segment.key.clone(),
-            len: segment_len,
-            container,
-        })
+        Ok(meta)
     }
 
     async fn load_init_segment(&self, variant: usize) -> HlsResult<SegmentMeta> {

@@ -364,6 +364,23 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
         );
 
         info!(remaining_samples, "Final read done — EOF confirmed");
+
+        // Step 7: Regression check — seek after EOF must resume playback.
+        // This catches false-EOF races where seek re-queues demand, but downloader
+        // marks EOF before demand is processed.
+        let resume_positions = [0.5_f64, total_secs * 0.25, total_secs * 0.75];
+        for (i, pos_secs) in resume_positions.iter().copied().enumerate() {
+            audio
+                .seek(Duration::from_secs_f64(pos_secs))
+                .unwrap_or_else(|e| panic!("seek-after-eof #{i} to {pos_secs:.4}s failed: {e}"));
+
+            let n = audio.read(&mut buf);
+            assert!(
+                n > 0,
+                "seek-after-eof #{i} returned 0 samples at {pos_secs:.4}s (is_eof={})",
+                audio.is_eof(),
+            );
+        }
     })
     .await;
 

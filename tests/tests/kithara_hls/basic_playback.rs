@@ -255,7 +255,7 @@ async fn test_init_segment_at_stream_start(
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Read from offset 0 - should get INIT data, not SEG-0.
-    // INIT data for variant 0: "V0-INIT:TEST_INIT_DATA" (22 bytes)
+    // Variant is ABR-dependent, so validate init marker generically.
     let mut buf = [0u8; 32];
 
     let n = tokio::task::spawn_blocking(move || stream.read(&mut buf).map(|n| (n, buf)))
@@ -266,10 +266,11 @@ async fn test_init_segment_at_stream_start(
     assert!(bytes_read > 0, "Should read data from offset 0");
 
     let data = &data[..bytes_read];
+    let head = String::from_utf8_lossy(&data[..data.len().min(20)]);
     assert!(
-        data.starts_with(b"V0-INIT:"),
+        head.contains("-INIT:"),
         "Offset 0 should contain INIT data, got: {:?}",
-        String::from_utf8_lossy(&data[..data.len().min(20)])
+        head
     );
 
     info!("INIT segment correctly at stream start");
