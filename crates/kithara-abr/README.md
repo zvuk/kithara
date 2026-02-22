@@ -19,6 +19,7 @@ Protocol-agnostic adaptive bitrate (ABR) algorithm. Provides `AbrController` wit
 
 ```rust
 use kithara_abr::{AbrController, AbrOptions, AbrMode, Variant};
+use kithara_platform::time::Instant;
 
 let opts = AbrOptions {
     mode: AbrMode::Auto(Some(0)),
@@ -29,6 +30,8 @@ let opts = AbrOptions {
     ..Default::default()
 };
 let controller = AbrController::new(opts);
+let decision = controller.decide(Instant::now());
+assert_eq!(decision.target_variant_index, 0);
 ```
 
 ## Decision Logic

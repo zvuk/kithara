@@ -18,7 +18,7 @@ Platform-aware primitives for native and wasm32 targets. Provides synchronizatio
 ## Usage
 
 ```rust
-use kithara_platform::{Mutex, Condvar, MaybeSend};
+use kithara_platform::{Condvar, Mutex};
 
 // Works on both native (parking_lot) and wasm32 (spin-loop fallback)
 let lock = Mutex::new(42);
@@ -34,6 +34,7 @@ let guard = lock.lock();
 <tr><td><code>Condvar</code></td><td><code>parking_lot::Condvar</code></td><td>Modified semantics for single-threaded wasm</td></tr>
 <tr><td><code>MaybeSend</code></td><td>= <code>Send</code></td><td>No-op (auto-implemented)</td></tr>
 <tr><td><code>MaybeSync</code></td><td>= <code>Sync</code></td><td>No-op (auto-implemented)</td></tr>
+<tr><td><code>ThreadPool</code></td><td>Rayon thread pool wrapper</td><td>Rayon wrapper (Web Workers via <code>wasm-bindgen-rayon</code>)</td></tr>
 </table>
 
 ## Time Utilities

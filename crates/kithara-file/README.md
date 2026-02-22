@@ -81,7 +81,7 @@ flowchart LR
 ```
 
 - **Backpressure**: downloader pauses when too far ahead of the reader (configurable `look_ahead_bytes`). Resumes when reader advances (notified via `tokio::Notify`).
-- **Lifecycle**: `Backend` task is leaked (`mem::forget`) and runs until cancellation or completion.
+- **Lifecycle**: `FileSource` keeps the downloader `Backend`; dropping the source drops backend and cancels downloader automatically.
 
 ## Three-Phase Download
 

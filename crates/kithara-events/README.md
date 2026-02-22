@@ -18,7 +18,7 @@ Unified event bus for the kithara audio pipeline. Provides a clone-able `EventBu
 ## Usage
 
 ```rust
-use kithara_events::{EventBus, Event};
+use kithara_events::{Event, EventBus, FileEvent};
 
 let bus = EventBus::new(64);
 

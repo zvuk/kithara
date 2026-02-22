@@ -73,7 +73,7 @@ sequenceDiagram
 <tr><td><code>Source</code></td><td>Sync random-access interface: <code>wait_range</code>, <code>read_at</code>, <code>len</code>, <code>media_info</code></td></tr>
 <tr><td><code>Downloader</code></td><td>Async planner: <code>plan()</code> returns batches; <code>commit()</code> stores results; backpressure via <code>should_throttle()</code></td></tr>
 <tr><td><code>DownloaderIo</code></td><td>Pure I/O (network fetch), <code>Clone + Send</code>, stateless; runs multiple copies in parallel</td></tr>
-<tr><td><code>StreamType</code></td><td>Marker trait for protocol types (<code>File</code>, <code>Hls</code>); associated types: <code>Config</code>, <code>Source</code>, <code>Error</code>, <code>Event</code></td></tr>
+<tr><td><code>StreamType</code></td><td>Marker trait for protocol types (<code>File</code>, <code>Hls</code>); associated types: <code>Config</code>, <code>Source</code>, <code>Error</code>, <code>Events</code></td></tr>
 </table>
 
 ## Canonical Types

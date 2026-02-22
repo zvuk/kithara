@@ -13,17 +13,20 @@
 
 # kithara-decode
 
-Pure audio decoding library built on Symphonia. Provides a synchronous `Decoder` that converts compressed audio (MP3, AAC, FLAC, WAV, etc.) into `PcmChunk` samples (pool-backed `Vec<f32>`). No threading, no channels -- just a thin wrapper over Symphonia's codec pipeline.
+Audio decoding library with runtime backend selection. `DecoderFactory` creates synchronous `InnerDecoder` instances that convert compressed audio (MP3, AAC, FLAC, WAV, etc.) into `PcmChunk` samples (pool-backed `Vec<f32>`). No threading, no channels -- just decoding.
 
 ## Usage
 
 ```rust
 use std::io::Cursor;
-use kithara_decode::Decoder;
-use kithara_bufpool::pcm_pool;
+use kithara_decode::{DecoderConfig, DecoderFactory};
 
 let reader = Cursor::new(wav_bytes);
-let mut decoder = Decoder::new_with_probe(reader, None, pcm_pool().clone())?;
+let mut decoder = DecoderFactory::create_with_probe(
+    reader,
+    Some("wav"),
+    DecoderConfig::default(),
+)?;
 
 let spec = decoder.spec(); // sample_rate, channels
 while let Ok(Some(chunk)) = decoder.next_chunk() {
@@ -37,7 +40,7 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 <tr><th>Backend</th><th>Implementation</th><th>Platform</th></tr>
 <tr><td>Symphonia</td><td>Software decoding; all formats</td><td>Cross-platform</td></tr>
 <tr><td>Apple AudioToolbox</td><td>Hardware-accelerated; fMP4, ADTS, MP3, FLAC, CAF</td><td>macOS / iOS</td></tr>
-<tr><td>Android MediaCodec</td><td>Placeholder</td><td>Android</td></tr>
+<tr><td>Android MediaCodec</td><td>Stub backend (returns unsupported)</td><td>Android</td></tr>
 </table>
 
 ## Initialization Paths
@@ -57,7 +60,7 @@ while let Ok(Some(chunk)) = decoder.next_chunk() {
 <table>
 <tr><th>Feature</th><th>Effect</th></tr>
 <tr><td><code>apple</code></td><td>Enables Apple AudioToolbox hardware decoder</td></tr>
-<tr><td><code>android</code></td><td>Enables Android MediaCodec decoder (placeholder)</td></tr>
+<tr><td><code>android</code></td><td>Enables Android MediaCodec stub backend</td></tr>
 <tr><td><code>perf</code></td><td>Performance instrumentation via <code>hotpath</code></td></tr>
 <tr><td><code>test-utils</code></td><td>Mock trait generation via <code>unimock</code></td></tr>
 </table>

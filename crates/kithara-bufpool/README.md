@@ -49,7 +49,7 @@ let pcm = pcm_pool().get_with(|b| b.clear());
 <table>
 <tr><th>Pool</th><th>Type</th><th>Max Buffers</th><th>Trim Capacity</th></tr>
 <tr><td><code>byte_pool()</code></td><td><code>SharedPool&lt;32, Vec&lt;u8&gt;&gt;</code></td><td>1024</td><td>64 KB</td></tr>
-<tr><td><code>pcm_pool()</code></td><td><code>SharedPool&lt;32, Vec&lt;f32&gt;&gt;</code></td><td>64</td><td>200K</td></tr>
+<tr><td><code>pcm_pool()</code></td><td><code>SharedPool&lt;32, Vec&lt;f32&gt;&gt;</code></td><td>64</td><td>200,000 samples</td></tr>
 </table>
 
 ## Integration

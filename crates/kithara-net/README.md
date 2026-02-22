@@ -20,7 +20,7 @@ HTTP networking with retry, timeout, and streaming support. Provides the `Net` t
 ```rust
 use kithara_net::{HttpClient, Net, NetOptions};
 
-let client = HttpClient::new()?;
+let client = HttpClient::new(NetOptions::default());
 let bytes = client.get_bytes(url, &NetOptions::default()).await?;
 let stream = client.stream(url, &NetOptions::default()).await?;
 ```
@@ -47,7 +47,7 @@ HttpClient::new(opts).with_retry(policy, cancel).with_timeout(duration)
 <tr><td><code>Headers</code></td><td><code>HashMap&lt;String, String&gt;</code> wrapper</td></tr>
 <tr><td><code>RangeSpec</code></td><td>HTTP byte range: <code>{ start: u64, end: Option&lt;u64&gt; }</code></td></tr>
 <tr><td><code>RetryPolicy</code></td><td>Retry configuration: base delay, max delay, max retries</td></tr>
-<tr><td><code>NetError</code></td><td>Error variants: <code>Http</code>, <code>Timeout</code>, <code>RetryExhausted</code>, <code>HttpError</code>, <code>Cancelled</code></td></tr>
+<tr><td><code>NetError</code></td><td>Error variants: <code>Http</code>, <code>Timeout</code>, <code>RetryExhausted</code>, <code>HttpError</code>, <code>Unimplemented</code>, <code>Cancelled</code></td></tr>
 </table>
 
 ## Timeout Behavior

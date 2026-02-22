@@ -13,7 +13,7 @@
 
 # kithara-audio
 
-Audio pipeline with decoding, effects chain, and sample rate conversion. Runs a dedicated OS thread for blocking decode/process work and bridges it to the caller via `kanal` channels. Provides `Audio<S>` as the main entry point and `AudioSyncReader` (behind `rodio` feature) for rodio integration.
+Audio pipeline with decoding, effects chain, and sample rate conversion. Runs a dedicated OS thread for blocking decode/process work and bridges it to the caller via `kanal` channels. Provides `Audio<S>` as the main entry point; with `rodio` feature enabled, `Audio<S>` implements `rodio::Source` directly.
 
 ## Usage
 
@@ -46,7 +46,7 @@ flowchart TB
         App -- "read(buf)" --> Resource
     end
 
-    subgraph "Downloader Thread (rayon, async via block_on)"
+    subgraph "Stream Backend Thread (kithara-stream)"
         DLLoop["Backend::run_downloader<br/><i>orchestration loop</i>"]
         NetTask["Network I/O<br/><i>reqwest + retry</i>"]
         WriterTask["Writer&lt;E&gt;<br/><i>byte pump</i>"]
@@ -96,10 +96,12 @@ flowchart TB
     style EventChan fill:#5b8a5b,color:#fff
 ```
 
-- **Downloader thread** (rayon): runs `Backend::run_downloader` via `handle.block_on()` -- async orchestration loop that plans, fetches (reqwest), and writes bytes to `StorageResource` through `Writer<E>`.
+- **Stream backend thread** (`kithara-stream`): runs `Backend::run_downloader` via `handle.block_on()` -- async orchestration loop that plans, fetches (reqwest), and writes bytes to `StorageResource` through `Writer<E>`.
 - **Decode thread** (rayon): runs `run_audio_loop` -- drains seek commands, calls `Decoder::next_chunk`, applies effects (resampler), sends processed chunks through a bounded `kanal` channel with backpressure.
 - **Events**: published to a unified `EventBus` (ABR switch, progress, decode).
 - **Epoch-based invalidation**: after seek, stale in-flight chunks are filtered by epoch counter (`Arc<AtomicU64>`).
+
+`kithara-audio` owns the decode/effects worker; stream download orchestration remains in `kithara-stream` implementations (`File` / `Hls`).
 
 ## Pipeline Architecture
 

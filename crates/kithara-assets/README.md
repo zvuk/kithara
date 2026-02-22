@@ -22,16 +22,16 @@ use kithara_assets::{AssetStoreBuilder, ResourceKey};
 
 let store = AssetStoreBuilder::new()
     .root_dir(cache_dir)
-    .asset_root("asset123")
+    .asset_root(Some("asset123"))
     .cancel(cancel.clone())
     .build();
-let key = ResourceKey::new("asset123", "segments/001.m4s");
+let key = ResourceKey::new("segments/001.m4s");
 let resource = store.open_resource(&key)?;
 ```
 
 ## Decorator Chain
 
-Requests flow through four layers (outermost to innermost):
+Requests flow through five layers (outermost to innermost):
 
 <table>
 <tr><th>Layer</th><th>Responsibility</th></tr>
@@ -39,8 +39,10 @@ Requests flow through four layers (outermost to innermost):
 <tr><td><code>LeaseAssets</code></td><td>RAII-based pinning; <code>LeaseGuard</code> unpins on drop; prevents eviction of in-use assets</td></tr>
 <tr><td><code>ProcessingAssets</code></td><td>Optional chunk-based transformation on <code>commit()</code> (e.g., AES-128-CBC decryption)</td></tr>
 <tr><td><code>EvictAssets</code></td><td>LRU eviction by asset count and/or byte size; pinned assets excluded</td></tr>
-<tr><td><code>DiskAssetStore</code></td><td>Base disk I/O; maps <code>ResourceKey</code> to filesystem paths</td></tr>
+<tr><td><code>DiskAssetStore</code> / <code>MemAssetStore</code></td><td>Base storage backend; maps <code>ResourceKey</code> to filesystem paths or in-memory resources</td></tr>
 </table>
+
+Decorator behavior is capability-gated by backend. In local-file mode (`asset_root = None` with absolute keys), disk backend disables cache/lease/evict capabilities, so those layers become pass-through.
 
 ```mermaid
 sequenceDiagram

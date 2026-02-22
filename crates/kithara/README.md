@@ -56,13 +56,17 @@ flowchart TD
 ## Features
 
 <table>
-<tr><th>Feature</th><th>Enables</th></tr>
-<tr><td><code>file</code></td><td>Progressive file download (<code>kithara-file</code>)</td></tr>
-<tr><td><code>hls</code></td><td>HLS streaming + ABR (<code>kithara-hls</code>, <code>kithara-abr</code>)</td></tr>
-<tr><td><code>rodio</code></td><td><code>rodio::Source</code> adapter for direct playback</td></tr>
-<tr><td><code>assets</code></td><td>Re-export <code>kithara-assets</code></td></tr>
-<tr><td><code>net</code></td><td>Re-export <code>kithara-net</code></td></tr>
-<tr><td><code>bufpool</code></td><td>Re-export <code>kithara-bufpool</code></td></tr>
+<tr><th>Feature</th><th>Default</th><th>Enables</th></tr>
+<tr><td><code>file</code></td><td>yes</td><td>Progressive pipeline (<code>kithara-file</code>, <code>kithara-assets</code>, <code>kithara-net</code>, <code>kithara-play/file</code>)</td></tr>
+<tr><td><code>hls</code></td><td>yes</td><td>HLS pipeline (<code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-assets</code>, <code>kithara-net</code>, <code>kithara-drm</code>, <code>kithara-play/hls</code>)</td></tr>
+<tr><td><code>assets</code></td><td>no</td><td>Asset/storage modules (<code>kithara-assets</code>, <code>kithara-storage</code>)</td></tr>
+<tr><td><code>net</code></td><td>no</td><td>Network module (<code>kithara-net</code>)</td></tr>
+<tr><td><code>rodio</code></td><td>no</td><td><code>rodio::Source</code> adapters (<code>rodio</code>, <code>kithara-audio/rodio</code>, <code>kithara-play/rodio</code>)</td></tr>
+<tr><td><code>test-utils</code></td><td>no</td><td>Mock exports from audio/decode/stream/play sub-crates</td></tr>
+<tr><td><code>perf</code></td><td>no</td><td>Hotpath instrumentation across sub-crates</td></tr>
+<tr><td><code>bufpool</code></td><td>no</td><td>Aggregator flag used by <code>full</code>; <code>kithara::bufpool</code> module is always re-exported</td></tr>
+<tr><td><code>full</code></td><td>no</td><td>Enables <code>file + hls + assets + net + bufpool</code></td></tr>
+<tr><td><code>internal</code></td><td>no</td><td>Internal-only exports in optional sub-crates</td></tr>
 </table>
 
 ## Key Types

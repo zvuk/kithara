@@ -13,7 +13,7 @@
 
 # kithara-play
 
-Trait-based player architecture mirroring Apple AVPlayer API with DJ engine capabilities. Defines **traits only** (no implementations). All traits are independently mockable via `unimock` (behind `test-utils` feature) unless noted otherwise.
+Trait-first player architecture mirroring Apple AVPlayer API with DJ engine capabilities. Exposes AVPlayer-style traits and also ships default concrete implementations (`EngineImpl`, `PlayerImpl`, `Resource`) under `impls`. Most traits are independently mockable via `unimock` (behind `test-utils` feature) unless noted otherwise.
 
 ## Usage
 
@@ -197,8 +197,14 @@ gantt
 ## Feature Flags
 
 <table>
-<tr><th>Feature</th><th>Effect</th></tr>
-<tr><td><code>test-utils</code></td><td>Mock trait generation via <code>unimock</code></td></tr>
+<tr><th>Feature</th><th>Default</th><th>Effect</th></tr>
+<tr><td><code>file</code></td><td>yes</td><td>Progressive file pipeline (<code>kithara-file</code>, <code>kithara-assets</code>, <code>kithara-net</code>)</td></tr>
+<tr><td><code>hls</code></td><td>yes</td><td>HLS pipeline (<code>kithara-hls</code>, <code>kithara-abr</code>, <code>kithara-assets</code>, <code>kithara-net</code>)</td></tr>
+<tr><td><code>backend-cpal</code></td><td>yes</td><td>CPAL backend via <code>firewheel/cpal</code></td></tr>
+<tr><td><code>rodio</code></td><td>no</td><td><code>rodio</code> integration (<code>kithara-audio/rodio</code>)</td></tr>
+<tr><td><code>wasm-bindgen</code></td><td>no</td><td>WASM backend via <code>firewheel/wasm-bindgen</code></td></tr>
+<tr><td><code>test-utils</code></td><td>no</td><td>Mock trait generation via <code>unimock</code></td></tr>
+<tr><td><code>internal</code></td><td>no</td><td>Internal-only exports for workspace testing/debug</td></tr>
 </table>
 
 ## Invariants
