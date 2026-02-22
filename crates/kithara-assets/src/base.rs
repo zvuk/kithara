@@ -35,6 +35,22 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// Resource type for index persistence (pins, LRU).
     type IndexRes: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
 
+    /// Whether this backend supports eviction decorator semantics.
+    ///
+    /// Backends that cannot persist or interpret eviction metadata should return `false`.
+    #[must_use]
+    fn supports_evict(&self) -> bool {
+        true
+    }
+
+    /// Whether this backend supports lease/pin decorator semantics.
+    ///
+    /// Backends that cannot persist or interpret pin metadata should return `false`.
+    #[must_use]
+    fn supports_lease(&self) -> bool {
+        true
+    }
+
     /// Open a resource with optional context (main method).
     ///
     /// # Errors

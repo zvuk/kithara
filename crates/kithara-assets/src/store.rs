@@ -19,6 +19,7 @@ const DEFAULT_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(5) {
 use crate::base::DiskAssetStore;
 use crate::{
     backend::AssetsBackend,
+    base::Assets,
     cache::CachedAssets,
     evict::EvictAssets,
     index::EvictConfig,
@@ -340,27 +341,29 @@ where
 
         // Build decorator chain: Disk -> Evict -> Processing -> Lease -> Cached
         let disk = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));
+        let evict_enabled = self.evict_enabled && disk.supports_evict();
+        let lease_enabled = self.lease_enabled && disk.supports_lease();
         let evict = Arc::new(EvictAssets::new(
             disk,
             evict_cfg,
             cancel.clone(),
-            self.evict_enabled,
+            evict_enabled,
             pool.clone(),
         ));
         let processing = Arc::new(ProcessingAssets::new(
-            evict.clone(),
+            Arc::clone(&evict),
             process_fn,
             pool.clone(),
         ));
 
         // LeaseAssets holds evict for byte recording
-        let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> = if self.lease_enabled {
-            Some(evict as Arc<dyn crate::evict::ByteRecorder>)
+        let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> = if lease_enabled {
+            Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>)
         } else {
             None
         };
         let lease =
-            LeaseAssets::with_options(processing, cancel, byte_recorder, self.lease_enabled, pool);
+            LeaseAssets::with_options(processing, cancel, byte_recorder, lease_enabled, pool);
 
         // CachedAssets on top to cache LeaseResource with guards
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
@@ -386,6 +389,7 @@ where
         });
         let asset_root = self.asset_root.unwrap_or_default();
         let cancel = self.cancel.unwrap_or_default();
+        let evict_cfg = self.evict_config.unwrap_or_default();
         let process_fn = self
             .process_fn
             .expect("process_fn is required for AssetStoreBuilder");
@@ -397,15 +401,27 @@ where
             self.mem_resource_capacity,
             root_dir,
         ));
+        let evict_enabled = self.evict_enabled && mem.supports_evict();
+        let lease_enabled = self.lease_enabled && mem.supports_lease();
         let evict = Arc::new(EvictAssets::new(
             mem,
-            EvictConfig::default(),
+            evict_cfg,
             cancel.clone(),
-            false,
+            evict_enabled,
             pool.clone(),
         ));
-        let processing = Arc::new(ProcessingAssets::new(evict, process_fn, pool.clone()));
-        let lease = LeaseAssets::with_options(processing, cancel, None, false, pool);
+        let processing = Arc::new(ProcessingAssets::new(
+            Arc::clone(&evict),
+            process_fn,
+            pool.clone(),
+        ));
+        let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> = if lease_enabled {
+            Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>)
+        } else {
+            None
+        };
+        let lease =
+            LeaseAssets::with_options(processing, cancel, byte_recorder, lease_enabled, pool);
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
         CachedAssets::with_options(Arc::new(lease), capacity, true, false)
     }
@@ -540,6 +556,37 @@ mod tests {
             .ephemeral(true)
             .build();
         assert!(backend.is_ephemeral());
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn ephemeral_auto_disables_unsupported_decorators() {
+        let store = AssetStoreBuilder::new()
+            .asset_root(Some("test"))
+            .build_ephemeral();
+
+        let lease = store.inner();
+        assert!(!lease.is_enabled());
+
+        let evict = lease.inner().inner();
+        assert!(!evict.is_enabled());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn disk_defaults_keep_decorators_enabled() {
+        let dir = tempdir().unwrap();
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(Some("test"))
+            .build_disk();
+
+        let lease = store.inner();
+        assert!(lease.is_enabled());
+
+        let evict = lease.inner().inner();
+        assert!(evict.is_enabled());
     }
 
     #[rstest]

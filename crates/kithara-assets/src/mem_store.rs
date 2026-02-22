@@ -57,6 +57,14 @@ impl Assets for MemAssetStore {
     type Context = ();
     type IndexRes = MemResource;
 
+    fn supports_evict(&self) -> bool {
+        false
+    }
+
+    fn supports_lease(&self) -> bool {
+        false
+    }
+
     fn root_dir(&self) -> &Path {
         &self.root_dir
     }
@@ -217,5 +225,12 @@ mod tests {
 
         let res = store.open_resource(&key).unwrap();
         assert!(res.path().is_none());
+    }
+
+    #[test]
+    fn mem_store_reports_unsupported_decorators() {
+        let store = make_mem_store();
+        assert!(!store.supports_evict());
+        assert!(!store.supports_lease());
     }
 }

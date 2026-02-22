@@ -101,6 +101,14 @@ where
     type Context = A::Context;
     type IndexRes = A::IndexRes;
 
+    fn supports_evict(&self) -> bool {
+        self.inner.supports_evict()
+    }
+
+    fn supports_lease(&self) -> bool {
+        self.inner.supports_lease()
+    }
+
     fn root_dir(&self) -> &Path {
         self.inner.root_dir()
     }
