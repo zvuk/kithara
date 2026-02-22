@@ -3,8 +3,9 @@
 use std::{collections::HashSet, time::Duration};
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, DiskAssetStore, EvictConfig, PinsIndex},
+    assets::{AssetStore, AssetStoreBuilder, EvictConfig},
     bufpool::byte_pool,
+    internal::{DiskAssetStore, PinsIndex},
 };
 use kithara_test_utils::temp_dir;
 use rstest::{fixture, rstest};

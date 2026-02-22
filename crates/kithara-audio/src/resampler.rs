@@ -369,96 +369,118 @@ impl ResamplerProcessor {
         }
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "resampler reconfiguration with multiple checks"
-    )]
     fn update_resampler_if_needed(&mut self) {
-        let host_sr = self.host_sample_rate.load(Ordering::Relaxed);
-        let target_rate = if host_sr == 0 {
-            self.source_rate
-        } else {
-            host_sr
-        };
-
-        // Update output spec
+        let target_rate = self.target_rate();
         self.output_spec.sample_rate = target_rate;
-
         let should_pt = Self::should_passthrough(self.source_rate, target_rate);
         let currently_pt = self.is_passthrough();
-
-        let new_ratio = if self.source_rate > 0 {
-            f64::from(target_rate) / f64::from(self.source_rate)
-        } else {
-            1.0
-        };
+        let new_ratio = self.ratio_for_target(target_rate);
         let ratio_changed = (new_ratio - self.current_ratio).abs() > 0.0001;
 
         if should_pt {
-            if !currently_pt {
-                debug!(
-                    source_rate = self.source_rate,
-                    target_rate, "Resampler switching to passthrough"
-                );
-                self.resampler = None;
-            }
-            self.current_ratio = 1.0;
-            for buf in &mut self.input_buffer {
-                buf.clear();
-            }
+            self.switch_to_passthrough(target_rate, currently_pt);
             return;
         }
 
-        // Need an active resampler with the latest ratio
-        if !currently_pt
-            && ratio_changed
-            && let Some(ref mut resampler) = self.resampler
-        {
-            match resampler.set_resample_ratio(new_ratio, false) {
-                Ok(()) => {
-                    debug!(
-                        new_ratio,
-                        source_rate = self.source_rate,
-                        target_rate,
-                        "Resampler ratio updated dynamically"
-                    );
-                    self.current_ratio = new_ratio;
-                    return;
-                }
-                Err(e) => {
-                    debug!(err = %e, "Failed to update ratio dynamically, recreating");
-                    self.resampler = None;
-                }
-            }
+        if self.try_update_ratio(target_rate, new_ratio, currently_pt, ratio_changed) {
+            return;
         }
 
         if currently_pt || self.resampler.is_none() || ratio_changed {
-            debug!(
-                new_ratio,
-                source_rate = self.source_rate,
-                target_rate,
-                quality = ?self.quality,
-                "Resampler activated"
-            );
+            self.recreate_resampler(target_rate, new_ratio);
+        }
+    }
 
-            match Self::create_resampler(
-                self.quality,
-                new_ratio,
-                self.chunk_size,
-                self.channels,
-                self.source_rate,
-                target_rate,
-            ) {
-                Ok(resampler) => {
-                    self.resampler = Some(resampler);
-                    self.current_ratio = new_ratio;
-                    for buf in &mut self.input_buffer {
-                        buf.clear();
-                    }
+    fn target_rate(&self) -> u32 {
+        let host_sr = self.host_sample_rate.load(Ordering::Relaxed);
+        if host_sr == 0 {
+            self.source_rate
+        } else {
+            host_sr
+        }
+    }
+
+    fn ratio_for_target(&self, target_rate: u32) -> f64 {
+        if self.source_rate > 0 {
+            f64::from(target_rate) / f64::from(self.source_rate)
+        } else {
+            1.0
+        }
+    }
+
+    fn switch_to_passthrough(&mut self, target_rate: u32, currently_pt: bool) {
+        if !currently_pt {
+            debug!(
+                source_rate = self.source_rate,
+                target_rate, "Resampler switching to passthrough"
+            );
+            self.resampler = None;
+        }
+        self.current_ratio = 1.0;
+        for buf in &mut self.input_buffer {
+            buf.clear();
+        }
+    }
+
+    fn try_update_ratio(
+        &mut self,
+        target_rate: u32,
+        new_ratio: f64,
+        currently_pt: bool,
+        ratio_changed: bool,
+    ) -> bool {
+        if currently_pt || !ratio_changed {
+            return false;
+        }
+        let Some(ref mut resampler) = self.resampler else {
+            return false;
+        };
+
+        match resampler.set_resample_ratio(new_ratio, false) {
+            Ok(()) => {
+                debug!(
+                    new_ratio,
+                    source_rate = self.source_rate,
+                    target_rate,
+                    "Resampler ratio updated dynamically"
+                );
+                self.current_ratio = new_ratio;
+                true
+            }
+            Err(e) => {
+                debug!(err = %e, "Failed to update ratio dynamically, recreating");
+                self.resampler = None;
+                false
+            }
+        }
+    }
+
+    fn recreate_resampler(&mut self, target_rate: u32, new_ratio: f64) {
+        debug!(
+            new_ratio,
+            source_rate = self.source_rate,
+            target_rate,
+            quality = ?self.quality,
+            "Resampler activated"
+        );
+
+        match Self::create_resampler(
+            self.quality,
+            new_ratio,
+            self.chunk_size,
+            self.channels,
+            self.source_rate,
+            target_rate,
+        ) {
+            Ok(resampler) => {
+                self.resampler = Some(resampler);
+                self.current_ratio = new_ratio;
+                for buf in &mut self.input_buffer {
+                    buf.clear();
                 }
-                Err(e) => {
-                    debug!(err = %e, "Failed to create resampler, staying in current mode");
-                }
+            }
+            Err(e) => {
+                debug!(err = %e, "Failed to create resampler, staying in current mode");
             }
         }
     }

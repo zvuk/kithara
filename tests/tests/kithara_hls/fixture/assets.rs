@@ -5,9 +5,9 @@
 use std::sync::Arc;
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, EvictConfig, ProcessChunkFn},
+    assets::{AssetStore, AssetStoreBuilder, AssetsBackend, EvictConfig, ProcessChunkFn},
     drm::{DecryptContext, aes128_cbc_process_chunk},
-    hls::{AssetsBackend, fetch::FetchManager},
+    internal::FetchManager,
     net::{HttpClient, NetOptions},
 };
 use rstest::fixture;

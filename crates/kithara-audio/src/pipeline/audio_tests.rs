@@ -1,7 +1,7 @@
 use std::{fs::File, io::Write};
 
 use kithara_events::{AudioEvent, SeekLifecycleStage};
-use kithara_stream::Stream;
+use kithara_stream::{ContainerFormat, MediaInfo, Stream};
 use kithara_test_utils::create_test_wav;
 use rstest::rstest;
 use tokio::time::{self, Duration};
@@ -59,8 +59,8 @@ async fn test_audio_receive_chunks() {
 
 #[test]
 fn test_audio_config_with_media_info() {
-    let info = kithara_stream::MediaInfo::default()
-        .with_container(kithara_stream::ContainerFormat::Wav)
+    let info = MediaInfo::default()
+        .with_container(ContainerFormat::Wav)
         .with_sample_rate(44100);
 
     let config = AudioConfig::<kithara_file::File>::new(kithara_file::FileConfig::default())
@@ -69,7 +69,7 @@ fn test_audio_config_with_media_info() {
     assert!(config.media_info.is_some());
     assert_eq!(
         config.media_info.unwrap().container,
-        Some(kithara_stream::ContainerFormat::Wav)
+        Some(ContainerFormat::Wav)
     );
 }
 

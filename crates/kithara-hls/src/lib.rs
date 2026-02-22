@@ -1,5 +1,21 @@
 #![forbid(unsafe_code)]
 #![cfg_attr(test, allow(clippy::ignored_unit_patterns))]
+#![allow(
+    dead_code,
+    reason = "internal HLS orchestration types are consumed via integration tests and `internal` feature"
+)]
+#![allow(
+    unreachable_pub,
+    reason = "public visibility is used for `internal` re-exports without widening stable API"
+)]
+#![allow(
+    unused_imports,
+    reason = "imports differ between feature combinations and test wiring"
+)]
+#![allow(
+    unfulfilled_lint_expectations,
+    reason = "some expect attributes only trigger under specific feature sets"
+)]
 
 //! HLS (HTTP Live Streaming) VOD implementation.
 //!

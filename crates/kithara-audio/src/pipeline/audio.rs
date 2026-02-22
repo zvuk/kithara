@@ -15,8 +15,10 @@ use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::unbounded;
-use kithara_platform::{Receiver, Sender, bounded};
-use kithara_stream::{EpochValidator, Fetch, Stream, StreamType, Timeline};
+use kithara_platform::{Receiver, Sender, ThreadPool, bounded};
+use kithara_stream::{
+    EpochValidator, Fetch, MediaInfo, Stream, StreamContext, StreamType, Timeline,
+};
 use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, trace, warn};
@@ -30,6 +32,24 @@ use crate::traits::{DecodeError, DecodeResult, PcmReader};
 
 /// Default capacity for broadcast event channels.
 const DEFAULT_EVENT_CAPACITY: usize = 64;
+
+enum ChunkOutcome {
+    Continue,
+    Return(Option<PcmChunk>),
+}
+
+enum RecvOutcome {
+    Closed,
+    Empty,
+    Item(Fetch<PcmChunk>),
+}
+
+type AudioChannels = (
+    Sender<AudioCommand>,
+    Receiver<AudioCommand>,
+    Sender<Fetch<PcmChunk>>,
+    Receiver<Fetch<PcmChunk>>,
+);
 
 /// Generic audio pipeline running in a separate thread.
 ///
@@ -346,68 +366,76 @@ impl<S> Audio<S> {
     ///
     /// After `preload()`, non-blocking. Before `preload()`, blocks on first call.
     /// Returns `None` on EOF or channel close.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "chunk validation with multiple conditions"
-    )]
     fn recv_valid_chunk(&mut self) -> Option<PcmChunk> {
         if self.eof {
             return None;
         }
 
         loop {
-            // On wasm32, blocking recv is forbidden (Atomics.wait cannot run
-            // on the browser main thread). Always use non-blocking try_recv.
-            #[cfg(target_arch = "wasm32")]
-            let use_nonblocking = true;
-            #[cfg(not(target_arch = "wasm32"))]
-            let use_nonblocking = self.preloaded;
-
-            let result = if use_nonblocking {
-                // Non-blocking mode
-                match self.pcm_rx.try_recv() {
-                    Ok(Some(fetch)) => Ok(fetch),
-                    Ok(None) => return None, // No data available
-                    Err(_) => {
-                        debug!("Audio: channel closed (EOF)");
-                        self.eof = true;
-                        return None;
-                    }
-                }
-            } else {
-                // Blocking mode before preload (native only, for tests/backward compat)
-                self.pcm_rx.recv().map_err(|_| ())
-            };
-
-            if let Ok(fetch) = result {
-                // Skip stale chunks (from before seek)
-                if !self.validator.is_valid(&fetch) {
-                    trace!(
-                        chunk_epoch = fetch.epoch(),
-                        current_epoch = self.validator.epoch,
-                        "skipping stale chunk"
-                    );
-                    continue;
-                }
-
-                if fetch.is_eof() {
-                    debug!(epoch = fetch.epoch(), "Audio: received EOF");
-                    self.eof = true;
-                    return None;
-                }
-
-                let chunk = fetch.into_inner();
-                trace!(
-                    samples = chunk.pcm.len(),
-                    spec = ?chunk.spec(),
-                    "Audio: received chunk"
-                );
-                return Some(chunk);
+            match self.recv_outcome() {
+                RecvOutcome::Item(fetch) => match self.process_fetch(fetch) {
+                    ChunkOutcome::Continue => continue,
+                    ChunkOutcome::Return(chunk) => return chunk,
+                },
+                RecvOutcome::Empty => return None,
+                RecvOutcome::Closed => return self.close_channel_and_mark_eof(),
             }
+        }
+    }
 
-            debug!("Audio: channel closed (EOF)");
+    fn recv_outcome(&mut self) -> RecvOutcome {
+        if self.use_nonblocking_recv() {
+            match self.pcm_rx.try_recv() {
+                Ok(Some(fetch)) => RecvOutcome::Item(fetch),
+                Ok(None) => RecvOutcome::Empty,
+                Err(_) => RecvOutcome::Closed,
+            }
+        } else {
+            self.pcm_rx
+                .recv()
+                .map_or_else(|_| RecvOutcome::Closed, RecvOutcome::Item)
+        }
+    }
+
+    fn process_fetch(&mut self, fetch: Fetch<PcmChunk>) -> ChunkOutcome {
+        if !self.validator.is_valid(&fetch) {
+            trace!(
+                chunk_epoch = fetch.epoch(),
+                current_epoch = self.validator.epoch,
+                "skipping stale chunk"
+            );
+            return ChunkOutcome::Continue;
+        }
+
+        if fetch.is_eof() {
+            debug!(epoch = fetch.epoch(), "Audio: received EOF");
             self.eof = true;
-            return None;
+            return ChunkOutcome::Return(None);
+        }
+
+        let chunk = fetch.into_inner();
+        trace!(
+            samples = chunk.pcm.len(),
+            spec = ?chunk.spec(),
+            "Audio: received chunk"
+        );
+        ChunkOutcome::Return(Some(chunk))
+    }
+
+    fn close_channel_and_mark_eof(&mut self) -> Option<PcmChunk> {
+        debug!("Audio: channel closed (EOF)");
+        self.eof = true;
+        None
+    }
+
+    fn use_nonblocking_recv(&self) -> bool {
+        #[cfg(target_arch = "wasm32")]
+        {
+            true
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.preloaded
         }
     }
 
@@ -433,6 +461,170 @@ impl<T> Audio<Stream<T>>
 where
     T: StreamType<Events = EventBus>,
 {
+    fn resolve_thread_pool(
+        stream_config: &T::Config,
+        thread_pool: Option<ThreadPool>,
+    ) -> ThreadPool {
+        thread_pool.unwrap_or_else(|| T::thread_pool(stream_config))
+    }
+
+    fn resolve_event_bus(stream_config: &T::Config, config_bus: Option<EventBus>) -> EventBus {
+        T::event_bus(stream_config)
+            .or(config_bus)
+            .unwrap_or_else(|| EventBus::new(DEFAULT_EVENT_CAPACITY))
+    }
+
+    async fn create_stream_with_probe(
+        thread_pool: &ThreadPool,
+        stream_config: T::Config,
+        byte_pool: kithara_bufpool::BytePool,
+    ) -> Result<Stream<T>, DecodeError> {
+        debug!("Audio::new — creating Stream...");
+        let stream = Stream::<T>::new(stream_config)
+            .await
+            .map_err(|e| DecodeError::Io(io::Error::other(e.to_string())))?;
+        debug!("Audio::new — Stream created");
+
+        debug!("Audio::new — spawning probe task on thread pool...");
+        let stream = thread_pool
+            .spawn_async(move || {
+                let mut stream = stream;
+                let mut probe_buf = byte_pool.get_with(|b| b.resize(1024, 0));
+                let _ = stream.read(&mut probe_buf);
+                stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
+                Ok::<_, DecodeError>(stream)
+            })
+            .await
+            .map_err(|e| {
+                DecodeError::Io(io::Error::other(format!("probe task panicked: {e}")))
+            })??;
+        debug!("Audio::new — probe task done");
+        Ok(stream)
+    }
+
+    async fn create_initial_decoder(
+        thread_pool: &ThreadPool,
+        shared_stream: SharedStream<T>,
+        initial_media_info: Option<MediaInfo>,
+        hint: Option<String>,
+        pcm_pool: PcmPool,
+        prefer_hardware: bool,
+        stream_ctx: Arc<dyn StreamContext>,
+    ) -> Result<Box<dyn kithara_decode::InnerDecoder>, DecodeError> {
+        debug!("Audio::new — spawning decoder creation on thread pool...");
+        let decoder_config = kithara_decode::DecoderConfig {
+            prefer_hardware,
+            hint: hint.clone(),
+            pcm_pool: Some(pcm_pool),
+            stream_ctx: Some(stream_ctx),
+            ..Default::default()
+        };
+        let hint_for_decoder = hint;
+        let initial_media_info_for_decoder = initial_media_info;
+        let decoder = thread_pool
+            .spawn_async(move || {
+                if let Some(ref info) = initial_media_info_for_decoder {
+                    kithara_decode::DecoderFactory::create_from_media_info(
+                        shared_stream,
+                        info,
+                        decoder_config,
+                    )
+                } else {
+                    kithara_decode::DecoderFactory::create_with_probe(
+                        shared_stream,
+                        hint_for_decoder.as_deref(),
+                        decoder_config,
+                    )
+                }
+            })
+            .await
+            .map_err(|e| {
+                DecodeError::Io(io::Error::other(format!("decoder task panicked: {e}")))
+            })??;
+        debug!("Audio::new — decoder created");
+        Ok(decoder)
+    }
+
+    fn create_channels(command_channel_capacity: usize, pcm_buffer_chunks: usize) -> AudioChannels {
+        let cmd_capacity = command_channel_capacity.max(1);
+        #[cfg(target_arch = "wasm32")]
+        let _ = cmd_capacity;
+        #[cfg(target_arch = "wasm32")]
+        let (cmd_tx, cmd_rx) = unbounded();
+        #[cfg(not(target_arch = "wasm32"))]
+        let (cmd_tx, cmd_rx) = bounded(cmd_capacity);
+        let (data_tx, data_rx) = bounded(pcm_buffer_chunks.max(1));
+        (cmd_tx, cmd_rx, data_tx, data_rx)
+    }
+
+    fn create_emit(
+        bus: &EventBus,
+        audio_events_tx: &broadcast::Sender<AudioEvent>,
+    ) -> Box<dyn Fn(AudioEvent) + Send> {
+        let emit_bus = bus.clone();
+        let emit_raw_tx = audio_events_tx.clone();
+        Box::new(move |event: AudioEvent| {
+            emit_bus.publish(event.clone());
+            let _ = emit_raw_tx.send(event);
+        })
+    }
+
+    fn create_decoder_factory(
+        prefer_hardware: bool,
+        stream_ctx: &Arc<dyn StreamContext>,
+        epoch: &Arc<AtomicU64>,
+        pool: &PcmPool,
+    ) -> super::stream_source::DecoderFactory<T> {
+        let factory_stream_ctx = Arc::clone(stream_ctx);
+        let factory_epoch = Arc::clone(epoch);
+        let factory_pool = pool.clone();
+        Box::new(move |stream, info, base_offset| {
+            let current_epoch = factory_epoch.load(Ordering::Acquire);
+            let config = kithara_decode::DecoderConfig {
+                prefer_hardware,
+                pcm_pool: Some(factory_pool.clone()),
+                stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
+                epoch: current_epoch,
+                ..Default::default()
+            };
+            match kithara_decode::DecoderFactory::create_for_recreate(
+                || OffsetReader::new(stream.clone(), base_offset),
+                info,
+                config,
+            ) {
+                Ok(d) => {
+                    d.update_byte_len(0);
+                    Some(d)
+                }
+                Err(e) => {
+                    warn!(?e, "failed to recreate decoder");
+                    None
+                }
+            }
+        })
+    }
+
+    fn spawn_worker(
+        thread_pool: &ThreadPool,
+        audio_source: StreamAudioSource<T>,
+        cmd_rx: Receiver<AudioCommand>,
+        data_tx: Sender<Fetch<PcmChunk>>,
+        preload_notify: Arc<Notify>,
+        preload_chunks: usize,
+        worker_cancel: CancellationToken,
+    ) {
+        thread_pool.spawn(move || {
+            run_audio_loop(
+                audio_source,
+                &cmd_rx,
+                &data_tx,
+                &preload_notify,
+                preload_chunks,
+                &worker_cancel,
+            );
+        });
+    }
+
     /// Create audio pipeline from `AudioConfig`.
     ///
     /// This is the target API for Stream sources.
@@ -450,14 +642,9 @@ where
     /// let audio = Audio::new(config).await?;
     /// sink.append(audio);
     /// ```
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "pipeline setup with debug tracing"
-    )]
     pub async fn new(config: AudioConfig<T>) -> Result<Self, DecodeError> {
         let cancel = CancellationToken::new();
 
-        // Destructure config to avoid partial move issues.
         let AudioConfig {
             byte_pool,
             command_channel_capacity,
@@ -475,106 +662,38 @@ where
             effects: custom_effects,
         } = config;
 
-        // Resolve thread pool: AudioConfig overrides stream config, which overrides global.
-        let thread_pool = thread_pool.unwrap_or_else(|| T::thread_pool(&stream_config));
-
-        // Create event bus: prefer stream config bus (HlsConfig/FileConfig),
-        // fall back to AudioConfig bus, or create a new one.
-        let bus = T::event_bus(&stream_config)
-            .or(config_bus)
-            .unwrap_or_else(|| EventBus::new(DEFAULT_EVENT_CAPACITY));
-
-        // Create stream.
-        debug!("Audio::new — creating Stream...");
-        let stream = Stream::<T>::new(stream_config)
-            .await
-            .map_err(|e| DecodeError::Io(io::Error::other(e.to_string())))?;
-        debug!("Audio::new — Stream created");
-
-        // Resolve byte pool: config overrides global.
+        let thread_pool = Self::resolve_thread_pool(&stream_config, thread_pool);
+        let bus = Self::resolve_event_bus(&stream_config, config_bus);
         let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::byte_pool().clone());
+        let stream = Self::create_stream_with_probe(&thread_pool, stream_config, byte_pool).await?;
 
-        // Trigger first segment load to get MediaInfo for proper decoder creation.
-        debug!("Audio::new — spawning probe task on thread pool...");
-        let stream = thread_pool
-            .spawn_async(move || {
-                let mut stream = stream;
-                let mut probe_buf = byte_pool.get_with(|b| b.resize(1024, 0));
-                let _ = stream.read(&mut probe_buf);
-                stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
-                Ok::<_, DecodeError>(stream)
-            })
-            .await
-            .map_err(|e| {
-                DecodeError::Io(io::Error::other(format!("probe task panicked: {e}")))
-            })??;
-        debug!("Audio::new — probe task done");
-
-        // Get initial MediaInfo.
-        // For decoder creation: user-provided overrides stream-detected.
-        // For format change tracking: always use stream-detected (so ABR switches
-        // are detected correctly even when user overrides the format).
         let stream_media_info = stream.media_info();
         let timeline = stream.timeline();
         let initial_media_info = user_media_info.or_else(|| stream_media_info.clone());
         debug!(?initial_media_info, "Initial MediaInfo from stream");
 
-        // Create shared stream for format change detection
         let shared_stream = SharedStream::new(stream);
-
-        // Build stream context once — shared across all decoder instances.
         let stream_ctx = shared_stream.build_stream_context();
 
         let pool = pool.get_or_insert_with(|| pcm_pool().clone());
-
-        // Create initial decoder on the thread pool to avoid blocking tokio runtime.
-        // Symphonia probe() does blocking IO which would deadlock the async downloader.
-        debug!("Audio::new — spawning decoder creation on thread pool...");
-        let decoder_config = kithara_decode::DecoderConfig {
+        let decoder = Self::create_initial_decoder(
+            &thread_pool,
+            shared_stream.clone(),
+            initial_media_info.clone(),
+            hint.clone(),
+            pool.clone(),
             prefer_hardware,
-            hint: hint.clone(),
-            pcm_pool: Some(pool.clone()),
-            stream_ctx: Some(Arc::clone(&stream_ctx)),
-            ..Default::default()
-        };
-        let shared_stream_for_decoder = shared_stream.clone();
-        let hint_for_decoder = hint.clone();
-        let initial_media_info_for_decoder = initial_media_info.clone();
-        let decoder: Box<dyn kithara_decode::InnerDecoder> = thread_pool
-            .spawn_async(move || {
-                if let Some(ref info) = initial_media_info_for_decoder {
-                    kithara_decode::DecoderFactory::create_from_media_info(
-                        shared_stream_for_decoder,
-                        info,
-                        decoder_config,
-                    )
-                } else {
-                    kithara_decode::DecoderFactory::create_with_probe(
-                        shared_stream_for_decoder,
-                        hint_for_decoder.as_deref(),
-                        decoder_config,
-                    )
-                }
-            })
-            .await
-            .map_err(|e| {
-                DecodeError::Io(io::Error::other(format!("decoder task panicked: {e}")))
-            })??;
-        debug!("Audio::new — decoder created");
+            Arc::clone(&stream_ctx),
+        )
+        .await?;
 
         let initial_spec = decoder.spec();
         let total_duration = decoder.duration();
         timeline.set_total_duration(total_duration);
         let metadata = decoder.metadata();
 
-        let cmd_capacity = command_channel_capacity.max(1);
-        #[cfg(target_arch = "wasm32")]
-        let _ = cmd_capacity;
-        #[cfg(target_arch = "wasm32")]
-        let (cmd_tx, cmd_rx) = unbounded();
-        #[cfg(not(target_arch = "wasm32"))]
-        let (cmd_tx, cmd_rx) = bounded(cmd_capacity);
-        let (data_tx, data_rx) = bounded(pcm_buffer_chunks.max(1));
+        let (cmd_tx, cmd_rx, data_tx, data_rx) =
+            Self::create_channels(command_channel_capacity, pcm_buffer_chunks);
 
         let epoch = Arc::new(AtomicU64::new(0));
         let (audio_events_tx, _) = broadcast::channel(DEFAULT_EVENT_CAPACITY);
@@ -596,52 +715,9 @@ where
             "Audio pipeline created"
         );
 
-        // Emit closure sends AudioEvent to both the EventBus and the raw channel.
-        let emit_bus = bus.clone();
-        let emit_raw_tx = audio_events_tx.clone();
-        let emit = Box::new(move |event: AudioEvent| {
-            emit_bus.publish(event.clone());
-            let _ = emit_raw_tx.send(event);
-        });
-
-        // Factory for creating decoders after ABR switch.
-        // Strategy is metadata-first with native probe fallback.
-        let factory_stream_ctx = Arc::clone(&stream_ctx);
-        let factory_epoch = Arc::clone(&epoch);
-        let factory_pool = pool.clone();
-        let decoder_factory: super::stream_source::DecoderFactory<T> =
-            Box::new(move |stream, info, base_offset| {
-                let current_epoch = factory_epoch.load(Ordering::Acquire);
-                let config = kithara_decode::DecoderConfig {
-                    prefer_hardware,
-                    pcm_pool: Some(factory_pool.clone()),
-                    stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
-                    epoch: current_epoch,
-                    ..Default::default()
-                };
-                match kithara_decode::DecoderFactory::create_for_recreate(
-                    || OffsetReader::new(stream.clone(), base_offset),
-                    info,
-                    config,
-                ) {
-                    Ok(d) => {
-                        d.update_byte_len(0);
-                        Some(d)
-                    }
-                    Err(e) => {
-                        warn!(?e, "failed to recreate decoder");
-                        None
-                    }
-                }
-            });
-
-        // Use StreamAudioSource for format change detection.
-        // Pass stream_media_info (not initial_media_info) so format change detection
-        // compares against what the stream actually reports, avoiding false positives
-        // when the user overrides media_info (e.g., WAV over HLS).
-        // Create lock-free notify callback from source before SharedStream wraps it.
-        // This avoids deadlock: SharedStream::notify_waiting() would take the inner
-        // mutex which the worker thread holds during read() → wait_range().
+        let emit = Self::create_emit(&bus, &audio_events_tx);
+        let decoder_factory =
+            Self::create_decoder_factory(prefer_hardware, &stream_ctx, &epoch, pool);
         let notify_waiting = shared_stream.make_notify_fn();
 
         let audio_source = StreamAudioSource::new(
@@ -655,20 +731,15 @@ where
         .with_emit(emit);
 
         let preload_notify = Arc::new(Notify::new());
-        let worker_notify = preload_notify.clone();
-
-        let worker_cancel = cancel.clone();
-
-        thread_pool.spawn(move || {
-            run_audio_loop(
-                audio_source,
-                &cmd_rx,
-                &data_tx,
-                &worker_notify,
-                preload_chunks.get(),
-                &worker_cancel,
-            );
-        });
+        Self::spawn_worker(
+            &thread_pool,
+            audio_source,
+            cmd_rx,
+            data_tx,
+            preload_notify.clone(),
+            preload_chunks.get(),
+            cancel.clone(),
+        );
 
         Ok(Self {
             cmd_tx,

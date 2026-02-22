@@ -13,8 +13,9 @@ use axum::{
 };
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara::net::{
-    Headers, HttpClient, Net, NetError, NetExt, NetOptions, RangeSpec, RetryPolicy, TimeoutNet,
+use kithara::{
+    internal::TimeoutNet,
+    net::{Headers, HttpClient, Net, NetError, NetExt, NetOptions, RangeSpec, RetryPolicy},
 };
 use kithara_test_utils::TestHttpServer;
 use rstest::*;

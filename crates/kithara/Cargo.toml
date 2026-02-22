@@ -55,7 +55,11 @@ perf = [
     "kithara-net/perf",
 ]
 full = ["file", "hls", "assets", "net", "bufpool"]
-internal = []
+internal = [
+    "kithara-assets?/internal",
+    "kithara-hls?/internal",
+    "kithara-net?/internal",
+]
 
 [dev-dependencies]
 kithara = { path = ".", default-features = false, features = ["internal"] }

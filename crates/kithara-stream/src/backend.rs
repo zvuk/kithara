@@ -22,6 +22,12 @@ use crate::downloader::{Downloader, DownloaderIo, PlanOutcome, StepResult};
 /// Default yield interval (iterations between `yield_now` calls).
 const DEFAULT_YIELD_INTERVAL: usize = 8;
 
+enum LoopControl {
+    Exit,
+    Proceed,
+    Restart,
+}
+
 /// Spawns and owns a Downloader task.
 ///
 /// The downloader runs independently (async, writing data to storage).
@@ -73,9 +79,6 @@ impl Backend {
         }
     }
 
-    // Core event loop coordinating backpressure, demand, batch/step execution, and
-    // periodic yield. Splitting would fragment the control flow and hurt readability.
-    #[expect(clippy::cognitive_complexity)]
     async fn run_downloader<D: Downloader>(mut dl: D, cancel: CancellationToken) {
         debug!("Downloader task started");
         let yield_interval = DEFAULT_YIELD_INTERVAL;
@@ -87,131 +90,31 @@ impl Backend {
                 return;
             }
 
-            // 1. Backpressure — wait until reader catches up.
-            //    Demand requests bypass throttle to prevent deadlock.
-            while dl.should_throttle() {
-                tokio::select! {
-                    biased;
-                    () = cancel.cancelled() => {
-                        debug!("Downloader cancelled during backpressure");
-                        return;
-                    }
-                    () = dl.wait_ready() => {}
-                }
-
-                // Check demand while throttled — demand bypasses backpressure.
-                if let Some(plan) = Self::try_poll_demand(&mut dl, &cancel).await
-                    && Self::fetch_and_commit_demand(&mut dl, plan, &cancel)
-                        .await
-                        .is_err()
-                {
-                    return;
-                }
+            if Self::wait_while_throttled(&mut dl, &cancel).await.is_err() {
+                return;
+            }
+            if Self::drain_demand_requests(&mut dl, &cancel).await.is_err() {
+                return;
             }
 
-            // 2. Drain on-demand requests (seek, range requests).
-            while let Some(plan) = Self::try_poll_demand(&mut dl, &cancel).await {
-                if Self::fetch_and_commit_demand(&mut dl, plan, &cancel)
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-            }
-
-            // 3. Plan next work.
-            let outcome = tokio::select! {
-                biased;
-                () = cancel.cancelled() => {
-                    debug!("Downloader cancelled during plan");
-                    return;
-                }
-                outcome = dl.plan() => outcome,
+            let Ok(outcome) = Self::plan_next(&mut dl, &cancel).await else {
+                return;
             };
 
-            match outcome {
-                PlanOutcome::Batch(plans) => {
-                    if plans.is_empty() {
-                        tokio::task::yield_now().await;
-                        continue;
-                    }
-
-                    // Execute all fetches in parallel.
-                    let io = dl.io().clone();
-                    let futures: Vec<_> = plans
-                        .into_iter()
-                        .map(|plan| {
-                            let io = io.clone();
-                            async move { io.fetch(plan).await }
-                        })
-                        .collect();
-
-                    let results = tokio::select! {
-                        biased;
-                        () = cancel.cancelled() => {
-                            debug!("Downloader cancelled during batch fetch");
-                            return;
-                        }
-                        results = futures::future::join_all(futures) => results,
-                    };
-
-                    // Commit results sequentially, checking demand between commits.
-                    for result in results {
-                        match result {
-                            Ok(fetch) => dl.commit(fetch),
-                            Err(e) => {
-                                debug!(?e, "batch fetch error");
-                                // Continue with remaining results — partial success.
-                            }
-                        }
-
-                        // Check demand between commits — allow seek to interrupt batch.
-                        if let Some(plan) = Self::try_poll_demand(&mut dl, &cancel).await
-                            && Self::fetch_and_commit_demand(&mut dl, plan, &cancel)
-                                .await
-                                .is_err()
-                        {
-                            return;
-                        }
-                    }
-
-                    steps_since_yield += 1;
-                }
-
-                PlanOutcome::Step => {
-                    let result = tokio::select! {
-                        biased;
-                        () = cancel.cancelled() => {
-                            debug!("Downloader cancelled during step");
-                            return;
-                        }
-                        () = dl.demand_signal() => {
-                            // Demand arrived while step was blocked.
-                            // Re-enter loop to drain demand before continuing.
-                            continue;
-                        }
-                        result = dl.step() => result,
-                    };
-
-                    match result {
-                        Ok(StepResult::Item(fetch)) => {
-                            dl.commit(fetch);
-                            steps_since_yield += 1;
-                        }
-                        Ok(StepResult::PhaseChange) => {
-                            // Phase changed, re-plan on next iteration.
-                            continue;
-                        }
-                        Err(e) => {
-                            debug!(?e, "step error");
-                            return;
-                        }
-                    }
-                }
-
+            let control = match outcome {
+                PlanOutcome::Batch(plans) => Self::handle_batch(&mut dl, &cancel, plans).await,
+                PlanOutcome::Step => Self::handle_step(&mut dl, &cancel).await,
                 PlanOutcome::Complete => {
                     debug!("Downloader complete");
-                    return;
+                    LoopControl::Exit
+                }
+            };
+
+            match control {
+                LoopControl::Exit => return,
+                LoopControl::Restart => continue,
+                LoopControl::Proceed => {
+                    steps_since_yield += 1;
                 }
             }
 
@@ -220,6 +123,132 @@ impl Backend {
             if !dl.should_throttle() && steps_since_yield >= yield_interval {
                 tokio::task::yield_now().await;
                 steps_since_yield = 0;
+            }
+        }
+    }
+
+    async fn wait_while_throttled<D: Downloader>(
+        dl: &mut D,
+        cancel: &CancellationToken,
+    ) -> Result<(), ()> {
+        while dl.should_throttle() {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    debug!("Downloader cancelled during backpressure");
+                    return Err(());
+                }
+                () = dl.wait_ready() => {}
+            }
+
+            if let Some(plan) = Self::try_poll_demand(dl, cancel).await
+                && Self::fetch_and_commit_demand(dl, plan, cancel)
+                    .await
+                    .is_err()
+            {
+                return Err(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn drain_demand_requests<D: Downloader>(
+        dl: &mut D,
+        cancel: &CancellationToken,
+    ) -> Result<(), ()> {
+        while let Some(plan) = Self::try_poll_demand(dl, cancel).await {
+            if Self::fetch_and_commit_demand(dl, plan, cancel)
+                .await
+                .is_err()
+            {
+                return Err(());
+            }
+        }
+        Ok(())
+    }
+
+    async fn plan_next<D: Downloader>(
+        dl: &mut D,
+        cancel: &CancellationToken,
+    ) -> Result<PlanOutcome<D::Plan>, ()> {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                debug!("Downloader cancelled during plan");
+                Err(())
+            }
+            outcome = dl.plan() => Ok(outcome),
+        }
+    }
+
+    async fn handle_batch<D: Downloader>(
+        dl: &mut D,
+        cancel: &CancellationToken,
+        plans: Vec<D::Plan>,
+    ) -> LoopControl {
+        if plans.is_empty() {
+            tokio::task::yield_now().await;
+            return LoopControl::Restart;
+        }
+
+        let io = dl.io().clone();
+        let futures: Vec<_> = plans
+            .into_iter()
+            .map(|plan| {
+                let io = io.clone();
+                async move { io.fetch(plan).await }
+            })
+            .collect();
+
+        let results = tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                debug!("Downloader cancelled during batch fetch");
+                return LoopControl::Exit;
+            }
+            results = futures::future::join_all(futures) => results,
+        };
+
+        for result in results {
+            match result {
+                Ok(fetch) => dl.commit(fetch),
+                Err(e) => debug!(?e, "batch fetch error"),
+            }
+
+            if let Some(plan) = Self::try_poll_demand(dl, cancel).await
+                && Self::fetch_and_commit_demand(dl, plan, cancel)
+                    .await
+                    .is_err()
+            {
+                return LoopControl::Exit;
+            }
+        }
+
+        LoopControl::Proceed
+    }
+
+    async fn handle_step<D: Downloader>(dl: &mut D, cancel: &CancellationToken) -> LoopControl {
+        let result = tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                debug!("Downloader cancelled during step");
+                return LoopControl::Exit;
+            }
+            () = dl.demand_signal() => {
+                return LoopControl::Restart;
+            }
+            result = dl.step() => result,
+        };
+
+        match result {
+            Ok(StepResult::Item(fetch)) => {
+                dl.commit(fetch);
+                LoopControl::Proceed
+            }
+            Ok(StepResult::PhaseChange) => LoopControl::Restart,
+            Err(e) => {
+                debug!(?e, "step error");
+                LoopControl::Exit
             }
         }
     }

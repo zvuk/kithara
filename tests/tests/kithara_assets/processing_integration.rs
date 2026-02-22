@@ -17,7 +17,8 @@ use std::{
 };
 
 use kithara::{
-    assets::{AssetStoreBuilder, Assets, EvictConfig, ProcessChunkFn, ResourceKey},
+    assets::{AssetStoreBuilder, EvictConfig, ProcessChunkFn, ResourceKey},
+    internal::Assets,
     storage::ResourceExt,
 };
 use kithara_test_utils::temp_dir;

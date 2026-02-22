@@ -43,6 +43,16 @@ pub struct AbrController<E: Estimator> {
     reference_instant: Instant,
 }
 
+#[derive(Clone, Copy)]
+struct SwitchContext {
+    adjusted_bps: f64,
+    buffer_level_secs: f64,
+    candidate_bw: u64,
+    candidate_idx: usize,
+    current: usize,
+    current_bw: u64,
+}
+
 impl<E: Estimator> AbrController<E> {
     pub fn with_estimator(cfg: AbrOptions, estimator: E) -> Self {
         let initial_variant = cfg.initial_variant();
@@ -100,21 +110,114 @@ impl<E: Estimator> AbrController<E> {
         self.estimator.buffer_level_secs()
     }
 
+    fn decision(current: usize, target_variant_index: usize, reason: AbrReason) -> AbrDecision {
+        AbrDecision {
+            target_variant_index,
+            reason,
+            changed: target_variant_index != current,
+        }
+    }
+
+    fn current_variant_bandwidth(&self, current: usize) -> u64 {
+        self.cfg
+            .variants
+            .iter()
+            .find(|v| v.variant_index == current)
+            .map_or(0, |v| v.bandwidth_bps)
+    }
+
+    fn variants_sorted_by_bandwidth(&self) -> Vec<(usize, u64)> {
+        let mut variants: Vec<(usize, u64)> = self
+            .cfg
+            .variants
+            .iter()
+            .map(|v| (v.variant_index, v.bandwidth_bps))
+            .collect();
+        variants.sort_by_key(|(_, bw)| *bw);
+        variants
+    }
+
+    #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
+    fn adjusted_throughput_bps(&self, estimate_bps: u64) -> f64 {
+        (estimate_bps as f64 / self.cfg.throughput_safety_factor).max(0.0)
+    }
+
+    fn candidate_variant(variants: &[(usize, u64)], adjusted_bps: f64) -> Option<(usize, u64)> {
+        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
+        let best_under = variants
+            .iter()
+            .filter(|(_, bw)| (*bw as f64) <= adjusted_bps)
+            .max_by_key(|(_, bw)| *bw);
+        best_under
+            .or_else(|| variants.first())
+            .map(|(idx, bw)| (*idx, *bw))
+    }
+
+    fn maybe_up_switch_decision(&self, now: Instant, ctx: SwitchContext) -> Option<AbrDecision> {
+        if ctx.candidate_bw <= ctx.current_bw {
+            return None;
+        }
+
+        let buffer_ok = self.cfg.min_buffer_for_up_switch_secs <= 0.0
+            || ctx.buffer_level_secs >= self.cfg.min_buffer_for_up_switch_secs;
+        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
+        let headroom_ok =
+            ctx.adjusted_bps >= (ctx.candidate_bw as f64) * self.cfg.up_hysteresis_ratio;
+        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
+        let required_bps = (ctx.candidate_bw as f64) * self.cfg.up_hysteresis_ratio;
+        tracing::debug!(
+            buffer_ok,
+            headroom_ok,
+            buffer_level_secs = ctx.buffer_level_secs,
+            min_buffer = self.cfg.min_buffer_for_up_switch_secs,
+            adjusted_bps = ctx.adjusted_bps,
+            required_bps,
+            "ABR decide: up-switch check"
+        );
+
+        if buffer_ok && headroom_ok {
+            self.record_switch(now);
+            return Some(Self::decision(
+                ctx.current,
+                ctx.candidate_idx,
+                AbrReason::UpSwitch,
+            ));
+        }
+
+        Some(Self::decision(
+            ctx.current,
+            ctx.current,
+            AbrReason::BufferTooLowForUpSwitch,
+        ))
+    }
+
+    fn maybe_down_switch_decision(&self, now: Instant, ctx: SwitchContext) -> Option<AbrDecision> {
+        if ctx.candidate_bw >= ctx.current_bw {
+            return None;
+        }
+
+        let urgent_down = ctx.buffer_level_secs <= self.cfg.down_switch_buffer_secs;
+        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
+        let margin_ok =
+            ctx.adjusted_bps <= (ctx.current_bw as f64) * self.cfg.down_hysteresis_ratio;
+        if urgent_down || margin_ok {
+            self.record_switch(now);
+            return Some(Self::decision(
+                ctx.current,
+                ctx.candidate_idx,
+                AbrReason::DownSwitch,
+            ));
+        }
+        None
+    }
+
     /// Make ABR decision using variants from configuration.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "ABR decision logic with multiple branches"
-    )]
     pub fn decide(&self, now: Instant) -> AbrDecision {
         let current = self.current_variant.load(Ordering::Acquire);
 
         // Handle Manual mode - always return configured variant
         if let AbrMode::Manual(idx) = self.cfg.mode {
-            return AbrDecision {
-                target_variant_index: idx,
-                reason: AbrReason::ManualOverride,
-                changed: idx != current,
-            };
+            return Self::decision(current, idx, AbrReason::ManualOverride);
         }
 
         let buffer_level_secs = self.buffer_level_secs();
@@ -125,51 +228,21 @@ impl<E: Estimator> AbrController<E> {
                 buffer_level_secs,
                 "ABR decide: MinInterval not elapsed"
             );
-            return AbrDecision {
-                target_variant_index: current,
-                reason: AbrReason::MinInterval,
-                changed: false,
-            };
+            return Self::decision(current, current, AbrReason::MinInterval);
         }
 
         let Some(estimate_bps) = self.estimator.estimate_bps() else {
             tracing::debug!(current, buffer_level_secs, "ABR decide: NoEstimate");
-            return AbrDecision {
-                target_variant_index: current,
-                reason: AbrReason::NoEstimate,
-                changed: false,
-            };
+            return Self::decision(current, current, AbrReason::NoEstimate);
         };
 
-        // Get current variant bandwidth from config
-        let current_bw = self
-            .cfg
-            .variants
-            .iter()
-            .find(|v| v.variant_index == current)
-            .map_or(0, |v| v.bandwidth_bps);
-
-        // Collect all variants as (index, bandwidth) pairs and sort by bandwidth
-        let mut variants: Vec<(usize, u64)> = self
-            .cfg
-            .variants
-            .iter()
-            .map(|v| (v.variant_index, v.bandwidth_bps))
-            .collect();
-
+        let current_bw = self.current_variant_bandwidth(current);
+        let variants = self.variants_sorted_by_bandwidth();
         if variants.is_empty() {
-            return AbrDecision {
-                target_variant_index: current,
-                reason: AbrReason::AlreadyOptimal,
-                changed: false,
-            };
+            return Self::decision(current, current, AbrReason::AlreadyOptimal);
         }
 
-        variants.sort_by_key(|(_, bw)| *bw);
-
-        // Adjust throughput by safety factor (divide, not multiply!)
-        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
-        let adjusted_bps = (estimate_bps as f64 / self.cfg.throughput_safety_factor).max(0.0);
+        let adjusted_bps = self.adjusted_throughput_bps(estimate_bps);
 
         tracing::debug!(
             current,
@@ -184,20 +257,9 @@ impl<E: Estimator> AbrController<E> {
             "ABR decide: evaluating"
         );
 
-        // Best candidate not exceeding adjusted throughput, otherwise lowest
-        #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
-        let best_under = variants
-            .iter()
-            .filter(|(_, bw)| (*bw as f64) <= adjusted_bps)
-            .max_by_key(|(_, bw)| *bw);
-        let candidate = best_under.or_else(|| variants.first());
-
-        let Some(&(candidate_idx, candidate_bw)) = candidate else {
-            return AbrDecision {
-                target_variant_index: current,
-                reason: AbrReason::AlreadyOptimal,
-                changed: false,
-            };
+        let Some((candidate_idx, candidate_bw)) = Self::candidate_variant(&variants, adjusted_bps)
+        else {
+            return Self::decision(current, current, AbrReason::AlreadyOptimal);
         };
 
         tracing::debug!(
@@ -208,58 +270,24 @@ impl<E: Estimator> AbrController<E> {
             "ABR decide: candidate selected"
         );
 
-        // Up-switch path
-        if candidate_bw > current_bw {
-            let buffer_ok = self.cfg.min_buffer_for_up_switch_secs <= 0.0
-                || buffer_level_secs >= self.cfg.min_buffer_for_up_switch_secs;
-            #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
-            let headroom_ok = adjusted_bps >= (candidate_bw as f64) * self.cfg.up_hysteresis_ratio;
-            #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
-            let required_bps = (candidate_bw as f64) * self.cfg.up_hysteresis_ratio;
-            tracing::debug!(
-                buffer_ok,
-                headroom_ok,
-                buffer_level_secs,
-                min_buffer = self.cfg.min_buffer_for_up_switch_secs,
-                adjusted_bps,
-                required_bps,
-                "ABR decide: up-switch check"
-            );
-            if buffer_ok && headroom_ok {
-                self.record_switch(now);
-                return AbrDecision {
-                    target_variant_index: candidate_idx,
-                    reason: AbrReason::UpSwitch,
-                    changed: true,
-                };
-            }
-            return AbrDecision {
-                target_variant_index: current,
-                reason: AbrReason::BufferTooLowForUpSwitch,
-                changed: false,
-            };
+        let switch_ctx = SwitchContext {
+            adjusted_bps,
+            buffer_level_secs,
+            candidate_bw,
+            candidate_idx,
+            current,
+            current_bw,
+        };
+
+        if let Some(decision) = self.maybe_up_switch_decision(now, switch_ctx) {
+            return decision;
         }
 
-        // Down-switch path
-        if candidate_bw < current_bw {
-            let urgent_down = buffer_level_secs <= self.cfg.down_switch_buffer_secs;
-            #[expect(clippy::cast_precision_loss)] // bitrate precision loss is negligible for ABR
-            let margin_ok = adjusted_bps <= (current_bw as f64) * self.cfg.down_hysteresis_ratio;
-            if urgent_down || margin_ok {
-                self.record_switch(now);
-                return AbrDecision {
-                    target_variant_index: candidate_idx,
-                    reason: AbrReason::DownSwitch,
-                    changed: true,
-                };
-            }
+        if let Some(decision) = self.maybe_down_switch_decision(now, switch_ctx) {
+            return decision;
         }
 
-        AbrDecision {
-            target_variant_index: current,
-            reason: AbrReason::AlreadyOptimal,
-            changed: false,
-        }
+        Self::decision(current, current, AbrReason::AlreadyOptimal)
     }
 
     pub fn apply(&mut self, decision: &AbrDecision, now: Instant) {

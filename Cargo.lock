@@ -2607,6 +2607,7 @@ dependencies = [
  "bytes",
  "cbc",
  "console_error_panic_hook",
+ "criterion",
  "dashmap",
  "futures",
  "gloo-timers",

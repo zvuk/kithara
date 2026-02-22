@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use fixture::*;
-use kithara::hls::{HlsResult, parsing::VariantId};
+use kithara::{hls::HlsResult, internal::VariantId};
 use rstest::rstest;
 
 use super::fixture;

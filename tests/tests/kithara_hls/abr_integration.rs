@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use kithara::{
     abr::{AbrController, AbrMode, AbrOptions, AbrReason, Variant},
-    hls::parsing::{MasterPlaylist, parse_master_playlist},
+    internal::{MasterPlaylist, parse_master_playlist},
 };
 use rstest::{fixture, rstest};
 

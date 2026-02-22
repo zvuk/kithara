@@ -25,7 +25,7 @@ use crate::{
     download_state::{DownloadProgress, DownloadState, LoadedSegment},
     fetch::{DefaultFetchManager, Loader, SegmentMeta},
     playlist::{PlaylistAccess, PlaylistState, VariantSizeMap},
-    source::SharedSegments,
+    source::{SegmentRequest, SharedSegments},
 };
 
 fn is_stale_epoch(fetch_epoch: SeekEpoch, current_epoch: SeekEpoch) -> bool {
@@ -551,10 +551,6 @@ impl HlsDownloader {
     /// Prepare variant for download: detect switches, calculate metadata, populate cache.
     ///
     /// Returns `(is_variant_switch, is_midstream_switch)`.
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "variant switch detection with multiple conditions"
-    )]
     async fn ensure_variant_ready(
         &mut self,
         variant: usize,
@@ -562,98 +558,559 @@ impl HlsDownloader {
     ) -> Result<(bool, bool), HlsError> {
         let (is_variant_switch, is_midstream_switch) =
             self.classify_variant_transition(variant, segment_index);
+        self.handle_midstream_switch(is_midstream_switch);
 
-        if is_midstream_switch {
-            self.shared
-                .had_midstream_switch
-                .store(true, Ordering::Release);
-            while self.shared.segment_requests.pop().is_some() {}
-        }
-
-        let current_length = self.shared.timeline.total_bytes().unwrap_or(0);
-        if is_variant_switch || current_length == 0 {
-            let needs_calculation = !self.playlist_state.has_size_map(variant);
-
-            if needs_calculation {
-                match Self::calculate_size_map(&self.playlist_state, &self.fetch, variant).await {
-                    Ok(()) => {
-                        let total = self.playlist_state.total_variant_size(variant).unwrap_or(0);
-
-                        debug!(variant, total, "calculated and cached variant size map");
-
-                        let (cached_count, cached_end_offset) = if !is_variant_switch {
-                            Self::populate_cached_segments(
-                                &self.shared,
-                                &self.fetch,
-                                variant,
-                                &self.coverage,
-                            )
-                        } else {
-                            (0, 0)
-                        };
-
-                        if cached_count > 0 {
-                            if cached_end_offset > self.byte_offset {
-                                self.byte_offset = cached_end_offset;
-                            }
-                            self.shared.timeline.set_download_position(self.byte_offset);
-                            if cached_count > self.current_segment_index {
-                                self.current_segment_index = cached_count;
-                            }
-                            self.sent_init_for_variant.insert(variant);
-                        }
-
-                        let effective_total = if is_midstream_switch {
-                            let switch_byte = self.byte_offset;
-                            let switch_meta = self
-                                .playlist_state
-                                .segment_byte_offset(variant, segment_index)
-                                .unwrap_or(0);
-                            let result = total
-                                .saturating_sub(switch_meta)
-                                .saturating_add(switch_byte);
-                            debug!(
-                                variant,
-                                segment_index,
-                                metadata_total = total,
-                                switch_byte,
-                                switch_meta,
-                                effective_total = result,
-                                "effective_total: midstream switch adjustment"
-                            );
-                            result
-                        } else {
-                            let result = total.max(cached_end_offset);
-                            debug!(
-                                variant,
-                                metadata_total = total,
-                                cached_end_offset,
-                                effective_total = result,
-                                "effective_total: normal (no switch)"
-                            );
-                            result
-                        };
-
-                        if effective_total > 0 {
-                            self.shared.timeline.set_total_bytes(Some(effective_total));
-                        }
-                    }
-                    Err(e) => {
-                        debug!(?e, variant, "failed to calculate variant size map");
-                    }
-                }
-            } else {
-                // Size map already exists, use cached total
-                if let Some(cached_total) = self.playlist_state.total_variant_size(variant) {
-                    debug!(variant, total = cached_total, "using cached variant length");
-                    if cached_total > 0 {
-                        self.shared.timeline.set_total_bytes(Some(cached_total));
-                    }
-                }
-            }
+        if self.should_prepare_variant_totals(is_variant_switch) {
+            self.refresh_variant_total_bytes(
+                variant,
+                segment_index,
+                is_variant_switch,
+                is_midstream_switch,
+            )
+            .await;
         }
 
         Ok((is_variant_switch, is_midstream_switch))
+    }
+
+    fn handle_midstream_switch(&mut self, is_midstream_switch: bool) {
+        if !is_midstream_switch {
+            return;
+        }
+        self.shared
+            .had_midstream_switch
+            .store(true, Ordering::Release);
+        while self.shared.segment_requests.pop().is_some() {}
+    }
+
+    fn should_prepare_variant_totals(&self, is_variant_switch: bool) -> bool {
+        is_variant_switch || self.shared.timeline.total_bytes().unwrap_or(0) == 0
+    }
+
+    async fn refresh_variant_total_bytes(
+        &mut self,
+        variant: usize,
+        segment_index: usize,
+        is_variant_switch: bool,
+        is_midstream_switch: bool,
+    ) {
+        if self.playlist_state.has_size_map(variant) {
+            self.apply_cached_variant_total(variant);
+            return;
+        }
+
+        if let Err(e) = Self::calculate_size_map(&self.playlist_state, &self.fetch, variant).await {
+            debug!(?e, variant, "failed to calculate variant size map");
+            return;
+        }
+
+        let total = self.playlist_state.total_variant_size(variant).unwrap_or(0);
+        debug!(variant, total, "calculated and cached variant size map");
+
+        let (cached_count, cached_end_offset) =
+            self.populate_cached_segments_if_needed(variant, is_variant_switch);
+        self.apply_cached_segment_progress(variant, cached_count, cached_end_offset);
+
+        let effective_total = self.calculate_effective_total(
+            variant,
+            segment_index,
+            total,
+            cached_end_offset,
+            is_midstream_switch,
+        );
+        if effective_total > 0 {
+            self.shared.timeline.set_total_bytes(Some(effective_total));
+        }
+    }
+
+    fn apply_cached_variant_total(&self, variant: usize) {
+        let Some(cached_total) = self.playlist_state.total_variant_size(variant) else {
+            return;
+        };
+        debug!(variant, total = cached_total, "using cached variant length");
+        if cached_total > 0 {
+            self.shared.timeline.set_total_bytes(Some(cached_total));
+        }
+    }
+
+    fn populate_cached_segments_if_needed(
+        &self,
+        variant: usize,
+        is_variant_switch: bool,
+    ) -> (usize, u64) {
+        if is_variant_switch {
+            return (0, 0);
+        }
+        Self::populate_cached_segments(&self.shared, &self.fetch, variant, &self.coverage)
+    }
+
+    fn apply_cached_segment_progress(
+        &mut self,
+        variant: usize,
+        cached_count: usize,
+        cached_end_offset: u64,
+    ) {
+        if cached_count == 0 {
+            return;
+        }
+
+        if cached_end_offset > self.byte_offset {
+            self.byte_offset = cached_end_offset;
+        }
+        self.shared.timeline.set_download_position(self.byte_offset);
+        if cached_count > self.current_segment_index {
+            self.current_segment_index = cached_count;
+        }
+        self.sent_init_for_variant.insert(variant);
+    }
+
+    fn calculate_effective_total(
+        &self,
+        variant: usize,
+        segment_index: usize,
+        total: u64,
+        cached_end_offset: u64,
+        is_midstream_switch: bool,
+    ) -> u64 {
+        if !is_midstream_switch {
+            let result = total.max(cached_end_offset);
+            debug!(
+                variant,
+                metadata_total = total,
+                cached_end_offset,
+                effective_total = result,
+                "effective_total: normal (no switch)"
+            );
+            return result;
+        }
+
+        let switch_byte = self.byte_offset;
+        let switch_meta = self
+            .playlist_state
+            .segment_byte_offset(variant, segment_index)
+            .unwrap_or(0);
+        let result = total
+            .saturating_sub(switch_meta)
+            .saturating_add(switch_byte);
+        debug!(
+            variant,
+            segment_index,
+            metadata_total = total,
+            switch_byte,
+            switch_meta,
+            effective_total = result,
+            "effective_total: midstream switch adjustment"
+        );
+        result
+    }
+
+    async fn poll_demand_impl(&mut self) -> Option<HlsPlan> {
+        if self.shared.timeline.is_flushing() {
+            yield_now().await;
+            return None;
+        }
+
+        let req = self.next_valid_demand_request()?;
+        debug!(
+            variant = req.variant,
+            segment_index = req.segment_index,
+            "processing on-demand segment request"
+        );
+
+        let (req, num_segments) = self.num_segments_for_demand(req).await?;
+        if Self::demand_request_out_of_range(&req, num_segments) {
+            self.shared.condvar.notify_all();
+            return None;
+        }
+
+        if self.segment_loaded_for_demand(
+            req.variant,
+            req.segment_index,
+            "segment loaded at stale offset, refreshing demand request",
+            "segment already loaded, skipping",
+        ) {
+            self.shared.condvar.notify_all();
+            return None;
+        }
+
+        let (is_variant_switch, is_midstream_switch) = self
+            .prepare_variant_for_demand(req.variant, req.segment_index)
+            .await?;
+
+        if self.should_skip_pre_switch_variant(req.variant, req.segment_index, is_midstream_switch)
+        {
+            self.shared.condvar.notify_all();
+            return None;
+        }
+
+        if self.segment_loaded_for_demand(
+            req.variant,
+            req.segment_index,
+            "segment loaded with stale offset after metadata calc, refreshing",
+            "segment loaded from cache after metadata calc",
+        ) {
+            self.shared.condvar.notify_all();
+            return None;
+        }
+
+        Some(self.build_demand_plan(&req, is_variant_switch))
+    }
+
+    fn next_valid_demand_request(&mut self) -> Option<SegmentRequest> {
+        loop {
+            let req = self.shared.segment_requests.pop()?;
+            let current_epoch = self.shared.timeline.seek_epoch();
+            if req.seek_epoch == current_epoch {
+                if req.seek_epoch != self.active_seek_epoch {
+                    self.reset_for_seek_epoch(req.seek_epoch, req.variant, req.segment_index);
+                }
+                return Some(req);
+            }
+
+            debug!(
+                req_epoch = req.seek_epoch,
+                current_epoch,
+                variant = req.variant,
+                segment_index = req.segment_index,
+                "dropping stale on-demand request"
+            );
+            self.bus.publish(HlsEvent::StaleRequestDropped {
+                seek_epoch: req.seek_epoch,
+                current_epoch,
+                variant: req.variant,
+                segment_index: req.segment_index,
+            });
+            self.shared.condvar.notify_all();
+        }
+    }
+
+    async fn num_segments_for_demand(
+        &mut self,
+        req: SegmentRequest,
+    ) -> Option<(SegmentRequest, usize)> {
+        match self.fetch.num_segments(req.variant).await {
+            Ok(value) => Some((req, value)),
+            Err(e) => {
+                self.publish_download_error("failed to query segment count for demand", &e);
+                self.shared.segment_requests.push(req);
+                self.shared.condvar.notify_all();
+                None
+            }
+        }
+    }
+
+    fn demand_request_out_of_range(req: &SegmentRequest, num_segments: usize) -> bool {
+        if req.segment_index < num_segments {
+            return false;
+        }
+        debug!(
+            variant = req.variant,
+            segment_index = req.segment_index,
+            num_segments,
+            "segment index out of range"
+        );
+        true
+    }
+
+    fn segment_loaded_for_demand(
+        &self,
+        variant: usize,
+        segment_index: usize,
+        stale_reason: &str,
+        loaded_reason: &str,
+    ) -> bool {
+        if let Some((loaded_offset, expected_offset)) =
+            self.loaded_segment_offset_mismatch(variant, segment_index)
+        {
+            debug!(
+                variant,
+                segment_index,
+                loaded_offset,
+                expected_offset,
+                reason = stale_reason,
+                "demand segment has stale offset"
+            );
+            return false;
+        }
+
+        if self
+            .shared
+            .segments
+            .lock()
+            .is_segment_loaded(variant, segment_index)
+        {
+            debug!(
+                variant,
+                segment_index,
+                reason = loaded_reason,
+                "demand segment already loaded"
+            );
+            return true;
+        }
+        false
+    }
+
+    async fn prepare_variant_for_demand(
+        &mut self,
+        variant: usize,
+        segment_index: usize,
+    ) -> Option<(bool, bool)> {
+        match self.ensure_variant_ready(variant, segment_index).await {
+            Ok(flags) => Some(flags),
+            Err(e) => {
+                self.publish_download_error("variant preparation error in poll_demand", &e);
+                self.shared.condvar.notify_all();
+                None
+            }
+        }
+    }
+
+    fn should_skip_pre_switch_variant(
+        &self,
+        variant: usize,
+        segment_index: usize,
+        is_midstream_switch: bool,
+    ) -> bool {
+        if !self.shared.had_midstream_switch.load(Ordering::Acquire) || is_midstream_switch {
+            return false;
+        }
+        let current_variant = self.abr.get_current_variant_index();
+        if variant == current_variant {
+            return false;
+        }
+        debug!(
+            variant,
+            segment_index, current_variant, "skipping stale segment from pre-switch variant"
+        );
+        true
+    }
+
+    fn build_demand_plan(&mut self, req: &SegmentRequest, is_variant_switch: bool) -> HlsPlan {
+        self.bus.publish(HlsEvent::SegmentStart {
+            variant: req.variant,
+            segment_index: req.segment_index,
+            byte_offset: self.byte_offset,
+        });
+
+        let need_init =
+            self.force_init_for_seek || should_request_init(is_variant_switch, req.segment_index);
+        if need_init {
+            self.force_init_for_seek = false;
+        }
+
+        HlsPlan {
+            variant: req.variant,
+            segment_index: req.segment_index,
+            need_init,
+            seek_epoch: req.seek_epoch,
+        }
+    }
+
+    async fn plan_impl(&mut self) -> PlanOutcome<HlsPlan> {
+        if self.shared.timeline.is_flushing() {
+            yield_now().await;
+            return PlanOutcome::Batch(Vec::new());
+        }
+
+        let old_variant = self.abr.get_current_variant_index();
+        let decision = self.make_abr_decision();
+        let variant = self.abr.get_current_variant_index();
+
+        let Some(num_segments) = self.num_segments_for_plan(variant).await else {
+            return PlanOutcome::Batch(Vec::new());
+        };
+
+        if self.handle_tail_state(variant, num_segments).await {
+            return PlanOutcome::Batch(Vec::new());
+        }
+
+        self.publish_variant_applied(old_variant, variant, &decision);
+
+        let (is_variant_switch, is_midstream_switch) = match self
+            .ensure_variant_ready(variant, self.current_segment_index)
+            .await
+        {
+            Ok(flags) => flags,
+            Err(e) => {
+                self.shared.condvar.notify_all();
+                self.publish_download_error("variant preparation error", &e);
+                return PlanOutcome::Complete;
+            }
+        };
+
+        let (plans, batch_end) = self.build_batch_plans(
+            variant,
+            num_segments,
+            is_variant_switch,
+            is_midstream_switch,
+        );
+
+        if plans.is_empty() {
+            self.current_segment_index = batch_end;
+            self.shared.condvar.notify_all();
+        }
+
+        PlanOutcome::Batch(plans)
+    }
+
+    async fn num_segments_for_plan(&mut self, variant: usize) -> Option<usize> {
+        match self.fetch.num_segments(variant).await {
+            Ok(value) => Some(value),
+            Err(e) => {
+                self.publish_download_error("failed to query segment count", &e);
+                self.shared.condvar.notify_all();
+                yield_now().await;
+                None
+            }
+        }
+    }
+
+    async fn handle_tail_state(&mut self, variant: usize, num_segments: usize) -> bool {
+        if self.current_segment_index < num_segments {
+            return false;
+        }
+
+        let timeline_seek_epoch = self.shared.timeline.seek_epoch();
+        if timeline_seek_epoch != self.active_seek_epoch {
+            self.shared.timeline.set_eof(false);
+            self.shared.condvar.notify_all();
+            yield_now().await;
+            return true;
+        }
+
+        let had_midstream_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
+        if !had_midstream_switch {
+            if self.rewind_to_first_missing_segment(variant, num_segments) {
+                return true;
+            }
+        } else {
+            debug!(
+                variant,
+                num_segments,
+                "playlist tail reached after midstream switch; skip automatic backfill"
+            );
+        }
+
+        if !self.shared.timeline.eof() {
+            debug!("reached end of playlist");
+            self.shared.timeline.set_eof(true);
+            self.bus.publish(HlsEvent::EndOfStream);
+        }
+        self.shared.condvar.notify_all();
+        true
+    }
+
+    fn rewind_to_first_missing_segment(&mut self, variant: usize, num_segments: usize) -> bool {
+        let missing_segment = {
+            let segments = self.shared.segments.lock();
+            first_missing_segment(
+                &segments,
+                variant,
+                self.gap_scan_start_segment,
+                num_segments,
+            )
+        };
+        let Some(segment_index) = missing_segment else {
+            return false;
+        };
+
+        debug!(
+            variant,
+            segment_index,
+            num_segments,
+            "playlist tail reached with gaps; rewinding to first missing segment"
+        );
+        self.current_segment_index = segment_index;
+        self.shared.condvar.notify_all();
+        true
+    }
+
+    fn publish_variant_applied(&self, old_variant: usize, variant: usize, decision: &AbrDecision) {
+        if !decision.changed {
+            return;
+        }
+        self.bus.publish(HlsEvent::VariantApplied {
+            from_variant: old_variant,
+            to_variant: variant,
+            reason: decision.reason,
+        });
+    }
+
+    fn build_batch_plans(
+        &mut self,
+        variant: usize,
+        num_segments: usize,
+        is_variant_switch: bool,
+        is_midstream_switch: bool,
+    ) -> (Vec<HlsPlan>, usize) {
+        let batch_end = (self.current_segment_index + self.prefetch_count).min(num_segments);
+        let seek_epoch = self.shared.timeline.seek_epoch();
+        let mut plans = Vec::new();
+        let mut need_init = self.force_init_for_seek || is_variant_switch;
+
+        for seg_idx in self.current_segment_index..batch_end {
+            if self.should_skip_planned_segment(variant, seg_idx, is_midstream_switch) {
+                continue;
+            }
+
+            self.bus.publish(HlsEvent::SegmentStart {
+                variant,
+                segment_index: seg_idx,
+                byte_offset: self.byte_offset,
+            });
+
+            let plan_need_init = should_request_init(need_init, seg_idx);
+            plans.push(HlsPlan {
+                variant,
+                segment_index: seg_idx,
+                need_init: plan_need_init,
+                seek_epoch,
+            });
+            if plan_need_init {
+                self.force_init_for_seek = false;
+            }
+            need_init = false;
+        }
+
+        (plans, batch_end)
+    }
+
+    fn should_skip_planned_segment(
+        &mut self,
+        variant: usize,
+        seg_idx: usize,
+        is_midstream_switch: bool,
+    ) -> bool {
+        if let Some((loaded_offset, expected_offset)) =
+            self.loaded_segment_offset_mismatch(variant, seg_idx)
+        {
+            debug!(
+                variant,
+                segment_index = seg_idx,
+                loaded_offset,
+                expected_offset,
+                "segment in plan window has stale offset, forcing refresh"
+            );
+            return false;
+        }
+
+        if self
+            .shared
+            .segments
+            .lock()
+            .is_segment_loaded(variant, seg_idx)
+        {
+            self.current_segment_index = seg_idx + 1;
+            return true;
+        }
+
+        let had_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
+        if !had_switch || is_midstream_switch {
+            return false;
+        }
+
+        let current = self.abr.get_current_variant_index();
+        variant != current
     }
 
     fn make_abr_decision(&mut self) -> AbrDecision {
@@ -731,340 +1188,12 @@ impl Downloader for HlsDownloader {
         &self.io
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "on-demand segment resolution is inherently complex"
-    )]
     async fn poll_demand(&mut self) -> Option<HlsPlan> {
-        // Pause during seek — planning downloads is pointless while the seek
-        // target is being resolved. The outer loop will retry.
-        if self.shared.timeline.is_flushing() {
-            yield_now().await;
-            return None;
-        }
-
-        let req = loop {
-            match self.shared.segment_requests.pop() {
-                Some(req) => {
-                    let current_epoch = self.shared.timeline.seek_epoch();
-                    if req.seek_epoch == current_epoch {
-                        if req.seek_epoch != self.active_seek_epoch {
-                            self.reset_for_seek_epoch(
-                                req.seek_epoch,
-                                req.variant,
-                                req.segment_index,
-                            );
-                        }
-                        break req;
-                    }
-
-                    debug!(
-                        req_epoch = req.seek_epoch,
-                        current_epoch,
-                        variant = req.variant,
-                        segment_index = req.segment_index,
-                        "dropping stale on-demand request"
-                    );
-                    self.bus.publish(HlsEvent::StaleRequestDropped {
-                        seek_epoch: req.seek_epoch,
-                        current_epoch,
-                        variant: req.variant,
-                        segment_index: req.segment_index,
-                    });
-                    self.shared.condvar.notify_all();
-                    continue;
-                }
-                None => return None,
-            }
-        };
-
-        debug!(
-            variant = req.variant,
-            segment_index = req.segment_index,
-            "processing on-demand segment request"
-        );
-
-        let num_segments = match self.fetch.num_segments(req.variant).await {
-            Ok(value) => value,
-            Err(e) => {
-                self.publish_download_error("failed to query segment count for demand", &e);
-                // Preserve demand request for retry on transient network failures.
-                self.shared.segment_requests.push(req);
-                self.shared.condvar.notify_all();
-                return None;
-            }
-        };
-        if req.segment_index >= num_segments {
-            debug!(
-                variant = req.variant,
-                segment_index = req.segment_index,
-                num_segments,
-                "segment index out of range"
-            );
-            self.shared.condvar.notify_all();
-            return None;
-        }
-
-        if let Some((loaded_offset, expected_offset)) =
-            self.loaded_segment_offset_mismatch(req.variant, req.segment_index)
-        {
-            debug!(
-                variant = req.variant,
-                segment_index = req.segment_index,
-                loaded_offset,
-                expected_offset,
-                "segment loaded at stale offset, refreshing demand request"
-            );
-        } else if self
-            .shared
-            .segments
-            .lock()
-            .is_segment_loaded(req.variant, req.segment_index)
-        {
-            debug!(
-                variant = req.variant,
-                segment_index = req.segment_index,
-                "segment already loaded, skipping"
-            );
-            self.shared.condvar.notify_all();
-            return None;
-        }
-
-        // Prepare variant (metadata, variant switch detection).
-        let (is_variant_switch, is_midstream_switch) = match self
-            .ensure_variant_ready(req.variant, req.segment_index)
-            .await
-        {
-            Ok(flags) => flags,
-            Err(e) => {
-                self.publish_download_error("variant preparation error in poll_demand", &e);
-                self.shared.condvar.notify_all();
-                return None;
-            }
-        };
-
-        // Skip stale segments from old variant after midstream switch.
-        if self.shared.had_midstream_switch.load(Ordering::Acquire) && !is_midstream_switch {
-            let current_variant = self.abr.get_current_variant_index();
-            if req.variant != current_variant {
-                debug!(
-                    variant = req.variant,
-                    segment_index = req.segment_index,
-                    current_variant,
-                    "skipping stale segment from pre-switch variant"
-                );
-                self.shared.condvar.notify_all();
-                return None;
-            }
-        }
-
-        // Re-check after metadata calculation (populate_cached_segments may have loaded it).
-        if let Some((loaded_offset, expected_offset)) =
-            self.loaded_segment_offset_mismatch(req.variant, req.segment_index)
-        {
-            debug!(
-                variant = req.variant,
-                segment_index = req.segment_index,
-                loaded_offset,
-                expected_offset,
-                "segment loaded with stale offset after metadata calc, refreshing"
-            );
-        } else if self
-            .shared
-            .segments
-            .lock()
-            .is_segment_loaded(req.variant, req.segment_index)
-        {
-            debug!(
-                variant = req.variant,
-                segment_index = req.segment_index,
-                "segment loaded from cache after metadata calc"
-            );
-            self.shared.condvar.notify_all();
-            return None;
-        }
-
-        self.bus.publish(HlsEvent::SegmentStart {
-            variant: req.variant,
-            segment_index: req.segment_index,
-            byte_offset: self.byte_offset,
-        });
-
-        let need_init =
-            self.force_init_for_seek || should_request_init(is_variant_switch, req.segment_index);
-        if need_init {
-            self.force_init_for_seek = false;
-        }
-
-        Some(HlsPlan {
-            variant: req.variant,
-            segment_index: req.segment_index,
-            need_init,
-            seek_epoch: req.seek_epoch,
-        })
+        self.poll_demand_impl().await
     }
 
-    #[expect(
-        clippy::cognitive_complexity,
-        reason = "download planning with variant and segment logic"
-    )]
     async fn plan(&mut self) -> PlanOutcome<HlsPlan> {
-        // Seek is being applied; avoid tail/EOF logic until flush completes.
-        // On-demand requests are drained by the outer loop right after flushing.
-        if self.shared.timeline.is_flushing() {
-            yield_now().await;
-            return PlanOutcome::Batch(Vec::new());
-        }
-
-        let old_variant = self.abr.get_current_variant_index();
-        let decision = self.make_abr_decision();
-        let variant = self.abr.get_current_variant_index();
-
-        let num_segments = match self.fetch.num_segments(variant).await {
-            Ok(value) => value,
-            Err(e) => {
-                self.publish_download_error("failed to query segment count", &e);
-                self.shared.condvar.notify_all();
-                yield_now().await;
-                return PlanOutcome::Batch(Vec::new());
-            }
-        };
-
-        if self.current_segment_index >= num_segments {
-            let timeline_seek_epoch = self.shared.timeline.seek_epoch();
-            if timeline_seek_epoch != self.active_seek_epoch {
-                // Seek epoch advanced, but downloader has not applied the new epoch yet.
-                // Do not emit EOF from stale tail state while on-demand seek request
-                // is still being routed through poll_demand.
-                self.shared.timeline.set_eof(false);
-                self.shared.condvar.notify_all();
-                yield_now().await;
-                return PlanOutcome::Batch(Vec::new());
-            }
-
-            let had_midstream_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
-            if !had_midstream_switch {
-                let missing_segment = {
-                    let segments = self.shared.segments.lock();
-                    first_missing_segment(
-                        &segments,
-                        variant,
-                        self.gap_scan_start_segment,
-                        num_segments,
-                    )
-                };
-                if let Some(segment_index) = missing_segment {
-                    debug!(
-                        variant,
-                        segment_index,
-                        num_segments,
-                        "playlist tail reached with gaps; rewinding to first missing segment"
-                    );
-                    self.current_segment_index = segment_index;
-                    self.shared.condvar.notify_all();
-                    return PlanOutcome::Batch(Vec::new());
-                }
-            } else {
-                debug!(
-                    variant,
-                    num_segments,
-                    "playlist tail reached after midstream switch; skip automatic backfill"
-                );
-            }
-
-            if !self.shared.timeline.eof() {
-                debug!("reached end of playlist");
-                self.shared.timeline.set_eof(true);
-                self.bus.publish(HlsEvent::EndOfStream);
-            }
-            self.shared.condvar.notify_all();
-            return PlanOutcome::Batch(Vec::new());
-        }
-
-        if decision.changed {
-            self.bus.publish(HlsEvent::VariantApplied {
-                from_variant: old_variant,
-                to_variant: variant,
-                reason: decision.reason,
-            });
-        }
-
-        // Prepare variant (metadata calc, variant-switch setup).
-        let (is_variant_switch, is_midstream_switch) = match self
-            .ensure_variant_ready(variant, self.current_segment_index)
-            .await
-        {
-            Ok(flags) => flags,
-            Err(e) => {
-                self.shared.condvar.notify_all();
-                self.publish_download_error("variant preparation error", &e);
-                return PlanOutcome::Complete;
-            }
-        };
-
-        // Build batch of plans.
-        let batch_end = (self.current_segment_index + self.prefetch_count).min(num_segments);
-        let seek_epoch = self.shared.timeline.seek_epoch();
-        let mut plans = Vec::new();
-        let mut need_init = self.force_init_for_seek || is_variant_switch;
-
-        for seg_idx in self.current_segment_index..batch_end {
-            // Skip already loaded segments.
-            if let Some((loaded_offset, expected_offset)) =
-                self.loaded_segment_offset_mismatch(variant, seg_idx)
-            {
-                debug!(
-                    variant,
-                    segment_index = seg_idx,
-                    loaded_offset,
-                    expected_offset,
-                    "segment in plan window has stale offset, forcing refresh"
-                );
-            } else if self
-                .shared
-                .segments
-                .lock()
-                .is_segment_loaded(variant, seg_idx)
-            {
-                self.current_segment_index = seg_idx + 1;
-                continue;
-            }
-
-            // Skip stale segments from old variant after midstream switch.
-            let had_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
-            if had_switch && !is_midstream_switch {
-                let current = self.abr.get_current_variant_index();
-                if variant != current {
-                    continue;
-                }
-            }
-
-            self.bus.publish(HlsEvent::SegmentStart {
-                variant,
-                segment_index: seg_idx,
-                byte_offset: self.byte_offset,
-            });
-
-            let plan_need_init = should_request_init(need_init, seg_idx);
-            plans.push(HlsPlan {
-                variant,
-                segment_index: seg_idx,
-                need_init: plan_need_init,
-                seek_epoch,
-            });
-            if plan_need_init {
-                self.force_init_for_seek = false;
-            }
-            need_init = false;
-        }
-
-        if plans.is_empty() {
-            // All segments in window already loaded (from cache).
-            self.current_segment_index = batch_end;
-            self.shared.condvar.notify_all();
-        }
-
-        PlanOutcome::Batch(plans)
+        self.plan_impl().await
     }
 
     fn commit(&mut self, fetch: HlsFetch) {
