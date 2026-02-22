@@ -4,6 +4,9 @@
 
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
+use kithara_coverage::{CoverageIndex, CoverageManager};
+use kithara_storage::StorageResource;
+
 #[cfg(not(target_arch = "wasm32"))]
 use crate::store::AssetStore;
 use crate::{
@@ -12,8 +15,6 @@ use crate::{
     key::ResourceKey,
     store::{AssetResource, MemStore},
 };
-use kithara_coverage::{CoverageIndex, CoverageManager};
-use kithara_storage::StorageResource;
 
 /// Storage backend: disk or memory asset store.
 ///

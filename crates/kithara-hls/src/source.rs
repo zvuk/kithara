@@ -649,9 +649,11 @@ mod tests {
     use url::Url;
 
     use super::*;
-    use crate::fetch::FetchManager;
-    use crate::parsing::{VariantId, VariantStream};
-    use crate::playlist::{SegmentState, VariantSizeMap, VariantState};
+    use crate::{
+        fetch::FetchManager,
+        parsing::{VariantId, VariantStream},
+        playlist::{SegmentState, VariantSizeMap, VariantState},
+    };
 
     #[derive(Clone, Copy)]
     enum WaitRangeUnblock {

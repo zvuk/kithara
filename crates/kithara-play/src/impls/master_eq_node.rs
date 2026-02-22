@@ -1,5 +1,6 @@
-use biquad::{Biquad, Coefficients, DirectForm1, ToHertz, Type};
 use core::num::NonZeroU32;
+
+use biquad::{Biquad, Coefficients, DirectForm1, ToHertz, Type};
 use firewheel::{
     StreamInfo,
     channel_config::{ChannelConfig, ChannelCount},

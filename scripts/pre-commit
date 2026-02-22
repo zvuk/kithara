@@ -1,31 +1,21 @@
 #!/usr/bin/env bash
-# Pre-commit hook: runs the same lint checks as CI.
-# Install:  ln -sf ../../scripts/pre-commit .git/hooks/pre-commit
+# Compatibility pre-commit entrypoint.
+# Preferred setup: install lefthook and run `lefthook install`.
 
 set -euo pipefail
 
-echo "pre-commit: checking formatting..."
-if ! cargo fmt --all --check 2>/dev/null; then
-    echo ""
-    echo "FAILED: formatting issues found. Run 'cargo fmt --all' to fix."
-    exit 1
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+
+if command -v lefthook >/dev/null 2>&1 && [[ -f lefthook.yml ]]; then
+    exec lefthook run pre-commit
 fi
 
-echo "pre-commit: running clippy..."
-if ! cargo clippy --workspace -- -D warnings 2>/dev/null; then
-    echo ""
-    echo "FAILED: clippy errors found."
-    exit 1
+echo "pre-commit: lefthook is not installed; falling back to just lint-fast"
+
+if command -v just >/dev/null 2>&1; then
+    exec just lint-fast
 fi
 
-echo "pre-commit: running style linter..."
-if ! bash scripts/ci/lint-style.sh; then
-    exit 1
-fi
-
-echo "pre-commit: checking architecture constraints..."
-if ! bash scripts/ci/check-arch.sh; then
-    exit 1
-fi
-
-echo "pre-commit: all checks passed."
+echo "pre-commit: just is not installed; running compatibility lint script"
+exec bash scripts/ci/lint.sh

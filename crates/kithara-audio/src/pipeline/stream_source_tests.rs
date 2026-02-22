@@ -9,8 +9,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use rstest::rstest;
-
 use kithara_bufpool::pcm_pool;
 use kithara_decode::{
     DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec,
@@ -21,6 +19,7 @@ use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, MediaInfo, Source, SourceSeekAnchor, Stream, StreamResult, StreamType, Timeline,
 };
+use rstest::rstest;
 
 use super::*;
 

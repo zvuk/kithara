@@ -40,6 +40,7 @@ lcov.info
 # Temporary / local environment files
 .env
 .env.*
+.cache/
 dhat-heap.json
 
 # Performance monitoring outputs

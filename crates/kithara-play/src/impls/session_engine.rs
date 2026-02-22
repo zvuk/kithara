@@ -19,7 +19,10 @@ use super::{
     master_eq_node::MasterEqNode, player_node::PlayerNode, player_processor::PlayerCmd,
     shared_eq::SharedEq, shared_player_state::SharedPlayerState,
 };
-use crate::{error::PlayError, types::SessionDuckingMode, types::SlotId};
+use crate::{
+    error::PlayError,
+    types::{SessionDuckingMode, SlotId},
+};
 
 pub(crate) type PlayerId = u64;
 

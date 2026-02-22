@@ -36,11 +36,13 @@ lint:
     QUALITY_MIN_BENCH_TARGETS: "1"
     QUALITY_MAX_LOCAL_HTTP_SERVERS: "0"
   before_script:
-    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev python3-pip
+    - python3 -m pip install --disable-pip-version-check --no-cache-dir semgrep
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
     - rustup component add clippy
     - rustup toolchain install nightly --component rustfmt
   script:
-    - bash scripts/ci/lint.sh
+    - just lint-full
   artifacts:
     paths:
       - target/quality-report.md
@@ -138,9 +140,11 @@ coverage:
     COVERAGE_MIN: "80"
   before_script:
     - apt-get update -qq && apt-get install -y -qq libasound2-dev
-    - test -f "$CARGO_HOME/bin/cargo-tarpaulin" || cargo install cargo-tarpaulin --locked
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+    - test -f "$CARGO_HOME/bin/cargo-llvm-cov" || cargo install cargo-llvm-cov --locked
+    - rustup component add llvm-tools-preview
   script:
-    - bash scripts/ci/coverage.sh
+    - just coverage
   artifacts:
     reports:
       coverage_report:
@@ -151,8 +155,11 @@ coverage:
 perf:
   stage: quality
   needs: [test]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
   script:
-    - bash scripts/ci/perf-test.sh
+    - just perf-test
   artifacts:
     paths:
       - perf-results.txt
@@ -164,17 +171,60 @@ perf:
         - Cargo.toml
         - Cargo.lock
 
-bench:
+bench-baseline:
   stage: quality
   needs: [test]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+  cache:
+    key: criterion-main-baseline
+    paths:
+      - target/criterion/
+    policy: pull-push
+  variables:
+    RUN_BENCHMARKS: "1"
+    BENCH_CANDIDATE_NAME: "main"
   script:
-    - bash scripts/ci/bench-test.sh
+    - just bench-ci
   artifacts:
     paths:
       - bench-results.txt
+      - target/criterion/
     expire_in: 30 days
   rules:
-    - changes:
+    - if: '$CI_COMMIT_REF_NAME == "main"'
+      changes:
+        - crates/kithara-abr/**/*
+        - Cargo.toml
+        - Cargo.lock
+
+bench:
+  stage: quality
+  needs: [test]
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq libasound2-dev
+    - test -f "$CARGO_HOME/bin/just" || cargo install just --locked
+    - test -f "$CARGO_HOME/bin/critcmp" || cargo install critcmp --locked
+  cache:
+    key: criterion-main-baseline
+    paths:
+      - target/criterion/
+    policy: pull
+  variables:
+    RUN_BENCHMARKS: "1"
+    BENCH_CANDIDATE_NAME: "ci"
+    BENCH_COMPARE_BASELINE_NAME: "main"
+  script:
+    - just bench-ci
+  artifacts:
+    paths:
+      - bench-results.txt
+      - target/criterion/
+    expire_in: 30 days
+  rules:
+    - if: '$CI_COMMIT_REF_NAME != "main"'
+      changes:
         - crates/kithara-abr/**/*
         - Cargo.toml
         - Cargo.lock

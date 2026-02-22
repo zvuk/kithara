@@ -199,8 +199,7 @@ impl PlayerResource {
 mod tests {
     use std::time::Duration;
 
-    use kithara_audio::PcmReader;
-    use kithara_audio::mock::TestPcmReader;
+    use kithara_audio::{PcmReader, mock::TestPcmReader};
     use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
     use kithara_events::AudioEvent;
     use rstest::rstest;

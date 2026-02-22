@@ -1,7 +1,8 @@
 #![forbid(unsafe_code)]
 
-use super::*;
 use tracing::debug;
+
+use super::*;
 
 #[derive(Default)]
 pub(super) struct WaitRangeState {

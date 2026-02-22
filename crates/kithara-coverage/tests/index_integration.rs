@@ -1,11 +1,10 @@
 use std::{sync::Arc, time::Duration};
 
+use kithara_coverage::{Coverage, CoverageIndex, DiskCoverage, MemCoverage};
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
 use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
-
-use kithara_coverage::{Coverage, CoverageIndex, DiskCoverage, MemCoverage};
 
 fn create_test_resource(dir: &TempDir, name: &str) -> MmapResource {
     let path = dir.path().join(name);

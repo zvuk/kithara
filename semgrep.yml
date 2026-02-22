@@ -1,0 +1,232 @@
+rules:
+  - id: style.no-separator-comments-rs
+    languages:
+      - rust
+    message: "Separator comments are not allowed; use plain // section headers."
+    severity: ERROR
+    paths:
+      include:
+        - /crates/**/*.rs
+        - /tests/**/*.rs
+    pattern-regex: '(?m)^\\s*//\\s*[=─-]{3,}'
+
+  - id: style.no-separator-comments-toml
+    languages:
+      - generic
+    message: "Separator comments are not allowed; use plain # comments."
+    severity: ERROR
+    paths:
+      include:
+        - /Cargo.toml
+        - /crates/**/*.toml
+    pattern-regex: '(?m)^\\s*#\\s*[=─-]{3,}'
+
+  - id: style.no-inline-qualified-paths
+    languages:
+      - rust
+    message: "Avoid inline qualified paths; import at file top and use short names in function bodies."
+    severity: WARNING
+    paths:
+      include:
+        - /crates/**/*.rs
+        - /tests/**/*.rs
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+      - pattern-regex: '(std::io::|std::fmt::|std::error::|std::ops::|std::sync::atomic::|std::collections::|tokio::sync::|tokio::time::|tokio::task::)'
+      - pattern-not-regex: '^\\s*use\\s+'
+      - pattern-not-regex: '^\\s*//'
+      - pattern-not-regex: '^\\s*///'
+      - pattern-not-regex: '^\\s*//!'
+      - pattern-not-regex: '^\\s*macro_rules!'
+
+  - id: rust.no-thin-async-wrapper
+    languages:
+      - rust
+    message: "Thin async wrappers with a single await are discouraged; inline at call sites unless a public API requires the wrapper."
+    severity: ERROR
+    paths:
+      include:
+        - /crates/**/src/**/*.rs
+    pattern-regex: '(?ms)^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?async\\s+fn\\s+\\w+\\s*\\([^)]*\\)\\s*(?:->\\s*[^\\{]+)?\\{\\s*[^\\n\\{\\};]+\\.await;\\s*\\}'
+
+  - id: rust.no-thin-sync-wrapper
+    languages:
+      - rust
+    message: "Thin sync wrappers with a single call are discouraged; inline at call sites unless a public API requires the wrapper."
+    severity: ERROR
+    paths:
+      include:
+        - /crates/**/src/**/*.rs
+    pattern-regex: '(?ms)^fn\\s+(?!main\\b)\\w+\\s*\\([^)]*\\)\\s*(?:->\\s*[^\\{]+)?\\{\\s*[A-Za-z0-9_:.]+\\([^\\n\\)]*\\);?\\s*\\}'
+
+  - id: style.no-local-use-in-prod-functions
+    languages:
+      - rust
+    message: "Move `use` imports to file top; local `use` inside non-test functions is discouraged."
+    severity: WARNING
+    paths:
+      include:
+        - /crates/**/*.rs
+    patterns:
+      - pattern: |
+          use $X;
+      - pattern-either:
+          - pattern-inside: |
+              fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+      - pattern-not-inside: |
+          mod tests {
+              ...
+          }
+      - pattern-not-inside: |
+          #[cfg(test)]
+          mod $M {
+              ...
+          }
+
+  - id: style.no-functions-in-lib-or-mod-rs
+    languages:
+      - rust
+    message: "`lib.rs`/`mod.rs` should only contain module declarations and re-exports."
+    severity: ERROR
+    paths:
+      include:
+        - /crates/**/src/lib.rs
+        - /crates/**/src/**/mod.rs
+    pattern-regex: '(?m)^\\s*(?:pub(?:\\([^)]*\\))?\\s+)?(?:async\\s+)?fn\\s+'
+
+  - id: style.no-tests-in-lib-or-mod-rs
+    languages:
+      - rust
+    message: "Inline `mod tests { ... }` blocks are not allowed in `lib.rs`/`mod.rs`."
+    severity: ERROR
+    paths:
+      include:
+        - /crates/**/src/lib.rs
+        - /crates/**/src/**/mod.rs
+    pattern-regex: '(?m)^\\s*mod\\s+tests\\s*\\{'

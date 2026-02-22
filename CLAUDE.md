@@ -171,7 +171,8 @@ All async operations accept `tokio_util::sync::CancellationToken`, forwarded thr
 
 ### Style check
 ```bash
-bash scripts/ci/lint-style.sh
+semgrep --config semgrep.yml --severity ERROR --error
+semgrep --config semgrep.yml --severity WARNING
 ```
 
 ## Adding new crates

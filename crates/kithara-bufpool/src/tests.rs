@@ -1,6 +1,7 @@
+use rstest::rstest;
+
 use super::*;
 use crate::pool::ReuseMock;
-use rstest::rstest;
 
 #[test]
 fn test_pool_basic() {

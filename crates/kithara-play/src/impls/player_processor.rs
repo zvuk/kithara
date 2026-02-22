@@ -458,17 +458,17 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
     use std::sync::{Arc as TestArc, Mutex};
-    use tokio::sync::broadcast;
 
-    use super::*;
-
-    use crate::impls::resource::Resource;
     use kithara_audio::{DecodeResult, PcmReader};
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::AudioEvent;
     use kithara_platform::Mutex as PlatformMutex;
+    use rstest::rstest;
+    use tokio::sync::broadcast;
+
+    use super::*;
+    use crate::impls::resource::Resource;
 
     #[derive(Clone, Copy)]
     enum TrackCommandScenario {

@@ -1,0 +1,5 @@
+pre-commit:
+  parallel: false
+  commands:
+    lint-fast:
+      run: just lint-fast

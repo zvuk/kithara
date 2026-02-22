@@ -79,9 +79,14 @@ cargo build --workspace
 # Test
 cargo test --workspace
 
-# Lint
-cargo fmt --all --check
-cargo clippy --workspace -- -D warnings
+# Install task runner + git hooks (recommended)
+cargo install just --locked
+cargo install lefthook --locked
+lefthook install
+
+# Lint / policy checks
+just lint-fast
+just lint-full
 ```
 
 ## Examples

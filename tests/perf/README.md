@@ -84,17 +84,18 @@ Tests buffer pool lock contention and work-stealing.
 Baselines are managed automatically via CI using `actions/cache`:
 
 - **Main branch pushes**: perf results are saved to cache as the new baseline
-- **Pull requests**: the latest cached baseline is restored and compared using `scripts/ci/compare-perf.sh`
+- **Pull requests**: the latest cached baseline is restored and compared with
+  `scripts/ci/compare-perf.sh` (hotpath perf gate)
 - Regression threshold: >10% slower triggers a warning in the PR comment
 
 ### Local Comparison
 
 ```bash
-# Run tests and save output
-cargo test --features perf --release -- --ignored --nocapture 2>&1 | tee my-results.txt
+# Run perf tests and save output
+just perf-test
 
 # Compare with a saved baseline
-./scripts/ci/compare-perf.sh my-results.txt saved-baseline.txt 10
+./scripts/ci/compare-perf.sh perf-results.txt saved-baseline.txt 10
 ```
 
 See `.gitlab-ci.yml` (`perf` job) for CI configuration.
@@ -104,13 +105,15 @@ See `.gitlab-ci.yml` (`perf` job) for CI configuration.
 For deterministic microbenchmarks of algorithmic hot paths, use Criterion benches:
 
 ```bash
-cargo bench -p kithara-abr --bench abr_estimator
+just bench-build
+RUN_BENCHMARKS=1 BENCH_CANDIDATE_NAME=local just bench-ci
 ```
 
 CI benchmark support:
 
-- `bench` job always runs compile-check (`--no-run`).
-- Set `RUN_BENCHMARKS=1` (and optional `BENCH_SAMPLE_SIZE`) to execute benchmark runs via `scripts/ci/bench-test.sh`.
+- `bench-baseline` job on `main` refreshes Criterion baseline (`main`) and stores it in cache/artifacts.
+- `bench` job on non-`main` refs runs Criterion and performs blocking `critcmp` against baseline `main`.
+- Set `BENCH_SAMPLE_SIZE` to tune benchmark sample size.
 
 ## Guidelines
 

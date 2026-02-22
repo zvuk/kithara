@@ -1,2 +1,1 @@
-pub use crate::driver::DriverIoMock;
-pub use crate::resource::ResourceMock;
+pub use crate::{driver::DriverIoMock, resource::ResourceMock};

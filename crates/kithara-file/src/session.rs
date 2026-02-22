@@ -308,8 +308,7 @@ impl kithara_stream::Source for FileSource {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Range;
-    use std::sync::Arc;
+    use std::{ops::Range, sync::Arc};
 
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use kithara_stream::Source;

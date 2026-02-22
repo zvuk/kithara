@@ -74,10 +74,6 @@ fn should_request_init(is_variant_switch: bool, segment_index: usize) -> bool {
     is_variant_switch || segment_index == 0
 }
 
-async fn yield_once() {
-    yield_now().await;
-}
-
 /// Pure I/O executor for HLS segment fetching.
 #[derive(Clone)]
 pub(crate) struct HlsIo {
@@ -743,7 +739,7 @@ impl Downloader for HlsDownloader {
         // Pause during seek — planning downloads is pointless while the seek
         // target is being resolved. The outer loop will retry.
         if self.shared.timeline.is_flushing() {
-            yield_once().await;
+            yield_now().await;
             return None;
         }
 
@@ -916,7 +912,7 @@ impl Downloader for HlsDownloader {
         // Seek is being applied; avoid tail/EOF logic until flush completes.
         // On-demand requests are drained by the outer loop right after flushing.
         if self.shared.timeline.is_flushing() {
-            yield_once().await;
+            yield_now().await;
             return PlanOutcome::Batch(Vec::new());
         }
 
@@ -929,7 +925,7 @@ impl Downloader for HlsDownloader {
             Err(e) => {
                 self.publish_download_error("failed to query segment count", &e);
                 self.shared.condvar.notify_all();
-                yield_once().await;
+                yield_now().await;
                 return PlanOutcome::Batch(Vec::new());
             }
         };
@@ -942,7 +938,7 @@ impl Downloader for HlsDownloader {
                 // is still being routed through poll_demand.
                 self.shared.timeline.set_eof(false);
                 self.shared.condvar.notify_all();
-                yield_once().await;
+                yield_now().await;
                 return PlanOutcome::Batch(Vec::new());
             }
 

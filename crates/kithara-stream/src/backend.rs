@@ -10,9 +10,10 @@
 //! - Periodic yield to async runtime
 //! - Cancellation via `CancellationToken`
 
-use kithara_platform::ThreadPool;
 #[cfg(test)]
 use std::future::Future;
+
+use kithara_platform::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 

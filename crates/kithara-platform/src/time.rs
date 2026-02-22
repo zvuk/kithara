@@ -5,15 +5,13 @@
 //! and `gloo_timers` is `Rc`-based / `!Send`).
 
 pub use std::time::Duration;
-
 #[cfg(not(target_arch = "wasm32"))]
 pub use std::time::Instant;
 
-#[cfg(target_arch = "wasm32")]
-pub use web_time::Instant;
-
 #[cfg(not(target_arch = "wasm32"))]
 pub use tokio::time::sleep;
+#[cfg(target_arch = "wasm32")]
+pub use web_time::Instant;
 
 /// No-op sleep for wasm32.
 ///

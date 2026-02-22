@@ -16,9 +16,16 @@ cargo test --workspace
 ## Before Submitting a PR
 
 ```bash
-cargo fmt --all --check
-cargo clippy --workspace -- -D warnings
+just lint-full
 cargo test --workspace
+```
+
+Recommended local setup:
+
+```bash
+cargo install just --locked
+cargo install lefthook --locked
+lefthook install
 ```
 
 See [`AGENTS.md`](AGENTS.md) for the full coding rules.

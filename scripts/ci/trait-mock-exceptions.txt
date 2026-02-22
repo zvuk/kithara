@@ -1,4 +1,6 @@
 # file_path|reason
+crates/kithara-assets/src/base.rs|core asset-store contract with associated types and filesystem semantics; validated via concrete disk/memory implementations and integration tests
+crates/kithara-coverage/src/mem.rs|value-semantic range-coverage contract validated by deterministic unit tests on MemCoverage; mocking provides no additional signal
 crates/kithara-platform/src/maybe_send.rs|marker cfg traits (MaybeSend/MaybeSync) are compile-time auto-trait shims, not runtime behavior contracts
 crates/kithara-stream/src/downloader.rs|traits use RPITIT (impl Future) and are currently validated through concrete fake implementations in backend tests
 crates/kithara-stream/src/stream.rs|StreamType includes static factory methods without self receiver, which unimock cannot generate mocks for
