@@ -18,13 +18,12 @@ futures = { workspace = true }
 
 # --- Native-only dependencies ---
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, features = ["full", "test-utils", "rodio"] }
+kithara = { workspace = true, features = ["full", "test-utils", "rodio", "internal"] }
 # Kithara crates not in facade
+kithara-audio = { workspace = true, features = ["internal"] }
 kithara-test-utils = { workspace = true }
 kithara-wasm = { workspace = true }
 kithara-net = { workspace = true, features = ["test-utils"] }
-# kithara-assets needs "internal" feature for test-only types
-kithara-assets = { workspace = true, features = ["internal"] }
 
 # Async runtime
 tokio = { workspace = true, features = ["full"] }
@@ -96,6 +95,9 @@ gloo-timers = { workspace = true }
 tracing-wasm = { workspace = true }
 console_error_panic_hook = { workspace = true }
 
+[dev-dependencies]
+criterion = { workspace = true }
+
 [features]
 perf = [
     "dep:hotpath",
@@ -134,3 +136,7 @@ required-features = ["perf"]
 name = "storage"
 path = "perf/storage.rs"
 required-features = ["perf"]
+
+[[bench]]
+name = "refactor_hotpaths"
+harness = false
