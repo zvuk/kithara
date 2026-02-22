@@ -1,9 +1,9 @@
 //! Generic audio pipeline that runs in a separate blocking thread.
 
-mod audio;
+pub(crate) mod audio;
 mod config;
-mod stream_source;
-mod worker;
+pub(crate) mod source;
+pub(crate) mod worker;
 
 pub use audio::Audio;
 pub use config::AudioConfig;

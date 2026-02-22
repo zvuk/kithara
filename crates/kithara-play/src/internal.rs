@@ -1,5 +1,19 @@
 #![forbid(unsafe_code)]
 
+pub mod engine {
+    pub use kithara_platform::ThreadPool;
+
+    pub use crate::{
+        EngineConfig, EngineEvent, EngineImpl, PlayError, SessionDuckingMode, SlotId,
+        traits::{dj::crossfade::CrossfadeConfig, engine::Engine},
+    };
+
+    #[must_use]
+    pub fn slot_id(value: u64) -> SlotId {
+        SlotId(value)
+    }
+}
+
 pub use crate::{
     ActionAtItemEnd, DjEvent, EngineConfig, EngineEvent, EngineImpl, EqBand, ItemStatus, MediaTime,
     ObserverId, PlayError, PlayerConfig, PlayerEvent, PlayerImpl, PlayerStatus, Resource,

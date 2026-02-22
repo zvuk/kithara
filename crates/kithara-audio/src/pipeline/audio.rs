@@ -25,7 +25,7 @@ use tracing::{debug, info, trace, warn};
 
 use super::{
     config::{AudioConfig, create_effects, expected_output_spec},
-    stream_source::{OffsetReader, SharedStream, StreamAudioSource},
+    source::{OffsetReader, SharedStream, StreamAudioSource},
     worker::{AudioCommand, run_audio_loop},
 };
 use crate::traits::{DecodeError, DecodeResult, PcmReader};
@@ -93,7 +93,7 @@ pub struct Audio<S> {
     _epoch: Arc<AtomicU64>,
 
     /// Epoch validator for filtering stale chunks.
-    validator: EpochValidator,
+    pub(crate) validator: EpochValidator,
 
     /// Current audio specification (updated from chunks).
     pub(crate) spec: PcmSpec,
@@ -133,7 +133,7 @@ pub struct Audio<S> {
     host_sample_rate: Arc<AtomicU32>,
 
     /// Notify for async preload (first chunk available).
-    preload_notify: Arc<Notify>,
+    pub(crate) preload_notify: Arc<Notify>,
 
     /// Whether `preload()` has been called (enables non-blocking mode).
     preloaded: bool,
@@ -574,7 +574,7 @@ where
         stream_ctx: &Arc<dyn StreamContext>,
         epoch: &Arc<AtomicU64>,
         pool: &PcmPool,
-    ) -> super::stream_source::DecoderFactory<T> {
+    ) -> super::source::DecoderFactory<T> {
         let factory_stream_ctx = Arc::clone(stream_ctx);
         let factory_epoch = Arc::clone(epoch);
         let factory_pool = pool.clone();
@@ -876,7 +876,3 @@ impl<S: Send> PcmReader for Audio<S> {
         Some(chunk)
     }
 }
-
-#[cfg(test)]
-#[path = "audio_tests.rs"]
-mod tests;

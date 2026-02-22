@@ -30,12 +30,12 @@ use crate::{
 /// Wraps Stream in `Arc<Mutex>` to allow:
 /// - Decoder to read via Read + Seek
 /// - `StreamAudioSource` to check `media_info()` for format changes
-pub(in crate::pipeline) struct SharedStream<T: StreamType> {
+pub(crate) struct SharedStream<T: StreamType> {
     inner: Arc<Mutex<Stream<T>>>,
 }
 
 impl<T: StreamType> SharedStream<T> {
-    pub(in crate::pipeline) fn new(stream: Stream<T>) -> Self {
+    pub(crate) fn new(stream: Stream<T>) -> Self {
         Self {
             inner: Arc::new(Mutex::new(stream)),
         }
@@ -61,11 +61,11 @@ impl<T: StreamType> SharedStream<T> {
         self.inner.lock().format_change_segment_range()
     }
 
-    fn clear_variant_fence(&self) {
+    pub(crate) fn clear_variant_fence(&self) {
         self.inner.lock().clear_variant_fence();
     }
 
-    pub(in crate::pipeline) fn set_seek_epoch(&self, seek_epoch: u64) {
+    pub(crate) fn set_seek_epoch(&self, seek_epoch: u64) {
         self.inner.lock().set_seek_epoch(seek_epoch);
     }
 
@@ -77,15 +77,13 @@ impl<T: StreamType> SharedStream<T> {
     }
 
     /// Build a `StreamContext` from the inner stream's source.
-    pub(in crate::pipeline) fn build_stream_context(
-        &self,
-    ) -> Arc<dyn kithara_stream::StreamContext> {
+    pub(crate) fn build_stream_context(&self) -> Arc<dyn kithara_stream::StreamContext> {
         let stream = self.inner.lock();
         T::build_stream_context(stream.source(), stream.timeline())
     }
 
     /// Get the shared timeline for flushing checks.
-    pub(in crate::pipeline) fn timeline(&self) -> Timeline {
+    pub(crate) fn timeline(&self) -> Timeline {
         self.inner.lock().timeline()
     }
 
@@ -96,7 +94,7 @@ impl<T: StreamType> SharedStream<T> {
     /// only the condvar/notify primitive — it never takes the inner
     /// mutex, preventing deadlock when called from `Audio::seek()`
     /// while the worker holds the lock inside `read()`.
-    pub(in crate::pipeline) fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
+    pub(crate) fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
         self.inner.lock().make_notify_fn()
     }
 }
@@ -127,13 +125,13 @@ impl<T: StreamType> Seek for SharedStream<T> {
 /// This is needed when recreating a decoder after ABR variant switch:
 /// the new segment starts at `base_offset` in the virtual stream, but Symphonia
 /// expects positions starting from 0.
-pub(in crate::pipeline) struct OffsetReader<T: StreamType> {
+pub(crate) struct OffsetReader<T: StreamType> {
     shared: SharedStream<T>,
     base_offset: u64,
 }
 
 impl<T: StreamType> OffsetReader<T> {
-    pub(in crate::pipeline) fn new(mut shared: SharedStream<T>, base_offset: u64) -> Self {
+    pub(crate) fn new(mut shared: SharedStream<T>, base_offset: u64) -> Self {
         // Ensure the stream is positioned at base_offset so reads start from
         // the correct location. This is critical when multiple fallback attempts
         // share the same underlying stream — each one may leave the position
@@ -175,7 +173,7 @@ impl<T: StreamType> Seek for OffsetReader<T> {
 ///
 /// Production: creates Symphonia `Decoder` via [`OffsetReader`].
 /// Tests: returns `MockDecoder` without real I/O.
-pub(in crate::pipeline) type DecoderFactory<T> =
+pub(crate) type DecoderFactory<T> =
     Box<dyn Fn(SharedStream<T>, &MediaInfo, u64) -> Option<Box<dyn InnerDecoder>> + Send>;
 
 /// Audio source for Stream with format change detection.
@@ -184,13 +182,13 @@ pub(in crate::pipeline) type DecoderFactory<T> =
 /// The old decoder naturally decodes all data from the current segment.
 /// When it encounters new segment data (different format), it errors or returns EOF.
 /// At that point, we seek to the segment boundary and recreate the decoder.
-pub(in crate::pipeline) struct StreamAudioSource<T: StreamType> {
+pub(crate) struct StreamAudioSource<T: StreamType> {
     shared_stream: SharedStream<T>,
     decoder: Box<dyn InnerDecoder>,
     decoder_factory: DecoderFactory<T>,
-    cached_media_info: Option<MediaInfo>,
+    pub(crate) cached_media_info: Option<MediaInfo>,
     /// Pending format change: (new `MediaInfo`, byte offset where new segment starts).
-    pending_format_change: Option<(MediaInfo, u64)>,
+    pub(crate) pending_format_change: Option<(MediaInfo, u64)>,
     epoch: Arc<AtomicU64>,
     chunks_decoded: u64,
     total_samples: u64,
@@ -200,17 +198,17 @@ pub(in crate::pipeline) struct StreamAudioSource<T: StreamType> {
     /// Base offset of current decoder in the virtual stream.
     /// Used to adjust `update_byte_len` after ABR variant switch:
     /// symphonia sees `total_len - base_offset` as byte length.
-    base_offset: u64,
-    pending_decode_started_epoch: Option<u64>,
+    pub(crate) base_offset: u64,
+    pub(crate) pending_decode_started_epoch: Option<u64>,
     pending_seek_skip: Option<(u64, Duration)>,
-    pending_seek_recover_target: Option<(u64, Duration)>,
-    pending_seek_recover_attempts: u8,
+    pub(crate) pending_seek_recover_target: Option<(u64, Duration)>,
+    pub(crate) pending_seek_recover_attempts: u8,
     /// Cached timeline for lock-free flushing checks.
-    timeline: Timeline,
+    pub(crate) timeline: Timeline,
 }
 
 impl<T: StreamType> StreamAudioSource<T> {
-    pub(in crate::pipeline) fn new(
+    pub(crate) fn new(
         shared_stream: SharedStream<T>,
         decoder: Box<dyn InnerDecoder>,
         decoder_factory: DecoderFactory<T>,
@@ -240,7 +238,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         }
     }
 
-    pub(in crate::pipeline) fn with_emit(mut self, emit: Box<dyn Fn(AudioEvent) + Send>) -> Self {
+    pub(crate) fn with_emit(mut self, emit: Box<dyn Fn(AudioEvent) + Send>) -> Self {
         self.emit = Some(emit);
         self
     }
@@ -873,7 +871,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         Some(chunk)
     }
 
-    fn retry_decode_error_after_seek(&mut self) -> bool {
+    pub(crate) fn retry_decode_error_after_seek(&mut self) -> bool {
         let Some(seek_epoch) = self.pending_decode_started_epoch else {
             return false;
         };
@@ -941,18 +939,6 @@ impl<T: StreamType> StreamAudioSource<T> {
             retry_pos,
             "decode error right after seek",
         )
-    }
-}
-
-/// Test-only accessors.
-#[cfg(test)]
-impl<T: StreamType> StreamAudioSource<T> {
-    pub(crate) fn has_pending_format_change(&self) -> bool {
-        self.pending_format_change.is_some()
-    }
-
-    pub(crate) fn current_base_offset(&self) -> u64 {
-        self.base_offset
     }
 }
 
@@ -1147,7 +1133,3 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "stream_source_tests.rs"]
-mod stream_source_tests;

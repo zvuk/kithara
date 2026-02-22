@@ -1,12 +1,11 @@
 use std::{fs::File, io::Write};
 
+use kithara_audio::internal::audio::*;
 use kithara_events::{AudioEvent, SeekLifecycleStage};
 use kithara_stream::{ContainerFormat, MediaInfo, Stream};
 use kithara_test_utils::create_test_wav;
 use rstest::rstest;
 use tokio::time::{self, Duration};
-
-use super::*;
 
 /// Write test WAV to a temp file and return config for it.
 fn test_wav_config(
@@ -224,8 +223,8 @@ async fn test_seek_emits_matching_playback_progress() {
     let mut buf = [0.0f32; 256];
 
     // Epoch comes from Timeline now, not from caller.
-    audio.seek(std::time::Duration::from_secs_f64(2.5)).unwrap();
-    let expected_epoch = audio.validator.epoch;
+    audio.seek(Duration::from_secs_f64(2.5)).unwrap();
+    let expected_epoch = seek_epoch(&audio);
     let _ = audio.read(&mut buf);
 
     let deadline = time::Instant::now() + Duration::from_millis(300);
@@ -252,8 +251,8 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
 
     let mut events = audio.decode_events();
     // Epoch comes from Timeline now, not from caller.
-    audio.seek(std::time::Duration::from_secs_f64(1.5)).unwrap();
-    let expected_epoch = audio.validator.epoch;
+    audio.seek(Duration::from_secs_f64(1.5)).unwrap();
+    let expected_epoch = seek_epoch(&audio);
 
     let mut saw_seek_complete_before_read = false;
     while let Ok(event) = events.try_recv() {
@@ -313,16 +312,16 @@ async fn test_audio_preload(#[case] second_preload: bool) {
         .await
         .unwrap();
 
-    assert!(audio.current_chunk.is_none());
+    assert!(!has_current_chunk(&audio));
 
-    let notify = audio.preload_notify.clone();
+    let notify = preload_notify(&audio);
     notify.notified().await;
     audio.preload();
     if second_preload {
         audio.preload();
     }
 
-    assert!(audio.current_chunk.is_some());
+    assert!(has_current_chunk(&audio));
 
     let mut buf = [0.0f32; 64];
     let n = audio.read(&mut buf);

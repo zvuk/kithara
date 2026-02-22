@@ -1,7 +1,5 @@
+use kithara_bufpool::internal::*;
 use rstest::rstest;
-
-use super::*;
-use crate::pool::ReuseMock;
 
 #[test]
 fn test_pool_basic() {
@@ -56,13 +54,13 @@ fn test_cross_shard_fallback() {
     let pool = Pool::<2, Vec<u8>>::new(8, 1024);
 
     // Determine which shard this thread maps to
-    let home_shard = pool.shard_index();
+    let home_shard = shard_index(&pool);
     let other_shard = (home_shard + 1) % 2;
 
     // Place a buffer with known capacity into the other shard
     let mut buf = Vec::with_capacity(999);
     buf.push(0); // ensure capacity > 0 after reuse
-    pool.put(buf, other_shard);
+    put(&pool, buf, other_shard);
 
     // get_with() should try home_shard first (empty), then fall back
     // to other_shard and find our buffer.
@@ -78,13 +76,13 @@ fn test_shard_saturation_drops_excess() {
     // 4 shards, 4 max_buffers total => 1 buffer per shard.
     // Returning more than 1 buffer to the same shard should drop excess.
     let pool = Pool::<4, Vec<u8>>::new(4, 1024);
-    let shard = pool.shard_index();
+    let shard = shard_index(&pool);
 
     // Return 3 buffers to the same shard
     for i in 0u8..3 {
         let mut buf = Vec::with_capacity(128);
         buf.resize(10, i);
-        pool.put(buf, shard);
+        put(&pool, buf, shard);
     }
 
     // Only 1 should survive (max_buffers_per_shard = 4/4 = 1)
@@ -226,9 +224,4 @@ fn test_multi_threaded_contention() {
     for h in handles {
         h.join().expect("thread panicked during contention test");
     }
-}
-
-#[test]
-fn reuse_mock_api_is_generated() {
-    let _ = ReuseMock::reuse;
 }

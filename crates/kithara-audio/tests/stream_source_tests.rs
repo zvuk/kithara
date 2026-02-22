@@ -1,6 +1,6 @@
 use std::{
     collections::VecDeque,
-    io::{self, SeekFrom},
+    io::{self, Read, Seek, SeekFrom},
     ops::Range,
     sync::{
         Arc,
@@ -9,6 +9,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use kithara_audio::internal::source::*;
 use kithara_bufpool::pcm_pool;
 use kithara_decode::{
     DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec,
@@ -20,8 +21,6 @@ use kithara_stream::{
     AudioCodec, MediaInfo, Source, SourceSeekAnchor, Stream, StreamResult, StreamType, Timeline,
 };
 use rstest::rstest;
-
-use super::*;
 
 // TestSource + TestStream
 
@@ -204,7 +203,7 @@ fn make_shared_stream(
     let source = TestSource::new(data, len);
     let state = source.state_handle();
     let stream = test_stream_from_source(source);
-    (SharedStream::new(stream), state)
+    (new_shared_stream(stream), state)
 }
 
 fn make_factory(decoders: Vec<Box<dyn InnerDecoder>>) -> DecoderFactory<TestStream> {
@@ -233,7 +232,7 @@ fn make_source(
     media_info: Option<MediaInfo>,
 ) -> StreamAudioSource<TestStream> {
     let epoch = Arc::new(AtomicU64::new(0));
-    StreamAudioSource::new(shared, decoder, factory, media_info, epoch, vec![])
+    new_stream_audio_source(shared, decoder, factory, media_info, epoch, vec![])
 }
 
 fn v0_spec() -> PcmSpec {
@@ -312,7 +311,7 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
     let mut source = make_source(shared, v0_decoder, factory, Some(v0_info()));
 
     // Decode 1 V0 chunk
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof);
 
     // Simulate: reader passed first V3 segment (964431..1732515)
@@ -330,7 +329,7 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
 
     // Decode remaining V0 chunks + trigger EOF → apply_format_change
     loop {
-        let fetch = source.fetch_next();
+        let fetch = fetch_next(&mut source);
         if fetch.is_eof {
             break;
         }
@@ -360,12 +359,12 @@ fn basic_decode_to_eof() {
     let mut source = make_source(shared, decoder, factory, Some(v0_info()));
 
     for _ in 0..3 {
-        let fetch = source.fetch_next();
+        let fetch = fetch_next(&mut source);
         assert!(!fetch.is_eof);
         assert!(!fetch.data.pcm.is_empty());
     }
 
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(fetch.is_eof);
 }
 
@@ -383,7 +382,7 @@ fn format_change_recreates_decoder() {
     let mut source = make_source(shared, v0_decoder, factory, Some(v0_info()));
 
     // Decode 1 V0 chunk
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof);
 
     // Trigger format change
@@ -394,12 +393,12 @@ fn format_change_recreates_decoder() {
     }
 
     // Decode remaining V0 chunk — detect_format_change sets boundary
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof);
-    assert!(source.has_pending_format_change());
+    assert!(has_pending_format_change(&source));
 
     // V0 decoder exhausted → EOF → apply_format_change → V3 decoder
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof, "Should get V3 data after format change");
     assert_eq!(fetch.data.spec(), v3_spec());
 }
@@ -421,7 +420,7 @@ fn seek_updates_epoch_and_decoder_and_controls_byte_len_update(
     let factory = make_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -430,10 +429,10 @@ fn seek_updates_epoch_and_decoder_and_controls_byte_len_update(
         vec![],
     );
 
-    source.base_offset = base_offset;
+    set_base_offset(&mut source, base_offset);
 
-    let seek_epoch = source.timeline.initiate_seek(Duration::from_secs(10));
-    source.apply_pending_seek();
+    let seek_epoch = timeline(&source).initiate_seek(Duration::from_secs(10));
+    apply_pending_seek(&mut source);
 
     assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
 
@@ -464,7 +463,7 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
     let (factory, offsets) = make_tracking_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -485,12 +484,12 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
         });
     }
 
-    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
-    source.apply_pending_seek();
+    let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+    apply_pending_seek(&mut source);
 
     assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
     assert_eq!(
-        source.current_base_offset(),
+        current_base_offset(&source),
         0,
         "seek must not recreate decoder in anchor path"
     );
@@ -513,7 +512,7 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
         "anchor seek must deterministically seek to segment start"
     );
 
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof);
     assert_eq!(
         fetch.data.pcm.len(),
@@ -540,7 +539,7 @@ fn seek_anchor_recreates_decoder_when_codec_changes() {
     let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -562,12 +561,12 @@ fn seek_anchor_recreates_decoder_when_codec_changes() {
         });
     }
 
-    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
-    source.apply_pending_seek();
+    let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+    apply_pending_seek(&mut source);
 
     assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
     assert_eq!(
-        source.current_base_offset(),
+        current_base_offset(&source),
         120,
         "codec change on seek must recreate decoder at init-bearing format boundary"
     );
@@ -600,7 +599,7 @@ fn seek_anchor_codec_change_without_format_boundary_uses_anchor_offset() {
     let (factory, offsets) = make_tracking_factory(vec![recreated_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -622,12 +621,12 @@ fn seek_anchor_codec_change_without_format_boundary_uses_anchor_offset() {
         });
     }
 
-    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
-    source.apply_pending_seek();
+    let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+    apply_pending_seek(&mut source);
 
     assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
     assert_eq!(
-        source.current_base_offset(),
+        current_base_offset(&source),
         500,
         "when format boundary is unknown, seek anchor offset must be used"
     );
@@ -652,7 +651,7 @@ fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
     let (factory, offsets) = make_tracking_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -673,12 +672,12 @@ fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
         });
     }
 
-    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
-    source.apply_pending_seek();
+    let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+    apply_pending_seek(&mut source);
 
     assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
     assert_eq!(
-        source.current_base_offset(),
+        current_base_offset(&source),
         0,
         "variant change with same codec must not recreate decoder"
     );
@@ -719,7 +718,7 @@ fn seek_anchor_failure_falls_back_to_direct_seek_without_decoder_recreate() {
     let (factory, offsets) = make_tracking_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -739,8 +738,8 @@ fn seek_anchor_failure_falls_back_to_direct_seek_without_decoder_recreate() {
         });
     }
 
-    let _seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
-    source.apply_pending_seek();
+    let _seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+    apply_pending_seek(&mut source);
 
     let created_offsets = offsets.lock();
     assert!(
@@ -781,7 +780,7 @@ fn failed_seek_without_pending_format_change_does_not_recreate_decoder() {
     let (factory, factory_offsets) = make_tracking_factory(vec![recovery_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         v3_decoder,
         factory,
@@ -790,13 +789,13 @@ fn failed_seek_without_pending_format_change_does_not_recreate_decoder() {
         vec![],
     );
 
-    source.base_offset = 863137;
-    source.cached_media_info = Some(v3_info());
+    set_base_offset(&mut source, 863137);
+    set_cached_media_info(&mut source, Some(v3_info()));
 
-    let _seek_epoch = source.timeline.initiate_seek(Duration::from_secs(10));
-    source.apply_pending_seek();
+    let _seek_epoch = timeline(&source).initiate_seek(Duration::from_secs(10));
+    apply_pending_seek(&mut source);
 
-    let _ = source.fetch_next();
+    let _ = fetch_next(&mut source);
 
     let offsets = factory_offsets.lock();
     assert!(
@@ -821,7 +820,7 @@ fn seek_recovery_same_codec_without_init_range_uses_current_segment_offset() {
     let (factory, factory_offsets) = make_tracking_factory(vec![recovery_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(1));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -829,10 +828,13 @@ fn seek_recovery_same_codec_without_init_range_uses_current_segment_offset() {
         Arc::clone(&epoch),
         vec![],
     );
-    source.base_offset = 152_859;
-    source.pending_decode_started_epoch = Some(1);
-    source.pending_seek_recover_target = Some((1, Duration::from_secs(174)));
-    source.pending_seek_recover_attempts = 1;
+    set_seek_recover_state(
+        &mut source,
+        152_859,
+        Some(1),
+        Some((1, Duration::from_secs(174))),
+        1,
+    );
 
     {
         let mut s = state.lock();
@@ -842,7 +844,7 @@ fn seek_recovery_same_codec_without_init_range_uses_current_segment_offset() {
     }
 
     assert!(
-        source.retry_decode_error_after_seek(),
+        retry_decode_error_after_seek(&mut source),
         "seek recovery should recreate decoder"
     );
 
@@ -873,7 +875,7 @@ fn seek_recovery_prefers_init_bearing_offset_when_available() {
     let (factory, factory_offsets) = make_tracking_factory(vec![recovery_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(1));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -881,10 +883,13 @@ fn seek_recovery_prefers_init_bearing_offset_when_available() {
         Arc::clone(&epoch),
         vec![],
     );
-    source.base_offset = 152_859;
-    source.pending_decode_started_epoch = Some(1);
-    source.pending_seek_recover_target = Some((1, Duration::from_secs(174)));
-    source.pending_seek_recover_attempts = 1;
+    set_seek_recover_state(
+        &mut source,
+        152_859,
+        Some(1),
+        Some((1, Duration::from_secs(174))),
+        1,
+    );
 
     {
         let mut s = state.lock();
@@ -894,7 +899,7 @@ fn seek_recovery_prefers_init_bearing_offset_when_available() {
     }
 
     assert!(
-        source.retry_decode_error_after_seek(),
+        retry_decode_error_after_seek(&mut source),
         "seek recovery should recreate decoder"
     );
 
@@ -919,7 +924,7 @@ fn seek_clears_variant_fence() {
     let factory = make_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -933,8 +938,8 @@ fn seek_clears_variant_fence() {
         source_state.variant_fence = Some(3);
     }
 
-    let _seek_epoch = source.timeline.initiate_seek(Duration::from_millis(250));
-    source.apply_pending_seek();
+    let _seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(250));
+    apply_pending_seek(&mut source);
 
     assert!(
         state.lock().variant_fence.is_none(),
@@ -974,7 +979,7 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
     let factory = make_factory(vec![v3_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         v0_decoder,
         factory,
@@ -984,7 +989,7 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
     );
 
     // Decode 1 V0 chunk
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof);
 
     // Trigger format change (ABR switch V0→V3)
@@ -995,22 +1000,22 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
     }
 
     // Decode another V0 chunk — detect_format_change sets boundary + pending
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(!fetch.is_eof);
     assert!(
-        source.has_pending_format_change(),
+        has_pending_format_change(&source),
         "Format change should be pending after detection"
     );
 
     // Seek arrives BEFORE format change is applied.
     // Old V0 decoder seek fails. base_offset=0.
     let seek_pos = Duration::from_secs_f64(147.48);
-    let _seek_epoch = source.timeline.initiate_seek(seek_pos);
-    source.apply_pending_seek();
+    let _seek_epoch = timeline(&source).initiate_seek(seek_pos);
+    apply_pending_seek(&mut source);
 
     // EXPECTED: format change was applied, V3 decoder received the seek
     assert_eq!(
-        source.current_base_offset(),
+        current_base_offset(&source),
         1000,
         "Pending format change should have been applied during seek recovery"
     );
@@ -1086,12 +1091,12 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
         while start.elapsed() < Duration::from_secs(20) {
             let pos_idx = (epoch as usize) % seek_positions.len();
             let seek_pos = Duration::from_secs_f64(seek_positions[pos_idx]);
-            epoch = source.timeline.initiate_seek(seek_pos);
-            source.apply_pending_seek();
+            epoch = timeline(&source).initiate_seek(seek_pos);
+            apply_pending_seek(&mut source);
 
             // Fetch a few chunks but don't drain (simulating rapid scrubbing)
             for _ in 0..3 {
-                let fetch = source.fetch_next();
+                let fetch = fetch_next(&mut source);
                 if v0_stopped {
                     if fetch.is_eof {
                         eof_after_v0_stop += 1;
@@ -1173,7 +1178,7 @@ fn source_variant_fence_blocks_cross_variant_reads() {
     }
 
     let stream = test_stream_from_source(source);
-    let mut shared = SharedStream::new(stream);
+    let mut shared = new_shared_stream(stream);
 
     // Read from V0 region — fence auto-detects V0
     let mut buf = vec![0u8; 100];
@@ -1188,7 +1193,7 @@ fn source_variant_fence_blocks_cross_variant_reads() {
     assert_eq!(n, 0, "V3 read must be blocked by fence (V0)");
 
     // Clear fence → read V3
-    shared.clear_variant_fence();
+    clear_variant_fence(&shared);
     shared.seek(SeekFrom::Start(1000)).unwrap();
     let mut buf = vec![0u8; 100];
     let n = shared.read(&mut buf).unwrap();
@@ -1658,7 +1663,7 @@ impl InnerDecoder for PanicOnNextChunkDecoder {
 
 fn make_encoded_factory(spec: PcmSpec, sample_size: usize) -> DecoderFactory<TestStream> {
     Box::new(move |stream, _info, base_offset| {
-        let reader = OffsetReader::new(stream, base_offset);
+        let reader = new_offset_reader(stream, base_offset);
         Some(Box::new(EncodedDecoder::new(reader, spec, sample_size, 50)))
     })
 }
@@ -1729,7 +1734,7 @@ fn abr_switch_must_not_lose_samples() {
         ];
     }
     let stream = test_stream_from_source(source);
-    let shared = SharedStream::new(stream);
+    let shared = new_shared_stream(stream);
 
     // Initial decoder: V0 (4 bytes/sample)
     let v0_mono_spec = PcmSpec {
@@ -1741,7 +1746,7 @@ fn abr_switch_must_not_lose_samples() {
         .with_sample_rate(44100)
         .with_channels(1);
     let initial_decoder = {
-        let reader = OffsetReader::new(shared.clone(), 0);
+        let reader = new_offset_reader(shared.clone(), 0);
         Box::new(EncodedDecoder::new(
             reader,
             v0_mono_spec,
@@ -1754,7 +1759,7 @@ fn abr_switch_must_not_lose_samples() {
     let factory = make_encoded_factory(v1_spec(), V1_SAMPLE_SIZE);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut src = StreamAudioSource::new(
+    let mut src = new_stream_audio_source(
         shared,
         initial_decoder,
         factory,
@@ -1766,7 +1771,7 @@ fn abr_switch_must_not_lose_samples() {
     // Collect all PCM samples
     let mut all_pcm: Vec<f32> = Vec::new();
     loop {
-        let fetch = src.fetch_next();
+        let fetch = fetch_next(&mut src);
         if !fetch.data.pcm.is_empty() {
             all_pcm.extend_from_slice(&fetch.data.pcm);
         }
@@ -1822,7 +1827,7 @@ fn seek_during_active_decode_completes_without_hang() {
     // Phase 1: decode a few chunks (active playback)
     let mut decoded_before_seek = 0;
     for _ in 0..3 {
-        let fetch = source.fetch_next();
+        let fetch = fetch_next(&mut source);
         if !fetch.is_eof {
             decoded_before_seek += 1;
         }
@@ -1830,23 +1835,23 @@ fn seek_during_active_decode_completes_without_hang() {
     assert!(decoded_before_seek > 0, "should decode chunks before seek");
 
     // Phase 2: initiate seek via Timeline (FLUSH_START)
-    let epoch = source.timeline.initiate_seek(Duration::from_secs(5));
-    assert!(source.timeline.is_flushing(), "flushing flag must be set");
+    let epoch = timeline(&source).initiate_seek(Duration::from_secs(5));
+    assert!(timeline(&source).is_flushing(), "flushing flag must be set");
 
     // Phase 3: apply_pending_seek (worker would call this)
-    source.apply_pending_seek();
+    apply_pending_seek(&mut source);
 
     // Phase 4: flushing should be cleared (FLUSH_STOP)
     assert!(
-        !source.timeline.is_flushing(),
+        !timeline(&source).is_flushing(),
         "flushing must be cleared after apply_pending_seek"
     );
-    assert_eq!(source.timeline.seek_epoch(), epoch, "epoch must match");
+    assert_eq!(timeline(&source).seek_epoch(), epoch, "epoch must match");
 
     // Phase 5: subsequent decode must produce data (not stuck)
     let mut decoded_after_seek = 0;
     for _ in 0..3 {
-        let fetch = source.fetch_next();
+        let fetch = fetch_next(&mut source);
         if !fetch.is_eof {
             decoded_after_seek += 1;
         }
@@ -1874,19 +1879,19 @@ fn rapid_seeks_via_timeline_all_complete() {
     let seek_positions = [1.0, 5.0, 0.5, 8.0, 3.0, 10.0, 0.1, 7.5, 2.0, 6.0];
 
     for (i, &secs) in seek_positions.iter().enumerate() {
-        let epoch = source.timeline.initiate_seek(Duration::from_secs_f64(secs));
-        assert!(source.timeline.is_flushing());
+        let epoch = timeline(&source).initiate_seek(Duration::from_secs_f64(secs));
+        assert!(timeline(&source).is_flushing());
 
-        source.apply_pending_seek();
+        apply_pending_seek(&mut source);
 
         assert!(
-            !source.timeline.is_flushing(),
+            !timeline(&source).is_flushing(),
             "seek #{i} to {secs}s: flushing not cleared"
         );
-        assert_eq!(source.timeline.seek_epoch(), epoch);
+        assert_eq!(timeline(&source).seek_epoch(), epoch);
 
         // Decode a few chunks to confirm pipeline is alive
-        let fetch = source.fetch_next();
+        let fetch = fetch_next(&mut source);
         // May be EOF if decoder ran out of scripted chunks, but must not hang
         let _ = fetch;
     }
@@ -1904,7 +1909,7 @@ fn repeated_seek_after_eof_must_not_stop_on_transient_bitstream_error() {
     let factory = make_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -1925,22 +1930,22 @@ fn repeated_seek_after_eof_must_not_stop_on_transient_bitstream_error() {
         });
     }
 
-    let first_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
-    source.apply_pending_seek();
+    let first_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+    apply_pending_seek(&mut source);
     assert_eq!(epoch.load(Ordering::Acquire), first_epoch);
 
     loop {
-        let fetch = source.fetch_next();
+        let fetch = fetch_next(&mut source);
         if fetch.is_eof {
             break;
         }
     }
 
-    let second_epoch = source.timeline.initiate_seek(Duration::from_millis(11_651));
-    source.apply_pending_seek();
+    let second_epoch = timeline(&source).initiate_seek(Duration::from_millis(11_651));
+    apply_pending_seek(&mut source);
     assert_eq!(epoch.load(Ordering::Acquire), second_epoch);
 
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(
         !fetch.is_eof,
         "transient 'unexpected end of bitstream' right after repeated seek must not terminate playback"
@@ -1961,7 +1966,7 @@ fn repeated_seek_program_config_error_recovers_via_decoder_recreate() {
     let (factory, created_offsets) = make_tracking_factory(vec![recreated_decoder]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -1983,22 +1988,22 @@ fn repeated_seek_program_config_error_recovers_via_decoder_recreate() {
         });
     }
 
-    let first_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
-    source.apply_pending_seek();
+    let first_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+    apply_pending_seek(&mut source);
     assert_eq!(epoch.load(Ordering::Acquire), first_epoch);
 
     loop {
-        let fetch = source.fetch_next();
+        let fetch = fetch_next(&mut source);
         if fetch.is_eof {
             break;
         }
     }
 
-    let second_epoch = source.timeline.initiate_seek(Duration::from_millis(11_651));
-    source.apply_pending_seek();
+    let second_epoch = timeline(&source).initiate_seek(Duration::from_millis(11_651));
+    apply_pending_seek(&mut source);
     assert_eq!(epoch.load(Ordering::Acquire), second_epoch);
 
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(
         !fetch.is_eof,
         "program-config decode failure after repeated seek must recover via decoder recreate"
@@ -2019,7 +2024,7 @@ fn decoder_panic_in_next_chunk_is_converted_to_decode_error() {
     let decoder: Box<dyn InnerDecoder> = Box::new(PanicOnNextChunkDecoder::new(v0_spec()));
     let (factory, offsets) = make_tracking_factory(vec![]);
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -2028,7 +2033,7 @@ fn decoder_panic_in_next_chunk_is_converted_to_decode_error() {
         vec![],
     );
 
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(
         fetch.is_eof,
         "decoder panic should surface as EOF fetch error"
@@ -2051,7 +2056,7 @@ fn seek_recovery_uses_applied_target_even_if_timeline_target_changes() {
     let (factory, created_offsets) = make_tracking_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -2072,14 +2077,14 @@ fn seek_recovery_uses_applied_target_even_if_timeline_target_changes() {
         });
     }
 
-    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
-    source.apply_pending_seek();
+    let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+    apply_pending_seek(&mut source);
     assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
 
-    let stale_epoch = source.timeline.initiate_seek(Duration::from_secs(99));
-    source.timeline.complete_seek(stale_epoch);
+    let stale_epoch = timeline(&source).initiate_seek(Duration::from_secs(99));
+    timeline(&source).complete_seek(stale_epoch);
 
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(
         !fetch.is_eof,
         "recovery must use applied seek target and ignore unrelated timeline target updates"
@@ -2104,7 +2109,7 @@ fn seek_skip_then_decode_error_still_recovers_as_post_seek_error() {
     let (factory, created_offsets) = make_tracking_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -2125,11 +2130,11 @@ fn seek_skip_then_decode_error_still_recovers_as_post_seek_error() {
         });
     }
 
-    let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(9_500));
-    source.apply_pending_seek();
+    let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(9_500));
+    apply_pending_seek(&mut source);
     assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
 
-    let fetch = source.fetch_next();
+    let fetch = fetch_next(&mut source);
     assert!(
         !fetch.is_eof,
         "decode error after fully-skipped first chunk must still be treated as post-seek recoverable"
@@ -2161,7 +2166,7 @@ fn stress_variant_only_seeks_do_not_recreate_decoder() {
     let (factory, offsets) = make_tracking_factory(vec![]);
 
     let epoch = Arc::new(AtomicU64::new(0));
-    let mut source = StreamAudioSource::new(
+    let mut source = new_stream_audio_source(
         shared,
         decoder,
         factory,
@@ -2184,14 +2189,14 @@ fn stress_variant_only_seeks_do_not_recreate_decoder() {
 
     const SEEK_ITERATIONS: usize = 200;
     for _ in 0..SEEK_ITERATIONS {
-        let seek_epoch = source.timeline.initiate_seek(Duration::from_millis(8_250));
-        source.apply_pending_seek();
+        let seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+        apply_pending_seek(&mut source);
         assert_eq!(epoch.load(Ordering::Acquire), seek_epoch);
-        let _ = source.fetch_next();
+        let _ = fetch_next(&mut source);
     }
 
     assert_eq!(
-        source.current_base_offset(),
+        current_base_offset(&source),
         0,
         "variant-only seek stress must keep the original decoder base offset"
     );

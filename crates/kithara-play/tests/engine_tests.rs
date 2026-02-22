@@ -1,9 +1,13 @@
+use kithara_play::internal::engine::*;
 use rstest::rstest;
-
-use super::*;
 
 fn make_engine() -> EngineImpl {
     EngineImpl::new(EngineConfig::default())
+}
+
+fn session_ducking_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
 #[derive(Clone, Copy)]
@@ -118,7 +122,7 @@ fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorS
     let err = match scenario {
         NotRunningErrorScenario::Stop => engine.stop().unwrap_err(),
         NotRunningErrorScenario::AllocateSlot => engine.allocate_slot().unwrap_err(),
-        NotRunningErrorScenario::ReleaseSlot => engine.release_slot(SlotId(99)).unwrap_err(),
+        NotRunningErrorScenario::ReleaseSlot => engine.release_slot(slot_id(99)).unwrap_err(),
     };
     assert!(matches!(err, PlayError::EngineNotRunning));
 }
@@ -127,7 +131,7 @@ fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorS
 fn engine_crossfade_stub_returns_not_ready() {
     let engine = make_engine();
     let err = engine
-        .crossfade(SlotId(1), SlotId(2), CrossfadeConfig::default())
+        .crossfade(slot_id(1), slot_id(2), CrossfadeConfig::default())
         .unwrap_err();
     assert!(matches!(err, PlayError::NotReady));
 }
@@ -166,7 +170,7 @@ fn engine_master_channels_returns_config() {
 
 #[test]
 fn engine_session_ducking_roundtrip() {
-    let _lock = ducking_test_lock().lock().unwrap();
+    let _lock = session_ducking_lock().lock().unwrap();
     EngineImpl::set_session_ducking(SessionDuckingMode::Soft).unwrap();
     assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Soft);
     EngineImpl::set_session_ducking(SessionDuckingMode::Hard).unwrap();
@@ -177,7 +181,7 @@ fn engine_session_ducking_roundtrip() {
 
 #[test]
 fn engine_instances_share_session_ducking() {
-    let _lock = ducking_test_lock().lock().unwrap();
+    let _lock = session_ducking_lock().lock().unwrap();
     let _a = make_engine();
     let _b = make_engine();
 

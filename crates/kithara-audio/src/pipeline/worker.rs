@@ -20,7 +20,7 @@ pub(crate) enum AudioCommand {
 }
 
 /// Trait for audio sources processed in a blocking worker thread.
-pub(super) trait AudioWorkerSource: Send + 'static {
+pub(crate) trait AudioWorkerSource: Send + 'static {
     type Chunk: Send + 'static;
     type Command: Send + 'static;
 
