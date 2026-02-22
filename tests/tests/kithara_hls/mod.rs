@@ -21,3 +21,4 @@ mod stress_seek_audio;
 mod stress_seek_lifecycle;
 mod stress_seek_random;
 mod sync_reader_hls_test;
+mod wait_range_contract;

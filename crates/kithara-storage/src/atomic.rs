@@ -99,7 +99,8 @@ impl<R: ResourceExt> ResourceExt for Atomic<R> {
             return self.inner.commit(Some(data.len() as u64));
         }
 
-        // In-memory or wasm32: delegate directly.
+        // In-memory or wasm32: reactivate committed resources before overwrite.
+        self.inner.reactivate()?;
         self.inner.write_all(data)
     }
 }
@@ -189,6 +190,22 @@ mod tests {
         let n = atomic.read_into(&mut buf).unwrap();
         assert_eq!(n, data.len());
         assert_eq!(&buf, data);
+    }
+
+    #[rstest]
+    #[timeout(Duration::from_secs(2))]
+    #[test]
+    fn mem_write_all_overwrites_committed_data() {
+        let res = create_mem_resource();
+        let atomic = Atomic::new(res);
+
+        atomic.write_all(b"first").unwrap();
+        atomic.write_all(b"second version").unwrap();
+
+        let mut buf = Vec::new();
+        let n = atomic.read_into(&mut buf).unwrap();
+        assert_eq!(n, b"second version".len());
+        assert_eq!(&buf, b"second version");
     }
 
     #[rstest]
