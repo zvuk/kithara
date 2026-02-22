@@ -605,18 +605,13 @@ where
         });
 
         // Factory for creating decoders after ABR switch.
-        //
-        // Three-level fallback:
-        // 1. create_from_media_info — uses codec/container from HLS metadata
-        // 2. create_with_probe — uses extension hint for codec detection
-        // 3. create_with_symphonia_probe — lets Symphonia detect format from data
+        // Strategy is metadata-first with native probe fallback.
         let factory_stream_ctx = Arc::clone(&stream_ctx);
         let factory_epoch = Arc::clone(&epoch);
         let factory_pool = pool.clone();
         let decoder_factory: super::stream_source::DecoderFactory<T> =
             Box::new(move |stream, info, base_offset| {
                 let current_epoch = factory_epoch.load(Ordering::Acquire);
-                let reader = OffsetReader::new(stream.clone(), base_offset);
                 let config = kithara_decode::DecoderConfig {
                     prefer_hardware,
                     pcm_pool: Some(factory_pool.clone()),
@@ -624,52 +619,18 @@ where
                     epoch: current_epoch,
                     ..Default::default()
                 };
-                match kithara_decode::DecoderFactory::create_from_media_info(reader, info, config) {
+                match kithara_decode::DecoderFactory::create_for_recreate(
+                    || OffsetReader::new(stream.clone(), base_offset),
+                    info,
+                    config,
+                ) {
                     Ok(d) => {
                         d.update_byte_len(0);
                         Some(d)
                     }
                     Err(e) => {
-                        warn!(?e, "Failed to recreate decoder, trying probe fallback");
-                        let reader = OffsetReader::new(stream.clone(), base_offset);
-                        let config = kithara_decode::DecoderConfig {
-                            prefer_hardware,
-                            pcm_pool: Some(factory_pool.clone()),
-                            stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
-                            epoch: current_epoch,
-                            ..Default::default()
-                        };
-                        match kithara_decode::DecoderFactory::create_with_probe(
-                            reader, None, config,
-                        ) {
-                            Ok(d) => {
-                                d.update_byte_len(0);
-                                Some(d)
-                            }
-                            Err(e) => {
-                                warn!(?e, "Probe fallback failed, trying Symphonia native probe");
-                                let reader = OffsetReader::new(stream, base_offset);
-                                let config = kithara_decode::DecoderConfig {
-                                    prefer_hardware,
-                                    pcm_pool: Some(factory_pool.clone()),
-                                    stream_ctx: Some(Arc::clone(&factory_stream_ctx)),
-                                    epoch: current_epoch,
-                                    ..Default::default()
-                                };
-                                match kithara_decode::DecoderFactory::create_with_symphonia_probe(
-                                    reader, config,
-                                ) {
-                                    Ok(d) => {
-                                        d.update_byte_len(0);
-                                        Some(d)
-                                    }
-                                    Err(e) => {
-                                        warn!(?e, "Symphonia native probe also failed");
-                                        None
-                                    }
-                                }
-                            }
-                        }
+                        warn!(?e, "failed to recreate decoder");
+                        None
                     }
                 }
             });

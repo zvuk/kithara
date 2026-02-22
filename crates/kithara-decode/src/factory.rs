@@ -63,7 +63,7 @@ pub(crate) struct ProbeHint {
 }
 
 /// Configuration for `DecoderFactory`.
-#[derive(Derivative)]
+#[derive(Clone, Derivative)]
 #[derivative(Default)]
 pub struct DecoderConfig {
     /// Prefer hardware decoder when available.
@@ -360,6 +360,36 @@ impl DecoderFactory {
         }
     }
 
+    /// Create decoder for seek-time recreation with metadata-first strategy.
+    ///
+    /// First tries `create_from_media_info`. If that fails, retries with
+    /// native Symphonia probing from a fresh source.
+    ///
+    /// # Errors
+    ///
+    /// Returns error when both strategies fail.
+    pub fn create_for_recreate<R, F>(
+        make_source: F,
+        media_info: &MediaInfo,
+        config: DecoderConfig,
+    ) -> DecodeResult<Box<dyn InnerDecoder>>
+    where
+        R: Read + Seek + Send + Sync + 'static,
+        F: Fn() -> R,
+    {
+        match Self::create_from_media_info(make_source(), media_info, config.clone()) {
+            Ok(decoder) => Ok(decoder),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    ?media_info,
+                    "create_from_media_info failed during recreate; retrying with native probe"
+                );
+                Self::create_with_symphonia_probe(make_source(), config)
+            }
+        }
+    }
+
     /// Create decoder from `MediaInfo` (for kithara-audio compatibility).
     ///
     /// This is a convenience method that extracts codec from `MediaInfo`
@@ -484,6 +514,7 @@ impl DecoderFactory {
 mod tests {
     use std::io::Cursor;
 
+    use kithara_test_utils::create_test_wav;
     use rstest::rstest;
 
     use super::*;
@@ -675,6 +706,34 @@ mod tests {
         let empty = Cursor::new(Vec::new());
         let result = DecoderFactory::create(empty, &CodecSelector::Auto, DecoderConfig::default());
         assert!(matches!(result, Err(DecodeError::ProbeFailed)));
+    }
+
+    #[test]
+    fn test_create_for_recreate_falls_back_to_native_probe_on_mismatch() {
+        let wav_data = create_test_wav(64, 44_100, 2);
+        let wrong_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
+
+        let decoder = DecoderFactory::create_for_recreate(
+            || Cursor::new(wav_data.clone()),
+            &wrong_info,
+            DecoderConfig::default(),
+        )
+        .expect("native probe fallback should recreate decoder");
+
+        let spec = decoder.spec();
+        assert_eq!(spec.channels, 2);
+        assert_eq!(spec.sample_rate, 44_100);
+    }
+
+    #[test]
+    fn test_create_for_recreate_fails_when_all_strategies_fail() {
+        let wrong_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
+        let result = DecoderFactory::create_for_recreate(
+            || Cursor::new(Vec::<u8>::new()),
+            &wrong_info,
+            DecoderConfig::default(),
+        );
+        assert!(result.is_err());
     }
 
     #[test]

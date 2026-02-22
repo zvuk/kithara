@@ -7,13 +7,11 @@ use std::{future::Future, sync::Arc};
 
 use futures::StreamExt;
 use kithara_assets::AssetResource;
+use kithara_coverage::{Coverage, CoverageManager, DiskCoverage};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, RangeSpec};
-use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{
-    Coverage, CoverageManager, CoverageState, Downloader, DownloaderIo, PlanOutcome, StepResult,
-    Writer, WriterItem,
-};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
+use kithara_stream::{Downloader, DownloaderIo, PlanOutcome, StepResult, Writer, WriterItem};
 use tokio_util::sync::CancellationToken;
 
 use crate::session::{FileStreamState, Progress, SharedFileState};
@@ -129,7 +127,7 @@ pub(crate) struct FileDownloader {
     look_ahead_bytes: Option<u64>,
     shared: Arc<SharedFileState>,
     /// Coverage tracker for downloaded ranges.
-    coverage: CoverageState,
+    coverage: DiskCoverage<StorageResource>,
     /// Current download phase.
     phase: FilePhase,
 }
@@ -142,7 +140,7 @@ impl FileDownloader {
         bus: EventBus,
         look_ahead_bytes: Option<u64>,
         shared: Arc<SharedFileState>,
-        coverage_manager: CoverageManager,
+        coverage_manager: CoverageManager<StorageResource>,
     ) -> Self {
         let url = state.url().clone();
         let total = state.len();
@@ -441,9 +439,9 @@ mod tests {
     use std::sync::Arc;
 
     use kithara_assets::AssetStoreBuilder;
+    use kithara_coverage::Coverage;
     use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
-    use kithara_stream::{Coverage, CoverageManager};
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -485,7 +483,7 @@ mod tests {
         };
 
         let shared = Arc::new(SharedFileState::new());
-        let coverage_manager = CoverageManager::open(&store).unwrap();
+        let coverage_manager = store.open_coverage_manager().unwrap();
         let mut coverage = coverage_manager.open_state(url.to_string());
         coverage.set_total_size(total);
         coverage.mark(0..1000); // Sequential downloaded first 1KB.

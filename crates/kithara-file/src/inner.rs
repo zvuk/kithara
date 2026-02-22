@@ -9,9 +9,7 @@ use kithara_events::{EventBus, FileEvent};
 use kithara_net::{HttpClient, Net};
 use kithara_platform::ThreadPool;
 use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{
-    Backend, CoverageManager, NullStreamContext, StreamContext, StreamType, Timeline,
-};
+use kithara_stream::{Backend, NullStreamContext, StreamContext, StreamType, Timeline};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -125,7 +123,9 @@ impl File {
         }
         let backend = backend_builder.build();
 
-        let coverage_manager = CoverageManager::open(&backend).map_err(SourceError::Assets)?;
+        let coverage_manager = backend
+            .open_coverage_manager()
+            .map_err(SourceError::Assets)?;
 
         let state = FileStreamState::create(
             Arc::new(backend),

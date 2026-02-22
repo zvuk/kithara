@@ -11,10 +11,11 @@ use kithara_abr::{
     ThroughputSampleSource,
 };
 use kithara_assets::ResourceKey;
+use kithara_coverage::{Coverage, CoverageManager};
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
-use kithara_storage::{ResourceExt, ResourceStatus};
-use kithara_stream::{Coverage, CoverageManager, Downloader, DownloaderIo, PlanOutcome};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
+use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
 use tracing::debug;
 use url::Url;
 
@@ -179,7 +180,7 @@ pub(crate) struct HlsDownloader {
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
     /// Coverage index for crash-safe segment tracking.
-    pub(crate) coverage: CoverageManager,
+    pub(crate) coverage: CoverageManager<StorageResource>,
 }
 
 impl HlsDownloader {
@@ -337,7 +338,7 @@ impl HlsDownloader {
         shared: &SharedSegments,
         fetch: &DefaultFetchManager,
         variant: usize,
-        coverage: &CoverageManager,
+        coverage: &CoverageManager<StorageResource>,
     ) -> (usize, u64) {
         // Ephemeral backend has no persistent cache to scan.
         if fetch.backend().is_ephemeral() {
@@ -534,7 +535,7 @@ impl HlsDownloader {
             total: None,
         });
 
-        // Mark segment coverage for crash-safe tracking via CoverageState.
+        // Mark segment coverage for crash-safe tracking in coverage index.
         {
             let mut segments = self.shared.segments.lock();
             if is_variant_switch {
@@ -1134,10 +1135,12 @@ mod tests {
     use std::{collections::HashSet, sync::Arc, time::Duration};
 
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
+    use kithara_coverage::CoverageManager;
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
-    use kithara_stream::{AudioCodec, CoverageManager, Downloader, PlanOutcome};
+    use kithara_storage::StorageResource;
+    use kithara_stream::{AudioCodec, Downloader, PlanOutcome};
     use tokio_util::sync::CancellationToken;
     use url::Url;
 
@@ -1247,12 +1250,14 @@ mod tests {
         Arc::new(FetchManager::new(backend, net, cancel))
     }
 
-    fn make_coverage_manager() -> CoverageManager {
+    fn make_coverage_manager() -> CoverageManager<StorageResource> {
         let backend = AssetStoreBuilder::new()
             .ephemeral(true)
             .cancel(CancellationToken::new())
             .build();
-        CoverageManager::open(&backend).expect("coverage manager should open")
+        backend
+            .open_coverage_manager()
+            .expect("coverage manager should open")
     }
 
     #[test]

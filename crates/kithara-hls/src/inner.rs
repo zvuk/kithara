@@ -9,7 +9,7 @@ use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_net::HttpClient;
 use kithara_platform::ThreadPool;
-use kithara_stream::{CoverageManager, StreamContext, StreamType, Timeline};
+use kithara_stream::{StreamContext, StreamType, Timeline};
 
 use crate::{
     HlsStreamContext,
@@ -123,8 +123,10 @@ impl StreamType for Hls {
             initial_variant,
         });
 
-        let coverage_manager =
-            CoverageManager::open(fetch_manager.backend()).map_err(HlsError::Assets)?;
+        let coverage_manager = fetch_manager
+            .backend()
+            .open_coverage_manager()
+            .map_err(HlsError::Assets)?;
 
         // Create HlsDownloader + HlsSource pair
         let playlist_state = fetch_manager
