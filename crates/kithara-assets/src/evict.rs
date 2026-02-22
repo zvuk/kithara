@@ -8,7 +8,7 @@ use kithara_storage::ResourceExt;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::base::delete_asset_dir;
+use crate::disk_store::delete_asset_dir;
 use crate::{
     base::Assets,
     error::AssetsResult,
@@ -328,6 +328,10 @@ where
 
     fn supports_lease(&self) -> bool {
         self.inner.supports_lease()
+    }
+
+    fn supports_cache(&self) -> bool {
+        self.inner.supports_cache()
     }
 
     fn root_dir(&self) -> &Path {

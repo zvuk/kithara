@@ -23,7 +23,7 @@ use crate::{
 /// Nothing is persisted to disk. Index resources (pins, LRU, coverage) are
 /// backed by [`MemResource`] and are not persisted either.
 ///
-/// `MemAssetStore` has the same `Res = StorageResource` as [`DiskAssetStore`](crate::DiskAssetStore),
+/// `MemAssetStore` has the same `Res = StorageResource` as [`DiskAssetStore`](crate::disk_store::DiskAssetStore),
 /// allowing both to be used through the same decorator chain.
 #[derive(Clone, Debug)]
 pub struct MemAssetStore {
@@ -56,6 +56,10 @@ impl Assets for MemAssetStore {
     type Res = StorageResource;
     type Context = ();
     type IndexRes = MemResource;
+
+    fn supports_cache(&self) -> bool {
+        true
+    }
 
     fn supports_evict(&self) -> bool {
         false

@@ -91,6 +91,12 @@ where
     pub fn inner(&self) -> &A {
         &self.inner
     }
+
+    #[cfg(test)]
+    #[must_use]
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.enabled
+    }
 }
 
 impl<A> Assets for CachedAssets<A>
@@ -107,6 +113,10 @@ where
 
     fn supports_lease(&self) -> bool {
         self.inner.supports_lease()
+    }
+
+    fn supports_cache(&self) -> bool {
+        self.inner.supports_cache()
     }
 
     fn root_dir(&self) -> &Path {
@@ -259,7 +269,7 @@ mod tests {
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::base::DiskAssetStore;
+    use crate::disk_store::DiskAssetStore;
 
     fn make_cached(dir: &Path, capacity: NonZeroUsize) -> CachedAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(

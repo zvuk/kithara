@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bytes::Bytes;
 use futures::StreamExt;
-use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
+use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_bufpool::byte_pool;
 use kithara_drm::DecryptContext;
 use kithara_net::{Headers, HttpClient, Net};
@@ -108,7 +108,7 @@ fn uri_basename_no_query(uri: &str) -> Option<&str> {
 /// and implements `Loader` for segment loading.
 #[derive(Clone)]
 pub struct FetchManager<N> {
-    backend: AssetsBackend<DecryptContext>,
+    backend: AssetStore<DecryptContext>,
     key_manager: Option<Arc<crate::keys::KeyManager>>,
     net: N,
     cancel: CancellationToken,
@@ -126,7 +126,7 @@ pub struct FetchManager<N> {
 }
 
 impl<N: Net> FetchManager<N> {
-    pub fn new(backend: AssetsBackend<DecryptContext>, net: N, cancel: CancellationToken) -> Self {
+    pub fn new(backend: AssetStore<DecryptContext>, net: N, cancel: CancellationToken) -> Self {
         Self {
             backend,
             key_manager: None,
@@ -199,7 +199,7 @@ impl<N: Net> FetchManager<N> {
         self.backend.asset_root()
     }
 
-    pub fn backend(&self) -> &AssetsBackend<DecryptContext> {
+    pub fn backend(&self) -> &AssetStore<DecryptContext> {
         &self.backend
     }
 
@@ -711,7 +711,7 @@ mod tests {
 
     use bytes::Bytes;
     use futures::stream;
-    use kithara_assets::{AssetStoreBuilder, AssetsBackend, ProcessChunkFn};
+    use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn};
     use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
     use kithara_net::{ByteStream, Headers, NetError, mock::NetMock};
     use rstest::rstest;
@@ -723,7 +723,7 @@ mod tests {
     use super::*;
 
     /// Build a test backend with DRM process function.
-    fn test_backend(asset_root: &str, root_dir: &Path) -> AssetsBackend<DecryptContext> {
+    fn test_backend(asset_root: &str, root_dir: &Path) -> AssetStore<DecryptContext> {
         let drm_fn: ProcessChunkFn<DecryptContext> =
             Arc::new(|input, output, ctx: &mut DecryptContext, is_last| {
                 aes128_cbc_process_chunk(input, output, ctx, is_last)
@@ -1003,6 +1003,10 @@ mod tests {
 
     // Partial segment tests
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "signature must match NetMock::stream callback shape in tests"
+    )]
     fn stream_with_timeout(
         _mock: &Unimock,
         url: Url,
@@ -1018,6 +1022,10 @@ mod tests {
         Ok(Box::pin(stream) as ByteStream)
     }
 
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "signature must match NetMock::stream callback shape in tests"
+    )]
     fn empty_stream(
         _mock: &Unimock,
         url: Url,

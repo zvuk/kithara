@@ -2,11 +2,11 @@
 
 use std::{ops::Range, time::Duration};
 
-use kithara_assets::{AssetStoreBuilder, AssetsBackend};
+use kithara_assets::{AssetStore, AssetStoreBuilder};
 use kithara_coverage::Coverage;
 use rstest::rstest;
 
-fn mark_coverage(backend: &AssetsBackend, key: &str, total_size: u64, covered: Range<u64>) {
+fn mark_coverage(backend: &AssetStore, key: &str, total_size: u64, covered: Range<u64>) {
     let manager = backend
         .open_coverage_manager()
         .expect("coverage manager should open");
@@ -15,7 +15,7 @@ fn mark_coverage(backend: &AssetsBackend, key: &str, total_size: u64, covered: R
     state.mark(covered);
 }
 
-fn read_coverage(backend: &AssetsBackend, key: &str) -> (Option<u64>, Vec<Range<u64>>, bool) {
+fn read_coverage(backend: &AssetStore, key: &str) -> (Option<u64>, Vec<Range<u64>>, bool) {
     let manager = backend
         .open_coverage_manager()
         .expect("coverage manager should open");

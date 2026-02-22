@@ -49,7 +49,7 @@ flowchart LR
     end
 
     subgraph "Assets"
-        AB["AssetsBackend<br/><i>Disk or Mem</i>"]
+        AB["AssetStore<br/><i>Disk or Mem</i>"]
         Proc["ProcessingAssets<br/><i>AES decrypt</i>"]
     end
 
@@ -129,7 +129,7 @@ flowchart LR
 
 ## Caching and Offline Support
 
-- Leverages `AssetsBackend<DecryptContext>` (disk or ephemeral) for persistent segment storage.
+- Leverages `AssetStore<DecryptContext>` (disk or ephemeral) for persistent segment storage.
 - `populate_cached_segments()` scans disk for committed segments on startup.
 - `#EXT-X-ALLOW-CACHE` flag respected.
 - `CoverageIndex` tracks per-segment byte-range coverage for crash recovery.
@@ -144,4 +144,4 @@ flowchart LR
 
 ## Integration
 
-Depends on `kithara-net` for HTTP, `kithara-assets` for caching (disk or in-memory via `AssetsBackend`), and `kithara-abr` for ABR algorithm. Composes with `kithara-audio` as `Audio<Stream<Hls>>`. Emits `HlsEvent` via broadcast channel for monitoring.
+Depends on `kithara-net` for HTTP, `kithara-assets` for caching (disk or in-memory via `AssetStore`), and `kithara-abr` for ABR algorithm. Composes with `kithara-audio` as `Audio<Stream<Hls>>`. Emits `HlsEvent` via broadcast channel for monitoring.

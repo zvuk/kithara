@@ -58,4 +58,4 @@ IV derivation happens in `kithara-hls`'s `KeyManager`:
 
 ## Integration
 
-Used by `kithara-hls` via `AssetsBackend<DecryptContext>`. The HLS crate sets up the processing callback when building the asset store, enabling transparent decryption of AES-128-CBC encrypted segments.
+Used by `kithara-hls` via `AssetStore<DecryptContext>`. The HLS crate sets up the processing callback when building the asset store, enabling transparent decryption of AES-128-CBC encrypted segments.

@@ -270,6 +270,10 @@ where
         self.inner.supports_lease()
     }
 
+    fn supports_cache(&self) -> bool {
+        self.inner.supports_cache()
+    }
+
     fn root_dir(&self) -> &Path {
         self.inner.root_dir()
     }

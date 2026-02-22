@@ -6,8 +6,8 @@
 //!
 //! ## Public contract
 //!
-//! The explicit public contract is the [`AssetStore`] type alias.
-//! Everything else should be considered an implementation detail (even if it is currently `pub`), and constructors must propagate the shared cancellation token (use `AssetStore::new`/`AssetStoreBuilder`).
+//! The explicit public contract is the unified [`AssetStore`] type.
+//! Everything else should be considered an implementation detail (even if it is currently `pub`), and constructors must propagate the shared cancellation token (use `AssetStoreBuilder`).
 //!
 //! ## Key mapping (normative)
 //!
@@ -34,9 +34,9 @@
 //! `_index/*` stores small files used as best-effort metadata.
 //! Filesystem remains the source of truth; indexes may be missing and can be rebuilt later.
 
-mod backend;
 mod base;
 mod cache;
+mod disk_store;
 mod error;
 mod evict;
 mod index;
@@ -45,12 +45,12 @@ mod lease;
 mod mem_store;
 mod process;
 mod store;
+mod unified;
 
 #[cfg(feature = "internal")]
 pub mod internal;
 
 // Public API - used by other crates
-pub use backend::AssetsBackend;
 pub use error::{AssetsError, AssetsResult};
 pub use index::EvictConfig;
 pub use key::{ResourceKey, asset_root_for_url};
@@ -58,7 +58,5 @@ pub use key::{ResourceKey, asset_root_for_url};
 pub use kithara_bufpool::{BytePool, byte_pool};
 pub use kithara_coverage::CoverageIndex;
 pub use process::ProcessChunkFn;
-#[cfg(not(target_arch = "wasm32"))]
-pub use store::{AssetResource, AssetStore, AssetStoreBuilder, MemStore, StoreOptions};
-#[cfg(target_arch = "wasm32")]
-pub use store::{AssetResource, AssetStoreBuilder, MemStore, StoreOptions};
+pub use store::{AssetResource, AssetStoreBuilder, StoreOptions};
+pub use unified::AssetStore;

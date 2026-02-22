@@ -3,7 +3,7 @@
 use std::{ops::Range, sync::Arc};
 
 use crossbeam_queue::SegQueue;
-use kithara_assets::{AssetResource, AssetsBackend, ResourceKey};
+use kithara_assets::{AssetResource, AssetStore, ResourceKey};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, Net};
 use kithara_storage::{ResourceExt, ResourceStatus, WaitOutcome};
@@ -27,7 +27,7 @@ pub(crate) struct FileStreamState {
 
 impl FileStreamState {
     pub(crate) async fn create(
-        assets: Arc<AssetsBackend>,
+        assets: Arc<AssetStore>,
         net_client: &HttpClient,
         url: Url,
         cancel: CancellationToken,
@@ -408,9 +408,6 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(None)
-            .cache_enabled(false)
-            .lease_enabled(false)
-            .evict_enabled(false)
             .cancel(CancellationToken::new())
             .build();
 

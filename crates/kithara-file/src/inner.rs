@@ -70,9 +70,6 @@ impl File {
 
         let store = AssetStoreBuilder::new()
             .asset_root(None)
-            .cache_enabled(false)
-            .lease_enabled(false)
-            .evict_enabled(false)
             .cancel(cancel)
             .build();
 

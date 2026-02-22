@@ -51,7 +51,8 @@ fn make_loaded_segment(
         init_len: 0,
         media_len,
         init_url: None,
-        media_url: Url::parse("https://example.com/seg").unwrap(),
+        media_url: Url::parse("https://example.com/seg")
+            .expect("test URL for media segment must be valid"),
     }
 }
 
@@ -84,7 +85,7 @@ fn make_variant_state_with_codec(
     count: usize,
     codec: Option<AudioCodec>,
 ) -> VariantState {
-    let base = Url::parse("https://example.com/").unwrap();
+    let base = Url::parse("https://example.com/").expect("test base URL must be valid");
     let segments = (0..count)
         .map(|index| SegmentState {
             index,

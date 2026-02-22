@@ -265,6 +265,10 @@ where
         self.inner.supports_lease()
     }
 
+    fn supports_cache(&self) -> bool {
+        self.inner.supports_cache()
+    }
+
     fn root_dir(&self) -> &Path {
         self.inner.root_dir()
     }
@@ -370,7 +374,7 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::{base::DiskAssetStore, index::PinsIndex, key::ResourceKey};
+    use crate::{disk_store::DiskAssetStore, index::PinsIndex, key::ResourceKey};
 
     fn make_lease(dir: &Path) -> LeaseAssets<DiskAssetStore> {
         let disk = Arc::new(DiskAssetStore::new(

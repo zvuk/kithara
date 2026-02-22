@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use kithara_assets::{AssetStoreBuilder, AssetsBackend, ProcessChunkFn, asset_root_for_url};
+use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn, asset_root_for_url};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_net::HttpClient;
@@ -63,7 +63,7 @@ impl StreamType for Hls {
         if let Some(cap) = config.store.cache_capacity {
             builder = builder.cache_capacity(cap);
         }
-        let backend: AssetsBackend<DecryptContext> = builder.build();
+        let backend: AssetStore<DecryptContext> = builder.build();
 
         // Build KeyManager for DRM key resolution
         let key_manager = Arc::new(KeyManager::from_options(

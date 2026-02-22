@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! Storage backend: disk or memory asset store.
+//! Unified asset store: disk or memory backend.
 
 use std::{fmt::Debug, hash::Hash, sync::Arc};
 
@@ -8,7 +8,7 @@ use kithara_coverage::{CoverageIndex, CoverageManager};
 use kithara_storage::StorageResource;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::store::AssetStore;
+use crate::store::DiskStore;
 use crate::{
     base::Assets,
     error::AssetsResult,
@@ -16,26 +16,22 @@ use crate::{
     store::{AssetResource, MemStore},
 };
 
-/// Storage backend: disk or memory asset store.
+/// Unified storage backend for assets.
 ///
-/// Provides a unified interface over `AssetStore` (disk) and `MemStore` (memory).
-/// Both variants return the same `AssetResource` type.
-///
-/// Generic parameter `Ctx` is the processing context type.
-/// Use `()` (default) for no processing, or `DecryptContext` for DRM decryption.
+/// Dispatches all operations to an inner disk or memory store chain.
 #[derive(Clone, Debug)]
-pub enum AssetsBackend<Ctx = ()>
+pub enum AssetStore<Ctx = ()>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
     /// File-backed storage with mmap resources.
     #[cfg(not(target_arch = "wasm32"))]
-    Disk(AssetStore<Ctx>),
+    Disk(DiskStore<Ctx>),
     /// In-memory storage (ephemeral, no disk artifacts).
     Mem(MemStore<Ctx>),
 }
 
-impl<Ctx> AssetsBackend<Ctx>
+impl<Ctx> AssetStore<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
@@ -116,9 +112,6 @@ where
     }
 
     /// Remove a single resource from the store.
-    ///
-    /// `MemStore`: removes from `DashMap` through decorator chain.
-    /// `DiskStore`: no-op (default impl in `Assets` trait).
     pub fn remove_resource(&self, key: &ResourceKey) {
         match self {
             #[cfg(not(target_arch = "wasm32"))]
@@ -133,16 +126,16 @@ where
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<Ctx> From<AssetStore<Ctx>> for AssetsBackend<Ctx>
+impl<Ctx> From<DiskStore<Ctx>> for AssetStore<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
-    fn from(store: AssetStore<Ctx>) -> Self {
+    fn from(store: DiskStore<Ctx>) -> Self {
         Self::Disk(store)
     }
 }
 
-impl<Ctx> From<MemStore<Ctx>> for AssetsBackend<Ctx>
+impl<Ctx> From<MemStore<Ctx>> for AssetStore<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {

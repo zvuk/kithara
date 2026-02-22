@@ -16,9 +16,8 @@ const DEFAULT_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(5) {
 };
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::base::DiskAssetStore;
+use crate::disk_store::DiskAssetStore;
 use crate::{
-    backend::AssetsBackend,
     base::Assets,
     cache::CachedAssets,
     evict::EvictAssets,
@@ -26,6 +25,7 @@ use crate::{
     lease::{LeaseAssets, LeaseGuard, LeaseResource},
     mem_store::MemAssetStore,
     process::{ProcessChunkFn, ProcessedResource, ProcessingAssets},
+    unified::AssetStore,
 };
 
 /// Simplified storage options for creating an asset store.
@@ -100,23 +100,21 @@ impl StoreOptions {
 /// Generic parameter `Ctx` is the context type for processing.
 /// Use `()` (default) for no processing (`ProcessingAssets` will pass through unchanged).
 #[cfg(not(target_arch = "wasm32"))]
-pub type AssetStore<Ctx = ()> =
+pub(crate) type DiskStore<Ctx = ()> =
     CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
-/// Resource handle returned by `AssetStore::open_resource` or `MemStore::open_resource`.
+/// Resource handle returned by [`AssetStore::open_resource`].
 ///
 /// Wraps `StorageResource` with processing and lease semantics.
 /// Implements `ResourceExt` for read/write/commit operations.
-/// Both `AssetStore` (disk) and `MemStore` (memory) return this same type.
+/// Both disk and memory variants return this same type.
 pub type AssetResource<Ctx = ()> =
     LeaseResource<ProcessedResource<StorageResource, Ctx>, LeaseGuard>;
 
 /// In-memory asset store with disabled decorators.
 ///
-/// Same decorator chain as [`AssetStore`] but backed by [`MemAssetStore`]
-/// instead of [`DiskAssetStore`]. All decorators run in disabled/no-op mode.
-/// Returns the same [`AssetResource`] type as `AssetStore`.
-pub type MemStore<Ctx = ()> =
+/// Internal chain used for `AssetStore::Mem`.
+pub(crate) type MemStore<Ctx = ()> =
     CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<MemAssetStore>, Ctx>>>;
 
 /// Constructor for the ready-to-use [`AssetStore`].
@@ -150,7 +148,6 @@ pub type MemStore<Ctx = ()> =
 /// - `ProcessingAssets` (if configured) wraps resources for transformation
 pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()> {
     cache_capacity: Option<NonZeroUsize>,
-    cache_enabled: bool,
     cancel: Option<CancellationToken>,
     ephemeral: bool,
     evict_config: Option<EvictConfig>,
@@ -182,7 +179,6 @@ impl AssetStoreBuilder<()> {
 
         Self {
             cache_capacity: None,
-            cache_enabled: true,
             cancel: None,
             ephemeral: false,
             evict_config: None,
@@ -203,13 +199,13 @@ where
 {
     /// Build the storage backend.
     ///
-    /// Returns `AssetsBackend::Disk` for persistent storage or
-    /// `AssetsBackend::Mem` when `ephemeral(true)` is set.
+    /// Returns `AssetStore::Disk` for persistent storage or
+    /// `AssetStore::Mem` when `ephemeral(true)` is set.
     ///
     /// # Panics
     /// Panics if `process_fn` is not set.
     #[must_use]
-    pub fn build(self) -> AssetsBackend<Ctx> {
+    pub fn build(self) -> AssetStore<Ctx> {
         #[cfg(target_arch = "wasm32")]
         {
             self.build_ephemeral().into()
@@ -273,16 +269,6 @@ where
         self
     }
 
-    /// Enable or disable the in-memory LRU cache layer.
-    ///
-    /// When disabled, `CachedAssets` delegates directly to the inner layer.
-    /// Default: `true`.
-    #[must_use]
-    pub fn cache_enabled(mut self, enabled: bool) -> Self {
-        self.cache_enabled = enabled;
-        self
-    }
-
     /// Enable or disable the eviction layer.
     ///
     /// When disabled, `EvictAssets` delegates directly to the inner layer
@@ -307,7 +293,7 @@ where
 
     /// Use ephemeral (in-memory) storage instead of disk.
     ///
-    /// When `true`, `build()` returns `AssetsBackend::Mem` with auto-eviction
+    /// When `true`, `build()` returns `AssetStore::Mem` with auto-eviction
     /// (LRU cache removes underlying data on eviction).
     /// Default: `false`.
     #[must_use]
@@ -322,7 +308,7 @@ where
     /// Panics if `process_fn` is not set for Ctx != ().
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
-    pub fn build_disk(self) -> AssetStore<Ctx> {
+    pub(crate) fn build_disk(self) -> DiskStore<Ctx> {
         let root_dir = self.root_dir.unwrap_or_else(|| {
             tempdir()
                 .expect("failed to create AssetStore temp dir")
@@ -341,6 +327,7 @@ where
 
         // Build decorator chain: Disk -> Evict -> Processing -> Lease -> Cached
         let disk = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));
+        let cache_enabled = disk.supports_cache();
         let evict_enabled = self.evict_enabled && disk.supports_evict();
         let lease_enabled = self.lease_enabled && disk.supports_lease();
         let evict = Arc::new(EvictAssets::new(
@@ -367,7 +354,7 @@ where
 
         // CachedAssets on top to cache LeaseResource with guards
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::with_options(Arc::new(lease), capacity, self.cache_enabled, false)
+        CachedAssets::with_options(Arc::new(lease), capacity, cache_enabled, false)
     }
 
     /// Build ephemeral (in-memory) asset store.
@@ -401,6 +388,7 @@ where
             self.mem_resource_capacity,
             root_dir,
         ));
+        let cache_enabled = mem.supports_cache();
         let evict_enabled = self.evict_enabled && mem.supports_evict();
         let lease_enabled = self.lease_enabled && mem.supports_lease();
         let evict = Arc::new(EvictAssets::new(
@@ -423,7 +411,7 @@ where
         let lease =
             LeaseAssets::with_options(processing, cancel, byte_recorder, lease_enabled, pool);
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::with_options(Arc::new(lease), capacity, true, false)
+        CachedAssets::with_options(Arc::new(lease), capacity, cache_enabled, false)
     }
 }
 
@@ -437,7 +425,6 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
     {
         AssetStoreBuilder {
             cache_capacity: self.cache_capacity,
-            cache_enabled: self.cache_enabled,
             cancel: self.cancel,
             ephemeral: self.ephemeral,
             evict_config: self.evict_config,
@@ -470,7 +457,6 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(Some("test_asset"))
-            .cache_enabled(false)
             .lease_enabled(false)
             .evict_enabled(false)
             .build();
@@ -517,7 +503,6 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(None)
-            .cache_enabled(false)
             .lease_enabled(false)
             .evict_enabled(false)
             .build();
@@ -538,7 +523,6 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(None)
-            .cache_enabled(false)
             .lease_enabled(false)
             .evict_enabled(false)
             .build();
@@ -582,11 +566,29 @@ mod tests {
             .asset_root(Some("test"))
             .build_disk();
 
+        assert!(store.is_enabled());
         let lease = store.inner();
         assert!(lease.is_enabled());
 
         let evict = lease.inner().inner();
         assert!(evict.is_enabled());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[rstest]
+    #[timeout(Duration::from_secs(5))]
+    fn disk_local_mode_disables_cache_by_capability() {
+        let dir = tempdir().unwrap();
+        let store = AssetStoreBuilder::new()
+            .root_dir(dir.path())
+            .asset_root(None)
+            .build_disk();
+
+        assert!(!store.is_enabled());
+        let lease = store.inner();
+        assert!(!lease.is_enabled());
+        let evict = lease.inner().inner();
+        assert!(!evict.is_enabled());
     }
 
     #[rstest]
@@ -644,7 +646,7 @@ mod tests {
             .root_dir(dir.path())
             .asset_root(Some("test"))
             .build_disk();
-        let backend: AssetsBackend = store.into();
+        let backend: AssetStore = store.into();
         assert!(!backend.is_ephemeral());
     }
 }
