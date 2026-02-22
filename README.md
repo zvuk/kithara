@@ -76,13 +76,15 @@ flowchart LR
 # Build
 cargo build --workspace
 
-# Test
-cargo test --workspace
-
 # Install task runner + git hooks (recommended)
 cargo install just --locked
-cargo install lefthook --locked
+cargo install cargo-nextest --locked
+# Install lefthook from the official instructions:
+# https://github.com/evilmartians/lefthook#install
 lefthook install
+
+# Test (nextest + doctests)
+just test-all
 
 # Lint / policy checks
 just lint-fast

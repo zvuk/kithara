@@ -10,65 +10,76 @@ fmt-check:
 clippy:
     cargo clippy --workspace -- -D warnings
 
+test:
+    cargo nextest run --workspace
+
+test-ci:
+    cargo nextest run --workspace --profile ci --no-fail-fast
+
+test-doc:
+    cargo test --doc --workspace
+
+test-all: test test-doc
+
 semgrep-blocking:
-    SEMGREP_BIN="$$(command -v semgrep || true)"; \
-    if [[ -z "$$SEMGREP_BIN" ]]; then \
-      PY_USER_BASE="$$(python3 -c 'import site; print(site.getuserbase())' 2>/dev/null || true)"; \
-      CANDIDATE="$$PY_USER_BASE/bin/semgrep"; \
-      if [[ -x "$$CANDIDATE" ]]; then \
-        SEMGREP_BIN="$$CANDIDATE"; \
+    SEMGREP_BIN="$(command -v semgrep || true)"; \
+    if [[ -z "$SEMGREP_BIN" ]]; then \
+      PY_USER_BASE="$(python3 -c 'import site; print(site.getuserbase())' 2>/dev/null || true)"; \
+      CANDIDATE="$PY_USER_BASE/bin/semgrep"; \
+      if [[ -x "$CANDIDATE" ]]; then \
+        SEMGREP_BIN="$CANDIDATE"; \
       fi; \
     fi; \
-    if [[ -z "$$SEMGREP_BIN" ]]; then \
+    if [[ -z "$SEMGREP_BIN" ]]; then \
       echo "FAILED: semgrep is required but not installed."; \
       exit 1; \
     fi; \
-    REPO_ROOT="$$(pwd)"; \
-    XDG_DIR="$$REPO_ROOT/.cache"; \
-    SEMGREP_DIR="$$XDG_DIR/semgrep"; \
-    mkdir -p "$$XDG_DIR" "$$SEMGREP_DIR"; \
-    export XDG_CACHE_HOME="$$XDG_DIR"; \
-    export XDG_CONFIG_HOME="$$XDG_DIR"; \
-    export SEMGREP_LOG_FILE="$$SEMGREP_DIR/semgrep.log"; \
-    export SEMGREP_SETTINGS_FILE="$$SEMGREP_DIR/settings.yml"; \
-    export PATH="$$(dirname "$$SEMGREP_BIN")":$$PATH; \
-    if [[ -z "$${SSL_CERT_FILE:-}" ]]; then \
-      CERT_PATH="$$(python3 -c 'import certifi; print(certifi.where())' 2>/dev/null || true)"; \
-      if [[ -n "$$CERT_PATH" && -f "$$CERT_PATH" ]]; then \
-        export SSL_CERT_FILE="$$CERT_PATH"; \
+    REPO_ROOT="$(pwd)"; \
+    XDG_DIR="$REPO_ROOT/.cache"; \
+    SEMGREP_DIR="$XDG_DIR/semgrep"; \
+    mkdir -p "$XDG_DIR" "$SEMGREP_DIR"; \
+    export XDG_CACHE_HOME="$XDG_DIR"; \
+    export XDG_CONFIG_HOME="$XDG_DIR"; \
+    export SEMGREP_LOG_FILE="$SEMGREP_DIR/semgrep.log"; \
+    export SEMGREP_SETTINGS_FILE="$SEMGREP_DIR/settings.yml"; \
+    export PATH="$(dirname "$SEMGREP_BIN")":$PATH; \
+    if [[ -z "${SSL_CERT_FILE:-}" ]]; then \
+      CERT_PATH="$(python3 -c 'import certifi; print(certifi.where())' 2>/dev/null || true)"; \
+      if [[ -n "$CERT_PATH" && -f "$CERT_PATH" ]]; then \
+        export SSL_CERT_FILE="$CERT_PATH"; \
       fi; \
     fi; \
-    "$$SEMGREP_BIN" --config semgrep.yml --severity ERROR --error
+    "$SEMGREP_BIN" --config semgrep.yml --severity ERROR --error
 
 semgrep-advisory:
-    SEMGREP_BIN="$$(command -v semgrep || true)"; \
-    if [[ -z "$$SEMGREP_BIN" ]]; then \
-      PY_USER_BASE="$$(python3 -c 'import site; print(site.getuserbase())' 2>/dev/null || true)"; \
-      CANDIDATE="$$PY_USER_BASE/bin/semgrep"; \
-      if [[ -x "$$CANDIDATE" ]]; then \
-        SEMGREP_BIN="$$CANDIDATE"; \
+    SEMGREP_BIN="$(command -v semgrep || true)"; \
+    if [[ -z "$SEMGREP_BIN" ]]; then \
+      PY_USER_BASE="$(python3 -c 'import site; print(site.getuserbase())' 2>/dev/null || true)"; \
+      CANDIDATE="$PY_USER_BASE/bin/semgrep"; \
+      if [[ -x "$CANDIDATE" ]]; then \
+        SEMGREP_BIN="$CANDIDATE"; \
       fi; \
     fi; \
-    if [[ -z "$$SEMGREP_BIN" ]]; then \
+    if [[ -z "$SEMGREP_BIN" ]]; then \
       echo "FAILED: semgrep is required but not installed."; \
       exit 1; \
     fi; \
-    REPO_ROOT="$$(pwd)"; \
-    XDG_DIR="$$REPO_ROOT/.cache"; \
-    SEMGREP_DIR="$$XDG_DIR/semgrep"; \
-    mkdir -p "$$XDG_DIR" "$$SEMGREP_DIR"; \
-    export XDG_CACHE_HOME="$$XDG_DIR"; \
-    export XDG_CONFIG_HOME="$$XDG_DIR"; \
-    export SEMGREP_LOG_FILE="$$SEMGREP_DIR/semgrep.log"; \
-    export SEMGREP_SETTINGS_FILE="$$SEMGREP_DIR/settings.yml"; \
-    export PATH="$$(dirname "$$SEMGREP_BIN")":$$PATH; \
-    if [[ -z "$${SSL_CERT_FILE:-}" ]]; then \
-      CERT_PATH="$$(python3 -c 'import certifi; print(certifi.where())' 2>/dev/null || true)"; \
-      if [[ -n "$$CERT_PATH" && -f "$$CERT_PATH" ]]; then \
-        export SSL_CERT_FILE="$$CERT_PATH"; \
+    REPO_ROOT="$(pwd)"; \
+    XDG_DIR="$REPO_ROOT/.cache"; \
+    SEMGREP_DIR="$XDG_DIR/semgrep"; \
+    mkdir -p "$XDG_DIR" "$SEMGREP_DIR"; \
+    export XDG_CACHE_HOME="$XDG_DIR"; \
+    export XDG_CONFIG_HOME="$XDG_DIR"; \
+    export SEMGREP_LOG_FILE="$SEMGREP_DIR/semgrep.log"; \
+    export SEMGREP_SETTINGS_FILE="$SEMGREP_DIR/settings.yml"; \
+    export PATH="$(dirname "$SEMGREP_BIN")":$PATH; \
+    if [[ -z "${SSL_CERT_FILE:-}" ]]; then \
+      CERT_PATH="$(python3 -c 'import certifi; print(certifi.where())' 2>/dev/null || true)"; \
+      if [[ -n "$CERT_PATH" && -f "$CERT_PATH" ]]; then \
+        export SSL_CERT_FILE="$CERT_PATH"; \
       fi; \
     fi; \
-    "$$SEMGREP_BIN" --config semgrep.yml --severity WARNING
+    "$SEMGREP_BIN" --config semgrep.yml --severity WARNING
 
 arch:
     bash scripts/ci/check-arch.sh
@@ -98,16 +109,16 @@ lint-full: lint-fast perf-compare-selftest quality-report play-unimock-check rst
 coverage:
     OUTPUT_DIR="${COVERAGE_OUTPUT_DIR:-./coverage}"; \
     COVERAGE_MIN="${COVERAGE_MIN:-80}"; \
-    mkdir -p "$$OUTPUT_DIR"; \
-    cargo llvm-cov \
+    mkdir -p "$OUTPUT_DIR"; \
+    cargo llvm-cov nextest \
       --workspace \
+      --profile ci \
       --cobertura \
-      --summary-only \
-      --output-path "$$OUTPUT_DIR/cobertura.xml" \
+      --output-path "$OUTPUT_DIR/cobertura.xml" \
       --ignore-filename-regex '(tests/|examples/|benches/)' \
-      --fail-under-lines "$$COVERAGE_MIN"; \
-    echo "==> coverage report written to $$OUTPUT_DIR/cobertura.xml"; \
-    echo "==> line coverage threshold: $$COVERAGE_MIN%"
+      --fail-under-lines "$COVERAGE_MIN"; \
+    echo "==> coverage report written to $OUTPUT_DIR/cobertura.xml"; \
+    echo "==> line coverage threshold: $COVERAGE_MIN%"
 
 perf-test:
     cargo test -p kithara-integration-tests --features perf --release \
@@ -118,7 +129,7 @@ bench-build:
 
 bench-run:
     sample_size="${BENCH_SAMPLE_SIZE:-20}"; \
-    cargo bench -p kithara-abr --bench abr_estimator -- --sample-size "$$sample_size" 2>&1 | tee bench-results.txt
+    cargo bench -p kithara-abr --bench abr_estimator -- --sample-size "$sample_size" 2>&1 | tee bench-results.txt
 
 bench-ci:
     just bench-build; \
@@ -129,7 +140,7 @@ bench-ci:
     sample_size="${BENCH_SAMPLE_SIZE:-20}"; \
     candidate_name="${BENCH_CANDIDATE_NAME:-ci}"; \
     cargo bench -p kithara-abr --bench abr_estimator \
-      -- --sample-size "$$sample_size" --save-baseline "$$candidate_name" \
+      -- --sample-size "$sample_size" --save-baseline "$candidate_name" \
       2>&1 | tee bench-results.txt; \
     if [[ -n "${BENCH_COMPARE_BASELINE_NAME:-}" ]]; then \
       if ! command -v critcmp >/dev/null 2>&1; then \
@@ -137,7 +148,7 @@ bench-ci:
         exit 1; \
       fi; \
       baseline_name="${BENCH_COMPARE_BASELINE_NAME}"; \
-      critcmp "$$baseline_name" "$$candidate_name" 2>&1 | tee -a bench-results.txt; \
+      critcmp "$baseline_name" "$candidate_name" 2>&1 | tee -a bench-results.txt; \
     fi
 
 wasm-test:

@@ -1,21 +1,14 @@
 #!/usr/bin/env bash
-# Compatibility pre-commit entrypoint.
-# Preferred setup: install lefthook and run `lefthook install`.
+# Git pre-commit entrypoint.
 
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
-if command -v lefthook >/dev/null 2>&1 && [[ -f lefthook.yml ]]; then
-    exec lefthook run pre-commit
+if ! command -v lefthook >/dev/null 2>&1; then
+    echo "pre-commit: lefthook is required. Install it: https://github.com/evilmartians/lefthook#install"
+    exit 1
 fi
 
-echo "pre-commit: lefthook is not installed; falling back to just lint-fast"
-
-if command -v just >/dev/null 2>&1; then
-    exec just lint-fast
-fi
-
-echo "pre-commit: just is not installed; running compatibility lint script"
-exec bash scripts/ci/lint.sh
+exec lefthook run pre-commit
