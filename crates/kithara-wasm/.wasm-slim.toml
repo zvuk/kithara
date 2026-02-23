@@ -1,0 +1,8 @@
+# wasm-slim configuration for CI size checks.
+template = "balanced"
+
+[size-budget]
+# Current dist baseline is ~28.2 MiB (~28931 KiB).
+target-size-kb = 29000
+warn-threshold-kb = 31000
+max-size-kb = 33000

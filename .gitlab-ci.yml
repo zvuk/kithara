@@ -105,6 +105,22 @@ wasm:
     - cargo check -p kithara-hls --target wasm32-unknown-unknown
     - cargo check -p kithara-decode --target wasm32-unknown-unknown
 
+wasm-size:
+  stage: test
+  needs: [lint]
+  before_script:
+    - rustup toolchain install nightly --component rust-src
+    - rustup target add wasm32-unknown-unknown --toolchain nightly
+    - test -f "$CARGO_HOME/bin/wasm-slim" || cargo install --git https://github.com/vitalratel/wasm-slim --rev 437c0accaccf37fe16e75991046076c5c1ee1fa7 wasm-slim --locked
+  script:
+    - WASM_SLIM_TOOLCHAIN=nightly bash scripts/ci/wasm-slim-check.sh
+  artifacts:
+    paths:
+      - target/wasm-slim-result.json
+      - crates/kithara-wasm/.wasm-slim/history.json
+    expire_in: 30 days
+  allow_failure: true
+
 hack:
   stage: test
   needs: [lint]

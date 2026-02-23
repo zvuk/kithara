@@ -159,3 +159,6 @@ wasm-test:
 
 wasm-build:
     bash crates/kithara-wasm/build-wasm.sh
+
+wasm-size-check:
+    bash scripts/ci/wasm-slim-check.sh

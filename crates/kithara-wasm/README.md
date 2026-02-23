@@ -87,3 +87,21 @@ At runtime, the demo checks these requirements and prints a clear error in the e
 ## Integration
 
 `kithara-wasm` is a wasm-bindgen wrapper around `kithara-play` so web and desktop follow the same playback logic.
+
+## Build
+
+```bash
+bash crates/kithara-wasm/build-wasm.sh
+```
+
+## WASM Size Budget (CI)
+
+`kithara-wasm` has `wasm-slim` budget configuration in `crates/kithara-wasm/.wasm-slim.toml`.
+
+Run the same check as CI:
+
+```bash
+bash scripts/ci/wasm-slim-check.sh
+```
+
+This check runs with nightly toolchain (`WASM_SLIM_TOOLCHAIN=nightly`) because `kithara-wasm` uses shared-memory wasm target features (`build-std` + atomics).
