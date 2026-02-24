@@ -4,11 +4,11 @@
 //! - [`bounded`], [`unbounded`]
 //! - [`Sender`], [`Receiver`]
 //!
-//! Blocking operations are implemented via `try_*` loops, so behavior is
-//! consistent on native and wasm32.
-
-#[cfg(target_arch = "wasm32")]
-use std::hint::spin_loop;
+//! All operations use kanal's *realtime* variants (`try_lock` only),
+//! so the internal `RawMutexLock` never escalates to `std::thread::sleep`
+//! or `std::thread::park`.  This is critical on wasm32+atomics where
+//! those calls compile to `memory.atomic.wait32` (`Atomics.wait`),
+//! which is illegal on the browser main thread.
 
 pub use kanal::{ReceiveError, SendError};
 
@@ -35,51 +35,44 @@ impl<T> Sender<T> {
         self.len() == 0
     }
 
-    /// Send an item.
+    /// Send an item, spinning until the channel accepts it.
     ///
-    /// On native platforms this is a blocking send.
-    /// On wasm32 this uses a `try_send` loop to avoid `Atomics.wait`.
-    ///
-    /// # Errors
-    /// Returns [`SendError`] if the receiver side is closed.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn send(&self, item: T) -> Result<(), SendError> {
-        self.0.send(item)
-    }
-
-    /// Send an item.
-    ///
-    /// On native platforms this is a blocking send.
-    /// On wasm32 this uses a `try_send` loop to avoid `Atomics.wait`.
+    /// Uses `try_send_option_realtime` internally so the kanal mutex
+    /// is never held longer than a single `try_lock` CAS.
     ///
     /// # Errors
     /// Returns [`SendError`] if the receiver side is closed.
-    #[cfg(target_arch = "wasm32")]
     pub fn send(&self, item: T) -> Result<(), SendError> {
         let mut pending = Some(item);
         loop {
-            match self.0.try_send_option(&mut pending) {
+            match self.0.try_send_option_realtime(&mut pending) {
                 Ok(true) => return Ok(()),
-                Ok(false) => spin_loop(),
+                Ok(false) => spin_wait_hint(),
                 Err(err) => return Err(err),
             }
         }
     }
 
-    /// Try send without waiting.
+    /// Try send without blocking.
+    ///
+    /// Returns `Ok(false)` when the channel is full **or** the internal
+    /// lock is momentarily contended (realtime semantics).
     ///
     /// # Errors
     /// Returns [`SendError`] if the receiver side is closed.
     pub fn try_send(&self, item: T) -> Result<bool, SendError> {
-        self.0.try_send(item)
+        self.0.try_send_realtime(item)
     }
 
-    /// Try send `Option<T>` without moving on full channel.
+    /// Try send `Option<T>` without blocking.
+    ///
+    /// The value stays inside `Option` when the channel is full or
+    /// the lock is contended, so the caller retains ownership.
     ///
     /// # Errors
     /// Returns [`SendError`] if the receiver side is closed.
     pub fn try_send_option(&self, item: &mut Option<T>) -> Result<bool, SendError> {
-        self.0.try_send_option(item)
+        self.0.try_send_option_realtime(item)
     }
 }
 
@@ -106,42 +99,32 @@ impl<T> Receiver<T> {
         self.len() == 0
     }
 
-    /// Receive one item.
+    /// Receive one item, spinning until data is available.
     ///
-    /// On native platforms this is a blocking receive.
-    /// On wasm32 this uses a `try_recv` loop to avoid `Atomics.wait`.
-    ///
-    /// # Errors
-    /// Returns [`ReceiveError`] if the sender side is closed.
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn recv(&self) -> Result<T, ReceiveError> {
-        self.0.recv()
-    }
-
-    /// Receive one item.
-    ///
-    /// On native platforms this is a blocking receive.
-    /// On wasm32 this uses a `try_recv` loop to avoid `Atomics.wait`.
+    /// Uses `try_recv_realtime` internally so the kanal mutex
+    /// is never held longer than a single `try_lock` CAS.
     ///
     /// # Errors
     /// Returns [`ReceiveError`] if the sender side is closed.
-    #[cfg(target_arch = "wasm32")]
     pub fn recv(&self) -> Result<T, ReceiveError> {
         loop {
-            match self.0.try_recv() {
+            match self.0.try_recv_realtime() {
                 Ok(Some(item)) => return Ok(item),
-                Ok(None) => spin_loop(),
+                Ok(None) => spin_wait_hint(),
                 Err(err) => return Err(err),
             }
         }
     }
 
-    /// Try receive without waiting.
+    /// Try receive without blocking.
+    ///
+    /// Returns `Ok(None)` when the channel is empty **or** the internal
+    /// lock is momentarily contended (realtime semantics).
     ///
     /// # Errors
     /// Returns [`ReceiveError`] if the sender side is closed.
     pub fn try_recv(&self) -> Result<Option<T>, ReceiveError> {
-        self.0.try_recv()
+        self.0.try_recv_realtime()
     }
 }
 
@@ -175,6 +158,9 @@ mod tests {
     fn try_send_reports_full_channel() {
         let (tx, rx) = bounded(1);
         assert!(tx.try_send(1).unwrap());
+        // Realtime try_send may return false for full OR contended lock.
+        // With a bounded(1) channel and one item already in, this must
+        // return false (channel full).
         assert!(!tx.try_send(2).unwrap());
         assert_eq!(rx.recv().unwrap(), 1);
     }
@@ -185,5 +171,18 @@ mod tests {
         assert!(matches!(rx.try_recv(), Ok(None)));
         tx.send(7).unwrap();
         assert!(matches!(rx.try_recv(), Ok(Some(7))));
+    }
+}
+
+#[inline]
+fn spin_wait_hint() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        std::thread::yield_now();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        core::hint::spin_loop();
     }
 }

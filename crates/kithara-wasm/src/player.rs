@@ -1,7 +1,8 @@
 //! WASM player powered by `kithara-play`.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
+use kithara_platform::Mutex;
 use kithara_play::{PlayerConfig, PlayerImpl, Resource, ResourceConfig, SessionDuckingMode};
 use tokio::sync::broadcast::{self, error::RecvError};
 use tracing::{info, warn};
@@ -62,10 +63,7 @@ impl WasmPlayer {
     }
 
     pub fn current_index(&self) -> i32 {
-        let Ok(current_index) = self.current_index.lock() else {
-            return -1;
-        };
-        current_index.map_or(-1, |idx| idx as i32)
+        self.current_index.lock().map_or(-1, |idx| idx as i32)
     }
 
     pub fn add_track(&mut self, url: String) -> Result<u32, JsValue> {
@@ -97,11 +95,7 @@ impl WasmPlayer {
         self.player
             .play_resource(resource)
             .map_err(|err| js_error(format!("failed to select track: {err}")))?;
-        let mut current_index = self
-            .current_index
-            .lock()
-            .map_err(|_| js_error("failed to lock current_index"))?;
-        *current_index = Some(idx);
+        *self.current_index.lock() = Some(idx);
 
         Ok(())
     }
@@ -213,9 +207,7 @@ impl WasmPlayer {
     }
 
     pub fn take_events(&self) -> String {
-        let Ok(mut events) = self.event_log.lock() else {
-            return String::new();
-        };
+        let mut events = self.event_log.lock();
         if events.is_empty() {
             return String::new();
         }
@@ -265,9 +257,7 @@ fn log_resource_events<T>(
 }
 
 fn push_event(event_log: &Arc<Mutex<Vec<String>>>, line: String) {
-    let Ok(mut events) = event_log.lock() else {
-        return;
-    };
+    let mut events = event_log.lock();
     events.push(line);
     const MAX_EVENTS: usize = 1024;
     if events.len() > MAX_EVENTS {

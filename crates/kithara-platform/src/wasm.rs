@@ -256,13 +256,12 @@ impl fmt::Debug for Condvar {
     }
 }
 
-// IMPORTANT: Do NOT use `std::hint::spin_loop()` here!
-// On wasm32+atomics it compiles to `memory.atomic.wait32` (= `Atomics.wait`)
-// which throws `TypeError` on the browser main thread regardless of timeout.
+// A bare `try_lock()` loop avoids `parking_lot::Mutex::lock()` which,
+// under contention on wasm32+atomics, escalates to `Atomics.wait` —
+// illegal on the browser main thread.
 //
-// A bare `try_lock()` loop is fine: contention windows are microseconds
-// (the rayon worker holds locks briefly), so the loop resolves in 1-2
-// iterations. This matches rayon's own `web_spin_lock` approach.
+// On wasm32 we yield to the host scheduler between retries.
+// On native we use a spin hint.
 
 #[inline]
 fn spin_lock<T: ?Sized>(m: &parking_lot::Mutex<T>) -> parking_lot::MutexGuard<'_, T> {
@@ -270,6 +269,7 @@ fn spin_lock<T: ?Sized>(m: &parking_lot::Mutex<T>) -> parking_lot::MutexGuard<'_
         if let Some(guard) = m.try_lock() {
             return guard;
         }
+        spin_wait_hint();
     }
 }
 
@@ -279,6 +279,7 @@ fn spin_read<T: ?Sized>(rw: &parking_lot::RwLock<T>) -> parking_lot::RwLockReadG
         if let Some(guard) = rw.try_read() {
             return guard;
         }
+        spin_wait_hint();
     }
 }
 
@@ -288,5 +289,19 @@ fn spin_write<T: ?Sized>(rw: &parking_lot::RwLock<T>) -> parking_lot::RwLockWrit
         if let Some(guard) = rw.try_write() {
             return guard;
         }
+        spin_wait_hint();
+    }
+}
+
+#[inline]
+fn spin_wait_hint() {
+    #[cfg(target_arch = "wasm32")]
+    {
+        std::thread::yield_now();
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        core::hint::spin_loop();
     }
 }

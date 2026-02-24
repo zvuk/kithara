@@ -3,11 +3,12 @@
 //! In-memory asset store for ephemeral (non-cacheable) content.
 
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
 };
 
-use dashmap::DashMap;
+use kithara_platform::RwLock;
 use kithara_storage::{MemOptions, MemResource, Resource, StorageResource};
 use tokio_util::sync::CancellationToken;
 
@@ -19,9 +20,12 @@ use crate::{
 
 /// In-memory [`Assets`] implementation for ephemeral content.
 ///
-/// All resources are stored in a `DashMap` keyed by [`ResourceKey`].
-/// Nothing is persisted to disk. Index resources (pins, LRU, coverage) are
-/// backed by [`MemResource`] and are not persisted either.
+/// All resources are stored in a [`HashMap`] behind a [`RwLock`] keyed by
+/// [`ResourceKey`]. Nothing is persisted to disk. Index resources (pins, LRU,
+/// coverage) are backed by [`MemResource`] and are not persisted either.
+///
+/// Uses `kithara_platform::RwLock` which is WASM-safe (spin-loop instead of
+/// `Atomics.wait` on the browser main thread).
 ///
 /// `MemAssetStore` has the same `Res = StorageResource` as [`DiskAssetStore`](crate::disk_store::DiskAssetStore),
 /// allowing both to be used through the same decorator chain.
@@ -30,7 +34,7 @@ pub struct MemAssetStore {
     asset_root: String,
     cancel: CancellationToken,
     mem_resource_capacity: Option<usize>,
-    resources: Arc<DashMap<ResourceKey, MemResource>>,
+    resources: Arc<RwLock<HashMap<ResourceKey, MemResource>>>,
     root_dir: PathBuf,
 }
 
@@ -46,7 +50,7 @@ impl MemAssetStore {
             asset_root: asset_root.into(),
             cancel,
             mem_resource_capacity,
-            resources: Arc::new(DashMap::new()),
+            resources: Arc::new(RwLock::new(HashMap::new())),
             root_dir,
         }
     }
@@ -83,7 +87,7 @@ impl Assets for MemAssetStore {
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         // Return existing resource if present.
-        if let Some(entry) = self.resources.get(key) {
+        if let Some(entry) = self.resources.read().get(key) {
             return Ok(StorageResource::Mem(entry.clone()));
         }
 
@@ -101,7 +105,7 @@ impl Assets for MemAssetStore {
             options.capacity = capacity;
         }
         let mem = Resource::open(self.cancel.clone(), options).map_err(AssetsError::Storage)?;
-        self.resources.insert(key.clone(), mem.clone());
+        self.resources.write().insert(key.clone(), mem.clone());
         Ok(StorageResource::Mem(mem))
     }
 
@@ -118,12 +122,12 @@ impl Assets for MemAssetStore {
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {
-        self.resources.clear();
+        self.resources.write().clear();
         Ok(())
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        self.resources.remove(key);
+        self.resources.write().remove(key);
         Ok(())
     }
 }
@@ -216,9 +220,9 @@ mod tests {
             res.write_at(0, b"data").unwrap();
         }
 
-        assert_eq!(store.resources.len(), 3);
+        assert_eq!(store.resources.read().len(), 3);
         store.delete_asset().unwrap();
-        assert_eq!(store.resources.len(), 0);
+        assert_eq!(store.resources.read().len(), 0);
     }
 
     #[rstest]

@@ -22,6 +22,7 @@ threads = ["dep:rayon", "dep:wasm-bindgen-rayon"]
 internal = []
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-platform = { workspace = true }
 kithara-play = { workspace = true, default-features = false, features = ["file", "hls", "backend-cpal", "wasm-bindgen"] }
 tracing-wasm = { workspace = true }
 tracing-log = { workspace = true }

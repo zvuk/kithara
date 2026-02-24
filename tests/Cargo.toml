@@ -73,8 +73,6 @@ async-trait = { workspace = true }
 
 # Storage
 mmap-io = { workspace = true }
-dashmap = { workspace = true }
-
 # Performance monitoring (optional)
 hotpath = { workspace = true, optional = true }
 

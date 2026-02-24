@@ -3,8 +3,8 @@
 //! Persistent coverage index for tracking downloaded byte ranges.
 //!
 //! [`CoverageIndex<R>`] is a global index stored in `_index/cov.bin`, keyed by
-//! resource identifier (e.g. URL). It uses [`DashMap`] for concurrent in-memory
-//! access and flushes atomically to disk via [`Atomic<R>`].
+//! resource identifier (e.g. URL). It uses [`kithara_platform::RwLock`] for
+//! concurrent in-memory access and flushes atomically to disk via [`Atomic<R>`].
 //!
 //! [`DiskCoverage<R>`] implements the [`Coverage`] trait on top of a shared
 //! `CoverageIndex<R>`, providing per-resource coverage tracking with automatic
@@ -12,7 +12,7 @@
 
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
-use dashmap::DashMap;
+use kithara_platform::RwLock;
 use kithara_storage::{Atomic, ResourceExt};
 use rangemap::RangeSet;
 
@@ -74,10 +74,12 @@ impl CoverageData {
 
 /// Global coverage index backed by a single file.
 ///
-/// Maintains an in-memory [`DashMap`] for concurrent access. Changes are
-/// flushed to disk atomically via [`flush()`](Self::flush).
+/// Maintains an in-memory [`HashMap`] behind a [`RwLock`] for concurrent
+/// access. Uses `kithara_platform::RwLock` which is WASM-safe (spin-loop
+/// instead of `Atomics.wait` on the browser main thread). Changes are flushed
+/// to disk atomically via [`flush()`](Self::flush).
 pub struct CoverageIndex<R: ResourceExt> {
-    state: DashMap<String, CoverageData>,
+    state: RwLock<HashMap<String, CoverageData>>,
     res: Atomic<R>,
 }
 
@@ -85,7 +87,7 @@ impl<R: ResourceExt> CoverageIndex<R> {
     /// Create from a resource. Corrupt/missing data results in empty state.
     pub fn new(res: R) -> Self {
         let atomic = Atomic::new(res);
-        let state = DashMap::new();
+        let mut state = HashMap::new();
 
         // Best-effort load existing data.
         let mut buf = Vec::new();
@@ -101,32 +103,35 @@ impl<R: ResourceExt> CoverageIndex<R> {
             }
         }
 
-        Self { state, res: atomic }
+        Self {
+            state: RwLock::new(state),
+            res: atomic,
+        }
     }
 
     /// In-memory lookup (no disk I/O).
     pub fn get(&self, key: &str) -> Option<MemCoverage> {
-        self.state.get(key).map(|entry| entry.to_mem_coverage())
+        self.state
+            .read()
+            .get(key)
+            .map(CoverageData::to_mem_coverage)
     }
 
     /// Update in-memory entry (no flush).
     pub fn update(&self, key: &str, coverage: &MemCoverage) {
         self.state
+            .write()
             .insert(key.to_string(), CoverageData::from_mem_coverage(coverage));
     }
 
     /// Remove entry from in-memory state.
     pub fn remove(&self, key: &str) {
-        self.state.remove(key);
+        self.state.write().remove(key);
     }
 
     /// Flush all in-memory state to disk atomically.
     pub fn flush(&self) {
-        let entries: HashMap<String, CoverageData> = self
-            .state
-            .iter()
-            .map(|entry| (entry.key().clone(), entry.value().clone()))
-            .collect();
+        let entries: HashMap<String, CoverageData> = self.state.read().clone();
 
         let file = CoverageIndexFile {
             version: 1,
