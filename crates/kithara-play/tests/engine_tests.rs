@@ -42,7 +42,7 @@ fn engine_config_default_thread_pool_is_none() {
 
 #[kithara::test]
 fn engine_config_builder() {
-    let pool = ThreadPool::with_num_threads(1).unwrap();
+    let pool = ThreadPool::global();
     let config = EngineConfig::default()
         .with_max_slots(8)
         .with_sample_rate(48000)
@@ -145,7 +145,7 @@ fn engine_cancel_crossfade_stub_returns_no_crossfade() {
 
 #[kithara::test]
 fn engine_config_thread_pool_used_by_engine() {
-    let pool = ThreadPool::with_num_threads(1).unwrap();
+    let pool = ThreadPool::global();
     let config = EngineConfig::default().with_thread_pool(pool);
     // Engine should accept a custom thread pool without panicking.
     let engine = EngineImpl::new(config);

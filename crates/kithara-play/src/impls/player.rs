@@ -691,7 +691,7 @@ mod tests {
 
     #[kithara::test]
     fn player_config_builder() {
-        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let pool = ThreadPool::global();
         let config = PlayerConfig::default()
             .with_max_slots(8)
             .with_default_rate(0.5)
@@ -713,7 +713,7 @@ mod tests {
 
     #[kithara::test]
     fn player_propagates_thread_pool_to_engine() {
-        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let pool = ThreadPool::global();
         let config = PlayerConfig::default().with_thread_pool(pool);
         // Should not panic — engine uses the player's thread pool.
         let player = PlayerImpl::new(config);

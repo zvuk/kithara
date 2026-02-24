@@ -146,7 +146,7 @@ mod tests {
             "test_asset",
             CancellationToken::new(),
             None,
-            std::env::temp_dir(),
+            PathBuf::from("/tmp"),
         )
     }
 

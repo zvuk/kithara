@@ -365,20 +365,17 @@ mod tests {
     use super::*;
 
     #[kithara::test]
-    #[case("https://example.com/song.mp3", true, "https")]
-    #[case("/tmp/song.mp3", false, "/tmp/song.mp3")]
-    #[case("file:///tmp/song.mp3", false, "/tmp/song.mp3")]
-    fn config_source_parsing_success(
-        #[case] input: &str,
-        #[case] expect_url: bool,
-        #[case] expected: &str,
-    ) {
+    fn config_source_parsing_url() {
+        let config = ResourceConfig::new("https://example.com/song.mp3").unwrap();
+        assert!(matches!(&config.src, ResourceSrc::Url(url) if url.scheme() == "https"));
+    }
+
+    #[kithara::test(native)]
+    #[case("/tmp/song.mp3", "/tmp/song.mp3")]
+    #[case("file:///tmp/song.mp3", "/tmp/song.mp3")]
+    fn config_source_parsing_file_path(#[case] input: &str, #[case] expected: &str) {
         let config = ResourceConfig::new(input).unwrap();
-        if expect_url {
-            assert!(matches!(&config.src, ResourceSrc::Url(url) if url.scheme() == expected));
-        } else {
-            assert!(matches!(&config.src, ResourceSrc::Path(path) if path == Path::new(expected)));
-        }
+        assert!(matches!(&config.src, ResourceSrc::Path(path) if path == Path::new(expected)));
     }
 
     #[kithara::test]

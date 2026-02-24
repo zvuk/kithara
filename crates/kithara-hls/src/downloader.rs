@@ -1724,7 +1724,7 @@ mod tests {
         );
     }
 
-    #[kithara::test]
+    #[kithara::test(native)]
     fn populate_cached_segments_requires_coverage_metadata() {
         let cancel = CancellationToken::new();
         let temp_dir = TempDir::new().expect("temp dir");

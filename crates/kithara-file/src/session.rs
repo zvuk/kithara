@@ -344,7 +344,7 @@ mod tests {
         }
     }
 
-    #[kithara::test(tokio)]
+    #[kithara::test(native, tokio)]
     async fn test_progress_signal_reader_advanced() {
         let progress = Arc::new(Progress::new(Timeline::new()));
 
@@ -415,7 +415,7 @@ mod tests {
         store.open_resource(&key).unwrap()
     }
 
-    #[kithara::test]
+    #[kithara::test(native)]
     fn test_file_source_read_at() {
         let dir = TempDir::new().unwrap();
         let data = b"hello world from kithara";
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(progress.read_pos(), 13);
     }
 
-    #[kithara::test]
+    #[kithara::test(native)]
     fn file_source_emits_byte_progress_not_playback_truth() {
         let dir = TempDir::new().unwrap();
         let data = b"abcdef";
@@ -470,7 +470,7 @@ mod tests {
         }
     }
 
-    #[kithara::test]
+    #[kithara::test(native)]
     fn test_file_source_len() {
         let dir = TempDir::new().unwrap();
         let res = create_committed_resource(&dir, b"abc");
@@ -485,7 +485,7 @@ mod tests {
         assert_eq!(source.len(), Some(12345));
     }
 
-    #[kithara::test]
+    #[kithara::test(native)]
     fn file_source_uses_progress_timeline_as_single_source_of_truth() {
         let dir = TempDir::new().unwrap();
         let res = create_committed_resource(&dir, b"abcdef");

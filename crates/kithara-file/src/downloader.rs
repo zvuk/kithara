@@ -454,7 +454,7 @@ mod tests {
     ///
     /// Currently FAILS: `poll_demand` does not change phase, so `plan()` still returns
     /// Step and the sequential download continues wasting bandwidth.
-    #[kithara::test(tokio)]
+    #[kithara::test(native, tokio)]
     async fn sequential_stops_after_demand() {
         let cancel = CancellationToken::new();
         let dir = TempDir::new().unwrap();

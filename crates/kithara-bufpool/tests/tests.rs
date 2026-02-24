@@ -198,33 +198,31 @@ fn test_attach_into_inner_does_not_recycle() {
     assert_eq!(fresh.capacity(), 0, "pool should be empty after into_inner");
 }
 
-#[kithara::test]
-fn test_multi_threaded_contention() {
-    use std::{sync::Arc, thread};
+#[kithara::test(tokio, browser)]
+async fn test_multi_threaded_contention() {
+    use std::sync::Arc;
 
     let pool = Arc::new(Pool::<4, Vec<u8>>::new(64, 4096));
     let num_threads = 8usize;
     let iterations = 1000usize;
 
-    let handles: Vec<_> = (0..num_threads)
-        .map(|t| {
-            let pool = Arc::clone(&pool);
-            thread::spawn(move || {
-                for i in 0..iterations {
-                    let mut buf = pool.get_with(|b| b.resize(64, 0));
-                    // Write a pattern unique to this thread+iteration
-                    let tag =
-                        u8::try_from((t * iterations + i) & 0xFF).expect("tag must fit into u8");
-                    buf.fill(tag);
-                    // Verify no corruption from other threads
-                    assert!(buf.iter().all(|&b| b == tag), "data corruption detected");
-                    // buf returned to pool on drop
-                }
-            })
-        })
-        .collect();
+    let mut handles = Vec::with_capacity(num_threads);
+    for t in 0..num_threads {
+        let pool = Arc::clone(&pool);
+        handles.push(kithara_platform::spawn_blocking(move || {
+            for i in 0..iterations {
+                let mut buf = pool.get_with(|b| b.resize(64, 0));
+                // Write a pattern unique to this thread+iteration
+                let tag = u8::try_from((t * iterations + i) & 0xFF).expect("tag must fit into u8");
+                buf.fill(tag);
+                // Verify no corruption from other threads
+                assert!(buf.iter().all(|&b| b == tag), "data corruption detected");
+                // buf returned to pool on drop
+            }
+        }));
+    }
 
     for h in handles {
-        h.join().expect("thread panicked during contention test");
+        h.await.expect("thread panicked during contention test");
     }
 }

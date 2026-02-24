@@ -35,6 +35,9 @@ url = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["full"] }
 
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+kithara-play = { workspace = true, default-features = false, features = ["backend-cpal", "wasm-bindgen"] }
+
 [features]
 default = ["file", "hls"]
 file = ["dep:kithara-file", "dep:kithara-assets", "dep:kithara-net", "kithara-play/file"]

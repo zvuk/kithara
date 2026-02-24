@@ -76,7 +76,7 @@ impl Resource {
         // Forward AudioEvents from the generic PcmReader into the unified EventBus.
         let forward_bus = bus.clone();
         let mut decode_rx = reader.decode_events();
-        tokio::spawn(async move {
+        kithara_platform::spawn_task(async move {
             loop {
                 match decode_rx.recv().await {
                     Ok(event) => forward_bus.publish(event),
@@ -363,6 +363,8 @@ mod tests {
 
     #[kithara::test(tokio)]
     async fn test_resource_subscribe_receives_events() {
+        use kithara_platform::time;
+
         let (resource, sender) = make_resource_with_sender();
         let mut rx = resource.subscribe();
 
@@ -372,9 +374,9 @@ mod tests {
         sender.send(AudioEvent::FormatDetected { spec }).unwrap();
 
         // Allow the forwarding task to run.
-        tokio::task::yield_now().await;
+        time::sleep(Duration::from_millis(10)).await;
 
-        let event = tokio::time::timeout(Duration::from_millis(200), rx.recv())
+        let event = time::timeout(Duration::from_millis(200), rx.recv())
             .await
             .unwrap()
             .unwrap();

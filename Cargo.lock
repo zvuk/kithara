@@ -2545,6 +2545,7 @@ dependencies = [
  "kithara-bufpool",
  "kithara-platform",
  "kithara-test-macros",
+ "tokio",
  "unimock",
  "wasm-bindgen-test",
 ]
@@ -2709,6 +2710,7 @@ dependencies = [
  "kithara-net",
  "kithara-platform",
  "kithara-stream",
+ "kithara-test-macros",
  "kithara-test-utils",
  "kithara-wasm",
  "mmap-io",
@@ -2767,12 +2769,16 @@ name = "kithara-platform"
 version = "0.1.0"
 dependencies = [
  "futures",
+ "js-sys",
  "kanal",
  "kithara-platform",
  "kithara-test-macros",
  "parking_lot",
  "rayon",
  "tokio",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "wasm-bindgen-rayon",
  "wasm-bindgen-test",
  "web-time",
 ]

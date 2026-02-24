@@ -22,6 +22,8 @@ use syn::{
 struct TestArgs {
     is_tokio: bool,
     is_wasm_only: bool,
+    is_native_only: bool,
+    is_browser: bool,
     timeout: Option<Expr>,
 }
 
@@ -30,6 +32,8 @@ impl Parse for TestArgs {
         let mut args = TestArgs {
             is_tokio: false,
             is_wasm_only: false,
+            is_native_only: false,
+            is_browser: false,
             timeout: None,
         };
 
@@ -38,6 +42,8 @@ impl Parse for TestArgs {
             match ident.to_string().as_str() {
                 "tokio" => args.is_tokio = true,
                 "wasm" => args.is_wasm_only = true,
+                "native" => args.is_native_only = true,
+                "browser" => args.is_browser = true,
                 "timeout" => {
                     let content;
                     syn::parenthesized!(content in input);
@@ -59,6 +65,20 @@ impl Parse for TestArgs {
             return Err(syn::Error::new(
                 proc_macro2::Span::call_site(),
                 "`tokio` and `wasm` are mutually exclusive",
+            ));
+        }
+
+        if args.is_wasm_only && args.is_native_only {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "`wasm` and `native` are mutually exclusive",
+            ));
+        }
+
+        if args.is_browser && args.is_wasm_only {
+            return Err(syn::Error::new(
+                proc_macro2::Span::call_site(),
+                "`browser` and `wasm` are mutually exclusive (`browser` already implies wasm)",
             ));
         }
 
@@ -265,18 +285,82 @@ fn emit_one_test(
 }
 
 // ---------------------------------------------------------------------------
+// Browser test generation
+// ---------------------------------------------------------------------------
+
+/// Emit a single browser test pair: WASM side (with `ensure_thread_pool`) and
+/// optional native side. Returns one or two `#[cfg]`-gated functions.
+#[allow(clippy::too_many_arguments)]
+fn emit_browser_test(
+    fn_name: &Ident,
+    vis: &syn::Visibility,
+    ret_type: &syn::ReturnType,
+    remaining_attrs: &[&Attribute],
+    is_async: bool,
+    preamble: &TokenStream2,
+    body_stmts: &[syn::Stmt],
+    args: &TestArgs,
+    browser_only: bool,
+) -> TokenStream2 {
+    let mut output = TokenStream2::new();
+
+    // WASM side: always async, with ensure_thread_pool init
+    let wasm_body = quote! {
+        kithara_platform::ensure_thread_pool().await;
+        #preamble
+        #(#body_stmts)*
+    };
+    let wasm_wrapped = wrap_with_timeout(&wasm_body, &args.timeout, true);
+    output.extend(quote! {
+        #(#remaining_attrs)*
+        #[cfg(target_arch = "wasm32")]
+        #[wasm_bindgen_test::wasm_bindgen_test]
+        #vis async fn #fn_name() #ret_type #wasm_wrapped
+    });
+
+    // Native side (only for dual-platform: native+browser or tokio+browser)
+    if !browser_only {
+        let native_is_async = is_async || args.is_tokio;
+        let native_attr = if native_is_async {
+            quote! { #[tokio::test] }
+        } else {
+            quote! { #[test] }
+        };
+        let native_asyncness = native_is_async.then(|| quote! { async });
+        let native_body = quote! { #preamble #(#body_stmts)* };
+        let native_wrapped = wrap_with_timeout(&native_body, &args.timeout, native_is_async);
+        output.extend(quote! {
+            #(#remaining_attrs)*
+            #[cfg(not(target_arch = "wasm32"))]
+            #native_attr
+            #vis #native_asyncness fn #fn_name() #ret_type #native_wrapped
+        });
+    }
+
+    output
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
 /// Unified test attribute.
 ///
 /// ```text
-/// #[kithara::test]                                     // sync
-/// #[kithara::test(tokio)]                              // async
-/// #[kithara::test(wasm)]                               // wasm-only
+/// #[kithara::test]                                     // sync, native + wasm
+/// #[kithara::test(tokio)]                              // async, native + wasm
+/// #[kithara::test(wasm)]                               // wasm-only (async)
+/// #[kithara::test(native)]                             // native-only
+/// #[kithara::test(native, tokio)]                      // native-only async
+/// #[kithara::test(browser)]                            // wasm-only, browser with thread pool init
+/// #[kithara::test(native, browser)]                    // sync native + browser wasm
+/// #[kithara::test(tokio, browser)]                     // async native + browser wasm
 /// #[kithara::test(timeout(Duration::from_secs(5)))]    // sync + timeout
 /// #[kithara::test(tokio, timeout(Duration::from_secs(5)))]  // async + timeout
 /// ```
+///
+/// The `browser` flag injects `kithara_platform::ensure_thread_pool().await` on
+/// WASM to initialize Web Workers before running the test body.
 ///
 /// Supports `#[case]` / `#[case::name]` parameterization and fixture injection.
 #[proc_macro_attribute]
@@ -330,6 +414,87 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
                     #(#body_stmts)*
                 }
             });
+        }
+        return Ok(tests);
+    }
+
+    // native-only (without browser): cfg(not(wasm32)) + #[test] or #[tokio::test]
+    if args.is_native_only && !args.is_browser {
+        let test_attr = if is_async || args.is_tokio {
+            quote! { #[tokio::test] }
+        } else {
+            quote! { #[test] }
+        };
+        let asyncness = (is_async || args.is_tokio).then(|| quote! { async });
+
+        if cases.is_empty() {
+            let preamble = make_preamble(&params, None);
+            let full = quote! { #preamble #(#body_stmts)* };
+            let wrapped = wrap_with_timeout(&full, &args.timeout, is_async || args.is_tokio);
+            return Ok(quote! {
+                #(#remaining_attrs)*
+                #[cfg(not(target_arch = "wasm32"))]
+                #test_attr
+                #vis #asyncness fn #fn_name() #ret_type #wrapped
+            });
+        }
+        let mut tests = TokenStream2::new();
+        for (i, case) in cases.iter().enumerate() {
+            let case_name = match &case.name {
+                Some(name) => format_ident!("{}_{}", fn_name, name),
+                None => format_ident!("{}_case_{}", fn_name, i + 1),
+            };
+            let preamble = make_preamble(&params, Some(&case.values));
+            let full = quote! { #preamble #(#body_stmts)* };
+            let wrapped = wrap_with_timeout(&full, &args.timeout, is_async || args.is_tokio);
+            tests.extend(quote! {
+                #(#remaining_attrs)*
+                #[cfg(not(target_arch = "wasm32"))]
+                #test_attr
+                #vis #asyncness fn #case_name() #ret_type #wrapped
+            });
+        }
+        return Ok(tests);
+    }
+
+    // browser: WASM with ensure_thread_pool init, optionally dual-platform
+    //   browser alone      → wasm-only + init
+    //   native, browser    → sync native + browser wasm
+    //   tokio, browser     → async native + browser wasm
+    if args.is_browser {
+        let browser_only = !args.is_tokio && !args.is_native_only;
+        if cases.is_empty() {
+            let preamble = make_preamble(&params, None);
+            return Ok(emit_browser_test(
+                fn_name,
+                vis,
+                ret_type,
+                &remaining_attrs,
+                is_async,
+                &preamble,
+                body_stmts,
+                &args,
+                browser_only,
+            ));
+        }
+        let mut tests = TokenStream2::new();
+        for (i, case) in cases.iter().enumerate() {
+            let case_name = match &case.name {
+                Some(name) => format_ident!("{}_{}", fn_name, name),
+                None => format_ident!("{}_case_{}", fn_name, i + 1),
+            };
+            let preamble = make_preamble(&params, Some(&case.values));
+            tests.extend(emit_browser_test(
+                &case_name,
+                vis,
+                ret_type,
+                &remaining_attrs,
+                is_async,
+                &preamble,
+                body_stmts,
+                &args,
+                browser_only,
+            ));
         }
         return Ok(tests);
     }

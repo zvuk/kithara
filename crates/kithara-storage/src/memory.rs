@@ -325,7 +325,7 @@ mod tests {
         assert_eq!(outcome, WaitOutcome::Ready);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test(native)]
     fn test_wait_range_blocks_then_ready() {
         let res = create_resource();
         let res2 = res.clone();
@@ -351,7 +351,7 @@ mod tests {
         assert_eq!(outcome, WaitOutcome::Eof);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(1)))]
+    #[kithara::test(native)]
     fn test_fail_wakes_waiters() {
         let res = create_resource();
         let res2 = res.clone();
@@ -366,7 +366,7 @@ mod tests {
         handle.join().unwrap();
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test(native)]
     fn test_cancel_wakes_waiters() {
         let cancel = CancellationToken::new();
         let res = MemResource::new(cancel.clone());

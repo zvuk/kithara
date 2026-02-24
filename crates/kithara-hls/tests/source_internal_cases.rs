@@ -17,13 +17,13 @@ use kithara_hls::internal::{
     source_range_ready_from_segments, source_variant_index_handle, subscribe_source_events,
 };
 use kithara_net::{HttpClient, NetOptions};
+use kithara_platform::{
+    spawn_blocking,
+    time::{self as time, Instant},
+};
 use kithara_storage::{StorageResource, WaitOutcome};
 use kithara_stream::{AudioCodec, Source, StreamError, Timeline};
 use kithara_test_utils::kithara;
-use tokio::{
-    task,
-    time::{self, Instant},
-};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -181,7 +181,7 @@ async fn wait_range_and_take_request(
     mut source: HlsSource,
     range: Range<u64>,
 ) -> SegmentRequest {
-    let handle = task::spawn_blocking(move || source.wait_range(range));
+    let handle = spawn_blocking(move || source.wait_range(range));
 
     let deadline = Instant::now() + Duration::from_millis(300);
     let request = loop {
@@ -204,7 +204,7 @@ async fn wait_range_and_take_request(
     request
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, browser)]
 async fn seek_time_anchor_resolves_segment_and_queues_request() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_size_maps();
@@ -748,7 +748,7 @@ fn range_ready_requires_coverage_metadata() {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, browser)]
 async fn wait_range_waits_until_coverage_is_complete() {
     let cancel = CancellationToken::new();
     let ps = dummy_playlist_state();
@@ -767,7 +767,7 @@ async fn wait_range_waits_until_coverage_is_complete() {
     set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&initial_mark));
 
     let shared_for_task = Arc::clone(&shared);
-    let handle = task::spawn_blocking(move || source.wait_range(0..80));
+    let handle = spawn_blocking(move || source.wait_range(0..80));
 
     time::sleep(Duration::from_millis(120)).await;
     assert!(
@@ -786,7 +786,7 @@ async fn wait_range_waits_until_coverage_is_complete() {
 
 // wait_range cancellation tests
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, browser)]
 #[case(WaitRangeUnblock::Cancel)]
 #[case(WaitRangeUnblock::Stopped)]
 async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) {
@@ -796,7 +796,7 @@ async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) 
     let shared2 = Arc::clone(&shared);
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    let handle = task::spawn_blocking(move || source.wait_range(0..1024));
+    let handle = spawn_blocking(move || source.wait_range(0..1024));
 
     // Give wait_range time to enter the loop
     time::sleep(Duration::from_millis(20)).await;
@@ -820,7 +820,7 @@ async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) 
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, browser)]
 async fn test_wait_range_returns_ready_when_data_pushed() {
     // Normal scenario: push segment data, wait_range returns Ready.
     let cancel = CancellationToken::new();
@@ -830,7 +830,7 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
     let coverage = source_coverage(&source);
 
-    let handle = task::spawn_blocking(move || source.wait_range(0..100));
+    let handle = spawn_blocking(move || source.wait_range(0..100));
 
     // Push a segment covering 0..100
     time::sleep(Duration::from_millis(20)).await;
@@ -870,7 +870,7 @@ fn test_wait_range_flushing_interrupts_without_requesting_segment() {
     );
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, browser)]
 async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     let cancel = CancellationToken::new();
     let ps = dummy_playlist_state();
@@ -882,7 +882,7 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
     shared2.timeline.set_eof(true);
 
-    let handle = task::spawn_blocking(move || source.wait_range(3_488_300..3_489_324));
+    let handle = spawn_blocking(move || source.wait_range(3_488_300..3_489_324));
 
     time::sleep(Duration::from_millis(20)).await;
     let segment = make_loaded_segment(0, 17, 3_400_000, 200_000);
@@ -909,7 +909,7 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     assert!(matches!(result, Ok(WaitOutcome::Ready)));
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, browser)]
 async fn test_wait_range_eof_when_stopped_and_past_end() {
     // Downloader stopped + eof -- wait_range at past-end offset returns Eof.
     let cancel = CancellationToken::new();
@@ -932,7 +932,7 @@ async fn test_wait_range_eof_when_stopped_and_past_end() {
     assert!(matches!(result, Ok(WaitOutcome::Eof)));
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, browser)]
 async fn test_wait_range_uses_active_variant_for_seek_request() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -951,7 +951,7 @@ async fn test_wait_range_uses_active_variant_for_seek_request() {
     assert_eq!(request.segment_index, 1);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, browser)]
 async fn test_wait_range_requeues_request_after_seek_epoch_change() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -961,7 +961,7 @@ async fn test_wait_range_requeues_request_after_seek_epoch_change() {
     shared.timeline.complete_seek(first_epoch);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = task::spawn_blocking(move || source.wait_range(150..170));
+    let handle = spawn_blocking(move || source.wait_range(150..170));
 
     let first_deadline = Instant::now() + Duration::from_millis(300);
     let first_request = loop {
@@ -1007,7 +1007,7 @@ async fn test_wait_range_requeues_request_after_seek_epoch_change() {
     assert!(result.is_err(), "wait_range should stop after cancellation");
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, browser)]
 async fn test_wait_range_without_size_map_uses_segment_zero_fallback() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_without_size_map();
@@ -1020,7 +1020,7 @@ async fn test_wait_range_without_size_map_uses_segment_zero_fallback() {
     assert_eq!(request.segment_index, 0);
 }
 
-#[kithara::test(tokio)]
+#[kithara::test(tokio, browser)]
 async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
     let cancel = CancellationToken::new();
     let ps = dummy_playlist_state();
@@ -1028,7 +1028,7 @@ async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
     let mut events = subscribe_source_events(&source);
 
-    let handle = task::spawn_blocking(move || source.wait_range(1024..2048));
+    let handle = spawn_blocking(move || source.wait_range(1024..2048));
     let mut saw_metadata_miss = false;
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {

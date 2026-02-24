@@ -312,12 +312,9 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use std::{
-        sync::{Arc, Mutex},
-        time::Duration,
-    };
+    use std::{sync::Arc, time::Duration};
 
-    use kithara_platform::ThreadPool;
+    use kithara_platform::{Mutex, ThreadPool};
     use tokio::sync::Notify;
     use tokio_util::sync::CancellationToken;
 
@@ -373,7 +370,7 @@ mod tests {
         }
 
         async fn poll_demand(&mut self) -> Option<u64> {
-            self.demand_queue.lock().unwrap().pop()
+            self.demand_queue.lock().pop()
         }
 
         async fn plan(&mut self) -> PlanOutcome<u64> {
@@ -382,8 +379,9 @@ mod tests {
 
         async fn step(&mut self) -> Result<StepResult<u64>, MockError> {
             self.step_entered.notify_one();
-            // Simulate slow/stalled HTTP stream — 30s between chunks.
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            // Simulate stalled HTTP stream — block forever.
+            // (test timeout on native prevents actual hang)
+            std::future::pending::<()>().await;
             Ok(StepResult::Item(0))
         }
 
@@ -414,7 +412,7 @@ mod tests {
     ///
     /// Timeout: 2s — `step()` blocks for 30s, so if demand waits for `step`,
     /// the test will be killed by rstest timeout.
-    #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
+    #[kithara::test(tokio, browser, timeout(Duration::from_secs(2)))]
     async fn demand_must_not_wait_for_step() {
         let demand_queue = Arc::new(Mutex::new(Vec::new()));
         let demand_notify = Arc::new(Notify::new());
@@ -431,14 +429,14 @@ mod tests {
         };
 
         let cancel = CancellationToken::new();
-        let pool = ThreadPool::with_num_threads(1).unwrap();
+        let pool = ThreadPool::global();
         let _backend = Backend::new(downloader, &cancel, &pool);
 
         // Wait for the downloader to enter step() (blocked on slow stream).
         step_entered.notified().await;
 
         // Queue demand while step() is blocked (simulates reader seek).
-        demand_queue.lock().unwrap().push(42);
+        demand_queue.lock().push(42);
         demand_notify.notify_one();
 
         // Must resolve promptly — if step() blocks demand, the 2s timeout fires.

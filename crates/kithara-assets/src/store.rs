@@ -450,7 +450,7 @@ mod tests {
     use super::*;
     use crate::key::ResourceKey;
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_all_decorators_disabled() {
         let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
@@ -473,7 +473,7 @@ mod tests {
         assert_eq!(&buf, b"data");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_defaults_all_enabled() {
         let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(&buf, b"hello");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_no_asset_root_with_absolute_key() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("song.mp3");
@@ -512,7 +512,7 @@ mod tests {
         assert_eq!(&buf[..n], b"test data");
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_no_asset_root_rejects_relative_key() {
         let dir = tempdir().unwrap();
 
@@ -583,7 +583,7 @@ mod tests {
         assert!(!evict.is_enabled());
     }
 
-    #[kithara::test(timeout(Duration::from_secs(5)))]
+    #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn build_disk_returns_disk() {
         let dir = tempdir().unwrap();
         let backend = AssetStoreBuilder::new()

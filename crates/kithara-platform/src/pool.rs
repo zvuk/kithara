@@ -144,7 +144,7 @@ mod tests {
 
     // --- Rayon pool creation (works on WASM via wasm-bindgen-rayon) ---
 
-    #[kithara::test]
+    #[kithara::test(native)]
     fn test_custom_pool() {
         let pool = ThreadPool::with_num_threads(2).unwrap();
         assert!(pool.inner.is_some());
@@ -152,8 +152,7 @@ mod tests {
 
     // --- Blocking tests (mpsc::recv uses Atomics.wait — forbidden on WASM main thread) ---
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test]
+    #[kithara::test(native)]
     fn test_spawn_completes() {
         let pool = ThreadPool::with_num_threads(2).unwrap();
         let (tx, rx) = std::sync::mpsc::channel();
@@ -163,8 +162,7 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 42);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(tokio)]
+    #[kithara::test(native, tokio)]
     #[case::custom(true)]
     #[case::global(false)]
     async fn test_spawn_async(#[case] custom: bool) {
@@ -177,8 +175,7 @@ mod tests {
         assert_eq!(result, 42);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test]
+    #[kithara::test(native)]
     fn test_clone_shares_pool() {
         let pool = ThreadPool::with_num_threads(2).unwrap();
         let pool2 = pool.clone();
@@ -198,16 +195,15 @@ mod tests {
     // --- Pure logic tests ---
 
     #[kithara::test(wasm)]
-    #[case::global(false, "global")]
-    #[case::custom(true, "custom")]
-    fn test_debug(#[case] custom: bool, #[case] expected_kind: &str) {
-        let pool = if custom {
-            ThreadPool::with_num_threads(3).unwrap()
-        } else {
-            ThreadPool::global()
-        };
-        let debug = format!("{:?}", pool);
-        assert!(debug.contains(expected_kind));
+    fn test_debug_global() {
+        let debug = format!("{:?}", ThreadPool::global());
+        assert!(debug.contains("global"));
+    }
+
+    #[kithara::test(native)]
+    fn test_debug_custom() {
+        let debug = format!("{:?}", ThreadPool::with_num_threads(3).unwrap());
+        assert!(debug.contains("custom"));
     }
 
     #[kithara::test(wasm)]
