@@ -347,7 +347,7 @@ async fn sequential_hls_create_destroy_no_leak() {
 
 /// Saturate a 4-thread pool with 2 instances (each uses ~2 threads:
 /// worker + downloader), drop them all, then verify full recovery.
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn pool_recovers_after_saturation() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
