@@ -5,13 +5,9 @@
 
 use std::time::Duration;
 
-use rstest::rstest;
-
 use super::fixture;
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn test_audio_test_server_starts() {
     // Test that the server can start and serve requests
     let server = fixture::AudioTestServer::new().await;
@@ -26,11 +22,9 @@ async fn test_audio_test_server_starts() {
     assert!(mp3_url.as_str().ends_with("/test.mp3"));
 }
 
-#[rstest]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 #[case("wav", "/silence.wav", "audio/wav", "WAV file")]
 #[case("mp3", "/test.mp3", "audio/mpeg", "MP3 file")]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
 async fn test_audio_test_server_serves_format(
     #[case] format: &str,
     #[case] path: &str,
@@ -73,7 +67,7 @@ async fn test_audio_test_server_serves_format(
     assert_eq!(server.request_count(path), 1, "{}: request count", desc);
 }
 
-#[test]
+#[kithara::test]
 fn test_embedded_audio_contains_data() {
     let audio = fixture::EmbeddedAudio::get();
 

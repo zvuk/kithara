@@ -18,12 +18,22 @@
 //! Shared test utilities for the kithara workspace.
 
 pub mod fixtures;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod http_server;
 pub mod memory_source;
 pub mod rng;
 pub mod wav;
 
+/// Re-export of `kithara_test_macros::test` under the `kithara` namespace.
+///
+/// Allows `use kithara_test_utils::kithara;` and then `#[kithara::test]`
+/// or `#[kithara::test(tokio)]` in test modules.
+pub mod kithara {
+    pub use kithara_test_macros::{fixture, test};
+}
+
 pub use fixtures::*;
+#[cfg(not(target_arch = "wasm32"))]
 pub use http_server::TestHttpServer;
 pub use rng::*;
 pub use wav::{create_saw_wav, create_test_wav};

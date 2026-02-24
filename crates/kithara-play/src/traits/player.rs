@@ -119,18 +119,19 @@ pub trait Player: MaybeSend + MaybeSync + 'static {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use unimock::Unimock;
 
     use super::*;
 
     fn assert_player_item_unimock<T: Player<Item = Unimock>>() {}
 
-    #[test]
+    #[kithara::test]
     fn player_mock_api_is_generated() {
         let _ = PlayerMock::status;
     }
 
-    #[test]
+    #[kithara::test]
     fn player_unimock_item_is_unimock() {
         assert_player_item_unimock::<Unimock>();
     }

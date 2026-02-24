@@ -25,6 +25,7 @@ kithara-net = { workspace = true, optional = true }
 kithara-abr = { workspace = true, optional = true }
 kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true, optional = true }
+kithara-test-macros = { workspace = true, optional = true }
 rodio = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["full"] }
@@ -38,6 +39,7 @@ assets = ["dep:kithara-assets", "dep:kithara-storage"]
 net = ["dep:kithara-net"]
 bufpool = []
 test-utils = [
+    "dep:kithara-test-macros",
     "kithara-audio/test-utils",
     "kithara-decode/test-utils",
     "kithara-stream/test-utils",
@@ -64,7 +66,6 @@ internal = [
 [dev-dependencies]
 kithara = { path = ".", default-features = false, features = ["internal"] }
 tokio = { workspace = true }
-rstest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 rodio = { workspace = true }

@@ -117,13 +117,11 @@ impl Coverage for MemCoverage {
 
 #[cfg(test)]
 mod tests {
-    use std::ops::Range;
-
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case::adjacent(vec![0..50, 50..100])]
     #[case::overlapping(vec![0..60, 40..100])]
     fn mark_and_merge_ranges(#[case] ranges: Vec<Range<u64>>) {
@@ -134,7 +132,7 @@ mod tests {
         assert!(c.is_complete());
     }
 
-    #[test]
+    #[kithara::test]
     fn gap_detection() {
         let mut c = MemCoverage::with_total_size(100);
         c.mark(0..30);
@@ -145,7 +143,7 @@ mod tests {
         assert_eq!(gaps[0], 30..70);
     }
 
-    #[test]
+    #[kithara::test]
     fn is_complete_with_known_total() {
         let mut c = MemCoverage::with_total_size(100);
         assert!(!c.is_complete());
@@ -154,14 +152,14 @@ mod tests {
         assert!(c.is_complete());
     }
 
-    #[test]
+    #[kithara::test]
     fn is_complete_without_total_always_false() {
         let mut c = MemCoverage::new();
         c.mark(0..100);
         assert!(!c.is_complete());
     }
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case::capped(200, Some(100..300))]
     #[case::uncapped(u64::MAX, Some(100..500))]
     fn next_gap_with_limits(#[case] max_size: u64, #[case] expected: Option<Range<u64>>) {
@@ -171,14 +169,14 @@ mod tests {
         assert_eq!(c.next_gap(max_size), expected);
     }
 
-    #[test]
+    #[kithara::test]
     fn next_gap_none_when_complete() {
         let mut c = MemCoverage::with_total_size(100);
         c.mark(0..100);
         assert!(c.next_gap(100).is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn set_total_size_after_mark() {
         let mut c = MemCoverage::new();
         c.mark(0..50);
@@ -188,7 +186,7 @@ mod tests {
         assert!(c.is_complete());
     }
 
-    #[test]
+    #[kithara::test]
     fn empty_range_ignored() {
         let mut c = MemCoverage::with_total_size(100);
         c.mark(50..50); // empty
@@ -197,13 +195,13 @@ mod tests {
         assert_eq!(c.gaps()[0], 0..100);
     }
 
-    #[test]
+    #[kithara::test]
     fn zero_total_is_complete() {
         let c = MemCoverage::with_total_size(0);
         assert!(c.is_complete());
     }
 
-    #[test]
+    #[kithara::test]
     fn multiple_gaps() {
         let mut c = MemCoverage::with_total_size(100);
         c.mark(0..20);
@@ -216,14 +214,14 @@ mod tests {
         assert_eq!(gaps[1], 60..80);
     }
 
-    #[test]
+    #[kithara::test]
     fn gaps_without_total_returns_empty() {
         let mut c = MemCoverage::new();
         c.mark(0..50);
         assert!(c.gaps().is_empty());
     }
 
-    #[test]
+    #[kithara::test]
     fn next_gap_without_total_returns_none() {
         let mut c = MemCoverage::new();
         c.mark(0..50);

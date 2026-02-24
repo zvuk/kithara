@@ -2,7 +2,7 @@
 
 //! Unified asset store: disk or memory backend.
 
-use std::{fmt::Debug, hash::Hash, sync::Arc};
+use std::{fmt::Debug, hash::Hash, path::Path, sync::Arc};
 
 use kithara_coverage::{CoverageIndex, CoverageManager};
 use kithara_storage::StorageResource;
@@ -121,6 +121,29 @@ where
             Self::Mem(s) => {
                 let _ = s.remove_resource(key);
             }
+        }
+    }
+
+    /// Return the root directory for the asset store.
+    #[must_use]
+    pub fn root_dir(&self) -> &Path {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk(s) => s.root_dir(),
+            Self::Mem(s) => s.root_dir(),
+        }
+    }
+
+    /// Delete the entire asset directory.
+    ///
+    /// # Errors
+    ///
+    /// Returns `AssetsError` if the directory cannot be removed.
+    pub fn delete_asset(&self) -> AssetsResult<()> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk(s) => s.delete_asset(),
+            Self::Mem(s) => s.delete_asset(),
         }
     }
 }

@@ -312,7 +312,7 @@ mod tests {
 
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use kithara_stream::Source;
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -320,14 +320,14 @@ mod tests {
 
     // Progress
 
-    #[test]
+    #[kithara::test]
     fn test_progress_initial_state() {
         let p = Progress::new(Timeline::new());
         assert_eq!(p.read_pos(), 0);
         assert_eq!(p.download_pos(), 0);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case::read(100, true)]
     #[case::download(500, false)]
     fn test_progress_set_and_get_positions(#[case] value: u64, #[case] read_pos: bool) {
@@ -344,7 +344,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_progress_signal_reader_advanced() {
         let progress = Arc::new(Progress::new(Timeline::new()));
 
@@ -368,7 +368,7 @@ mod tests {
 
     // SharedFileState
 
-    #[rstest]
+    #[kithara::test]
     #[case::empty(vec![], vec![])]
     #[case::single(vec![100..200], vec![100..200])]
     #[case::fifo(vec![0..10, 10..20, 20..30], vec![0..10, 10..20, 20..30])]
@@ -387,7 +387,7 @@ mod tests {
         assert_eq!(state.pop_range_request(), None);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_shared_file_state_multiple_pops() {
         let state = SharedFileState::new();
         state.request_range(0..50);
@@ -415,7 +415,7 @@ mod tests {
         store.open_resource(&key).unwrap()
     }
 
-    #[test]
+    #[kithara::test]
     fn test_file_source_read_at() {
         let dir = TempDir::new().unwrap();
         let data = b"hello world from kithara";
@@ -443,7 +443,7 @@ mod tests {
         assert_eq!(progress.read_pos(), 13);
     }
 
-    #[test]
+    #[kithara::test]
     fn file_source_emits_byte_progress_not_playback_truth() {
         let dir = TempDir::new().unwrap();
         let data = b"abcdef";
@@ -470,7 +470,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn test_file_source_len() {
         let dir = TempDir::new().unwrap();
         let res = create_committed_resource(&dir, b"abc");
@@ -485,7 +485,7 @@ mod tests {
         assert_eq!(source.len(), Some(12345));
     }
 
-    #[test]
+    #[kithara::test]
     fn file_source_uses_progress_timeline_as_single_source_of_truth() {
         let dir = TempDir::new().unwrap();
         let res = create_committed_resource(&dir, b"abcdef");

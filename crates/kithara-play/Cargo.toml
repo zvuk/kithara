@@ -66,5 +66,11 @@ internal = []
 kithara-play = { path = ".", default-features = false, features = ["backend-cpal", "internal"] }
 kithara-audio = { workspace = true, features = ["test-utils"] }
 unimock = { workspace = true }
+kithara-test-utils = { workspace = true }
+wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
-rstest = { workspace = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+kithara-play = { path = ".", features = ["wasm-bindgen"] }

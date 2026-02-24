@@ -14,7 +14,6 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_test_utils::wav::create_test_wav;
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -146,9 +145,7 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
 // Tests
 
 /// 2 concurrent HLS instances (manual variant, no ABR).
-#[rstest]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 async fn two_hls_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -187,9 +184,7 @@ async fn two_hls_instances() {
 }
 
 /// 4 concurrent HLS instances (manual variant, no ABR).
-#[rstest]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 async fn four_hls_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -226,9 +221,7 @@ async fn four_hls_instances() {
 }
 
 /// 8 concurrent HLS instances (manual variant, no ABR).
-#[rstest]
-#[timeout(Duration::from_secs(120))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn eight_hls_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -265,9 +258,7 @@ async fn eight_hls_instances() {
 }
 
 /// 4 concurrent HLS instances with auto ABR (2 variants).
-#[rstest]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 async fn four_hls_instances_with_abr() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

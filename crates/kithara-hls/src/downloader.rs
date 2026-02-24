@@ -1267,6 +1267,7 @@ mod tests {
     use kithara_net::{HttpClient, NetOptions};
     use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
     use kithara_stream::{AudioCodec, Downloader, PlanOutcome, Timeline};
+    use kithara_test_utils::kithara;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
     use url::Url;
@@ -1283,13 +1284,13 @@ mod tests {
         source::{SharedSegments, build_pair},
     };
 
-    #[test]
+    #[kithara::test]
     fn commit_drops_stale_fetch_epoch() {
         assert!(is_stale_epoch(7, 8));
         assert!(!is_stale_epoch(9, 9));
     }
 
-    #[test]
+    #[kithara::test]
     fn first_missing_segment_detects_gap() {
         let mut state = DownloadState::new();
         let media_url = Url::parse("https://example.com/seg.m4s").expect("valid URL");
@@ -1387,7 +1388,7 @@ mod tests {
             .expect("coverage manager should open")
     }
 
-    #[test]
+    #[kithara::test]
     fn cross_codec_switch_detects_incompatible_variants() {
         let playlist_state = Arc::new(PlaylistState::new(vec![
             make_variant_state(0, Some(AudioCodec::AacLc)),
@@ -1396,7 +1397,7 @@ mod tests {
         assert!(is_cross_codec_switch(&playlist_state, 0, 1));
     }
 
-    #[test]
+    #[kithara::test]
     fn cross_codec_switch_allows_same_codec_variants() {
         let playlist_state = Arc::new(PlaylistState::new(vec![
             make_variant_state(0, Some(AudioCodec::AacLc)),
@@ -1405,7 +1406,7 @@ mod tests {
         assert!(!is_cross_codec_switch(&playlist_state, 0, 1));
     }
 
-    #[test]
+    #[kithara::test]
     fn classify_same_variant_seek_is_not_midstream_switch() {
         let mut sent_init_for_variant = HashSet::new();
         let variant = 1;
@@ -1439,7 +1440,7 @@ mod tests {
         assert!(!is_midstream_switch);
     }
 
-    #[test]
+    #[kithara::test]
     fn classify_real_variant_change_marks_midstream_switch_only_after_segment_zero() {
         let sent_init_for_variant = HashSet::new();
         let from_variant = Some(0);
@@ -1456,7 +1457,7 @@ mod tests {
         assert!(is_midstream_switch);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn plan_while_flushing_does_not_mark_eof() {
         let cancel = CancellationToken::new();
         let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state(
@@ -1495,7 +1496,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn plan_with_new_seek_epoch_does_not_mark_eof_from_stale_tail() {
         let cancel = CancellationToken::new();
         let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state(
@@ -1540,7 +1541,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn reset_for_seek_epoch_keeps_init_markers_on_known_variant() {
         let cancel = CancellationToken::new();
         let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state(
@@ -1580,7 +1581,7 @@ mod tests {
         assert_eq!(downloader.gap_scan_start_segment, 0);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn reset_for_seek_epoch_to_unseen_variant_sets_new_baseline() {
         let cancel = CancellationToken::new();
         let playlist_state = Arc::new(PlaylistState::new(vec![
@@ -1624,7 +1625,7 @@ mod tests {
         assert_eq!(downloader.gap_scan_start_segment, 0);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn reset_for_seek_epoch_forces_init_on_cross_codec_seek() {
         let cancel = CancellationToken::new();
         let playlist_state = Arc::new(PlaylistState::new(vec![
@@ -1658,19 +1659,19 @@ mod tests {
         assert_eq!(downloader.gap_scan_start_segment, 2);
     }
 
-    #[test]
+    #[kithara::test]
     fn should_request_init_for_segment_zero_even_when_variant_is_known() {
         assert!(should_request_init(false, 0));
         assert!(!should_request_init(false, 1));
     }
 
-    #[test]
+    #[kithara::test]
     fn should_request_init_only_for_segment_zero_or_variant_switch() {
         assert!(!should_request_init(false, 5));
         assert!(should_request_init(true, 5));
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn loaded_segment_offset_mismatch_detects_shifted_loaded_segment() {
         let cancel = CancellationToken::new();
         let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
@@ -1723,7 +1724,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn populate_cached_segments_requires_coverage_metadata() {
         let cancel = CancellationToken::new();
         let temp_dir = TempDir::new().expect("temp dir");

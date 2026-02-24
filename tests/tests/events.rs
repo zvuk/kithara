@@ -2,8 +2,9 @@
 //! Integration tests for unified event bus.
 
 use kithara::events::{Event, EventBus, HlsEvent};
+use kithara_test_utils::kithara;
 
-#[test]
+#[kithara::test]
 fn test_event_bus_publish_subscribe() {
     let bus = EventBus::new(32);
     let mut rx = bus.subscribe();

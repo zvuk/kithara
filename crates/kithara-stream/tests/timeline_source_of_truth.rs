@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
 use std::{
@@ -5,6 +6,10 @@ use std::{
     ops::Range,
     sync::Arc,
 };
+
+mod kithara {
+    pub(crate) use kithara_test_macros::test;
+}
 
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
@@ -76,7 +81,7 @@ impl StreamType for TimelineStream {
     }
 }
 
-#[test]
+#[kithara::test]
 fn stream_must_use_source_timeline_as_single_position_truth() {
     let timeline = Timeline::new();
     let config = TimelineConfig {
@@ -112,7 +117,7 @@ fn stream_must_use_source_timeline_as_single_position_truth() {
 /// reads data through `Stream::read()`. At this point `flushing == true`
 /// (set by `initiate_seek()`, cleared by `complete_seek()` at the end).
 /// If `read()` blocks on flushing, the seek deadlocks.
-#[test]
+#[kithara::test]
 fn read_must_succeed_while_flushing() {
     let data: Vec<u8> = (0..=255).collect();
     let timeline = Timeline::new();

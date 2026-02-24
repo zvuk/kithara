@@ -43,7 +43,7 @@ impl From<AudioEvent> for Event {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -55,7 +55,7 @@ mod tests {
         matches!(event, FileEvent::DownloadComplete { total_bytes: 42 })
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(FileEvent::EndOfStream, file_is_end_of_stream)]
     #[case(
         FileEvent::DownloadComplete { total_bytes: 42 },
@@ -84,7 +84,7 @@ mod tests {
     }
 
     #[cfg(feature = "hls")]
-    #[rstest]
+    #[kithara::test]
     #[case(HlsEvent::EndOfStream, hls_is_end_of_stream)]
     #[case(
         HlsEvent::VariantApplied {
@@ -100,7 +100,7 @@ mod tests {
     }
 
     #[cfg(feature = "audio")]
-    #[test]
+    #[kithara::test]
     fn audio_event_into_event() {
         let event: Event = AudioEvent::EndOfStream.into();
         assert!(matches!(event, Event::Audio(AudioEvent::EndOfStream)));

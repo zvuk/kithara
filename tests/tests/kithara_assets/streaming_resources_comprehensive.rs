@@ -8,7 +8,6 @@ use kithara::{
     storage::ResourceExt,
 };
 use kithara_test_utils::temp_dir;
-use rstest::rstest;
 
 /// Helper to read bytes from resource into a new Vec
 fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
@@ -26,16 +25,14 @@ fn asset_store_with_root(temp_dir: &tempfile::TempDir, asset_root: &str) -> Asse
             max_assets: None,
             max_bytes: None,
         })
-        .build_disk()
+        .build()
 }
 
-#[rstest]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 #[case(1024, 512, 0)] // Small write
 #[case(4096, 2048, 8192)] // Medium write with offset
 #[case(16384, 8192, 32768)] // Large write with offset
 #[case(65536, 32768, 131072)] // Very large write with offset
-#[timeout(Duration::from_secs(5))]
-#[test]
 fn streaming_resource_complex_write_patterns(
     #[case] total_size: usize,
     #[case] chunk_size: usize,
@@ -66,11 +63,9 @@ fn streaming_resource_complex_write_patterns(
     res.commit(None).unwrap();
 }
 
-#[rstest]
+#[kithara::test(timeout(Duration::from_secs(10)))]
 #[case(1, 100)] // Single concurrent write
 #[case(2, 50)] // Few concurrent writes (reduced to avoid timeout)
-#[timeout(Duration::from_secs(10))]
-#[test]
 fn streaming_resource_concurrent_writes(
     #[case] write_count: usize,
     #[case] chunk_size: usize,
@@ -109,13 +104,11 @@ fn streaming_resource_concurrent_writes(
     res.commit(None).unwrap();
 }
 
-#[rstest]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 #[case(0, 1024)] // Read from start
 #[case(2048, 1024)] // Read from middle
 #[case(4096, 512)] // Read from end
 #[case(8192, 100)] // Read beyond written data (partial)
-#[timeout(Duration::from_secs(5))]
-#[test]
 fn streaming_resource_edge_case_reads(
     #[case] offset: u64,
     #[case] read_size: usize,
@@ -149,11 +142,9 @@ fn streaming_resource_edge_case_reads(
     res.commit(None).unwrap();
 }
 
-#[rstest]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 #[case(vec![(0, 1024), (2048, 1024)])] // Non-overlapping
 #[case(vec![(0, 512), (1024, 512)])] // Smaller overlapping
-#[timeout(Duration::from_secs(5))]
-#[test]
 fn streaming_resource_multiple_range_operations(
     #[case] write_ranges: Vec<(usize, usize)>,
     temp_dir: tempfile::TempDir,
@@ -188,11 +179,9 @@ fn streaming_resource_multiple_range_operations(
     res.commit(None).unwrap();
 }
 
-#[rstest]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 #[case(false)] // Without explicit commit
 #[case(true)] // With explicit commit
-#[timeout(Duration::from_secs(5))]
-#[test]
 fn streaming_resource_commit_behavior(#[case] explicit_commit: bool, temp_dir: tempfile::TempDir) {
     let store = asset_store_with_root(&temp_dir, "streaming-commit");
 
@@ -228,12 +217,10 @@ fn streaming_resource_commit_behavior(#[case] explicit_commit: bool, temp_dir: t
     assert_eq!(final_read, data);
 }
 
-#[rstest]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 #[case(1024)]
 #[case(4096)]
 #[case(16384)]
-#[timeout(Duration::from_secs(5))]
-#[test]
 fn streaming_resource_zero_length_operations(
     #[case] base_offset: u64,
     temp_dir: tempfile::TempDir,

@@ -23,4 +23,5 @@ url = { workspace = true }
 
 [dev-dependencies]
 kithara-drm = { path = ".", default-features = false, features = ["internal"] }
-rstest = { workspace = true }
+kithara-test-utils = { workspace = true }
+wasm-bindgen-test = { workspace = true }

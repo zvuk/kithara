@@ -28,7 +28,6 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::{TestHttpServer, cancel_token, debug_tracing_setup, temp_dir};
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
@@ -146,9 +145,7 @@ async fn start_mismatch_server() -> TestHttpServer {
 /// - HEAD total: `597_600` (3 x `199_200`)
 /// - Actual total: `600_000` (3 x `200_000`)
 /// - Seek to `598_000` is valid but fails if `expected_total_length` = HEAD total.
-#[rstest]
-#[timeout(Duration::from_secs(15))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
 async fn seek_beyond_head_total_within_actual_total(
     _debug_tracing_setup: (),
     temp_dir: TempDir,

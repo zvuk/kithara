@@ -442,6 +442,7 @@ mod tests {
     use kithara_coverage::Coverage;
     use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
+    use kithara_test_utils::kithara;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -453,7 +454,7 @@ mod tests {
     ///
     /// Currently FAILS: `poll_demand` does not change phase, so `plan()` still returns
     /// Step and the sequential download continues wasting bandwidth.
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn sequential_stops_after_demand() {
         let cancel = CancellationToken::new();
         let dir = TempDir::new().unwrap();

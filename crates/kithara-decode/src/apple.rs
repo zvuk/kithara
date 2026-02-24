@@ -1331,11 +1331,11 @@ pub type AppleAlac = Apple<Alac>;
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[rstest]
+    #[kithara::test]
     #[case::default(None)]
     #[case::fmp4(Some(ContainerFormat::Fmp4))]
     fn test_apple_config_container(#[case] container: Option<ContainerFormat>) {
@@ -1349,7 +1349,7 @@ mod tests {
         assert!(config.pcm_pool.is_none());
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case::fmp4(ContainerFormat::Fmp4, Some(kAudioFileM4AType))]
     #[case::adts(ContainerFormat::Adts, Some(kAudioFileAAC_ADTSType))]
     #[case::mpeg(ContainerFormat::MpegAudio, Some(kAudioFileMP3Type))]
@@ -1363,14 +1363,14 @@ mod tests {
         assert_eq!(container_to_file_type(container), expected);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_os_status_to_string() {
         assert_eq!(os_status_to_string(noErr), "noErr");
         // 'wht?' = 0x7768743f
         assert!(os_status_to_string(0x7768743f).contains("wht?"));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_type_aliases_exist() {
         fn _check_aac(_: AppleAac) {}
         fn _check_mp3(_: AppleMp3) {}

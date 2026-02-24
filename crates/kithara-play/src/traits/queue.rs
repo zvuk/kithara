@@ -37,18 +37,19 @@ pub trait QueuePlayer: MaybeSend + MaybeSync + 'static {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
     use unimock::Unimock;
 
     use super::*;
 
     fn assert_queue_item_unimock<T: QueuePlayer<Item = Unimock>>() {}
 
-    #[test]
+    #[kithara::test]
     fn queue_player_mock_api_is_generated() {
         let _ = QueuePlayerMock::items;
     }
 
-    #[test]
+    #[kithara::test]
     fn queue_player_unimock_item_is_unimock() {
         assert_queue_item_unimock::<Unimock>();
     }

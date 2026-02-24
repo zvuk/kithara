@@ -14,7 +14,6 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_test_utils::wav::create_test_wav;
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -105,9 +104,7 @@ async fn create_hls_audio(
 /// The cancelled instances have their `CancellationToken` fired after a
 /// short delay (simulating a network failure / user abort). The test verifies
 /// that the healthy instances still read to EOF, unaffected by the cancelled ones.
-#[rstest]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 async fn healthy_instances_survive_cancelled_peers() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -213,9 +210,7 @@ async fn healthy_instances_survive_cancelled_peers() {
 }
 
 /// 4 healthy + 4 cancelled HLS instances (8 total). Healthy ones must complete.
-#[rstest]
-#[timeout(Duration::from_secs(120))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn eight_instances_half_cancelled() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

@@ -95,7 +95,7 @@ impl FileConfig {
 mod tests {
     use std::path::Path;
 
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -103,7 +103,7 @@ mod tests {
         FileSrc::Remote(Url::parse("http://example.com/audio.mp3").unwrap())
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(test_src())]
     #[case(FileSrc::Local(PathBuf::from("/tmp/song.mp3")))]
     fn test_file_config_new_preserves_source(#[case] src: FileSrc) {
@@ -117,7 +117,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn test_with_store() {
         let store = StoreOptions::default();
         let config = FileConfig::new(test_src()).with_store(store);
@@ -125,7 +125,7 @@ mod tests {
         assert!(config.bus.is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_with_net() {
         let net = NetOptions::default();
         let config = FileConfig::new(test_src()).with_net(net);
@@ -159,7 +159,7 @@ mod tests {
         config.headers.as_ref().and_then(|h| h.get("Authorization")) == Some("Bearer token123")
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(apply_cancel, has_cancel)]
     #[case(apply_events, has_bus)]
     #[case(apply_headers, has_auth_header)]
@@ -171,7 +171,7 @@ mod tests {
         assert!(check(&config));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_builder_chain() {
         let store = StoreOptions::default();
         let net = NetOptions::default();
@@ -188,7 +188,7 @@ mod tests {
         assert!(config.bus.is_some());
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case("stream-a")]
     #[case("stream-b")]
     fn test_with_name_sets_name(#[case] name: &str) {
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(config.name.as_deref(), Some(name));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_debug_impl() {
         let config = FileConfig::new(test_src());
         let debug_str = format!("{:?}", config);
@@ -204,7 +204,7 @@ mod tests {
         assert!(debug_str.contains("FileConfig"));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_clone() {
         let bus = EventBus::new(32);
         let config = FileConfig::new(test_src()).with_events(bus);

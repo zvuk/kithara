@@ -1,7 +1,10 @@
 use kithara_bufpool::internal::*;
-use rstest::rstest;
 
-#[test]
+mod kithara {
+    pub(crate) use kithara_test_macros::test;
+}
+
+#[kithara::test]
 fn test_pool_basic() {
     let pool = Pool::<4, Vec<u8>>::new(16, 1024);
     let mut buf = pool.get();
@@ -9,7 +12,7 @@ fn test_pool_basic() {
     assert_eq!(&buf[..], b"hello");
 }
 
-#[test]
+#[kithara::test]
 fn test_pool_reuse() {
     let pool = Pool::<4, Vec<u8>>::new(16, 1024);
 
@@ -23,7 +26,7 @@ fn test_pool_reuse() {
     assert!(buf.capacity() > 0); // But capacity retained
 }
 
-#[test]
+#[kithara::test]
 fn test_pool_f32() {
     let pool = Pool::<4, Vec<f32>>::new(16, 1024);
     let mut buf = pool.get_with(|b| b.resize(100, 0.0));
@@ -32,7 +35,7 @@ fn test_pool_f32() {
     assert_eq!(buf[0], 1.5);
 }
 
-#[test]
+#[kithara::test]
 fn test_shared_pool() {
     let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
     let pool2 = pool.clone();
@@ -47,7 +50,7 @@ fn test_shared_pool() {
     assert_eq!(buf2[0], 2);
 }
 
-#[test]
+#[kithara::test]
 fn test_cross_shard_fallback() {
     // 2-shard pool: put a buffer into the "other" shard, then verify
     // get_with() finds it via cross-shard fallback.
@@ -71,7 +74,7 @@ fn test_cross_shard_fallback() {
     );
 }
 
-#[test]
+#[kithara::test]
 fn test_shard_saturation_drops_excess() {
     // 4 shards, 4 max_buffers total => 1 buffer per shard.
     // Returning more than 1 buffer to the same shard should drop excess.
@@ -103,7 +106,7 @@ fn test_shard_saturation_drops_excess() {
     );
 }
 
-#[rstest]
+#[kithara::test]
 #[case::pool(false)]
 #[case::shared_pool(true)]
 fn test_into_inner_does_not_recycle(#[case] shared: bool) {
@@ -132,7 +135,7 @@ fn test_into_inner_does_not_recycle(#[case] shared: bool) {
     }
 }
 
-#[rstest]
+#[kithara::test]
 #[case::pool(false)]
 #[case::shared_pool(true)]
 fn test_recycle_roundtrip(#[case] shared: bool) {
@@ -159,7 +162,7 @@ fn test_recycle_roundtrip(#[case] shared: bool) {
     }
 }
 
-#[test]
+#[kithara::test]
 fn test_shared_pool_attach() {
     let pool = SharedPool::<4, Vec<f32>>::new(16, 1024);
 
@@ -181,7 +184,7 @@ fn test_shared_pool_attach() {
     assert_eq!(reused.capacity(), cap);
 }
 
-#[test]
+#[kithara::test]
 fn test_attach_into_inner_does_not_recycle() {
     let pool = SharedPool::<4, Vec<u8>>::new(16, 1024);
 
@@ -195,7 +198,7 @@ fn test_attach_into_inner_does_not_recycle() {
     assert_eq!(fresh.capacity(), 0, "pool should be empty after into_inner");
 }
 
-#[test]
+#[kithara::test]
 fn test_multi_threaded_contention() {
     use std::{sync::Arc, thread};
 

@@ -1,5 +1,5 @@
 use kithara_play::internal::engine::*;
-use rstest::rstest;
+use kithara_test_utils::kithara;
 
 fn make_engine() -> EngineImpl {
     EngineImpl::new(EngineConfig::default())
@@ -25,7 +25,7 @@ enum NotRunningErrorScenario {
     Stop,
 }
 
-#[test]
+#[kithara::test]
 fn engine_config_defaults() {
     let config = EngineConfig::default();
     assert_eq!(config.channels, 2);
@@ -34,13 +34,13 @@ fn engine_config_defaults() {
     assert_eq!(config.sample_rate, 44100);
 }
 
-#[test]
+#[kithara::test]
 fn engine_config_default_thread_pool_is_none() {
     let config = EngineConfig::default();
     assert!(config.thread_pool.is_none());
 }
 
-#[test]
+#[kithara::test]
 fn engine_config_builder() {
     let pool = ThreadPool::with_num_threads(1).unwrap();
     let config = EngineConfig::default()
@@ -56,7 +56,7 @@ fn engine_config_builder() {
     assert_eq!(config.eq_bands, 5);
 }
 
-#[rstest]
+#[kithara::test]
 #[case(EngineInitialScenario::NotRunning)]
 #[case(EngineInitialScenario::SlotState)]
 #[case(EngineInitialScenario::ActiveSlotsEmpty)]
@@ -74,26 +74,26 @@ fn engine_initial_state(#[case] scenario: EngineInitialScenario) {
     }
 }
 
-#[test]
+#[kithara::test]
 fn engine_subscribe_works() {
     let engine = make_engine();
     let _rx = engine.subscribe();
 }
 
-#[test]
+#[kithara::test]
 fn engine_master_volume_default() {
     let engine = make_engine();
     assert!((engine.master_volume() - 1.0).abs() < f32::EPSILON);
 }
 
-#[test]
+#[kithara::test]
 fn engine_set_master_volume() {
     let engine = make_engine();
     engine.set_master_volume(0.5);
     assert!((engine.master_volume() - 0.5).abs() < f32::EPSILON);
 }
 
-#[test]
+#[kithara::test]
 fn engine_set_master_volume_clamps() {
     let engine = make_engine();
     engine.set_master_volume(2.0);
@@ -102,7 +102,7 @@ fn engine_set_master_volume_clamps() {
     assert!(engine.master_volume().abs() < f32::EPSILON);
 }
 
-#[test]
+#[kithara::test]
 fn engine_set_master_volume_emits_event() {
     let engine = make_engine();
     let mut rx = engine.subscribe();
@@ -113,7 +113,7 @@ fn engine_set_master_volume_emits_event() {
     );
 }
 
-#[rstest]
+#[kithara::test]
 #[case(NotRunningErrorScenario::Stop)]
 #[case(NotRunningErrorScenario::AllocateSlot)]
 #[case(NotRunningErrorScenario::ReleaseSlot)]
@@ -127,7 +127,7 @@ fn engine_not_running_operations_return_error(#[case] scenario: NotRunningErrorS
     assert!(matches!(err, PlayError::EngineNotRunning));
 }
 
-#[test]
+#[kithara::test]
 fn engine_crossfade_stub_returns_not_ready() {
     let engine = make_engine();
     let err = engine
@@ -136,14 +136,14 @@ fn engine_crossfade_stub_returns_not_ready() {
     assert!(matches!(err, PlayError::NotReady));
 }
 
-#[test]
+#[kithara::test]
 fn engine_cancel_crossfade_stub_returns_no_crossfade() {
     let engine = make_engine();
     let err = engine.cancel_crossfade().unwrap_err();
     assert!(matches!(err, PlayError::NoCrossfade));
 }
 
-#[test]
+#[kithara::test]
 fn engine_config_thread_pool_used_by_engine() {
     let pool = ThreadPool::with_num_threads(1).unwrap();
     let config = EngineConfig::default().with_thread_pool(pool);
@@ -152,7 +152,7 @@ fn engine_config_thread_pool_used_by_engine() {
     assert!(!engine.is_running());
 }
 
-#[test]
+#[kithara::test]
 fn engine_master_sample_rate_returns_config_when_stopped() {
     let config = EngineConfig {
         sample_rate: 48000,
@@ -162,13 +162,13 @@ fn engine_master_sample_rate_returns_config_when_stopped() {
     assert_eq!(engine.master_sample_rate(), 48000);
 }
 
-#[test]
+#[kithara::test]
 fn engine_master_channels_returns_config() {
     let engine = make_engine();
     assert_eq!(engine.master_channels(), 2);
 }
 
-#[test]
+#[kithara::test]
 fn engine_session_ducking_roundtrip() {
     let _lock = session_ducking_lock().lock().unwrap();
     EngineImpl::set_session_ducking(SessionDuckingMode::Soft).unwrap();
@@ -179,7 +179,7 @@ fn engine_session_ducking_roundtrip() {
     assert_eq!(EngineImpl::session_ducking(), SessionDuckingMode::Off);
 }
 
-#[test]
+#[kithara::test]
 fn engine_instances_share_session_ducking() {
     let _lock = session_ducking_lock().lock().unwrap();
     let _a = make_engine();
@@ -194,7 +194,7 @@ fn engine_instances_share_session_ducking() {
 // Tests that require actual audio hardware should be marked #[ignore].
 // They are run explicitly during local development or on hardware-capable CI.
 
-#[test]
+#[kithara::test]
 #[ignore = "requires audio hardware"]
 fn engine_start_stop_roundtrip() {
     let engine = make_engine();
@@ -204,7 +204,7 @@ fn engine_start_stop_roundtrip() {
     assert!(!engine.is_running());
 }
 
-#[test]
+#[kithara::test]
 #[ignore = "requires audio hardware"]
 fn engine_allocate_and_release_slot() {
     let engine = make_engine();
@@ -220,7 +220,7 @@ fn engine_allocate_and_release_slot() {
     engine.stop().unwrap();
 }
 
-#[test]
+#[kithara::test]
 #[ignore = "requires audio hardware"]
 fn engine_arena_full_error() {
     let config = EngineConfig {

@@ -202,7 +202,7 @@ mod tests {
     use kithara_audio::{PcmReader, mock::TestPcmReader};
     use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
     use kithara_events::AudioEvent;
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use tokio::sync::broadcast;
 
     use super::*;
@@ -294,17 +294,16 @@ mod tests {
         assert_eq!(&**pr.src(), "test.mp3");
     }
 
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case(assert_buffers_initialized)]
     #[case(assert_position_and_duration)]
     #[case(assert_src)]
-    #[tokio::test]
     async fn resource_accessors(#[case] assert_fn: AccessorAssertion) {
         let pr = make_player_resource();
         assert_fn(&pr);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn resource_read_returns_samples() {
         let mut pr = make_player_resource();
         let mut left = vec![0.0f32; 128];
@@ -321,7 +320,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn resource_seek_clears_buffer() {
         let mut pr = make_player_resource();
 
@@ -337,7 +336,7 @@ mod tests {
         assert_eq!(pr.write_pos, 0);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn resource_zero_read_without_eof_is_not_error() {
         let reader = PendingReader::new();
         let resource = Resource::from_reader(reader);
@@ -352,7 +351,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn resource_eof_returns_error() {
         let reader = TestPcmReader::new(mock_spec(), 0.01);
         let resource = Resource::from_reader(reader);

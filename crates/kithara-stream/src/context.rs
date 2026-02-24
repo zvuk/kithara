@@ -51,11 +51,13 @@ impl StreamContext for NullStreamContext {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
 
     use super::*;
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case::initial(0)]
     #[case::advanced(12_345)]
     fn test_null_stream_context_reads_byte_offset(#[case] offset: u64) {
@@ -67,7 +69,7 @@ mod tests {
         assert_eq!(ctx.variant_index(), None);
     }
 
-    #[test]
+    #[kithara::test]
     fn stream_context_mock_api_is_generated() {
         let _ = StreamContextMock::byte_offset;
     }

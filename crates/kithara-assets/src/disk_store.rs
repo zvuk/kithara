@@ -191,12 +191,12 @@ pub(crate) fn sanitize_rel(input: &str) -> Result<String, ()> {
 #[cfg(test)]
 mod tests {
     use kithara_storage::{ResourceExt, ResourceStatus};
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
 
-    #[rstest]
+    #[kithara::test]
     #[case("valid.txt", true, "Simple filename")]
     #[case("dir/valid.txt", true, "Nested path")]
     #[case("a/b/c/file.mp3", true, "Multiple levels")]
@@ -230,7 +230,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn test_open_absolute_resource_readonly() {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("local_audio.mp3");

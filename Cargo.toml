@@ -19,6 +19,7 @@ members = [
     "crates/kithara-platform",
     "crates/kithara-play",
     "crates/kithara-test-utils",
+    "crates/kithara-test-macros",
     "tests",
 ]
 
@@ -113,6 +114,7 @@ kithara-platform = { path = "crates/kithara-platform", version = "0.1.0" }
 kithara-play = { path = "crates/kithara-play", version = "0.1.0", default-features = false }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
+kithara-test-macros = { path = "crates/kithara-test-macros" }
 kithara-test-utils = { path = "crates/kithara-test-utils" }
 kithara-wasm = { path = "crates/kithara-wasm" }
 rstest = { version = "0.26.1", features = ["async-timeout", "crate-name"] }
@@ -120,7 +122,7 @@ serial_test = "3.3.1"
 unimock = { version = "0.6", features = ["std"] }
 
 # async/runtime
-tokio = { version = "1.49.0", default-features = false, features = ["sync", "macros", "rt"] }
+tokio = { version = "1.49.0", default-features = false, features = ["sync", "macros", "rt", "time"] }
 tokio-util = { version = "0.7.18", default-features = false }
 tokio-stream = "0.1.18"
 futures = "0.3.31"
@@ -180,7 +182,7 @@ wasm-bindgen-futures = "0.4"
 wasm-bindgen-rayon = { version = "1.2", features = ["no-bundler"] }
 wasm-bindgen-test = "0.3"
 js-sys = "0.3"
-web-sys = { version = "0.3", features = ["Blob", "Document", "Element", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "Window"] }
+web-sys = { version = "0.3", features = ["Blob", "console", "Document", "Element", "Event", "EventTarget", "File", "FileList", "FileReader", "HtmlElement", "HtmlInputElement", "Window"] }
 
 # serialization
 serde = { version = "1.0", features = ["derive"] }

@@ -1,10 +1,14 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! Tests for `Writer::with_offset()` — range-request resume path and `OffsetOverflow` error.
+
+mod kithara {
+    pub(crate) use kithara_test_macros::test;
+}
 
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
 use kithara_stream::{Writer, WriterError, WriterItem};
-use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 
 /// Run a writer to completion, returning total bytes written.
@@ -36,7 +40,7 @@ fn open_resource(dir: &tempfile::TempDir, name: &str, len: u64) -> MmapResource 
     .unwrap()
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(
     100,
     vec![vec![0xABu8; 512]],
@@ -49,7 +53,6 @@ fn open_resource(dir: &tempfile::TempDir, name: &str, len: u64) -> MmapResource 
     vec![(200_u64, 100_usize), (300_u64, 100_usize), (400_u64, 100_usize)],
     500_u64
 )]
-#[tokio::test]
 async fn writer_with_offset_writes_expected_offsets(
     #[case] start_offset: u64,
     #[case] chunks: Vec<Vec<u8>>,
@@ -95,7 +98,7 @@ async fn writer_with_offset_writes_expected_offsets(
 
 // 3. with_offset(0) behaves identically to new()
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn writer_with_offset_zero_is_same_as_new() {
     let dir = tempfile::tempdir().unwrap();
 
@@ -134,7 +137,7 @@ async fn writer_with_offset_zero_is_same_as_new() {
 
 // 4. Offset overflow returns WriterError::OffsetOverflow
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn writer_with_offset_overflow_returns_error() {
     let dir = tempfile::tempdir().unwrap();
     // Use a large initial_len so the storage doesn't reject the huge offset write itself.
@@ -190,7 +193,7 @@ async fn writer_with_offset_overflow_returns_error() {
 
 // 5. Cancellation mid-write terminates cleanly
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn writer_with_offset_cancellation() {
     let dir = tempfile::tempdir().unwrap();
     let res = open_resource(&dir, "cancel.bin", 4096);

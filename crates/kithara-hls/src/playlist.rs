@@ -366,7 +366,7 @@ impl PlaylistAccess for PlaylistState {
 mod tests {
     use std::time::Duration;
 
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use url::Url;
 
     use super::*;
@@ -446,7 +446,7 @@ mod tests {
 
     // Test 1: basic access
 
-    #[test]
+    #[kithara::test]
     fn test_playlist_state_basic_access() {
         let state = PlaylistState::new(vec![make_variant(0, 5), make_variant(1, 3)]);
 
@@ -461,7 +461,7 @@ mod tests {
 
     // Test 2: variant info
 
-    #[test]
+    #[kithara::test]
     fn test_playlist_state_variant_info() {
         let mut v = make_variant(0, 2);
         v.codec = Some(AudioCodec::Flac);
@@ -491,7 +491,7 @@ mod tests {
 
     // Test 3: size map not set
 
-    #[test]
+    #[kithara::test]
     fn test_size_map_not_set() {
         let state = PlaylistState::new(vec![make_variant(0, 3)]);
 
@@ -503,7 +503,7 @@ mod tests {
 
     // Test 4: size map set and query
 
-    #[test]
+    #[kithara::test]
     fn test_size_map_set_and_query() {
         let state = PlaylistState::new(vec![make_variant(0, 4)]);
 
@@ -517,7 +517,7 @@ mod tests {
         assert_eq!(state.total_variant_size(0), Some(1500));
     }
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case::first(0, Some(0))]
     #[case::second(1, Some(300))]
     #[case::third(2, Some(600))]
@@ -529,7 +529,7 @@ mod tests {
         assert_eq!(state.segment_byte_offset(0, segment), expected);
     }
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case::init_start(0, Some(0))]
     #[case::init_inside(99, Some(0))]
     #[case::media_start(100, Some(0))]
@@ -547,7 +547,7 @@ mod tests {
 
     // Test 5: reconcile segment size
 
-    #[test]
+    #[kithara::test]
     fn test_reconcile_segment_size() {
         let state = PlaylistState::new(vec![make_variant(0, 3)]);
 
@@ -576,7 +576,7 @@ mod tests {
 
     // Test 6: find_segment_at_offset edge cases
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case::first_segment_start(0, 0, Some(0))]
     #[case::init_region(0, 49, Some(0))]
     #[case::first_media_start(0, 50, Some(0))]
@@ -604,7 +604,7 @@ mod tests {
 
     // Test 7: deterministic seek_point_for_time mapping
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case::segment_0_start(0, (0, 0))]
     #[case::segment_0_last_ms(3999, (0, 0))]
     #[case::segment_1_start(4000, (1, 150))]
@@ -623,7 +623,7 @@ mod tests {
         assert_eq!(seek_point, expected);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_seek_point_for_time_boundary_at_track_end() {
         let state = PlaylistState::new(vec![make_variant(0, 4)]);
         state.set_size_map(0, make_size_map(50, &[100, 100, 100, 100]));
@@ -634,7 +634,7 @@ mod tests {
         assert_eq!(seek_point, (3, 350));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_find_seek_point_for_time_returns_segment_bounds() {
         let state = PlaylistState::new(vec![make_variant(0, 4)]);
         let seek_point = state
@@ -646,7 +646,7 @@ mod tests {
         assert_eq!(seek_point.2, Duration::from_secs(12));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_track_duration_uses_longest_variant() {
         let state = PlaylistState::new(vec![make_variant(0, 4), make_variant(1, 3)]);
         assert_eq!(state.track_duration(), Some(Duration::from_secs(16)));
@@ -654,7 +654,7 @@ mod tests {
 
     // Test 8: from_parsed builder
 
-    #[test]
+    #[kithara::test]
     fn test_from_parsed_basic() {
         let variants = vec![VariantStream {
             id: VariantId(0),

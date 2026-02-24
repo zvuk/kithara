@@ -203,7 +203,7 @@ impl AudioEffect for EqEffect {
 mod tests {
     use kithara_bufpool::pcm_pool;
     use kithara_decode::{PcmMeta, PcmSpec};
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -217,7 +217,7 @@ mod tests {
         )
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(0, 0)]
     #[case(1, 1)]
     #[case(10, 10)]
@@ -245,7 +245,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn eq_flat_gain_is_passthrough() {
         let bands = generate_log_spaced_bands(10);
         let spec = PcmSpec {
@@ -277,7 +277,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn eq_reset_marks_dirty() {
         let bands = generate_log_spaced_bands(3);
         let mut eq = EqEffect::new(bands, 44100, 2);
@@ -289,7 +289,7 @@ mod tests {
         assert!(eq.is_dirty());
     }
 
-    #[test]
+    #[kithara::test]
     fn eq_set_gain_clamps() {
         let bands = generate_log_spaced_bands(3);
         let mut eq = EqEffect::new(bands, 44100, 2);
@@ -304,7 +304,7 @@ mod tests {
         assert!((eq.bands()[0].gain_db - 3.0).abs() < f32::EPSILON);
     }
 
-    #[test]
+    #[kithara::test]
     fn eq_set_gain_out_of_bounds_band_is_noop() {
         let bands = generate_log_spaced_bands(3);
         let mut eq = EqEffect::new(bands, 44100, 2);
@@ -317,7 +317,7 @@ mod tests {
         }
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(2, 256, Some((2, 3.0)))]
     #[case(1, 128, None)]
     fn eq_process_supported_channel_layouts(
@@ -342,7 +342,7 @@ mod tests {
         assert_eq!(result.unwrap().samples().len(), sample_len);
     }
 
-    #[test]
+    #[kithara::test]
     fn eq_flush_returns_none() {
         let bands = generate_log_spaced_bands(3);
         let mut eq = EqEffect::new(bands, 44100, 2);

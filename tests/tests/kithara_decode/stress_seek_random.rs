@@ -15,7 +15,6 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::{Xorshift64, wav::create_test_wav};
-use rstest::rstest;
 use tracing::info;
 
 const SAMPLE_RATE: u32 = 44100;
@@ -35,9 +34,7 @@ const SEEK_ITERATIONS: usize = 1000;
 /// 5. Sample 1000 random seek positions in `(0, duration - chunk_duration)`
 /// 6. For each: seek → read → verify data (valid range, L==R channels)
 /// 7. Final: seek to `duration - chunk_duration`, read all → verify EOF
-#[rstest]
-#[timeout(Duration::from_secs(120))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn stress_random_seek_read_synthetic_wav() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

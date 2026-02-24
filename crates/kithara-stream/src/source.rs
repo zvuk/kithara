@@ -146,10 +146,14 @@ pub trait Source: Send + 'static {
 
 #[cfg(test)]
 mod tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
     use super::*;
 
     // Dummy test to verify trait compiles
-    #[test]
+    #[kithara::test]
     fn test_source_trait_object_safety() {
         // Source is not object-safe due to associated types,
         // but we can verify it compiles with concrete types

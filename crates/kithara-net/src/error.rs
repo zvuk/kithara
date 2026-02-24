@@ -73,7 +73,9 @@ impl From<ReqwestError> for NetError {
 
 #[cfg(test)]
 mod tests {
-    use rstest::*;
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
 
     use super::*;
 
@@ -82,9 +84,8 @@ mod tests {
     }
 
     // Test error creation methods
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case::timeout_error(NetError::timeout(), NetError::Timeout)]
-    #[tokio::test]
     async fn test_error_creation_methods(
         #[case] created_error: NetError,
         #[case] expected_error: NetError,
@@ -96,20 +97,19 @@ mod tests {
     }
 
     // Test is_retryable method - parameterized
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case::timeout(NetError::Timeout, true)]
     #[case::http_500(NetError::HttpError { status: 500, url: test_url("http://example.com"), body: None }, true)]
     #[case::http_429(NetError::HttpError { status: 429, url: test_url("http://example.com"), body: None }, true)]
     #[case::http_404(NetError::HttpError { status: 404, url: test_url("http://example.com"), body: None }, false)]
     #[case::unimplemented(NetError::Unimplemented, false)]
     #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) }, false)]
-    #[tokio::test]
     async fn test_is_retryable(#[case] error: NetError, #[case] expected_retryable: bool) {
         assert_eq!(error.is_retryable(), expected_retryable);
     }
 
     // Test error display formatting
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case::http_error(
         NetError::Http("connection failed".to_string()),
         "HTTP request failed: connection failed"
@@ -120,7 +120,6 @@ mod tests {
         NetError::HttpError { status: 404, url: test_url("http://example.com/test"), body: Some("Not found".to_string()) },
         "HTTP 404: Some(\"Not found\") for URL: Url { scheme: \"http\", cannot_be_a_base: false, username: \"\", password: None, host: Some(Domain(\"example.com\")), port: None, path: \"/test\", query: None, fragment: None }"
     )]
-    #[tokio::test]
     async fn test_error_display(#[case] error: NetError, #[case] expected_prefix: &str) {
         let display = error.to_string();
         assert!(
@@ -132,8 +131,7 @@ mod tests {
     }
 
     // Test RetryExhausted error display
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_exhausted_display() {
         let source = Box::new(NetError::Timeout);
         let error = NetError::RetryExhausted {
@@ -146,12 +144,11 @@ mod tests {
     }
 
     // Test error cloning
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case::timeout(NetError::Timeout)]
     #[case::http_error(NetError::HttpError { status: 500, url: test_url("http://example.com"), body: None })]
     #[case::unimplemented(NetError::Unimplemented)]
     #[case::retry_exhausted(NetError::RetryExhausted { max_retries: 3, source: Box::new(NetError::Timeout) })]
-    #[tokio::test]
     async fn test_error_cloning(#[case] error: NetError) {
         let cloned = error.clone();
 
@@ -163,10 +160,9 @@ mod tests {
     }
 
     // Test error debug formatting
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case::timeout(NetError::Timeout)]
     #[case::http_error(NetError::HttpError { status: 404, url: test_url("http://example.com"), body: None })]
-    #[tokio::test]
     async fn test_error_debug(#[case] error: NetError) {
         let debug_output = format!("{:?}", error);
 
@@ -179,8 +175,7 @@ mod tests {
     }
 
     // Test NetResult type alias
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_net_result_type() {
         // Test Ok variant
         let ok_result: NetResult<i32> = Ok(42);
@@ -198,7 +193,7 @@ mod tests {
     }
 
     // Test that HTTP error strings are parsed for retryability
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case("500 Internal Server Error", true)]
     #[case("502 Bad Gateway", true)]
     #[case("503 Service Unavailable", true)]
@@ -212,7 +207,6 @@ mod tests {
     #[case("400 Bad Request", false)]
     #[case("403 Forbidden", false)]
     #[case("401 Unauthorized", false)]
-    #[tokio::test]
     async fn test_http_error_string_parsing(
         #[case] error_string: &str,
         #[case] expected_retryable: bool,
@@ -222,8 +216,7 @@ mod tests {
     }
 
     // Test error equality (where applicable)
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_error_equality() {
         // Timeout errors should be equal
         let timeout1 = NetError::Timeout;

@@ -131,11 +131,13 @@ impl AudioCodec {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
 
     use super::*;
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case("mp4a.40.2", Some(AudioCodec::AacLc), "AAC-LC standard")]
     #[case("MP4A.40.2", Some(AudioCodec::AacLc), "AAC-LC uppercase")]
     #[case("mp4a.40.5", Some(AudioCodec::AacHe), "AAC-HE")]
@@ -161,7 +163,7 @@ mod tests {
         assert_eq!(AudioCodec::from_hls_codec(codec_str), expected);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_media_info_new() {
         let info = MediaInfo::default();
         assert_eq!(info.container, None);
@@ -170,7 +172,7 @@ mod tests {
         assert_eq!(info.channels, None);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_media_info_default() {
         let info = MediaInfo::default();
         assert_eq!(info.container, None);
@@ -179,7 +181,7 @@ mod tests {
         assert_eq!(info.channels, None);
     }
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case(ContainerFormat::Fmp4)]
     #[case(ContainerFormat::MpegTs)]
     #[case(ContainerFormat::MpegAudio)]
@@ -197,7 +199,7 @@ mod tests {
         assert_eq!(info.channels, None);
     }
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case(44100)]
     #[case(48000)]
     #[case(88200)]
@@ -211,7 +213,7 @@ mod tests {
         assert_eq!(info.channels, None);
     }
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case(1)] // Mono
     #[case(2)] // Stereo
     #[case(6)] // 5.1 surround
@@ -224,7 +226,7 @@ mod tests {
         assert_eq!(info.channels, Some(channels));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_media_info_builder_chain() {
         let mut info = MediaInfo::default()
             .with_container(ContainerFormat::Fmp4)
@@ -238,7 +240,7 @@ mod tests {
         assert_eq!(info.channels, Some(2));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_media_info_partial_builder() {
         let mut info = MediaInfo::default().with_sample_rate(48000);
         info.codec = Some(AudioCodec::Mp3);
@@ -249,21 +251,21 @@ mod tests {
         assert_eq!(info.channels, None);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_container_format_debug() {
         let format = ContainerFormat::Fmp4;
         let debug_str = format!("{:?}", format);
         assert!(debug_str.contains("Fmp4"));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_audio_codec_debug() {
         let codec = AudioCodec::AacLc;
         let debug_str = format!("{:?}", codec);
         assert!(debug_str.contains("AacLc"));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_media_info_clone() {
         let mut info = MediaInfo::default().with_container(ContainerFormat::Fmp4);
         info.codec = Some(AudioCodec::AacLc);
@@ -272,7 +274,7 @@ mod tests {
         assert_eq!(info, cloned);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_media_info_partial_eq() {
         let info1 = MediaInfo {
             codec: Some(AudioCodec::AacLc),

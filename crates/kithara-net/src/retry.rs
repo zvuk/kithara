@@ -209,9 +209,13 @@ impl RetryPolicyTrait for DefaultRetryPolicy {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
     use futures::stream;
-    use rstest::*;
     use unimock::{MockFn, Unimock, matching};
 
     use super::*;
@@ -247,14 +251,14 @@ mod tests {
 
     // DefaultRetryPolicy Tests
 
-    #[rstest]
+    #[kithara::test]
     fn test_default_retry_policy_new() {
         let policy = RetryPolicy::default();
         let retry_policy = DefaultRetryPolicy::new(policy);
         assert_eq!(retry_policy.policy.max_retries, 3);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(0, true, "first attempt should retry")]
     #[case(1, true, "second attempt should retry")]
     #[case(2, true, "third attempt should retry")]
@@ -271,7 +275,7 @@ mod tests {
         assert_eq!(retry_policy.should_retry(&error, attempt), expected);
     }
 
-    #[rstest]
+    #[kithara::test]
     fn test_default_retry_policy_should_not_retry_non_retryable() {
         let policy = RetryPolicy::default();
         let retry_policy = DefaultRetryPolicy::new(policy);
@@ -279,7 +283,7 @@ mod tests {
         assert!(!retry_policy.should_retry(&error, 0));
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(0, Duration::ZERO, "first attempt no delay")]
     #[case(1, Duration::from_millis(100), "second attempt base delay")]
     #[case(2, Duration::from_millis(200), "third attempt 2x delay")]
@@ -300,8 +304,7 @@ mod tests {
 
     // RetryNet Tests - get_bytes
 
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_net_get_bytes_success_first_try() {
         let mock = Unimock::new(
             NetMock::get_bytes
@@ -316,8 +319,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_net_get_bytes_retry_then_success() {
         let mock = Unimock::new((
             NetMock::get_bytes
@@ -338,8 +340,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_net_get_bytes_max_retries_exhausted() {
         let mock = Unimock::new(
             NetMock::get_bytes
@@ -354,8 +355,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_net_get_bytes_non_retryable_error() {
         let mock = Unimock::new(
             NetMock::get_bytes
@@ -372,8 +372,7 @@ mod tests {
 
     // RetryNet Tests - stream
 
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_net_stream_success() {
         let mock = Unimock::new(
             NetMock::stream
@@ -388,8 +387,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_net_stream_retry_then_success() {
         let mock = Unimock::new((
             NetMock::stream
@@ -412,8 +410,7 @@ mod tests {
 
     // RetryNet Tests - get_range
 
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_net_get_range_success() {
         let mock = Unimock::new(
             NetMock::get_range
@@ -429,8 +426,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_net_get_range_retry_then_success() {
         let mock = Unimock::new((
             NetMock::get_range
@@ -454,8 +450,7 @@ mod tests {
 
     // RetryNet Tests - head
 
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_net_head_success() {
         let mock = Unimock::new(
             NetMock::head
@@ -470,8 +465,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_net_head_retry_then_success() {
         let mock = Unimock::new((
             NetMock::head
@@ -494,7 +488,7 @@ mod tests {
 
     // RetryPolicyTrait Tests
 
-    #[rstest]
+    #[kithara::test]
     fn test_retry_policy_trait_max_attempts() {
         let policy = RetryPolicy {
             base_delay: Duration::from_millis(100),
@@ -505,7 +499,7 @@ mod tests {
         assert_eq!(retry_policy.max_attempts(), 5);
     }
 
-    #[rstest]
+    #[kithara::test]
     fn test_retry_policy_trait_delay() {
         let policy = RetryPolicy {
             base_delay: Duration::from_millis(50),
@@ -517,8 +511,7 @@ mod tests {
         assert_eq!(retry_policy.delay_for_attempt(1), Duration::from_millis(50));
     }
 
-    #[rstest]
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_retry_net_cancel_interrupts_sleep() {
         let mock = Unimock::new(
             NetMock::get_bytes

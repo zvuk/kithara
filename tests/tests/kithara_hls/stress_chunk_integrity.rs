@@ -21,7 +21,6 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_test_utils::Xorshift64;
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -193,11 +192,9 @@ async fn next_chunk_with_timeout(
 
 // Stress Test
 
-#[rstest]
+#[kithara::test(tokio, timeout(Duration::from_secs(TEST_TIMEOUT_SECS)))]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
-#[timeout(Duration::from_secs(TEST_TIMEOUT_SECS))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

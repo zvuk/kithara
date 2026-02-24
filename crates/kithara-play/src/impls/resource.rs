@@ -255,7 +255,7 @@ mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
     use kithara_events::{AudioEvent, Event};
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use tokio::sync::broadcast;
 
     use super::Resource;
@@ -288,10 +288,9 @@ mod tests {
 
     // -- Tests --------------------------------------------------------------------
 
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case(ReadMode::Interleaved)]
     #[case(ReadMode::Planar)]
-    #[tokio::test]
     async fn test_resource_from_reader_read_variants(#[case] mode: ReadMode) {
         let mut resource = make_resource();
         match mode {
@@ -319,7 +318,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_resource_from_reader_spec() {
         let resource = make_resource();
         let spec = resource.spec();
@@ -327,7 +326,7 @@ mod tests {
         assert_eq!(spec.channels, 2);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_resource_from_reader_position_and_duration() {
         let resource = make_resource();
         assert_eq!(resource.position(), Duration::ZERO);
@@ -336,7 +335,7 @@ mod tests {
         assert!((dur.as_secs_f64() - 1.0).abs() < 0.001);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_resource_from_reader_seek() {
         let mut resource = make_resource();
         assert_eq!(resource.position(), Duration::ZERO);
@@ -346,7 +345,7 @@ mod tests {
         assert!((pos.as_secs_f64() - 0.5).abs() < 0.001);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_resource_from_reader_is_eof() {
         let mut resource = make_resource();
         assert!(!resource.is_eof());
@@ -362,7 +361,7 @@ mod tests {
         assert!(resource.is_eof());
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_resource_subscribe_receives_events() {
         let (resource, sender) = make_resource_with_sender();
         let mut rx = resource.subscribe();
@@ -383,7 +382,7 @@ mod tests {
         assert!(matches!(event, Event::Audio(AudioEvent::FormatDetected { spec: s }) if s == spec));
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_resource_metadata() {
         let resource = make_resource();
         let meta = resource.metadata();

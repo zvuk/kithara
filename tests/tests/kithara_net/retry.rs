@@ -9,7 +9,6 @@ use std::{
 use bytes::Bytes;
 use kithara::net::{Net, NetError, NetExt, RetryPolicy};
 use kithara_net::mock::NetMock;
-use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 use unimock::{MockFn, Unimock, matching};
 
@@ -78,11 +77,10 @@ fn make_retry_mock(failures_before_success: usize, error_type: NetError) -> Unim
     .no_verify_in_drop()
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(1)]
 #[case(2)]
 #[case(3)]
-#[tokio::test]
 async fn test_retryable_errors_success_after_retries(#[case] failures_before_success: usize) {
     let error_type = NetError::Http("500 Internal Server Error".to_string());
     let mock_net = make_retry_mock(failures_before_success, error_type);
@@ -100,11 +98,10 @@ async fn test_retryable_errors_success_after_retries(#[case] failures_before_suc
     assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(1)]
 #[case(2)]
 #[case(3)]
-#[tokio::test]
 async fn test_non_retryable_errors_no_retry(#[case] failures_before_success: usize) {
     let error_type = NetError::Http("400 Bad Request".to_string());
     let mock_net = make_retry_mock(failures_before_success, error_type);
@@ -122,11 +119,10 @@ async fn test_non_retryable_errors_no_retry(#[case] failures_before_success: usi
     assert!(matches!(result.err().unwrap(), NetError::Http(_)));
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(2, 1)]
 #[case(3, 2)]
 #[case(4, 3)]
-#[tokio::test]
 async fn test_retry_exhaustion(#[case] failures_before_success: usize, #[case] max_retries: u32) {
     let error_type = NetError::Http("500 Internal Server Error".to_string());
     let mock_net = make_retry_mock(failures_before_success, error_type);
@@ -144,11 +140,10 @@ async fn test_retry_exhaustion(#[case] failures_before_success: usize, #[case] m
     assert!(matches!(result.err().unwrap(), NetError::Http(_)));
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(1, Duration::from_millis(100), Duration::from_millis(1000))]
 #[case(2, Duration::from_millis(100), Duration::from_millis(1000))]
 #[case(3, Duration::from_millis(100), Duration::from_millis(1000))]
-#[tokio::test]
 async fn test_exponential_backoff_with_max_delay(
     #[case] max_retries: u32,
     #[case] base_delay: Duration,
@@ -165,10 +160,9 @@ async fn test_exponential_backoff_with_max_delay(
     assert!(result.is_err());
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(1)]
 #[case(2)]
-#[tokio::test]
 async fn test_all_net_methods_with_retry(#[case] failures_before_success: usize) {
     let error_type = NetError::Http("500 Internal Server Error".to_string());
     let mock_net = make_retry_mock(failures_before_success, error_type);
@@ -182,10 +176,9 @@ async fn test_all_net_methods_with_retry(#[case] failures_before_success: usize)
     assert_success_all_net_methods(&retry_net).await;
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(1)]
 #[case(2)]
-#[tokio::test]
 async fn test_timeout_retry_chaining(#[case] failures_before_success: usize) {
     let error_type = NetError::Http("500 Internal Server Error".to_string());
     let mock_net = make_retry_mock(failures_before_success, error_type);
@@ -206,7 +199,7 @@ async fn test_timeout_retry_chaining(#[case] failures_before_success: usize) {
     assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
 }
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn test_zero_max_retries() {
     let error_type = NetError::Http("500 Internal Server Error".to_string());
     let mock_net = make_retry_mock(1, error_type);
@@ -220,9 +213,8 @@ async fn test_zero_max_retries() {
     assert!(matches!(result.err().unwrap(), NetError::Http(_)));
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(1)]
-#[tokio::test]
 async fn test_zero_base_delay(#[case] failures_before_success: usize) {
     let error_type = NetError::Http("500 Internal Server Error".to_string());
     let mock_net = make_retry_mock(failures_before_success, error_type);

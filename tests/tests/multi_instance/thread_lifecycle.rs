@@ -25,7 +25,6 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_test_utils::wav::create_test_wav;
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -150,9 +149,7 @@ fn read_partial_and_drop_hls(audio: Audio<Stream<Hls>>, samples_to_read: usize) 
 // Tests
 
 /// Drop a File instance mid-stream, then verify all pool threads are free.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn file_threads_released_after_drop() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -189,9 +186,7 @@ async fn file_threads_released_after_drop() {
 }
 
 /// Drop an HLS instance mid-stream, then verify all pool threads are free.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn hls_threads_released_after_drop() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -250,9 +245,7 @@ async fn hls_threads_released_after_drop() {
 ///
 /// If threads leak, the pool (2 threads) would be exhausted by the 2nd
 /// iteration and the test would deadlock.
-#[rstest]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 async fn sequential_file_create_destroy_no_leak() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -293,9 +286,7 @@ async fn sequential_file_create_destroy_no_leak() {
 }
 
 /// Create and destroy HLS instances sequentially, 10 times, on a shared pool.
-#[rstest]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 async fn sequential_hls_create_destroy_no_leak() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -356,9 +347,7 @@ async fn sequential_hls_create_destroy_no_leak() {
 
 /// Saturate a 4-thread pool with 2 instances (each uses ~2 threads:
 /// worker + downloader), drop them all, then verify full recovery.
-#[rstest]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 async fn pool_recovers_after_saturation() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -471,9 +460,7 @@ async fn pool_recovers_after_saturation() {
 
 /// Probe helper should tolerate delayed thread release and not fail
 /// on a single transient snapshot.
-#[rstest]
-#[timeout(Duration::from_secs(20))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(20)))]
 async fn pool_availability_waits_for_delayed_release() {
     let pool = ThreadPool::with_num_threads(4).expect("thread pool");
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();

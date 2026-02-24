@@ -320,7 +320,7 @@ impl AbrController<ThroughputEstimator> {
 mod tests {
     use std::time::Duration;
 
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 
     use super::{
@@ -356,7 +356,7 @@ mod tests {
         ))
     }
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case("downswitch_low_throughput", 2, 300_000 / 8, 10.0, 0, AbrReason::DownSwitch, true)]
     #[case("upswitch_high_throughput", 0, 2_000_000 / 8, 0.0, 2, AbrReason::UpSwitch, true)]
     #[case(
@@ -407,7 +407,7 @@ mod tests {
         assert_eq!(d.changed, expected_changed);
     }
 
-    #[test]
+    #[kithara::test]
     fn upswitch_requires_buffer_and_hysteresis() {
         let cfg = AbrOptions {
             min_buffer_for_up_switch_secs: 10.0,
@@ -449,7 +449,7 @@ mod tests {
         assert!(ok_buf.changed);
     }
 
-    #[test]
+    #[kithara::test]
     fn min_switch_interval_prevents_oscillation() {
         let cfg = AbrOptions {
             down_switch_buffer_secs: 0.0,
@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(d2.reason, AbrReason::MinInterval);
     }
 
-    #[test]
+    #[kithara::test]
     fn no_change_without_estimate() {
         let cfg = AbrOptions {
             mode: AbrMode::Auto(Some(1)),
@@ -496,7 +496,7 @@ mod tests {
         assert_eq!(d.reason, AbrReason::NoEstimate);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_estimator_called_once_per_decide() {
         let cfg = AbrOptions {
             min_switch_interval: Duration::ZERO,
@@ -529,7 +529,7 @@ mod tests {
         // Unimock verifies call counts on drop
     }
 
-    #[test]
+    #[kithara::test]
     fn test_min_interval_skips_estimator_call() {
         let cfg = AbrOptions {
             min_switch_interval: Duration::from_secs(30),
@@ -564,7 +564,7 @@ mod tests {
         // Unimock verifies estimator was called exactly once on drop
     }
 
-    #[test]
+    #[kithara::test]
     fn test_abr_sequence_estimate_then_push() {
         let cfg = AbrOptions {
             min_switch_interval: Duration::ZERO,
@@ -606,7 +606,7 @@ mod tests {
         c.decide(now);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_abr_sequence_multiple_decisions() {
         let cfg = AbrOptions {
             min_switch_interval: Duration::ZERO,
@@ -641,7 +641,7 @@ mod tests {
 
     // apply() tests
 
-    #[test]
+    #[kithara::test]
     fn apply_no_change_leaves_variant_and_timestamp_unchanged() {
         let cfg = AbrOptions {
             min_switch_interval: Duration::ZERO,
@@ -669,7 +669,7 @@ mod tests {
         assert!(c.can_switch_now(now));
     }
 
-    #[test]
+    #[kithara::test]
     fn apply_with_change_updates_variant_and_records_switch() {
         let cfg = AbrOptions {
             min_buffer_for_up_switch_secs: 0.0,
@@ -696,7 +696,7 @@ mod tests {
         assert!(!c.can_switch_now(now));
     }
 
-    #[test]
+    #[kithara::test]
     fn apply_round_trip_decide_reflects_new_state() {
         let cfg = AbrOptions {
             min_buffer_for_up_switch_secs: 0.0,
@@ -728,7 +728,7 @@ mod tests {
 
     // Hysteresis boundary tests
 
-    #[test]
+    #[kithara::test]
     fn up_switch_hysteresis_boundary() {
         // variants: 0 → 256k, 1 → 512k, 2 → 1024k
         // Current: variant 0 (256k bps)
@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(d.target_variant_index, 2);
     }
 
-    #[test]
+    #[kithara::test]
     fn down_switch_hysteresis_boundary() {
         // Current: variant 2 (1_024_000 bps)
         // Down-switch margin condition: adjusted_bps <= current_bw * down_hysteresis_ratio
@@ -827,7 +827,7 @@ mod tests {
 
     // Buffer threshold for up-switch
 
-    #[test]
+    #[kithara::test]
     fn buffer_level_threshold_for_up_switch() {
         let min_buffer = 10.0;
 
@@ -866,7 +866,7 @@ mod tests {
 
     // Single variant
 
-    #[test]
+    #[kithara::test]
     fn single_variant_returns_already_optimal() {
         let cfg = AbrOptions {
             min_switch_interval: Duration::ZERO,
@@ -889,7 +889,7 @@ mod tests {
 
     // Min-interval enforcement
 
-    #[test]
+    #[kithara::test]
     fn min_interval_enforcement_precise() {
         let interval = Duration::from_secs(30);
         let cfg = AbrOptions {

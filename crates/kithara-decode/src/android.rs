@@ -132,11 +132,11 @@ pub type AndroidAlac = Android<Alac>;
 mod tests {
     use std::io::Cursor;
 
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[rstest]
+    #[kithara::test]
     #[case::default(false)]
     #[case::with_handle(true)]
     fn test_android_config_handle_presence(#[case] with_handle: bool) {
@@ -151,7 +151,7 @@ mod tests {
         assert_eq!(config.byte_len_handle.is_some(), with_handle);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case::aac(0)]
     #[case::mp3(1)]
     #[case::flac(2)]
@@ -174,7 +174,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn test_type_aliases_exist() {
         fn _check_aac(_: AndroidAac) {}
         fn _check_mp3(_: AndroidMp3) {}

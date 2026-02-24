@@ -23,7 +23,6 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_test_utils::Xorshift64;
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -157,11 +156,9 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
 /// and full-track integrity verification after seek-to-zero.
-#[rstest]
+#[kithara::test(tokio, timeout(Duration::from_secs(300)))]
 #[case::ephemeral(true)]
 #[case::mmap(false)]
-#[timeout(Duration::from_secs(300))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

@@ -5,12 +5,11 @@
 use std::sync::Arc;
 
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, AssetsBackend, EvictConfig, ProcessChunkFn},
+    assets::{AssetStore, AssetStoreBuilder, EvictConfig, ProcessChunkFn},
     drm::{DecryptContext, aes128_cbc_process_chunk},
     internal::FetchManager,
     net::{HttpClient, NetOptions},
 };
-use rstest::fixture;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
@@ -47,7 +46,7 @@ pub(crate) fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
         .asset_root(Some(asset_root))
         .evict_config(EvictConfig::default())
         .cancel(CancellationToken::new())
-        .build_disk();
+        .build();
 
     TestAssets {
         assets,
@@ -62,11 +61,7 @@ pub(crate) fn create_test_net() -> HttpClient {
 }
 
 pub(crate) fn test_fetch_manager(assets: &TestAssets, net: HttpClient) -> FetchManager<HttpClient> {
-    FetchManager::new(
-        AssetsBackend::Disk(assets.assets().clone()),
-        net,
-        CancellationToken::new(),
-    )
+    FetchManager::new(assets.assets().clone(), net, CancellationToken::new())
 }
 
 pub(crate) fn test_fetch_manager_shared(
@@ -77,19 +72,19 @@ pub(crate) fn test_fetch_manager_shared(
 }
 
 /// Fixture: test assets
-#[fixture]
+#[kithara::fixture]
 pub(crate) fn assets_fixture() -> TestAssets {
     create_test_assets()
 }
 
 /// Fixture: test HTTP client
-#[fixture]
+#[kithara::fixture]
 pub(crate) fn net_fixture() -> HttpClient {
     create_test_net()
 }
 
 /// Fixture: both assets and network client
-#[fixture]
+#[kithara::fixture]
 pub(crate) fn abr_cache_and_net() -> (TestAssets, HttpClient) {
     (create_test_assets(), create_test_net())
 }

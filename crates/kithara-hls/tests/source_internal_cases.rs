@@ -19,7 +19,7 @@ use kithara_hls::internal::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_storage::{StorageResource, WaitOutcome};
 use kithara_stream::{AudioCodec, Source, StreamError, Timeline};
-use rstest::rstest;
+use kithara_test_utils::kithara;
 use tokio::{
     task,
     time::{self, Instant},
@@ -204,7 +204,7 @@ async fn wait_range_and_take_request(
     request
 }
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn seek_time_anchor_resolves_segment_and_queues_request() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_size_maps();
@@ -241,7 +241,7 @@ async fn seek_time_anchor_resolves_segment_and_queues_request() {
     assert_eq!(req.seek_epoch, 9);
 }
 
-#[test]
+#[kithara::test]
 fn media_info_uses_reader_offset_variant_instead_of_last_loaded_segment() {
     let cancel = CancellationToken::new();
     let playlist_state =
@@ -275,7 +275,7 @@ fn media_info_uses_reader_offset_variant_instead_of_last_loaded_segment() {
     assert_eq!(hinted_info.codec, Some(AudioCodec::Flac));
 }
 
-#[test]
+#[kithara::test]
 fn media_info_uses_hinted_variant_when_segments_are_flushed() {
     let cancel = CancellationToken::new();
     let playlist_state =
@@ -292,7 +292,7 @@ fn media_info_uses_hinted_variant_when_segments_are_flushed() {
     assert_eq!(info.codec, Some(AudioCodec::Flac));
 }
 
-#[test]
+#[kithara::test]
 fn current_segment_range_uses_reader_offset_not_last_segment() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_codecs(None, None);
@@ -316,7 +316,7 @@ fn current_segment_range_uses_reader_offset_not_last_segment() {
     assert_eq!(Source::current_segment_range(&source), Some(100..200));
 }
 
-#[test]
+#[kithara::test]
 fn format_change_segment_range_uses_metadata_when_segments_are_flushed() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_size_maps();
@@ -331,7 +331,7 @@ fn format_change_segment_range_uses_metadata_when_segments_are_flushed() {
     assert_eq!(Source::format_change_segment_range(&source), Some(0..100));
 }
 
-#[test]
+#[kithara::test]
 fn format_change_segment_range_prefers_loaded_init_bearing_segment() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_size_maps();
@@ -367,7 +367,7 @@ fn format_change_segment_range_prefers_loaded_init_bearing_segment() {
     assert_eq!(Source::format_change_segment_range(&source), Some(300..440));
 }
 
-#[test]
+#[kithara::test]
 fn format_change_segment_range_falls_back_to_metadata_without_loaded_init() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_size_maps();
@@ -395,7 +395,7 @@ fn format_change_segment_range_falls_back_to_metadata_without_loaded_init() {
     assert_eq!(Source::format_change_segment_range(&source), Some(0..100));
 }
 
-#[test]
+#[kithara::test]
 fn set_seek_epoch_flushes_playback_segments() {
     let cancel = CancellationToken::new();
     let playlist_state = playlist_state_with_codecs(None, None);
@@ -427,7 +427,7 @@ fn set_seek_epoch_flushes_playback_segments() {
     assert_eq!(shared.segments.lock().num_entries(), 0);
 }
 
-#[test]
+#[kithara::test]
 fn codec_fence_allows_cross_variant_reads_when_codec_matches() {
     let cancel = CancellationToken::new();
     let playlist_state =
@@ -442,7 +442,7 @@ fn codec_fence_allows_cross_variant_reads_when_codec_matches() {
     assert!(source_can_cross_variant(&source, 0, 1));
 }
 
-#[test]
+#[kithara::test]
 fn codec_fence_blocks_cross_variant_reads_when_codec_changes() {
     let cancel = CancellationToken::new();
     let playlist_state =
@@ -457,7 +457,7 @@ fn codec_fence_blocks_cross_variant_reads_when_codec_changes() {
     assert!(!source_can_cross_variant(&source, 0, 1));
 }
 
-#[test]
+#[kithara::test]
 fn build_pair_seeds_timeline_total_duration_from_playlist() {
     let cancel = CancellationToken::new();
     let playlist_state = Arc::new(PlaylistState::new(vec![
@@ -486,7 +486,7 @@ fn build_pair_seeds_timeline_total_duration_from_playlist() {
     );
 }
 
-#[test]
+#[kithara::test]
 fn build_pair_seeds_current_variant_from_abr_mode() {
     let cancel = CancellationToken::new();
     let playlist_state = Arc::new(PlaylistState::new(vec![
@@ -520,7 +520,7 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
     );
 }
 
-#[test]
+#[kithara::test]
 fn test_fence_at_removes_stale_entries() {
     let mut state = DownloadState::new();
 
@@ -559,7 +559,7 @@ fn test_fence_at_removes_stale_entries() {
     assert!(state.is_range_loaded(&(300..400)));
 }
 
-#[test]
+#[kithara::test]
 fn test_find_at_offset_after_fence() {
     let mut state = DownloadState::new();
 
@@ -589,7 +589,7 @@ fn test_find_at_offset_after_fence() {
     assert_eq!(state.find_at_offset(250).unwrap().variant, 3);
 }
 
-#[test]
+#[kithara::test]
 fn test_wait_range_blocks_after_fence() {
     let mut state = DownloadState::new();
 
@@ -616,7 +616,7 @@ fn test_wait_range_blocks_after_fence() {
     assert!(state.is_range_loaded(&(200..300)));
 }
 
-#[test]
+#[kithara::test]
 fn test_cumulative_offset_after_switch() {
     let mut state = DownloadState::new();
 
@@ -649,7 +649,7 @@ fn test_cumulative_offset_after_switch() {
     assert_eq!(state.find_at_offset(700).unwrap().segment_index, 14);
 }
 
-#[test]
+#[kithara::test]
 fn test_last_entry_tracks_most_recent_push() {
     let mut state = DownloadState::new();
 
@@ -668,7 +668,7 @@ fn test_last_entry_tracks_most_recent_push() {
     assert_eq!(state.last().unwrap().segment_index, 14);
 }
 
-#[test]
+#[kithara::test]
 fn test_had_midstream_switch_flag() {
     let ps = dummy_playlist_state();
     let shared = SharedSegments::new(CancellationToken::new(), ps, Timeline::new());
@@ -678,7 +678,7 @@ fn test_had_midstream_switch_flag() {
     assert!(shared.had_midstream_switch.load(Ordering::Acquire));
 }
 
-#[test]
+#[kithara::test]
 fn test_max_end_offset() {
     let mut state = DownloadState::new();
     assert_eq!(state.max_end_offset(), 0);
@@ -695,7 +695,7 @@ fn test_max_end_offset() {
     assert_eq!(state.max_end_offset(), 600);
 }
 
-#[test]
+#[kithara::test]
 fn range_ready_uses_coverage_for_disk_segments() {
     let cancel = CancellationToken::new();
     let ps = dummy_playlist_state();
@@ -729,7 +729,7 @@ fn range_ready_uses_coverage_for_disk_segments() {
     );
 }
 
-#[test]
+#[kithara::test]
 fn range_ready_requires_coverage_metadata() {
     let cancel = CancellationToken::new();
     let ps = dummy_playlist_state();
@@ -748,7 +748,7 @@ fn range_ready_requires_coverage_metadata() {
     );
 }
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn wait_range_waits_until_coverage_is_complete() {
     let cancel = CancellationToken::new();
     let ps = dummy_playlist_state();
@@ -786,10 +786,9 @@ async fn wait_range_waits_until_coverage_is_complete() {
 
 // wait_range cancellation tests
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(WaitRangeUnblock::Cancel)]
 #[case(WaitRangeUnblock::Stopped)]
-#[tokio::test]
 async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) {
     let cancel = CancellationToken::new();
     let ps = dummy_playlist_state();
@@ -821,7 +820,7 @@ async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) 
     );
 }
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn test_wait_range_returns_ready_when_data_pushed() {
     // Normal scenario: push segment data, wait_range returns Ready.
     let cancel = CancellationToken::new();
@@ -853,7 +852,7 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
     assert!(matches!(result, Ok(WaitOutcome::Ready)));
 }
 
-#[test]
+#[kithara::test]
 fn test_wait_range_flushing_interrupts_without_requesting_segment() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -871,7 +870,7 @@ fn test_wait_range_flushing_interrupts_without_requesting_segment() {
     );
 }
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     let cancel = CancellationToken::new();
     let ps = dummy_playlist_state();
@@ -910,7 +909,7 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     assert!(matches!(result, Ok(WaitOutcome::Ready)));
 }
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn test_wait_range_eof_when_stopped_and_past_end() {
     // Downloader stopped + eof -- wait_range at past-end offset returns Eof.
     let cancel = CancellationToken::new();
@@ -933,7 +932,7 @@ async fn test_wait_range_eof_when_stopped_and_past_end() {
     assert!(matches!(result, Ok(WaitOutcome::Eof)));
 }
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn test_wait_range_uses_active_variant_for_seek_request() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -952,7 +951,7 @@ async fn test_wait_range_uses_active_variant_for_seek_request() {
     assert_eq!(request.segment_index, 1);
 }
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn test_wait_range_requeues_request_after_seek_epoch_change() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -1008,7 +1007,7 @@ async fn test_wait_range_requeues_request_after_seek_epoch_change() {
     assert!(result.is_err(), "wait_range should stop after cancellation");
 }
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn test_wait_range_without_size_map_uses_segment_zero_fallback() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_without_size_map();
@@ -1021,7 +1020,7 @@ async fn test_wait_range_without_size_map_uses_segment_zero_fallback() {
     assert_eq!(request.segment_index, 0);
 }
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
     let cancel = CancellationToken::new();
     let ps = dummy_playlist_state();

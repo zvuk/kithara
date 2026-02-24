@@ -16,7 +16,6 @@ use kithara_events::{AudioEvent, Event, EventBus, SeekLifecycleStage};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
 use kithara_platform::ThreadPool;
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
-use rstest::rstest;
 use tracing::{info, warn};
 use url::Url;
 use wasm_bindgen_futures::JsFuture;
@@ -728,7 +727,7 @@ async fn wasm_player_play_without_loaded_track_must_not_panic_or_hang() {
     let _ = player.is_playing();
 }
 
-#[rstest]
+#[kithara::test]
 #[test_attr(wasm_bindgen_test)]
 #[case(2_u32, 20_u32)]
 #[case(3_u32, 20_u32)]

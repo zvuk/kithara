@@ -514,18 +514,17 @@ impl DecoderFactory {
 mod tests {
     use std::io::Cursor;
 
-    use kithara_test_utils::create_test_wav;
-    use rstest::rstest;
+    use kithara_test_utils::{create_test_wav, kithara};
 
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn test_codec_selector_exact() {
         let selector = CodecSelector::Exact(AudioCodec::AacLc);
         assert!(matches!(selector, CodecSelector::Exact(AudioCodec::AacLc)));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_codec_selector_probe() {
         let hint = ProbeHint {
             codec: Some(AudioCodec::Mp3),
@@ -535,13 +534,13 @@ mod tests {
         assert!(matches!(selector, CodecSelector::Probe(_)));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_codec_selector_auto() {
         let selector = CodecSelector::Auto;
         assert!(matches!(selector, CodecSelector::Auto));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_probe_hint_default() {
         let hint = ProbeHint::default();
         assert!(hint.codec.is_none());
@@ -550,7 +549,7 @@ mod tests {
         assert!(hint.mime.is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_probe_hint_with_all_fields() {
         let hint = ProbeHint {
             codec: Some(AudioCodec::Flac),
@@ -564,7 +563,7 @@ mod tests {
         assert_eq!(hint.mime, Some("audio/flac".into()));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_decoder_config_default() {
         let config = DecoderConfig::default();
         assert!(!config.prefer_hardware);
@@ -572,7 +571,7 @@ mod tests {
         assert!(config.gapless);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_decoder_config_custom() {
         let handle = Arc::new(AtomicU64::new(1000));
         let config = DecoderConfig {
@@ -590,7 +589,7 @@ mod tests {
         assert_eq!(config.hint, Some("mp3".to_string()));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_probe_from_direct_codec() {
         let hint = ProbeHint {
             codec: Some(AudioCodec::Vorbis),
@@ -600,7 +599,7 @@ mod tests {
         assert_eq!(codec, AudioCodec::Vorbis);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case("mp3", AudioCodec::Mp3)]
     #[case("aac", AudioCodec::AacLc)]
     #[case("m4a", AudioCodec::AacLc)]
@@ -618,7 +617,7 @@ mod tests {
         assert_eq!(codec, expected);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case("audio/mpeg", AudioCodec::Mp3)]
     #[case("audio/flac", AudioCodec::Flac)]
     #[case("audio/aac", AudioCodec::AacLc)]
@@ -636,7 +635,7 @@ mod tests {
         assert_eq!(codec, expected);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(ContainerFormat::MpegAudio, AudioCodec::Mp3)]
     #[case(ContainerFormat::Ogg, AudioCodec::Vorbis)]
     #[case(ContainerFormat::Wav, AudioCodec::Pcm)]
@@ -651,7 +650,7 @@ mod tests {
         assert_eq!(codec, expected);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_probe_priority_codec_over_extension() {
         // Codec hint should take priority over extension
         let hint = ProbeHint {
@@ -663,7 +662,7 @@ mod tests {
         assert_eq!(codec, AudioCodec::Flac);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_probe_priority_extension_over_mime() {
         // Extension should take priority over MIME when no direct codec
         let hint = ProbeHint {
@@ -675,7 +674,7 @@ mod tests {
         assert_eq!(codec, AudioCodec::Flac);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(ProbeHint::default())]
     #[case(ProbeHint { extension: Some("xyz".into()), ..Default::default() })]
     #[case(ProbeHint { mime: Some("application/octet-stream".into()), ..Default::default() })]
@@ -685,7 +684,7 @@ mod tests {
         assert!(matches!(result, Err(DecodeError::ProbeFailed)));
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case("unknown")]
     #[case("")]
     #[case("doc")]
@@ -693,7 +692,7 @@ mod tests {
         assert!(DecoderFactory::codec_from_extension(extension).is_none());
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case("text/plain")]
     #[case("")]
     #[case("video/mp4")]
@@ -701,14 +700,14 @@ mod tests {
         assert!(DecoderFactory::codec_from_mime(mime).is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_auto_selector_fails() {
         let empty = Cursor::new(Vec::new());
         let result = DecoderFactory::create(empty, &CodecSelector::Auto, DecoderConfig::default());
         assert!(matches!(result, Err(DecodeError::ProbeFailed)));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_create_for_recreate_falls_back_to_native_probe_on_mismatch() {
         let wav_data = create_test_wav(64, 44_100, 2);
         let wrong_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
@@ -725,7 +724,7 @@ mod tests {
         assert_eq!(spec.sample_rate, 44_100);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_create_for_recreate_fails_when_all_strategies_fail() {
         let wrong_info = MediaInfo::new(Some(AudioCodec::Mp3), Some(ContainerFormat::MpegAudio));
         let result = DecoderFactory::create_for_recreate(
@@ -736,7 +735,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
+    #[kithara::test]
     #[cfg(all(feature = "apple", any(target_os = "macos", target_os = "ios")))]
     fn test_prefer_hardware_aac_falls_back_to_symphonia() {
         // When prefer_hardware is true but Apple decoder fails (not implemented),

@@ -125,17 +125,17 @@ impl AudioNode for PlayerNode {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn player_node_defaults_active() {
         let node = PlayerNode::new();
         assert!(node.active);
     }
 
-    #[test]
+    #[kithara::test]
     fn player_node_info_has_stereo_output() {
         let node = PlayerNode::new();
         let info = node.info(&EmptyConfig);
@@ -144,7 +144,7 @@ mod tests {
         let _ = info;
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(PlayerCmd::SetPaused(true))]
     #[case(PlayerCmd::SetPaused(false))]
     #[case(PlayerCmd::SetFadeDuration(0.25))]
@@ -160,7 +160,7 @@ mod tests {
         assert!(matches!(received, Ok(Some(_))));
     }
 
-    #[test]
+    #[kithara::test]
     fn player_node_shared_state_accessible() {
         let node = PlayerNode::new();
         let state = node.shared_state();

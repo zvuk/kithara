@@ -17,15 +17,13 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_test_utils::wav::create_saw_wav;
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use super::fixture::{HlsTestServer, HlsTestServerConfig};
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn ephemeral_backend_creates_mem_resource() {
     let backend = AssetStoreBuilder::new()
         .ephemeral(true)
@@ -42,8 +40,7 @@ fn ephemeral_backend_creates_mem_resource() {
     );
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn disk_backend_creates_mmap_resource() {
     let temp = TempDir::new().expect("temp dir");
     let backend = AssetStoreBuilder::new()
@@ -87,9 +84,7 @@ fn count_files(dir: &std::path::Path) -> usize {
     count
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 async fn ephemeral_pipeline_no_disk_writes() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

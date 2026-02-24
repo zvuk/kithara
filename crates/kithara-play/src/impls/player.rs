@@ -339,6 +339,17 @@ impl PlayerImpl {
         Some(state.duration.load(Ordering::Relaxed))
     }
 
+    /// Diagnostic: number of times the audio processor's `process()` has been called.
+    pub fn process_count(&self) -> u64 {
+        let Some(slot_id) = *self.current_slot.lock() else {
+            return 0;
+        };
+        let Some(state) = self.engine.slot_shared_state(slot_id) else {
+            return 0;
+        };
+        state.process_count.load(Ordering::Relaxed)
+    }
+
     /// Returns `true` if the player is in playing state.
     pub fn is_playing(&self) -> bool {
         let Some(slot_id) = *self.current_slot.lock() else {
@@ -533,7 +544,7 @@ impl PlayerImpl {
 mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -573,7 +584,7 @@ mod tests {
 
     // -- Tests --------------------------------------------------------------------
 
-    #[rstest]
+    #[kithara::test]
     #[case(PlayerBasicScenario::StartsPaused)]
     #[case(PlayerBasicScenario::QueueStartsEmpty)]
     #[case(PlayerBasicScenario::ActionAtItemEndDefault)]
@@ -607,7 +618,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn player_pause_sets_rate_zero() {
         let player = PlayerImpl::new(PlayerConfig::default());
         // Don't call play() (requires audio hardware); just test pause logic.
@@ -616,7 +627,7 @@ mod tests {
         assert!((player.rate() - 0.0).abs() < f32::EPSILON);
     }
 
-    #[test]
+    #[kithara::test]
     fn player_volume_clamps() {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_volume(2.0);
@@ -627,7 +638,7 @@ mod tests {
         assert!((player.engine().master_volume() - 0.0).abs() < f32::EPSILON);
     }
 
-    #[test]
+    #[kithara::test]
     fn player_muted() {
         let player = PlayerImpl::new(PlayerConfig::default());
         assert!(!player.is_muted());
@@ -635,7 +646,7 @@ mod tests {
         assert!(player.is_muted());
     }
 
-    #[test]
+    #[kithara::test]
     fn player_session_ducking_roundtrip() {
         let _lock = crate::impls::engine::ducking_test_lock().lock().unwrap();
         let player = PlayerImpl::new(PlayerConfig::default());
@@ -646,7 +657,7 @@ mod tests {
         player.set_session_ducking(SessionDuckingMode::Off).unwrap();
     }
 
-    #[test]
+    #[kithara::test]
     fn player_crossfade_duration() {
         let player = PlayerImpl::new(PlayerConfig::default());
         assert!((player.crossfade_duration() - 1.0).abs() < f32::EPSILON);
@@ -654,7 +665,7 @@ mod tests {
         assert!((player.crossfade_duration() - 3.0).abs() < f32::EPSILON);
     }
 
-    #[test]
+    #[kithara::test]
     fn player_events_subscribe() {
         let player = PlayerImpl::new(PlayerConfig::default());
         let mut rx = player.subscribe();
@@ -664,7 +675,7 @@ mod tests {
         assert!(event.is_ok());
     }
 
-    #[test]
+    #[kithara::test]
     fn player_config_custom() {
         let config = PlayerConfig {
             crossfade_duration: 2.0,
@@ -678,7 +689,7 @@ mod tests {
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
     }
 
-    #[test]
+    #[kithara::test]
     fn player_config_builder() {
         let pool = ThreadPool::with_num_threads(1).unwrap();
         let config = PlayerConfig::default()
@@ -694,13 +705,13 @@ mod tests {
         assert!(config.thread_pool.is_some());
     }
 
-    #[test]
+    #[kithara::test]
     fn player_config_default_thread_pool_is_none() {
         let config = PlayerConfig::default();
         assert!(config.thread_pool.is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn player_propagates_thread_pool_to_engine() {
         let pool = ThreadPool::with_num_threads(1).unwrap();
         let config = PlayerConfig::default().with_thread_pool(pool);
@@ -711,10 +722,9 @@ mod tests {
 
     // -- Integration tests (player + resource + queue) ----------------------------
 
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case(InsertScenario::AppendTwice, 2)]
     #[case(InsertScenario::InsertAfterIndex, 3)]
-    #[tokio::test]
     async fn player_insert_scenarios(
         #[case] scenario: InsertScenario,
         #[case] expected_count: usize,
@@ -728,11 +738,10 @@ mod tests {
         assert_eq!(player.item_count(), expected_count);
     }
 
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case(RemoveAtScenario::ExistingItem)]
     #[case(RemoveAtScenario::OutOfBounds)]
     #[case(RemoveAtScenario::ShiftCurrentIndex)]
-    #[tokio::test]
     async fn player_remove_at_scenarios(#[case] scenario: RemoveAtScenario) {
         let player = PlayerImpl::new(PlayerConfig::default());
         match scenario {
@@ -762,10 +771,9 @@ mod tests {
         }
     }
 
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case(false)]
     #[case(true)]
-    #[tokio::test]
     async fn player_remove_all_resets_state(#[case] with_resources: bool) {
         let player = PlayerImpl::new(PlayerConfig::default());
         if with_resources {
@@ -780,7 +788,7 @@ mod tests {
         assert_eq!(player.status(), PlayerStatus::Unknown);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn player_advance_through_queue() {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.insert(make_resource(1.0), None);
@@ -796,7 +804,7 @@ mod tests {
         assert_eq!(player.current_index(), 2);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn player_advance_emits_event() {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.insert(make_resource(1.0), None);
@@ -807,7 +815,7 @@ mod tests {
         assert!(matches!(event, Ok(PlayerEvent::CurrentItemChanged)));
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn player_play_without_audio_hardware_logs_warning() {
         // play() should not panic even when audio hardware is unavailable.
         let player = PlayerImpl::new(PlayerConfig::default());
@@ -818,7 +826,7 @@ mod tests {
         // where the failure occurs. The key invariant: no panic.
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn player_multiple_events_in_order() {
         let player = PlayerImpl::new(PlayerConfig::default());
         let mut rx = player.subscribe();
@@ -835,7 +843,7 @@ mod tests {
         assert!(matches!(e3, Ok(PlayerEvent::RateChanged { .. })));
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn player_negative_crossfade_duration_clamped() {
         let player = PlayerImpl::new(PlayerConfig::default());
         player.set_crossfade_duration(-5.0);

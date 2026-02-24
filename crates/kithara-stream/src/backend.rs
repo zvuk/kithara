@@ -308,13 +308,16 @@ impl Drop for Backend {
 
 #[cfg(test)]
 mod tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
     use std::{
         sync::{Arc, Mutex},
         time::Duration,
     };
 
     use kithara_platform::ThreadPool;
-    use rstest::rstest;
     use tokio::sync::Notify;
     use tokio_util::sync::CancellationToken;
 
@@ -411,9 +414,7 @@ mod tests {
     ///
     /// Timeout: 2s — `step()` blocks for 30s, so if demand waits for `step`,
     /// the test will be killed by rstest timeout.
-    #[rstest]
-    #[timeout(Duration::from_secs(2))]
-    #[tokio::test]
+    #[kithara::test(tokio, timeout(Duration::from_secs(2)))]
     async fn demand_must_not_wait_for_step() {
         let demand_queue = Arc::new(Mutex::new(Vec::new()));
         let demand_notify = Arc::new(Notify::new());

@@ -9,6 +9,21 @@ use tracing::{info, warn};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+/// Direct console.log that bypasses tracing infrastructure.
+macro_rules! clog {
+    ($($arg:tt)*) => {
+        web_sys::console::log_1(&format!($($arg)*).into());
+    };
+}
+
+/// Diagnostic: return current WASM linear memory size in bytes.
+#[wasm_bindgen]
+pub fn wasm_memory_bytes() -> f64 {
+    let mem: js_sys::WebAssembly::Memory = wasm_bindgen::memory().unchecked_into();
+    let buf: js_sys::ArrayBuffer = mem.buffer().unchecked_into();
+    buf.byte_length() as f64
+}
+
 const CROSSFADE_SECONDS: f32 = 5.0;
 const FILE_URL_DEFAULT: &str = "https://stream.silvercomet.top/track.mp3";
 const HLS_URL_DEFAULT: &str = "https://stream.silvercomet.top/hls/master.m3u8";
@@ -86,16 +101,21 @@ impl WasmPlayer {
             return Err(js_error(format!("playlist index out of range: {idx}")));
         };
 
+        clog!("[TRACE] select_track: loading resource url={url}");
         let resource = load_resource(&url).await?;
+        clog!("[TRACE] select_track: resource loaded, subscribing events");
         log_resource_events(
             resource.subscribe(),
             url.clone(),
             Arc::clone(&self.event_log),
         );
+        clog!("[TRACE] select_track: calling play_resource");
         self.player
             .play_resource(resource)
             .map_err(|err| js_error(format!("failed to select track: {err}")))?;
+        clog!("[TRACE] select_track: play_resource done, updating index");
         *self.current_index.lock() = Some(idx);
+        clog!("[TRACE] select_track: complete");
 
         Ok(())
     }
@@ -134,7 +154,7 @@ impl WasmPlayer {
 
         for notification in self.player.drain_notifications() {
             let line = format!("player notification={notification}");
-            info!("{line}");
+            clog!("[TRACE] tick: {line}");
             push_event(&self.event_log, line);
         }
 
@@ -147,6 +167,11 @@ impl WasmPlayer {
 
     pub fn is_playing(&self) -> bool {
         self.player.is_playing()
+    }
+
+    /// Diagnostic: how many times the audio-thread process() callback has run.
+    pub fn process_count(&self) -> f64 {
+        self.player.process_count() as f64
     }
 
     pub fn get_volume(&self) -> f32 {

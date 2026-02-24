@@ -3,7 +3,6 @@ use std::time::Duration;
 use bytes::Bytes;
 use kithara::net::{Net, NetError, NetExt};
 use kithara_net::mock::NetMock;
-use rstest::rstest;
 use unimock::{MockFn, Unimock, matching};
 
 use super::fixture::{
@@ -66,12 +65,11 @@ fn make_timeout_mock(should_succeed: bool) -> Unimock {
     .no_verify_in_drop()
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case::success_before_timeout(Duration::from_millis(100), Duration::from_millis(200), true)]
 #[case::timeout_before_success(Duration::from_millis(200), Duration::from_millis(100), false)]
 #[case::zero_delay(Duration::from_millis(0), Duration::from_millis(100), true)]
 #[case::large_timeout(Duration::from_millis(1000), Duration::from_millis(10), false)]
-#[tokio::test]
 async fn test_timeout_scenarios(
     #[case] delay: Duration,
     #[case] timeout: Duration,
@@ -86,7 +84,7 @@ async fn test_timeout_scenarios(
     assert_bytes_or_timeout(result, should_succeed);
 }
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn test_timeout_with_error() {
     let delay = Duration::from_millis(100);
     let timeout = Duration::from_millis(200);
@@ -106,10 +104,9 @@ async fn test_timeout_with_error() {
     }
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(Duration::from_millis(100), Duration::from_millis(200), true)]
 #[case(Duration::from_millis(200), Duration::from_millis(100), false)]
-#[tokio::test]
 async fn test_all_net_methods_with_timeout(
     #[case] delay: Duration,
     #[case] timeout: Duration,
@@ -128,11 +125,10 @@ async fn test_all_net_methods_with_timeout(
     }
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(Duration::from_millis(0), true)]
 #[case(Duration::from_millis(50), false)]
 #[case(Duration::from_millis(100), false)]
-#[tokio::test]
 async fn test_zero_timeout(#[case] delay: Duration, #[case] should_succeed: bool) {
     let mock_net = DelayedNet::new(make_timeout_mock(true), delay);
     let timeout_net = mock_net.with_timeout(Duration::from_millis(0));
@@ -143,12 +139,11 @@ async fn test_zero_timeout(#[case] delay: Duration, #[case] should_succeed: bool
     assert_bytes_or_timeout(result, should_succeed);
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(Duration::from_millis(0))]
 #[case(Duration::from_millis(100))]
 #[case(Duration::from_millis(1000))]
 #[case(Duration::from_millis(5000))]
-#[tokio::test]
 async fn test_large_timeout(#[case] delay: Duration) {
     let mock_net = DelayedNet::new(make_timeout_mock(true), delay);
     let timeout_net = mock_net.with_timeout(Duration::from_secs(10));
@@ -160,11 +155,10 @@ async fn test_large_timeout(#[case] delay: Duration) {
     assert_eq!(result.unwrap(), Bytes::from_static(b"success"));
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case(Duration::from_millis(50))]
 #[case(Duration::from_millis(100))]
 #[case(Duration::from_millis(200))]
-#[tokio::test]
 async fn test_timeout_preserves_error(#[case] delay: Duration) {
     let mock_net = DelayedNet::new(make_timeout_mock(false), delay);
     let timeout_net = mock_net.with_timeout(Duration::from_secs(1));
@@ -179,14 +173,13 @@ async fn test_timeout_preserves_error(#[case] delay: Duration) {
     assert!(error.to_string().contains("mock error"));
 }
 
-#[rstest]
+#[kithara::test(tokio)]
 #[case::fast_delay(100, 200, true)]
 #[case::slow_delay(200, 100, false)]
 #[case::quick_success(50, 100, true)]
 #[case::moderate_timeout(150, 100, false)]
 #[case::zero_delay(0, 100, true)]
 #[case::large_delay(1000, 10, false)]
-#[tokio::test]
 async fn test_timeout_representative_scenarios(
     #[case] delay_ms: u64,
     #[case] timeout_ms: u64,

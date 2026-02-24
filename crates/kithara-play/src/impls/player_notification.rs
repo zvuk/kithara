@@ -45,11 +45,11 @@ pub(crate) enum PlayerNotification {
 mod tests {
     use std::sync::Arc;
 
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[rstest]
+    #[kithara::test]
     #[case(
         PlayerNotification::TrackLoaded(Arc::from("test.mp3")),
         "TrackLoaded",
@@ -70,7 +70,7 @@ mod tests {
         assert!(debug.contains(src_hint));
     }
 
-    #[test]
+    #[kithara::test]
     fn notification_clone() {
         let n = PlayerNotification::TrackChanged {
             old: Arc::from("old.mp3"),
@@ -82,7 +82,7 @@ mod tests {
         );
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case("fail.mp3")]
     #[case("broken.mp3")]
     fn notification_error_variant(#[case] src: &str) {

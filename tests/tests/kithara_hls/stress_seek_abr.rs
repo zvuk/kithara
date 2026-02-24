@@ -12,7 +12,6 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::temp_dir;
-use rstest::rstest;
 use tempfile::TempDir;
 use tracing::info;
 
@@ -50,9 +49,7 @@ fn no_proxy_contains_host(host: &str) -> bool {
 /// Reproduces production bug: after ABR switch (V0 AAC → V3 FLAC),
 /// seek causes deadlock because `detect_format_change` picks wrong
 /// segment offset → decoder created at wrong position → "missing ftyp atom".
-#[rstest]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 #[ignore = "requires network — production HLS stream"]
 async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TempDir) {
     assert!(
@@ -207,9 +204,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TempDir) {
 ///
 /// Uses seek positions observed in logs and asserts that each seek
 /// still yields PCM samples (audio must stay alive).
-#[rstest]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 #[ignore = "requires network + NO_PROXY=stream.silvercomet.top"]
 async fn seek_sequence_from_log_real_stream(temp_dir: TempDir) {
     assert!(

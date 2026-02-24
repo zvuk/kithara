@@ -33,9 +33,11 @@
 //! These tests document what the architecture SHOULD support.
 //! Implementation comes after we agree on contracts.
 
-use rstest::rstest;
+mod kithara {
+    pub(crate) use kithara_test_macros::test;
+}
 
-#[rstest]
+#[kithara::test(wasm)]
 #[case::resource_status(
     "ResourceStatus must expose downloaded and expected bytes for partial state"
 )]
@@ -76,7 +78,7 @@ fn test_progressive_download_contract_topics(#[case] topic: &str) {
 /// - Check if resource is partial: downloaded < expected
 /// - Reopen partial files and know expected total
 /// - Decide whether to commit or continue
-#[test]
+#[kithara::test]
 fn test_resource_status_should_expose_partial_state() {
     // This test documents the DESIRED API, not current implementation
 
@@ -126,7 +128,7 @@ fn test_resource_status_should_expose_partial_state() {
 ///     }
 /// }
 /// ```
-#[test]
+#[kithara::test]
 fn test_writer_completed_vs_committed_semantics() {
     // Scenario: HTTP stream closes at 512KB, Content-Length was 1MB
 
@@ -185,7 +187,7 @@ fn test_writer_completed_vs_committed_semantics() {
 ///     // Normal sequential download...
 /// }
 /// ```
-#[test]
+#[kithara::test]
 fn test_downloader_should_support_on_demand_mode() {
     // Scenario:
     // 1. Sequential download: 0-512KB
@@ -224,7 +226,7 @@ fn test_downloader_should_support_on_demand_mode() {
 ///
 /// For partial: `Source::len()` = `Some(1MB)` even though only 512KB downloaded.
 /// Decoder sees correct duration, seeks work correctly.
-#[test]
+#[kithara::test]
 fn test_source_len_should_return_expected_total() {
     // Scenario: 512KB downloaded, 1MB expected
 
@@ -264,7 +266,7 @@ fn test_source_len_should_return_expected_total() {
 ///
 /// Or: `wait_range()` should NOT be called for ranges beyond downloaded.
 /// Instead, Source checks and requests on-demand before waiting.
-#[test]
+#[kithara::test]
 fn test_wait_range_should_not_deadlock_on_partial() {
     // Scenario:
     // 1. Resource: downloaded=512KB, expected=1MB
@@ -308,7 +310,7 @@ fn test_wait_range_should_not_deadlock_on_partial() {
 /// This works but couples Source to implementation details.
 ///
 /// Better: Option A with trait method? Or accept `SharedState` as normal pattern?
-#[test]
+#[kithara::test]
 fn test_on_demand_request_should_be_explicit() {
     // Scenario: Source needs range [700KB..710KB]
 
@@ -370,7 +372,7 @@ fn test_on_demand_request_should_be_explicit() {
 /// - During download: `update_downloaded(rel_path, pos)`
 /// - On commit (complete): `remove(rel_path)` — committed files are complete
 /// - On reopen: `load()` → know `expected_total` for partial
-#[test]
+#[kithara::test]
 fn test_partial_download_resume_needs_download_index() {
     // Scenario: App crash at 512KB of 1MB
 
@@ -426,7 +428,7 @@ fn test_partial_download_resume_needs_download_index() {
 ///     })
 /// }
 /// ```
-#[test]
+#[kithara::test]
 fn test_hls_time_seek_needs_duration_tracking() {
     // Scenario: 10 segments, each 4 seconds
     // User seeks to 36 seconds (segment 9)
@@ -471,7 +473,7 @@ fn test_hls_time_seek_needs_duration_tracking() {
 ///
 /// Decoder sees: segment N always at bytes N*1MB..(N+1)*1MB regardless of variant.
 /// HLS maps: virtual byte → segment index → load segment → read from `StorageResource`.
-#[test]
+#[kithara::test]
 fn test_hls_abr_switch_needs_virtual_byte_space() {
     // Scenario: 3 segments variant 0, switch to variant 3, seek back
 
@@ -506,7 +508,7 @@ fn test_hls_abr_switch_needs_virtual_byte_space() {
 ///
 /// Fix: Same as File — Writer yields `StreamEnded`, `FetchManager` checks
 /// `total_bytes` vs expected before committing and adding to `SegmentIndex`.
-#[test]
+#[kithara::test]
 fn test_hls_partial_segment_should_not_be_committed() {
     // Scenario: segment expected 200KB, network drops at 100KB
 
@@ -561,7 +563,7 @@ fn test_hls_partial_segment_should_not_be_committed() {
 ///
 /// These are the contracts we need to implement.
 /// Next step: Write TDD tests at integration level that verify these contracts.
-#[test]
+#[kithara::test]
 fn architectural_requirements_summary() {
     // This test exists only to document the summary above.
     // Run `cargo test -- --nocapture` to see this documentation.

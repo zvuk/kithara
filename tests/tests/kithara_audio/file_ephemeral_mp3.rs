@@ -89,7 +89,7 @@ fn app() -> Router {
     Router::new().route("/test.mp3", get(mp3_endpoint).head(mp3_endpoint))
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio)]
 async fn audio_file_ephemeral_mp3_does_not_end_early() {
     let server = TestHttpServer::new(app()).await;
     let temp_dir = tempfile::TempDir::new().unwrap();

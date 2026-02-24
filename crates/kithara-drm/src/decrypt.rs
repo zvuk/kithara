@@ -106,7 +106,7 @@ mod tests {
         Encryptor,
         cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
     };
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -127,7 +127,7 @@ mod tests {
     }
 
     /// Roundtrip: encrypt → decrypt single chunk.
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case::hello(b"Hello, DRM world! This is a test of AES-128-CBC.".as_slice(), [0x42u8; 16], [0x13u8; 16])]
     #[case::exact_block(&[0x55u8; 16], [0xAAu8; 16], [0xBBu8; 16])]
     fn test_single_chunk_roundtrip(
@@ -144,7 +144,7 @@ mod tests {
         assert_eq!(&output[..written], plaintext);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_single_chunk_roundtrip_large() {
         let key = [0x01u8; 16];
         let iv = [0x02u8; 16];
@@ -160,7 +160,7 @@ mod tests {
         assert_eq!(&output[..written], &plaintext[..]);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_empty_input() {
         let mut ctx = DecryptContext::new([0u8; 16], [0u8; 16]);
         let mut output = [0u8; 16];
@@ -168,7 +168,7 @@ mod tests {
         assert_eq!(written, 0);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_unaligned_input_fails() {
         let mut ctx = DecryptContext::new([0u8; 16], [0u8; 16]);
         let input = [0u8; 15]; // Not aligned to 16
@@ -178,7 +178,7 @@ mod tests {
     }
 
     /// Multi-chunk CBC IV chaining.
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case::small_2_chunks(48, 32)]
     #[case::large_4_chunks(256, 64)]
     #[case::uneven_3_chunks(160, 48)]

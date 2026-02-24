@@ -9,7 +9,6 @@ use kithara::{
     decode::{DecoderConfig, DecoderFactory},
     stream::{AudioCodec, ContainerFormat, MediaInfo},
 };
-use rstest::{fixture, rstest};
 
 use super::fixture;
 
@@ -19,12 +18,12 @@ fn test_config() -> DecoderConfig {
 
 // Fixtures
 
-#[fixture]
+#[kithara::fixture]
 fn audio() -> EmbeddedAudio {
     EmbeddedAudio::get()
 }
 
-#[fixture]
+#[kithara::fixture]
 fn wav_media_info() -> MediaInfo {
     MediaInfo {
         channels: None,
@@ -35,7 +34,7 @@ fn wav_media_info() -> MediaInfo {
     }
 }
 
-#[fixture]
+#[kithara::fixture]
 fn mp3_media_info() -> MediaInfo {
     MediaInfo {
         channels: None,
@@ -48,7 +47,7 @@ fn mp3_media_info() -> MediaInfo {
 
 // Basic Decode Tests
 
-#[rstest]
+#[kithara::test]
 fn decode_wav_with_probe(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 
@@ -66,7 +65,7 @@ fn decode_wav_with_probe(audio: EmbeddedAudio) {
     assert!(!chunk.pcm.is_empty());
 }
 
-#[rstest]
+#[kithara::test]
 fn decode_mp3_with_probe(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.mp3());
 
@@ -84,7 +83,7 @@ fn decode_mp3_with_probe(audio: EmbeddedAudio) {
     assert!(!chunk.pcm.is_empty());
 }
 
-#[rstest]
+#[kithara::test]
 #[case::wav(true, "wav")]
 #[case::mp3(false, "mp3")]
 fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &str) {
@@ -107,7 +106,7 @@ fn decode_complete(audio: EmbeddedAudio, #[case] use_wav: bool, #[case] ext: &st
 
 // MediaInfo Creation Tests
 
-#[rstest]
+#[kithara::test]
 fn from_media_info_wav(audio: EmbeddedAudio, wav_media_info: MediaInfo) {
     let reader = Cursor::new(audio.wav());
 
@@ -122,7 +121,7 @@ fn from_media_info_wav(audio: EmbeddedAudio, wav_media_info: MediaInfo) {
     assert!(chunk.is_some());
 }
 
-#[rstest]
+#[kithara::test]
 fn from_media_info_mp3(audio: EmbeddedAudio, mp3_media_info: MediaInfo) {
     let reader = Cursor::new(audio.mp3());
 
@@ -136,7 +135,7 @@ fn from_media_info_mp3(audio: EmbeddedAudio, mp3_media_info: MediaInfo) {
 
 // Spec Tests
 
-#[rstest]
+#[kithara::test]
 fn spec_wav_properties(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 
@@ -148,7 +147,7 @@ fn spec_wav_properties(audio: EmbeddedAudio) {
     assert_eq!(spec.channels, 2);
 }
 
-#[rstest]
+#[kithara::test]
 fn spec_mp3_properties(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.mp3());
 
@@ -166,7 +165,7 @@ fn spec_mp3_properties(audio: EmbeddedAudio) {
 
 // Error Handling Tests
 
-#[rstest]
+#[kithara::test]
 #[case::invalid(vec![0u8; 100])]
 #[case::empty(vec![])]
 fn invalid_data_fails(#[case] data: Vec<u8>) {
@@ -176,7 +175,7 @@ fn invalid_data_fails(#[case] data: Vec<u8>) {
     assert!(result.is_err());
 }
 
-#[rstest]
+#[kithara::test]
 fn truncated_data_handles_gracefully(audio: EmbeddedAudio) {
     // Take only first 1000 bytes of WAV (truncated)
     let truncated: Vec<u8> = audio.wav().iter().take(1000).copied().collect();
@@ -193,7 +192,7 @@ fn truncated_data_handles_gracefully(audio: EmbeddedAudio) {
 
 // Chunk Properties Tests
 
-#[rstest]
+#[kithara::test]
 fn chunk_has_valid_samples(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 
@@ -225,7 +224,7 @@ fn chunk_has_valid_samples(audio: EmbeddedAudio) {
     );
 }
 
-#[rstest]
+#[kithara::test]
 fn multiple_chunks_consistent(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.mp3());
 
@@ -265,7 +264,7 @@ fn multiple_chunks_consistent(audio: EmbeddedAudio) {
 
 // Decode Consistency Tests
 
-#[rstest]
+#[kithara::test]
 fn consecutive_chunks_differ(audio: EmbeddedAudio) {
     let reader = Cursor::new(audio.wav());
 

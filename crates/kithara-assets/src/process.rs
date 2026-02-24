@@ -317,11 +317,12 @@ where
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use tempfile::tempdir;
     use tokio_util::sync::CancellationToken;
 
@@ -363,7 +364,7 @@ mod tests {
         })
     }
 
-    #[test]
+    #[kithara::test]
     fn test_process_on_commit() {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));
@@ -390,7 +391,7 @@ mod tests {
         assert_eq!(buf, expected);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case::short(&b"data"[..], 4)]
     #[case::longer(&b"abcdef"[..], 6)]
     fn test_process_called_once_on_multiple_commits(#[case] content: &[u8], #[case] len: u64) {
@@ -410,7 +411,7 @@ mod tests {
         assert_eq!(call_count.load(Ordering::SeqCst), count_after_first);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_read_at_after_processing() {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0xFF, Arc::clone(&call_count));
@@ -431,7 +432,7 @@ mod tests {
         assert_eq!(buf, expected);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_no_processing_without_ctx() {
         let call_count = Arc::new(AtomicUsize::new(0));
         let process_fn = xor_chunk_processor(0x42, Arc::clone(&call_count));

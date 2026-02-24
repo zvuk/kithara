@@ -46,9 +46,11 @@ impl StreamContext for HlsStreamContext {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn test_hls_stream_context_reads_atomics() {
         let timeline = Timeline::new();
         timeline.set_byte_position(1000);

@@ -171,7 +171,7 @@ fn init_tracing() {
 ///
 /// After sequential stream closes at 512KB, seek to 700KB
 /// should trigger on-demand Range request and succeed.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio)]
 async fn file_stream_closes_early_seek_still_works() {
     let clean_temp_dir = clean_temp_dir();
     let cancel_token = CancellationToken::new();
@@ -243,7 +243,7 @@ async fn file_stream_closes_early_seek_still_works() {
 ///
 /// Phase 1: download 512KB of 1MB, drop stream.
 /// Phase 2: reopen same URL with same cache dir, seek to 700KB → on-demand Range.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio)]
 async fn partial_cache_resume_works() {
     let cache_dir = clean_temp_dir();
     init_tracing();

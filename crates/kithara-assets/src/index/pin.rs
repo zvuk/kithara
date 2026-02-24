@@ -94,11 +94,12 @@ impl<R: ResourceExt> PinsIndex<R> {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use std::{collections::HashSet, time::Duration};
 
     use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource};
-    use rstest::*;
+    use kithara_test_utils::kithara;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -118,9 +119,7 @@ mod tests {
         .unwrap()
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[test]
+    #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_pins_index_new() {
         let temp_dir = TempDir::new().unwrap();
         let res = create_test_resource(&temp_dir);
@@ -132,9 +131,7 @@ mod tests {
         assert!(pins.is_empty());
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[test]
+    #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_load_empty_resource() {
         let temp_dir = TempDir::new().unwrap();
         let res = create_test_resource(&temp_dir);
@@ -145,9 +142,7 @@ mod tests {
         assert!(pins.is_empty());
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[test]
+    #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_load_invalid_json() {
         let temp_dir = TempDir::new().unwrap();
         let res = create_test_resource(&temp_dir);
@@ -162,9 +157,7 @@ mod tests {
         assert!(pins.is_empty());
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[test]
+    #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_store_and_load() {
         let temp_dir = TempDir::new().unwrap();
         let res = create_test_resource(&temp_dir);
@@ -182,9 +175,7 @@ mod tests {
         assert!(loaded.contains("asset2"));
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[test]
+    #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_persistence_across_instances() {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join("pins.bin");
@@ -226,9 +217,7 @@ mod tests {
         }
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(1))]
-    #[test]
+    #[kithara::test(timeout(Duration::from_secs(1)))]
     fn test_pins_index_file_format() {
         let temp_dir = TempDir::new().unwrap();
         let res = create_test_resource(&temp_dir);

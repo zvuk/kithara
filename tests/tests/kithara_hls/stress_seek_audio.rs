@@ -20,7 +20,6 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_test_utils::{Xorshift64, wav::create_saw_wav};
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -75,11 +74,9 @@ fn phase_distance(a: usize, b: usize) -> usize {
 ///    - Level 2: continuity (consecutive frames follow pattern)
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 6. Final seek near end → read to EOF
-#[rstest]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
-#[timeout(Duration::from_secs(120))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

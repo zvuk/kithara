@@ -16,7 +16,6 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::{cancel_token, temp_dir, tracing_setup};
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -35,9 +34,7 @@ use super::fixture::{
 /// 4. Verify segment 1 data is readable
 ///
 /// EXPECTED: seek is processed, segment data is read correctly
-#[rstest]
-#[timeout(Duration::from_secs(10))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn test_driver_seek_after_playlist_finished(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -102,9 +99,7 @@ async fn test_driver_seek_after_playlist_finished(
 ///
 /// This tests seek backward at the Stream<Hls> level with ABR active,
 /// without the full decoder chain.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn test_driver_abr_seek_backward(
     _tracing_setup: (),
     temp_dir: TempDir,

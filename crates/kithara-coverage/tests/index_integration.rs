@@ -1,8 +1,10 @@
+#![cfg(not(target_arch = "wasm32"))]
+
 use std::{sync::Arc, time::Duration};
 
 use kithara_coverage::{Coverage, CoverageIndex, DiskCoverage, MemCoverage};
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
-use rstest::rstest;
+use kithara_test_utils::kithara;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
@@ -19,9 +21,7 @@ fn create_test_resource(dir: &TempDir, name: &str) -> MmapResource {
     .expect("failed to open mmap coverage resource")
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn open_empty_file_returns_empty_state() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");
@@ -30,9 +30,7 @@ fn open_empty_file_returns_empty_state() {
     assert!(index.get("nonexistent").is_none());
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn get_nonexistent_key_returns_none() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");
@@ -41,9 +39,7 @@ fn get_nonexistent_key_returns_none() {
     assert!(index.get("missing-key").is_none());
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn update_and_get_roundtrip() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");
@@ -62,9 +58,7 @@ fn update_and_get_roundtrip() {
     assert_eq!(gaps[0], 500..1000);
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn update_two_different_keys() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");
@@ -85,9 +79,7 @@ fn update_two_different_keys() {
     assert!(loaded2.is_complete());
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn remove_deletes_entry() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");
@@ -101,9 +93,7 @@ fn remove_deletes_entry() {
     assert!(index.get("key1").is_none());
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn flush_and_reopen_persists() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("cov.bin");
@@ -149,9 +139,7 @@ fn flush_and_reopen_persists() {
     }
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn corrupt_file_returns_empty_state() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");
@@ -163,9 +151,7 @@ fn corrupt_file_returns_empty_state() {
     assert!(index.get("anything").is_none());
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn concurrent_updates_from_different_threads() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");
@@ -195,9 +181,7 @@ fn concurrent_updates_from_different_threads() {
 
 // DiskCoverage tests
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn disk_coverage_open_without_existing_entry() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");
@@ -208,9 +192,7 @@ fn disk_coverage_open_without_existing_entry() {
     assert!(cov.total_size().is_none());
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn disk_coverage_mark_flush_reopen() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("cov.bin");
@@ -262,9 +244,7 @@ fn disk_coverage_mark_flush_reopen() {
     }
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn disk_coverage_flush_idempotent() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");
@@ -279,9 +259,7 @@ fn disk_coverage_flush_idempotent() {
     cov.flush();
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn disk_coverage_remove_deletes_from_index() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");
@@ -299,9 +277,7 @@ fn disk_coverage_remove_deletes_from_index() {
     assert!(index.get("to-remove").is_none());
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn disk_coverage_drop_flushes() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");
@@ -319,9 +295,7 @@ fn disk_coverage_drop_flushes() {
     assert_eq!(loaded.total_size(), Some(200));
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(2))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(2)))]
 fn multiple_disk_coverages_independent() {
     let dir = TempDir::new().unwrap();
     let res = create_test_resource(&dir, "cov.bin");

@@ -13,6 +13,7 @@ use derivative::Derivative;
 use kithara_platform::{Condvar, Mutex};
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 
 use crate::{
     StorageError, StorageResult,
@@ -284,7 +285,6 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
     }
 
     #[cfg_attr(feature = "perf", hotpath::measure)]
-    #[expect(clippy::significant_drop_tightening)] // lock must be held for condvar.wait_for
     fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
         if range.start > range.end {
             return Err(StorageError::InvalidRange {
@@ -325,6 +325,14 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                 }
                 return Ok(WaitOutcome::Ready);
             }
+
+            debug!(
+                range_start = range.start,
+                range_end = range.end,
+                committed = state.committed,
+                final_len = ?state.final_len,
+                "storage::wait_range spinning"
+            );
 
             self.inner
                 .condvar
@@ -404,9 +412,13 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
 
 #[cfg(test)]
 mod tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn driver_io_mock_api_is_generated() {
         let _ = DriverIoMock::read_at;
     }

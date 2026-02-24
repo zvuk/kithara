@@ -384,9 +384,11 @@ where
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn byte_recorder_mock_api_is_generated() {
         let _ = ByteRecorderMock::record_bytes;
     }

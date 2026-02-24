@@ -75,9 +75,11 @@ pub trait PlayerItem: MaybeSend + MaybeSync + 'static {
 
 #[cfg(test)]
 mod tests {
+    use kithara_test_utils::kithara;
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn player_item_mock_api_is_generated() {
         let _ = PlayerItemMock::status;
     }

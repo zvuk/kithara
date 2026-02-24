@@ -63,22 +63,24 @@ web-sys = { workspace = true, features = [
 kithara-audio = { path = ".", default-features = false, features = ["internal"] }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-axum = { workspace = true }
 bytes = { workspace = true }
-reqwest = { workspace = true, features = ["rustls", "stream"] }
 tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
 url = { workspace = true }
 kithara-decode = { workspace = true, features = ["test-utils"] }
+kithara-test-utils = { workspace = true }
+tempfile = { workspace = true }
+aes = { workspace = true }
+cbc = { workspace = true }
+unimock = { workspace = true }
+wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+axum = { workspace = true }
+reqwest = { workspace = true, features = ["rustls", "stream"] }
+tracing-subscriber = { workspace = true }
 kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
-kithara-test-utils = { workspace = true }
-tempfile = { workspace = true }
 rodio = { workspace = true }
-rstest = { workspace = true }
-aes = { workspace = true }
-cbc = { workspace = true }
 hotpath = { workspace = true }
-unimock = { workspace = true }

@@ -706,6 +706,7 @@ impl<N: Net> Loader for FetchManager<N> {
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use std::{collections::HashMap, path::Path, sync::Arc, time::Duration};
 
@@ -714,7 +715,7 @@ mod tests {
     use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn};
     use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
     use kithara_net::{ByteStream, Headers, NetError, mock::NetMock};
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
     use unimock::{MockFn, Unimock, matching};
@@ -808,10 +809,9 @@ mod tests {
 
     // FetchManager tests
 
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case(FetchKind::Playlist)]
     #[case(FetchKind::Key)]
-    #[tokio::test]
     async fn test_fetch_with_mock_net(#[case] kind: FetchKind) {
         let (url, rel_path, expected) = match kind {
             FetchKind::Playlist => (
@@ -836,7 +836,7 @@ mod tests {
         assert_eq!(result.unwrap(), expected);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_fetch_playlist_uses_cache() {
         let url = test_url("http://example.com/playlist.m3u8");
         let playlist_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
@@ -852,10 +852,9 @@ mod tests {
         assert_eq!(result1.unwrap(), result2.unwrap());
     }
 
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case(FetchKind::Playlist)]
     #[case(FetchKind::Key)]
-    #[tokio::test]
     async fn test_fetch_with_network_error(#[case] kind: FetchKind) {
         let (url, rel_path) = match kind {
             FetchKind::Playlist => (
@@ -874,7 +873,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_matcher_url_path_matching() {
         let master_content = b"#EXTM3U\n#EXT-X-VERSION:6\n";
         let media_content = b"#EXTINF:4.0\nseg0.bin\n";
@@ -898,7 +897,7 @@ mod tests {
         assert!(media.is_ok());
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_matcher_url_domain_matching() {
         let content = b"test content";
 
@@ -915,7 +914,7 @@ mod tests {
         assert!(result.is_ok());
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_matcher_headers_matching() {
         let key_content = vec![0u8; 16];
 
@@ -955,7 +954,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_mock_loader_basic() {
         let loader = Unimock::new((
             LoaderMock::num_variants
@@ -978,7 +977,7 @@ mod tests {
         assert_eq!(meta.len, 200_000);
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn test_mock_loader_multi_variant() {
         let loader = Unimock::new(
             LoaderMock::load_media_segment
@@ -1038,10 +1037,9 @@ mod tests {
         Ok(Box::pin(stream) as ByteStream)
     }
 
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case(&stream_with_timeout)]
     #[case(&empty_stream)]
-    #[tokio::test]
     async fn test_load_media_segment_invalid_stream_returns_err(
         #[case] stream_answer: &'static StreamAnswer,
     ) {

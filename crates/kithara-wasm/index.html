@@ -844,6 +844,9 @@
         let selectingTrack = false;
         let lastTickErrorAt = 0;
         let uiSuspended = false;
+        let lastProcessCount = 0;
+        let lastProcessCountLogTime = 0;
+        let lastWasmMemoryBytes = 0;
 
         function renderPlaylist() {
             playlistEl.innerHTML = '';
@@ -927,6 +930,7 @@
         }
 
         function updateUi() {
+            try {
             if (uiSuspended) {
                 uiRaf = requestAnimationFrame(updateUi);
                 return;
@@ -966,6 +970,27 @@
                 }
             }
             sampleSeekProgress(posMs);
+            // Diagnostic: log process_count + WASM memory every ~1s
+            const pcNow = Date.now();
+            if (pcNow - lastProcessCountLogTime >= 1000) {
+                const pc = player.process_count();
+                const delta = pc - lastProcessCount;
+                let memMB = '?';
+                try {
+                    const bytes = wasm.wasm_memory_bytes();
+                    memMB = (bytes / (1024 * 1024)).toFixed(1);
+                    if (bytes !== lastWasmMemoryBytes) {
+                        console.log(`[DIAG-MEM] WASM memory GREW: ${(lastWasmMemoryBytes/(1024*1024)).toFixed(1)}MB -> ${memMB}MB`);
+                        lastWasmMemoryBytes = bytes;
+                    }
+                } catch(e) { memMB = 'err:' + e; }
+                console.log(`[DIAG] process_count=${pc} delta=${delta} pos=${posMs.toFixed(0)} wasmMem=${memMB}MB`);
+                lastProcessCount = pc;
+                lastProcessCountLogTime = pcNow;
+            }
+            } catch (err) {
+                console.error("[UPDATEUI-CRASH] " + err + " stack=" + (err.stack || "no stack"));
+            }
             uiRaf = requestAnimationFrame(updateUi);
         }
 

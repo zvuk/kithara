@@ -8,7 +8,6 @@ use std::io::Cursor;
 
 use kithara::decode::{DecoderConfig, DecoderFactory, InnerDecoder};
 use kithara_test_utils::create_test_wav;
-use rstest::rstest;
 
 fn create_wav_decoder(frames: usize) -> Box<dyn InnerDecoder> {
     let wav_data = create_test_wav(frames, 44100, 2);
@@ -44,12 +43,11 @@ enum PerfScenario {
     Throughput,
 }
 
-#[rstest]
+#[kithara::test]
 #[case("decoder_wav", PerfScenario::DecodeLoop)]
 #[case("decoder_probe", PerfScenario::ProbeLatency)]
 #[case("decoder_f32_conversion", PerfScenario::F32Conversion)]
 #[case("decoder_throughput", PerfScenario::Throughput)]
-#[test]
 #[ignore]
 fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = hotpath::FunctionsGuardBuilder::new(label).build();

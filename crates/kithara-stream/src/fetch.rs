@@ -76,9 +76,13 @@ impl Default for EpochValidator {
 
 #[cfg(test)]
 mod tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn epoch_validator_keeps_matching_chunks() {
         let mut validator = EpochValidator::new();
         let item = Fetch::new(vec![1u8, 2, 3], false, 1);
@@ -86,7 +90,7 @@ mod tests {
         assert!(validator.is_valid(&item));
     }
 
-    #[test]
+    #[kithara::test]
     fn epoch_validator_rejects_stale_chunks_after_seek() {
         let mut validator = EpochValidator::new();
         let stale = Fetch::new(vec![3u8], false, validator.epoch);

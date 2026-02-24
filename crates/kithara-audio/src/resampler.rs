@@ -745,7 +745,7 @@ impl AudioEffect for ResamplerProcessor {
 #[cfg(test)]
 mod tests {
     use kithara_bufpool::pcm_pool;
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -776,7 +776,7 @@ mod tests {
         ResamplerParams::new(host_sr, source_rate, channels).with_quality(quality)
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case::same_rate(44100, 44100, true)]
     #[case::host_zero(0, 44100, true)]
     #[case::different_rate(44100, 48000, false)]
@@ -789,7 +789,7 @@ mod tests {
         assert_eq!(processor.is_passthrough(), expected);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_passthrough_processing() {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 44100, 2));
 
@@ -808,14 +808,14 @@ mod tests {
         assert_eq!(out.spec().sample_rate, 44100);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_output_spec() {
         let processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
         assert_eq!(processor.output_spec.sample_rate, 44100);
         assert_eq!(processor.output_spec.channels, 2);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_dynamic_host_rate_change() {
         let host_sr = make_host_rate(44100);
         let mut processor = ResamplerProcessor::new(params(host_sr.clone(), 44100, 2));
@@ -836,7 +836,7 @@ mod tests {
         assert!(!processor.is_passthrough());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_accumulates_small_chunks() {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
@@ -853,7 +853,7 @@ mod tests {
         assert_eq!(processor.input_buffer[0].len(), 50);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_processes_large_chunks() {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
@@ -870,7 +870,7 @@ mod tests {
         assert!(!result.unwrap().pcm.is_empty());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_source_rate_change_updates_dynamically() {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
@@ -898,7 +898,7 @@ mod tests {
         assert!(processor.is_passthrough());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_no_data_loss_across_chunks() {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 48000, 2));
 
@@ -931,7 +931,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn test_audio_effect_trait() {
         let mut processor = ResamplerProcessor::new(params(make_host_rate(44100), 44100, 2));
 
@@ -954,7 +954,7 @@ mod tests {
 
     // Quality-specific tests
 
-    #[rstest]
+    #[kithara::test]
     #[case::fast(ResamplerQuality::Fast)]
     #[case::normal(ResamplerQuality::Normal)]
     #[case::good(ResamplerQuality::Good)]

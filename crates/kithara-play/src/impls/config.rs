@@ -360,11 +360,11 @@ impl ResourceConfig {
 mod tests {
     use std::path::Path;
 
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[rstest]
+    #[kithara::test]
     #[case("https://example.com/song.mp3", true, "https")]
     #[case("/tmp/song.mp3", false, "/tmp/song.mp3")]
     #[case("file:///tmp/song.mp3", false, "/tmp/song.mp3")]
@@ -381,13 +381,13 @@ mod tests {
         }
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case("relative/path.mp3")]
     fn config_source_parsing_error(#[case] input: &str) {
         assert!(ResourceConfig::new(input).is_err());
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(false)]
     #[case(true)]
     fn config_bus_presence(#[case] with_events: bool) {
@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[cfg(feature = "file")]
-    #[test]
+    #[kithara::test]
     fn config_bus_propagates_to_file_config() {
         let bus = EventBus::new(32);
         let config = ResourceConfig::new("https://example.com/song.mp3")
@@ -410,7 +410,7 @@ mod tests {
     }
 
     #[cfg(feature = "hls")]
-    #[test]
+    #[kithara::test]
     fn config_bus_propagates_to_hls_config() {
         let bus = EventBus::new(32);
         let config = ResourceConfig::new("https://example.com/live.m3u8")
@@ -421,7 +421,7 @@ mod tests {
     }
 
     #[cfg(any(feature = "file", feature = "hls"))]
-    #[test]
+    #[kithara::test]
     fn config_with_headers() {
         let mut headers = Headers::new();
         headers.insert("Authorization", "Bearer test");
@@ -436,7 +436,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn config_builder_chain() {
         let bus = EventBus::new(32);
         let config = ResourceConfig::new("https://example.com/song.mp3")

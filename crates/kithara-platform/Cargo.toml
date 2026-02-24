@@ -26,4 +26,5 @@ tokio = { workspace = true, features = ["time", "sync"] }
 
 [dev-dependencies]
 kithara-platform = { path = ".", default-features = false, features = ["internal"] }
-rstest = { workspace = true }
+kithara-test-macros = { workspace = true }
+wasm-bindgen-test = { workspace = true }

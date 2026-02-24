@@ -14,20 +14,17 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::temp_dir;
-use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
 use super::fixture::AudioTestServer;
 
-#[fixture]
+#[kithara::fixture]
 async fn server() -> AudioTestServer {
     AudioTestServer::new().await
 }
 
 /// Create Decoder<Stream<File>> and verify spec.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn decoder_file_creates_successfully(#[future] server: AudioTestServer, temp_dir: TempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -43,9 +40,7 @@ async fn decoder_file_creates_successfully(#[future] server: AudioTestServer, te
 }
 
 /// Decoder<Stream<File>> reads MP3 samples (no seek, just read).
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn decoder_file_reads_samples(#[future] server: AudioTestServer, temp_dir: TempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -64,9 +59,7 @@ async fn decoder_file_reads_samples(#[future] server: AudioTestServer, temp_dir:
 }
 
 /// Seek to 0: read, seek to beginning, read again.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn decoder_file_seek_to_zero(#[future] server: AudioTestServer, temp_dir: TempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -91,9 +84,7 @@ async fn decoder_file_seek_to_zero(#[future] server: AudioTestServer, temp_dir: 
 }
 
 /// Decoder<Stream<File>> reads MP3 samples and can seek forward.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn decoder_file_seek_forward(#[future] server: AudioTestServer, temp_dir: TempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -131,9 +122,7 @@ async fn decoder_file_seek_forward(#[future] server: AudioTestServer, temp_dir: 
 }
 
 /// Decoder<Stream<File>> can seek backward to the beginning.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir: TempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -174,9 +163,7 @@ async fn decoder_file_seek_backward(#[future] server: AudioTestServer, temp_dir:
 }
 
 /// Decoder<Stream<File>> multiple seeks in sequence.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir: TempDir) {
     let server = server.await;
     let url = server.mp3_url();
@@ -217,9 +204,7 @@ async fn decoder_file_seek_multiple(#[future] server: AudioTestServer, temp_dir:
 }
 
 /// Decoder<Stream<File>> events are emitted on seek.
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn decoder_file_seek_emits_events(#[future] server: AudioTestServer, temp_dir: TempDir) {
     let server = server.await;
     let url = server.mp3_url();

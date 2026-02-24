@@ -27,5 +27,8 @@ tokio = { workspace = true, features = ["full"] }
 
 [dev-dependencies]
 kithara-events = { path = ".", default-features = false, features = ["internal"] }
+kithara-test-utils = { workspace = true }
+wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-rstest = { workspace = true }

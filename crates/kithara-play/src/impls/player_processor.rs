@@ -214,7 +214,13 @@ impl PlayerNodeProcessor {
             {
                 match transition {
                     TrackTransition::FadeIn(_) => {
-                        track.seek(0.0);
+                        // Only seek if the track has progressed past the start.
+                        // Seeking to 0 on a freshly loaded track triggers
+                        // set_seek_epoch → clear() which wipes the segment index
+                        // and races with in-flight ABR downloads (WASM HLS bug).
+                        if track.position() > 0.5 {
+                            track.seek(0.0);
+                        }
                         track.fade_in();
                     }
                     TrackTransition::FadeOut(_) => {
@@ -433,6 +439,10 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
         _events: &mut ProcEvents,
         _extra: &mut ProcExtra,
     ) -> ProcessStatus {
+        self.shared_state
+            .process_count
+            .fetch_add(1, Ordering::Relaxed);
+
         // 1. Drain commands
         self.drain_commands();
 
@@ -464,7 +474,7 @@ mod tests {
     use kithara_decode::{PcmSpec, TrackMetadata};
     use kithara_events::AudioEvent;
     use kithara_platform::Mutex as PlatformMutex;
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use tokio::sync::broadcast;
 
     use super::*;
@@ -490,18 +500,17 @@ mod tests {
         (processor, tx)
     }
 
-    #[test]
+    #[kithara::test]
     fn processor_renders_silence_when_no_tracks() {
         let (processor, _tx) = make_processor();
         assert_eq!(processor.tracks.len(), 0);
         assert_eq!(processor.tracks_index.len(), 0);
     }
 
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case(TrackCommandScenario::LoadOnly, 1, true)]
     #[case(TrackCommandScenario::DuplicateLoad, 1, true)]
     #[case(TrackCommandScenario::LoadThenUnload, 0, false)]
-    #[tokio::test]
     async fn processor_track_command_scenarios(
         #[case] scenario: TrackCommandScenario,
         #[case] expected_tracks: usize,
@@ -556,7 +565,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn processor_seek_without_tracks_does_not_panic() {
         let (mut processor, tx) = make_processor();
         tx.send(PlayerCmd::Seek {
@@ -567,7 +576,7 @@ mod tests {
         processor.drain_commands();
     }
 
-    #[test]
+    #[kithara::test]
     fn processor_set_paused_updates_shared_state() {
         let (mut processor, tx) = make_processor();
 
@@ -580,7 +589,7 @@ mod tests {
         assert!(!processor.shared_state.playing.load(Ordering::SeqCst));
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn processor_fade_in_restarts_track_from_zero() {
         let (mut processor, tx) = make_processor();
         let src = Arc::from("track1.mp3");
@@ -616,7 +625,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn processor_cleanup_finished_tracks() {
         let (mut processor, tx) = make_processor();
 
@@ -742,7 +751,7 @@ mod tests {
         )))
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn processor_multiple_seek_epochs_only_last_applies() {
         let seek_log = TestArc::new(Mutex::new(Vec::new()));
         let resource = create_tracking_player_resource("track1.mp3", Arc::clone(&seek_log));
@@ -787,9 +796,10 @@ mod tests {
         processor.drain_commands();
 
         let seek_log = seek_log.lock().expect("seek log mutex poisoned");
-        // FadeIn calls seek(0.0) → 0ms, then only the last seek epoch passes → 30000ms.
+        // FadeIn skips seek(0.0) because position is already at 0.
+        // Only the last seek epoch passes → 30000ms.
         // Seeks with stale epochs (1, 2) are dropped.
-        assert_eq!(seek_log.as_slice(), [0, 30000]);
+        assert_eq!(seek_log.as_slice(), [30000]);
         assert_eq!(shared_state.seek_epoch.load(Ordering::SeqCst), third);
     }
 }

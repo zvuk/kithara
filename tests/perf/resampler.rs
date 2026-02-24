@@ -11,7 +11,6 @@ use kithara::{
     bufpool::pcm_pool,
     decode::{PcmChunk, PcmMeta, PcmSpec},
 };
-use rstest::rstest;
 
 /// Create a test PCM chunk with specified sample count.
 fn create_test_chunk(frames: usize, spec: PcmSpec) -> PcmChunk {
@@ -66,12 +65,11 @@ enum PerfScenario {
     QualityComparison,
 }
 
-#[rstest]
+#[kithara::test]
 #[case("resampler_quality", PerfScenario::QualityComparison)]
 #[case("resampler_passthrough", PerfScenario::PassthroughDetection)]
 #[case("resampler_deinterleave", PerfScenario::DeinterleaveOverhead)]
 #[case("resampler_breakdown", PerfScenario::DetailedBreakdown)]
-#[test]
 #[ignore]
 fn perf_resampler_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = hotpath::FunctionsGuardBuilder::new(label).build();

@@ -371,7 +371,7 @@ impl PlayerTrack {
 mod tests {
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
     use crate::impls::resource::Resource;
@@ -394,7 +394,7 @@ mod tests {
 
     // Note: `make_track()` requires a tokio runtime because `Resource::from_reader()`
     // internally calls `tokio::spawn()` to forward audio events. All tests using
-    // this helper must use `#[tokio::test]`.
+    // this helper must use `#[kithara::test(tokio)]`.
     fn make_track() -> PlayerTrack {
         let src: Arc<str> = Arc::from("test.mp3");
         let resource = Resource::from_reader(TestPcmReader::new(mock_spec(), 60.0));
@@ -405,13 +405,12 @@ mod tests {
         PlayerTrack::new(arc_resource, src, 1.0, sample_rate, FadeCurve::SquareRoot)
     }
 
-    #[rstest]
+    #[kithara::test(tokio)]
     #[case(TrackStateScenario::StartPreloading, TrackState::Preloading)]
     #[case(TrackStateScenario::FadeIn, TrackState::FadingIn)]
     #[case(TrackStateScenario::FadeOutAfterPlay, TrackState::FadingOut)]
     #[case(TrackStateScenario::Play, TrackState::Playing)]
     #[case(TrackStateScenario::StopAfterPlay, TrackState::Finished)]
-    #[tokio::test]
     async fn track_state_transitions(
         #[case] scenario: TrackStateScenario,
         #[case] expected_state: TrackState,
@@ -433,7 +432,7 @@ mod tests {
         assert_eq!(track.state(), expected_state);
     }
 
-    #[test]
+    #[kithara::test]
     fn track_state_is_playing() {
         assert!(TrackState::Playing.is_playing());
         assert!(TrackState::FadingIn.is_playing());
@@ -443,7 +442,7 @@ mod tests {
         assert!(!TrackState::Finished.is_playing());
     }
 
-    #[test]
+    #[kithara::test]
     fn track_state_is_leading() {
         assert!(TrackState::Playing.is_leading());
         assert!(TrackState::FadingIn.is_leading());
@@ -453,13 +452,13 @@ mod tests {
         assert!(!TrackState::Finished.is_leading());
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn track_src_returns_identifier() {
         let track = make_track();
         assert_eq!(&**track.src(), "test.mp3");
     }
 
-    #[tokio::test]
+    #[kithara::test(tokio)]
     async fn track_initial_position_and_duration() {
         let track = make_track();
         assert_eq!(track.position(), 0.0);

@@ -19,7 +19,6 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::Xorshift64;
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -36,7 +35,7 @@ use super::fixture::{EncryptionConfig, HlsTestServer, HlsTestServerConfig};
 /// 5. Sample `seek_iterations` random seek positions in `(0, len - chunk_size)`
 /// 6. For each: seek → read → verify every byte matches `expected_byte_at`
 /// 7. Final: seek to `len - chunk_size`, read all → verify EOF
-#[rstest]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 #[case::small(50_000, 20, 200, false, false)]
 #[case::medium(100_000, 50, 500, false, false)]
 #[case::large(200_000, 100, 1000, false, false)]
@@ -44,8 +43,6 @@ use super::fixture::{EncryptionConfig, HlsTestServer, HlsTestServerConfig};
 #[case::init_medium(100_000, 50, 500, true, false)]
 #[case::encrypted_small(50_000, 20, 200, true, true)]
 #[case::encrypted_medium(100_000, 50, 500, true, true)]
-#[timeout(Duration::from_secs(120))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stress_random_seek_read_hls(
     #[case] segment_size: usize,
     #[case] segment_count: usize,

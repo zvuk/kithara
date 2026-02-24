@@ -18,7 +18,6 @@ use kithara::{
     storage::ResourceExt,
 };
 use kithara_test_utils::{cancel_token, temp_dir};
-use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 
 fn exists_asset_dir(root: &std::path::Path, asset_root: &str) -> bool {
@@ -39,15 +38,13 @@ fn asset_store_with_root_and_limit(
             max_bytes,
         })
         .cancel(cancel)
-        .build_disk()
+        .build()
 }
 
-#[rstest]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 #[case(60, 60, "asset-a", "asset-b", "asset-c")]
 #[case(40, 80, "small-1", "small-2", "small-3")]
 #[case(90, 30, "large-1", "large-2", "large-3")]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
 async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     #[case] bytes_a: usize,
     #[case] bytes_b: usize,
@@ -145,12 +142,10 @@ async fn eviction_max_bytes_uses_explicit_touch_asset_bytes(
     );
 }
 
-#[rstest]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 #[case(100, 150)] // Exactly at limit + overflow
 #[case(50, 120)] // Well below limit
 #[case(200, 50)] // Over limit with small new asset
-#[timeout(Duration::from_secs(5))]
-#[test]
 fn eviction_corner_cases_different_byte_limits(
     #[case] max_bytes: usize,
     #[case] new_asset_size: usize,

@@ -115,12 +115,14 @@ pub struct NetOptions {
 
 #[cfg(test)]
 mod tests {
-    use rstest::*;
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
 
     use super::*;
 
     // Headers tests
-    #[rstest]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::empty_headers(Headers::new(), true)]
     #[case::headers_with_values({
         let mut h = Headers::new();
@@ -128,18 +130,14 @@ mod tests {
         h.insert("key2", "value2");
         h
     }, false)]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
     async fn test_headers_is_empty(#[case] headers: Headers, #[case] expected_empty: bool) {
         assert_eq!(headers.is_empty(), expected_empty);
     }
 
-    #[rstest]
-    #[case::insert_and_get("key1", "value1")]
-    #[case::insert_and_get("Content-Type", "application/json")]
-    #[case::insert_and_get("X-Custom-Header", "custom-value")]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+    #[case::simple_key("key1", "value1")]
+    #[case::content_type("Content-Type", "application/json")]
+    #[case::custom_header("X-Custom-Header", "custom-value")]
     async fn test_headers_insert_and_get(#[case] key: &str, #[case] value: &str) {
         let mut headers = Headers::new();
         headers.insert(key, value);
@@ -148,9 +146,7 @@ mod tests {
         assert_eq!(headers.get("non-existent"), None);
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_headers_iter() {
         let mut headers = Headers::new();
         headers.insert("key1", "value1");
@@ -168,9 +164,7 @@ mod tests {
         assert_eq!(iterated.get("key3"), Some(&"value3".to_string()));
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_headers_from_hashmap() {
         let mut map = HashMap::new();
         map.insert("key1".to_string(), "value1".to_string());
@@ -183,22 +177,18 @@ mod tests {
         assert_eq!(headers.get("key2"), Some("value2"));
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_headers_default() {
         let headers = Headers::default();
         assert!(headers.is_empty());
     }
 
     // RangeSpec tests
-    #[rstest]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::full_range(0, Some(100), "bytes=0-100")]
     #[case::open_ended(50, None, "bytes=50-")]
     #[case::single_byte(10, Some(10), "bytes=10-10")]
     #[case::zero_length(0, Some(0), "bytes=0-0")]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
     async fn test_range_spec_to_header_value(
         #[case] start: u64,
         #[case] end: Option<u64>,
@@ -208,12 +198,10 @@ mod tests {
         assert_eq!(range.to_header_value(), expected_header);
     }
 
-    #[rstest]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::from_start_0(0, 0, None)]
     #[case::from_start_100(100, 100, None)]
     #[case::from_start_max(u64::MAX, u64::MAX, None)]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
     async fn test_range_spec_from_start(
         #[case] start: u64,
         #[case] expected_start: u64,
@@ -224,14 +212,12 @@ mod tests {
         assert_eq!(range.end, expected_end);
     }
 
-    #[rstest]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::equal_ranges(RangeSpec::new(0, Some(100)), RangeSpec::new(0, Some(100)), true)]
     #[case::different_starts(RangeSpec::new(0, Some(100)), RangeSpec::new(1, Some(100)), false)]
     #[case::different_ends(RangeSpec::new(0, Some(100)), RangeSpec::new(0, Some(99)), false)]
     #[case::one_open_ended(RangeSpec::new(0, None), RangeSpec::new(0, None), true)]
     #[case::mixed_ends(RangeSpec::new(0, Some(100)), RangeSpec::new(0, None), false)]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
     async fn test_range_spec_partial_eq(
         #[case] range1: RangeSpec,
         #[case] range2: RangeSpec,
@@ -240,9 +226,7 @@ mod tests {
         assert_eq!(range1 == range2, expected_equal);
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_range_spec_debug() {
         let range = RangeSpec::new(10, Some(20));
         let debug_output = format!("{:?}", range);
@@ -251,9 +235,7 @@ mod tests {
         assert!(debug_output.contains("end: Some(20)"));
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_range_spec_clone() {
         let range1 = RangeSpec::new(10, Some(20));
         let range2 = range1.clone();
@@ -264,9 +246,7 @@ mod tests {
     }
 
     // RetryPolicy tests
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_retry_policy_default() {
         let policy = RetryPolicy::default();
 
@@ -275,12 +255,10 @@ mod tests {
         assert_eq!(policy.max_delay, Duration::from_secs(5));
     }
 
-    #[rstest]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case(1, Duration::from_millis(50), Duration::from_secs(1))]
     #[case(5, Duration::from_millis(100), Duration::from_secs(2))]
     #[case(10, Duration::from_millis(200), Duration::from_secs(10))]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
     async fn test_retry_policy_new(
         #[case] max_retries: u32,
         #[case] base_delay: Duration,
@@ -293,7 +271,7 @@ mod tests {
         assert_eq!(policy.max_delay, max_delay);
     }
 
-    #[rstest]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case(0, Duration::ZERO)]
     #[case(1, Duration::from_millis(100))]
     #[case(2, Duration::from_millis(200))]
@@ -302,8 +280,6 @@ mod tests {
     #[case(5, Duration::from_millis(1600))]
     #[case(10, Duration::from_secs(5))] // Capped at max_delay
     #[case(20, Duration::from_secs(5))] // Capped at max_delay
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
     async fn test_retry_policy_delay_for_attempt_default(
         #[case] attempt: u32,
         #[case] expected_delay: Duration,
@@ -314,7 +290,7 @@ mod tests {
         assert_eq!(delay, expected_delay);
     }
 
-    #[rstest]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case(
         1,
         Duration::from_millis(50),
@@ -350,8 +326,6 @@ mod tests {
         4,
         Duration::from_millis(200)
     )] // Capped
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
     async fn test_retry_policy_delay_for_attempt_custom(
         #[case] max_retries: u32,
         #[case] base_delay: Duration,
@@ -365,9 +339,7 @@ mod tests {
         assert_eq!(delay, expected_delay);
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_retry_policy_debug() {
         let policy = RetryPolicy::default();
         let debug_output = format!("{:?}", policy);
@@ -378,9 +350,7 @@ mod tests {
         assert!(debug_output.contains("max_delay"));
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_retry_policy_clone() {
         let policy1 = RetryPolicy::new(5, Duration::from_millis(100), Duration::from_secs(2));
         let policy2 = policy1.clone();
@@ -391,12 +361,10 @@ mod tests {
     }
 
     // Edge cases for RangeSpec
-    #[rstest]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::start_equals_end(10, Some(10), "bytes=10-10")]
     #[case::start_greater_than_end(20, Some(10), "bytes=20-10")] // This is valid per spec
     #[case::max_values(u64::MAX, Some(u64::MAX), &format!("bytes={}-{}", u64::MAX, u64::MAX))]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
     async fn test_range_spec_edge_cases(
         #[case] start: u64,
         #[case] end: Option<u64>,
@@ -407,13 +375,11 @@ mod tests {
     }
 
     // Edge cases for RetryPolicy
-    #[rstest]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::zero_max_retries(0, Duration::from_millis(100), Duration::from_secs(1))]
     #[case::large_max_retries(100, Duration::from_millis(10), Duration::from_secs(10))]
     #[case::zero_base_delay(3, Duration::ZERO, Duration::from_secs(1))]
     #[case::zero_max_delay(3, Duration::from_millis(100), Duration::ZERO)]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
     async fn test_retry_policy_edge_cases(
         #[case] max_retries: u32,
         #[case] base_delay: Duration,
@@ -439,11 +405,9 @@ mod tests {
     }
 
     // Test that large attempt numbers don't cause overflow
-    #[rstest]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case(10)]
     #[case(20)]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
     async fn test_retry_policy_large_attempts(#[case] attempt: u32) {
         let policy = RetryPolicy::default();
 
@@ -456,13 +420,11 @@ mod tests {
     }
 
     // Test Headers with special characters
-    #[rstest]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     #[case::with_spaces("X-Custom Header", "value with spaces")]
     #[case::with_unicode("X-Emoji", "🎉")]
     #[case::with_special_chars("X-Special", "a\tb\nc")]
     #[case::empty_value("X-Empty", "")]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
     async fn test_headers_special_characters(#[case] key: &str, #[case] value: &str) {
         let mut headers = Headers::new();
         headers.insert(key, value);
@@ -471,9 +433,7 @@ mod tests {
     }
 
     // Test Headers case sensitivity
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
-    #[tokio::test]
+    #[kithara::test(tokio, timeout(Duration::from_secs(5)))]
     async fn test_headers_case_sensitive() {
         let mut headers = Headers::new();
         headers.insert("Content-Type", "application/json");

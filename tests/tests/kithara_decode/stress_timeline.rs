@@ -10,7 +10,6 @@ use std::{io::Cursor, time::Duration};
 
 use kithara::decode::{DecoderConfig, DecoderFactory};
 use kithara_test_utils::{Xorshift64, wav::create_test_wav};
-use rstest::rstest;
 
 const SAMPLE_RATE: u32 = 44100;
 const DURATION_SECS: f64 = 10.0;
@@ -18,9 +17,7 @@ const SAMPLE_COUNT: usize = (SAMPLE_RATE as f64 * DURATION_SECS) as usize;
 const SEEK_ITERATIONS: usize = 200;
 const CHUNKS_PER_BURST: usize = 5;
 
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(30)))]
 fn stress_seeks_preserve_timeline_integrity() {
     let wav_data = create_test_wav(SAMPLE_COUNT, SAMPLE_RATE, 2);
     let cursor = Cursor::new(wav_data);

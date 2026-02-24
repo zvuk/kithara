@@ -19,7 +19,6 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_test_utils::Xorshift64;
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -161,9 +160,7 @@ fn detect_direction(buf: &[f32], channels: usize) -> Direction {
 /// 2. ABR starts on V0, switches to V1 when V0 segments become slow
 /// 3. Verify switch happened via PCM direction change
 /// 4. 200 random seeks with direction + integrity checks
-#[rstest]
-#[timeout(Duration::from_secs(120))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn stress_seek_abr_audio() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

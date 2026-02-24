@@ -248,15 +248,19 @@ impl Default for Timeline {
 
 #[cfg(test)]
 mod tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn download_position_defaults_to_zero() {
         let timeline = Timeline::new();
         assert_eq!(timeline.download_position(), 0);
     }
 
-    #[test]
+    #[kithara::test]
     fn download_position_is_shared_between_clones() {
         let timeline = Timeline::new();
         let clone = timeline.clone();
@@ -265,7 +269,7 @@ mod tests {
         assert_eq!(clone.download_position(), 512);
     }
 
-    #[test]
+    #[kithara::test]
     fn initiate_seek_sets_flushing_and_target() {
         let tl = Timeline::new();
         assert!(!tl.is_flushing());
@@ -279,7 +283,7 @@ mod tests {
         assert_eq!(tl.committed_position(), Duration::from_secs(10));
     }
 
-    #[test]
+    #[kithara::test]
     fn complete_seek_clears_flushing() {
         let tl = Timeline::new();
         let epoch = tl.initiate_seek(Duration::from_secs(5));
@@ -290,7 +294,7 @@ mod tests {
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(5)));
     }
 
-    #[test]
+    #[kithara::test]
     fn complete_seek_ignores_stale_epoch() {
         let tl = Timeline::new();
         let epoch1 = tl.initiate_seek(Duration::from_secs(5));
@@ -302,7 +306,7 @@ mod tests {
         assert!(!tl.is_flushing());
     }
 
-    #[test]
+    #[kithara::test]
     fn seek_epoch_monotonically_increases() {
         let tl = Timeline::new();
         let e1 = tl.initiate_seek(Duration::from_secs(1));
@@ -314,7 +318,7 @@ mod tests {
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(3)));
     }
 
-    #[test]
+    #[kithara::test]
     fn complete_seek_does_not_clobber_concurrent_target() {
         let tl = Timeline::new();
         let epoch1 = tl.initiate_seek(Duration::from_secs(5));
@@ -326,7 +330,7 @@ mod tests {
         assert_eq!(tl.seek_target(), Some(Duration::from_secs(15)));
     }
 
-    #[test]
+    #[kithara::test]
     fn initiate_seek_is_visible_across_clones() {
         let tl = Timeline::new();
         let clone = tl.clone();

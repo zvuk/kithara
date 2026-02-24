@@ -159,11 +159,11 @@ mod tests {
     use std::time::Duration;
 
     use kithara_platform::time::Instant;
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn cache_hit_sets_high_initial_bps() {
         let cfg = AbrOptions::default();
         let mut est = ThroughputEstimator::new(&cfg);
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(est.estimate_bps(), Some(100_000_000));
     }
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case(vec![(500_000, 1000)], 3_500_000, "Single sample")]
     #[case(vec![(500_000, 1000), (500_000, 1000)], 3_800_000, "Stable throughput")]
     #[case(vec![(1_000_000, 1000), (1_000_000, 1000), (1_000_000, 1000)], 7_500_000, "Multiple stable samples")]
@@ -217,7 +217,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn test_min_chunk_size_filtering() {
         let cfg = AbrOptions::default();
         let mut est = ThroughputEstimator::new(&cfg);
@@ -249,7 +249,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn test_min_duration_clamping() {
         let cfg = AbrOptions::default();
         let mut est = ThroughputEstimator::new(&cfg);
@@ -273,7 +273,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn test_no_estimate_without_samples() {
         let cfg = AbrOptions::default();
         let est = ThroughputEstimator::new(&cfg);

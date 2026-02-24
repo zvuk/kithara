@@ -17,7 +17,6 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::Xorshift64;
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
@@ -29,11 +28,9 @@ const SEEK_ITERATIONS: usize = 800;
 const PROBE_SIZE: usize = 64;
 const TAIL_CHUNK_SIZE: usize = 32 * 1024;
 
-#[rstest]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 #[case::disk(false)]
 #[case::ephemeral(true)]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     let temp_dir = TempDir::new().expect("temp dir");
     let server = HlsTestServer::new(HlsTestServerConfig {

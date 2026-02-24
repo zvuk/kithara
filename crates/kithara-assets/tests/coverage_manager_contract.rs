@@ -4,7 +4,7 @@ use std::{ops::Range, time::Duration};
 
 use kithara_assets::{AssetStore, AssetStoreBuilder};
 use kithara_coverage::Coverage;
-use rstest::rstest;
+use kithara_test_utils::kithara;
 
 fn mark_coverage(backend: &AssetStore, key: &str, total_size: u64, covered: Range<u64>) {
     let manager = backend
@@ -23,8 +23,7 @@ fn read_coverage(backend: &AssetStore, key: &str) -> (Option<u64>, Vec<Range<u64
     (state.total_size(), state.gaps(), state.is_complete())
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn mem_backend_coverage_persists_between_manager_reopens() {
     let backend = AssetStoreBuilder::new()
         .ephemeral(true)
@@ -46,8 +45,7 @@ fn mem_backend_coverage_persists_between_manager_reopens() {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-#[rstest]
-#[timeout(Duration::from_secs(5))]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn disk_backend_coverage_remove_invalidates_entry() {
     let temp_dir = tempfile::TempDir::new().expect("temp dir");
     let backend = AssetStoreBuilder::new()

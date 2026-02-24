@@ -137,7 +137,7 @@ mod tests {
     use std::time::Duration;
 
     use kithara_storage::ResourceExt;
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -150,8 +150,7 @@ mod tests {
         )
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn open_creates_mem_resource() {
         let store = make_mem_store();
         let key = ResourceKey::new("seg_0.m4s");
@@ -160,8 +159,7 @@ mod tests {
         assert!(matches!(res, StorageResource::Mem(_)));
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn open_returns_same_resource() {
         let store = make_mem_store();
         let key = ResourceKey::new("seg_0.m4s");
@@ -176,8 +174,7 @@ mod tests {
         assert_eq!(&buf, b"data");
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn write_commit_read_roundtrip() {
         let store = make_mem_store();
         let key = ResourceKey::new("seg_0.m4s");
@@ -192,8 +189,7 @@ mod tests {
         assert_eq!(&buf, b"segment data");
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn remove_resource_then_open_creates_new() {
         let store = make_mem_store();
         let key = ResourceKey::new("seg_0.m4s");
@@ -209,8 +205,7 @@ mod tests {
         assert_eq!(res2.len(), None);
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn delete_asset_clears_all() {
         let store = make_mem_store();
 
@@ -225,8 +220,7 @@ mod tests {
         assert_eq!(store.resources.read().len(), 0);
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn no_path_for_mem_resources() {
         let store = make_mem_store();
         let key = ResourceKey::new("seg_0.m4s");
@@ -235,7 +229,7 @@ mod tests {
         assert!(res.path().is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn mem_store_reports_unsupported_decorators() {
         let store = make_mem_store();
         assert!(!store.supports_evict());

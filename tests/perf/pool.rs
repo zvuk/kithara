@@ -7,7 +7,6 @@
 use std::{sync::Arc, thread};
 
 use kithara::bufpool::{PcmPool, pcm_pool};
-use rstest::rstest;
 
 #[hotpath::measure]
 fn pool_get_put_cycle(pool: &PcmPool) {
@@ -56,12 +55,11 @@ enum PerfScenario {
     SingleThreadGetPut,
 }
 
-#[rstest]
+#[kithara::test]
 #[case("pool_single_thread", PerfScenario::SingleThreadGetPut)]
 #[case("pool_multi_thread", PerfScenario::MultiThreadContention)]
 #[case("pool_allocation_rate", PerfScenario::AllocationRate)]
 #[case("pool_scalability", PerfScenario::Scalability)]
-#[test]
 #[ignore]
 fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = hotpath::FunctionsGuardBuilder::new(label).build();

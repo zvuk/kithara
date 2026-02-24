@@ -1,7 +1,12 @@
+#![cfg(not(target_arch = "wasm32"))]
 //! TDD test: Writer stream end should NOT auto-commit resource.
 //!
 //! Writer yields `WriterItem::StreamEnded { total_bytes }` when the source stream ends.
 //! The resource must remain Active — caller decides whether to commit.
+
+mod kithara {
+    pub(crate) use kithara_test_macros::test;
+}
 
 use bytes::Bytes;
 use futures::StreamExt;
@@ -9,7 +14,7 @@ use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt
 use kithara_stream::{Writer, WriterItem};
 use tokio_util::sync::CancellationToken;
 
-#[tokio::test]
+#[kithara::test(tokio)]
 async fn writer_stream_end_does_not_commit_resource() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("test_file.bin");

@@ -727,13 +727,12 @@ impl<R: Read + Seek + Send + Sync> symphonia::core::io::MediaSource for ReadSeek
 mod tests {
     use std::io::Cursor;
 
-    use kithara_test_utils::create_test_wav;
-    use rstest::rstest;
+    use kithara_test_utils::{create_test_wav, kithara};
 
     use super::*;
     use crate::traits::AudioDecoder;
 
-    #[test]
+    #[kithara::test]
     fn test_symphonia_config_default() {
         let config = SymphoniaConfig::default();
         assert!(!config.verify);
@@ -743,7 +742,7 @@ mod tests {
         assert!(config.hint.is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_symphonia_config_with_container() {
         let config = SymphoniaConfig {
             container: Some(ContainerFormat::Fmp4),
@@ -752,7 +751,7 @@ mod tests {
         assert_eq!(config.container, Some(ContainerFormat::Fmp4));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_symphonia_types_exist() {
         fn _check_aac(_: SymphoniaAac) {}
         fn _check_mp3(_: SymphoniaMp3) {}
@@ -773,7 +772,7 @@ mod tests {
 
     type SymphoniaPcm = Symphonia<Pcm>;
 
-    #[rstest]
+    #[kithara::test]
     #[case(Some(ContainerFormat::Wav))]
     #[case(None)]
     fn test_create_decoder_wav(#[case] container: Option<ContainerFormat>) {
@@ -792,7 +791,7 @@ mod tests {
         assert_eq!(AudioDecoder::spec(&decoder).channels, 2);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_next_chunk_returns_data() {
         let wav_data = create_test_wav(100, 44100, 2);
         let cursor = Cursor::new(wav_data);
@@ -812,7 +811,7 @@ mod tests {
         assert!(!chunk.pcm.is_empty());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_next_chunk_eof() {
         let wav_data = create_test_wav(10, 44100, 2);
         let cursor = Cursor::new(wav_data);
@@ -831,7 +830,7 @@ mod tests {
         assert!(result.is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_seek_to_beginning() {
         let wav_data = create_test_wav(10000, 44100, 2);
         let cursor = Cursor::new(wav_data);
@@ -854,7 +853,7 @@ mod tests {
         assert!(chunk.is_some());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_duration_available() {
         let wav_data = create_test_wav(44100, 44100, 2); // 1 second of audio
         let cursor = Cursor::new(wav_data);
@@ -873,7 +872,7 @@ mod tests {
         assert!(dur.as_secs_f64() > 0.9 && dur.as_secs_f64() < 1.1);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_read_seek_adapter_byte_len() {
         use symphonia::core::io::MediaSource;
 
@@ -890,7 +889,7 @@ mod tests {
         assert!(adapter.is_seekable());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_read_seek_adapter_dynamic_update() {
         use symphonia::core::io::MediaSource;
 
@@ -908,7 +907,7 @@ mod tests {
         assert_eq!(adapter.byte_len(), Some(2000));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_config_with_custom_handle() {
         let handle = Arc::new(AtomicU64::new(12345));
         let config = SymphoniaConfig {
@@ -930,7 +929,7 @@ mod tests {
         assert_eq!(config.hint, Some("mp4".to_string()));
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(Vec::new())]
     #[case([0xDE, 0xAD, 0xBE, 0xEF].repeat(100))]
     fn test_invalid_input_fails(#[case] data: Vec<u8>) {
@@ -944,7 +943,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_unsupported_container_returns_error() {
         let data = vec![0u8; 100];
         let cursor = Cursor::new(data);

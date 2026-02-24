@@ -6,7 +6,6 @@ use std::time::Duration;
 
 use axum::{Router, routing::get};
 use kithara_test_utils::TestHttpServer;
-use rstest::fixture;
 use url::Url;
 
 use super::{HlsResult, crypto::init_data};
@@ -182,7 +181,7 @@ pub(crate) async fn segment_data(
 }
 
 /// Fixture: default ABR test server
-#[fixture]
+#[kithara::fixture]
 pub(crate) async fn abr_server_default() -> AbrTestServer {
     AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),

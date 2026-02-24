@@ -16,7 +16,6 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::{Xorshift64, temp_dir};
-use rstest::rstest;
 use tempfile::TempDir;
 use tracing::info;
 
@@ -167,11 +166,9 @@ async fn next_chunk_with_timeout(
     }
 }
 
-#[rstest]
+#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
-#[timeout(Duration::from_secs(60))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires network + NO_PROXY=stream.silvercomet.top"]
 async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_dir: TempDir) {
     assert!(

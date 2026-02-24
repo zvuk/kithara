@@ -187,11 +187,11 @@ pub trait InnerDecoder: Send + 'static {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[rstest]
+    #[kithara::test]
     #[case::aac(0, AudioCodec::AacLc)]
     #[case::mp3(1, AudioCodec::Mp3)]
     #[case::flac(2, AudioCodec::Flac)]
@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(actual, expected);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_audio_decoder_trait_is_object_safe() {
         // This test verifies the trait can be used as dyn AudioDecoder
         fn _accepts_boxed(_: Box<dyn AudioDecoder<Config = (), Source = Box<dyn DecoderInput>>>) {}

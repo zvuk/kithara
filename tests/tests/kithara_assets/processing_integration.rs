@@ -22,7 +22,6 @@ use kithara::{
     storage::ResourceExt,
 };
 use kithara_test_utils::temp_dir;
-use rstest::rstest;
 
 /// Context for test processing callback.
 #[derive(Clone, Debug, Hash, Eq, PartialEq, Default)]
@@ -45,9 +44,7 @@ fn create_xor_chunk_callback(call_count: Arc<AtomicUsize>) -> ProcessChunkFn<Tes
     )
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn processing_transforms_data_on_commit(temp_dir: tempfile::TempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -59,7 +56,7 @@ fn processing_transforms_data_on_commit(temp_dir: tempfile::TempDir) {
             max_bytes: None,
         })
         .process_fn(create_xor_chunk_callback(Arc::clone(&call_count)))
-        .build_disk();
+        .build();
 
     let key = ResourceKey::new("data.bin");
 
@@ -91,9 +88,7 @@ fn processing_transforms_data_on_commit(temp_dir: tempfile::TempDir) {
     assert_eq!(buf, expected);
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn processing_caches_result_on_subsequent_reads(temp_dir: tempfile::TempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -105,7 +100,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: tempfile::TempDir) {
             max_bytes: None,
         })
         .process_fn(create_xor_chunk_callback(Arc::clone(&call_count)))
-        .build_disk();
+        .build();
 
     let key = ResourceKey::new("cached.bin");
     let ctx = TestContext { xor_key: 0xAB };
@@ -143,9 +138,7 @@ fn processing_caches_result_on_subsequent_reads(temp_dir: tempfile::TempDir) {
     assert_eq!(call_count.load(Ordering::SeqCst), count_after_commit);
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn processing_partial_reads_work_correctly(temp_dir: tempfile::TempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -157,7 +150,7 @@ fn processing_partial_reads_work_correctly(temp_dir: tempfile::TempDir) {
             max_bytes: None,
         })
         .process_fn(create_xor_chunk_callback(Arc::clone(&call_count)))
-        .build_disk();
+        .build();
 
     let key = ResourceKey::new("partial.bin");
     let ctx = TestContext { xor_key: 0xFF };
@@ -192,9 +185,7 @@ fn processing_partial_reads_work_correctly(temp_dir: tempfile::TempDir) {
     assert_eq!(&buf_end[..10], &expected_end[..]);
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn processing_read_past_end_returns_zero(temp_dir: tempfile::TempDir) {
     let call_count = Arc::new(AtomicUsize::new(0));
 
@@ -206,7 +197,7 @@ fn processing_read_past_end_returns_zero(temp_dir: tempfile::TempDir) {
             max_bytes: None,
         })
         .process_fn(create_xor_chunk_callback(Arc::clone(&call_count)))
-        .build_disk();
+        .build();
 
     let key = ResourceKey::new("eof.bin");
     let ctx = TestContext { xor_key: 0x00 };
@@ -229,9 +220,7 @@ fn processing_read_past_end_returns_zero(temp_dir: tempfile::TempDir) {
     assert_eq!(n, 0);
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn store_without_processing_works_normally(temp_dir: tempfile::TempDir) {
     // Build store WITHOUT custom process_fn (uses default pass-through).
     let store = AssetStoreBuilder::new()
@@ -241,7 +230,7 @@ fn store_without_processing_works_normally(temp_dir: tempfile::TempDir) {
             max_assets: None,
             max_bytes: None,
         })
-        .build_disk();
+        .build();
 
     let key = ResourceKey::new("test.bin");
 

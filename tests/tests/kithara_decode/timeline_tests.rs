@@ -9,13 +9,12 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream, StreamType},
 };
 use kithara_test_utils::wav::create_saw_wav;
-use rstest::rstest;
 use tokio_util::sync::CancellationToken;
 
 use super::fixture::EmbeddedAudio;
 use crate::kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig};
 
-#[test]
+#[kithara::test]
 fn test_progressive_file_timeline_monotonic() {
     let audio = EmbeddedAudio::get();
     let reader = Cursor::new(audio.wav());
@@ -67,7 +66,7 @@ fn test_progressive_file_timeline_monotonic() {
     assert!(chunk_count > 0, "should have decoded some chunks");
 }
 
-#[test]
+#[kithara::test]
 fn test_progressive_file_seek_resets_frame_offset() {
     let audio = EmbeddedAudio::get();
     let reader = Cursor::new(audio.wav());
@@ -111,9 +110,7 @@ const TOTAL_BYTES: usize = SEGMENT_COUNT * SEGMENT_SIZE; // 2 MB
 /// - `variant_index` is `Some` and consistent
 /// - `frame_offset` monotonically increases
 /// - `epoch` stays 0 (no ABR switch)
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn test_hls_timeline_segment_tracking() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

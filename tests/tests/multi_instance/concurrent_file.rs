@@ -12,7 +12,6 @@ use kithara::{
     platform::ThreadPool,
     stream::Stream,
 };
-use rstest::rstest;
 use tempfile::TempDir;
 use tracing::info;
 
@@ -79,9 +78,7 @@ fn assert_consistent_counts(results: &[(usize, u64)]) {
 ///
 /// Each Audio instance uses 2 pool threads (downloader + audio_loop),
 /// so pool size must be >= 2 * N to avoid starvation.
-#[rstest]
-#[timeout(Duration::from_secs(120))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn two_file_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -119,9 +116,7 @@ async fn two_file_instances() {
 }
 
 /// 4 concurrent File instances on a shared pool.
-#[rstest]
-#[timeout(Duration::from_secs(120))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn four_file_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -159,9 +154,7 @@ async fn four_file_instances() {
 }
 
 /// 8 concurrent File instances on a shared pool.
-#[rstest]
-#[timeout(Duration::from_secs(180))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(180)))]
 async fn eight_file_instances() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
 //! Defense-in-depth: `Stream::seek()` rejects corrupted byte deltas.
@@ -37,11 +38,14 @@ use std::{
     sync::Arc,
 };
 
+mod kithara {
+    pub(crate) use kithara_test_macros::test;
+}
+
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     NullStreamContext, Source, Stream, StreamContext, StreamResult, StreamType, Timeline,
 };
-use rstest::rstest;
 
 /// Minimal mock source with known length.
 struct MockSource {
@@ -153,7 +157,7 @@ fn mock_stream(source: MockSource) -> Stream<MockStream> {
 /// computes these deltas. With `probe_byte_len`, even the legacy path is
 /// safe. This test verifies defense-in-depth: `Stream::seek()` bounds-checks
 /// and returns Err for overflow deltas.
-#[rstest]
+#[kithara::test]
 #[case::epoch_10(595_033, 9_223_372_036_854_115_238i64)]
 #[case::epoch_11(544_238, 9_223_372_036_854_233_317i64)]
 fn seek_corrupted_delta_from_production_is_rejected(
@@ -187,7 +191,7 @@ fn seek_corrupted_delta_from_production_is_rejected(
 // GREEN tests — normal seek behavior (sanity checks)
 
 /// Normal current-relative seeks with bounded deltas.
-#[rstest]
+#[kithara::test]
 #[case::backward(500_000, -100_000, 400_000)]
 #[case::forward(100_000, 200_000, 300_000)]
 fn seek_current_normal(#[case] start: u64, #[case] delta: i64, #[case] expected: u64) {
@@ -204,7 +208,7 @@ fn seek_current_normal(#[case] start: u64, #[case] delta: i64, #[case] expected:
 }
 
 /// Genuine seek past EOF returns error (graceful, no crash).
-#[test]
+#[kithara::test]
 fn seek_past_eof_still_rejected() {
     let source = MockSource::new(1_000);
     let mut stream = mock_stream(source);
@@ -219,7 +223,7 @@ fn seek_past_eof_still_rejected() {
 }
 
 /// `SeekFrom::End` with negative delta works.
-#[test]
+#[kithara::test]
 fn seek_from_end_backward() {
     let source = MockSource::new(1_000_000);
     let mut stream = mock_stream(source);
@@ -255,7 +259,7 @@ fn seek_from_end_backward() {
 /// gets a garbage size (~3.5 GB), and issues a seek that overflows.
 /// With `fence_at()` removing stale entries, this shouldn't happen in
 /// production. But if it does, Stream returns Err instead of crashing.
-#[test]
+#[kithara::test]
 fn variant_switch_stale_atoms_produce_garbage_seek() {
     // Production values — no large allocation needed, only len matters
     let source = MockSource::with_reported_len(27_229_109);
@@ -275,7 +279,7 @@ fn variant_switch_stale_atoms_produce_garbage_seek() {
 }
 
 /// Read after seek returns correct data.
-#[test]
+#[kithara::test]
 fn read_after_seek() {
     let source = MockSource::new(1_000);
     let mut stream = mock_stream(source);

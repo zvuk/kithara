@@ -7,7 +7,6 @@
 use std::io::Write;
 
 use kithara::storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
-use rstest::rstest;
 use tempfile::NamedTempFile;
 use tokio_util::sync::CancellationToken;
 
@@ -58,12 +57,11 @@ enum PerfScenario {
     Writes,
 }
 
-#[rstest]
+#[kithara::test]
 #[case("storage_sequential_read", PerfScenario::SequentialReads)]
 #[case("storage_random_read", PerfScenario::RandomReads)]
 #[case("storage_write", PerfScenario::Writes)]
 #[case("storage_wait_range", PerfScenario::WaitRange)]
-#[test]
 #[ignore]
 fn perf_storage_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = hotpath::FunctionsGuardBuilder::new(label).build();

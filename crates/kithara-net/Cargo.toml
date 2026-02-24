@@ -40,11 +40,13 @@ reqwest = { workspace = true, features = ["stream"] }
 gloo-timers = { workspace = true }
 
 [dev-dependencies]
-# Keep dev deps workspace-first; add here only after adding to root [workspace.dependencies].
 kithara-net = { path = ".", default-features = false, features = ["internal"] }
+kithara-test-macros = { workspace = true }
+futures = { workspace = true }
+unimock = { workspace = true }
+wasm-bindgen-test = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
 tower = { workspace = true }
-futures = { workspace = true }
-rstest = { workspace = true }
 memory-stats = { workspace = true }
-unimock = { workspace = true }

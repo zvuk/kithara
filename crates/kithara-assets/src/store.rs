@@ -100,7 +100,7 @@ impl StoreOptions {
 /// Generic parameter `Ctx` is the context type for processing.
 /// Use `()` (default) for no processing (`ProcessingAssets` will pass through unchanged).
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) type DiskStore<Ctx = ()> =
+pub type DiskStore<Ctx = ()> =
     CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
 /// Resource handle returned by [`AssetStore::open_resource`].
@@ -308,7 +308,7 @@ where
     /// Panics if `process_fn` is not set for Ctx != ().
     #[cfg(not(target_arch = "wasm32"))]
     #[must_use]
-    pub(crate) fn build_disk(self) -> DiskStore<Ctx> {
+    pub fn build_disk(self) -> DiskStore<Ctx> {
         let root_dir = self.root_dir.unwrap_or_else(|| {
             tempdir()
                 .expect("failed to create AssetStore temp dir")
@@ -444,14 +444,13 @@ mod tests {
     use std::time::Duration;
 
     use kithara_storage::ResourceExt;
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use tempfile::tempdir;
 
     use super::*;
     use crate::key::ResourceKey;
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn builder_all_decorators_disabled() {
         let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
@@ -474,8 +473,7 @@ mod tests {
         assert_eq!(&buf, b"data");
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn builder_defaults_all_enabled() {
         let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
@@ -493,8 +491,7 @@ mod tests {
         assert_eq!(&buf, b"hello");
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn builder_no_asset_root_with_absolute_key() {
         let dir = tempdir().unwrap();
         let file_path = dir.path().join("song.mp3");
@@ -515,8 +512,7 @@ mod tests {
         assert_eq!(&buf[..n], b"test data");
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn builder_no_asset_root_rejects_relative_key() {
         let dir = tempdir().unwrap();
 
@@ -532,8 +528,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn build_ephemeral_returns_mem() {
         let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
@@ -542,8 +537,7 @@ mod tests {
         assert!(backend.is_ephemeral());
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn ephemeral_auto_disables_unsupported_decorators() {
         let store = AssetStoreBuilder::new()
             .asset_root(Some("test"))
@@ -557,8 +551,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn disk_defaults_keep_decorators_enabled() {
         let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
@@ -575,8 +568,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn disk_local_mode_disables_cache_by_capability() {
         let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
@@ -591,8 +583,7 @@ mod tests {
         assert!(!evict.is_enabled());
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn build_disk_returns_disk() {
         let dir = tempdir().unwrap();
         let backend = AssetStoreBuilder::new()
@@ -603,8 +594,7 @@ mod tests {
         assert!(!backend.is_ephemeral());
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn ephemeral_retains_data_after_cache_eviction() {
         let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
@@ -638,8 +628,8 @@ mod tests {
         assert_eq!(&buf, b"data");
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn from_asset_store() {
         let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()

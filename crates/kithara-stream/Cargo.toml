@@ -41,10 +41,13 @@ wasm-bindgen-futures = { workspace = true }
 
 [dev-dependencies]
 kithara-stream = { path = ".", default-features = false, features = ["internal"] }
+kithara-test-macros = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
-rstest = { workspace = true }
+tempfile = { workspace = true }
+wasm-bindgen-test = { workspace = true }
+unimock = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 memory-stats = { workspace = true }
 axum = { workspace = true }
-tempfile = { workspace = true }
-unimock = { workspace = true }

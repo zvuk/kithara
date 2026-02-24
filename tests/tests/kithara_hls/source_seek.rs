@@ -21,7 +21,6 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::{cancel_token, temp_dir, tracing_setup};
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -36,12 +35,10 @@ const SEGMENT_SIZE: u64 = 200_000;
 
 // Stream<Hls> Seek + Read Tests
 
-#[rstest]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 #[case(0, b"V0-SEG-0:")] // Start of segment 0
 #[case(200_000, b"V0-SEG-1:")] // Start of segment 1
 #[case(400_000, b"V0-SEG-2:")] // Start of segment 2
-#[timeout(Duration::from_secs(10))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hls_stream_seek_to_segment_start(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -80,9 +77,7 @@ async fn hls_stream_seek_to_segment_start(
     assert_eq!(&result.1[..result.0], &expected_vec[..]);
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(10))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn hls_stream_seek_current(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -124,9 +119,7 @@ async fn hls_stream_seek_current(
     .unwrap();
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(10))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn hls_stream_multiple_seeks(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -171,9 +164,7 @@ async fn hls_stream_multiple_seeks(
     .unwrap();
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(10))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn hls_stream_read_all_then_seek_back(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -233,9 +224,7 @@ async fn hls_stream_read_all_then_seek_back(
 
 // ABR considerations
 
-#[rstest]
-#[timeout(Duration::from_secs(10))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn hls_with_manual_abr_uses_fixed_variant(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -268,9 +257,7 @@ async fn hls_with_manual_abr_uses_fixed_variant(
     .unwrap();
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(10))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn hls_seek_across_all_segments_with_fixed_abr(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -326,9 +313,7 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
 ///
 /// This test shows that different variants produce different data at the same positions,
 /// which is the foundation for ABR switch + seek correctness.
-#[rstest]
-#[timeout(Duration::from_secs(15))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
 async fn hls_seek_different_variants_return_different_data(
     _tracing_setup: (),
     temp_dir: TempDir,

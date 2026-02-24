@@ -13,7 +13,6 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::{TestHttpServer, temp_dir};
-use rstest::{fixture, rstest};
 use tempfile::TempDir;
 
 // Test Server Fixtures
@@ -83,20 +82,18 @@ async fn run_test_server() -> TestHttpServer {
 
 // Fixtures
 
-#[fixture]
+#[kithara::fixture]
 async fn test_server() -> TestHttpServer {
     run_test_server().await
 }
 
 // Stream<File> Seek Tests
 
-#[rstest]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 #[case(0, b"ID3\x04\x00")]
 #[case(5, b"\x00\x00\x00\x00T")]
 #[case(10, b"estAu")]
 #[case(22, b"12345")]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[timeout(Duration::from_secs(10))]
 async fn stream_file_seek_start_reads_correct_bytes(
     #[future] test_server: TestHttpServer,
     temp_dir: TempDir,
@@ -133,9 +130,7 @@ async fn stream_file_seek_start_reads_correct_bytes(
     assert_eq!(&result.1[..result.0], &expected_vec[..]);
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(10))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn stream_file_seek_current_works(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
     let server = test_server.await;
     let url = server.url("/audio.mp3");
@@ -164,9 +159,7 @@ async fn stream_file_seek_current_works(#[future] test_server: TestHttpServer, t
     .unwrap();
 }
 
-#[rstest]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[timeout(Duration::from_secs(10))]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn stream_file_seek_end_works(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
     let server = test_server.await;
     let url = server.url("/audio.mp3");
@@ -190,9 +183,7 @@ async fn stream_file_seek_end_works(#[future] test_server: TestHttpServer, temp_
     .unwrap();
 }
 
-#[rstest]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[timeout(Duration::from_secs(10))]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn stream_file_seek_past_eof_fails(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
     let server = test_server.await;
     let url = server.url("/audio.mp3");
@@ -210,9 +201,7 @@ async fn stream_file_seek_past_eof_fails(#[future] test_server: TestHttpServer, 
     .unwrap();
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(10))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn stream_file_multiple_seeks_work(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
     let server = test_server.await;
     let url = server.url("/audio.mp3");

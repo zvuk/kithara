@@ -35,6 +35,8 @@ pub(crate) struct SharedPlayerState {
     pub(crate) duration: AtomicF64,
     /// Current sample rate from the audio stream.
     pub(crate) sample_rate: AtomicU32,
+    /// Diagnostic: how many times `process()` has been called on the audio thread.
+    pub(crate) process_count: AtomicU64,
     /// Sender for processor-to-main-thread notifications.
     pub(crate) notification_tx: Sender<PlayerNotification>,
     /// Receiver for processor-to-main-thread notifications.
@@ -54,6 +56,7 @@ impl SharedPlayerState {
             position: AtomicF64::new(0.0),
             duration: AtomicF64::new(0.0),
             sample_rate: AtomicU32::new(0),
+            process_count: AtomicU64::new(0),
             notification_tx: tx,
             notification_rx: rx,
         }
@@ -74,11 +77,11 @@ impl SharedPlayerState {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn shared_state_defaults() {
         let state = SharedPlayerState::new();
         assert!(!state.playing.load(Ordering::Relaxed));
@@ -88,7 +91,7 @@ mod tests {
         assert_eq!(state.sample_rate.load(Ordering::Relaxed), 0);
     }
 
-    #[test]
+    #[kithara::test]
     fn shared_state_seek_epoch_increments() {
         let state = SharedPlayerState::new();
         assert_eq!(state.next_seek_epoch(), 1);
@@ -96,7 +99,7 @@ mod tests {
         assert_eq!(state.next_seek_epoch(), 3);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(0, None)]
     #[case(44_100, Some(44_100))]
     #[case(48_000, Some(48_000))]
@@ -106,7 +109,7 @@ mod tests {
         assert_eq!(state.sample_rate().map(NonZeroU32::get), expected);
     }
 
-    #[test]
+    #[kithara::test]
     fn shared_state_notification_channel_works() {
         use std::sync::Arc;
 
@@ -124,7 +127,7 @@ mod tests {
         ));
     }
 
-    #[test]
+    #[kithara::test]
     fn shared_state_position_and_duration_update() {
         let state = SharedPlayerState::new();
         state.position.store(42.5, Ordering::Relaxed);

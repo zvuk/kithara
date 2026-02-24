@@ -261,11 +261,12 @@ where
 }
 
 #[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use std::{sync::Arc, time::Duration};
 
     use kithara_storage::ResourceExt;
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
@@ -289,8 +290,7 @@ mod tests {
         CachedAssets::with_options(disk, NonZeroUsize::new(5).unwrap(), false, false)
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn evicts_at_custom_capacity() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(3).unwrap();
@@ -309,8 +309,7 @@ mod tests {
         assert_eq!(cached.cache.lock().len(), 3);
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn cache_hit_returns_same_resource() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(5).unwrap();
@@ -324,8 +323,7 @@ mod tests {
         assert_eq!(res1.path(), res2.path());
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn concurrent_opens_do_not_block_each_other() {
         let dir = tempfile::tempdir().unwrap();
         let cap = NonZeroUsize::new(5).unwrap();
@@ -348,8 +346,7 @@ mod tests {
         assert_eq!(cached.cache.lock().len(), 4);
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn bypass_does_not_cache() {
         let dir = tempfile::tempdir().unwrap();
         let cached = make_cached_disabled(dir.path());
@@ -366,8 +363,7 @@ mod tests {
         assert_eq!(cached.cache.lock().len(), 0);
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn bypass_still_returns_resources() {
         let dir = tempfile::tempdir().unwrap();
         let cached = make_cached_disabled(dir.path());
@@ -399,8 +395,7 @@ mod tests {
         (mem, cached)
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn remove_on_evict_false_does_not_remove() {
         let cap = NonZeroUsize::new(2).unwrap();
         let (mem, cached) = make_mem_cached(cap, false);
@@ -418,8 +413,7 @@ mod tests {
         assert!(mem.open_resource_with_ctx(&k0, None).is_ok());
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn remove_on_evict_true_removes_evicted_resource() {
         let cap = NonZeroUsize::new(2).unwrap();
         let (mem, cached) = make_mem_cached(cap, true);
@@ -442,8 +436,7 @@ mod tests {
         assert_eq!(reopened.len(), None, "evicted resource should be gone");
     }
 
-    #[rstest]
-    #[timeout(Duration::from_secs(5))]
+    #[kithara::test(timeout(Duration::from_secs(5)))]
     fn cache_hit_does_not_trigger_eviction() {
         let cap = NonZeroUsize::new(2).unwrap();
         let (mem, cached) = make_mem_cached(cap, true);

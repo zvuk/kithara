@@ -1778,12 +1778,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "037711b3d59c33004d3856fbdc83b99d4ff37a24768fa1be9ce3538a1cde4393"
 
 [[package]]
-name = "futures-timer"
-version = "3.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f288b0a4f20f9a56b5d1da57e2227c661b7b16168e2f72365f57b63326e29b24"
-
-[[package]]
 name = "futures-util"
 version = "0.3.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1876,12 +1870,6 @@ name = "glam"
 version = "0.31.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "556f6b2ea90b8d15a74e0e7bb41671c9bdf38cd9f78c284d750b9ce58a2b5be7"
-
-[[package]]
-name = "glob"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "gloo-timers"
@@ -2452,9 +2440,9 @@ dependencies = [
  "kithara-play",
  "kithara-storage",
  "kithara-stream",
+ "kithara-test-macros",
  "ratatui",
  "rodio",
- "rstest",
  "tokio",
  "tokio-util",
  "tracing",
@@ -2470,9 +2458,10 @@ dependencies = [
  "derivative",
  "kithara-abr",
  "kithara-platform",
- "rstest",
+ "kithara-test-utils",
  "tracing",
  "unimock",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2488,8 +2477,8 @@ dependencies = [
  "kithara-coverage",
  "kithara-platform",
  "kithara-storage",
+ "kithara-test-utils",
  "lru 0.16.3",
- "rstest",
  "serde",
  "serial_test",
  "sha2",
@@ -2499,6 +2488,7 @@ dependencies = [
  "tracing",
  "unimock",
  "url",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2531,7 +2521,6 @@ dependencies = [
  "kithara-test-utils",
  "reqwest",
  "rodio",
- "rstest",
  "rubato 1.0.1",
  "smallvec",
  "tempfile",
@@ -2543,6 +2532,7 @@ dependencies = [
  "unimock",
  "url",
  "wasm-bindgen",
+ "wasm-bindgen-test",
  "web-sys",
 ]
 
@@ -2554,8 +2544,9 @@ dependencies = [
  "hotpath",
  "kithara-bufpool",
  "kithara-platform",
- "rstest",
+ "kithara-test-macros",
  "unimock",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2566,11 +2557,12 @@ dependencies = [
  "kithara-coverage",
  "kithara-platform",
  "kithara-storage",
+ "kithara-test-utils",
  "rangemap",
- "rstest",
  "serde",
  "tempfile",
  "tokio-util",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2585,11 +2577,11 @@ dependencies = [
  "kithara-decode",
  "kithara-stream",
  "kithara-test-utils",
- "rstest",
  "symphonia 0.6.0",
  "thiserror 2.0.18",
  "tracing",
  "unimock",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2600,10 +2592,11 @@ dependencies = [
  "bytes",
  "cbc",
  "kithara-drm",
- "rstest",
+ "kithara-test-utils",
  "thiserror 2.0.18",
  "tracing",
  "url",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2613,8 +2606,9 @@ dependencies = [
  "kithara-abr",
  "kithara-decode",
  "kithara-events",
- "rstest",
+ "kithara-test-utils",
  "tokio",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2637,10 +2631,10 @@ dependencies = [
  "kithara-platform",
  "kithara-storage",
  "kithara-stream",
+ "kithara-test-utils",
  "memory-stats",
  "reqwest",
  "rodio",
- "rstest",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2648,6 +2642,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2675,9 +2670,9 @@ dependencies = [
  "kithara-platform",
  "kithara-storage",
  "kithara-stream",
+ "kithara-test-utils",
  "rangemap",
  "rodio",
- "rstest",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2686,6 +2681,7 @@ dependencies = [
  "tracing-subscriber",
  "unimock",
  "url",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2718,7 +2714,6 @@ dependencies = [
  "mmap-io",
  "reqwest",
  "rodio",
- "rstest",
  "serde",
  "serial_test",
  "sha2",
@@ -2755,15 +2750,16 @@ dependencies = [
  "kithara-assets",
  "kithara-net",
  "kithara-platform",
+ "kithara-test-macros",
  "memory-stats",
  "reqwest",
- "rstest",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
  "tower",
  "unimock",
  "url",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2773,10 +2769,11 @@ dependencies = [
  "futures",
  "kanal",
  "kithara-platform",
+ "kithara-test-macros",
  "parking_lot",
  "rayon",
- "rstest",
  "tokio",
+ "wasm-bindgen-test",
  "web-time",
 ]
 
@@ -2802,9 +2799,9 @@ dependencies = [
  "kithara-platform",
  "kithara-play",
  "kithara-stream",
+ "kithara-test-utils",
  "portable-atomic",
  "rodio",
- "rstest",
  "smallvec",
  "thiserror 2.0.18",
  "thunderdome",
@@ -2813,6 +2810,7 @@ dependencies = [
  "tracing",
  "unimock",
  "url",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2825,15 +2823,16 @@ dependencies = [
  "kithara-bufpool",
  "kithara-platform",
  "kithara-storage",
+ "kithara-test-macros",
  "mmap-io",
  "rangemap",
- "rstest",
  "slice_ring_buf",
  "tempfile",
  "thiserror 2.0.18",
  "tokio-util",
  "tracing",
  "unimock",
+ "wasm-bindgen-test",
 ]
 
 [[package]]
@@ -2850,9 +2849,9 @@ dependencies = [
  "kithara-platform",
  "kithara-storage",
  "kithara-stream",
+ "kithara-test-macros",
  "memory-stats",
  "rayon",
- "rstest",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2862,6 +2861,16 @@ dependencies = [
  "unimock",
  "url",
  "wasm-bindgen-futures",
+ "wasm-bindgen-test",
+]
+
+[[package]]
+name = "kithara-test-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -2872,7 +2881,7 @@ dependencies = [
  "futures",
  "kithara-storage",
  "kithara-stream",
- "rstest",
+ "kithara-test-macros",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
@@ -2886,6 +2895,7 @@ name = "kithara-wasm"
 version = "0.1.0"
 dependencies = [
  "console_error_panic_hook",
+ "js-sys",
  "kithara-platform",
  "kithara-play",
  "kithara-wasm",
@@ -2897,6 +2907,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-rayon",
+ "web-sys",
 ]
 
 [[package]]
@@ -3858,12 +3869,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a96887878f22d7bad8a3b6dc5b7440e0ada9a245242924394987b21cf2210a4c"
 
 [[package]]
-name = "relative-path"
-version = "1.9.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
-
-[[package]]
 name = "reqwest"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3936,35 +3941,6 @@ dependencies = [
  "dasp_sample",
  "num-rational",
  "symphonia 0.5.5",
-]
-
-[[package]]
-name = "rstest"
-version = "0.26.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f5a3193c063baaa2a95a33f03035c8a72b83d97a54916055ba22d35ed3839d49"
-dependencies = [
- "futures-timer",
- "futures-util",
- "rstest_macros",
-]
-
-[[package]]
-name = "rstest_macros"
-version = "0.26.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c845311f0ff7951c5506121a9ad75aec44d083c31583b2ea5a30bcb0b0abba0"
-dependencies = [
- "cfg-if",
- "glob",
- "proc-macro-crate",
- "proc-macro2",
- "quote",
- "regex",
- "relative-path",
- "rustc_version",
- "syn 2.0.117",
- "unicode-ident",
 ]
 
 [[package]]

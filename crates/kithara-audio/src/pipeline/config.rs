@@ -140,6 +140,7 @@ pub(super) fn create_effects(
 #[cfg(test)]
 mod tests {
     use kithara_decode::PcmChunk;
+    use kithara_test_utils::kithara;
 
     use super::*;
     use crate::traits::AudioEffect;
@@ -157,7 +158,8 @@ mod tests {
         fn reset(&mut self) {}
     }
 
-    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    #[kithara::test]
     fn audio_config_with_effect_adds_to_chain() {
         let config = AudioConfig::<kithara_file::File>::new(kithara_file::FileConfig::default())
             .with_effect(Box::new(PassthroughEffect))
@@ -165,7 +167,7 @@ mod tests {
         assert_eq!(config.effects.len(), 2);
     }
 
-    #[test]
+    #[kithara::test]
     fn create_effects_includes_custom_effects() {
         let host_sr = Arc::new(AtomicU32::new(44100));
         let effects = create_effects(

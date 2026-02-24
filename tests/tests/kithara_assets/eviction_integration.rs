@@ -13,7 +13,6 @@ use kithara::{
     storage::ResourceExt,
 };
 use kithara_test_utils::temp_dir;
-use rstest::rstest;
 
 #[derive(serde::Deserialize)]
 #[expect(dead_code, reason = "fields deserialized from binary")]
@@ -38,15 +37,13 @@ fn asset_store_with_root(
             max_assets,
             max_bytes: None,
         })
-        .build_disk()
+        .build()
 }
 
-#[rstest]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 #[case(2, 3)]
 #[case(3, 4)]
 #[case(5, 6)]
-#[timeout(Duration::from_secs(5))]
-#[test]
 fn eviction_max_assets_skips_pinned_assets(
     #[case] max_assets: usize,
     #[case] create_count: usize,
@@ -116,12 +113,10 @@ fn eviction_max_assets_skips_pinned_assets(
     );
 }
 
-#[rstest]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 #[case(1)]
 #[case(2)]
 #[case(3)]
-#[timeout(Duration::from_secs(5))]
-#[test]
 fn eviction_ignores_missing_index(#[case] asset_count: usize, temp_dir: tempfile::TempDir) {
     let dir = temp_dir.path().to_path_buf();
 
@@ -150,9 +145,7 @@ fn eviction_ignores_missing_index(#[case] asset_count: usize, temp_dir: tempfile
     assert!(res.is_ok(), "Should handle missing LRU index gracefully");
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[test]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn eviction_with_zero_byte_assets(temp_dir: tempfile::TempDir) {
     let dir = temp_dir.path().to_path_buf();
 
@@ -181,12 +174,10 @@ fn eviction_with_zero_byte_assets(temp_dir: tempfile::TempDir) {
     );
 }
 
-#[rstest]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 #[case(1, 3, 1)] // max_assets=1, create 3 assets, keep 1 newest pinned
 #[case(2, 4, 1)] // max_assets=2, create 4 assets, keep 1 newest pinned
 #[case(3, 6, 2)] // max_assets=3, create 6 assets, keep 2 newest pinned
-#[timeout(Duration::from_secs(5))]
-#[test]
 fn eviction_respects_max_assets_limit(
     #[case] max_assets: usize,
     #[case] create_count: usize,

@@ -211,24 +211,31 @@ impl Condvar {
         self.0.wait(&mut guard.0);
     }
 
-    /// Block until notified (timeout ignored on wasm32).
+    /// Sleep-based timed wait for wasm32.
     ///
     /// On wasm32, `parking_lot::Condvar::wait_for` internally calls
-    /// `std::time::Instant::now()` which panics ("time not implemented").
-    /// We delegate to untimed `wait()` instead — notifications from the
-    /// downloader are reliable, and the timeout is only a safety net on
-    /// native.
+    /// `std::time::Instant::now()` which panics ("time not implemented"),
+    /// and untimed `wait()` blocks forever via `Atomics.wait` — if a
+    /// notification is missed (race between condition check and wait),
+    /// the thread never wakes up.
     ///
-    /// Always returns `true` (not timed out) since we don't track elapsed
-    /// time.
+    /// Instead we temporarily unlock the mutex, sleep for `timeout`
+    /// (which uses `memory_atomic_wait32` with a deadline on wasm32,
+    /// NOT `Instant::now`), then re-lock. The caller's loop re-checks
+    /// the condition on the next iteration.
+    ///
+    /// Returns `false` (simulated timeout) so callers that branch on
+    /// the return value take the poll/retry path.
     #[inline]
     pub fn wait_for<T: ?Sized>(
         &self,
         guard: &mut MutexGuard<'_, T>,
-        _timeout: std::time::Duration,
+        timeout: std::time::Duration,
     ) -> bool {
-        self.0.wait(&mut guard.0);
-        true
+        parking_lot::MutexGuard::unlocked(&mut guard.0, || {
+            std::thread::sleep(timeout);
+        });
+        false
     }
 
     /// Wake one waiting thread.

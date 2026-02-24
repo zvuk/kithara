@@ -7,7 +7,7 @@ use kithara_platform::{Receiver, Sender};
 use kithara_stream::{Fetch, Timeline};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
-use tracing::trace;
+use tracing::{debug, trace};
 
 use crate::traits::AudioEffect;
 
@@ -87,6 +87,7 @@ fn send_with_backpressure<S: AudioWorkerSource>(
         match data_tx.try_send_option(&mut item) {
             Ok(true) => return Ok(true), // sent
             Ok(false) => {
+                // Removed: debug!("worker: channel full, backpressure spin");
                 let mut latest_cmd = None;
                 loop {
                     match cmd_rx.try_recv() {
@@ -184,6 +185,10 @@ fn mark_eof(preloaded: &mut bool, preload_notify: &Notify, at_eof: &mut bool) {
 /// fires. This ensures the channel has enough data for non-blocking reads.
 ///
 /// `cancel` token signals graceful shutdown when Audio is dropped.
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "diagnostic debug!() temporarily raises complexity"
+)]
 pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     mut source: S,
     cmd_rx: &Receiver<S::Command>,
@@ -219,8 +224,10 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
             continue;
         }
 
+        debug!(chunks_sent, "worker: fetching next chunk");
         let fetch = source.fetch_next();
         let is_eof = fetch.is_eof();
+        debug!(is_eof, chunks_sent, "worker: fetch_next returned");
 
         match send_with_backpressure(&mut source, cmd_rx, data_tx, cancel, fetch) {
             Ok(true) => {
@@ -232,10 +239,11 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
                 );
             }
             Ok(false) => {
-                // Command handled during backpressure: refetch next loop.
+                debug!("worker: backpressure or command, refetching");
                 continue;
             }
             Err(()) => {
+                debug!("worker: data channel closed, stopping");
                 trace!("audio worker stopped (data channel closed)");
                 return;
             }

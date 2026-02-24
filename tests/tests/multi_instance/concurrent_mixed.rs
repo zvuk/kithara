@@ -14,7 +14,6 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_test_utils::wav::create_test_wav;
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -82,9 +81,7 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
 }
 
 /// 2 File + 2 HLS instances on a shared pool.
-#[rstest]
-#[timeout(Duration::from_secs(120))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn mixed_two_file_two_hls() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -196,9 +193,7 @@ async fn mixed_two_file_two_hls() {
 }
 
 /// 4 File + 4 HLS instances (8 total) on a shared pool.
-#[rstest]
-#[timeout(Duration::from_secs(180))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[kithara::test(tokio, timeout(Duration::from_secs(180)))]
 async fn mixed_four_file_four_hls() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()

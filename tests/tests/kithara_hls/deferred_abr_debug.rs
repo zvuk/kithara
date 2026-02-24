@@ -12,7 +12,6 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::{cancel_token, debug_tracing_setup, temp_dir};
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -20,9 +19,7 @@ use tracing::info;
 use super::fixture;
 
 /// Diagnostic version with detailed logging and safety limits
-#[rstest]
-#[timeout(Duration::from_secs(15))]
-#[tokio::test]
+#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
 async fn debug_sequential_read(
     _debug_tracing_setup: (),
     temp_dir: TempDir,

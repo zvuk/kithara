@@ -4,15 +4,12 @@ use std::{sync::Arc, time::Duration};
 
 use fixture::*;
 use kithara::{hls::HlsResult, internal::KeyManager};
-use rstest::rstest;
 
 use super::fixture;
 
 // Test Cases
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn fetch_and_cache_key(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -30,9 +27,7 @@ async fn fetch_and_cache_key(
     Ok(())
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn key_processor_applied(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -58,9 +53,7 @@ async fn key_processor_applied(
     Ok(())
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn key_manager_with_different_processors(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -84,9 +77,7 @@ async fn key_manager_with_different_processors(
     Ok(())
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn key_manager_error_handling(
     assets_fixture: TestAssets,
     net_fixture: kithara::net::HttpClient,
@@ -107,9 +98,7 @@ async fn key_manager_error_handling(
     Ok(())
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn key_manager_caching_behavior(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -132,9 +121,7 @@ async fn key_manager_caching_behavior(
     Ok(())
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn key_manager_with_context(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,
@@ -171,9 +158,7 @@ async fn key_manager_with_context(
     Ok(())
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn aes128_key_decrypts_ciphertext(
     #[future] test_server: TestServer,
     assets_fixture: TestAssets,

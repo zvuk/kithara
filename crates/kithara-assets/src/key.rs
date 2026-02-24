@@ -150,13 +150,13 @@ pub(crate) fn canonicalize_for_asset(url: &Url) -> AssetsResult<String> {
 mod tests {
     use std::path::PathBuf;
 
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use url::Url;
 
     use super::*;
     use crate::AssetsError;
 
-    #[rstest]
+    #[kithara::test]
     #[case(
         "https://example.com/audio.mp3?token=123&quality=high#section",
         "https://example.com/audio.mp3?different=456#other",
@@ -212,7 +212,7 @@ mod tests {
         }
     }
 
-    #[test]
+    #[kithara::test]
     fn test_asset_root_stable_across_calls() {
         let url = Url::parse("https://example.com/path/to/audio.mp3?version=1.2").unwrap();
 
@@ -225,7 +225,7 @@ mod tests {
         );
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case("https://example.com/audio.mp3", "Simple URL")]
     #[case(
         "https://example.com:8080/audio.mp3?quality=high",
@@ -241,7 +241,7 @@ mod tests {
         assert!(root.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(
         "https://example.com/audio.mp3?token=123&quality=high#section",
         "https://example.com/audio.mp3",
@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(result, expected_canonical, "{}", description);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_asset_root_with_name_differs_from_without() {
         let url = Url::parse("https://example.com/stream").unwrap();
 
@@ -291,7 +291,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn test_asset_root_same_url_different_names_differ() {
         let url = Url::parse("https://cdn.example.com/stream").unwrap();
 
@@ -304,7 +304,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn test_asset_root_same_url_same_name_equal() {
         let url = Url::parse("https://cdn.example.com/stream").unwrap();
 
@@ -317,7 +317,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn test_asset_root_query_differs_but_name_distinguishes() {
         // URLs that differ only in query params — canonicalization strips them.
         let url1 = Url::parse("https://cdn.example.com/stream?track_id=123&token=abc").unwrap();
@@ -340,7 +340,7 @@ mod tests {
         );
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case("file:///path/to/audio.mp3", "file URL without host should error")]
     #[case("", "Empty URL string should fail to parse")]
     fn test_canonicalize_for_asset_errors_on_missing_host(
@@ -363,7 +363,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[kithara::test]
     fn test_resource_key_absolute() {
         let path = PathBuf::from("/tmp/song.mp3");
         let key = ResourceKey::absolute(&path);
@@ -371,14 +371,14 @@ mod tests {
         assert_eq!(key.as_absolute_path(), Some(path.as_path()));
     }
 
-    #[test]
+    #[kithara::test]
     fn test_resource_key_relative_is_not_absolute() {
         let key = ResourceKey::new("seg.m4s");
         assert!(!key.is_absolute());
         assert_eq!(key.as_absolute_path(), None);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_resource_key_absolute_hash_differs() {
         use std::collections::HashSet;
         let abs = ResourceKey::absolute("/tmp/a.mp3");

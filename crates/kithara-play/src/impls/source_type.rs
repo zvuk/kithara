@@ -60,7 +60,7 @@ impl SourceType {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -75,7 +75,7 @@ mod tests {
         }
     }
 
-    #[rstest]
+    #[kithara::test]
     #[cfg(feature = "file")]
     #[case(ResourceSrc::Path(PathBuf::from("/tmp/song.mp3")), "local")]
     #[case(
@@ -87,7 +87,7 @@ mod tests {
         assert_eq!(source_tag(&detected), expected);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[cfg(feature = "hls")]
     #[case("https://example.com/playlist.m3u8")]
     #[case("https://example.com/live/index.m3u8")]
@@ -97,7 +97,7 @@ mod tests {
         assert_eq!(source_tag(&detected), "hls");
     }
 
-    #[rstest]
+    #[kithara::test]
     fn detect_invalid_relative_path() {
         // Relative paths should not reach here (caught by ResourceConfig::new),
         // but verify graceful handling via the Path variant

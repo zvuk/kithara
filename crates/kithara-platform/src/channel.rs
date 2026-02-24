@@ -144,9 +144,13 @@ pub fn unbounded<T>() -> (Sender<T>, Receiver<T>) {
 
 #[cfg(test)]
 mod tests {
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
     use super::*;
 
-    #[test]
+    #[kithara::test]
     fn bounded_send_recv_roundtrip() {
         let (tx, rx) = bounded(1);
         tx.send(42).unwrap();
@@ -154,7 +158,7 @@ mod tests {
         assert_eq!(got, 42);
     }
 
-    #[test]
+    #[kithara::test]
     fn try_send_reports_full_channel() {
         let (tx, rx) = bounded(1);
         assert!(tx.try_send(1).unwrap());
@@ -165,7 +169,7 @@ mod tests {
         assert_eq!(rx.recv().unwrap(), 1);
     }
 
-    #[test]
+    #[kithara::test]
     fn unbounded_try_recv_empty_then_value() {
         let (tx, rx) = unbounded();
         assert!(matches!(rx.try_recv(), Ok(None)));

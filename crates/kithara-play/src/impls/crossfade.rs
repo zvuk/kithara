@@ -42,11 +42,11 @@ impl CrossfadeSettings {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
-    #[rstest]
+    #[kithara::test]
     #[case(CrossfadeCurve::EqualPower, FadeCurve::SquareRoot)]
     #[case(CrossfadeCurve::Linear, FadeCurve::Linear)]
     #[case(CrossfadeCurve::SCurve, FadeCurve::Linear)]
@@ -60,7 +60,7 @@ mod tests {
         assert_eq!(map_curve(input), expected);
     }
 
-    #[test]
+    #[kithara::test]
     fn default_settings() {
         let settings = CrossfadeSettings::default();
         assert!((settings.duration - DEFAULT_CROSSFADE_DURATION).abs() < f32::EPSILON);

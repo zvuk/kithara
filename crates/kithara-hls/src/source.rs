@@ -335,7 +335,18 @@ impl Source for HlsSource {
                 WaitRangeDecision::Cancelled => {
                     return Err(StreamError::Source(HlsError::Cancelled));
                 }
-                WaitRangeDecision::Continue => {}
+                WaitRangeDecision::Continue => {
+                    debug!(
+                        range_start = range.start,
+                        range_end = range.end,
+                        eof = context.eof,
+                        total = context.total,
+                        expected_total = context.expected_total,
+                        num_entries = context.num_entries,
+                        range_ready = context.range_ready,
+                        "wait_range: spinning (condition not met)"
+                    );
+                }
                 WaitRangeDecision::Eof => return Ok(WaitOutcome::Eof),
                 WaitRangeDecision::Interrupted => return Ok(WaitOutcome::Interrupted),
                 WaitRangeDecision::Ready => return Ok(WaitOutcome::Ready),

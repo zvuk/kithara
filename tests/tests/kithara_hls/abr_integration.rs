@@ -6,7 +6,6 @@ use kithara::{
     abr::{AbrController, AbrMode, AbrOptions, AbrReason, Variant},
     internal::{MasterPlaylist, parse_master_playlist},
 };
-use rstest::{fixture, rstest};
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
 fn variants_from_master(master: &MasterPlaylist) -> Vec<Variant> {
@@ -22,12 +21,12 @@ fn variants_from_master(master: &MasterPlaylist) -> Vec<Variant> {
 
 // Fixtures
 
-#[fixture]
+#[kithara::fixture]
 fn abr_config_default() -> AbrOptions {
     AbrOptions::default()
 }
 
-#[fixture]
+#[kithara::fixture]
 fn test_master_playlist_data() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
@@ -41,20 +40,20 @@ video/360p/playlist.m3u8
 "#
 }
 
-#[fixture]
+#[kithara::fixture]
 fn parsed_master_playlist(test_master_playlist_data: &str) -> MasterPlaylist {
     parse_master_playlist(test_master_playlist_data.as_bytes())
         .expect("Failed to parse master playlist")
 }
 
-#[fixture]
+#[kithara::fixture]
 fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<Variant> {
     variants_from_master(&parsed_master_playlist)
 }
 
 // Test Cases
 
-#[rstest]
+#[kithara::test]
 fn test_variant_selection_manual_override(variants_from_parsed_playlist: Vec<Variant>) {
     let opts = AbrOptions {
         mode: AbrMode::Manual(2),
@@ -69,7 +68,7 @@ fn test_variant_selection_manual_override(variants_from_parsed_playlist: Vec<Var
     assert_eq!(decision.reason, AbrReason::ManualOverride);
 }
 
-#[rstest]
+#[kithara::test]
 #[case(0)]
 #[case(1)]
 #[case(2)]
@@ -92,7 +91,7 @@ fn test_manual_selector_different_indices(
     assert_eq!(decision.reason, AbrReason::ManualOverride);
 }
 
-#[rstest]
+#[kithara::test]
 fn test_abr_controller_no_selector(
     mut abr_config_default: AbrOptions,
     variants_from_parsed_playlist: Vec<Variant>,
@@ -108,7 +107,7 @@ fn test_abr_controller_no_selector(
     assert_ne!(decision.reason, AbrReason::ManualOverride);
 }
 
-#[rstest]
+#[kithara::test]
 #[case(0.0, 0.0)] // No buffer
 #[case(1.0, 0.0)] // 1 second buffer
 #[case(5.0, 0.0)] // 5 second buffer
@@ -133,7 +132,7 @@ fn test_abr_decision_with_different_conditions(
     assert_eq!(decision.reason, AbrReason::ManualOverride);
 }
 
-#[rstest]
+#[kithara::test]
 fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
     let variants = variants_from_master(&parsed_master_playlist);
 
@@ -150,9 +149,7 @@ fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
     assert_eq!(variants[2].variant_index, 2);
 }
 
-#[rstest]
-#[timeout(Duration::from_secs(5))]
-#[tokio::test]
+#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
 async fn test_abr_controller_async_usage() {
     // Test that ABR controller can be used in async context
     let config = AbrOptions {

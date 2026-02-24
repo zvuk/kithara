@@ -97,7 +97,7 @@ impl PcmChunk {
 
 #[cfg(test)]
 mod tests {
-    use rstest::*;
+    use kithara_test_utils::kithara;
 
     use super::*;
 
@@ -113,7 +113,7 @@ mod tests {
 
     // PcmSpec Tests
 
-    #[rstest]
+    #[kithara::test]
     #[case(44100, 2, "44100 Hz, 2 channels")]
     #[case(48000, 1, "48000 Hz, 1 channels")]
     #[case(96000, 6, "96000 Hz, 6 channels")]
@@ -131,7 +131,7 @@ mod tests {
         assert_eq!(format!("{}", spec), expected);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_pcm_spec_clone() {
         let spec = PcmSpec {
             channels: 2,
@@ -141,7 +141,7 @@ mod tests {
         assert_eq!(spec, cloned);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(44100, 2, 44100, 2, true)]
     #[case(44100, 2, 48000, 2, false)]
     #[case(44100, 2, 44100, 1, false)]
@@ -164,7 +164,7 @@ mod tests {
         assert_eq!(spec1 == spec2, should_equal);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_pcm_spec_debug() {
         let spec = PcmSpec {
             channels: 2,
@@ -176,7 +176,7 @@ mod tests {
         assert!(debug_str.contains("2"));
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(44100, 2)]
     #[case(48000, 1)]
     #[case(96000, 6)]
@@ -191,7 +191,7 @@ mod tests {
 
     // PcmMeta Tests
 
-    #[test]
+    #[kithara::test]
     fn test_pcm_meta_default() {
         let meta = PcmMeta::default();
         assert_eq!(meta.spec, PcmSpec::default());
@@ -202,7 +202,7 @@ mod tests {
         assert_eq!(meta.epoch, 0);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_pcm_meta_copy() {
         let meta = PcmMeta {
             spec: PcmSpec {
@@ -219,7 +219,7 @@ mod tests {
         assert_eq!(meta, copied);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_pcm_meta_with_spec() {
         let spec = PcmSpec {
             channels: 2,
@@ -233,7 +233,7 @@ mod tests {
         assert_eq!(meta.frame_offset, 0);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_pcm_meta_partial_eq() {
         let a = PcmMeta {
             spec: PcmSpec {
@@ -254,7 +254,7 @@ mod tests {
 
     // PcmChunk Tests
 
-    #[test]
+    #[kithara::test]
     fn test_pcm_chunk_new() {
         let spec = PcmSpec {
             channels: 2,
@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(chunk.samples(), &pcm[..]);
     }
 
-    #[rstest]
+    #[kithara::test]
     #[case(vec![0.0, 1.0, 2.0, 3.0], 2, 2)] // 4 samples, 2 channels = 2 frames
     #[case(vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 2, 3)] // 6 samples, 2 channels = 3 frames
     #[case(vec![0.0], 1, 1)] // 1 sample, 1 channel = 1 frame
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(chunk.frames(), expected_frames);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_frames_zero_channels() {
         let spec = PcmSpec {
             channels: 0,
@@ -296,7 +296,7 @@ mod tests {
         assert_eq!(chunk.frames(), 0);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_samples_access() {
         let spec = PcmSpec {
             channels: 2,
@@ -310,7 +310,7 @@ mod tests {
         assert_eq!(samples, &pcm[..]);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_pcm_chunk_clone() {
         let spec = PcmSpec {
             channels: 2,
@@ -324,7 +324,7 @@ mod tests {
         assert_eq!(cloned.pcm, chunk.pcm);
     }
 
-    #[test]
+    #[kithara::test]
     fn test_pcm_chunk_debug() {
         let spec = PcmSpec {
             channels: 2,

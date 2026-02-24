@@ -6,7 +6,6 @@ use std::{collections::HashMap, sync::Arc};
 
 use axum::{Router, routing::get};
 use kithara_test_utils::TestHttpServer;
-use rstest::fixture;
 use url::Url;
 
 use super::{HlsResult, crypto::*};
@@ -98,7 +97,7 @@ impl TestServer {
     }
 }
 
-#[fixture]
+#[kithara::fixture]
 pub(crate) async fn test_server() -> TestServer {
     TestServer::new().await
 }

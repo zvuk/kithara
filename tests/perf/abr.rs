@@ -10,7 +10,6 @@ use kithara::abr::{
     AbrController, AbrDecision, AbrMode, AbrOptions, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource, Variant,
 };
-use rstest::rstest;
 
 /// Helper to create variants from bitrates.
 fn create_variants(bitrates: &[u64]) -> Vec<Variant> {
@@ -52,12 +51,11 @@ enum PerfScenario {
     PureDecision,
 }
 
-#[rstest]
+#[kithara::test]
 #[case("abr_decision", PerfScenario::DecisionMaking)]
 #[case("abr_creation", PerfScenario::ControllerCreation)]
 #[case("abr_pure_decision", PerfScenario::PureDecision)]
 #[case("abr_estimator_loop", PerfScenario::EstimatorHotLoop)]
-#[test]
 #[ignore]
 fn perf_abr_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenario) {
     let _guard = hotpath::FunctionsGuardBuilder::new(label).build();

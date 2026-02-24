@@ -37,6 +37,7 @@ tokio-util = { workspace = true, features = ["full"] }
 [dev-dependencies]
 kithara-assets = { path = ".", features = ["internal"] }
 tempfile = { workspace = true }
-rstest = { workspace = true }
 serial_test = { workspace = true }
 unimock = { workspace = true }
+kithara-test-utils = { workspace = true }
+wasm-bindgen-test = { workspace = true }

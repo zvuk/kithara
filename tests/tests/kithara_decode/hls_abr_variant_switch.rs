@@ -19,7 +19,6 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::temp_dir;
-use rstest::rstest;
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -40,9 +39,7 @@ use crate::kithara_hls::fixture::abr::{AbrTestServer, master_playlist};
 /// - All bytes should be readable sequentially
 /// - Variant switch should be seamless from reader's perspective
 /// - No gaps or duplicates in byte stream
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn test_abr_variant_switch_no_byte_glitches(
     temp_dir: TempDir,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -194,9 +191,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
 }
 
 /// Simpler test without ABR - just verify basic multi-segment reading works
-#[rstest]
-#[timeout(Duration::from_secs(10))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
 async fn test_basic_multi_segment_reading(
     temp_dir: TempDir,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {
@@ -266,9 +261,7 @@ async fn test_basic_multi_segment_reading(
 /// 4. Reader seeks back to offset 0 - this requires loading segment 0 from variant 2
 /// 5. BUG: `first_media_segment` stays at 2 instead of updating to 0
 /// 6. This causes gap detection or incorrect offset calculations
-#[rstest]
-#[timeout(Duration::from_secs(30))]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
 async fn test_abr_variant_switch_with_seek_backward(
     temp_dir: TempDir,
 ) -> Result<(), Box<dyn Error + Send + Sync>> {

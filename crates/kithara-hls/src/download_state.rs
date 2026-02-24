@@ -210,6 +210,7 @@ impl DownloadState {
     /// from other variants that are strictly before the fence. Rebuilds
     /// `loaded_keys` and `loaded_ranges` from remaining entries.
     pub fn fence_at(&mut self, offset: u64, keep_variant: usize) {
+        let before = self.entries.len();
         self.entries
             .retain(|_, seg| seg.byte_offset < offset || seg.variant == keep_variant);
 
@@ -218,6 +219,7 @@ impl DownloadState {
         debug!(
             offset,
             keep_variant,
+            before,
             remaining = self.entries.len(),
             "download_state::fence_at"
         );
@@ -225,6 +227,7 @@ impl DownloadState {
 
     /// Remove all indexed segments while keeping persisted byte-cache intact.
     pub fn clear(&mut self) {
+        debug!(entries = self.entries.len(), "download_state::clear called");
         self.entries.clear();
         self.loaded_keys.clear();
         self.loaded_ranges.clear();
@@ -276,7 +279,7 @@ impl DownloadProgress for DownloadState {
 
 #[cfg(test)]
 mod tests {
-    use rstest::rstest;
+    use kithara_test_utils::kithara;
     use url::Url;
 
     use super::*;
@@ -311,7 +314,7 @@ mod tests {
 
     // Test 1: push and find
 
-    #[test]
+    #[kithara::test]
     fn test_push_and_find() {
         let mut state = DownloadState::new();
 
@@ -356,7 +359,7 @@ mod tests {
 
     // Test 2: is_range_loaded
 
-    #[test]
+    #[kithara::test]
     fn test_is_range_loaded() {
         let mut state = DownloadState::new();
 
@@ -384,7 +387,7 @@ mod tests {
 
     // Test 3: is_segment_loaded
 
-    #[test]
+    #[kithara::test]
     fn test_is_segment_loaded() {
         let mut state = DownloadState::new();
 
@@ -406,7 +409,7 @@ mod tests {
 
     // Test 4: last
 
-    #[test]
+    #[kithara::test]
     fn test_last() {
         let mut state = DownloadState::new();
 
@@ -435,7 +438,7 @@ mod tests {
 
     // Test 5: fence_at
 
-    #[test]
+    #[kithara::test]
     fn test_fence_at() {
         let mut state = DownloadState::new();
 
@@ -478,7 +481,7 @@ mod tests {
 
     // Test 6: first_segment_of_variant
 
-    #[test]
+    #[kithara::test]
     fn test_first_segment_of_variant() {
         let mut state = DownloadState::new();
 
@@ -504,7 +507,7 @@ mod tests {
         assert!(state.first_segment_of_variant(99).is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_first_init_segment_of_variant() {
         let mut state = DownloadState::new();
 
@@ -523,7 +526,7 @@ mod tests {
 
     // Test 7: find_at_offset BTreeMap performance
 
-    #[test]
+    #[kithara::test]
     fn test_find_at_offset_btree_performance() {
         let mut state = DownloadState::new();
         let segment_size: u64 = 1000;
@@ -569,7 +572,7 @@ mod tests {
 
     // Test 8: total_loaded_bytes
 
-    #[test]
+    #[kithara::test]
     fn test_total_loaded_bytes() {
         let mut state = DownloadState::new();
 
@@ -582,7 +585,7 @@ mod tests {
         assert_eq!(state.total_loaded_bytes(), 300); // 100 + (50 + 150)
     }
 
-    #[test]
+    #[kithara::test]
     fn test_clear_removes_all_loaded_segments() {
         let mut state = DownloadState::new();
         state.push(make_segment(0, 0, 0, 0, 100));
@@ -602,7 +605,7 @@ mod tests {
         assert!(state.find_at_offset(0).is_none());
     }
 
-    #[test]
+    #[kithara::test]
     fn test_push_replaces_existing_segment_with_new_offset() {
         let mut state = DownloadState::new();
 
@@ -623,7 +626,7 @@ mod tests {
 
     // Test 9: LoadedSegment methods
 
-    #[rstest]
+    #[kithara::test(wasm)]
     #[case(99, false)]
     #[case(100, true)]
     #[case(200, true)]
