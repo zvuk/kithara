@@ -83,6 +83,7 @@ kithara-events = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-platform = { workspace = true }
 kithara-stream = { workspace = true }
+kithara-test-macros = { workspace = true }
 kithara-wasm = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
