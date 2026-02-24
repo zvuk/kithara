@@ -4,8 +4,6 @@
 
 use std::io::{Cursor, Read};
 
-use kithara_test_utils::kithara;
-
 #[kithara::test]
 fn test_cursor_reads_all_binary_segments() {
     // Create 3 binary segments (same format as MockDecoder expects)
