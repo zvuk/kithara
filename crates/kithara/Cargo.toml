@@ -27,9 +27,13 @@ kithara-bufpool = { workspace = true }
 kithara-drm = { workspace = true, optional = true }
 kithara-test-macros = { workspace = true, optional = true }
 rodio = { workspace = true, optional = true }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["full"] }
 tokio-util = { workspace = true, features = ["full"] }
-url = { workspace = true }
 
 [features]
 default = ["file", "hls"]
@@ -68,9 +72,11 @@ kithara = { path = ".", default-features = false, features = ["internal"] }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+url = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 rodio = { workspace = true }
 ratatui = { workspace = true }
-url = { workspace = true }
 
 [[example]]
 name = "resource_rodio"
