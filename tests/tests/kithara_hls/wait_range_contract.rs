@@ -6,7 +6,6 @@
 //! 2. After seek burst, sequential tail read is contiguous and exact.
 
 use std::io::{Read, Seek, SeekFrom};
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use kithara::{

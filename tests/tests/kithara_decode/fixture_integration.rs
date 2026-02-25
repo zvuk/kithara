@@ -3,7 +3,6 @@
 //! Tests that verify the audio fixtures work correctly and can be used
 //! by decode tests without external network access.
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use super::fixture;

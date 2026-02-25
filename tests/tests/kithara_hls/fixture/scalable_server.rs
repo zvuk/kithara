@@ -374,7 +374,7 @@ mod native {
 
         let delay_ms = eval_delay(&config.delay_rules, variant, segment);
         if delay_ms > 0 {
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            kithara_platform::time::sleep(Duration::from_millis(delay_ms)).await;
         }
 
         let plaintext = if let Some(ref per_variant) = config.custom_data_per_variant {
@@ -479,26 +479,34 @@ mod wasm {
     impl HlsTestServer {
         pub(crate) async fn new(config: HlsTestServerConfig) -> Self {
             // Convert to serializable config for fixture server.
-            // Tests using custom_data/custom_data_per_variant must be native-only.
-            assert!(
-                config.custom_data.is_none() && config.custom_data_per_variant.is_none(),
-                "custom_data not supported on WASM — mark this test as native-only"
-            );
+            let data_mode = if let Some(per_variant) = &config.custom_data_per_variant {
+                DataMode::CustomDataPerVariant(
+                    per_variant.iter().map(|variant_data| variant_data.as_ref().clone()).collect(),
+                )
+            } else if let Some(data) = &config.custom_data {
+                DataMode::CustomData(data.as_ref().clone())
+            } else {
+                DataMode::TestPattern
+            };
 
             let session_config = HlsSessionConfig {
                 variant_count: config.variant_count,
                 segments_per_variant: config.segments_per_variant,
                 segment_size: config.segment_size,
                 segment_duration_secs: config.segment_duration_secs,
-                data_mode: DataMode::TestPattern,
-                init_mode: if config.init_data_per_variant.is_some() {
-                    InitMode::WavHeader {
-                        sample_rate: 44100,
-                        channels: 2,
-                    }
-                } else {
-                    InitMode::None
-                },
+                data_mode,
+                init_mode: config
+                    .init_data_per_variant
+                    .as_ref()
+                    .map(|init_data| {
+                        InitMode::Custom(
+                            init_data
+                                .iter()
+                                .map(|segment| segment.as_ref().clone())
+                                .collect(),
+                        )
+                    })
+                    .unwrap_or(InitMode::None),
                 variant_bandwidths: config.variant_bandwidths.clone(),
                 delay_rules: config.delay_rules.clone(),
                 encryption: config.encryption.as_ref().map(|enc| {

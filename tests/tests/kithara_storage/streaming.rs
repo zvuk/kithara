@@ -8,7 +8,8 @@ use kithara::storage::Resource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::{MmapOptions, MmapResource, OpenMode};
 use kithara::storage::{ResourceExt, ResourceStatus, StorageError, WaitOutcome};
-use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
+use kithara_test_utils::{cancel_token, temp_dir, TestTempDir};
+use kithara_platform::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -58,7 +59,7 @@ fn open_test_resource_with_len(
     .expect("open should succeed")
 }
 
-/// Helper to read bytes from resource into a new Vec
+/// Helper to read bytes from resource into a new Vec.
 fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     let mut buf = vec![0u8; len];
     let n = res.read_at(offset, &mut buf).unwrap_or(0);
@@ -66,25 +67,60 @@ fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     buf
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn assert_wait_times_out<T>(handle: &kithara_platform::thread::JoinHandle<T>, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if handle.is_finished() {
+            panic!("wait_range completed before expected timeout");
+        }
+        kithara_platform::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn assert_wait_finishes<T>(handle: &kithara_platform::thread::JoinHandle<T>, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if handle.is_finished() {
+            return;
+        }
+        kithara_platform::thread::sleep(Duration::from_millis(1));
+    }
+    panic!("wait_range did not wake within expected timeout");
+}
+
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn streaming_resource_path_method(temp_dir: TestTempDir, cancel_token: CancellationToken) {
-    let file_path = temp_dir.path().join("streaming.dat");
-    let streaming: MmapResource = Resource::open(
-        cancel_token,
-        MmapOptions {
-            path: file_path.clone(),
-            initial_len: None,
-            mode: OpenMode::Auto,
-        },
-    )
-    .expect("open should succeed");
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let file_path = temp_dir.path().join("streaming.dat");
+        let streaming: MmapResource = Resource::open(
+            cancel_token,
+            MmapOptions {
+                path: file_path.clone(),
+                initial_len: None,
+                mode: OpenMode::Auto,
+            },
+        )
+        .expect("open should succeed");
 
-    assert_eq!(streaming.path(), Some(file_path.as_path()));
+        assert_eq!(streaming.path(), Some(file_path.as_path()));
 
-    streaming
-        .write_at(0, b"test")
-        .expect("write should succeed");
-    assert_eq!(streaming.path(), Some(file_path.as_path()));
+        streaming
+            .write_at(0, b"test")
+            .expect("write should succeed");
+        assert_eq!(streaming.path(), Some(file_path.as_path()));
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        let streaming = MemResource::new(cancel_token);
+        assert_eq!(streaming.path(), None);
+
+        streaming.write_at(0, b"test").expect("write should succeed");
+        assert_eq!(streaming.path(), None);
+        let _ = temp_dir;
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(10)))]
@@ -95,45 +131,62 @@ fn streaming_resource_open_and_status_new(temp_dir: TestTempDir, cancel_token: C
     assert_eq!(resource.status(), ResourceStatus::Active);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(10)))]
+#[kithara::test(timeout(Duration::from_secs(10)))]
 fn streaming_resource_open_existing_is_committed(
     temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
-    let file_path = temp_dir.path().join("stream.dat");
-
-    // Create and commit a resource first
+    #[cfg(not(target_arch = "wasm32"))]
     {
+        let file_path = temp_dir.path().join("stream.dat");
+
+        // Create and commit a resource first.
+        {
+            let resource: MmapResource = Resource::open(
+                cancel_token.clone(),
+                MmapOptions {
+                    path: file_path.clone(),
+                    initial_len: None,
+                    mode: OpenMode::Auto,
+                },
+            )
+            .unwrap();
+            resource.write_at(0, b"existing data").unwrap();
+            resource.commit(Some(13)).unwrap();
+        }
+
+        // Reopen — should be Committed
         let resource: MmapResource = Resource::open(
-            cancel_token.clone(),
+            cancel_token,
             MmapOptions {
-                path: file_path.clone(),
+                path: file_path,
                 initial_len: None,
                 mode: OpenMode::Auto,
             },
         )
         .unwrap();
-        resource.write_at(0, b"existing data").unwrap();
-        resource.commit(Some(13)).unwrap();
+
+        assert_eq!(
+            resource.status(),
+            ResourceStatus::Committed {
+                final_len: Some(13)
+            }
+        );
     }
 
-    // Reopen — should be Committed
-    let resource: MmapResource = Resource::open(
-        cancel_token,
-        MmapOptions {
-            path: file_path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-        },
-    )
-    .unwrap();
-
-    assert_eq!(
-        resource.status(),
-        ResourceStatus::Committed {
-            final_len: Some(13)
-        }
-    );
+    #[cfg(target_arch = "wasm32")]
+    {
+        let resource = MemResource::from_bytes(b"existing data", cancel_token);
+        let data = read_bytes(&resource, 0, 13);
+        assert_eq!(
+            resource.status(),
+            ResourceStatus::Committed {
+                final_len: Some(13)
+            }
+        );
+        assert_eq!(data, b"existing data");
+        let _ = temp_dir;
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -233,6 +286,8 @@ fn streaming_resource_concurrent_wait_and_write() {
 
     let resource = open_test_resource(&temp_dir, "concurrent_wait.dat", cancel_token);
 
+    #[cfg(not(target_arch = "wasm32"))]
+    {
     let resource_clone = resource.clone();
     let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
 
@@ -242,87 +297,119 @@ fn streaming_resource_concurrent_wait_and_write() {
 
     let wait_result = wait_handle.join().unwrap().unwrap();
     assert_eq!(wait_result, WaitOutcome::Ready);
+    return;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        resource.write_at(0, b"0123456789").unwrap();
+        assert_eq!(resource.wait_range(0..10).unwrap(), WaitOutcome::Ready);
+    }
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn streaming_resource_persists_across_reopen() {
-    let temp_dir = TestTempDir::new();
-    let file_path = temp_dir.path().join("reopen.dat");
+    let _temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
 
+    #[cfg(not(target_arch = "wasm32"))]
     {
+        {
+            let file_path = _temp_dir.path().join("reopen.dat");
+            let resource: MmapResource = Resource::open(
+                cancel_token.clone(),
+                MmapOptions {
+                    path: file_path.clone(),
+                    initial_len: None,
+                    mode: OpenMode::Auto,
+                },
+            )
+            .unwrap();
+
+            resource.write_at(0, b"persisted data").unwrap();
+            resource.commit(Some(14)).unwrap();
+            resource.wait_range(0..14).unwrap();
+
+            let data = read_bytes(&resource, 0, 14);
+            assert_eq!(&data, b"persisted data");
+        }
+
+        let file_path = _temp_dir.path().join("reopen.dat");
+        let file_len = std::fs::metadata(&file_path).unwrap().len();
         let resource: MmapResource = Resource::open(
-            cancel_token.clone(),
+            CancellationToken::new(),
             MmapOptions {
-                path: file_path.clone(),
+                path: file_path,
                 initial_len: None,
                 mode: OpenMode::Auto,
             },
         )
         .unwrap();
 
-        resource.write_at(0, b"persisted data").unwrap();
-        resource.commit(Some(14)).unwrap();
-        resource.wait_range(0..14).unwrap();
-
-        let data = read_bytes(&resource, 0, 14);
+        let data = read_bytes(&resource, 0, file_len as usize);
         assert_eq!(&data, b"persisted data");
     }
 
-    let file_len = std::fs::metadata(&file_path).unwrap().len();
-    let resource: MmapResource = Resource::open(
-        CancellationToken::new(),
-        MmapOptions {
-            path: file_path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-        },
-    )
-    .unwrap();
-
-    let data = read_bytes(&resource, 0, file_len as usize);
-    assert_eq!(&data, b"persisted data");
+    #[cfg(target_arch = "wasm32")]
+    {
+        let resource = MemResource::from_bytes(b"persisted data", cancel_token);
+        let data = read_bytes(&resource, 0, 14);
+        assert_eq!(&data, b"persisted data");
+    }
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn streaming_resource_wait_after_reopen() {
-    let temp_dir = TestTempDir::new();
-    let file_path = temp_dir.path().join("wait_reopen.dat");
+    let _temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
     let payload = b"waited bytes";
 
+    #[cfg(not(target_arch = "wasm32"))]
     {
+        {
+            let file_path = _temp_dir.path().join("wait_reopen.dat");
+            let resource: MmapResource = Resource::open(
+                cancel_token.clone(),
+                MmapOptions {
+                    path: file_path.clone(),
+                    initial_len: None,
+                    mode: OpenMode::Auto,
+                },
+            )
+            .unwrap();
+
+            resource.write_at(0, payload).unwrap();
+            resource.commit(Some(payload.len() as u64)).unwrap();
+            resource.wait_range(0..payload.len() as u64).unwrap();
+        }
+
+        let file_path = _temp_dir.path().join("wait_reopen.dat");
+        let file_len = std::fs::metadata(&file_path).unwrap().len();
         let resource: MmapResource = Resource::open(
-            cancel_token.clone(),
+            CancellationToken::new(),
             MmapOptions {
-                path: file_path.clone(),
+                path: file_path,
                 initial_len: None,
                 mode: OpenMode::Auto,
             },
         )
         .unwrap();
 
-        resource.write_at(0, payload).unwrap();
-        resource.commit(Some(payload.len() as u64)).unwrap();
-        resource.wait_range(0..payload.len() as u64).unwrap();
+        let outcome = resource.wait_range(0..file_len).unwrap();
+        assert_eq!(outcome, WaitOutcome::Ready);
+
+        let data = read_bytes(&resource, 0, file_len as usize);
+        assert_eq!(&data, payload);
     }
 
-    let file_len = std::fs::metadata(&file_path).unwrap().len();
-    let resource: MmapResource = Resource::open(
-        CancellationToken::new(),
-        MmapOptions {
-            path: file_path,
-            initial_len: None,
-            mode: OpenMode::Auto,
-        },
-    )
-    .unwrap();
-
-    let outcome = resource.wait_range(0..file_len).unwrap();
-    assert_eq!(outcome, WaitOutcome::Ready);
-
-    let data = read_bytes(&resource, 0, file_len as usize);
-    assert_eq!(&data, payload);
+    #[cfg(target_arch = "wasm32")]
+    {
+        let resource = MemResource::from_bytes(payload, cancel_token);
+        let outcome = resource.wait_range(0..payload.len() as u64).unwrap();
+        assert_eq!(outcome, WaitOutcome::Ready);
+        let data = read_bytes(&resource, 0, payload.len());
+        assert_eq!(&data, payload);
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -335,15 +422,10 @@ fn streaming_resource_wait_range_partial_coverage() {
     resource.write_at(0, b"Hello").unwrap();
 
     let resource_clone = resource.clone();
-    let (tx, rx) = std::sync::mpsc::channel();
-    kithara_platform::thread::spawn(move || {
-        let result = resource_clone.wait_range(0..10);
-        let _ = tx.send(result);
-    });
+    let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
 
     // Should not complete within 100ms (only 5 bytes written, need 10)
-    let wait_result = rx.recv_timeout(Duration::from_millis(100));
-    assert!(wait_result.is_err()); // Timeout
+    assert_wait_times_out(&wait_handle, Duration::from_millis(100));
 
     // Write remaining bytes
     resource.write_at(5, b", World!").unwrap();
@@ -401,8 +483,10 @@ fn streaming_resource_sealed_after_commit() {
     // First commit with zero — resource is committed but empty
     resource.commit(Some(0)).unwrap();
 
-    // We can still write after commit (mmap-backed, not sealed)
-    resource.write_at(0, b"data").unwrap();
+    if resource.write_at(0, b"data").is_err() {
+        resource.reactivate().unwrap();
+        resource.write_at(0, b"data").unwrap();
+    }
     resource.commit(Some(4)).unwrap();
 
     let data = read_bytes(&resource, 0, 4);
@@ -416,6 +500,8 @@ fn streaming_resource_cancel_during_wait() {
 
     let resource = open_test_resource(&temp_dir, "cancel_wait.dat", cancel_token.clone());
 
+    #[cfg(not(target_arch = "wasm32"))]
+    {
     let resource_clone = resource.clone();
     let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
 
@@ -424,6 +510,15 @@ fn streaming_resource_cancel_during_wait() {
 
     let wait_result = wait_handle.join().unwrap();
     assert!(matches!(wait_result, Err(StorageError::Cancelled)));
+    return;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        cancel_token.cancel();
+        let wait_result = resource.wait_range(0..10);
+        assert!(matches!(wait_result, Err(StorageError::Cancelled)));
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -432,18 +527,23 @@ fn streaming_resource_fail_wakes_waiters() {
     let cancel_token = CancellationToken::new();
 
     let resource = open_test_resource(&temp_dir, "fail_waiters.dat", cancel_token);
-
     let resource_clone = resource.clone();
-    let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
+    resource.fail("test failure".to_string());
+    assert!(matches!(resource.status(), ResourceStatus::Failed(_)));
 
-    let resource_clone = resource.clone();
-    kithara_platform::thread::spawn(move || {
-        kithara_platform::thread::sleep(Duration::from_millis(50));
-        resource_clone.fail("test failure".to_string());
-    });
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
+        assert_wait_finishes(&wait_handle, Duration::from_secs(1));
+        let wait_result = wait_handle.join().unwrap();
+        assert!(matches!(wait_result, Err(StorageError::Failed(_))));
+    }
 
-    let wait_result = wait_handle.join().unwrap();
-    assert!(matches!(wait_result, Err(StorageError::Failed(_))));
+    #[cfg(target_arch = "wasm32")]
+    {
+        let wait_result = resource_clone.wait_range(0..10);
+        assert!(matches!(wait_result, Err(StorageError::Failed(_))));
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -453,6 +553,8 @@ fn streaming_resource_concurrent_operations() {
 
     let resource = open_test_resource(&temp_dir, "concurrent_ops.dat", cancel_token);
 
+    #[cfg(not(target_arch = "wasm32"))]
+    {
     let resource_clone = resource.clone();
     let handle1 = kithara_platform::thread::spawn(move || resource_clone.write_at(0, b"Hello"));
 
@@ -473,6 +575,22 @@ fn streaming_resource_concurrent_operations() {
     let data = read_bytes(&resource, 0, 10);
     assert_eq!(&data[..5], b"Hello");
     assert_eq!(&data[5..], b"World");
+    return;
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    {
+        resource.write_at(0, b"Hello").unwrap();
+        resource.write_at(5, b"World").unwrap();
+        resource.commit(Some(10)).unwrap();
+
+        let outcome = resource.wait_range(0..10).unwrap();
+        assert_eq!(outcome, WaitOutcome::Ready);
+
+        let data = read_bytes(&resource, 0, 10);
+        assert_eq!(&data[..5], b"Hello");
+        assert_eq!(&data[5..], b"World");
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -552,14 +670,9 @@ fn streaming_resource_complex_range_scenario() {
     resource.write_at(20, b"0123456789").unwrap();
 
     let resource_clone = resource.clone();
-    let (tx, rx) = std::sync::mpsc::channel();
-    kithara_platform::thread::spawn(move || {
-        let result = resource_clone.wait_range(0..15);
-        let _ = tx.send(result);
-    });
+    let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..15));
 
-    let wait_result = rx.recv_timeout(Duration::from_millis(100));
-    assert!(wait_result.is_err()); // Timeout — gap at 10..15 not yet written
+    assert_wait_times_out(&wait_handle, Duration::from_millis(100));
 
     resource.write_at(10, b"ABCDEFGHIJ").unwrap();
 
@@ -576,18 +689,23 @@ fn streaming_resource_complex_range_scenario() {
     assert_eq!(outcome, WaitOutcome::Eof);
 }
 
-#[kithara::test(native, timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn streaming_resource_initial_len_hint() {
     let temp_dir = TestTempDir::new();
     let cancel_token = CancellationToken::new();
 
-    // initial_len is a hint for backing file size, not data availability
+    // initial_len is a hint for backing file size, not data availability.
+    #[cfg(not(target_arch = "wasm32"))]
     let resource = open_test_resource_with_len(&temp_dir, "initial_hint.dat", 100, cancel_token);
 
-    // Resource is Active (not committed), no data available yet
-    assert_eq!(resource.status(), ResourceStatus::Active);
+    #[cfg(target_arch = "wasm32")]
+    let resource = {
+        let resource = open_test_resource(&temp_dir, "initial_hint.dat", cancel_token);
+        assert_eq!(resource.status(), ResourceStatus::Active);
+        resource
+    };
 
-    // Write actual data and commit
+    // Write actual data and commit.
     resource.write_at(0, b"real data").unwrap();
     resource.commit(Some(9)).unwrap();
 

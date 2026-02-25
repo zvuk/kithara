@@ -3,8 +3,7 @@
 //! Verifies that 2, 4, and 8 `Audio<Stream<File>>` instances can run
 //! concurrently on a shared `ThreadPool` and each reads PCM data to EOF.
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use kithara::{
     assets::StoreOptions,
@@ -87,7 +86,7 @@ async fn two_file_instances() {
         .try_init();
 
     let server = AudioTestServer::new().await;
-    let pool = ThreadPool::with_num_threads(6).expect("thread pool");
+    let pool = crate::multi_instance::test_thread_pool(6);
 
     let mut handles = Vec::new();
     let mut temps = Vec::new();
@@ -125,7 +124,7 @@ async fn four_file_instances() {
         .try_init();
 
     let server = AudioTestServer::new().await;
-    let pool = ThreadPool::with_num_threads(10).expect("thread pool");
+    let pool = crate::multi_instance::test_thread_pool(10);
 
     let mut handles = Vec::new();
     let mut temps = Vec::new();
@@ -163,7 +162,7 @@ async fn eight_file_instances() {
         .try_init();
 
     let server = AudioTestServer::new().await;
-    let pool = ThreadPool::with_num_threads(18).expect("thread pool");
+    let pool = crate::multi_instance::test_thread_pool(18);
 
     let mut handles = Vec::new();
     let mut temps = Vec::new();

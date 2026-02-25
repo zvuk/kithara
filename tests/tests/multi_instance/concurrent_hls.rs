@@ -5,8 +5,7 @@
 //! Tests both manual variant (no ABR) and auto ABR modes.
 
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use kithara::{
     assets::StoreOptions,
@@ -154,7 +153,7 @@ async fn two_hls_instances() {
         .try_init();
 
     let wav_data = generate_wav_data();
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = crate::multi_instance::test_thread_pool(4);
 
     // Each instance needs its own server (binds a random port) and cache dir.
     let mut handles = Vec::new();
@@ -193,7 +192,7 @@ async fn four_hls_instances() {
         .try_init();
 
     let wav_data = generate_wav_data();
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = crate::multi_instance::test_thread_pool(4);
 
     let mut handles = Vec::new();
     for i in 0..4 {
@@ -230,7 +229,7 @@ async fn eight_hls_instances() {
         .try_init();
 
     let wav_data = generate_wav_data();
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = crate::multi_instance::test_thread_pool(4);
 
     let mut handles = Vec::new();
     for i in 0..8 {
@@ -267,7 +266,7 @@ async fn four_hls_instances_with_abr() {
         .try_init();
 
     let wav_data = generate_wav_data();
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = crate::multi_instance::test_thread_pool(4);
 
     let mut handles = Vec::new();
     for i in 0..4 {

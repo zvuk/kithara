@@ -6,7 +6,6 @@
 use std::{
     future::Future,
     sync::atomic::{AtomicBool, Ordering},
-    time::{Duration, Instant},
 };
 
 use futures::future::{Either, select};
@@ -14,7 +13,7 @@ use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
 use kithara_events::{AudioEvent, Event, EventBus, SeekLifecycleStage};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_platform::ThreadPool;
+use kithara_platform::{time::{Duration, Instant}, ThreadPool};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
 use tracing::{info, warn};
 use url::Url;
@@ -27,6 +26,7 @@ mod kithara {
 /// Number of rayon worker threads for the thread pool.
 const THREAD_COUNT: usize = 2;
 const EVENT_BUS_CAPACITY: usize = 4096;
+const REAL_HLS_STREAM_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 
 /// Guard: `init_thread_pool` panics if called twice in the same page.
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
@@ -330,6 +330,14 @@ async fn select_with_retry(
         }
     }
     false
+}
+
+fn trim_events_tail(events: &str) -> String {
+    if events.len() <= 2048 {
+        events.to_string()
+    } else {
+        format!("...{}", &events[events.len() - 2048..])
+    }
 }
 
 // ── Saw-tooth verification helpers ──
@@ -822,6 +830,125 @@ async fn fill_buffer_position_must_not_drift() {
         final_pos <= duration_ms + 1000.0,
         "position {final_pos:.0}ms exceeds duration {duration_ms:.0}ms too much"
     );
+}
+
+#[kithara::test(wasm, timeout(Duration::from_secs(90)), env(NO_PROXY = "stream.silvercomet.top"))]
+async fn wasm_player_real_hls_repro_freeze_probe() {
+    init().await;
+    info!("Starting wasm_player_real_hls_repro_freeze_probe");
+
+    let url = option_env!("KITHARA_REAL_HLS_STREAM_URL").unwrap_or(REAL_HLS_STREAM_URL);
+    let mut player = kithara_wasm::WasmPlayer::new();
+    let idx = match player.add_track(url.to_string()) {
+        Ok(idx) => idx,
+        Err(err) => {
+            warn!("real HLS repro: add_track failed: {:?}", err);
+            return;
+        }
+    };
+
+    if !select_with_retry(&mut player, idx, 12).await {
+        warn!("real HLS repro: select_track retries exhausted");
+        return;
+    }
+
+    let duration_ms = wait_duration_ms(&player).await;
+    if duration_ms <= 0.0 {
+        warn!("real HLS repro: duration is not available; skip");
+        return;
+    }
+
+    player.play();
+    assert!(player.is_playing(), "real HLS repro: play() should start playback");
+
+    let start_ms = player.get_position_ms();
+    assert!(
+        wait_position_advance(&player, start_ms).await,
+        "real HLS repro: position must advance after initial play"
+    );
+
+    let mut last_position_ms = player.get_position_ms();
+    let mut last_process_count = player.process_count();
+    let mut stable_position_iterations = 0u32;
+    let mut last_events = String::new();
+    let mut seek_executed = false;
+    let mut seek_progress = false;
+
+    for i in 0..80 {
+        yield_ms(250).await;
+
+        if let Err(err) = player.tick() {
+            warn!(iteration = i, "real HLS repro: tick() failed: {:?}", err);
+        }
+
+        let position_ms = player.get_position_ms();
+        let process_count = player.process_count();
+        let events = player.take_events();
+        if !events.is_empty() {
+            last_events = trim_events_tail(&events);
+        }
+
+        if position_ms > last_position_ms + 10.0 {
+            stable_position_iterations = 0;
+            last_position_ms = position_ms;
+        } else {
+            stable_position_iterations += 1;
+        }
+
+        if process_count > last_process_count {
+            last_process_count = process_count;
+        }
+
+        if i == 40 && !seek_executed {
+            let seek_ms = (duration_ms * 0.4).clamp(500.0, (duration_ms - 500.0).max(500.0));
+            match player.seek(seek_ms) {
+                Ok(()) => {
+                    seek_executed = true;
+                    let before_seek_ms = player.get_position_ms();
+                    if wait_position_advance(&player, before_seek_ms).await {
+                        seek_progress = true;
+                    }
+                }
+                Err(err) => warn!(
+                    iteration = i,
+                    seek_ms,
+                    "real HLS repro: midstream seek failed: {:?}",
+                    err
+                ),
+            }
+        }
+
+        if i % 20 == 0 {
+            info!(
+                iteration = i,
+                position_ms = position_ms,
+                process_count = process_count,
+                is_playing = player.is_playing(),
+                "real HLS repro probe"
+            );
+        }
+
+        if stable_position_iterations >= 20 {
+            panic!(
+                "real HLS repro: position stalled for {stable_position_iterations} consecutive iterations (~{}ms) on stream {url}; \
+                 last_pos_ms={position_ms}, process_count={process_count}, seek_executed={seek_executed}, \
+                 seek_progress={seek_progress}, last_events={}",
+                stable_position_iterations * 250,
+                last_events
+            );
+        }
+    }
+
+    assert!(
+        seek_executed,
+        "real HLS repro: midstream seek was not executed"
+    );
+    if seek_executed {
+        assert!(
+            seek_progress,
+            "real HLS repro: midstream seek should resume position progress before finish"
+        );
+    }
 }
 
 /// Aggressive seek stress test: 1000 rapid random seeks.

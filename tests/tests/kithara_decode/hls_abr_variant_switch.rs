@@ -10,7 +10,7 @@
 //! This test verifies that Stream<Hls> reads continuous bytes without skips during ABR
 //! variant switches.
 
-use std::{env, error::Error, io::Read as _, time::Duration};
+use std::{error::Error, io::Read as _, time::Duration};
 
 use kithara::{
     assets::StoreOptions,
@@ -46,10 +46,9 @@ async fn test_abr_variant_switch_no_byte_glitches(
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(
-            env::var("RUST_LOG")
-                .unwrap_or_else(|_| "kithara_decode=debug,kithara_hls=debug".to_string()),
-        )
+        .with_env_filter(kithara_test_utils::rust_log_filter(
+            "kithara_decode=debug,kithara_hls=debug",
+        ))
         .try_init();
 
     // Create test server with ABR-triggering configuration:
@@ -122,7 +121,7 @@ async fn test_abr_variant_switch_no_byte_glitches(
     info!("Reading bytes from Stream<Hls>");
 
     // Give ABR some time to trigger and load segments
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    kithara_platform::time::sleep(Duration::from_millis(100)).await;
 
     // Read bytes in blocking thread
     let result = kithara_platform::spawn_blocking(
@@ -324,7 +323,7 @@ async fn test_abr_variant_switch_with_seek_backward(
     });
 
     // Give ABR time to trigger and load some segments
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    kithara_platform::time::sleep(Duration::from_millis(100)).await;
 
     kithara_platform::spawn_blocking(move || -> Result<(), Box<dyn Error + Send + Sync>> {
         use std::io::SeekFrom;

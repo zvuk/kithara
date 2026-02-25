@@ -870,6 +870,59 @@ fn test_wait_range_flushing_interrupts_without_requesting_segment() {
     );
 }
 
+#[kithara::test]
+fn test_wait_range_flushing_overrides_stale_eof() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    let total_bytes = 2_400u64;
+    shared.timeline.set_eof(true);
+    shared.timeline.set_total_bytes(Some(total_bytes));
+    shared.timeline.set_byte_position(total_bytes);
+
+    let _ = shared.timeline.initiate_seek(Duration::ZERO);
+    let mut source = make_test_source(Arc::clone(&shared), cancel);
+
+    let result = source.wait_range(total_bytes..total_bytes + 128);
+
+    assert!(
+        shared.timeline.is_flushing(),
+        "test setup must remain in flushing state before source apply"
+    );
+    assert!(matches!(result, Ok(WaitOutcome::Interrupted)));
+}
+
+#[kithara::test]
+fn test_wait_range_stale_eof_overrides_multiple_initiate_seek_storm() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    shared.current_variant_index.store(0, Ordering::Release);
+
+    let total_bytes = 2_400u64;
+    shared.timeline.set_eof(true);
+    shared.timeline.set_total_bytes(Some(total_bytes));
+    shared.timeline.set_byte_position(total_bytes);
+
+    // Simulate holding the seek key: multiple seek starts without completing the newest one yet.
+    for idx in 0..12u64 {
+        let _ = shared.timeline.initiate_seek(Duration::from_millis(idx + 1));
+    }
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel);
+    let result = source.wait_range(total_bytes..total_bytes + 128);
+
+    assert!(
+        shared.timeline.is_flushing(),
+        "seek storm must keep timeline in flushing state"
+    );
+    assert!(
+        matches!(result, Ok(WaitOutcome::Interrupted)),
+        "stale EOF should not end playback while seek flushing is active"
+    );
+    assert!(shared.timeline.eof(), "bug reproducer relies on stale EOF");
+}
+
 #[kithara::test(tokio, browser)]
 async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     let cancel = CancellationToken::new();

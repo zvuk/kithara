@@ -239,7 +239,7 @@ async fn test_init_segment_at_stream_start(
     let mut stream = Stream::<Hls>::new(config).await?;
 
     // Wait for INIT and first segment to be loaded.
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    kithara_platform::time::sleep(Duration::from_millis(100)).await;
 
     // Read from offset 0 - should get INIT data, not SEG-0.
     // Variant is ABR-dependent, so validate init marker generically.

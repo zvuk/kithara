@@ -39,9 +39,9 @@ async fn stress_random_seek_read_synthetic_wav() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| {
-            "kithara_audio=debug,kithara_decode=debug,kithara_stream=debug".to_string()
-        }))
+        .with_env_filter(kithara_test_utils::rust_log_filter(
+            "kithara_audio=debug,kithara_decode=debug,kithara_stream=debug",
+        ))
         .try_init();
 
     // Step 1: Create synthetic WAV

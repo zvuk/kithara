@@ -11,6 +11,8 @@ use std::{fmt::Debug, ops::Range, path::Path, sync::Arc};
 
 use derivative::Derivative;
 use kithara_platform::{Condvar, Mutex};
+#[cfg(target_arch = "wasm32")]
+use kithara_platform::thread;
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -304,7 +306,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             }
 
             // Slow path: lock state and check coverage, wait if needed.
-            let mut state = self.inner.state.lock();
+            let state = self.inner.state.lock();
 
             if self.inner.cancel.is_cancelled() {
                 return Err(StorageError::Cancelled);
@@ -334,9 +336,20 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                 "storage::wait_range spinning"
             );
 
-            self.inner
-                .condvar
-                .wait_for(&mut state, std::time::Duration::from_millis(50));
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let mut state = state;
+                self.inner
+                    .condvar
+                    .wait_for(&mut state, std::time::Duration::from_millis(50));
+            }
+
+            #[cfg(target_arch = "wasm32")]
+            {
+                drop(state);
+                thread::sleep(std::time::Duration::from_millis(50));
+                continue;
+            }
         }
     }
 

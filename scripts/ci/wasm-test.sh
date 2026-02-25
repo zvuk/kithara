@@ -17,6 +17,7 @@ set -euo pipefail
 echo "=== Running WASM integration tests (nightly, build-std) ==="
 CHROMEDRIVER="${CHROMEDRIVER:-chromedriver}" \
 WASM_BINDGEN_TEST_TIMEOUT=300 \
+WASM_BINDGEN_USE_BROWSER=1 \
 cargo +nightly test --target wasm32-unknown-unknown \
     -p kithara-integration-tests --test integration
 

@@ -159,9 +159,13 @@ mod wasm {
     impl AudioTestServer {
         pub(crate) async fn new() -> Self {
             let resp = fixture_client::create_audio_fixtures_session().await;
+            let mut base_url = resp.base_url;
+            if !base_url.ends_with('/') {
+                base_url.push('/');
+            }
             Self {
                 session_id: resp.session_id,
-                base_url: resp.base_url.parse().unwrap(),
+                base_url: base_url.parse().unwrap(),
             }
         }
 

@@ -12,6 +12,8 @@ mod player;
 #[cfg(target_arch = "wasm32")]
 pub use bindings::{build_info, setup};
 #[cfg(target_arch = "wasm32")]
+pub use player::wasm_memory_bytes;
+#[cfg(target_arch = "wasm32")]
 pub use player::WasmPlayer;
 // Re-export initThreadPool from wasm-bindgen-rayon.
 // JS calls: `await initThreadPool(navigator.hardwareConcurrency)`

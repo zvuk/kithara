@@ -152,6 +152,10 @@ pub enum DataMode {
         channels: u16,
         patterns: Vec<PcmPattern>,
     },
+    /// Exact custom segment bytes for all variants.
+    CustomData(Vec<u8>),
+    /// Exact custom segment bytes for each variant.
+    CustomDataPerVariant(Vec<Vec<u8>>),
 }
 
 /// PCM saw-tooth pattern for a variant.
@@ -174,6 +178,10 @@ pub enum InitMode {
     None,
     /// 44-byte WAV header (streaming mode: size = 0xFFFFFFFF).
     WavHeader { sample_rate: u32, channels: u16 },
+    /// Exact custom init bytes for each variant.
+    ///
+    /// Variant `v` uses `data[v]`; missing entries produce an empty init segment.
+    Custom(Vec<Vec<u8>>),
 }
 
 // ── Delay Rules ────────────────────────────────────────────────────

@@ -10,7 +10,6 @@
 //! Note: ABR is set to Manual(0) to fix variant and avoid switching during tests.
 
 use std::io::{Read, Seek, SeekFrom};
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use fixture::TestServer;

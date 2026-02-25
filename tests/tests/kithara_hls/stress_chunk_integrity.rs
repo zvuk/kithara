@@ -11,7 +11,9 @@
 //! 3. **Random seeks**: 200 seek + 5 chunk reads with continuity + saw-tooth checks
 //! 4. **EOF**: seek near end, drain to EOF
 
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, sync::Arc};
+
+use kithara_platform::time::Duration;
 
 use kithara::{
     assets::StoreOptions,
@@ -33,7 +35,6 @@ const SEGMENT_COUNT: usize = 50;
 const SEEK_ITERATIONS: usize = 200;
 const SAW_PERIOD: usize = 65536;
 const WARMUP_TIMEOUT_SECS: u64 = 30;
-#[cfg(not(target_arch = "wasm32"))]
 const TEST_TIMEOUT_SECS: u64 = 60;
 const POST_SWITCH_CHUNKS: usize = 50;
 const CHUNKS_PER_SEEK: usize = 5;
@@ -173,7 +174,7 @@ async fn next_chunk_with_timeout(
     timeout: Duration,
     stage: &str,
 ) -> Option<PcmChunk> {
-    let deadline = tokio::time::Instant::now() + timeout;
+    let deadline = kithara_platform::time::Instant::now() + timeout;
     loop {
         if let Some(chunk) = PcmReader::next_chunk(audio) {
             return Some(chunk);
@@ -182,11 +183,11 @@ async fn next_chunk_with_timeout(
             return None;
         }
         assert!(
-            tokio::time::Instant::now() <= deadline,
+            kithara_platform::time::Instant::now() <= deadline,
             "next_chunk timeout at stage='{stage}' (is_eof={})",
             audio.is_eof()
         );
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        kithara_platform::time::sleep(Duration::from_millis(5)).await;
     }
 }
 
@@ -199,10 +200,9 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| {
-            "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug"
-                .to_string()
-        }))
+        .with_env_filter(kithara_test_utils::rust_log_filter(
+            "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug",
+        ))
         .try_init();
 
     // Generate WAV data for two variants
@@ -284,7 +284,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     // Phase 1: Warmup + ABR switch detection
     info!("Phase 1: waiting for ABR switch (ascending -> descending) via chunks...");
 
-    let warmup_start = tokio::time::Instant::now();
+    let warmup_start = kithara_platform::time::Instant::now();
     let warmup_timeout = Duration::from_secs(WARMUP_TIMEOUT_SECS);
     let mut warmup_ascending = 0u64;
     let mut warmup_unknown = 0u64;

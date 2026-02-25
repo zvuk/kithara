@@ -4,7 +4,7 @@
 //! a network failure), other instances on the same shared `ThreadPool`
 //! continue to read PCM data to EOF without being affected.
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara::{
     assets::StoreOptions,
@@ -13,6 +13,7 @@ use kithara::{
     platform::ThreadPool,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -110,7 +111,7 @@ async fn healthy_instances_survive_cancelled_peers() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = crate::multi_instance::test_thread_pool(4);
     let wav_data = generate_wav_data();
 
     let mut handles: Vec<kithara_platform::BlockingHandle<Outcome>> = Vec::new();
@@ -147,8 +148,8 @@ async fn healthy_instances_survive_cancelled_peers() {
         let audio = create_hls_audio(&server, temp.path(), &pool, cancel).await;
 
         // Fire the cancel after a short delay.
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(500)).await;
+        kithara_platform::spawn_task(async move {
+            kithara_platform::time::sleep(Duration::from_millis(500)).await;
             cancel_clone.cancel();
         });
 
@@ -216,7 +217,7 @@ async fn eight_instances_half_cancelled() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = crate::multi_instance::test_thread_pool(4);
     let wav_data = generate_wav_data();
 
     let mut handles: Vec<kithara_platform::BlockingHandle<Outcome>> = Vec::new();
@@ -252,8 +253,8 @@ async fn eight_instances_half_cancelled() {
 
         // Stagger cancellation slightly to make it more realistic.
         let delay_ms = 200 + ((i - 4) as u64 * 100);
-        tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        kithara_platform::spawn_task(async move {
+            kithara_platform::time::sleep(Duration::from_millis(delay_ms)).await;
             cancel_clone.cancel();
         });
 

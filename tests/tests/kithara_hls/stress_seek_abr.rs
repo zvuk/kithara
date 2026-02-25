@@ -33,9 +33,9 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| {
-            "kithara_audio=debug,kithara_hls=debug,kithara_decode=debug".to_string()
-        }))
+        .with_env_filter(kithara_test_utils::rust_log_filter(
+            "kithara_audio=debug,kithara_hls=debug,kithara_decode=debug",
+        ))
         .try_init();
 
     let url: url::Url = HLS_URL.parse().expect("valid URL");
@@ -186,9 +186,9 @@ async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| {
-            "kithara_audio=debug,kithara_hls=debug,kithara_decode=debug".to_string()
-        }))
+        .with_env_filter(kithara_test_utils::rust_log_filter(
+            "kithara_audio=debug,kithara_hls=debug,kithara_decode=debug",
+        ))
         .try_init();
 
     let url: url::Url = HLS_URL.parse().expect("valid URL");

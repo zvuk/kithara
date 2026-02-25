@@ -3,7 +3,6 @@
 //! Diagnostic test for `sequential_read_across_segments_maintains_variant`
 
 use std::io::Read;
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use fixture::TestServer;

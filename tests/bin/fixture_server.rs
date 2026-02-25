@@ -227,6 +227,11 @@ mod server {
                     }
                     data
                 }
+                DataMode::CustomData(data) => data.clone(),
+                DataMode::CustomDataPerVariant(patterns) => patterns
+                    .get(v)
+                    .cloned()
+                    .unwrap_or_default(),
                 DataMode::SawWav { .. } => {
                     let total = config.segments_per_variant * config.segment_size;
                     create_saw_wav(total)
@@ -251,6 +256,7 @@ mod server {
                     sample_rate,
                     channels,
                 } => create_wav_init_header(*sample_rate, *channels),
+                InitMode::Custom(data) => data.get(v).cloned().unwrap_or_default(),
             };
             inits.push(init);
         }
@@ -470,7 +476,7 @@ seg/v{}_2.bin
         total_len: usize,
     ) -> Vec<u8> {
         if delay != Duration::ZERO {
-            tokio::time::sleep(delay).await;
+            kithara_platform::time::sleep(delay).await;
         }
         let mut data = Vec::new();
         data.push(variant as u8);
@@ -905,7 +911,7 @@ seg/v{}_2.bin
                     // Drop the read lock before sleeping to avoid holding it.
                     let delay = Duration::from_millis(delay_ms);
                     drop(sessions);
-                    tokio::time::sleep(delay).await;
+                    kithara_platform::time::sleep(delay).await;
                     let sessions = state.sessions.read().await;
                     let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
                     let SessionKind::Hls(data) = &session.kind else {
@@ -1172,7 +1178,7 @@ seg/v{}_2.bin
         if let Some(delay_ms) = route.delay_ms
             && delay_ms > 0
         {
-            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+            kithara_platform::time::sleep(Duration::from_millis(delay_ms)).await;
         }
 
         let body_data = route.body.unwrap_or_default();
@@ -1334,7 +1340,7 @@ seg/v{}_2.bin
 
     async fn cleanup_expired_sessions(sessions: Sessions) {
         loop {
-            tokio::time::sleep(Duration::from_secs(30)).await;
+            kithara_platform::time::sleep(Duration::from_secs(30)).await;
             let mut map = sessions.write().await;
             let now = Instant::now();
             map.retain(|_, session| {

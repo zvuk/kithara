@@ -29,8 +29,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
-    kithara_decode::fixture::AudioTestServer,
     kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig},
+    kithara_decode::fixture::AudioTestServer,
+    multi_instance::{available_thread_count, test_thread_pool},
 };
 
 const SAMPLE_RATE: u32 = 44100;
@@ -84,7 +85,7 @@ async fn pool_max_concurrency(pool: &ThreadPool, expected_threads: usize) -> usi
 }
 
 async fn assert_pool_threads_available(pool: &ThreadPool, expected_threads: usize) {
-    let deadline = tokio::time::Instant::now() + POOL_AVAILABILITY_TIMEOUT;
+    let deadline = kithara_platform::time::Instant::now() + POOL_AVAILABILITY_TIMEOUT;
     let mut best_observed = 0usize;
 
     loop {
@@ -95,7 +96,7 @@ async fn assert_pool_threads_available(pool: &ThreadPool, expected_threads: usiz
             return;
         }
 
-        if tokio::time::Instant::now() >= deadline {
+        if kithara_platform::time::Instant::now() >= deadline {
             assert!(
                 best_observed >= expected_threads,
                 "only {best_observed}/{expected_threads} threads were free concurrently \
@@ -104,7 +105,7 @@ async fn assert_pool_threads_available(pool: &ThreadPool, expected_threads: usiz
             );
         }
 
-        tokio::time::sleep(POOL_AVAILABILITY_RETRY).await;
+        kithara_platform::time::sleep(POOL_AVAILABILITY_RETRY).await;
     }
 }
 
@@ -155,7 +156,7 @@ async fn file_threads_released_after_drop() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = test_thread_pool(4);
     let server = AudioTestServer::new().await;
     let temp = TestTempDir::new();
 
@@ -177,10 +178,10 @@ async fn file_threads_released_after_drop() {
     .expect("join");
 
     // Give worker/downloader time to notice cancellation and exit.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    kithara_platform::time::sleep(Duration::from_millis(500)).await;
 
     // All 4 pool threads should be free now.
-    assert_pool_threads_available(&pool, 4).await;
+    assert_pool_threads_available(&pool, available_thread_count(4)).await;
     info!("all pool threads are free after File instance drop");
 }
 
@@ -192,7 +193,7 @@ async fn hls_threads_released_after_drop() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = test_thread_pool(4);
     let wav_data = generate_wav_data();
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
 
@@ -234,9 +235,9 @@ async fn hls_threads_released_after_drop() {
     .await
     .expect("join");
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    kithara_platform::time::sleep(Duration::from_millis(500)).await;
 
-    assert_pool_threads_available(&pool, 4).await;
+    assert_pool_threads_available(&pool, available_thread_count(4)).await;
     info!("all pool threads are free after HLS instance drop");
 }
 
@@ -251,7 +252,7 @@ async fn sequential_file_create_destroy_no_leak() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = test_thread_pool(4);
     let server = AudioTestServer::new().await;
 
     for round in 0..10 {
@@ -274,13 +275,13 @@ async fn sequential_file_create_destroy_no_leak() {
         .expect("join");
 
         // Brief pause to let threads exit.
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        kithara_platform::time::sleep(Duration::from_millis(200)).await;
 
         info!(round, "iteration done, pool still alive");
     }
 
     // After 10 rounds the pool should be fully usable.
-    assert_pool_threads_available(&pool, 4).await;
+    assert_pool_threads_available(&pool, available_thread_count(4)).await;
     info!("10 sequential create/destroy cycles completed without thread leak");
 }
 
@@ -292,7 +293,7 @@ async fn sequential_hls_create_destroy_no_leak() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = test_thread_pool(4);
     let wav_data = generate_wav_data();
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
 
@@ -335,12 +336,12 @@ async fn sequential_hls_create_destroy_no_leak() {
         .await
         .expect("join");
 
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        kithara_platform::time::sleep(Duration::from_millis(200)).await;
 
         info!(round, "iteration done");
     }
 
-    assert_pool_threads_available(&pool, 4).await;
+    assert_pool_threads_available(&pool, available_thread_count(4)).await;
     info!("10 sequential HLS create/destroy cycles completed without thread leak");
 }
 
@@ -353,7 +354,7 @@ async fn pool_recovers_after_saturation() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = test_thread_pool(4);
     let wav_data = generate_wav_data();
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
     let server = AudioTestServer::new().await;
@@ -413,11 +414,11 @@ async fn pool_recovers_after_saturation() {
     h2.await.expect("join");
 
     info!("phase 1 done: both instances dropped");
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    kithara_platform::time::sleep(Duration::from_millis(500)).await;
 
     // Phase 2: verify full recovery
     info!("phase 2: verifying pool recovery");
-    assert_pool_threads_available(&pool, 4).await;
+    assert_pool_threads_available(&pool, available_thread_count(4)).await;
 
     // Phase 3: create new instances on the recovered pool
     info!("phase 3: creating new instances on recovered pool");
@@ -461,7 +462,7 @@ async fn pool_recovers_after_saturation() {
 /// on a single transient snapshot.
 #[kithara::test(tokio, timeout(Duration::from_secs(20)))]
 async fn pool_availability_waits_for_delayed_release() {
-    let pool = ThreadPool::with_num_threads(4).expect("thread pool");
+    let pool = test_thread_pool(4);
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
 
     for _ in 0..2 {
@@ -479,8 +480,8 @@ async fn pool_availability_waits_for_delayed_release() {
             .expect("busy task should start");
     }
 
-    let started = tokio::time::Instant::now();
-    assert_pool_threads_available(&pool, 4).await;
+    let started = kithara_platform::time::Instant::now();
+    assert_pool_threads_available(&pool, available_thread_count(4)).await;
     assert!(
         started.elapsed() >= Duration::from_millis(400),
         "availability check should wait for delayed release"

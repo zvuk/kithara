@@ -39,3 +39,16 @@ pub use fixtures::*;
 pub use http_server::TestHttpServer;
 pub use rng::*;
 pub use wav::{create_saw_wav, create_test_wav};
+
+/// Get a `tracing` filter string for tests with wasm-safe fallback.
+#[inline]
+pub fn rust_log_filter(default: &str) -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        std::env::var("RUST_LOG").unwrap_or_else(|_| default.to_string())
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        default.to_string()
+    }
+}

@@ -13,7 +13,6 @@
 //! smaller Content-Length for HEAD than the actual GET body.
 
 use std::io::{Read, Seek, SeekFrom};
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use fixture::scalable_server::{HlsTestServer, HlsTestServerConfig};

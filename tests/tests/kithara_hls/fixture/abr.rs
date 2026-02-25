@@ -148,7 +148,7 @@ mod native {
         total_len: usize,
     ) -> Vec<u8> {
         if delay != Duration::ZERO {
-            tokio::time::sleep(delay).await;
+            kithara_platform::time::sleep(delay).await;
         }
 
         let mut data = Vec::new();

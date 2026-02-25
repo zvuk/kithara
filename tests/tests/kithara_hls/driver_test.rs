@@ -155,7 +155,7 @@ async fn test_driver_abr_seek_backward(
     });
 
     // Give ABR time to start downloading
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    kithara_platform::time::sleep(Duration::from_millis(100)).await;
 
     kithara_platform::spawn_blocking(move || {
         // Read some data forward

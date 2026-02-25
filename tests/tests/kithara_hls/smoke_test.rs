@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use fixture::TestServer;
 use kithara::{
@@ -13,6 +13,7 @@ use kithara_test_utils::{TestTempDir, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use url::Url;
+use tokio::sync::oneshot;
 
 use super::fixture;
 
@@ -42,21 +43,23 @@ async fn test_hls_session_creation(
     info!("HLS source opened successfully");
 
     // Spawn a task to consume events (prevent channel from filling up)
-    let events_handle = tokio::spawn(async move {
+    let (events_sender, events_receiver) = oneshot::channel::<u64>();
+
+    kithara_platform::spawn_task(async move {
         let mut event_count = 0;
         while let Ok(Ok(event)) =
-            tokio::time::timeout(Duration::from_millis(100), events_rx.recv()).await
+            kithara_platform::time::timeout(Duration::from_millis(100), events_rx.recv()).await
         {
             event_count += 1;
             if event_count <= 3 {
                 info!("Event {}: {:?}", event_count, event);
             }
         }
-        event_count
+        let _ = events_sender.send(event_count);
     });
 
     // Get event count with timeout
-    let event_count = events_handle.await?;
+    let event_count = events_receiver.await?;
     info!("Total events received: {}", event_count);
 
     // If we got here without errors, the test passes
@@ -123,7 +126,7 @@ async fn test_hls_session_events_consumption(
 
     // Try to receive events with timeout
     let timeout = Duration::from_millis(500);
-    let event_result = tokio::time::timeout(timeout, events_rx.recv()).await;
+    let event_result = kithara_platform::time::timeout(timeout, events_rx.recv()).await;
 
     match event_result {
         Ok(Ok(event)) => {
@@ -184,7 +187,7 @@ async fn test_hls_session_drop_cleanup(
     drop(stream);
 
     // Wait a bit to ensure cleanup happens
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    kithara_platform::time::sleep(Duration::from_millis(100)).await;
 
     info!("HLS session dropped without issues");
     Ok(())

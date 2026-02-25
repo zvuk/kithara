@@ -47,7 +47,7 @@ async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
     // Give HLS time to start fetching
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    kithara_platform::time::sleep(Duration::from_secs(2)).await;
 
     // Read ALL bytes using std::io::Read
     let mut all_bytes = Vec::new();

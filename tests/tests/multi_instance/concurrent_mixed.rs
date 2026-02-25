@@ -4,15 +4,13 @@
 //! same shared `ThreadPool` and all read PCM data to EOF.
 
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     file::{File, FileConfig},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
-    platform::ThreadPool,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_test_utils::{TestTempDir, wav::create_test_wav};
@@ -90,7 +88,7 @@ async fn mixed_two_file_two_hls() {
         .try_init();
 
     // Each Audio instance uses 2 pool threads (downloader + audio_loop).
-    let pool = ThreadPool::with_num_threads(10).expect("thread pool");
+    let pool = crate::multi_instance::test_thread_pool(10);
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;
 
@@ -202,7 +200,7 @@ async fn mixed_four_file_four_hls() {
         .try_init();
 
     // Each Audio instance uses 2 pool threads (downloader + audio_loop).
-    let pool = ThreadPool::with_num_threads(18).expect("thread pool");
+    let pool = crate::multi_instance::test_thread_pool(18);
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;
 

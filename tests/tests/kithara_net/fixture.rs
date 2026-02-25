@@ -21,12 +21,12 @@ impl<N: Net> DelayedNet<N> {
 #[async_trait::async_trait]
 impl<N: Net> Net for DelayedNet<N> {
     async fn get_bytes(&self, url: Url, headers: Option<Headers>) -> Result<Bytes, NetError> {
-        tokio::time::sleep(self.delay).await;
+        kithara_platform::time::sleep(self.delay).await;
         self.inner.get_bytes(url, headers).await
     }
 
     async fn stream(&self, url: Url, headers: Option<Headers>) -> Result<ByteStream, NetError> {
-        tokio::time::sleep(self.delay).await;
+        kithara_platform::time::sleep(self.delay).await;
         self.inner.stream(url, headers).await
     }
 
@@ -36,12 +36,12 @@ impl<N: Net> Net for DelayedNet<N> {
         range: RangeSpec,
         headers: Option<Headers>,
     ) -> Result<ByteStream, NetError> {
-        tokio::time::sleep(self.delay).await;
+        kithara_platform::time::sleep(self.delay).await;
         self.inner.get_range(url, range, headers).await
     }
 
     async fn head(&self, url: Url, headers: Option<Headers>) -> Result<Headers, NetError> {
-        tokio::time::sleep(self.delay).await;
+        kithara_platform::time::sleep(self.delay).await;
         self.inner.head(url, headers).await
     }
 }

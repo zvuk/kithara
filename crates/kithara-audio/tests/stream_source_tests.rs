@@ -71,7 +71,20 @@ impl TestSource {
 impl Source for TestSource {
     type Error = io::Error;
 
-    fn wait_range(&mut self, _range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
+    fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
+        if self.timeline.is_flushing() {
+            return Ok(WaitOutcome::Interrupted);
+        }
+
+        if self.timeline.eof()
+            && self
+                .timeline
+                .total_bytes()
+                .is_some_and(|total| total > 0 && range.start >= total)
+        {
+            return Ok(WaitOutcome::Eof);
+        }
+
         Ok(WaitOutcome::Ready)
     }
 
@@ -1186,6 +1199,27 @@ fn source_variant_fence_blocks_cross_variant_reads() {
     let n = shared.read(&mut buf).unwrap();
     assert_eq!(n, 100, "V3 read should succeed after fence clear");
     assert!(buf[..n].iter().all(|&b| b == 0xBB), "Should be V3 data");
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)))]
+fn stream_read_is_interrupted_when_flushing_over_stale_eof() {
+    let source = TestSource::new(vec![0u8; 200], Some(200));
+    let total_bytes = 200u64;
+
+    source.timeline.set_eof(true);
+    source.timeline.set_total_bytes(Some(total_bytes));
+    source.timeline.set_byte_position(total_bytes);
+
+    for idx in 0..12u64 {
+        let _ = source.timeline.initiate_seek(Duration::from_millis(idx + 1));
+    }
+
+    let mut stream = test_stream_from_source(source);
+    let mut buf = vec![0u8; 16];
+
+    let result = stream.read(&mut buf).expect_err("read should be interrupted by flushing");
+    assert_eq!(result.kind(), io::ErrorKind::Interrupted);
+    assert_eq!(result.to_string(), "seek pending");
 }
 
 // Encoded ABR switch test — verify no samples lost during decoder recreation

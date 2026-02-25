@@ -126,6 +126,10 @@ impl HlsSource {
             return WaitRangeDecision::Ready;
         }
 
+        if self.shared.timeline.is_flushing() {
+            return WaitRangeDecision::Interrupted;
+        }
+
         if context.eof && context.effective_total > 0 && range.start >= context.effective_total {
             debug!(
                 range_start = range.start,
@@ -137,10 +141,6 @@ impl HlsSource {
                 "wait_range: EOF"
             );
             return WaitRangeDecision::Eof;
-        }
-
-        if self.shared.timeline.is_flushing() {
-            return WaitRangeDecision::Interrupted;
         }
 
         WaitRangeDecision::Continue

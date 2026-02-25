@@ -116,9 +116,9 @@ mod hls_timeline {
         let _ = tracing_subscriber::fmt()
             .with_test_writer()
             .with_max_level(tracing::Level::DEBUG)
-            .with_env_filter(std::env::var("RUST_LOG").unwrap_or_else(|_| {
-                "kithara_decode=debug,kithara_hls=debug,kithara_stream=debug".to_string()
-            }))
+            .with_env_filter(kithara_test_utils::rust_log_filter(
+                "kithara_decode=debug,kithara_hls=debug,kithara_stream=debug",
+            ))
             .try_init();
 
         // Generate WAV data served as HLS segments

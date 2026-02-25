@@ -107,7 +107,7 @@ async fn error_429_endpoint() -> impl IntoResponse {
 }
 
 async fn slow_headers_endpoint() -> impl IntoResponse {
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    kithara_platform::time::sleep(Duration::from_millis(500)).await;
     "Slow headers"
 }
 
@@ -119,7 +119,7 @@ async fn slow_body_endpoint() -> impl IntoResponse {
         Ok(Bytes::from("!")),
     ])
     .then(|chunk| async move {
-        tokio::time::sleep(Duration::from_millis(200)).await;
+        kithara_platform::time::sleep(Duration::from_millis(200)).await;
         chunk
     });
 
@@ -178,7 +178,7 @@ async fn retry_test_endpoint(State(counter): State<RequestCounter>) -> impl Into
 }
 
 async fn timeout_test_endpoint() -> impl IntoResponse {
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    kithara_platform::time::sleep(Duration::from_secs(2)).await;
     "Should timeout"
 }
 

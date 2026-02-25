@@ -979,15 +979,18 @@ impl HlsDownloader {
         }
 
         let had_midstream_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
-        if !had_midstream_switch {
-            if self.rewind_to_first_missing_segment(variant, num_segments) {
+        let rewind_variant = self.rewind_reference_variant(variant);
+        let can_rewind_from_tail =
+            !had_midstream_switch && self.last_committed_variant == Some(rewind_variant);
+        if can_rewind_from_tail {
+            if self.rewind_to_first_missing_segment(rewind_variant, num_segments) {
                 return true;
             }
         } else {
             debug!(
-                variant,
+                rewind_variant,
                 num_segments,
-                "playlist tail reached after midstream switch; skip automatic backfill"
+                "playlist tail reached without committed variant match; skip automatic backfill"
             );
         }
 
@@ -998,6 +1001,15 @@ impl HlsDownloader {
         }
         self.shared.condvar.notify_all();
         true
+    }
+
+    fn rewind_reference_variant(&self, fallback_variant: usize) -> usize {
+        let current_variant = self.shared.current_variant_index.load(Ordering::Acquire);
+        if current_variant < self.playlist_state.num_variants() {
+            current_variant
+        } else {
+            fallback_variant
+        }
     }
 
     fn rewind_to_first_missing_segment(&mut self, variant: usize, num_segments: usize) -> bool {
@@ -1258,7 +1270,11 @@ impl Downloader for HlsDownloader {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashSet, sync::Arc, time::Duration};
+    use std::{
+        collections::HashSet,
+        sync::{atomic::Ordering, Arc},
+        time::Duration,
+    };
 
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
     use kithara_coverage::{Coverage, CoverageManager};
@@ -1275,6 +1291,7 @@ mod tests {
     use super::{
         DownloadState, HlsDownloader, LoadedSegment, classify_variant_transition,
         first_missing_segment, is_cross_codec_switch, is_stale_epoch, should_request_init,
+        AbrDecision, AbrReason,
     };
     use crate::{
         config::HlsConfig,
@@ -1455,6 +1472,197 @@ mod tests {
             classify_variant_transition(from_variant, &sent_init_for_variant, to_variant, 5);
         assert!(is_variant_switch);
         assert!(is_midstream_switch);
+    }
+
+    #[kithara::test(tokio)]
+    async fn tail_state_uses_committed_variant_for_missing_segment_rewind() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 2),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 2),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+        let coverage = make_coverage_manager();
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            coverage,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.last_committed_variant = Some(0);
+        downloader.current_segment_index = 2;
+        {
+            let mut segments = downloader.shared.segments.lock();
+            let media_url = Url::parse("https://example.com/seg-0-1").expect("valid segment URL");
+            segments.push(LoadedSegment {
+                variant: 0,
+                segment_index: 0,
+                byte_offset: 0,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url.clone(),
+            });
+            segments.push(LoadedSegment {
+                variant: 0,
+                segment_index: 1,
+                byte_offset: 100,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url,
+            });
+        }
+
+        downloader.shared.current_variant_index.store(0, Ordering::Release);
+        downloader.shared.timeline.set_eof(false);
+        assert!(downloader
+            .handle_tail_state(1, 2)
+            .await);
+        assert!(
+            downloader.shared.timeline.eof(),
+            "playlist should reach EOF when committed variant has no missing tail gaps"
+        );
+        assert_eq!(downloader.current_segment_index, 2);
+        assert_eq!(downloader.last_committed_variant, Some(0));
+    }
+
+    #[kithara::test(tokio)]
+    async fn tail_state_ignores_stale_committed_variant() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+        let coverage = make_coverage_manager();
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            coverage,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.last_committed_variant = Some(1);
+        downloader.current_segment_index = 3;
+        downloader.shared.current_variant_index.store(0, Ordering::Release);
+        {
+            let mut segments = downloader.shared.segments.lock();
+            let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
+            segments.push(LoadedSegment {
+                variant: 0,
+                segment_index: 0,
+                byte_offset: 0,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url.clone(),
+            });
+            segments.push(LoadedSegment {
+                variant: 0,
+                segment_index: 1,
+                byte_offset: 100,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url.clone(),
+            });
+            segments.push(LoadedSegment {
+                variant: 0,
+                segment_index: 2,
+                byte_offset: 200,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url,
+            });
+        }
+
+        downloader.shared.timeline.set_eof(false);
+        assert!(downloader
+            .handle_tail_state(1, 3)
+            .await);
+        assert!(
+            downloader.shared.timeline.eof(),
+            "playlist should emit EOF when stale committed variant is unrelated to tail gaps"
+        );
+        assert_eq!(downloader.current_segment_index, 3);
+        assert_eq!(downloader.shared.current_variant_index.load(Ordering::Acquire), 0);
+    }
+
+    #[kithara::test(tokio)]
+    async fn tail_state_does_not_rewind_to_uncommitted_variant() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 2),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 2),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+        let coverage = make_coverage_manager();
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            coverage,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.last_committed_variant = Some(0);
+        downloader.current_segment_index = 2;
+        downloader.shared.current_variant_index.store(1, Ordering::Release);
+        {
+            let mut segments = downloader.shared.segments.lock();
+            let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
+            segments.push(LoadedSegment {
+                variant: 0,
+                segment_index: 0,
+                byte_offset: 0,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url.clone(),
+            });
+            segments.push(LoadedSegment {
+                variant: 0,
+                segment_index: 1,
+                byte_offset: 100,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url,
+            });
+        }
+
+        downloader.shared.timeline.set_eof(false);
+        assert!(downloader
+            .handle_tail_state(1, 2)
+            .await);
+        assert!(
+            downloader.shared.timeline.eof(),
+            "playlist should reach EOF when tail is committed on different variant"
+        );
+        assert_eq!(downloader.current_segment_index, 2);
     }
 
     #[kithara::test(tokio)]

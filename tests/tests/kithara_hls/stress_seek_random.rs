@@ -7,7 +7,6 @@
 //! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
 //! No external network required.
 
-#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 use std::{
     io::{Read, Seek, SeekFrom},
@@ -53,10 +52,9 @@ async fn stress_random_seek_read_hls(
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(
-            std::env::var("RUST_LOG")
-                .unwrap_or_else(|_| "kithara_hls=debug,kithara_stream=debug".to_string()),
-        )
+        .with_env_filter(kithara_test_utils::rust_log_filter(
+            "kithara_hls=debug,kithara_stream=debug",
+        ))
         .try_init();
 
     // Init data
