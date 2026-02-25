@@ -9,8 +9,8 @@
 //! 3. Seek returns data from correct variant
 //! 4. Multiple seeks maintain correct variant tracking
 
+use kithara_platform::time::Duration;
 use std::io::{Read, Seek, SeekFrom};
-use std::time::Duration;
 
 use fixture::TestServer;
 use kithara::{

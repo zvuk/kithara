@@ -1,4 +1,4 @@
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 #[non_exhaustive]

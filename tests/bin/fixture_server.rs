@@ -228,10 +228,9 @@ mod server {
                     data
                 }
                 DataMode::CustomData(data) => data.clone(),
-                DataMode::CustomDataPerVariant(patterns) => patterns
-                    .get(v)
-                    .cloned()
-                    .unwrap_or_default(),
+                DataMode::CustomDataPerVariant(patterns) => {
+                    patterns.get(v).cloned().unwrap_or_default()
+                }
                 DataMode::SawWav { .. } => {
                     let total = config.segments_per_variant * config.segment_size;
                     create_saw_wav(total)

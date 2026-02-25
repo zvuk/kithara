@@ -1,12 +1,10 @@
 #![forbid(unsafe_code)]
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
-#[cfg(not(target_arch = "wasm32"))]
-use kithara::internal::Assets;
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, ResourceKey},
     storage::ResourceExt,

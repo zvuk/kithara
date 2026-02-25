@@ -4,6 +4,7 @@
 //! thread. All `lock()` / `read()` / `write()` methods use `try_lock()` in
 //! a spin loop instead of the blocking path.
 
+use crate::time::Duration;
 use std::{
     fmt,
     ops::{Deref, DerefMut},
@@ -211,15 +212,15 @@ impl Condvar {
         self.0.wait(&mut guard.0);
     }
 
-    /// Sleep-based timed wait for wasm32.
+    /// Backoff-based timed wait for wasm32.
     ///
     /// On wasm32, `parking_lot::Condvar::wait_for` internally calls
-    /// `std::time::Instant::now()` which panics ("time not implemented"),
+    /// `kithara_platform::time::Instant::now()` which panics ("time not implemented"),
     /// and untimed `wait()` blocks forever via `Atomics.wait` — if a
     /// notification is missed (race between condition check and wait),
     /// the thread never wakes up.
     ///
-    /// Instead we temporarily unlock the mutex, sleep for `timeout`
+    /// Instead we temporarily unlock the mutex, back off for `timeout`
     /// (which uses `memory_atomic_wait32` with a deadline on wasm32,
     /// NOT `Instant::now`), then re-lock. The caller's loop re-checks
     /// the condition on the next iteration.
@@ -227,13 +228,9 @@ impl Condvar {
     /// Returns `false` (simulated timeout) so callers that branch on
     /// the return value take the poll/retry path.
     #[inline]
-    pub fn wait_for<T: ?Sized>(
-        &self,
-        guard: &mut MutexGuard<'_, T>,
-        timeout: std::time::Duration,
-    ) -> bool {
+    pub fn wait_for<T: ?Sized>(&self, guard: &mut MutexGuard<'_, T>, timeout: Duration) -> bool {
         parking_lot::MutexGuard::unlocked(&mut guard.0, || {
-            crate::thread::sleep(timeout);
+            crate::thread::backoff(timeout);
         });
         false
     }

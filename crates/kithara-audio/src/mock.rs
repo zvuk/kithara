@@ -6,7 +6,7 @@
     reason = "test mock code; values are small and positive by construction"
 )]
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::AudioEvent;

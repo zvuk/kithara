@@ -3,8 +3,8 @@
 //! Verifies that File and HLS `Audio` instances can coexist on the
 //! same shared `ThreadPool` and all read PCM data to EOF.
 
-use std::sync::Arc;
 use kithara_platform::time::Duration;
+use std::sync::Arc;
 
 use kithara::{
     assets::StoreOptions,

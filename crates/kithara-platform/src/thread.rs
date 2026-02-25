@@ -5,7 +5,7 @@
 //! a synchronous result channel so caller code can keep the same patterns.
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use std::thread::{JoinHandle, sleep, spawn, yield_now};
+pub use std::thread::{JoinHandle, spawn, yield_now};
 #[cfg(not(target_arch = "wasm32"))]
 pub use std::time::Duration;
 #[cfg(target_arch = "wasm32")]
@@ -54,8 +54,17 @@ pub fn yield_now() {
     core::hint::spin_loop();
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+/// Blocking backoff for synchronous retry loops.
+pub fn backoff(duration: Duration) {
+    std::thread::sleep(duration);
+}
+
 #[cfg(target_arch = "wasm32")]
-pub fn sleep(duration: Duration) {
+/// Busy-wait backoff for synchronous retry loops on wasm.
+///
+/// Use `kithara_platform::time::sleep` in async code.
+pub fn backoff(duration: Duration) {
     let end = Instant::now() + duration;
     while Instant::now() < end {
         yield_now();

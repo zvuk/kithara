@@ -1,6 +1,6 @@
 //! `rodio::Source` implementation for [`Resource`].
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use super::resource::Resource;
 

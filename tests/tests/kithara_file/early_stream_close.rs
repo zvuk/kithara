@@ -226,7 +226,8 @@ async fn file_stream_closes_early_seek_still_works() {
         }
     });
 
-    let result = match kithara_platform::time::timeout(Duration::from_secs(5), blocking_task).await {
+    let result = match kithara_platform::time::timeout(Duration::from_secs(5), blocking_task).await
+    {
         Ok(Ok(result)) => result,
         Ok(Err(e)) => panic!("Blocking task panicked: {:?}", e),
         Err(_) => panic!(
@@ -267,7 +268,7 @@ async fn partial_cache_resume_works() {
         tracing::info!("Phase 1: read {} bytes", n);
 
         // Give sequential download time to finish (server sends 512KB quickly)
-        kithara_platform::thread::sleep(Duration::from_millis(500));
+        kithara_platform::thread::backoff(Duration::from_millis(500));
         // stream1 drops here
     });
 

@@ -131,7 +131,7 @@ fn read_must_succeed_while_flushing() {
         .expect("stream");
 
     // Simulate FLUSH_START — flushing is now true
-    let _epoch = timeline.initiate_seek(std::time::Duration::from_secs(10));
+    let _epoch = timeline.initiate_seek(kithara_platform::time::Duration::from_secs(10));
     assert!(
         timeline.is_flushing(),
         "flushing must be set after initiate_seek"

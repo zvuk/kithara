@@ -358,8 +358,6 @@ impl ResourceConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -375,7 +373,10 @@ mod tests {
     #[case("file:///tmp/song.mp3", "/tmp/song.mp3")]
     fn config_source_parsing_file_path(#[case] input: &str, #[case] expected: &str) {
         let config = ResourceConfig::new(input).unwrap();
-        assert!(matches!(&config.src, ResourceSrc::Path(path) if path == Path::new(expected)));
+        assert!(matches!(
+            &config.src,
+            ResourceSrc::Path(path) if path == std::path::Path::new(expected)
+        ));
     }
 
     #[kithara::test]

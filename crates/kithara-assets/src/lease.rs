@@ -370,7 +370,7 @@ impl Drop for LeaseGuardInner {
 #[cfg(test)]
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
-    use std::time::Duration;
+    use kithara_platform::time::Duration;
 
     use kithara_test_utils::kithara;
 

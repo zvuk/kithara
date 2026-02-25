@@ -1153,7 +1153,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
         if Instant::now() > deadline {
             panic!("Test timed out after 30s — deadlock in seek/format-change interaction");
         }
-        thread::sleep(Duration::from_millis(50));
+        thread::backoff(Duration::from_millis(50));
     }
 }
 
@@ -1211,13 +1211,17 @@ fn stream_read_is_interrupted_when_flushing_over_stale_eof() {
     source.timeline.set_byte_position(total_bytes);
 
     for idx in 0..12u64 {
-        let _ = source.timeline.initiate_seek(Duration::from_millis(idx + 1));
+        let _ = source
+            .timeline
+            .initiate_seek(Duration::from_millis(idx + 1));
     }
 
     let mut stream = test_stream_from_source(source);
     let mut buf = vec![0u8; 16];
 
-    let result = stream.read(&mut buf).expect_err("read should be interrupted by flushing");
+    let result = stream
+        .read(&mut buf)
+        .expect_err("read should be interrupted by flushing");
     assert_eq!(result.kind(), io::ErrorKind::Interrupted);
     assert_eq!(result.to_string(), "seek pending");
 }
@@ -1472,6 +1476,59 @@ impl InnerDecoder for SeekTransientBitstreamDecoder {
         self.chunks_left = 4;
         if self.seek_count == 2 {
             self.error_after_seek = true;
+        }
+        Ok(())
+    }
+
+    fn update_byte_len(&self, _len: u64) {}
+
+    fn duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs(220))
+    }
+}
+
+struct SeekTransientEofDecoder {
+    chunks_left: usize,
+    eof_after_seek: bool,
+    seek_count: usize,
+    spec: PcmSpec,
+}
+
+impl SeekTransientEofDecoder {
+    fn new(spec: PcmSpec) -> Self {
+        Self {
+            chunks_left: 0,
+            eof_after_seek: false,
+            seek_count: 0,
+            spec,
+        }
+    }
+}
+
+impl InnerDecoder for SeekTransientEofDecoder {
+    fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        if self.eof_after_seek {
+            self.eof_after_seek = false;
+            return Ok(None);
+        }
+
+        if self.chunks_left == 0 {
+            return Ok(None);
+        }
+
+        self.chunks_left -= 1;
+        Ok(Some(make_chunk(self.spec, 128)))
+    }
+
+    fn spec(&self) -> PcmSpec {
+        self.spec
+    }
+
+    fn seek(&mut self, _pos: Duration) -> DecodeResult<()> {
+        self.seek_count += 1;
+        self.chunks_left = 4;
+        if self.seek_count == 2 {
+            self.eof_after_seek = true;
         }
         Ok(())
     }
@@ -1966,6 +2023,60 @@ fn repeated_seek_after_eof_must_not_stop_on_transient_bitstream_error() {
     assert!(
         !fetch.is_eof,
         "transient 'unexpected end of bitstream' right after repeated seek must not terminate playback"
+    );
+}
+
+#[kithara::test(timeout(Duration::from_secs(10)))]
+fn repeated_seek_after_eof_must_not_stop_on_transient_eof_after_seek() {
+    let (shared, state) = make_shared_stream(vec![0u8; 2000], Some(2000));
+    let spec = PcmSpec {
+        channels: 1,
+        sample_rate: 100,
+    };
+    let decoder: Box<dyn InnerDecoder> = Box::new(SeekTransientEofDecoder::new(spec));
+    let factory = make_factory(vec![]);
+
+    let epoch = Arc::new(AtomicU64::new(0));
+    let mut source = new_stream_audio_source(
+        shared,
+        decoder,
+        factory,
+        Some(v0_info()),
+        Arc::clone(&epoch),
+        vec![],
+    );
+
+    {
+        let mut s = state.lock();
+        s.media_info = Some(v0_info());
+        s.seek_anchor = Some(SourceSeekAnchor {
+            byte_offset: 500,
+            segment_start: Duration::from_secs(8),
+            segment_end: Some(Duration::from_secs(12)),
+            segment_index: Some(3),
+            variant_index: Some(0),
+        });
+    }
+
+    let first_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
+    apply_pending_seek(&mut source);
+    assert_eq!(epoch.load(Ordering::Acquire), first_epoch);
+
+    loop {
+        let fetch = fetch_next(&mut source);
+        if fetch.is_eof {
+            break;
+        }
+    }
+
+    let second_epoch = timeline(&source).initiate_seek(Duration::from_millis(11_651));
+    apply_pending_seek(&mut source);
+    assert_eq!(epoch.load(Ordering::Acquire), second_epoch);
+
+    let fetch = fetch_next(&mut source);
+    assert!(
+        !fetch.is_eof,
+        "transient EOF right after repeated seek must not terminate playback"
     );
 }
 

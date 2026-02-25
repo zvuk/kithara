@@ -29,8 +29,8 @@ use tokio_util::sync::CancellationToken;
 use tracing::info;
 
 use crate::{
-    kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig},
     kithara_decode::fixture::AudioTestServer,
+    kithara_hls::fixture::{HlsTestServer, HlsTestServerConfig},
     multi_instance::{available_thread_count, test_thread_pool},
 };
 
@@ -69,7 +69,7 @@ async fn pool_max_concurrency(pool: &ThreadPool, expected_threads: usize) -> usi
             let cur = running.fetch_add(1, Ordering::SeqCst) + 1;
             max_concurrent.fetch_max(cur, Ordering::SeqCst);
 
-            kithara_platform::thread::sleep(POOL_AVAILABILITY_PROBE_HOLD);
+            kithara_platform::thread::backoff(POOL_AVAILABILITY_PROBE_HOLD);
 
             running.fetch_sub(1, Ordering::SeqCst);
             let _ = tx.send(cur);
@@ -149,13 +149,8 @@ fn read_partial_and_drop_hls(audio: Audio<Stream<Hls>>, samples_to_read: usize) 
 // Tests
 
 /// Drop a File instance mid-stream, then verify all pool threads are free.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(timeout(Duration::from_secs(30)))]
 async fn file_threads_released_after_drop() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
     let pool = test_thread_pool(4);
     let server = AudioTestServer::new().await;
     let temp = TestTempDir::new();
@@ -186,13 +181,8 @@ async fn file_threads_released_after_drop() {
 }
 
 /// Drop an HLS instance mid-stream, then verify all pool threads are free.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(timeout(Duration::from_secs(30)))]
 async fn hls_threads_released_after_drop() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
     let pool = test_thread_pool(4);
     let wav_data = generate_wav_data();
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
@@ -245,13 +235,8 @@ async fn hls_threads_released_after_drop() {
 ///
 /// If threads leak, the pool (2 threads) would be exhausted by the 2nd
 /// iteration and the test would deadlock.
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(timeout(Duration::from_secs(60)))]
 async fn sequential_file_create_destroy_no_leak() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
     let pool = test_thread_pool(4);
     let server = AudioTestServer::new().await;
 
@@ -286,13 +271,8 @@ async fn sequential_file_create_destroy_no_leak() {
 }
 
 /// Create and destroy HLS instances sequentially, 10 times, on a shared pool.
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(timeout(Duration::from_secs(60)))]
 async fn sequential_hls_create_destroy_no_leak() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
     let pool = test_thread_pool(4);
     let wav_data = generate_wav_data();
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
@@ -347,13 +327,8 @@ async fn sequential_hls_create_destroy_no_leak() {
 
 /// Saturate a 4-thread pool with 2 instances (each uses ~2 threads:
 /// worker + downloader), drop them all, then verify full recovery.
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(timeout(Duration::from_secs(120)))]
 async fn pool_recovers_after_saturation() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::INFO)
-        .try_init();
-
     let pool = test_thread_pool(4);
     let wav_data = generate_wav_data();
     let segment_duration = SEGMENT_SIZE as f64 / (SAMPLE_RATE as f64 * CHANNELS as f64 * 2.0);
@@ -460,7 +435,7 @@ async fn pool_recovers_after_saturation() {
 
 /// Probe helper should tolerate delayed thread release and not fail
 /// on a single transient snapshot.
-#[kithara::test(tokio, timeout(Duration::from_secs(20)))]
+#[kithara::test(timeout(Duration::from_secs(20)))]
 async fn pool_availability_waits_for_delayed_release() {
     let pool = test_thread_pool(4);
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
@@ -469,7 +444,7 @@ async fn pool_availability_waits_for_delayed_release() {
         let tx = ready_tx.clone();
         pool.spawn(move || {
             let _ = tx.send(());
-            kithara_platform::thread::sleep(Duration::from_millis(700));
+            kithara_platform::thread::backoff(Duration::from_millis(700));
         });
     }
     drop(ready_tx);

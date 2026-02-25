@@ -4,7 +4,7 @@
 //! All `decoder.read()`/`seek()` calls run in `spawn_blocking` because
 //! the internal kanal channel uses blocking `recv()`.
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use kithara::{
     assets::StoreOptions,

@@ -3,7 +3,7 @@
 //! Uses production HLS stream (requires network).
 //! Expected: FAILS — seek after ABR switch causes deadlock or audio death.
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use kithara::{
     assets::StoreOptions,
@@ -25,19 +25,11 @@ const HLS_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
 #[kithara::test(
     tokio,
     browser,
-    timeout(Duration::from_secs(60)),
-    env(NO_PROXY = "stream.silvercomet.top"),
+    timeout(Duration::from_secs(120)),
+    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top"),
     soft_fail("connection", "timeout", "refused", "resolve", "dns", "network")
 )]
 async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(kithara_test_utils::rust_log_filter(
-            "kithara_audio=debug,kithara_hls=debug,kithara_decode=debug",
-        ))
-        .try_init();
-
     let url: url::Url = HLS_URL.parse().expect("valid URL");
     info!("Opening HLS stream: {}", url);
 
@@ -130,7 +122,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
             }
 
             // Small pause between seeks (simulate real user interaction)
-            kithara_platform::thread::sleep(Duration::from_millis(50));
+            kithara_platform::thread::backoff(Duration::from_millis(50));
         }
 
         info!(
@@ -178,19 +170,11 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
 #[kithara::test(
     tokio,
     browser,
-    timeout(Duration::from_secs(60)),
-    env(NO_PROXY = "stream.silvercomet.top"),
+    timeout(Duration::from_secs(120)),
+    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top"),
     soft_fail("connection", "timeout", "refused", "resolve", "dns", "network")
 )]
 async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(kithara_test_utils::rust_log_filter(
-            "kithara_audio=debug,kithara_hls=debug,kithara_decode=debug",
-        ))
-        .try_init();
-
     let url: url::Url = HLS_URL.parse().expect("valid URL");
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
@@ -222,7 +206,7 @@ async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
                 let n = audio.read(&mut buf);
                 samples_after_seek += n;
                 if n == 0 {
-                    kithara_platform::thread::sleep(Duration::from_millis(15));
+                    kithara_platform::thread::backoff(Duration::from_millis(15));
                 }
             }
 

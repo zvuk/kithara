@@ -1,4 +1,4 @@
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;

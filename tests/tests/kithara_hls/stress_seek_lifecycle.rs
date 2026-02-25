@@ -149,7 +149,7 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
         if audio.is_eof() {
             return (0, retry);
         }
-        kithara_platform::thread::sleep(Duration::from_millis(1));
+        kithara_platform::thread::backoff(Duration::from_millis(1));
     }
     (0, MAX_ZERO_READS)
 }

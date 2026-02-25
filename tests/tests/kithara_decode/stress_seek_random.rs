@@ -7,7 +7,7 @@
 //! Deterministic xorshift64 PRNG guarantees reproducibility.
 //! No network required.
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use kithara::{
     audio::{Audio, AudioConfig},

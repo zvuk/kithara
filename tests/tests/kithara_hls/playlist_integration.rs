@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use fixture::*;
 use kithara::{hls::HlsResult, internal::VariantId};

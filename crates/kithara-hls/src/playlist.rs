@@ -4,7 +4,7 @@
 //! master and media playlists, with per-variant size maps for byte-offset
 //! resolution. The `PlaylistAccess` trait provides a testable read interface.
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use kithara_platform::RwLock;
 use kithara_stream::{AudioCodec, ContainerFormat};
@@ -364,7 +364,7 @@ impl PlaylistAccess for PlaylistState {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use kithara_platform::time::Duration;
 
     use kithara_test_utils::kithara;
     use url::Url;

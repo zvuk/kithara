@@ -3,7 +3,7 @@
 //! Tests that verify the audio fixtures work correctly and can be used
 //! by decode tests without external network access.
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use super::fixture;
 

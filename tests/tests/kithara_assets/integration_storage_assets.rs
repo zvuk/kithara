@@ -1,17 +1,12 @@
 #![forbid(unsafe_code)]
 
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Duration;
-
-#[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
-#[cfg(not(target_arch = "wasm32"))]
-use kithara::internal::Assets;
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, ResourceKey},
     bufpool::byte_pool,
     storage::ResourceExt,
 };
+use kithara_platform::{thread, time::Duration};
 use kithara_test_utils::temp_dir;
 
 /// Helper to read bytes from resource into a pooled buffer
@@ -39,7 +34,6 @@ struct PinsIndexFile {
     pinned: Vec<String>,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn read_pins_file(root: &std::path::Path) -> Option<Vec<String>> {
     let path = root.join("_index").join("pins.bin");
     if !path.exists() {
@@ -56,25 +50,14 @@ fn asset_store_with_root(
     temp_dir: &kithara_test_utils::TestTempDir,
     asset_root: &str,
 ) -> AssetStore {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        AssetStoreBuilder::new()
-            .root_dir(temp_dir.path())
-            .asset_root(Some(asset_root))
-            .evict_config(EvictConfig {
-                max_assets: None,
-                max_bytes: None,
-            })
-            .build()
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        let _ = temp_dir;
-        AssetStoreBuilder::new()
-            .ephemeral(true)
-            .asset_root(Some(asset_root))
-            .build()
-    }
+    AssetStoreBuilder::new()
+        .root_dir(temp_dir.path())
+        .asset_root(Some(asset_root))
+        .evict_config(EvictConfig {
+            max_assets: None,
+            max_bytes: None,
+        })
+        .build()
 }
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -212,7 +195,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
     let store_reader = store.clone();
     let key_reader = key.clone();
     let payload_len_reader = payload_len;
-    let reader = kithara_platform::thread::spawn(move || {
+    let reader = thread::spawn(move || {
         let res = store_reader.open_resource(&key_reader).unwrap();
         res.wait_range(0..payload_len_reader).unwrap();
         let mut buf = byte_pool().get_with(|b| b.resize(payload_len_reader as usize, 0));
@@ -224,7 +207,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
     let store_writer = store;
     let payload_writer = payload.clone();
     let key_writer = key;
-    let writer = kithara_platform::thread::spawn(move || {
+    let writer = thread::spawn(move || {
         let res = store_writer.open_resource(&key_writer).unwrap();
         res.write_at(0, &payload_writer).unwrap();
         res.commit(Some(payload_writer.len() as u64)).unwrap();

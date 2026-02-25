@@ -13,8 +13,9 @@ use std::sync::{
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_platform::{Mutex, Sender, ThreadPool};
+use kithara_platform::{Mutex, ThreadPool};
 use portable_atomic::AtomicF32;
+use ringbuf::{HeapProd, traits::Producer};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 
@@ -61,7 +62,7 @@ pub struct EngineConfig {
 /// Handle for a slot, providing command channel and shared state.
 pub(crate) struct SlotHandle {
     pub(crate) slot_id: SlotId,
-    pub(crate) cmd_tx: Sender<PlayerCmd>,
+    pub(crate) cmd_tx: HeapProd<PlayerCmd>,
     pub(crate) eq: SharedEq,
     pub(crate) shared_state: Arc<SharedPlayerState>,
 }
@@ -160,12 +161,15 @@ impl EngineImpl {
         Ok(id)
     }
 
-    pub(crate) fn slot_cmd_tx(&self, slot: SlotId) -> Option<Sender<PlayerCmd>> {
-        self.slot_handles
-            .lock()
-            .iter()
-            .find(|h| h.slot_id == slot)
-            .map(|h| h.cmd_tx.clone())
+    pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
+        let mut slot_handles = self.slot_handles.lock();
+        let Some(handle) = slot_handles.iter_mut().find(|h| h.slot_id == slot) else {
+            return Err(PlayError::Internal("slot handle not found".into()));
+        };
+        handle
+            .cmd_tx
+            .try_push(cmd)
+            .map_err(|_| PlayError::Internal("slot channel full".into()))
     }
 
     pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq> {

@@ -115,7 +115,7 @@ fn perf_pool_scenarios(#[case] label: &'static str, #[case] scenario: PerfScenar
                     Box::leak(format!("pool_scalability_{}", num_threads).into_boxed_str());
                 let _guard = hotpath::FunctionsGuardBuilder::new(scenario_label).build();
                 let pool = Arc::new(pcm_pool().clone());
-                let start = std::time::Instant::now();
+                let start = kithara_platform::time::Instant::now();
 
                 run_threaded(pool, num_threads, iterations_per_thread);
 

@@ -66,8 +66,8 @@ pub struct SharedSegments {
     pub stopped: AtomicBool,
     /// Current segment index (updated by Source on each `read_at`).
     pub current_segment_index: Arc<AtomicU32>,
-    /// Current variant index (updated by Source on each `read_at`).
-    pub current_variant_index: Arc<AtomicUsize>,
+    /// Current variant index shared with ABR controller.
+    pub abr_variant_index: Arc<AtomicUsize>,
 }
 
 impl SharedSegments {
@@ -76,6 +76,21 @@ impl SharedSegments {
         cancel: CancellationToken,
         playlist_state: Arc<PlaylistState>,
         timeline: Timeline,
+    ) -> Self {
+        Self::with_variant_index(
+            cancel,
+            playlist_state,
+            timeline,
+            Arc::new(AtomicUsize::new(0)),
+        )
+    }
+
+    #[must_use]
+    pub fn with_variant_index(
+        cancel: CancellationToken,
+        playlist_state: Arc<PlaylistState>,
+        timeline: Timeline,
+        abr_variant_index: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             segments: Mutex::new(DownloadState::new()),
@@ -88,7 +103,7 @@ impl SharedSegments {
             cancel,
             stopped: AtomicBool::new(false),
             current_segment_index: Arc::new(AtomicU32::new(0)),
-            current_variant_index: Arc::new(AtomicUsize::new(0)),
+            abr_variant_index,
         }
     }
 }
@@ -111,7 +126,6 @@ pub struct HlsSource {
 }
 
 const WAIT_RANGE_MAX_METADATA_MISS_SPINS: usize = 20;
-const WAIT_RANGE_ON_DEMAND_RETRY_SPINS: usize = 10;
 const WAIT_RANGE_SLEEP_MS: u64 = 50;
 
 impl HlsSource {
@@ -150,7 +164,7 @@ impl HlsSource {
             return Err(HlsError::SegmentNotFound("empty playlist".to_string()));
         }
 
-        let mut variant = self.shared.current_variant_index.load(Ordering::Acquire);
+        let mut variant = self.shared.abr_variant_index.load(Ordering::Acquire);
         if variant >= variants {
             variant = 0;
         }
@@ -352,6 +366,10 @@ impl Source for HlsSource {
                 WaitRangeDecision::Ready => return Ok(WaitOutcome::Ready),
             }
 
+            if context.eof && !context.range_ready {
+                state.clear_on_demand_requested();
+            }
+
             drop(segments);
             self.request_on_demand_if_needed(range.start, context.seek_epoch, &mut state)?;
             segments = self.shared.segments.lock();
@@ -363,7 +381,6 @@ impl Source for HlsSource {
             if self.shared.timeline.is_flushing() {
                 return Ok(WaitOutcome::Interrupted);
             }
-            state.bump_on_demand_wait();
         }
     }
 
@@ -377,13 +394,21 @@ impl Source for HlsSource {
             return Ok(0);
         };
 
+        let previous_hint = self.shared.current_segment_index.load(Ordering::Acquire) as usize;
         #[expect(clippy::cast_possible_truncation, reason = "segment index fits in u32")]
         self.shared
             .current_segment_index
             .store(seg.segment_index as u32, Ordering::Relaxed);
-        self.shared
-            .current_variant_index
-            .store(seg.variant, Ordering::Relaxed);
+        if seg.segment_index < previous_hint {
+            self.bus.publish(HlsEvent::Seek {
+                stage: "read_at_moved_hint_backward",
+                seek_epoch: self.shared.timeline.seek_epoch(),
+                variant: seg.variant,
+                offset,
+                from_segment_index: previous_hint,
+                to_segment_index: seg.segment_index,
+            });
+        }
 
         // Variant fence: auto-detect on first read, block cross-variant reads.
         if self.variant_fence.is_none() {
@@ -423,7 +448,7 @@ impl Source for HlsSource {
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        let hinted_variant = self.shared.current_variant_index.load(Ordering::Acquire);
+        let hinted_variant = self.shared.abr_variant_index.load(Ordering::Acquire);
         let reader_variant = self.current_loaded_segment().map(|seg| seg.variant);
         let has_hinted_variant = self
             .shared
@@ -451,7 +476,7 @@ impl Source for HlsSource {
     }
 
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
-        let current_variant = self.shared.current_variant_index.load(Ordering::Acquire);
+        let current_variant = self.shared.abr_variant_index.load(Ordering::Acquire);
         {
             let segments = self.shared.segments.lock();
             // Decoder recreate needs init-bearing segment (ftyp/moov),
@@ -507,6 +532,9 @@ impl Source for HlsSource {
         // seek_epoch is now managed by Timeline.initiate_seek()
         self.shared.timeline.set_eof(false);
         self.shared.timeline.set_download_position(0);
+        self.shared
+            .had_midstream_switch
+            .store(false, Ordering::Release);
         while self.shared.segment_requests.pop().is_some() {}
         {
             let mut segments = self.shared.segments.lock();
@@ -529,6 +557,7 @@ impl Source for HlsSource {
         let variant = anchor.variant_index.unwrap_or(0);
         let segment_index = anchor.segment_index.unwrap_or(0) as usize;
         let seek_epoch = self.shared.timeline.seek_epoch();
+        let previous_hint = self.shared.current_segment_index.load(Ordering::Acquire) as usize;
 
         while self.shared.segment_requests.pop().is_some() {}
         self.shared.segment_requests.push(SegmentRequest {
@@ -540,13 +569,19 @@ impl Source for HlsSource {
         self.shared.timeline.set_byte_position(anchor.byte_offset);
         self.shared.reader_advanced.notify_one();
         self.shared.condvar.notify_all();
-
-        self.shared
-            .current_variant_index
-            .store(variant, Ordering::Relaxed);
         self.shared
             .current_segment_index
             .store(anchor.segment_index.unwrap_or(0), Ordering::Relaxed);
+        if previous_hint != segment_index {
+            self.bus.publish(HlsEvent::Seek {
+                stage: "seek_anchor_set_hint",
+                seek_epoch,
+                variant,
+                offset: anchor.byte_offset,
+                from_segment_index: previous_hint,
+                to_segment_index: segment_index,
+            });
+        }
 
         debug!(
             seek_epoch,
@@ -587,17 +622,15 @@ pub(crate) fn build_pair(
 
     let cancel = config.cancel.clone().unwrap_or_default();
     let abr = kithara_abr::AbrController::new(abr_opts);
-    let initial_variant = abr.get_current_variant_index();
+    let abr_variant_index = abr.variant_index_handle();
     let timeline = Timeline::new();
     timeline.set_total_duration(playlist_state.track_duration());
-    let shared = Arc::new(SharedSegments::new(
+    let shared = Arc::new(SharedSegments::with_variant_index(
         cancel,
         Arc::clone(&playlist_state),
         timeline,
+        abr_variant_index,
     ));
-    shared
-        .current_variant_index
-        .store(initial_variant, Ordering::Relaxed);
     let source_coverage = coverage.clone();
 
     let downloader = HlsDownloader {
@@ -611,7 +644,6 @@ pub(crate) fn build_pair(
         force_init_for_seek: false,
         sent_init_for_variant: HashSet::new(),
         abr,
-        byte_offset: 0,
         shared: Arc::clone(&shared),
         bus: bus.clone(),
         look_ahead_bytes: config.look_ahead_bytes,
@@ -645,6 +677,6 @@ impl HlsSource {
 
     /// Handle to current variant index atomic.
     pub(crate) fn variant_index_handle(&self) -> Arc<AtomicUsize> {
-        Arc::clone(&self.shared.current_variant_index)
+        Arc::clone(&self.shared.abr_variant_index)
     }
 }

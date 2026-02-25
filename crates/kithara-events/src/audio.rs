@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use kithara_decode::PcmSpec;
 

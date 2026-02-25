@@ -143,8 +143,16 @@ async fn next_chunk_with_timeout(
     tokio,
     browser,
     timeout(Duration::from_secs(180)),
-    env(NO_PROXY = "stream.silvercomet.top"),
-    soft_fail("connection", "timeout", "timed out", "refused", "resolve", "dns", "network")
+    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top"),
+    soft_fail(
+        "connection",
+        "timeout",
+        "timed out",
+        "refused",
+        "resolve",
+        "dns",
+        "network"
+    )
 )]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
@@ -225,7 +233,8 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     });
 
     info!(ephemeral, "Phase 1: warmup until ABR switch");
-    let warmup_deadline = kithara_platform::time::Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
+    let warmup_deadline =
+        kithara_platform::time::Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
     while kithara_platform::time::Instant::now() < warmup_deadline {
         let _ = next_chunk_with_timeout(
             &mut audio,

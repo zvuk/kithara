@@ -4,9 +4,10 @@ use std::{fs::File, io::Write};
 
 use kithara_audio::internal::audio::*;
 use kithara_events::{AudioEvent, SeekLifecycleStage};
+use kithara_platform::time::{Duration, Instant, sleep, timeout};
 use kithara_stream::{ContainerFormat, MediaInfo, Stream};
 use kithara_test_utils::{create_test_wav, kithara};
-use tokio::time::{self, Duration};
+use ringbuf::traits::Consumer;
 
 /// Write test WAV to a temp file and return config for it.
 fn test_wav_config(
@@ -37,19 +38,24 @@ async fn test_audio_new(#[case] sample_count: usize) {
 #[kithara::test(tokio)]
 async fn test_audio_receive_chunks() {
     let (_tmp, config) = test_wav_config(1000);
-    let audio = Audio::<Stream<kithara_file::File>>::new(config)
+    let mut audio = Audio::<Stream<kithara_file::File>>::new(config)
         .await
         .unwrap();
 
     let mut chunk_count = 0;
-    while let Ok(fetch) = audio.pcm_rx().recv() {
-        if fetch.is_eof() {
-            break;
-        }
-        chunk_count += 1;
-        assert!(!fetch.data.pcm.is_empty());
-        if chunk_count >= 5 {
-            break;
+    let deadline = Instant::now() + Duration::from_secs(1);
+    while Instant::now() < deadline {
+        if let Some(fetch) = audio.pcm_rx().try_pop() {
+            if fetch.is_eof() {
+                break;
+            }
+            chunk_count += 1;
+            assert!(!fetch.data.pcm.is_empty());
+            if chunk_count >= 5 {
+                break;
+            }
+        } else {
+            sleep(Duration::from_millis(1)).await;
         }
     }
 
@@ -187,9 +193,9 @@ async fn test_audio_playback_progress_uses_output_commit() {
     let _ = audio.read(&mut buf);
 
     let mut saw_progress = false;
-    let deadline = time::Instant::now() + Duration::from_millis(300);
-    while time::Instant::now() < deadline {
-        match time::timeout(Duration::from_millis(40), events.recv()).await {
+    let deadline = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < deadline {
+        match timeout(Duration::from_millis(40), events.recv()).await {
             Ok(Ok(event)) => {
                 if let AudioEvent::PlaybackProgress {
                     position_ms,
@@ -226,10 +232,10 @@ async fn test_seek_emits_matching_playback_progress() {
     let expected_epoch = seek_epoch(&audio);
     let _ = audio.read(&mut buf);
 
-    let deadline = time::Instant::now() + Duration::from_millis(300);
+    let deadline = Instant::now() + Duration::from_millis(300);
     let mut matched_epoch = None;
-    while time::Instant::now() < deadline {
-        match time::timeout(Duration::from_millis(40), events.recv()).await {
+    while Instant::now() < deadline {
+        match timeout(Duration::from_millis(40), events.recv()).await {
             Ok(Ok(AudioEvent::PlaybackProgress { seek_epoch, .. })) => {
                 matched_epoch = Some(seek_epoch);
                 break;
@@ -269,11 +275,11 @@ async fn test_seek_complete_emitted_only_after_output_commit() {
     let n = audio.read(&mut buf);
     assert!(n > 0, "read must commit PCM output");
 
-    let deadline = time::Instant::now() + Duration::from_millis(400);
+    let deadline = Instant::now() + Duration::from_millis(400);
     let mut saw_seek_complete = false;
     let mut saw_output_committed = false;
-    while time::Instant::now() < deadline {
-        match time::timeout(Duration::from_millis(40), events.recv()).await {
+    while Instant::now() < deadline {
+        match timeout(Duration::from_millis(40), events.recv()).await {
             Ok(Ok(AudioEvent::SeekLifecycle {
                 stage: SeekLifecycleStage::OutputCommitted,
                 seek_epoch,

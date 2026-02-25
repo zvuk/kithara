@@ -1,5 +1,5 @@
 // StreamingResource tests (merged from edge cases)
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 #[cfg(target_arch = "wasm32")]
 use kithara::storage::MemResource;
@@ -8,8 +8,8 @@ use kithara::storage::Resource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::{MmapOptions, MmapResource, OpenMode};
 use kithara::storage::{ResourceExt, ResourceStatus, StorageError, WaitOutcome};
-use kithara_test_utils::{cancel_token, temp_dir, TestTempDir};
 use kithara_platform::time::Instant;
+use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -73,7 +73,7 @@ fn assert_wait_times_out<T>(handle: &kithara_platform::thread::JoinHandle<T>, ti
         if handle.is_finished() {
             panic!("wait_range completed before expected timeout");
         }
-        kithara_platform::thread::sleep(Duration::from_millis(1));
+        kithara_platform::thread::backoff(Duration::from_millis(1));
     }
 }
 
@@ -84,7 +84,7 @@ fn assert_wait_finishes<T>(handle: &kithara_platform::thread::JoinHandle<T>, tim
         if handle.is_finished() {
             return;
         }
-        kithara_platform::thread::sleep(Duration::from_millis(1));
+        kithara_platform::thread::backoff(Duration::from_millis(1));
     }
     panic!("wait_range did not wake within expected timeout");
 }
@@ -117,7 +117,9 @@ fn streaming_resource_path_method(temp_dir: TestTempDir, cancel_token: Cancellat
         let streaming = MemResource::new(cancel_token);
         assert_eq!(streaming.path(), None);
 
-        streaming.write_at(0, b"test").expect("write should succeed");
+        streaming
+            .write_at(0, b"test")
+            .expect("write should succeed");
         assert_eq!(streaming.path(), None);
         let _ = temp_dir;
     }
@@ -288,16 +290,16 @@ fn streaming_resource_concurrent_wait_and_write() {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-    let resource_clone = resource.clone();
-    let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
+        let resource_clone = resource.clone();
+        let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
 
-    kithara_platform::thread::sleep(Duration::from_millis(10));
+        kithara_platform::thread::backoff(Duration::from_millis(10));
 
-    resource.write_at(0, b"0123456789").unwrap();
+        resource.write_at(0, b"0123456789").unwrap();
 
-    let wait_result = wait_handle.join().unwrap().unwrap();
-    assert_eq!(wait_result, WaitOutcome::Ready);
-    return;
+        let wait_result = wait_handle.join().unwrap().unwrap();
+        assert_eq!(wait_result, WaitOutcome::Ready);
+        return;
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -502,15 +504,15 @@ fn streaming_resource_cancel_during_wait() {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-    let resource_clone = resource.clone();
-    let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
+        let resource_clone = resource.clone();
+        let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
 
-    kithara_platform::thread::sleep(Duration::from_millis(50));
-    cancel_token.cancel();
+        kithara_platform::thread::backoff(Duration::from_millis(50));
+        cancel_token.cancel();
 
-    let wait_result = wait_handle.join().unwrap();
-    assert!(matches!(wait_result, Err(StorageError::Cancelled)));
-    return;
+        let wait_result = wait_handle.join().unwrap();
+        assert!(matches!(wait_result, Err(StorageError::Cancelled)));
+        return;
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -555,27 +557,27 @@ fn streaming_resource_concurrent_operations() {
 
     #[cfg(not(target_arch = "wasm32"))]
     {
-    let resource_clone = resource.clone();
-    let handle1 = kithara_platform::thread::spawn(move || resource_clone.write_at(0, b"Hello"));
+        let resource_clone = resource.clone();
+        let handle1 = kithara_platform::thread::spawn(move || resource_clone.write_at(0, b"Hello"));
 
-    let resource_clone = resource.clone();
-    let handle2 = kithara_platform::thread::spawn(move || {
-        kithara_platform::thread::sleep(Duration::from_millis(10));
-        resource_clone.write_at(5, b"World")
-    });
+        let resource_clone = resource.clone();
+        let handle2 = kithara_platform::thread::spawn(move || {
+            kithara_platform::thread::backoff(Duration::from_millis(10));
+            resource_clone.write_at(5, b"World")
+        });
 
-    assert!(handle1.join().unwrap().is_ok());
-    assert!(handle2.join().unwrap().is_ok());
+        assert!(handle1.join().unwrap().is_ok());
+        assert!(handle2.join().unwrap().is_ok());
 
-    resource.commit(Some(10)).unwrap();
+        resource.commit(Some(10)).unwrap();
 
-    let outcome = resource.wait_range(0..10).unwrap();
-    assert_eq!(outcome, WaitOutcome::Ready);
+        let outcome = resource.wait_range(0..10).unwrap();
+        assert_eq!(outcome, WaitOutcome::Ready);
 
-    let data = read_bytes(&resource, 0, 10);
-    assert_eq!(&data[..5], b"Hello");
-    assert_eq!(&data[5..], b"World");
-    return;
+        let data = read_bytes(&resource, 0, 10);
+        assert_eq!(&data[..5], b"Hello");
+        assert_eq!(&data[5..], b"World");
+        return;
     }
 
     #[cfg(target_arch = "wasm32")]

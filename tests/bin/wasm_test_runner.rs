@@ -54,7 +54,7 @@ async fn main() {
                 ready = true;
                 break;
             }
-            kithara_platform::time::sleep(std::time::Duration::from_millis(100)).await;
+            kithara_platform::time::sleep(kithara_platform::time::Duration::from_millis(100)).await;
         }
         if !ready {
             let _ = child.kill();

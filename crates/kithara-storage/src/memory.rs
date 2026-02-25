@@ -254,15 +254,15 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use std::time::Duration;
-
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::StorageError;
+    #[cfg(not(target_arch = "wasm32"))]
     use kithara_platform::thread;
+    #[cfg(not(target_arch = "wasm32"))]
+    use kithara_platform::time::Duration;
 
     use super::*;
-    use crate::{
-        StorageError,
-        resource::{ResourceExt, ResourceStatus, WaitOutcome},
-    };
+    use crate::resource::{ResourceExt, ResourceStatus, WaitOutcome};
 
     fn create_resource() -> MemResource {
         MemResource::new(CancellationToken::new())
@@ -333,7 +333,7 @@ mod tests {
         let res2 = res.clone();
 
         let handle = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
+            thread::backoff(Duration::from_millis(50));
             res2.write_at(0, b"delayed data").unwrap();
         });
 
@@ -359,7 +359,7 @@ mod tests {
         let res2 = res.clone();
 
         let handle = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
+            thread::backoff(Duration::from_millis(50));
             res2.fail("test error".to_string());
         });
 
@@ -376,7 +376,7 @@ mod tests {
         let handle = thread::spawn({
             let cancel = cancel.clone();
             move || {
-                thread::sleep(Duration::from_millis(50));
+                thread::backoff(Duration::from_millis(50));
                 cancel.cancel();
             }
         });

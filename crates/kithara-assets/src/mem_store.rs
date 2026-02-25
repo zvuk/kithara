@@ -134,8 +134,7 @@ impl Assets for MemAssetStore {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
+    use kithara_platform::time::Duration;
     use kithara_storage::ResourceExt;
     use kithara_test_utils::kithara;
 

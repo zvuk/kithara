@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use kithara::{
     abr::{AbrController, AbrMode, AbrOptions, AbrReason, Variant},

@@ -17,11 +17,10 @@
 //!
 //! # Async utilities
 //!
-//! [`sleep`] delegates to `tokio::time::sleep` on native and is a no-op on
-//! wasm32 (browser fetch has its own retry/timeout mechanisms).
+//! [`time::sleep`] delegates to `tokio::time::sleep` on native and to
+//! `setTimeout` on wasm32.
 
 mod blocking;
-mod channel;
 mod maybe_send;
 mod pool;
 mod task;
@@ -33,11 +32,10 @@ pub mod time;
 pub mod internal;
 
 pub use blocking::{BlockingError, BlockingHandle, spawn_blocking};
-pub use channel::{ReceiveError, Receiver, SendError, Sender, bounded, unbounded};
 pub use maybe_send::{MaybeSend, MaybeSync};
 pub use pool::ThreadPool;
 pub use task::spawn_task;
-pub use thread::{Duration, JoinHandle, sleep, spawn, yield_now};
+pub use thread::{Duration, JoinHandle, backoff, spawn, yield_now};
 pub use thread_pool_init::ensure_thread_pool;
 
 // On native: re-export parking_lot types directly (zero overhead).

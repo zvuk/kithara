@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use kithara_abr::{

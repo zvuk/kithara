@@ -99,10 +99,3 @@ pub(crate) fn assets_fixture() -> TestAssets {
 pub(crate) fn net_fixture() -> HttpClient {
     create_test_net()
 }
-
-/// Fixture: both assets and network client
-#[cfg(not(target_arch = "wasm32"))]
-#[kithara::fixture]
-pub(crate) fn abr_cache_and_net() -> (TestAssets, HttpClient) {
-    (create_test_assets(), create_test_net())
-}

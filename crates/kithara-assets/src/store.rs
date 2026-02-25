@@ -5,8 +5,6 @@ use std::{hash::Hash, num::NonZeroUsize, path::PathBuf, sync::Arc};
 use derive_setters::Setters;
 use kithara_bufpool::{BytePool, byte_pool};
 use kithara_storage::StorageResource;
-#[cfg(not(target_arch = "wasm32"))]
-use tempfile::tempdir;
 use tokio_util::sync::CancellationToken;
 
 /// Default in-memory LRU cache capacity (enough for init + 2-3 media segments).
@@ -57,7 +55,7 @@ impl Default for StoreOptions {
             #[cfg(not(target_arch = "wasm32"))]
             cache_dir: std::env::temp_dir().join("kithara"),
             #[cfg(target_arch = "wasm32")]
-            cache_dir: std::path::PathBuf::from("/kithara"),
+            cache_dir: PathBuf::from("/kithara"),
             cache_capacity: None,
             ephemeral: false,
             max_assets: None,
@@ -100,7 +98,7 @@ impl StoreOptions {
 /// Generic parameter `Ctx` is the context type for processing.
 /// Use `()` (default) for no processing (`ProcessingAssets` will pass through unchanged).
 #[cfg(not(target_arch = "wasm32"))]
-pub type DiskStore<Ctx = ()> =
+pub(crate) type DiskStore<Ctx = ()> =
     CachedAssets<LeaseAssets<ProcessingAssets<EvictAssets<DiskAssetStore>, Ctx>>>;
 
 /// Resource handle returned by [`AssetStore::open_resource`].
@@ -310,7 +308,7 @@ where
     #[must_use]
     pub fn build_disk(self) -> DiskStore<Ctx> {
         let root_dir = self.root_dir.unwrap_or_else(|| {
-            tempdir()
+            tempfile::tempdir()
                 .expect("failed to create AssetStore temp dir")
                 .keep()
         });
@@ -371,7 +369,7 @@ where
             }
             #[cfg(target_arch = "wasm32")]
             {
-                std::path::PathBuf::from("/kithara-ephemeral")
+                PathBuf::from("/kithara-ephemeral")
             }
         });
         let asset_root = self.asset_root.unwrap_or_default();
@@ -441,8 +439,7 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
+    use kithara_platform::time::Duration;
     use kithara_storage::ResourceExt;
     use kithara_test_utils::kithara;
     use tempfile::tempdir;
@@ -543,6 +540,7 @@ mod tests {
             .asset_root(Some("test"))
             .build_ephemeral();
 
+        assert!(store.is_enabled());
         let lease = store.inner();
         assert!(!lease.is_enabled());
 

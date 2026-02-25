@@ -2412,16 +2412,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kanal"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e3953adf0cd667798b396c2fa13552d6d9b3269d7dd1154c4c416442d1ff574"
-dependencies = [
- "futures-core",
- "lock_api",
-]
-
-[[package]]
 name = "kithara"
 version = "0.1.0"
 dependencies = [
@@ -2520,6 +2510,7 @@ dependencies = [
  "kithara-stream",
  "kithara-test-utils",
  "reqwest",
+ "ringbuf",
  "rodio",
  "rubato 1.0.1",
  "smallvec",
@@ -2607,6 +2598,7 @@ dependencies = [
  "kithara-abr",
  "kithara-decode",
  "kithara-events",
+ "kithara-platform",
  "kithara-test-utils",
  "tokio",
  "wasm-bindgen-test",
@@ -2771,7 +2763,6 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "js-sys",
- "kanal",
  "kithara-platform",
  "kithara-test-macros",
  "parking_lot",
@@ -2808,6 +2799,7 @@ dependencies = [
  "kithara-stream",
  "kithara-test-utils",
  "portable-atomic",
+ "ringbuf",
  "rodio",
  "smallvec",
  "thiserror 2.0.18",

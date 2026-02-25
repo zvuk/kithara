@@ -115,8 +115,6 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use std::time::Duration;
-
     #[cfg(not(target_arch = "wasm32"))]
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
@@ -145,7 +143,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
     fn mmap_write_all_read_into_roundtrip() {
         let dir = TempDir::new().unwrap();
         let res = create_mmap_resource(&dir, "test.bin");
@@ -161,7 +159,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
     fn mmap_tmp_file_cleaned_up() {
         let dir = TempDir::new().unwrap();
         let res = create_mmap_resource(&dir, "index.bin");
@@ -181,7 +179,7 @@ mod tests {
         );
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
     fn mem_write_all_read_into_roundtrip() {
         let res = create_mem_resource();
         let atomic = Atomic::new(res);
@@ -195,7 +193,7 @@ mod tests {
         assert_eq!(&buf, data);
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
     fn mem_write_all_overwrites_committed_data() {
         let res = create_mem_resource();
         let atomic = Atomic::new(res);
@@ -210,7 +208,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
     fn mmap_read_into_empty_returns_zero() {
         let dir = TempDir::new().unwrap();
         let res = create_mmap_resource(&dir, "empty.bin");
@@ -222,7 +220,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
     fn mmap_overwrite_atomically() {
         let dir = TempDir::new().unwrap();
         let res = create_mmap_resource(&dir, "overwrite.bin");
@@ -238,7 +236,7 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
     fn mmap_path_returns_inner_path() {
         let dir = TempDir::new().unwrap();
         let res = create_mmap_resource(&dir, "path_test.bin");
@@ -248,7 +246,7 @@ mod tests {
         assert_eq!(atomic.path(), Some(expected.as_path()));
     }
 
-    #[kithara::test(timeout(Duration::from_secs(2)))]
+    #[kithara::test(timeout(kithara_platform::time::Duration::from_secs(2)))]
     fn mem_path_returns_none() {
         let res = create_mem_resource();
         let atomic = Atomic::new(res);

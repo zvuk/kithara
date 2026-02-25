@@ -12,8 +12,8 @@
 //! This test simulates the mismatch by having the server return
 //! smaller Content-Length for HEAD than the actual GET body.
 
+use kithara_platform::time::Duration;
 use std::io::{Read, Seek, SeekFrom};
-use std::time::Duration;
 
 use fixture::scalable_server::{HlsTestServer, HlsTestServerConfig};
 use kithara::{

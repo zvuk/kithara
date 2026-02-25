@@ -10,9 +10,9 @@
 use std::{fmt::Debug, ops::Range, path::Path, sync::Arc};
 
 use derivative::Derivative;
-use kithara_platform::{Condvar, Mutex};
 #[cfg(target_arch = "wasm32")]
 use kithara_platform::thread;
+use kithara_platform::{Condvar, Mutex};
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -339,15 +339,16 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             #[cfg(not(target_arch = "wasm32"))]
             {
                 let mut state = state;
-                self.inner
-                    .condvar
-                    .wait_for(&mut state, std::time::Duration::from_millis(50));
+                self.inner.condvar.wait_for(
+                    &mut state,
+                    kithara_platform::time::Duration::from_millis(50),
+                );
             }
 
             #[cfg(target_arch = "wasm32")]
             {
                 drop(state);
-                thread::sleep(std::time::Duration::from_millis(50));
+                thread::backoff(kithara_platform::time::Duration::from_millis(50));
                 continue;
             }
         }

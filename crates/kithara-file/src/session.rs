@@ -308,12 +308,12 @@ impl kithara_stream::Source for FileSource {
 
 #[cfg(test)]
 mod tests {
-    use std::{ops::Range, sync::Arc};
-
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
+    use kithara_platform::time::{Duration, sleep, timeout};
     use kithara_stream::Source;
     use kithara_test_utils::kithara;
-    use tempfile::TempDir;
+    use std::ops::Range;
+    use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
@@ -344,24 +344,19 @@ mod tests {
         }
     }
 
-    #[kithara::test(native, tokio)]
+    #[kithara::test(tokio)]
     async fn test_progress_signal_reader_advanced() {
         let progress = Arc::new(Progress::new(Timeline::new()));
 
-        // Register the notified future BEFORE signaling (Notify protocol).
         let notified = progress.notified_reader_advance();
-
-        // Spawn a task that will signal after a short delay.
-        let p = Arc::clone(&progress);
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-            p.set_read_pos(42);
-        });
-
-        // The notified future must resolve within the timeout.
-        tokio::time::timeout(std::time::Duration::from_secs(2), notified)
-            .await
-            .unwrap();
+        let notified_progress = Arc::clone(&progress);
+        timeout(Duration::from_secs(2), async move {
+            sleep(Duration::from_millis(10)).await;
+            notified_progress.set_read_pos(42);
+            notified.await;
+        })
+        .await
+        .unwrap();
 
         assert_eq!(progress.read_pos(), 42);
     }
@@ -401,25 +396,24 @@ mod tests {
     // FileSource
 
     /// Helper: create a committed `AssetResource` backed by a file with `data`.
-    fn create_committed_resource(dir: &TempDir, data: &[u8]) -> AssetResource {
-        let file_path = dir.path().join("test.dat");
-        std::fs::write(&file_path, data).unwrap();
-
+    fn create_committed_resource(data: &[u8]) -> AssetResource {
         let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
-            .asset_root(None)
+            .ephemeral(true)
+            .asset_root(Some("test"))
             .cancel(CancellationToken::new())
             .build();
 
-        let key = ResourceKey::absolute(&file_path);
-        store.open_resource(&key).unwrap()
+        let key = ResourceKey::new("test.dat");
+        let res = store.open_resource(&key).unwrap();
+        res.write_at(0, data).unwrap();
+        res.commit(Some(data.len() as u64)).unwrap();
+        res
     }
 
-    #[kithara::test(native)]
+    #[kithara::test]
     fn test_file_source_read_at() {
-        let dir = TempDir::new().unwrap();
         let data = b"hello world from kithara";
-        let res = create_committed_resource(&dir, data);
+        let res = create_committed_resource(data);
 
         let progress = Arc::new(Progress::new(Timeline::new()));
         let bus = EventBus::new(16);
@@ -428,7 +422,7 @@ mod tests {
         let mut source = FileSource::new(res, Arc::clone(&progress), bus);
 
         let mut buf = [0u8; 11];
-        let n = source.read_at(0, &mut buf).unwrap();
+        let n = Source::read_at(&mut source, 0, &mut buf).unwrap();
         assert_eq!(n, 11);
         assert_eq!(&buf[..n], b"hello world");
 
@@ -437,17 +431,16 @@ mod tests {
 
         // Read from an offset.
         let mut buf2 = [0u8; 7];
-        let n2 = source.read_at(6, &mut buf2).unwrap();
+        let n2 = Source::read_at(&mut source, 6, &mut buf2).unwrap();
         assert_eq!(n2, 7);
         assert_eq!(&buf2[..n2], b"world f");
         assert_eq!(progress.read_pos(), 13);
     }
 
-    #[kithara::test(native)]
+    #[kithara::test]
     fn file_source_emits_byte_progress_not_playback_truth() {
-        let dir = TempDir::new().unwrap();
         let data = b"abcdef";
-        let res = create_committed_resource(&dir, data);
+        let res = create_committed_resource(data);
 
         let progress = Arc::new(Progress::new(Timeline::new()));
         let bus = EventBus::new(16);
@@ -457,7 +450,7 @@ mod tests {
         let mut source = FileSource::new(res, progress, bus);
 
         let mut buf = [0u8; 3];
-        let n = source.read_at(0, &mut buf).unwrap();
+        let n = Source::read_at(&mut source, 0, &mut buf).unwrap();
         assert_eq!(n, 3);
 
         let event = events.try_recv().expect("expected file event");
@@ -470,10 +463,9 @@ mod tests {
         }
     }
 
-    #[kithara::test(native)]
+    #[kithara::test]
     fn test_file_source_len() {
-        let dir = TempDir::new().unwrap();
-        let res = create_committed_resource(&dir, b"abc");
+        let res = create_committed_resource(b"abc");
 
         let progress = Arc::new(Progress::new(Timeline::new()));
         let bus = EventBus::new(16);
@@ -482,13 +474,12 @@ mod tests {
         let source = FileSource::new(res, progress, bus);
 
         // len() should return the explicit value provided at construction.
-        assert_eq!(source.len(), Some(12345));
+        assert_eq!(Source::len(&source), Some(12345));
     }
 
-    #[kithara::test(native)]
+    #[kithara::test]
     fn file_source_uses_progress_timeline_as_single_source_of_truth() {
-        let dir = TempDir::new().unwrap();
-        let res = create_committed_resource(&dir, b"abcdef");
+        let res = create_committed_resource(b"abcdef");
 
         let timeline = Timeline::new();
         let progress = Arc::new(Progress::new(timeline.clone()));
@@ -497,13 +488,13 @@ mod tests {
         let mut source = FileSource::new(res, Arc::clone(&progress), bus);
 
         let mut buf = [0u8; 2];
-        let n = source.read_at(0, &mut buf).unwrap();
+        let n = Source::read_at(&mut source, 0, &mut buf).unwrap();
         assert_eq!(n, 2);
 
         assert_eq!(progress.read_pos(), 2);
-        assert_eq!(source.timeline().byte_position(), 2);
+        assert_eq!(Source::timeline(&source).byte_position(), 2);
 
         progress.set_read_pos(5);
-        assert_eq!(source.timeline().byte_position(), 5);
+        assert_eq!(Source::timeline(&source).byte_position(), 5);
     }
 }

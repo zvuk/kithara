@@ -4,8 +4,8 @@
 //! concurrently on a shared `ThreadPool` and each reads PCM data to EOF.
 //! Tests both manual variant (no ABR) and auto ABR modes.
 
-use std::sync::Arc;
 use kithara_platform::time::Duration;
+use std::sync::Arc;
 
 use kithara::{
     assets::StoreOptions,

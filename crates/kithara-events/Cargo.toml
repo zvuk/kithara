@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 tokio = { workspace = true }
+kithara-platform = { workspace = true }
 
 kithara-abr = { workspace = true, optional = true }
 kithara-decode = { workspace = true, optional = true }

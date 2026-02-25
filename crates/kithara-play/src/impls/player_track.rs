@@ -13,7 +13,8 @@ use firewheel::{
     },
     param::smoother::SmootherConfig,
 };
-use kithara_platform::{Mutex, Sender};
+use kithara_platform::Mutex;
+use ringbuf::{HeapProd, traits::Producer};
 
 use super::{player_notification::PlayerNotification, player_resource::PlayerResource};
 
@@ -126,7 +127,7 @@ impl PlayerTrack {
         scratch_bufs: &mut [&mut [f32]],
         mix_bufs: &mut [&mut [f32]],
         range: Range<usize>,
-        notification_tx: &Sender<PlayerNotification>,
+        notification_tx: &Mutex<HeapProd<PlayerNotification>>,
     ) {
         // Read data from resource inside a scoped lock
         let read_outcome = {
@@ -180,20 +181,21 @@ impl PlayerTrack {
     }
 
     /// Handle EOF or read error.
-    fn handle_eof(&mut self, notification_tx: &Sender<PlayerNotification>) {
+    fn handle_eof(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
         if self.state == TrackState::Finished {
             return;
         }
         self.set_state(TrackState::Finished);
         notification_tx
-            .try_send(PlayerNotification::TrackPlaybackStopped(Arc::clone(
+            .lock()
+            .try_push(PlayerNotification::TrackPlaybackStopped(Arc::clone(
                 &self.src,
             )))
             .ok();
     }
 
     /// Check position-based notifications.
-    fn check_notifications(&mut self, notification_tx: &Sender<PlayerNotification>) {
+    fn check_notifications(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
         let position = self.observed_position;
         let duration = self.observed_duration;
 
@@ -218,7 +220,8 @@ impl PlayerTrack {
             let threshold = (dur * DEFAULT_TRACK_END_THRESHOLD) - fade;
             if pos >= threshold.max(0.0) {
                 notification_tx
-                    .try_send(PlayerNotification::TrackAboutToEnd(Arc::clone(&self.src)))
+                    .lock()
+                    .try_push(PlayerNotification::TrackAboutToEnd(Arc::clone(&self.src)))
                     .ok();
                 self.notified_about_to_end = true;
             }
@@ -229,7 +232,8 @@ impl PlayerTrack {
             let threshold = dur - fade;
             if pos >= threshold.max(0.0)
                 && notification_tx
-                    .try_send(PlayerNotification::TrackRequested(Arc::clone(&self.src)))
+                    .lock()
+                    .try_push(PlayerNotification::TrackRequested(Arc::clone(&self.src)))
                     .is_ok()
             {
                 self.notified_track_requested = true;
@@ -248,7 +252,7 @@ impl PlayerTrack {
     }
 
     /// Emit notification when state changes.
-    fn notify_state_change(&mut self, notification_tx: &Sender<PlayerNotification>) {
+    fn notify_state_change(&mut self, notification_tx: &Mutex<HeapProd<PlayerNotification>>) {
         if !self.state_dirty {
             return;
         }
@@ -261,7 +265,7 @@ impl PlayerTrack {
             TrackState::Finished => PlayerNotification::TrackPlaybackStopped(Arc::clone(&self.src)),
         };
 
-        if notification_tx.try_send(notification).is_ok() {
+        if notification_tx.lock().try_push(notification).is_ok() {
             self.state_dirty = false;
         }
     }

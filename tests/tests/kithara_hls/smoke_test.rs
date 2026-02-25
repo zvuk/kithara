@@ -10,10 +10,10 @@ use kithara::{
     stream::Stream,
 };
 use kithara_test_utils::{TestTempDir, temp_dir, tracing_setup};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 use url::Url;
-use tokio::sync::oneshot;
 
 use super::fixture;
 

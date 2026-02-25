@@ -274,50 +274,187 @@ fn make_dedicated_worker_config() -> TokenStream2 {
     }
 }
 
-fn wrap_with_timeout(body: &TokenStream2, timeout: &Option<Expr>, is_async: bool) -> TokenStream2 {
+fn wrap_with_timeout(
+    body: &TokenStream2,
+    timeout: &Option<Expr>,
+    is_async: bool,
+    fn_name: &Ident,
+) -> TokenStream2 {
     let Some(dur) = timeout else {
         return quote! { { #body } };
     };
 
+    let fn_name_str = fn_name.to_string();
+
     if is_async {
+        // WASM-only cooperative timeout (native async+timeout uses
+        // emit_async_timeout_test for manual runtime control).
         quote! {
             {
+                let __timeout_dur: ::std::time::Duration = #dur;
                 let __body = async { #body };
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    tokio::time::timeout(#dur, __body)
-                        .await
-                        .expect("test timed out")
-                }
-                #[cfg(target_arch = "wasm32")]
-                {
-                    kithara_platform::time::timeout(#dur, __body)
-                        .await
-                        .expect("test timed out")
-                }
+                kithara_platform::time::timeout(__timeout_dur, __body)
+                    .await
+                    .unwrap_or_else(|_| panic!(
+                        "test `{}` timed out after {:?}",
+                        #fn_name_str, __timeout_dur,
+                    ))
             }
         }
     } else {
         quote! {
             {
+                let __timeout_dur: ::std::time::Duration = #dur;
                 let __body = move || { #body };
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    let (tx, rx) = std::sync::mpsc::channel();
-                    let handle = std::thread::spawn(move || { tx.send(__body()).ok(); });
-                    rx.recv_timeout(#dur).expect("test timed out");
-                    handle.join().ok();
+                    let (tx, rx) = ::std::sync::mpsc::channel();
+                    let handle = ::std::thread::spawn(move || {
+                        tx.send(__body()).ok();
+                    });
+                    match rx.recv_timeout(__timeout_dur) {
+                        Ok(v) => {
+                            handle.join().ok();
+                            v
+                        }
+                        Err(::std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                            panic!(
+                                "test `{}` timed out after {:?}",
+                                #fn_name_str, __timeout_dur,
+                            )
+                        }
+                        Err(::std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                            // Test body panicked — propagate the original panic.
+                            match handle.join() {
+                                Err(payload) => ::std::panic::resume_unwind(payload),
+                                Ok(_) => unreachable!(),
+                            }
+                        }
+                    }
                 }
                 #[cfg(target_arch = "wasm32")]
                 {
-                    __body();
+                    __body()
                 }
             }
         }
     }
 }
 
-/// Generate `unsafe { set_var(...) }` statements for each env var.
+/// Emit a native async test with a timeout using a **manual tokio runtime**.
+///
+/// Why: `#[tokio::test]` creates a runtime whose `Drop` waits indefinitely for
+/// `spawn_blocking` tasks.  If the test body spawns a blocking thread that
+/// outlives the timeout, the runtime shutdown hangs forever — even though
+/// `tokio::time::timeout` already fired and panicked.
+///
+/// This function generates a **sync** `#[test]` fn that:
+/// 1. Spawns a watchdog thread **outside** the tokio runtime.
+/// 2. Creates the runtime manually.
+/// 3. Runs the async body inside `block_on` with `tokio::time::timeout`.
+/// 4. Catches panics via `catch_unwind` so we can call `shutdown_timeout`
+///    before re-raising.
+/// 5. Calls `runtime.shutdown_timeout(100ms)` — never blocks on zombies.
+/// 6. The watchdog Drop guard fires **after** `shutdown_timeout`, so it only
+///    aborts if even the forced shutdown is stuck.
+#[allow(clippy::too_many_arguments)]
+fn emit_async_timeout_test(
+    fn_name: &Ident,
+    vis: &syn::Visibility,
+    ret_type: &syn::ReturnType,
+    remaining_attrs: &[&Attribute],
+    body: &TokenStream2,
+    args: &TestArgs,
+) -> TokenStream2 {
+    let dur = args.timeout.as_ref().expect("caller verified timeout");
+    let fn_name_str = fn_name.to_string();
+
+    // Brace the body so it can be used as `async { #braced }` safely.
+    let braced = quote! { { #body } };
+    let inner_body = if !args.soft_fail_patterns.is_empty() {
+        wrap_with_soft_fail(&braced, fn_name, true, &args.soft_fail_patterns)
+    } else {
+        braced
+    };
+
+    let env_setup = make_env_setup(&args.env_vars);
+
+    quote! {
+        #(#remaining_attrs)*
+        #[cfg(not(target_arch = "wasm32"))]
+        #[test]
+        #vis fn #fn_name() #ret_type {
+            #env_setup
+
+            let __timeout_dur: ::std::time::Duration = #dur;
+
+            // Hard-timeout watchdog — runs OUTSIDE the tokio runtime on a
+            // plain OS thread.  A Drop guard cancels it when the function
+            // exits (including after runtime.shutdown_timeout).  If even
+            // shutdown_timeout hangs, the watchdog fires and aborts.
+            let __done = ::std::sync::Arc::new(
+                ::std::sync::atomic::AtomicBool::new(false),
+            );
+            {
+                let __done_w = __done.clone();
+                let __fn = #fn_name_str;
+                ::std::thread::spawn(move || {
+                    ::std::thread::sleep(
+                        __timeout_dur + ::std::time::Duration::from_secs(3),
+                    );
+                    if !__done_w.load(::std::sync::atomic::Ordering::SeqCst) {
+                        eprintln!(
+                            "\n\x1b[1;31mHARD TIMEOUT\x1b[0m: test `{}` exceeded {:?} \
+                             (runtime shutdown blocked). Aborting process.\n",
+                            __fn, __timeout_dur,
+                        );
+                        ::std::process::abort();
+                    }
+                });
+            }
+            struct __WG(::std::sync::Arc<::std::sync::atomic::AtomicBool>);
+            impl Drop for __WG {
+                fn drop(&mut self) {
+                    self.0.store(true, ::std::sync::atomic::Ordering::SeqCst);
+                }
+            }
+            let _wg = __WG(__done);
+
+            let __rt = ::tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("tokio runtime");
+
+            let __result = ::std::panic::catch_unwind(
+                ::std::panic::AssertUnwindSafe(|| {
+                    __rt.block_on(async {
+                        ::tokio::time::timeout(__timeout_dur, async {
+                            #inner_body
+                        })
+                        .await
+                        .unwrap_or_else(|_| panic!(
+                            "test `{}` timed out after {:?}",
+                            #fn_name_str, __timeout_dur,
+                        ))
+                    })
+                })
+            );
+
+            // Force-shutdown the runtime: never block on zombie blocking threads.
+            __rt.shutdown_timeout(::std::time::Duration::from_millis(100));
+
+            match __result {
+                Ok(__v) => __v,
+                Err(__payload) => ::std::panic::resume_unwind(__payload),
+            }
+        }
+    }
+}
+
+/// Generate guarded env setup for the test body.
+///
+/// Uses a process-wide mutex to serialize env mutation and restores previous
+/// values on drop to avoid cross-test leakage.
 fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
     if env_vars.is_empty() {
         return quote! {};
@@ -328,14 +465,53 @@ fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
 
     quote! {
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        let _kithara_env_guard = {
+            struct __KitharaEnvGuard {
+                saved: ::std::vec::Vec<(
+                    &'static str,
+                    ::std::option::Option<::std::string::String>,
+                )>,
+                lock: ::std::option::Option<::std::sync::MutexGuard<'static, ()>>,
+            }
+
+            impl Drop for __KitharaEnvGuard {
+                fn drop(&mut self) {
+                    for (key, value) in self.saved.drain(..).rev() {
+                        match value {
+                            Some(value) => {
+                                // SAFETY: test-scoped restoration under env lock.
+                                unsafe { std::env::set_var(key, value); }
+                            }
+                            None => {
+                                // SAFETY: test-scoped restoration under env lock.
+                                unsafe { std::env::remove_var(key); }
+                            }
+                        }
+                    }
+                    let _ = self.lock.take();
+                }
+            }
+
+            static __KITHARA_TEST_ENV_LOCK: ::std::sync::OnceLock<::std::sync::Mutex<()>> =
+                ::std::sync::OnceLock::new();
+            let __lock = __KITHARA_TEST_ENV_LOCK
+                .get_or_init(|| ::std::sync::Mutex::new(()))
+                .lock()
+                .expect("kithara::test env lock poisoned");
+
+            let mut __saved = ::std::vec::Vec::new();
             #(
-                // SAFETY: test sets env vars at start before spawning threads.
+                __saved.push((#keys, std::env::var(#keys).ok()));
+                // SAFETY: guarded by process-wide env lock.
                 unsafe { std::env::set_var(#keys, #values); }
             )*
-        }
-    }
 
+            __KitharaEnvGuard {
+                saved: __saved,
+                lock: Some(__lock),
+            }
+        };
+    }
 }
 
 /// Wrap body in `catch_unwind`; re-panic unless the message matches a pattern.
@@ -423,7 +599,26 @@ fn emit_one_test(
     args: &TestArgs,
 ) -> TokenStream2 {
     let full = quote! { #preamble #(#body_stmts)* };
-    let with_timeout = wrap_with_timeout(&full, &args.timeout, is_async);
+
+    // Async + timeout on native: use manual runtime for clean shutdown.
+    // This avoids #[tokio::test]'s Runtime::drop hanging on zombie
+    // spawn_blocking threads after a timeout fires.
+    if is_async && args.timeout.is_some() {
+        let mut output =
+            emit_async_timeout_test(fn_name, vis, ret_type, remaining_attrs, &full, args);
+        // WASM side: async function with cooperative timeout
+        let wasm_timeout = wrap_with_timeout(&full, &args.timeout, true, fn_name);
+        let wasm_wrapped = finalize_body(&wasm_timeout, args, fn_name, true);
+        output.extend(quote! {
+            #(#remaining_attrs)*
+            #[cfg(target_arch = "wasm32")]
+            #[wasm_bindgen_test::wasm_bindgen_test]
+            #vis async fn #fn_name() #ret_type #wasm_wrapped
+        });
+        return output;
+    }
+
+    let with_timeout = wrap_with_timeout(&full, &args.timeout, is_async, fn_name);
     let wrapped = finalize_body(&with_timeout, args, fn_name, is_async);
     let asyncness = is_async.then(|| quote! { async });
 
@@ -462,7 +657,7 @@ fn emit_browser_test(
         #preamble
         #(#body_stmts)*
     };
-    let wasm_with_timeout = wrap_with_timeout(&wasm_body, &args.timeout, true);
+    let wasm_with_timeout = wrap_with_timeout(&wasm_body, &args.timeout, true, fn_name);
     let wasm_wrapped = finalize_body(&wasm_with_timeout, args, fn_name, true);
     output.extend(quote! {
         #(#remaining_attrs)*
@@ -474,21 +669,36 @@ fn emit_browser_test(
     // Native side (only for dual-platform: native+browser or tokio+browser)
     if !browser_only {
         let native_is_async = is_async || args.is_tokio;
-        let native_attr = if native_is_async {
-            quote! { #[tokio::test] }
-        } else {
-            quote! { #[test] }
-        };
-        let native_asyncness = native_is_async.then(|| quote! { async });
         let native_body = quote! { #preamble #(#body_stmts)* };
-        let native_with_timeout = wrap_with_timeout(&native_body, &args.timeout, native_is_async);
-        let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, native_is_async);
-        output.extend(quote! {
-            #(#remaining_attrs)*
-            #[cfg(not(target_arch = "wasm32"))]
-            #native_attr
-            #vis #native_asyncness fn #fn_name() #ret_type #native_wrapped
-        });
+
+        // Async + timeout: use manual runtime (same reason as emit_one_test)
+        if native_is_async && args.timeout.is_some() {
+            output.extend(emit_async_timeout_test(
+                fn_name,
+                vis,
+                ret_type,
+                remaining_attrs,
+                &native_body,
+                args,
+            ));
+        } else {
+            let native_attr = if native_is_async {
+                quote! { #[tokio::test] }
+            } else {
+                quote! { #[test] }
+            };
+            let native_asyncness = native_is_async.then(|| quote! { async });
+            let native_with_timeout =
+                wrap_with_timeout(&native_body, &args.timeout, native_is_async, fn_name);
+            let native_wrapped =
+                finalize_body(&native_with_timeout, args, fn_name, native_is_async);
+            output.extend(quote! {
+                #(#remaining_attrs)*
+                #[cfg(not(target_arch = "wasm32"))]
+                #native_attr
+                #vis #native_asyncness fn #fn_name() #ret_type #native_wrapped
+            });
+        }
     }
 
     output
@@ -593,18 +803,32 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
 
     // native-only (without browser): cfg(not(wasm32)) + #[test] or #[tokio::test]
     if args.is_native_only && !args.is_browser {
-        let test_attr = if is_async || args.is_tokio {
-            quote! { #[tokio::test] }
-        } else {
-            quote! { #[test] }
-        };
-        let asyncness = (is_async || args.is_tokio).then(|| quote! { async });
+        let native_is_async = is_async || args.is_tokio;
 
         if cases.is_empty() {
             let preamble = make_preamble(&params, None);
             let full = quote! { #preamble #(#body_stmts)* };
-            let with_timeout = wrap_with_timeout(&full, &args.timeout, is_async || args.is_tokio);
-            let wrapped = finalize_body(&with_timeout, &args, fn_name, is_async || args.is_tokio);
+
+            // Async + timeout: manual runtime
+            if native_is_async && args.timeout.is_some() {
+                return Ok(emit_async_timeout_test(
+                    fn_name,
+                    vis,
+                    ret_type,
+                    &remaining_attrs,
+                    &full,
+                    &args,
+                ));
+            }
+
+            let test_attr = if native_is_async {
+                quote! { #[tokio::test] }
+            } else {
+                quote! { #[test] }
+            };
+            let asyncness = native_is_async.then(|| quote! { async });
+            let with_timeout = wrap_with_timeout(&full, &args.timeout, native_is_async, fn_name);
+            let wrapped = finalize_body(&with_timeout, &args, fn_name, native_is_async);
             return Ok(quote! {
                 #(#remaining_attrs)*
                 #[cfg(not(target_arch = "wasm32"))]
@@ -612,6 +836,7 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
                 #vis #asyncness fn #fn_name() #ret_type #wrapped
             });
         }
+
         let mut tests = TokenStream2::new();
         for (i, case) in cases.iter().enumerate() {
             let case_name = match &case.name {
@@ -620,9 +845,28 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
             };
             let preamble = make_preamble(&params, Some(&case.values));
             let full = quote! { #preamble #(#body_stmts)* };
-            let with_timeout = wrap_with_timeout(&full, &args.timeout, is_async || args.is_tokio);
-            let wrapped =
-                finalize_body(&with_timeout, &args, &case_name, is_async || args.is_tokio);
+
+            // Async + timeout: manual runtime (per case)
+            if native_is_async && args.timeout.is_some() {
+                tests.extend(emit_async_timeout_test(
+                    &case_name,
+                    vis,
+                    ret_type,
+                    &remaining_attrs,
+                    &full,
+                    &args,
+                ));
+                continue;
+            }
+
+            let test_attr = if native_is_async {
+                quote! { #[tokio::test] }
+            } else {
+                quote! { #[test] }
+            };
+            let asyncness = native_is_async.then(|| quote! { async });
+            let with_timeout = wrap_with_timeout(&full, &args.timeout, native_is_async, &case_name);
+            let wrapped = finalize_body(&with_timeout, &args, &case_name, native_is_async);
             tests.extend(quote! {
                 #(#remaining_attrs)*
                 #[cfg(not(target_arch = "wasm32"))]

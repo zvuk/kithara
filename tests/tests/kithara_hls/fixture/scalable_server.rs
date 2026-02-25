@@ -481,7 +481,10 @@ mod wasm {
             // Convert to serializable config for fixture server.
             let data_mode = if let Some(per_variant) = &config.custom_data_per_variant {
                 DataMode::CustomDataPerVariant(
-                    per_variant.iter().map(|variant_data| variant_data.as_ref().clone()).collect(),
+                    per_variant
+                        .iter()
+                        .map(|variant_data| variant_data.as_ref().clone())
+                        .collect(),
                 )
             } else if let Some(data) = &config.custom_data {
                 DataMode::CustomData(data.as_ref().clone())

@@ -13,11 +13,13 @@ use std::{
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
-#[cfg(target_arch = "wasm32")]
-use kithara_platform::unbounded;
-use kithara_platform::{Receiver, Sender, ThreadPool, bounded};
+use kithara_platform::ThreadPool;
 use kithara_stream::{
     EpochValidator, Fetch, MediaInfo, Stream, StreamContext, StreamType, Timeline,
+};
+use ringbuf::{
+    HeapCons, HeapProd, HeapRb,
+    traits::{Consumer, Split},
 };
 use tokio::sync::{Notify, broadcast};
 use tokio_util::sync::CancellationToken;
@@ -32,6 +34,7 @@ use crate::traits::{DecodeError, DecodeResult, PcmReader};
 
 /// Default capacity for broadcast event channels.
 const DEFAULT_EVENT_CAPACITY: usize = 64;
+const RECV_BACKOFF: Duration = Duration::from_micros(100);
 
 enum ChunkOutcome {
     Continue,
@@ -45,10 +48,10 @@ enum RecvOutcome {
 }
 
 type AudioChannels = (
-    Sender<AudioCommand>,
-    Receiver<AudioCommand>,
-    Sender<Fetch<PcmChunk>>,
-    Receiver<Fetch<PcmChunk>>,
+    HeapProd<AudioCommand>,
+    HeapCons<AudioCommand>,
+    HeapProd<Fetch<PcmChunk>>,
+    HeapCons<Fetch<PcmChunk>>,
 );
 
 /// Generic audio pipeline running in a separate thread.
@@ -84,10 +87,10 @@ pub struct Audio<S> {
     /// Seek flows through Timeline atomics. This channel is kept alive
     /// so the worker loop does not exit due to a closed `cmd_rx`.
     #[expect(dead_code, reason = "kept alive for cmd_rx in worker loop")]
-    cmd_tx: Sender<AudioCommand>,
+    cmd_tx: HeapProd<AudioCommand>,
 
     /// PCM chunk receiver.
-    pcm_rx: Receiver<Fetch<PcmChunk>>,
+    pcm_rx: HeapCons<Fetch<PcmChunk>>,
 
     /// Shared epoch counter with worker (kept alive for `Arc` shared ownership).
     _epoch: Arc<AtomicU64>,
@@ -153,8 +156,8 @@ pub struct Audio<S> {
 impl<S> Audio<S> {
     /// Get reference to PCM receiver for direct channel access.
     #[must_use]
-    pub fn pcm_rx(&self) -> &Receiver<Fetch<PcmChunk>> {
-        &self.pcm_rx
+    pub fn pcm_rx(&mut self) -> &mut HeapCons<Fetch<PcmChunk>> {
+        &mut self.pcm_rx
     }
 
     /// Enable non-blocking mode for `read()`.
@@ -348,7 +351,7 @@ impl<S> Audio<S> {
         self.eof = false;
 
         // 3. Drain stale chunks from pcm channel to unblock worker
-        while let Ok(Some(_)) = self.pcm_rx.try_recv() {}
+        while self.pcm_rx.try_pop().is_some() {}
 
         // 4. Wake blocked wait_range() calls for instant seek response
         if let Some(ref notify) = self.notify_waiting {
@@ -385,15 +388,24 @@ impl<S> Audio<S> {
 
     fn recv_outcome(&mut self) -> RecvOutcome {
         if self.use_nonblocking_recv() {
-            match self.pcm_rx.try_recv() {
-                Ok(Some(fetch)) => RecvOutcome::Item(fetch),
-                Ok(None) => RecvOutcome::Empty,
-                Err(_) => RecvOutcome::Closed,
+            return self
+                .pcm_rx
+                .try_pop()
+                .map_or(RecvOutcome::Empty, RecvOutcome::Item);
+        }
+
+        loop {
+            if let Some(fetch) = self.pcm_rx.try_pop() {
+                return RecvOutcome::Item(fetch);
             }
-        } else {
-            self.pcm_rx
-                .recv()
-                .map_or_else(|_| RecvOutcome::Closed, RecvOutcome::Item)
+            if self
+                .cancel
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+            {
+                return RecvOutcome::Closed;
+            }
+            kithara_platform::thread::backoff(RECV_BACKOFF);
         }
     }
 
@@ -549,13 +561,8 @@ where
 
     fn create_channels(command_channel_capacity: usize, pcm_buffer_chunks: usize) -> AudioChannels {
         let cmd_capacity = command_channel_capacity.max(1);
-        #[cfg(target_arch = "wasm32")]
-        let _ = cmd_capacity;
-        #[cfg(target_arch = "wasm32")]
-        let (cmd_tx, cmd_rx) = unbounded();
-        #[cfg(not(target_arch = "wasm32"))]
-        let (cmd_tx, cmd_rx) = bounded(cmd_capacity);
-        let (data_tx, data_rx) = bounded(pcm_buffer_chunks.max(1));
+        let (cmd_tx, cmd_rx) = HeapRb::<AudioCommand>::new(cmd_capacity).split();
+        let (data_tx, data_rx) = HeapRb::<Fetch<PcmChunk>>::new(pcm_buffer_chunks.max(1)).split();
         (cmd_tx, cmd_rx, data_tx, data_rx)
     }
 
@@ -616,8 +623,8 @@ where
     fn spawn_worker(
         thread_pool: &ThreadPool,
         audio_source: StreamAudioSource<T>,
-        cmd_rx: Receiver<AudioCommand>,
-        data_tx: Sender<Fetch<PcmChunk>>,
+        cmd_rx: HeapCons<AudioCommand>,
+        data_tx: HeapProd<Fetch<PcmChunk>>,
         preload_notify: Arc<Notify>,
         preload_chunks: usize,
         worker_cancel: CancellationToken,
@@ -625,8 +632,8 @@ where
         thread_pool.spawn(move || {
             run_audio_loop(
                 audio_source,
-                &cmd_rx,
-                &data_tx,
+                cmd_rx,
+                data_tx,
                 &preload_notify,
                 preload_chunks,
                 &worker_cancel,

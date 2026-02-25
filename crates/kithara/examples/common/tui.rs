@@ -1,4 +1,4 @@
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 #[cfg(feature = "hls")]
 use kithara::prelude::HlsEvent;

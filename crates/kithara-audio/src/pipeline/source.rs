@@ -871,7 +871,7 @@ impl<T: StreamType> StreamAudioSource<T> {
         Some(chunk)
     }
 
-    pub(crate) fn retry_decode_error_after_seek(&mut self) -> bool {
+    fn retry_decode_failure_after_seek(&mut self, log_context: &'static str) -> bool {
         let Some(seek_epoch) = self.pending_decode_started_epoch else {
             return false;
         };
@@ -901,7 +901,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                     debug!(
                         epoch = seek_epoch,
                         ?retry_pos,
-                        "decode error right after seek: one-shot decoder.seek retry succeeded"
+                        "{log_context}: one-shot decoder.seek retry succeeded"
                     );
                     return true;
                 }
@@ -910,7 +910,7 @@ impl<T: StreamType> StreamAudioSource<T> {
                         ?err,
                         epoch = seek_epoch,
                         ?retry_pos,
-                        "decode error right after seek: one-shot decoder.seek retry failed"
+                        "{log_context}: one-shot decoder.seek retry failed"
                     );
                 }
             }
@@ -927,18 +927,21 @@ impl<T: StreamType> StreamAudioSource<T> {
             warn!(
                 epoch = seek_epoch,
                 ?retry_pos,
-                "decode error right after seek: no media info for decoder recovery"
+                "{log_context}: no media info for decoder recovery"
             );
             return false;
         };
 
         let recreate_offset = self.decoder_recreate_offset(None);
-        self.recreate_decoder_for_seek(
-            &new_info,
-            recreate_offset,
-            retry_pos,
-            "decode error right after seek",
-        )
+        self.recreate_decoder_for_seek(&new_info, recreate_offset, retry_pos, log_context)
+    }
+
+    pub(crate) fn retry_decode_error_after_seek(&mut self) -> bool {
+        self.retry_decode_failure_after_seek("decode error right after seek")
+    }
+
+    fn retry_decode_eof_after_seek(&mut self) -> bool {
+        self.retry_decode_failure_after_seek("decode EOF right after seek")
     }
 }
 
@@ -993,6 +996,10 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
                             reset_effects(&mut self.effects);
                             continue;
                         }
+                    }
+
+                    if self.retry_decode_eof_after_seek() {
+                        continue;
                     }
 
                     debug!(
@@ -1066,7 +1073,14 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
                 }
                 Fetch::new(chunk, false, current_epoch)
             }
-            Ok(None) | Err(_) => Fetch::new(PcmChunk::default(), true, current_epoch),
+            Ok(None) => {
+                self.emit_event(AudioEvent::EndOfStream);
+                Fetch::new(PcmChunk::default(), true, current_epoch)
+            }
+            Err(_) => {
+                self.emit_event(AudioEvent::EndOfStream);
+                Fetch::new(PcmChunk::default(), true, current_epoch)
+            }
         }
     }
 

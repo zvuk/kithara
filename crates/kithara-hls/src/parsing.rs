@@ -1,6 +1,6 @@
 //! HLS playlist parsing and data types.
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,

@@ -9,8 +9,8 @@
 //!
 //! Note: ABR is set to Manual(0) to fix variant and avoid switching during tests.
 
+use kithara_platform::time::Duration;
 use std::io::{Read, Seek, SeekFrom};
-use std::time::Duration;
 
 use fixture::TestServer;
 use kithara::{

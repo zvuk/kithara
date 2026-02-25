@@ -94,6 +94,7 @@ impl<R: ResourceExt> LruIndex<R> {
     }
 
     /// Remove an asset from the index (e.g. after eviction).
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn remove(&self, asset_root: &str) -> AssetsResult<()> {
         let mut st = self.load()?;
         st.remove(asset_root);
@@ -133,6 +134,7 @@ impl LruState {
         self.by_root.len()
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     pub(crate) fn remove(&mut self, asset_root: &str) {
         self.by_root.remove(asset_root);
     }

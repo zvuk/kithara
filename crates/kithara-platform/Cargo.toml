@@ -16,7 +16,6 @@ internal = []
 
 [dependencies]
 futures = { workspace = true }
-kanal = { workspace = true }
 parking_lot = { workspace = true }
 rayon = { workspace = true }
 web-time = { workspace = true }

@@ -93,7 +93,6 @@ where
     }
 
     #[cfg(test)]
-    #[must_use]
     pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
     }

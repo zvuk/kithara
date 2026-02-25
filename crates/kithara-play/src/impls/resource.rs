@@ -250,7 +250,7 @@ impl Resource {
     reason = "test mock code; values are small and positive by construction"
 )]
 mod tests {
-    use std::time::Duration;
+    use kithara_platform::time::Duration;
 
     use kithara_audio::mock::TestPcmReader;
     use kithara_decode::PcmSpec;

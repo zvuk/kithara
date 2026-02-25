@@ -8,7 +8,6 @@ use super::*;
 pub(super) struct WaitRangeState {
     metadata_miss_count: usize,
     on_demand_request_epoch: Option<u64>,
-    on_demand_wait_spins: usize,
 }
 
 impl WaitRangeState {
@@ -18,25 +17,20 @@ impl WaitRangeState {
             .is_some_and(|epoch| epoch != seek_epoch)
         {
             self.on_demand_request_epoch = None;
-            self.on_demand_wait_spins = 0;
         }
     }
 
     pub(super) fn on_demand_pending(&self, seek_epoch: u64) -> bool {
-        self.on_demand_request_epoch.is_some_and(|epoch| {
-            epoch == seek_epoch && self.on_demand_wait_spins < WAIT_RANGE_ON_DEMAND_RETRY_SPINS
-        })
+        self.on_demand_request_epoch
+            .is_some_and(|epoch| epoch == seek_epoch)
     }
 
     pub(super) fn mark_on_demand_requested(&mut self, seek_epoch: u64) {
         self.on_demand_request_epoch = Some(seek_epoch);
-        self.on_demand_wait_spins = 0;
     }
 
-    pub(super) fn bump_on_demand_wait(&mut self) {
-        if self.on_demand_request_epoch.is_some() {
-            self.on_demand_wait_spins = self.on_demand_wait_spins.saturating_add(1);
-        }
+    pub(super) fn clear_on_demand_requested(&mut self) {
+        self.on_demand_request_epoch = None;
     }
 }
 
@@ -184,14 +178,7 @@ impl HlsSource {
         metadata_miss_count: &mut usize,
         max_metadata_miss_spins: usize,
     ) -> StreamResult<bool, HlsError> {
-        if self.shared.had_midstream_switch.load(Ordering::Acquire) {
-            // After variant switch metadata offsets diverge from runtime offsets.
-            // Let sequential downloader catch up from current position.
-            self.shared.reader_advanced.notify_one();
-            return Ok(true);
-        }
-
-        let current_variant = self.shared.current_variant_index.load(Ordering::Acquire);
+        let current_variant = self.shared.abr_variant_index.load(Ordering::Acquire);
         if let Some(segment_index) = self
             .playlist_state
             .find_segment_at_offset(current_variant, range_start)
@@ -211,12 +198,21 @@ impl HlsSource {
             self.fallback_segment_index_for_offset(current_variant, range_start)
         {
             *metadata_miss_count = 0;
+            let hint_index = self.shared.current_segment_index.load(Ordering::Acquire) as usize;
             debug!(
                 variant = current_variant,
                 segment_index,
                 offset = range_start,
                 "wait_range: metadata miss fallback segment load"
             );
+            self.bus.publish(HlsEvent::Seek {
+                stage: "wait_range_metadata_fallback",
+                seek_epoch,
+                variant: current_variant,
+                offset: range_start,
+                from_segment_index: hint_index,
+                to_segment_index: segment_index,
+            });
             self.push_segment_request(current_variant, segment_index, seek_epoch);
             return Ok(true);
         }

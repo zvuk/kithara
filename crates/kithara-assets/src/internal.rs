@@ -10,7 +10,7 @@ use kithara_storage::ResourceExt;
 pub use crate::base::Assets;
 use crate::error::AssetsResult;
 #[cfg(not(target_arch = "wasm32"))]
-pub use crate::{base::Assets, disk_store::DiskAssetStore, store::DiskStore};
+pub use crate::{base::Assets, disk_store::DiskAssetStore};
 pub use crate::{
     cache::CachedAssets,
     evict::EvictAssets,

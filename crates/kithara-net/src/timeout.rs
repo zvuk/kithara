@@ -1,4 +1,4 @@
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -14,12 +14,19 @@ use crate::{
 /// Timeout decorator for Net implementations
 pub struct TimeoutNet<N> {
     inner: N,
+    #[cfg(not(target_arch = "wasm32"))]
     timeout: Duration,
 }
 
 impl<N: Net> TimeoutNet<N> {
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn new(inner: N, timeout: Duration) -> Self {
         Self { inner, timeout }
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn new(inner: N, _timeout: Duration) -> Self {
+        Self { inner }
     }
 }
 

@@ -7,7 +7,7 @@
 //! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
 //! No external network required.
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 use std::{
     io::{Read, Seek, SeekFrom},
     sync::Arc,

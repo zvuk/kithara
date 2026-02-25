@@ -55,11 +55,14 @@ impl<S> ::rodio::Source for Audio<S> {
         self.spec.sample_rate
     }
 
-    fn total_duration(&self) -> Option<std::time::Duration> {
+    fn total_duration(&self) -> Option<kithara_platform::time::Duration> {
         self.timeline.total_duration()
     }
 
-    fn try_seek(&mut self, pos: std::time::Duration) -> Result<(), ::rodio::source::SeekError> {
+    fn try_seek(
+        &mut self,
+        pos: kithara_platform::time::Duration,
+    ) -> Result<(), ::rodio::source::SeekError> {
         self.seek(pos)
             .map_err(|err| ::rodio::source::SeekError::Other(Box::new(err)))
     }

@@ -14,3 +14,4 @@ mod kithara_storage;
 mod kithara_stream;
 mod kithara_wasm;
 mod multi_instance;
+mod timeout_guard;

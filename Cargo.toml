@@ -131,7 +131,6 @@ futures = "0.3.31"
 rayon = { version = "1.10", features = ["web_spin_lock"] }
 
 # channels/buffers
-kanal = "0.1.1"
 bytes = "1.11.1"
 ringbuf = "0.4.8"
 slice_ring_buf = "0.3"

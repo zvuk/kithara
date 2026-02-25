@@ -299,9 +299,18 @@ where
 
         loop {
             if stop_rx.try_recv().is_ok() {
+                if let Some(session) = ui_session.as_mut() {
+                    session.log_line("loop exit reason=stop_signal")?;
+                }
                 break;
             }
             if sink.empty() {
+                if let Some(session) = ui_session.as_mut() {
+                    session.log_line(&format!(
+                        "loop exit reason=sink_empty pos={:?}",
+                        sink.get_pos()
+                    ))?;
+                }
                 break;
             }
 

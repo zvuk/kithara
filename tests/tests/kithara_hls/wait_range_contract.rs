@@ -5,8 +5,8 @@
 //! 1. Rapid seek burst never returns premature EOF.
 //! 2. After seek burst, sequential tail read is contiguous and exact.
 
+use kithara_platform::time::Duration;
 use std::io::{Read, Seek, SeekFrom};
-use std::time::Duration;
 
 use kithara::{
     assets::StoreOptions,

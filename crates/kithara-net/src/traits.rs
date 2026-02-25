@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
 use tokio_util::sync::CancellationToken;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(all(not(target_arch = "wasm32"), any(test, feature = "test-utils")))]
 use unimock::unimock;
 use url::Url;
 

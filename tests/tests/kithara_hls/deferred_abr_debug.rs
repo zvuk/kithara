@@ -2,8 +2,8 @@
 
 //! Diagnostic test for `sequential_read_across_segments_maintains_variant`
 
+use kithara_platform::time::Duration;
 use std::io::Read;
-use std::time::Duration;
 
 use fixture::TestServer;
 use kithara::{

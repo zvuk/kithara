@@ -14,6 +14,7 @@ use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_platform::{Mutex, ThreadPool};
 use portable_atomic::AtomicF32;
+use ringbuf::traits::Consumer;
 use tokio::sync::broadcast;
 use tracing::{debug, warn};
 
@@ -376,7 +377,7 @@ impl PlayerImpl {
         };
 
         let mut out = Vec::new();
-        while let Ok(Some(notification)) = state.notification_rx.try_recv() {
+        while let Some(notification) = state.notification_rx.lock().try_pop() {
             out.push(format!("{notification:?}"));
         }
         out
@@ -499,15 +500,7 @@ impl PlayerImpl {
     fn send_to_slot(&self, cmd: PlayerCmd) -> Result<(), PlayError> {
         let slot_id = (*self.current_slot.lock())
             .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
-        let tx = self
-            .engine
-            .slot_cmd_tx(slot_id)
-            .ok_or_else(|| PlayError::Internal("slot handle not found".into()))?;
-        match tx.try_send(cmd) {
-            Ok(true) => Ok(()),
-            Ok(false) => Err(PlayError::Internal("slot channel full".into())),
-            Err(_) => Err(PlayError::Internal("slot channel closed".into())),
-        }
+        self.engine.send_slot_cmd(slot_id, cmd)
     }
 
     /// Load the current queue item into the active slot.

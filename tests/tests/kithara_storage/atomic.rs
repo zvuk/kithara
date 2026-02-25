@@ -1,5 +1,5 @@
 #[cfg(not(target_arch = "wasm32"))]
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 #[cfg(target_arch = "wasm32")]
 use kithara::storage::MemResource;

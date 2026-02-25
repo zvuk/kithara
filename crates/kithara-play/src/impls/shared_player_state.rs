@@ -10,8 +10,9 @@ use std::{
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use kithara_platform::{Receiver, Sender, bounded};
+use kithara_platform::Mutex;
 use portable_atomic::{AtomicF64, AtomicU32};
+use ringbuf::{HeapCons, HeapProd, HeapRb, traits::Split};
 
 use super::player_notification::PlayerNotification;
 
@@ -19,7 +20,6 @@ use super::player_notification::PlayerNotification;
 ///
 /// Position and duration are updated by the processor every render cycle.
 /// Notifications flow from the processor to the main thread via a bounded channel.
-#[derive(Debug)]
 pub(crate) struct SharedPlayerState {
     /// Whether playback is active.
     pub(crate) playing: AtomicBool,
@@ -38,9 +38,9 @@ pub(crate) struct SharedPlayerState {
     /// Diagnostic: how many times `process()` has been called on the audio thread.
     pub(crate) process_count: AtomicU64,
     /// Sender for processor-to-main-thread notifications.
-    pub(crate) notification_tx: Sender<PlayerNotification>,
+    pub(crate) notification_tx: Mutex<HeapProd<PlayerNotification>>,
     /// Receiver for processor-to-main-thread notifications.
-    pub(crate) notification_rx: Receiver<PlayerNotification>,
+    pub(crate) notification_rx: Mutex<HeapCons<PlayerNotification>>,
 }
 
 impl SharedPlayerState {
@@ -49,7 +49,7 @@ impl SharedPlayerState {
     /// The notification channel is bounded to 32 to avoid dropping
     /// notifications during high activity while keeping memory bounded.
     pub(crate) fn new() -> Self {
-        let (tx, rx) = bounded(32);
+        let (tx, rx) = HeapRb::<PlayerNotification>::new(32).split();
         Self {
             playing: AtomicBool::new(false),
             seek_epoch: AtomicU64::new(0),
@@ -57,8 +57,8 @@ impl SharedPlayerState {
             duration: AtomicF64::new(0.0),
             sample_rate: AtomicU32::new(0),
             process_count: AtomicU64::new(0),
-            notification_tx: tx,
-            notification_rx: rx,
+            notification_tx: Mutex::new(tx),
+            notification_rx: Mutex::new(rx),
         }
     }
 
@@ -78,6 +78,7 @@ impl SharedPlayerState {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
 
@@ -116,13 +117,14 @@ mod tests {
         let state = SharedPlayerState::new();
         let sent = state
             .notification_tx
-            .try_send(PlayerNotification::TrackLoaded(Arc::from("test.mp3")));
+            .lock()
+            .try_push(PlayerNotification::TrackLoaded(Arc::from("test.mp3")));
         assert!(sent.is_ok());
 
-        let received = state.notification_rx.try_recv();
-        assert!(received.is_ok());
+        let received = state.notification_rx.lock().try_pop();
+        assert!(received.is_some());
         assert!(matches!(
-            received.unwrap().unwrap(),
+            received.unwrap(),
             PlayerNotification::TrackLoaded(src) if &*src == "test.mp3"
         ));
     }

@@ -110,7 +110,7 @@ async fn next_chunk_with_timeout(
     tokio,
     browser,
     timeout(Duration::from_secs(60)),
-    env(NO_PROXY = "stream.silvercomet.top"),
+    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top"),
     soft_fail("connection", "timeout", "refused", "resolve", "dns", "network")
 )]
 #[case::mmap(false)]
@@ -119,7 +119,9 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::INFO)
-        .with_env_filter(kithara_test_utils::rust_log_filter("kithara_audio=info,kithara_file=info"))
+        .with_env_filter(kithara_test_utils::rust_log_filter(
+            "kithara_audio=info,kithara_file=info",
+        ))
         .try_init();
 
     let url: url::Url = MP3_URL.parse().expect("valid URL");
@@ -167,7 +169,8 @@ async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir:
     audio.preload();
 
     info!(ephemeral, "Phase 1: warmup");
-    let warmup_deadline = kithara_platform::time::Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
+    let warmup_deadline =
+        kithara_platform::time::Instant::now() + Duration::from_secs(WARMUP_TIMEOUT_SECS);
     while kithara_platform::time::Instant::now() < warmup_deadline {
         let _ = next_chunk_with_timeout(
             &mut audio,

@@ -2,7 +2,6 @@ use std::{
     ops::Range,
     slice,
     sync::{Arc, atomic::Ordering},
-    time::Duration,
 };
 
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
@@ -19,7 +18,7 @@ use kithara_hls::internal::{
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     spawn_blocking,
-    time::{self as time, Instant},
+    time::{Duration, Instant, sleep, timeout},
 };
 use kithara_storage::{StorageResource, WaitOutcome};
 use kithara_stream::{AudioCodec, Source, StreamError, Timeline};
@@ -191,12 +190,12 @@ async fn wait_range_and_take_request(
         if Instant::now() > deadline {
             panic!("expected on-demand segment request");
         }
-        time::sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
     };
 
     shared.cancel.cancel();
     shared.condvar.notify_all();
-    let _ = time::timeout(Duration::from_millis(400), handle)
+    let _ = timeout(Duration::from_millis(400), handle)
         .await
         .expect("wait_range task should complete")
         .expect("wait_range task should not panic");
@@ -219,7 +218,7 @@ async fn seek_time_anchor_resolves_segment_and_queues_request() {
         let _ = shared.timeline.initiate_seek(Duration::ZERO);
     }
     shared.timeline.complete_seek(9);
-    shared.current_variant_index.store(0, Ordering::Relaxed);
+    shared.abr_variant_index.store(0, Ordering::Relaxed);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
     let anchor = Source::seek_time_anchor(&mut source, Duration::from_millis(8_500))
@@ -269,7 +268,7 @@ fn media_info_uses_reader_offset_variant_instead_of_last_loaded_segment() {
 
     // Variant fence path can expose the target variant before reader_offset advances.
     shared.timeline.set_byte_position(0);
-    shared.current_variant_index.store(1, Ordering::Release);
+    shared.abr_variant_index.store(1, Ordering::Release);
     set_source_variant_fence(&mut source, Some(0));
     let hinted_info = Source::media_info(&source).expect("media info from hinted variant");
     assert_eq!(hinted_info.codec, Some(AudioCodec::Flac));
@@ -287,7 +286,7 @@ fn media_info_uses_hinted_variant_when_segments_are_flushed() {
     ));
     let source = make_test_source(Arc::clone(&shared), cancel);
 
-    shared.current_variant_index.store(1, Ordering::Release);
+    shared.abr_variant_index.store(1, Ordering::Release);
     let info = Source::media_info(&source).expect("media info from hinted variant");
     assert_eq!(info.codec, Some(AudioCodec::Flac));
 }
@@ -327,7 +326,7 @@ fn format_change_segment_range_uses_metadata_when_segments_are_flushed() {
     ));
     let source = make_test_source(Arc::clone(&shared), cancel);
 
-    shared.current_variant_index.store(1, Ordering::Release);
+    shared.abr_variant_index.store(1, Ordering::Release);
     assert_eq!(Source::format_change_segment_range(&source), Some(0..100));
 }
 
@@ -363,7 +362,7 @@ fn format_change_segment_range_prefers_loaded_init_bearing_segment() {
     }
     let source = make_test_source(Arc::clone(&shared), cancel);
 
-    shared.current_variant_index.store(1, Ordering::Release);
+    shared.abr_variant_index.store(1, Ordering::Release);
     assert_eq!(Source::format_change_segment_range(&source), Some(300..440));
 }
 
@@ -390,7 +389,7 @@ fn format_change_segment_range_falls_back_to_metadata_without_loaded_init() {
     }
     let source = make_test_source(Arc::clone(&shared), cancel);
 
-    shared.current_variant_index.store(1, Ordering::Release);
+    shared.abr_variant_index.store(1, Ordering::Release);
     // Metadata for variant 1 is still the source of init-bearing segment range.
     assert_eq!(Source::format_change_segment_range(&source), Some(0..100));
 }
@@ -411,6 +410,7 @@ fn set_seek_epoch_flushes_playback_segments() {
     }
     shared.timeline.set_eof(true);
     shared.timeline.set_download_position(200);
+    shared.had_midstream_switch.store(true, Ordering::Release);
     // Set epoch to 3 via Timeline
     for _ in 0..3 {
         let _ = shared.timeline.initiate_seek(Duration::ZERO);
@@ -424,6 +424,7 @@ fn set_seek_epoch_flushes_playback_segments() {
     assert!(!shared.timeline.eof());
     assert_eq!(shared.timeline.download_position(), 0);
     assert_eq!(shared.current_segment_index.load(Ordering::Acquire), 0);
+    assert!(!shared.had_midstream_switch.load(Ordering::Acquire));
     assert_eq!(shared.segments.lock().num_entries(), 0);
 }
 
@@ -769,7 +770,7 @@ async fn wait_range_waits_until_coverage_is_complete() {
     let shared_for_task = Arc::clone(&shared);
     let handle = spawn_blocking(move || source.wait_range(0..80));
 
-    time::sleep(Duration::from_millis(120)).await;
+    sleep(Duration::from_millis(120)).await;
     assert!(
         !handle.is_finished(),
         "wait_range returned early even though coverage is incomplete"
@@ -777,7 +778,7 @@ async fn wait_range_waits_until_coverage_is_complete() {
 
     cancel.cancel();
     shared_for_task.condvar.notify_all();
-    let result = time::timeout(Duration::from_millis(300), handle)
+    let result = timeout(Duration::from_millis(300), handle)
         .await
         .expect("wait_range task should complete")
         .expect("wait_range task should not panic");
@@ -799,7 +800,7 @@ async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) 
     let handle = spawn_blocking(move || source.wait_range(0..1024));
 
     // Give wait_range time to enter the loop
-    time::sleep(Duration::from_millis(20)).await;
+    sleep(Duration::from_millis(20)).await;
 
     match unblock {
         WaitRangeUnblock::Cancel => cancel.cancel(),
@@ -809,7 +810,7 @@ async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) 
         }
     }
 
-    let result = time::timeout(Duration::from_millis(200), handle)
+    let result = timeout(Duration::from_millis(200), handle)
         .await
         .expect("task should complete within 200ms")
         .expect("task should not panic");
@@ -833,7 +834,7 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
     let handle = spawn_blocking(move || source.wait_range(0..100));
 
     // Push a segment covering 0..100
-    time::sleep(Duration::from_millis(20)).await;
+    sleep(Duration::from_millis(20)).await;
     let segment = make_loaded_segment(0, 0, 0, 100);
     let segment_url = segment.media_url.clone();
     {
@@ -844,7 +845,7 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
     set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&full_mark));
     shared2.condvar.notify_all();
 
-    let result = time::timeout(Duration::from_millis(200), handle)
+    let result = timeout(Duration::from_millis(200), handle)
         .await
         .expect("task should complete within 200ms")
         .expect("task should not panic");
@@ -857,7 +858,7 @@ fn test_wait_range_flushing_interrupts_without_requesting_segment() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.current_variant_index.store(0, Ordering::Release);
+    shared.abr_variant_index.store(0, Ordering::Release);
 
     let _epoch = shared.timeline.initiate_seek(Duration::from_millis(1));
 
@@ -897,7 +898,7 @@ fn test_wait_range_stale_eof_overrides_multiple_initiate_seek_storm() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.current_variant_index.store(0, Ordering::Release);
+    shared.abr_variant_index.store(0, Ordering::Release);
 
     let total_bytes = 2_400u64;
     shared.timeline.set_eof(true);
@@ -906,7 +907,9 @@ fn test_wait_range_stale_eof_overrides_multiple_initiate_seek_storm() {
 
     // Simulate holding the seek key: multiple seek starts without completing the newest one yet.
     for idx in 0..12u64 {
-        let _ = shared.timeline.initiate_seek(Duration::from_millis(idx + 1));
+        let _ = shared
+            .timeline
+            .initiate_seek(Duration::from_millis(idx + 1));
     }
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
@@ -937,7 +940,7 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
 
     let handle = spawn_blocking(move || source.wait_range(3_488_300..3_489_324));
 
-    time::sleep(Duration::from_millis(20)).await;
+    sleep(Duration::from_millis(20)).await;
     let segment = make_loaded_segment(0, 17, 3_400_000, 200_000);
     let segment_url = segment.media_url.clone();
     {
@@ -954,7 +957,7 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     shared2.timeline.set_eof(false);
     shared2.condvar.notify_all();
 
-    let result = time::timeout(Duration::from_millis(200), handle)
+    let result = timeout(Duration::from_millis(200), handle)
         .await
         .expect("task should complete within 200ms")
         .expect("task should not panic");
@@ -997,7 +1000,7 @@ async fn test_wait_range_uses_active_variant_for_seek_request() {
         let mut segments = shared.segments.lock();
         segments.push(make_loaded_segment(1, 5, 500, 100));
     }
-    shared.current_variant_index.store(0, Ordering::Release);
+    shared.abr_variant_index.store(0, Ordering::Release);
 
     let request = wait_range_and_take_request(Arc::clone(&shared), source, 150..170).await;
     assert_eq!(request.variant, 0);
@@ -1009,7 +1012,7 @@ async fn test_wait_range_requeues_request_after_seek_epoch_change() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.current_variant_index.store(0, Ordering::Release);
+    shared.abr_variant_index.store(0, Ordering::Release);
     let first_epoch = shared.timeline.initiate_seek(Duration::ZERO);
     shared.timeline.complete_seek(first_epoch);
 
@@ -1025,7 +1028,7 @@ async fn test_wait_range_requeues_request_after_seek_epoch_change() {
             Instant::now() <= first_deadline,
             "expected initial on-demand request"
         );
-        time::sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
     };
     assert_eq!(first_request.seek_epoch, first_epoch);
 
@@ -1044,7 +1047,7 @@ async fn test_wait_range_requeues_request_after_seek_epoch_change() {
             Instant::now() <= second_deadline,
             "expected re-queued on-demand request for updated seek epoch"
         );
-        time::sleep(Duration::from_millis(10)).await;
+        sleep(Duration::from_millis(10)).await;
     };
 
     assert_eq!(second_request.variant, 0);
@@ -1053,7 +1056,7 @@ async fn test_wait_range_requeues_request_after_seek_epoch_change() {
 
     cancel.cancel();
     shared.condvar.notify_all();
-    let result = time::timeout(Duration::from_millis(400), handle)
+    let result = timeout(Duration::from_millis(400), handle)
         .await
         .expect("wait_range task should complete")
         .expect("wait_range task should not panic");
@@ -1065,12 +1068,63 @@ async fn test_wait_range_without_size_map_uses_segment_zero_fallback() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_without_size_map();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    shared.current_variant_index.store(0, Ordering::Release);
+    shared.abr_variant_index.store(0, Ordering::Release);
     let source = make_test_source(Arc::clone(&shared), cancel.clone());
 
     let request = wait_range_and_take_request(Arc::clone(&shared), source, 0..128).await;
     assert_eq!(request.variant, 0);
     assert_eq!(request.segment_index, 0);
+}
+
+#[kithara::test(tokio, browser)]
+async fn test_wait_range_without_size_map_emits_seek_fallback_diagnostic() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_without_size_map();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    shared.abr_variant_index.store(0, Ordering::Release);
+    let source = make_test_source(Arc::clone(&shared), cancel.clone());
+    let mut events = subscribe_source_events(&source);
+
+    let request = wait_range_and_take_request(Arc::clone(&shared), source, 0..128).await;
+    assert_eq!(request.variant, 0);
+    assert_eq!(request.segment_index, 0);
+
+    let diag = timeout(Duration::from_secs(1), async {
+        loop {
+            match events.recv().await {
+                Ok(Event::Hls(HlsEvent::Seek {
+                    stage,
+                    seek_epoch,
+                    variant,
+                    offset,
+                    from_segment_index,
+                    to_segment_index,
+                })) if stage == "wait_range_metadata_fallback" => {
+                    break (
+                        stage,
+                        seek_epoch,
+                        variant,
+                        offset,
+                        from_segment_index,
+                        to_segment_index,
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    panic!("expected seek fallback diagnostic, got channel error: {error}")
+                }
+            }
+        }
+    })
+    .await
+    .expect("seek fallback diagnostic should arrive");
+
+    assert_eq!(diag.0, "wait_range_metadata_fallback");
+    assert_eq!(diag.1, 0);
+    assert_eq!(diag.2, 0);
+    assert_eq!(diag.3, 0);
+    assert_eq!(diag.4, 0);
+    assert_eq!(diag.5, 0);
 }
 
 #[kithara::test(tokio, browser)]
@@ -1086,14 +1140,14 @@ async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
         if let Ok(Ok(Event::Hls(HlsEvent::SeekMetadataMiss { .. }))) =
-            time::timeout(Duration::from_millis(50), events.recv()).await
+            timeout(Duration::from_millis(50), events.recv()).await
         {
             saw_metadata_miss = true;
             break;
         }
     }
 
-    let result = time::timeout(Duration::from_secs(3), handle)
+    let result = timeout(Duration::from_secs(3), handle)
         .await
         .expect("wait_range should fail fast")
         .expect("wait_range task should not panic");
@@ -1109,4 +1163,130 @@ async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
     }
 
     assert!(saw_metadata_miss, "expected SeekMetadataMiss diagnostic");
+}
+
+#[kithara::test(browser)]
+async fn test_wait_range_stalled_on_demand_request_returns_interrupted() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    shared.abr_variant_index.store(0, Ordering::Release);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel);
+    let handle = spawn_blocking(move || source.wait_range(150..170));
+
+    let request_deadline = Instant::now() + Duration::from_secs(2);
+    let request = loop {
+        if let Some(request) = shared.segment_requests.pop() {
+            break request;
+        }
+        sleep(Duration::from_millis(10)).await;
+        assert!(
+            Instant::now() <= request_deadline,
+            "expected on-demand request before wasm stall timeout"
+        );
+    };
+
+    let stalled_budget_deadline = Instant::now() + Duration::from_secs(2);
+    while !handle.is_finished() {
+        assert!(
+            Instant::now() <= stalled_budget_deadline,
+            "wait_range should self-interrupt on stalled on-demand request"
+        );
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    assert_eq!(request.variant, 0);
+    assert_eq!(request.segment_index, 1);
+
+    let result = handle.await.expect("wait_range task should not panic");
+    assert!(matches!(result, Ok(WaitOutcome::Interrupted)));
+}
+
+#[kithara::test(browser)]
+async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_arrives() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    shared.abr_variant_index.store(0, Ordering::Release);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+    let coverage = source_coverage(&source);
+
+    let handle = spawn_blocking(move || source.wait_range(150..170));
+
+    let request_deadline = Instant::now() + Duration::from_secs(2);
+    let request = loop {
+        if let Some(request) = shared.segment_requests.pop() {
+            break request;
+        }
+        sleep(Duration::from_millis(10)).await;
+        assert!(
+            Instant::now() <= request_deadline,
+            "expected on-demand request before timeout"
+        );
+    };
+    assert_eq!(request.variant, 0);
+    assert_eq!(request.segment_index, 1);
+
+    {
+        let segment = make_loaded_segment(0, 1, 100, 100);
+        let segment_url = segment.media_url.clone();
+        {
+            let mut segments = shared.segments.lock();
+            segments.push(segment);
+        }
+        let full_mark = 100..200;
+        set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&full_mark));
+    }
+    shared.condvar.notify_all();
+
+    let result = timeout(Duration::from_secs(1), handle)
+        .await
+        .expect("wait_range should not hang while data is pushed")
+        .expect("wait_range task should not panic");
+    assert!(matches!(result, Ok(WaitOutcome::Ready)));
+}
+
+#[kithara::test(browser)]
+async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    shared.abr_variant_index.store(0, Ordering::Release);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+    let handle = spawn_blocking(move || source.wait_range(150..170));
+
+    let request_deadline = Instant::now() + Duration::from_secs(2);
+    let first_request = loop {
+        if let Some(request) = shared.segment_requests.pop() {
+            break request;
+        }
+        sleep(Duration::from_millis(10)).await;
+        assert!(
+            Instant::now() <= request_deadline,
+            "expected an on-demand request before timeout"
+        );
+    };
+    assert_eq!(first_request.variant, 0);
+    assert_eq!(first_request.segment_index, 1);
+
+    let dedupe_deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() <= dedupe_deadline {
+        assert!(
+            shared.segment_requests.pop().is_none(),
+            "wait_range should not duplicate on-demand requests while stalled"
+        );
+        shared.condvar.notify_all();
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    cancel.cancel();
+    shared.condvar.notify_all();
+    let result = timeout(Duration::from_millis(500), handle)
+        .await
+        .expect("wait_range should exit after cancellation")
+        .expect("wait_range task should not panic");
+    assert!(matches!(result, Ok(WaitOutcome::Interrupted) | Err(_)));
 }

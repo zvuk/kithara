@@ -26,6 +26,7 @@ fallible-iterator = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
+ringbuf = { workspace = true }
 rodio = { workspace = true, optional = true }
 tracing = { workspace = true }
 bytes = { workspace = true }

@@ -90,7 +90,7 @@ fn perf_decoder_scenarios(#[case] label: &'static str, #[case] scenario: PerfSce
         PerfScenario::Throughput => {
             let mut decoder = create_wav_decoder(44100 * 5);
 
-            let start = std::time::Instant::now();
+            let start = kithara_platform::time::Instant::now();
             let mut total_samples = 0;
             hotpath::measure_block!("decode_all_chunks", {
                 while let Ok(Some(chunk)) = decoder.next_chunk() {

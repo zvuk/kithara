@@ -16,7 +16,8 @@ use firewheel::{
     node::{AudioNode, AudioNodeInfo, AudioNodeProcessor, ConstructProcessorContext, EmptyConfig},
 };
 use kithara_bufpool::PcmPool;
-use kithara_platform::Receiver;
+use kithara_platform::Mutex;
+use ringbuf::{HeapCons, HeapRb, traits::Split};
 
 use super::{
     player_processor::{PlayerCmd, PlayerNodeProcessor},
@@ -34,14 +35,14 @@ use super::{
 /// Use [`PlayerNode::with_channel`] to create a node wired to a command
 /// channel and shared state. [`PlayerNode::new`] creates a standalone
 /// node (useful for tests or when wiring is deferred to Task 9).
-#[derive(Clone, Debug, Diff, Patch)]
+#[derive(Clone, Diff, Patch)]
 pub(crate) struct PlayerNode {
     /// Whether the node is active (used by Diff/Patch for graph updates).
     pub(crate) active: bool,
 
-    /// Receiver for commands from the main thread. Cloned into the processor.
+    /// Receiver for commands from the main thread. Taken by the processor.
     #[diff(skip)]
-    cmd_rx: Receiver<PlayerCmd>,
+    cmd_rx: Arc<Mutex<Option<HeapCons<PlayerCmd>>>>,
 
     /// PCM buffer pool for scratch buffer allocation.
     #[diff(skip)]
@@ -60,10 +61,10 @@ impl PlayerNode {
     /// from the main thread.
     #[cfg(test)]
     pub(crate) fn new() -> Self {
-        let (_, rx) = kithara_platform::bounded(1);
+        let (_, rx) = HeapRb::<PlayerCmd>::new(1).split();
         Self {
             active: true,
-            cmd_rx: rx,
+            cmd_rx: Arc::new(Mutex::new(Some(rx))),
             pcm_pool: kithara_bufpool::pcm_pool().clone(),
             shared_state: Arc::new(SharedPlayerState::new()),
         }
@@ -71,13 +72,13 @@ impl PlayerNode {
 
     /// Create a player node wired to the given command channel and shared state.
     pub(crate) fn with_channel(
-        cmd_rx: Receiver<PlayerCmd>,
+        cmd_rx: HeapCons<PlayerCmd>,
         shared_state: Arc<SharedPlayerState>,
         pcm_pool: PcmPool,
     ) -> Self {
         Self {
             active: true,
-            cmd_rx,
+            cmd_rx: Arc::new(Mutex::new(Some(cmd_rx))),
             pcm_pool,
             shared_state,
         }
@@ -91,7 +92,7 @@ impl PlayerNode {
 
     /// Get a reference to the command receiver.
     #[expect(dead_code, reason = "accessor for future use")]
-    pub(crate) fn cmd_rx(&self) -> &Receiver<PlayerCmd> {
+    pub(crate) fn cmd_rx(&self) -> &Arc<Mutex<Option<HeapCons<PlayerCmd>>>> {
         &self.cmd_rx
     }
 }
@@ -114,8 +115,12 @@ impl AudioNode for PlayerNode {
         cx: ConstructProcessorContext,
     ) -> impl AudioNodeProcessor {
         let sample_rate = cx.stream_info.sample_rate;
+        let cmd_rx = self.cmd_rx.lock().take().unwrap_or_else(|| {
+            let (_, rx) = HeapRb::<PlayerCmd>::new(1).split();
+            rx
+        });
         PlayerNodeProcessor::new(
-            self.cmd_rx.clone(),
+            cmd_rx,
             Arc::clone(&self.shared_state),
             sample_rate,
             &self.pcm_pool,
@@ -126,6 +131,7 @@ impl AudioNode for PlayerNode {
 #[cfg(test)]
 mod tests {
     use kithara_test_utils::kithara;
+    use ringbuf::traits::{Consumer, Producer};
 
     use super::*;
 
@@ -149,15 +155,19 @@ mod tests {
     #[case(PlayerCmd::SetPaused(false))]
     #[case(PlayerCmd::SetFadeDuration(0.25))]
     fn player_node_with_channel(#[case] cmd: PlayerCmd) {
-        let (tx, rx) = kithara_platform::bounded(8);
+        let (mut tx, rx) = HeapRb::<PlayerCmd>::new(8).split();
         let shared_state = Arc::new(SharedPlayerState::new());
         let node = PlayerNode::with_channel(rx, shared_state, kithara_bufpool::pcm_pool().clone());
         assert!(node.active);
 
         // Verify the channel is connected
-        tx.send(cmd).ok();
-        let received = node.cmd_rx.try_recv();
-        assert!(matches!(received, Ok(Some(_))));
+        tx.try_push(cmd).ok();
+        let received = node
+            .cmd_rx
+            .lock()
+            .as_mut()
+            .and_then(|cmd_rx| cmd_rx.try_pop());
+        assert!(received.is_some());
     }
 
     #[kithara::test]

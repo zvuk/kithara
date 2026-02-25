@@ -169,7 +169,6 @@ pub(crate) struct HlsDownloader {
     pub(crate) force_init_for_seek: bool,
     pub(crate) sent_init_for_variant: HashSet<usize>,
     pub(crate) abr: AbrController<ThroughputEstimator>,
-    pub(crate) byte_offset: u64,
     pub(crate) shared: Arc<SharedSegments>,
     pub(crate) bus: EventBus,
     /// Backpressure threshold. None = no backpressure.
@@ -197,6 +196,10 @@ impl HlsDownloader {
         segment_index: usize,
     ) {
         let previous_variant = self.last_committed_variant;
+        let download_position = self
+            .playlist_state
+            .segment_byte_offset(variant, segment_index)
+            .unwrap_or(0);
         self.active_seek_epoch = seek_epoch;
         self.shared.timeline.set_eof(false);
         self.shared
@@ -204,10 +207,6 @@ impl HlsDownloader {
             .store(false, Ordering::Release);
         self.current_segment_index = segment_index;
         self.gap_scan_start_segment = segment_index;
-        self.byte_offset = self
-            .playlist_state
-            .segment_byte_offset(variant, segment_index)
-            .unwrap_or(0);
         self.force_init_for_seek = previous_variant
             .and_then(|index| self.playlist_state.variant_codec(index))
             .zip(self.playlist_state.variant_codec(variant))
@@ -217,7 +216,9 @@ impl HlsDownloader {
         // go through synthetic variant-switch init insertion.
         self.last_committed_variant = Some(variant);
         self.shared.timeline.set_total_bytes(None);
-        self.shared.timeline.set_download_position(0);
+        self.shared
+            .timeline
+            .set_download_position(download_position);
 
         let current_variant = self.abr.get_current_variant_index();
         if current_variant != variant {
@@ -467,16 +468,17 @@ impl HlsDownloader {
         };
 
         let had_midstream_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
+        let current_download = self.shared.timeline.download_position();
         let byte_offset = if is_midstream_switch || had_midstream_switch {
             // Variant switch: always use cumulative offset.
-            self.byte_offset
+            current_download
         } else {
             // Use metadata offset for correct positioning of both sequential
             // and on-demand (seek) loads. Metadata is kept in sync with actual
             // sizes via reconcile_metadata() after each commit.
             self.playlist_state
                 .segment_byte_offset(dl.variant, dl.segment_index)
-                .unwrap_or(self.byte_offset)
+                .unwrap_or(current_download)
         };
 
         let media_len = dl.media.len;
@@ -494,10 +496,8 @@ impl HlsDownloader {
         };
 
         let end = byte_offset + actual_size;
-        if end > self.byte_offset {
-            self.byte_offset = end;
-        }
-        self.shared.timeline.set_download_position(self.byte_offset);
+        let next_download = current_download.max(end);
+        self.shared.timeline.set_download_position(next_download);
 
         // Reconcile metadata: update this segment's size and recalculate subsequent
         // byte_offsets using the actual (possibly decrypted) size. For non-DRM streams
@@ -526,7 +526,7 @@ impl HlsDownloader {
         }
 
         self.bus.publish(HlsEvent::DownloadProgress {
-            offset: self.byte_offset,
+            offset: next_download,
             total: None,
         });
 
@@ -654,10 +654,12 @@ impl HlsDownloader {
             return;
         }
 
-        if cached_end_offset > self.byte_offset {
-            self.byte_offset = cached_end_offset;
+        let current_download = self.shared.timeline.download_position();
+        if cached_end_offset > current_download {
+            self.shared
+                .timeline
+                .set_download_position(cached_end_offset);
         }
-        self.shared.timeline.set_download_position(self.byte_offset);
         if cached_count > self.current_segment_index {
             self.current_segment_index = cached_count;
         }
@@ -684,7 +686,7 @@ impl HlsDownloader {
             return result;
         }
 
-        let switch_byte = self.byte_offset;
+        let switch_byte = self.shared.timeline.download_position();
         let switch_meta = self
             .playlist_state
             .segment_byte_offset(variant, segment_index)
@@ -889,7 +891,7 @@ impl HlsDownloader {
         self.bus.publish(HlsEvent::SegmentStart {
             variant: req.variant,
             segment_index: req.segment_index,
-            byte_offset: self.byte_offset,
+            byte_offset: self.shared.timeline.download_position(),
         });
 
         let need_init =
@@ -994,6 +996,18 @@ impl HlsDownloader {
             );
         }
 
+        let stream_end = self
+            .playlist_state
+            .total_variant_size(variant)
+            .unwrap_or_else(|| self.shared.segments.lock().max_end_offset());
+        let playback_at_end = stream_end == 0 || self.shared.timeline.byte_position() >= stream_end;
+        if !playback_at_end {
+            self.shared.timeline.set_eof(false);
+            self.shared.condvar.notify_all();
+            yield_now().await;
+            return true;
+        }
+
         if !self.shared.timeline.eof() {
             debug!("reached end of playlist");
             self.shared.timeline.set_eof(true);
@@ -1004,7 +1018,7 @@ impl HlsDownloader {
     }
 
     fn rewind_reference_variant(&self, fallback_variant: usize) -> usize {
-        let current_variant = self.shared.current_variant_index.load(Ordering::Acquire);
+        let current_variant = self.abr.get_current_variant_index();
         if current_variant < self.playlist_state.num_variants() {
             current_variant
         } else {
@@ -1068,7 +1082,7 @@ impl HlsDownloader {
             self.bus.publish(HlsEvent::SegmentStart {
                 variant,
                 segment_index: seg_idx,
-                byte_offset: self.byte_offset,
+                byte_offset: self.shared.timeline.download_position(),
             });
 
             let plan_need_init = should_request_init(need_init, seg_idx);
@@ -1272,7 +1286,7 @@ impl Downloader for HlsDownloader {
 mod tests {
     use std::{
         collections::HashSet,
-        sync::{atomic::Ordering, Arc},
+        sync::{Arc, atomic::Ordering},
         time::Duration,
     };
 
@@ -1289,9 +1303,9 @@ mod tests {
     use url::Url;
 
     use super::{
-        DownloadState, HlsDownloader, LoadedSegment, classify_variant_transition,
-        first_missing_segment, is_cross_codec_switch, is_stale_epoch, should_request_init,
-        AbrDecision, AbrReason,
+        AbrDecision, AbrReason, DownloadState, HlsDownloader, LoadedSegment,
+        classify_variant_transition, first_missing_segment, is_cross_codec_switch, is_stale_epoch,
+        should_request_init,
     };
     use crate::{
         config::HlsConfig,
@@ -1522,17 +1536,81 @@ mod tests {
             });
         }
 
-        downloader.shared.current_variant_index.store(0, Ordering::Release);
+        downloader
+            .shared
+            .abr_variant_index
+            .store(0, Ordering::Release);
         downloader.shared.timeline.set_eof(false);
-        assert!(downloader
-            .handle_tail_state(1, 2)
-            .await);
+        downloader.shared.timeline.set_byte_position(200);
+        assert!(downloader.handle_tail_state(1, 2).await);
         assert!(
             downloader.shared.timeline.eof(),
             "playlist should reach EOF when committed variant has no missing tail gaps"
         );
         assert_eq!(downloader.current_segment_index, 2);
         assert_eq!(downloader.last_committed_variant, Some(0));
+    }
+
+    #[kithara::test(tokio)]
+    async fn tail_state_keeps_eof_false_when_playback_not_at_end() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            2,
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+        let coverage = make_coverage_manager();
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            coverage,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.last_committed_variant = Some(0);
+        downloader.current_segment_index = 2;
+        downloader
+            .shared
+            .abr_variant_index
+            .store(0, Ordering::Release);
+        downloader.shared.timeline.set_byte_position(0);
+        downloader.shared.timeline.set_eof(false);
+        {
+            let mut segments = downloader.shared.segments.lock();
+            let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
+            segments.push(LoadedSegment {
+                variant: 0,
+                segment_index: 0,
+                byte_offset: 0,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url.clone(),
+            });
+            segments.push(LoadedSegment {
+                variant: 0,
+                segment_index: 1,
+                byte_offset: 100,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url,
+            });
+        }
+
+        assert!(downloader.handle_tail_state(0, 2).await);
+        assert!(
+            !downloader.shared.timeline.eof(),
+            "downloader must not set eof while playback position is not at stream end"
+        );
     }
 
     #[kithara::test(tokio)]
@@ -1560,7 +1638,10 @@ mod tests {
 
         downloader.last_committed_variant = Some(1);
         downloader.current_segment_index = 3;
-        downloader.shared.current_variant_index.store(0, Ordering::Release);
+        downloader
+            .shared
+            .abr_variant_index
+            .store(0, Ordering::Release);
         {
             let mut segments = downloader.shared.segments.lock();
             let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
@@ -1594,15 +1675,17 @@ mod tests {
         }
 
         downloader.shared.timeline.set_eof(false);
-        assert!(downloader
-            .handle_tail_state(1, 3)
-            .await);
+        downloader.shared.timeline.set_byte_position(300);
+        assert!(downloader.handle_tail_state(1, 3).await);
         assert!(
             downloader.shared.timeline.eof(),
             "playlist should emit EOF when stale committed variant is unrelated to tail gaps"
         );
         assert_eq!(downloader.current_segment_index, 3);
-        assert_eq!(downloader.shared.current_variant_index.load(Ordering::Acquire), 0);
+        assert_eq!(
+            downloader.shared.abr_variant_index.load(Ordering::Acquire),
+            0
+        );
     }
 
     #[kithara::test(tokio)]
@@ -1630,7 +1713,10 @@ mod tests {
 
         downloader.last_committed_variant = Some(0);
         downloader.current_segment_index = 2;
-        downloader.shared.current_variant_index.store(1, Ordering::Release);
+        downloader
+            .shared
+            .abr_variant_index
+            .store(1, Ordering::Release);
         {
             let mut segments = downloader.shared.segments.lock();
             let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
@@ -1655,14 +1741,88 @@ mod tests {
         }
 
         downloader.shared.timeline.set_eof(false);
-        assert!(downloader
-            .handle_tail_state(1, 2)
-            .await);
+        downloader.shared.timeline.set_byte_position(200);
+        assert!(downloader.handle_tail_state(1, 2).await);
         assert!(
             downloader.shared.timeline.eof(),
             "playlist should reach EOF when tail is committed on different variant"
         );
         assert_eq!(downloader.current_segment_index, 2);
+    }
+
+    #[kithara::test(tokio)]
+    async fn tail_state_does_not_rewind_from_tail_when_playback_not_at_end() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+        let coverage = make_coverage_manager();
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            coverage,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.last_committed_variant = Some(0);
+        downloader.current_segment_index = 3;
+        downloader
+            .shared
+            .abr_variant_index
+            .store(1, Ordering::Release);
+        downloader
+            .shared
+            .had_midstream_switch
+            .store(true, Ordering::Release);
+        {
+            let mut segments = downloader.shared.segments.lock();
+            let media_url = Url::parse("https://example.com/seg-1-0").expect("valid segment URL");
+            segments.push(LoadedSegment {
+                variant: 1,
+                segment_index: 0,
+                byte_offset: 0,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url.clone(),
+            });
+            segments.push(LoadedSegment {
+                variant: 1,
+                segment_index: 1,
+                byte_offset: 100,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url: media_url.clone(),
+            });
+            segments.push(LoadedSegment {
+                variant: 1,
+                segment_index: 2,
+                byte_offset: 200,
+                init_len: 0,
+                media_len: 100,
+                init_url: None,
+                media_url,
+            });
+        }
+        downloader.shared.timeline.set_eof(false);
+        downloader.shared.timeline.set_byte_position(150);
+
+        assert!(downloader.handle_tail_state(1, 3).await);
+        assert!(
+            !downloader.shared.timeline.eof(),
+            "tail handler must not force EOF while playback is not at stream end"
+        );
+        assert_eq!(downloader.current_segment_index, 3);
     }
 
     #[kithara::test(tokio)]

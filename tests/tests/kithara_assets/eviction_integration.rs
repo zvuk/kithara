@@ -6,11 +6,10 @@
 //! Each `AssetStore` is scoped to a single `asset_root`, so eviction between assets
 //! requires creating multiple `AssetStore` instances with the same `root_dir`.
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
-    internal::Assets,
     storage::ResourceExt,
 };
 use kithara_test_utils::temp_dir;
@@ -209,7 +208,7 @@ fn eviction_respects_max_assets_limit(
     }
 
     // Give eviction a moment to complete
-    kithara_platform::thread::sleep(Duration::from_millis(100));
+    kithara_platform::thread::backoff(Duration::from_millis(100));
 
     // Count how many asset directories exist
     let mut existing_count = 0;

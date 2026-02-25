@@ -96,6 +96,12 @@ impl<E: Estimator> AbrController<E> {
         self.current_variant.load(Ordering::Acquire)
     }
 
+    /// Shared atomic handle with current variant index.
+    #[must_use]
+    pub fn variant_index_handle(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.current_variant)
+    }
+
     pub fn push_throughput_sample(&mut self, sample: ThroughputSample) {
         self.estimator.push_sample(sample);
     }
@@ -318,7 +324,7 @@ impl AbrController<ThroughputEstimator> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use kithara_platform::time::Duration;
 
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};

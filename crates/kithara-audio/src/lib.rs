@@ -15,14 +15,15 @@
 //! use kithara_audio::{Audio, AudioConfig};
 //! use kithara_hls::{Hls, HlsConfig};
 //! use kithara_stream::Stream;
+//! use ringbuf::traits::Consumer;
 //!
 //! // HLS stream with decoding
 //! let config = AudioConfig::<Hls>::new(hls_config);
-//! let audio = Audio::<Stream<Hls>>::new(config).await?;
+//! let mut audio = Audio::<Stream<Hls>>::new(config).await?;
 //! sink.append(audio);  // rodio compatible
 //!
 //! // Or read PCM from channel directly
-//! while let Ok(chunk) = audio.pcm_rx().recv() {
+//! while let Some(chunk) = audio.pcm_rx().try_pop() {
 //!     play_audio(chunk);
 //! }
 //!

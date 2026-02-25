@@ -13,7 +13,10 @@ use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
 use kithara_events::{AudioEvent, Event, EventBus, SeekLifecycleStage};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_platform::{time::{Duration, Instant}, ThreadPool};
+use kithara_platform::{
+    ThreadPool,
+    time::{Duration, Instant},
+};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
 use tracing::{info, warn};
 use url::Url;
@@ -832,7 +835,11 @@ async fn fill_buffer_position_must_not_drift() {
     );
 }
 
-#[kithara::test(wasm, timeout(Duration::from_secs(90)), env(NO_PROXY = "stream.silvercomet.top"))]
+#[kithara::test(
+    wasm,
+    timeout(Duration::from_secs(90)),
+    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top")
+)]
 async fn wasm_player_real_hls_repro_freeze_probe() {
     init().await;
     info!("Starting wasm_player_real_hls_repro_freeze_probe");
@@ -859,7 +866,10 @@ async fn wasm_player_real_hls_repro_freeze_probe() {
     }
 
     player.play();
-    assert!(player.is_playing(), "real HLS repro: play() should start playback");
+    assert!(
+        player.is_playing(),
+        "real HLS repro: play() should start playback"
+    );
 
     let start_ms = player.get_position_ms();
     assert!(
@@ -911,9 +921,7 @@ async fn wasm_player_real_hls_repro_freeze_probe() {
                 }
                 Err(err) => warn!(
                     iteration = i,
-                    seek_ms,
-                    "real HLS repro: midstream seek failed: {:?}",
-                    err
+                    seek_ms, "real HLS repro: midstream seek failed: {:?}", err
                 ),
             }
         }

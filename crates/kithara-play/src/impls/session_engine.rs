@@ -2,17 +2,22 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
-use std::sync::OnceLock;
+use std::{
+    sync::{OnceLock, mpsc},
+    time::Duration,
+};
 
 use firewheel::{
     FirewheelConfig, Volume, diff::Memo, node::NodeID, nodes::volume_pan::VolumePanNode,
 };
 use kithara_bufpool::PcmPool;
-#[cfg(target_arch = "wasm32")]
-use kithara_platform::Mutex;
+use kithara_platform::{Mutex, ThreadPool};
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::Receiver;
-use kithara_platform::{Sender, ThreadPool, bounded};
+use ringbuf::{
+    HeapCons,
+    traits::{Consumer, Producer},
+};
+use ringbuf::{HeapProd, HeapRb, traits::Split};
 use tracing::warn;
 
 use super::{
@@ -143,31 +148,49 @@ enum Cmd {
 #[cfg(not(target_arch = "wasm32"))]
 struct CmdMsg {
     cmd: Cmd,
-    reply_tx: Sender<Reply>,
+    reply_tx: mpsc::SyncSender<Reply>,
 }
 
 enum Reply {
     Ok,
     PlayerRegistered(PlayerId),
     SessionDucking(SessionDuckingMode),
-    SlotAllocated(SlotId, Sender<PlayerCmd>, Arc<SharedPlayerState>, SharedEq),
+    SlotAllocated(
+        SlotId,
+        HeapProd<PlayerCmd>,
+        Arc<SharedPlayerState>,
+        SharedEq,
+    ),
     SampleRate(u32),
     Err(String),
 }
 
 pub(crate) struct SessionClient {
     #[cfg(not(target_arch = "wasm32"))]
-    cmd_tx: Sender<CmdMsg>,
+    cmd_tx: Mutex<HeapProd<CmdMsg>>,
     #[cfg(target_arch = "wasm32")]
     state: Mutex<SessionState>,
 }
 
 impl SessionClient {
     #[cfg(not(target_arch = "wasm32"))]
+    fn push_cmd(&self, msg: CmdMsg) -> Result<(), PlayError> {
+        let mut pending = msg;
+        loop {
+            match self.cmd_tx.lock().try_push(pending) {
+                Ok(()) => return Ok(()),
+                Err(returned) => {
+                    pending = returned;
+                    kithara_platform::thread::backoff(Duration::from_micros(100));
+                }
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn call(&self, cmd: Cmd) -> Result<Reply, PlayError> {
-        let (reply_tx, reply_rx) = bounded(1);
-        self.cmd_tx
-            .send(CmdMsg { cmd, reply_tx })
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        self.push_cmd(CmdMsg { cmd, reply_tx })
             .map_err(|_| PlayError::Internal("session thread gone".into()))?;
         reply_rx
             .recv()
@@ -191,7 +214,15 @@ impl SessionClient {
     pub(crate) fn allocate_slot(
         &self,
         player_id: PlayerId,
-    ) -> Result<(SlotId, Sender<PlayerCmd>, Arc<SharedPlayerState>, SharedEq), PlayError> {
+    ) -> Result<
+        (
+            SlotId,
+            HeapProd<PlayerCmd>,
+            Arc<SharedPlayerState>,
+            SharedEq,
+        ),
+        PlayError,
+    > {
         match self.call_ok(Cmd::AllocateSlot { player_id })? {
             Reply::SlotAllocated(slot_id, cmd_tx, shared_state, eq) => {
                 Ok((slot_id, cmd_tx, shared_state, eq))
@@ -306,12 +337,16 @@ impl SessionClient {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn engine_thread(cmd_rx: &Receiver<CmdMsg>) {
+fn engine_thread(mut cmd_rx: HeapCons<CmdMsg>) {
     let mut state = SessionState::new();
-    while let Ok(msg) = cmd_rx.recv() {
-        let CmdMsg { cmd, reply_tx } = msg;
-        let reply = run_cmd(&mut state, cmd);
-        let _ = reply_tx.send(reply);
+    loop {
+        if let Some(msg) = cmd_rx.try_pop() {
+            let CmdMsg { cmd, reply_tx } = msg;
+            let reply = run_cmd(&mut state, cmd);
+            let _ = reply_tx.send(reply);
+            continue;
+        }
+        kithara_platform::thread::backoff(Duration::from_micros(100));
     }
 }
 
@@ -321,10 +356,12 @@ pub(crate) fn session_client(thread_pool: Option<ThreadPool>) -> Arc<SessionClie
         static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
         SESSION_CLIENT
             .get_or_init(|| {
-                let (cmd_tx, cmd_rx) = bounded(64);
+                let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(64).split();
                 let pool = thread_pool.unwrap_or_default();
-                pool.spawn(move || engine_thread(&cmd_rx));
-                Arc::new(SessionClient { cmd_tx })
+                pool.spawn(move || engine_thread(cmd_rx));
+                Arc::new(SessionClient {
+                    cmd_tx: Mutex::new(cmd_tx),
+                })
             })
             .clone()
     }
@@ -643,7 +680,7 @@ fn allocate_slot(state: &mut SessionState, player_id: PlayerId) -> Result<Reply,
     let slot_id = SlotId(state.players[idx].next_slot_id);
     state.players[idx].next_slot_id += 1;
 
-    let (cmd_tx, cmd_rx) = bounded(32);
+    let (cmd_tx, cmd_rx) = HeapRb::<PlayerCmd>::new(32).split();
     let shared_state = Arc::new(SharedPlayerState::new());
     let shared_eq = state.players[idx].shared_eq.clone();
 

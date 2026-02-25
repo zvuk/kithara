@@ -1,7 +1,7 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use std::time::Duration;
+use kithara_platform::time::Duration;
 
 use axum::{
     Router,

@@ -331,7 +331,7 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use std::time::Duration;
+    use kithara_platform::time::Duration;
 
     use kithara_platform::thread;
     use tempfile::TempDir;
@@ -413,7 +413,7 @@ mod tests {
         let res2 = res.clone();
 
         let handle = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
+            thread::backoff(Duration::from_millis(50));
             res2.write_at(0, b"delayed data").unwrap();
         });
 
@@ -441,7 +441,7 @@ mod tests {
         let res2 = res.clone();
 
         let handle = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
+            thread::backoff(Duration::from_millis(50));
             res2.fail("test error".to_string());
         });
 
@@ -469,7 +469,7 @@ mod tests {
         let handle = thread::spawn({
             let cancel = cancel.clone();
             move || {
-                thread::sleep(Duration::from_millis(50));
+                thread::backoff(Duration::from_millis(50));
                 cancel.cancel();
             }
         });

@@ -436,37 +436,32 @@ impl Downloader for FileDownloader {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use kithara_assets::AssetStoreBuilder;
-    use kithara_coverage::Coverage;
-    use kithara_events::EventBus;
+    use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use kithara_net::{HttpClient, NetOptions};
+    use kithara_stream::Timeline;
     use kithara_test_utils::kithara;
-    use tempfile::TempDir;
+    use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
-    use crate::session::{Progress, SharedFileState};
 
     /// After a demand (on-demand range request) is polled during Sequential phase,
     /// the downloader should cancel sequential and switch to gap-filling.
     ///
     /// Currently FAILS: `poll_demand` does not change phase, so `plan()` still returns
     /// Step and the sequential download continues wasting bandwidth.
-    #[kithara::test(native, tokio)]
+    #[kithara::test(tokio)]
     async fn sequential_stops_after_demand() {
         let cancel = CancellationToken::new();
-        let dir = TempDir::new().unwrap();
 
         let store = AssetStoreBuilder::new()
-            .root_dir(dir.path())
+            .ephemeral(true)
             .asset_root(Some("test"))
             .cancel(cancel.clone())
             .build();
 
         let url: url::Url = "http://example.com/test.mp3".parse().unwrap();
-        let key = kithara_assets::ResourceKey::from_url(&url);
+        let key = ResourceKey::from_url(&url);
         let res = store.open_resource(&key).unwrap();
 
         let total: u64 = 10_000;
@@ -493,7 +488,7 @@ mod tests {
             io,
             writer,
             res,
-            progress: Arc::new(Progress::new(kithara_stream::Timeline::new())),
+            progress: Arc::new(Progress::new(Timeline::new())),
             bus: EventBus::new(16),
             total: Some(total),
             look_ahead_bytes: None,
