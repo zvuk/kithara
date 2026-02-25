@@ -333,6 +333,7 @@ mod tests {
 
     use std::time::Duration;
 
+    use kithara_platform::thread;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -411,8 +412,8 @@ mod tests {
         let res = create_resource(&dir);
         let res2 = res.clone();
 
-        let handle = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
             res2.write_at(0, b"delayed data").unwrap();
         });
 
@@ -439,8 +440,8 @@ mod tests {
         let res = create_resource(&dir);
         let res2 = res.clone();
 
-        let handle = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
             res2.fail("test error".to_string());
         });
 
@@ -465,10 +466,10 @@ mod tests {
         )
         .expect("open cancel test resource");
 
-        let handle = std::thread::spawn({
+        let handle = thread::spawn({
             let cancel = cancel.clone();
             move || {
-                std::thread::sleep(Duration::from_millis(50));
+                thread::sleep(Duration::from_millis(50));
                 cancel.cancel();
             }
         });

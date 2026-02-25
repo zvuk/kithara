@@ -36,7 +36,7 @@ const TOTAL_SIZE: usize = 1_024_000;
 const STREAM_CLOSES_AT: usize = 512_000;
 
 fn clean_temp_dir() -> TestTempDir {
-    let dir = kithara_test_utils::TestTempDir::new();
+    let dir = TestTempDir::new();
     let entries: Vec<_> = std::fs::read_dir(dir.path())
         .unwrap()
         .collect::<Result<Vec<_>, _>>()
@@ -267,7 +267,7 @@ async fn partial_cache_resume_works() {
         tracing::info!("Phase 1: read {} bytes", n);
 
         // Give sequential download time to finish (server sends 512KB quickly)
-        std::thread::sleep(Duration::from_millis(500));
+        kithara_platform::thread::sleep(Duration::from_millis(500));
         // stream1 drops here
     });
 

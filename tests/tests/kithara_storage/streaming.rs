@@ -234,9 +234,9 @@ fn streaming_resource_concurrent_wait_and_write() {
     let resource = open_test_resource(&temp_dir, "concurrent_wait.dat", cancel_token);
 
     let resource_clone = resource.clone();
-    let wait_handle = std::thread::spawn(move || resource_clone.wait_range(0..10));
+    let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
 
-    std::thread::sleep(Duration::from_millis(10));
+    kithara_platform::thread::sleep(Duration::from_millis(10));
 
     resource.write_at(0, b"0123456789").unwrap();
 
@@ -336,7 +336,7 @@ fn streaming_resource_wait_range_partial_coverage() {
 
     let resource_clone = resource.clone();
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    kithara_platform::thread::spawn(move || {
         let result = resource_clone.wait_range(0..10);
         let _ = tx.send(result);
     });
@@ -417,9 +417,9 @@ fn streaming_resource_cancel_during_wait() {
     let resource = open_test_resource(&temp_dir, "cancel_wait.dat", cancel_token.clone());
 
     let resource_clone = resource.clone();
-    let wait_handle = std::thread::spawn(move || resource_clone.wait_range(0..10));
+    let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
 
-    std::thread::sleep(Duration::from_millis(50));
+    kithara_platform::thread::sleep(Duration::from_millis(50));
     cancel_token.cancel();
 
     let wait_result = wait_handle.join().unwrap();
@@ -434,11 +434,11 @@ fn streaming_resource_fail_wakes_waiters() {
     let resource = open_test_resource(&temp_dir, "fail_waiters.dat", cancel_token);
 
     let resource_clone = resource.clone();
-    let wait_handle = std::thread::spawn(move || resource_clone.wait_range(0..10));
+    let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
 
     let resource_clone = resource.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(50));
+    kithara_platform::thread::spawn(move || {
+        kithara_platform::thread::sleep(Duration::from_millis(50));
         resource_clone.fail("test failure".to_string());
     });
 
@@ -454,11 +454,11 @@ fn streaming_resource_concurrent_operations() {
     let resource = open_test_resource(&temp_dir, "concurrent_ops.dat", cancel_token);
 
     let resource_clone = resource.clone();
-    let handle1 = std::thread::spawn(move || resource_clone.write_at(0, b"Hello"));
+    let handle1 = kithara_platform::thread::spawn(move || resource_clone.write_at(0, b"Hello"));
 
     let resource_clone = resource.clone();
-    let handle2 = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(10));
+    let handle2 = kithara_platform::thread::spawn(move || {
+        kithara_platform::thread::sleep(Duration::from_millis(10));
         resource_clone.write_at(5, b"World")
     });
 
@@ -553,7 +553,7 @@ fn streaming_resource_complex_range_scenario() {
 
     let resource_clone = resource.clone();
     let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
+    kithara_platform::thread::spawn(move || {
         let result = resource_clone.wait_range(0..15);
         let _ = tx.send(result);
     });

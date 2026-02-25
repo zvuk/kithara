@@ -265,6 +265,7 @@ where
 mod tests {
     use std::{sync::Arc, time::Duration};
 
+    use kithara_platform::thread;
     use kithara_storage::ResourceExt;
     use kithara_test_utils::kithara;
     use tokio_util::sync::CancellationToken;
@@ -332,7 +333,7 @@ mod tests {
         let handles: Vec<_> = (0..4)
             .map(|i| {
                 let c = cached.clone();
-                std::thread::spawn(move || {
+                thread::spawn(move || {
                     let key = ResourceKey::new(format!("seg_{i}.m4s"));
                     c.open_resource(&key).unwrap();
                 })

@@ -108,7 +108,7 @@ fn send_with_backpressure<S: AudioWorkerSource>(
                 if source.timeline().is_flushing() {
                     return Ok(false);
                 }
-                std::thread::sleep(BACKOFF_BUSY); // back off and retry
+                kithara_platform::thread::sleep(BACKOFF_BUSY); // back off and retry
             }
             Err(_) => return Err(()), // channel closed
         }
@@ -145,7 +145,7 @@ fn handle_eof_idle<S: AudioWorkerSource>(
                 trace!("audio worker cancelled at EOF");
                 return WorkerControl::Stop;
             }
-            std::thread::sleep(BACKOFF_EOF);
+            kithara_platform::thread::sleep(BACKOFF_EOF);
             WorkerControl::Continue
         }
         Err(_) => {

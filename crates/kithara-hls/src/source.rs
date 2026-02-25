@@ -433,7 +433,7 @@ impl Source for HlsSource {
             .is_some();
         let variant = match reader_variant {
             Some(reader) if reader == hinted_variant => reader,
-            Some(reader) if self.variant_fence.is_some() && has_hinted_variant => hinted_variant,
+            Some(_reader) if self.variant_fence.is_some() && has_hinted_variant => hinted_variant,
             Some(reader) => reader,
             None if has_hinted_variant => hinted_variant,
             None if hinted_variant < self.playlist_state.num_variants() => hinted_variant,

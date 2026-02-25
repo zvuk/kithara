@@ -49,8 +49,8 @@ mod app {
     const VOLUME_STEP: f32 = 0.05;
     const PROGRESS_LOG_INTERVAL: Duration = Duration::from_secs(1);
 
-    pub type ExampleError = Box<dyn Error + Send + Sync>;
-    pub type ExampleResult<T = ()> = Result<T, ExampleError>;
+    pub(crate) type ExampleError = Box<dyn Error + Send + Sync>;
+    pub(crate) type ExampleResult<T = ()> = Result<T, ExampleError>;
 
     enum UiMsg {
         CrossfadeStarted(Instant),
@@ -446,7 +446,7 @@ mod app {
 
     #[tokio::main(flavor = "current_thread")]
     #[cfg_attr(feature = "perf", hotpath::main)]
-    pub async fn main() -> ExampleResult {
+    pub(crate) async fn main() -> ExampleResult {
         super::tracing_support::init_tracing(&["off"], true)?;
 
         let mut cli_args = args().skip(1);

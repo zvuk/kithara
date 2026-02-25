@@ -182,7 +182,7 @@ mod tests {
 fn spin_wait_hint() {
     #[cfg(target_arch = "wasm32")]
     {
-        std::thread::yield_now();
+        crate::thread::yield_now();
     }
 
     #[cfg(not(target_arch = "wasm32"))]

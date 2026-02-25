@@ -18,6 +18,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_platform::time::Instant;
 use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -247,7 +248,7 @@ async fn stress_seek_abr_audio() {
         // Phase 1: Warmup + ABR switch detection
         info!("Phase 1: waiting for ABR switch (ascending → descending)...");
 
-        let warmup_start = std::time::Instant::now();
+        let warmup_start = Instant::now();
         let warmup_timeout = Duration::from_secs(WARMUP_TIMEOUT_SECS);
         let mut warmup_ascending_chunks = 0u64;
         let mut warmup_unknown_chunks = 0u64;

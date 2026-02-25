@@ -209,7 +209,7 @@ fn eviction_respects_max_assets_limit(
     }
 
     // Give eviction a moment to complete
-    std::thread::sleep(Duration::from_millis(100));
+    kithara_platform::thread::sleep(Duration::from_millis(100));
 
     // Count how many asset directories exist
     let mut existing_count = 0;

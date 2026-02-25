@@ -17,7 +17,7 @@ use kithara_decode::{
     DecodeError, DecodeResult, InnerDecoder, PcmChunk, PcmMeta, PcmSpec,
     mock::{infinite_inner_decoder_loose, scripted_inner_decoder_loose},
 };
-use kithara_platform::Mutex;
+use kithara_platform::{Mutex, thread};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
     AudioCodec, MediaInfo, Source, SourceSeekAnchor, Stream, StreamResult, StreamType, Timeline,
@@ -1036,7 +1036,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
     const V3_SEGMENT_20_START: u64 = 1732515;
     const V3_SEGMENT_20_END: u64 = 2476302;
 
-    let handle = std::thread::spawn(move || {
+    let handle = thread::spawn(move || {
         let (shared, state) = make_shared_stream(
             vec![0u8; V3_SEGMENT_20_END as usize],
             Some(V3_SEGMENT_20_END),
@@ -1140,7 +1140,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
         if Instant::now() > deadline {
             panic!("Test timed out after 30s — deadlock in seek/format-change interaction");
         }
-        std::thread::sleep(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50));
     }
 }
 

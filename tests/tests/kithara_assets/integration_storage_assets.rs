@@ -212,7 +212,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
     let store_reader = store.clone();
     let key_reader = key.clone();
     let payload_len_reader = payload_len;
-    let reader = std::thread::spawn(move || {
+    let reader = kithara_platform::thread::spawn(move || {
         let res = store_reader.open_resource(&key_reader).unwrap();
         res.wait_range(0..payload_len_reader).unwrap();
         let mut buf = byte_pool().get_with(|b| b.resize(payload_len_reader as usize, 0));
@@ -224,7 +224,7 @@ fn streaming_resource_concurrent_write_and_read_across_handles(
     let store_writer = store;
     let payload_writer = payload.clone();
     let key_writer = key;
-    let writer = std::thread::spawn(move || {
+    let writer = kithara_platform::thread::spawn(move || {
         let res = store_writer.open_resource(&key_writer).unwrap();
         res.write_at(0, &payload_writer).unwrap();
         res.commit(Some(payload_writer.len() as u64)).unwrap();

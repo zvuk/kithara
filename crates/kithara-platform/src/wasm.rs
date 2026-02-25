@@ -233,7 +233,7 @@ impl Condvar {
         timeout: std::time::Duration,
     ) -> bool {
         parking_lot::MutexGuard::unlocked(&mut guard.0, || {
-            std::thread::sleep(timeout);
+            crate::thread::sleep(timeout);
         });
         false
     }
@@ -304,7 +304,7 @@ fn spin_write<T: ?Sized>(rw: &parking_lot::RwLock<T>) -> parking_lot::RwLockWrit
 fn spin_wait_hint() {
     #[cfg(target_arch = "wasm32")]
     {
-        std::thread::yield_now();
+        crate::thread::yield_now();
     }
 
     #[cfg(not(target_arch = "wasm32"))]

@@ -256,6 +256,8 @@ mod tests {
 
     use std::time::Duration;
 
+    use kithara_platform::thread;
+
     use super::*;
     use crate::{
         StorageError,
@@ -330,8 +332,8 @@ mod tests {
         let res = create_resource();
         let res2 = res.clone();
 
-        let handle = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
             res2.write_at(0, b"delayed data").unwrap();
         });
 
@@ -356,8 +358,8 @@ mod tests {
         let res = create_resource();
         let res2 = res.clone();
 
-        let handle = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(50));
+        let handle = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
             res2.fail("test error".to_string());
         });
 
@@ -371,10 +373,10 @@ mod tests {
         let cancel = CancellationToken::new();
         let res = MemResource::new(cancel.clone());
 
-        let handle = std::thread::spawn({
+        let handle = thread::spawn({
             let cancel = cancel.clone();
             move || {
-                std::thread::sleep(Duration::from_millis(50));
+                thread::sleep(Duration::from_millis(50));
                 cancel.cancel();
             }
         });

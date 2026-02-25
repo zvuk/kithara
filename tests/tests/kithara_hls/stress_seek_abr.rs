@@ -3,7 +3,7 @@
 //! Uses production HLS stream (requires network).
 //! Expected: FAILS — seek after ABR switch causes deadlock or audio death.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use kithara::{
     assets::StoreOptions,
@@ -11,6 +11,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_platform::time::Instant;
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::info;
 
@@ -129,7 +130,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
             }
 
             // Small pause between seeks (simulate real user interaction)
-            std::thread::sleep(Duration::from_millis(50));
+            kithara_platform::thread::sleep(Duration::from_millis(50));
         }
 
         info!(
@@ -221,7 +222,7 @@ async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
                 let n = audio.read(&mut buf);
                 samples_after_seek += n;
                 if n == 0 {
-                    std::thread::sleep(Duration::from_millis(15));
+                    kithara_platform::thread::sleep(Duration::from_millis(15));
                 }
             }
 

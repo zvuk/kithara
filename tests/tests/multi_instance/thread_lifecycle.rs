@@ -68,7 +68,7 @@ async fn pool_max_concurrency(pool: &ThreadPool, expected_threads: usize) -> usi
             let cur = running.fetch_add(1, Ordering::SeqCst) + 1;
             max_concurrent.fetch_max(cur, Ordering::SeqCst);
 
-            std::thread::sleep(POOL_AVAILABILITY_PROBE_HOLD);
+            kithara_platform::thread::sleep(POOL_AVAILABILITY_PROBE_HOLD);
 
             running.fetch_sub(1, Ordering::SeqCst);
             let _ = tx.send(cur);
@@ -468,7 +468,7 @@ async fn pool_availability_waits_for_delayed_release() {
         let tx = ready_tx.clone();
         pool.spawn(move || {
             let _ = tx.send(());
-            std::thread::sleep(Duration::from_millis(700));
+            kithara_platform::thread::sleep(Duration::from_millis(700));
         });
     }
     drop(ready_tx);

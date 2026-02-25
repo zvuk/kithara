@@ -3,6 +3,7 @@
 use std::{sync::Arc, time::Duration};
 
 use kithara_coverage::{Coverage, CoverageIndex, DiskCoverage, MemCoverage};
+use kithara_platform::thread;
 use kithara_storage::{MmapOptions, MmapResource, OpenMode, Resource, ResourceExt};
 use kithara_test_utils::kithara;
 use tempfile::TempDir;
@@ -160,7 +161,7 @@ fn concurrent_updates_from_different_threads() {
     let handles: Vec<_> = (0..4)
         .map(|i| {
             let idx = Arc::clone(&index);
-            std::thread::spawn(move || {
+            thread::spawn(move || {
                 let key = format!("thread-key-{i}");
                 let mut mc = MemCoverage::with_total_size(100);
                 mc.mark(0..50);

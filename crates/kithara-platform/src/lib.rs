@@ -25,6 +25,7 @@ mod channel;
 mod maybe_send;
 mod pool;
 mod task;
+pub mod thread;
 mod thread_pool_init;
 pub mod time;
 
@@ -36,6 +37,7 @@ pub use channel::{ReceiveError, Receiver, SendError, Sender, bounded, unbounded}
 pub use maybe_send::{MaybeSend, MaybeSync};
 pub use pool::ThreadPool;
 pub use task::spawn_task;
+pub use thread::{Duration, JoinHandle, sleep, spawn, yield_now};
 pub use thread_pool_init::ensure_thread_pool;
 
 // On native: re-export parking_lot types directly (zero overhead).

@@ -22,6 +22,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_platform::time::Instant;
 use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -148,7 +149,7 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
         if audio.is_eof() {
             return (0, retry);
         }
-        std::thread::sleep(Duration::from_millis(1));
+        kithara_platform::thread::sleep(Duration::from_millis(1));
     }
     (0, MAX_ZERO_READS)
 }
@@ -258,9 +259,9 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
         info!("Phase 1: warmup — reading until ABR switch");
         let mut initial_direction = Direction::Unknown;
         let mut switch_detected = false;
-        let warmup_deadline = std::time::Instant::now() + Duration::from_secs(60);
+        let warmup_deadline = Instant::now() + Duration::from_secs(60);
 
-        while std::time::Instant::now() < warmup_deadline {
+        while Instant::now() < warmup_deadline {
             let (n, _) = read_with_retry(&mut audio, &mut buf);
             if n == 0 {
                 break;
