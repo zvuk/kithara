@@ -23,7 +23,7 @@ use tracing::info;
 
 use super::fixture::{HlsTestServer, HlsTestServerConfig};
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(wasm, timeout(Duration::from_secs(5)))]
 fn ephemeral_backend_creates_mem_resource() {
     let backend = AssetStoreBuilder::new()
         .ephemeral(true)
@@ -40,7 +40,7 @@ fn ephemeral_backend_creates_mem_resource() {
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_backend_creates_mmap_resource() {
     let temp = TempDir::new().expect("temp dir");
     let backend = AssetStoreBuilder::new()
@@ -84,7 +84,7 @@ fn count_files(dir: &std::path::Path) -> usize {
     count
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(60)))]
 async fn ephemeral_pipeline_no_disk_writes() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -131,7 +131,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     // Read samples in blocking thread
     let temp_path = temp_dir.path().to_path_buf();
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         let mut buf = vec![0.0f32; 4096];
         let mut total_samples = 0usize;
 
@@ -167,7 +167,6 @@ async fn ephemeral_pipeline_no_disk_writes() {
 
     match result {
         Ok(()) => info!("Ephemeral pipeline test passed"),
-        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }

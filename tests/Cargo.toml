@@ -11,33 +11,23 @@ workspace = true
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-url = { workspace = true }
-tracing = { workspace = true }
-thiserror = { workspace = true }
-futures = { workspace = true }
-
-# --- Native-only dependencies ---
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-kithara = { workspace = true, features = ["full", "test-utils", "rodio", "internal"] }
-# Kithara crates not in facade
+kithara = { workspace = true, features = ["full", "test-utils", "internal"] }
 kithara-audio = { workspace = true, features = ["internal"] }
 kithara-test-utils = { workspace = true }
 kithara-wasm = { workspace = true }
 kithara-net = { workspace = true, features = ["test-utils"] }
+kithara-platform = { workspace = true }
 
 # Async runtime
-tokio = { workspace = true, features = ["full"] }
-tokio-util = { workspace = true, features = ["full"] }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
 tokio-stream = { workspace = true }
 
 # Channels/buffers
 bytes = { workspace = true }
 
 # HTTP/URL
-reqwest = { workspace = true, features = ["rustls", "stream"] }
-axum = { workspace = true }
-tower = { workspace = true }
-tower-http = { workspace = true }
+url = { workspace = true }
 
 # HLS parsing
 hls_m3u8 = { workspace = true }
@@ -49,13 +39,14 @@ rodio = { workspace = true }
 # Testing framework
 serial_test = { workspace = true }
 tempfile = { workspace = true }
-unimock = { workspace = true }
 
 # Logging
+tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+serde_json = { workspace = true }
 bincode = { workspace = true }
 
 # Crypto (for HLS encryption tests)
@@ -64,27 +55,53 @@ aes = { workspace = true }
 cbc = { workspace = true }
 
 # Misc
+thiserror = { workspace = true }
+futures = { workspace = true }
 uuid = { workspace = true }
 sha2 = { workspace = true }
 
 # Async traits
 async-trait = { workspace = true }
 
+# --- Native-only dependencies ---
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Additional kithara features (rodio not available on WASM)
+kithara = { workspace = true, features = ["rodio"] }
+
+# Additional tokio features (full runtime on native)
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["full"] }
+
+# HTTP server (axum stack not available on WASM)
+reqwest = { workspace = true, features = ["rustls", "stream"] }
+axum = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+
+# Native audio playback (adds playback feature requiring cpal)
+rodio = { workspace = true, features = ["playback"] }
+
+# Mocking
+unimock = { workspace = true }
+
 # Storage
 mmap-io = { workspace = true }
+
 # Performance monitoring (optional)
 hotpath = { workspace = true, optional = true }
 
 # --- WASM-only dependencies ---
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 kithara-assets = { workspace = true }
-kithara-audio = { workspace = true }
 kithara-events = { workspace = true }
 kithara-hls = { workspace = true }
-kithara-platform = { workspace = true }
 kithara-stream = { workspace = true }
 kithara-test-macros = { workspace = true }
-kithara-wasm = { workspace = true }
+
+# uuid needs js feature on WASM
+uuid = { workspace = true, features = ["js"] }
+
+# WASM-specific
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 wasm-bindgen-test = { workspace = true }
@@ -106,6 +123,16 @@ perf = [
 [[bin]]
 name = "hls_fixture_server"
 path = "bin/hls_fixture_server.rs"
+test = false
+
+[[bin]]
+name = "fixture_server"
+path = "bin/fixture_server.rs"
+test = false
+
+[[bin]]
+name = "wasm_test_runner"
+path = "bin/wasm_test_runner.rs"
 test = false
 
 # Performance test binaries

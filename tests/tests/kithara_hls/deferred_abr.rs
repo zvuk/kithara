@@ -47,7 +47,7 @@ fn variant_from_data(data: &[u8]) -> Option<usize> {
 /// Test: Manual variant switch with fixed ABR, verify data comes from correct variant.
 ///
 /// This tests the basic variant selection without ABR auto-switching.
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 #[case(0)]
 #[case(1)]
 #[case(2)]
@@ -70,7 +70,7 @@ async fn manual_variant_returns_correct_data(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         let mut buf = [0u8; 10];
         let n = stream.read(&mut buf).unwrap();
         (n, buf)
@@ -95,7 +95,7 @@ async fn manual_variant_returns_correct_data(
 ///
 /// When reading sequentially across multiple segments, all data should
 /// come from the same variant (no unexpected switches).
-#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn sequential_read_across_segments_maintains_variant(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -117,7 +117,7 @@ async fn sequential_read_across_segments_maintains_variant(
 
     // Read all three segments sequentially
     // Use 64KB buffer to avoid async lock overhead per small read
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         let mut all_data = Vec::new();
         let mut buf = vec![0u8; 64 * 1024];
         let mut read_count = 0;
@@ -169,7 +169,7 @@ async fn sequential_read_across_segments_maintains_variant(
 ///
 /// Once we seek and commit to a variant, sequential reads should
 /// continue from that variant.
-#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn after_seek_sequential_reads_maintain_variant(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -188,7 +188,7 @@ async fn after_seek_sequential_reads_maintain_variant(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         // Seek to middle of segment 1 (200KB per segment)
         stream.seek(SeekFrom::Start(200_100)).unwrap();
 
@@ -226,7 +226,7 @@ async fn after_seek_sequential_reads_maintain_variant(
 ///
 /// Rapidly seeking back and forth should maintain correct variant tracking.
 /// Note: We first read all data to ensure segments are fetched, then seek.
-#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn multiple_seeks_maintain_correct_variant(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -245,7 +245,7 @@ async fn multiple_seeks_maintain_correct_variant(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         // First, read all data to ensure all segments are fetched
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024];
@@ -320,7 +320,7 @@ async fn multiple_seeks_maintain_correct_variant(
 
 /// Test: Seek to exact segment boundary reads correct segment prefix.
 /// Note: With 200KB segments, we only read the first 26 bytes to verify the segment.
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 #[case(0)] // Start of segment 0
 #[case(200_000)] // Start of segment 1
 #[case(400_000)] // Start of segment 2
@@ -343,7 +343,7 @@ async fn seek_to_segment_boundary_reads_correct_segment(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         stream.seek(SeekFrom::Start(position)).unwrap();
 
         // Read first 26 bytes (the meaningful prefix before padding)

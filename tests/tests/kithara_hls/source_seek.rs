@@ -35,7 +35,7 @@ const SEGMENT_SIZE: u64 = 200_000;
 
 // Stream<Hls> Seek + Read Tests
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 #[case(0, b"V0-SEG-0:")] // Start of segment 0
 #[case(200_000, b"V0-SEG-1:")] // Start of segment 1
 #[case(400_000, b"V0-SEG-2:")] // Start of segment 2
@@ -62,7 +62,7 @@ async fn hls_stream_seek_to_segment_start(
     let expected_len = expected_prefix.len();
     let expected_vec = expected_prefix.to_vec();
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         let pos = stream.seek(SeekFrom::Start(seek_pos)).unwrap();
         assert_eq!(pos, seek_pos);
 
@@ -77,7 +77,7 @@ async fn hls_stream_seek_to_segment_start(
     assert_eq!(&result.1[..result.0], &expected_vec[..]);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn hls_stream_seek_current(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -96,7 +96,7 @@ async fn hls_stream_seek_current(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Read first 10 bytes
         let mut buf = [0u8; 10];
         let n = stream.read(&mut buf).unwrap();
@@ -119,7 +119,7 @@ async fn hls_stream_seek_current(
     .unwrap();
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn hls_stream_multiple_seeks(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -138,7 +138,7 @@ async fn hls_stream_multiple_seeks(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Read from start
         let mut buf = [0u8; 9];
         let n = stream.read(&mut buf).unwrap();
@@ -164,7 +164,7 @@ async fn hls_stream_multiple_seeks(
     .unwrap();
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn hls_stream_read_all_then_seek_back(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -183,7 +183,7 @@ async fn hls_stream_read_all_then_seek_back(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Read all data
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024]; // 64KB buffer for efficiency
@@ -224,7 +224,7 @@ async fn hls_stream_read_all_then_seek_back(
 
 // ABR considerations
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn hls_with_manual_abr_uses_fixed_variant(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -244,7 +244,7 @@ async fn hls_with_manual_abr_uses_fixed_variant(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Read first segment prefix
         let mut buf = [0u8; 9];
         let n = stream.read(&mut buf).unwrap();
@@ -257,7 +257,7 @@ async fn hls_with_manual_abr_uses_fixed_variant(
     .unwrap();
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn hls_seek_across_all_segments_with_fixed_abr(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -278,7 +278,7 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Test seeking within segment 0 and verifying data
         // Segment 0 starts with "V0-SEG-0:TEST_SEGMENT_DATA" (26 bytes) then 0xFF padding
 
@@ -313,7 +313,7 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
 ///
 /// This test shows that different variants produce different data at the same positions,
 /// which is the foundation for ABR switch + seek correctness.
-#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn hls_seek_different_variants_return_different_data(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -344,7 +344,7 @@ async fn hls_seek_different_variants_return_different_data(
     let mut stream_v0 = Stream::<Hls>::new(config_v0).await.unwrap();
     let mut stream_v1 = Stream::<Hls>::new(config_v1).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Read initial data from both variants
         let mut buf_v0 = [0u8; 9];
         let mut buf_v1 = [0u8; 9];

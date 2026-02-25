@@ -52,7 +52,7 @@ test-utils = [
     "kithara-stream/test-utils",
     "kithara-play/test-utils",
 ]
-rodio = ["dep:rodio", "kithara-audio/rodio", "kithara-play/rodio"]
+rodio = ["dep:rodio", "rodio/playback", "kithara-audio/rodio", "kithara-play/rodio"]
 perf = [
     "kithara-audio/perf",
     "kithara-decode/perf",
@@ -78,7 +78,7 @@ tracing-subscriber = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-rodio = { workspace = true }
+rodio = { workspace = true, features = ["playback"] }
 ratatui = { workspace = true }
 
 [[example]]

@@ -34,7 +34,7 @@ use super::fixture::{
 /// 4. Verify segment 1 data is readable
 ///
 /// EXPECTED: seek is processed, segment data is read correctly
-#[kithara::test(tokio, timeout(Duration::from_secs(10)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn test_driver_seek_after_playlist_finished(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -53,7 +53,7 @@ async fn test_driver_seek_after_playlist_finished(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Read ALL data until EOF
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024];
@@ -99,7 +99,7 @@ async fn test_driver_seek_after_playlist_finished(
 ///
 /// This tests seek backward at the Stream<Hls> level with ABR active,
 /// without the full decoder chain.
-#[kithara::test(tokio, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
 async fn test_driver_abr_seek_backward(
     _tracing_setup: (),
     temp_dir: TempDir,
@@ -158,7 +158,7 @@ async fn test_driver_abr_seek_backward(
     // Give ABR time to start downloading
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Read some data forward
         let mut first_read = vec![0u8; 50_000];
         let n1 = stream.read(&mut first_read).unwrap();

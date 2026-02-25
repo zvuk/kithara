@@ -88,6 +88,27 @@ At runtime, the demo checks these requirements and prints a clear error in the e
 
 `kithara-wasm` is a wasm-bindgen wrapper around `kithara-play` so web and desktop follow the same playback logic.
 
+## Testing
+
+WASM tests run in headless Chrome via `wasm-bindgen-test`. The custom `wasm_test_runner` binary auto-starts the fixture server before delegating to `wasm-bindgen-test-runner`.
+
+```bash
+# Recommended entrypoint (handles everything)
+bash scripts/ci/wasm-test.sh
+
+# Manual run (fixture server starts automatically)
+cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
+```
+
+Test categories running on WASM:
+
+- **`kithara_wasm/`** — WASM player unit tests (AudioWorklet, threading)
+- **`kithara_hls/`** — HLS integration tests marked `browser` (50+ tests via fixture server)
+- **`kithara_file/`** — live stream stress tests marked `browser`
+- **`kithara_hls/abr_integration`** — pure ABR logic tests marked `wasm`
+
+The fixture server provides dynamic HLS/ABR session management via HTTP API. On native, tests use in-process axum servers; on WASM, the same test code sends config to the external fixture server and gets back a `base_url`.
+
 ## Build
 
 ```bash

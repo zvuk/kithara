@@ -35,7 +35,7 @@ use super::fixture::{EncryptionConfig, HlsTestServer, HlsTestServerConfig};
 /// 5. Sample `seek_iterations` random seek positions in `(0, len - chunk_size)`
 /// 6. For each: seek → read → verify every byte matches `expected_byte_at`
 /// 7. Final: seek to `len - chunk_size`, read all → verify EOF
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(120)))]
 #[case::small(50_000, 20, 200, false, false)]
 #[case::medium(100_000, 50, 500, false, false)]
 #[case::large(200_000, 100, 1000, false, false)]
@@ -117,7 +117,7 @@ async fn stress_random_seek_read_hls(
     let mut stream = Stream::<Hls>::new(config).await.expect("create HLS stream");
 
     // Steps 3-7 in blocking thread
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         // Step 3: Total byte length from fixture config
         info!(total_bytes, "Stream byte length");
 
@@ -269,7 +269,6 @@ async fn stress_random_seek_read_hls(
 
     match result {
         Ok(()) => info!("HLS stress test passed"),
-        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }

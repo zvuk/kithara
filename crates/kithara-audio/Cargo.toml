@@ -82,5 +82,5 @@ kithara-file = { workspace = true }
 kithara-hls = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-net = { workspace = true }
-rodio = { workspace = true }
+rodio = { workspace = true, features = ["playback"] }
 hotpath = { workspace = true }

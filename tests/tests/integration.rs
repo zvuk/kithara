@@ -11,9 +11,7 @@ mod kithara_assets;
 mod kithara_audio;
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_decode;
-#[cfg(not(target_arch = "wasm32"))]
 mod kithara_file;
-#[cfg(not(target_arch = "wasm32"))]
 mod kithara_hls;
 #[cfg(not(target_arch = "wasm32"))]
 mod kithara_net;

@@ -17,6 +17,8 @@
 
 //! Shared test utilities for the kithara workspace.
 
+pub mod fixture_client;
+pub mod fixture_protocol;
 pub mod fixtures;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod http_server;

@@ -22,7 +22,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_test_utils::Xorshift64;
+use kithara_test_utils::{Xorshift64, fixture_protocol::DelayRule};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -156,7 +156,7 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 
 /// Aggressive lifecycle stress test with 3 ABR variants, 2000 seeks,
 /// and full-track integrity verification after seek-to-zero.
-#[kithara::test(tokio, timeout(Duration::from_secs(300)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(300)))]
 #[case::ephemeral(true)]
 #[case::mmap(false)]
 async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
@@ -201,13 +201,12 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
             Arc::clone(&init_segment),
         ]),
         variant_bandwidths: Some(vec![5_000_000, 1_000_000, 500_000]),
-        segment_delay: Some(Arc::new(|variant, segment| {
-            if variant == 0 && segment >= 3 {
-                Duration::from_millis(500)
-            } else {
-                Duration::ZERO
-            }
-        })),
+        delay_rules: vec![DelayRule {
+            variant: Some(0),
+            segment_gte: Some(3),
+            delay_ms: 500,
+            ..Default::default()
+        }],
         ..Default::default()
     })
     .await;
@@ -250,7 +249,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
         "Audio pipeline created"
     );
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         let channels = spec.channels as usize;
         let chunk_samples = (0.05 * spec.sample_rate as f64 * channels as f64) as usize;
         let mut buf = vec![0.0f32; chunk_samples];
@@ -537,7 +536,6 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
 
     match result {
         Ok(()) => info!("Lifecycle stress test passed"),
-        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }

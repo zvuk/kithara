@@ -7,7 +7,6 @@
 
 use std::{
     io::{Read, Seek, SeekFrom},
-    panic,
     time::Duration,
 };
 
@@ -28,7 +27,7 @@ const SEEK_ITERATIONS: usize = 800;
 const PROBE_SIZE: usize = 64;
 const TAIL_CHUNK_SIZE: usize = 32 * 1024;
 
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(60)))]
 #[case::disk(false)]
 #[case::ephemeral(true)]
 async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
@@ -57,7 +56,7 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
         "fixture stream must be larger than probe"
     );
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         // Phase 1: dense seek burst with immediate probe reads.
         let mut rng = Xorshift64::new(0xA11C_EE55_D00D_BA5E);
         let max_seek = total_bytes - PROBE_SIZE as u64;
@@ -122,7 +121,6 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
 
     match result {
         Ok(()) => {}
-        Err(e) if e.is_panic() => panic::resume_unwind(e.into_panic()),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }

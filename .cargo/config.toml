@@ -2,7 +2,7 @@
 RUST_TEST_THREADS = "4"
 
 [target.wasm32-unknown-unknown]
-runner = "wasm-bindgen-test-runner"
+runner = ["cargo", "run", "--bin", "wasm_test_runner", "-p", "kithara-integration-tests", "--"]
 rustflags = [
     "-C", "target-feature=+atomics,+bulk-memory,+mutable-globals",
     "-C", "link-arg=--shared-memory",

@@ -1,7 +1,7 @@
 //! Test fixtures for HLS integration tests
 //!
 //! This module provides reusable test infrastructure including:
-//! - HTTP test servers for HLS content
+//! - HTTP test servers for HLS content (in-process on native, remote on WASM)
 //! - Asset store helpers
 //! - Encryption/decryption utilities
 //! - ABR testing infrastructure

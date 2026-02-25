@@ -20,7 +20,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_test_utils::Xorshift64;
+use kithara_test_utils::{Xorshift64, fixture_protocol::DelayRule};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
@@ -192,7 +192,7 @@ async fn next_chunk_with_timeout(
 
 // Stress Test
 
-#[kithara::test(tokio, timeout(Duration::from_secs(TEST_TIMEOUT_SECS)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(TEST_TIMEOUT_SECS)))]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
 async fn stress_chunk_integrity(#[case] ephemeral: bool) {
@@ -229,13 +229,12 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
         custom_data_per_variant: Some(vec![Arc::clone(&v0_pcm), Arc::clone(&v1_pcm)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
         variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        segment_delay: Some(Arc::new(|variant, segment| {
-            if variant == 0 && segment >= 3 {
-                Duration::from_millis(500)
-            } else {
-                Duration::ZERO
-            }
-        })),
+        delay_rules: vec![DelayRule {
+            variant: Some(0),
+            segment_gte: Some(3),
+            delay_ms: 500,
+            ..Default::default()
+        }],
         ..Default::default()
     })
     .await;

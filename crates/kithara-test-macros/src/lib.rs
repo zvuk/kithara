@@ -25,6 +25,10 @@ struct TestArgs {
     is_native_only: bool,
     is_browser: bool,
     timeout: Option<Expr>,
+    env_vars: Vec<(String, String)>,
+    /// Substring patterns for soft-fail: if a panic message contains any of
+    /// these (case-insensitive), the test prints a warning instead of failing.
+    soft_fail_patterns: Vec<String>,
 }
 
 impl Parse for TestArgs {
@@ -35,6 +39,8 @@ impl Parse for TestArgs {
             is_native_only: false,
             is_browser: false,
             timeout: None,
+            env_vars: Vec::new(),
+            soft_fail_patterns: Vec::new(),
         };
 
         while !input.is_empty() {
@@ -48,6 +54,36 @@ impl Parse for TestArgs {
                     let content;
                     syn::parenthesized!(content in input);
                     args.timeout = Some(content.parse()?);
+                }
+                "env" => {
+                    let content;
+                    syn::parenthesized!(content in input);
+                    while !content.is_empty() {
+                        let key: Ident = content.parse()?;
+                        content.parse::<Token![=]>()?;
+                        let value: syn::LitStr = content.parse()?;
+                        args.env_vars.push((key.to_string(), value.value()));
+                        if !content.is_empty() {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                }
+                "soft_fail" => {
+                    let content;
+                    syn::parenthesized!(content in input);
+                    while !content.is_empty() {
+                        let pattern: syn::LitStr = content.parse()?;
+                        args.soft_fail_patterns.push(pattern.value());
+                        if !content.is_empty() {
+                            content.parse::<Token![,]>()?;
+                        }
+                    }
+                    if args.soft_fail_patterns.is_empty() {
+                        return Err(syn::Error::new(
+                            ident.span(),
+                            "soft_fail requires at least one pattern string",
+                        ));
+                    }
                 }
                 other => {
                     return Err(syn::Error::new(
@@ -261,6 +297,95 @@ fn wrap_with_timeout(body: &TokenStream2, timeout: &Option<Expr>, is_async: bool
     }
 }
 
+/// Generate `unsafe { set_var(...) }` statements for each env var.
+fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
+    if env_vars.is_empty() {
+        return quote! {};
+    }
+    let stmts: Vec<_> = env_vars
+        .iter()
+        .map(|(key, value)| {
+            quote! {
+                // SAFETY: test sets env vars at start before spawning threads.
+                unsafe { std::env::set_var(#key, #value); }
+            }
+        })
+        .collect();
+    quote! { #(#stmts)* }
+}
+
+/// Wrap body in `catch_unwind`; re-panic unless the message matches a pattern.
+///
+/// Requires `futures` crate at the call site for async tests.
+fn wrap_with_soft_fail(
+    body: &TokenStream2,
+    fn_name: &Ident,
+    is_async: bool,
+    patterns: &[String],
+) -> TokenStream2 {
+    let name_str = fn_name.to_string();
+    let pattern_strs: Vec<_> = patterns.iter().map(|p| p.to_lowercase()).collect();
+    let handle_panic = quote! {
+        let __msg = if let Some(s) = __panic.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = __panic.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "unknown panic".to_string()
+        };
+        let __lower = __msg.to_lowercase();
+        let __patterns: &[&str] = &[#(#pattern_strs),*];
+        if __patterns.iter().any(|p| __lower.contains(p)) {
+            eprintln!("[SOFT FAIL] {}: {}", #name_str, __msg);
+        } else {
+            std::panic::resume_unwind(__panic);
+        }
+    };
+
+    if is_async {
+        quote! {
+            {
+                let __result = futures::FutureExt::catch_unwind(
+                    std::panic::AssertUnwindSafe(async move #body)
+                ).await;
+                if let Err(__panic) = __result {
+                    #handle_panic
+                }
+            }
+        }
+    } else {
+        quote! {
+            {
+                let __result = std::panic::catch_unwind(
+                    std::panic::AssertUnwindSafe(move || #body)
+                );
+                if let Err(__panic) = __result {
+                    #handle_panic
+                }
+            }
+        }
+    }
+}
+
+/// Combine env-var setup and optional soft-fail wrapping around an
+/// already-timeout-wrapped body.
+fn finalize_body(
+    inner: &TokenStream2,
+    args: &TestArgs,
+    fn_name: &Ident,
+    is_async: bool,
+) -> TokenStream2 {
+    let env_setup = make_env_setup(&args.env_vars);
+    if !args.soft_fail_patterns.is_empty() {
+        let soft = wrap_with_soft_fail(inner, fn_name, is_async, &args.soft_fail_patterns);
+        quote! { { #env_setup #soft } }
+    } else if !args.env_vars.is_empty() {
+        quote! { { #env_setup #inner } }
+    } else {
+        inner.clone()
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_one_test(
     fn_name: &Ident,
@@ -274,7 +399,8 @@ fn emit_one_test(
     args: &TestArgs,
 ) -> TokenStream2 {
     let full = quote! { #preamble #(#body_stmts)* };
-    let wrapped = wrap_with_timeout(&full, &args.timeout, is_async);
+    let with_timeout = wrap_with_timeout(&full, &args.timeout, is_async);
+    let wrapped = finalize_body(&with_timeout, args, fn_name, is_async);
     let asyncness = is_async.then(|| quote! { async });
 
     quote! {
@@ -310,7 +436,8 @@ fn emit_browser_test(
         #preamble
         #(#body_stmts)*
     };
-    let wasm_wrapped = wrap_with_timeout(&wasm_body, &args.timeout, true);
+    let wasm_with_timeout = wrap_with_timeout(&wasm_body, &args.timeout, true);
+    let wasm_wrapped = finalize_body(&wasm_with_timeout, args, fn_name, true);
     output.extend(quote! {
         #(#remaining_attrs)*
         #[cfg(target_arch = "wasm32")]
@@ -328,7 +455,8 @@ fn emit_browser_test(
         };
         let native_asyncness = native_is_async.then(|| quote! { async });
         let native_body = quote! { #preamble #(#body_stmts)* };
-        let native_wrapped = wrap_with_timeout(&native_body, &args.timeout, native_is_async);
+        let native_with_timeout = wrap_with_timeout(&native_body, &args.timeout, native_is_async);
+        let native_wrapped = finalize_body(&native_with_timeout, args, fn_name, native_is_async);
         output.extend(quote! {
             #(#remaining_attrs)*
             #[cfg(not(target_arch = "wasm32"))]
@@ -357,7 +485,23 @@ fn emit_browser_test(
 /// #[kithara::test(tokio, browser)]                     // async native + browser wasm
 /// #[kithara::test(timeout(Duration::from_secs(5)))]    // sync + timeout
 /// #[kithara::test(tokio, timeout(Duration::from_secs(5)))]  // async + timeout
+/// #[kithara::test(env(NO_PROXY = "host.example.com"))] // set env vars
+/// #[kithara::test(soft_fail("connection", "refused"))] // soft-fail on matching panics
 /// ```
+///
+/// ## `env`
+///
+/// `env(KEY = "value")` sets environment variables before the test body runs.
+///
+/// ## `soft_fail`
+///
+/// `soft_fail("pattern1", "pattern2")` catches panics whose message contains
+/// any of the given substrings (case-insensitive). Matching panics are printed
+/// as `[SOFT FAIL]` warnings; non-matching panics propagate normally.
+///
+/// Requires `futures` crate at the call site for async tests.
+///
+/// ## `browser`
 ///
 /// The `browser` flag injects `kithara_platform::ensure_thread_pool().await` on
 /// WASM to initialize Web Workers before running the test body.
@@ -388,14 +532,13 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
     if args.is_wasm_only {
         if cases.is_empty() {
             let preamble = make_preamble(&params, None);
+            let full = quote! { { #preamble #(#body_stmts)* } };
+            let wrapped = finalize_body(&full, &args, fn_name, true);
             return Ok(quote! {
                 #(#remaining_attrs)*
                 #[cfg(target_arch = "wasm32")]
                 #[wasm_bindgen_test::wasm_bindgen_test]
-                #vis async fn #fn_name() #ret_type {
-                    #preamble
-                    #(#body_stmts)*
-                }
+                #vis async fn #fn_name() #ret_type #wrapped
             });
         }
         let mut tests = TokenStream2::new();
@@ -405,14 +548,13 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
                 None => format_ident!("{}_case_{}", fn_name, i + 1),
             };
             let preamble = make_preamble(&params, Some(&case.values));
+            let full = quote! { { #preamble #(#body_stmts)* } };
+            let wrapped = finalize_body(&full, &args, &case_name, true);
             tests.extend(quote! {
                 #(#remaining_attrs)*
                 #[cfg(target_arch = "wasm32")]
                 #[wasm_bindgen_test::wasm_bindgen_test]
-                #vis async fn #case_name() #ret_type {
-                    #preamble
-                    #(#body_stmts)*
-                }
+                #vis async fn #case_name() #ret_type #wrapped
             });
         }
         return Ok(tests);
@@ -430,7 +572,8 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
         if cases.is_empty() {
             let preamble = make_preamble(&params, None);
             let full = quote! { #preamble #(#body_stmts)* };
-            let wrapped = wrap_with_timeout(&full, &args.timeout, is_async || args.is_tokio);
+            let with_timeout = wrap_with_timeout(&full, &args.timeout, is_async || args.is_tokio);
+            let wrapped = finalize_body(&with_timeout, &args, fn_name, is_async || args.is_tokio);
             return Ok(quote! {
                 #(#remaining_attrs)*
                 #[cfg(not(target_arch = "wasm32"))]
@@ -446,7 +589,9 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
             };
             let preamble = make_preamble(&params, Some(&case.values));
             let full = quote! { #preamble #(#body_stmts)* };
-            let wrapped = wrap_with_timeout(&full, &args.timeout, is_async || args.is_tokio);
+            let with_timeout = wrap_with_timeout(&full, &args.timeout, is_async || args.is_tokio);
+            let wrapped =
+                finalize_body(&with_timeout, &args, &case_name, is_async || args.is_tokio);
             tests.extend(quote! {
                 #(#remaining_attrs)*
                 #[cfg(not(target_arch = "wasm32"))]

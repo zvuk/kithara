@@ -74,7 +74,7 @@ fn phase_distance(a: usize, b: usize) -> usize {
 ///    - Level 2: continuity (consecutive frames follow pattern)
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 6. Final seek near end → read to EOF
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(120)))]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
 async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
@@ -154,7 +154,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     );
 
     // Steps 5-6 in blocking thread
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         // Compute chunk size: ~50ms of audio
         let chunk_duration_secs = 0.05;
         let chunk_samples =
@@ -383,7 +383,6 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
 
     match result {
         Ok(()) => info!("Audio+HLS stress test passed"),
-        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }

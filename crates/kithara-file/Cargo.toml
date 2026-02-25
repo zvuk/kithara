@@ -48,7 +48,7 @@ wasm-bindgen-test = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 axum = { workspace = true }
-rodio = { workspace = true }
+rodio = { workspace = true, features = ["playback"] }
 tracing-subscriber = { workspace = true }
 memory-stats = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "stream"] }

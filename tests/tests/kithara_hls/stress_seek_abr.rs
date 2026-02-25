@@ -16,48 +16,20 @@ use tempfile::TempDir;
 use tracing::info;
 
 const HLS_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
-const REQUIRED_NO_PROXY_HOST: &str = "stream.silvercomet.top";
-
-fn no_proxy_contains_host(host: &str) -> bool {
-    let entries = ["NO_PROXY", "no_proxy"]
-        .into_iter()
-        .filter_map(|key| std::env::var(key).ok())
-        .flat_map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|entry| !entry.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        });
-
-    for entry in entries {
-        if entry == "*" || entry == host {
-            return true;
-        }
-        if let Some(suffix) = entry.strip_prefix('.') {
-            if host == suffix || host.ends_with(&format!(".{suffix}")) {
-                return true;
-            }
-        }
-    }
-    false
-}
 
 /// Stress test: 20 seconds of rapid seeking after ABR switch.
 ///
 /// Reproduces production bug: after ABR switch (V0 AAC → V3 FLAC),
 /// seek causes deadlock because `detect_format_change` picks wrong
 /// segment offset → decoder created at wrong position → "missing ftyp atom".
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
-#[ignore = "requires network — production HLS stream"]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(60)),
+    env(NO_PROXY = "stream.silvercomet.top"),
+    soft_fail("connection", "timeout", "refused", "resolve", "dns", "network")
+)]
 async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TempDir) {
-    assert!(
-        no_proxy_contains_host(REQUIRED_NO_PROXY_HOST),
-        "this test requires NO_PROXY/no_proxy to include '{}'",
-        REQUIRED_NO_PROXY_HOST
-    );
-
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
@@ -100,7 +72,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TempDir) {
 
     // Phase 1: Warmup — read PCM for ~10s to let ABR switch happen
     // Phase 2: 20s rapid seeking
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
         let start = Instant::now();
 
@@ -195,8 +167,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TempDir) {
 
     match result {
         Ok(()) => info!("Test passed"),
-        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
-        Err(e) => panic!("spawn_blocking failed: {}", e),
+        Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }
 
@@ -204,15 +175,14 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TempDir) {
 ///
 /// Uses seek positions observed in logs and asserts that each seek
 /// still yields PCM samples (audio must stay alive).
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
-#[ignore = "requires network + NO_PROXY=stream.silvercomet.top"]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(60)),
+    env(NO_PROXY = "stream.silvercomet.top"),
+    soft_fail("connection", "timeout", "refused", "resolve", "dns", "network")
+)]
 async fn seek_sequence_from_log_real_stream(temp_dir: TempDir) {
-    assert!(
-        no_proxy_contains_host(REQUIRED_NO_PROXY_HOST),
-        "this test requires NO_PROXY/no_proxy to include '{}'",
-        REQUIRED_NO_PROXY_HOST
-    );
-
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
@@ -233,7 +203,7 @@ async fn seek_sequence_from_log_real_stream(temp_dir: TempDir) {
         .await
         .expect("audio creation");
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         let mut buf = vec![0f32; 4096];
         // Warm up pipeline before seek sequence.
         let warmup_deadline = Instant::now() + Duration::from_secs(4);
@@ -266,7 +236,6 @@ async fn seek_sequence_from_log_real_stream(temp_dir: TempDir) {
 
     match result {
         Ok(()) => info!("seek_sequence_from_log_real_stream passed"),
-        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
-        Err(e) => panic!("spawn_blocking failed: {}", e),
+        Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }

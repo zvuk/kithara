@@ -18,7 +18,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_test_utils::Xorshift64;
+use kithara_test_utils::{Xorshift64, fixture_protocol::DelayRule};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -160,7 +160,7 @@ fn detect_direction(buf: &[f32], channels: usize) -> Direction {
 /// 2. ABR starts on V0, switches to V1 when V0 segments become slow
 /// 3. Verify switch happened via PCM direction change
 /// 4. 200 random seeks with direction + integrity checks
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(120)))]
 async fn stress_seek_abr_audio() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -195,13 +195,12 @@ async fn stress_seek_abr_audio() {
         custom_data_per_variant: Some(vec![Arc::clone(&v0_pcm), Arc::clone(&v1_pcm)]),
         init_data_per_variant: Some(vec![Arc::clone(&init_segment), Arc::clone(&init_segment)]),
         variant_bandwidths: Some(vec![5_000_000, 1_000_000]),
-        segment_delay: Some(Arc::new(|variant, segment| {
-            if variant == 0 && segment >= 3 {
-                Duration::from_millis(500)
-            } else {
-                Duration::ZERO
-            }
-        })),
+        delay_rules: vec![DelayRule {
+            variant: Some(0),
+            segment_gte: Some(3),
+            delay_ms: 500,
+            ..Default::default()
+        }],
         ..Default::default()
     })
     .await;
@@ -239,7 +238,7 @@ async fn stress_seek_abr_audio() {
     );
 
     // Run test phases in blocking thread
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         let channels = spec.channels as usize;
         let chunk_duration_secs = 0.05;
         let chunk_samples =
@@ -542,7 +541,6 @@ async fn stress_seek_abr_audio() {
 
     match result {
         Ok(()) => info!("ABR stress test passed"),
-        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
         Err(e) => panic!("spawn_blocking failed: {e}"),
     }
 }

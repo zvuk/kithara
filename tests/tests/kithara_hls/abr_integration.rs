@@ -53,7 +53,7 @@ fn variants_from_parsed_playlist(parsed_master_playlist: MasterPlaylist) -> Vec<
 
 // Test Cases
 
-#[kithara::test]
+#[kithara::test(wasm)]
 fn test_variant_selection_manual_override(variants_from_parsed_playlist: Vec<Variant>) {
     let opts = AbrOptions {
         mode: AbrMode::Manual(2),
@@ -68,7 +68,7 @@ fn test_variant_selection_manual_override(variants_from_parsed_playlist: Vec<Var
     assert_eq!(decision.reason, AbrReason::ManualOverride);
 }
 
-#[kithara::test]
+#[kithara::test(wasm)]
 #[case(0)]
 #[case(1)]
 #[case(2)]
@@ -91,7 +91,7 @@ fn test_manual_selector_different_indices(
     assert_eq!(decision.reason, AbrReason::ManualOverride);
 }
 
-#[kithara::test]
+#[kithara::test(wasm)]
 fn test_abr_controller_no_selector(
     mut abr_config_default: AbrOptions,
     variants_from_parsed_playlist: Vec<Variant>,
@@ -107,7 +107,7 @@ fn test_abr_controller_no_selector(
     assert_ne!(decision.reason, AbrReason::ManualOverride);
 }
 
-#[kithara::test]
+#[kithara::test(wasm)]
 #[case(0.0, 0.0)] // No buffer
 #[case(1.0, 0.0)] // 1 second buffer
 #[case(5.0, 0.0)] // 5 second buffer
@@ -132,7 +132,7 @@ fn test_abr_decision_with_different_conditions(
     assert_eq!(decision.reason, AbrReason::ManualOverride);
 }
 
-#[kithara::test]
+#[kithara::test(wasm)]
 fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
     let variants = variants_from_master(&parsed_master_playlist);
 
@@ -149,8 +149,8 @@ fn test_variants_from_master_structure(parsed_master_playlist: MasterPlaylist) {
     assert_eq!(variants[2].variant_index, 2);
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
-async fn test_abr_controller_async_usage() {
+#[kithara::test(wasm, timeout(Duration::from_secs(5)))]
+fn test_abr_controller_async_usage() {
     // Test that ABR controller can be used in async context
     let config = AbrOptions {
         mode: AbrMode::Manual(0),

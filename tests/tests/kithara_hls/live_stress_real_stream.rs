@@ -20,7 +20,6 @@ use tempfile::TempDir;
 use tracing::info;
 
 const HLS_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
-const REQUIRED_NO_PROXY_HOST: &str = "stream.silvercomet.top";
 const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
 const WARMUP_TIMEOUT_SECS: u64 = 16;
 const RANDOM_PHASE_BUDGET_SECS: u64 = 24;
@@ -55,32 +54,6 @@ impl LiveStats {
             variant_switches: self.variant_switches,
         }
     }
-}
-
-fn no_proxy_contains_host(host: &str) -> bool {
-    let entries = ["NO_PROXY", "no_proxy"]
-        .into_iter()
-        .filter_map(|key| std::env::var(key).ok())
-        .flat_map(|value| {
-            value
-                .split(',')
-                .map(str::trim)
-                .filter(|entry| !entry.is_empty())
-                .map(str::to_string)
-                .collect::<Vec<_>>()
-        });
-
-    for entry in entries {
-        if entry == "*" || entry == host {
-            return true;
-        }
-        if let Some(suffix) = entry.strip_prefix('.') {
-            if host == suffix || host.ends_with(&format!(".{suffix}")) {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 fn file_count_and_size(path: &Path) -> (u64, u64) {
@@ -166,17 +139,16 @@ async fn next_chunk_with_timeout(
     }
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(60)))]
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(60)),
+    env(NO_PROXY = "stream.silvercomet.top"),
+    soft_fail("connection", "timeout", "refused", "resolve", "dns", "network")
+)]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
-#[ignore = "requires network + NO_PROXY=stream.silvercomet.top"]
 async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_dir: TempDir) {
-    assert!(
-        no_proxy_contains_host(REQUIRED_NO_PROXY_HOST),
-        "this test requires NO_PROXY/no_proxy to include '{}'",
-        REQUIRED_NO_PROXY_HOST
-    );
-
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::INFO)

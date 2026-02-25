@@ -5,14 +5,56 @@
 - integration tests for workspace crates;
 - performance regression tests (`hotpath`, ignored by default);
 - Criterion microbenchmarks;
-- local test binaries/fixtures (for example, HLS fixture server).
+- local test binaries/fixtures (fixture server, WASM test runner).
 
 ## Layout
 
 - `tests/tests/` — integration tests grouped by crate (`kithara_hls`, `kithara_file`, `kithara_decode`, ...).
 - `tests/perf/` — perf scenarios, each behind `feature = "perf"` and `#[ignore]`.
 - `tests/benches/` — Criterion benchmarks.
-- `tests/bin/` — helper binaries (`hls_fixture_server`).
+- `tests/bin/` — helper binaries:
+  - `fixture_server` — dynamic fixture server for HLS/ABR test sessions (native + WASM).
+  - `wasm_test_runner` — custom WASM test runner that auto-starts fixture server.
+
+## Cross-Platform Test Architecture
+
+Integration tests run on both **native** and **WASM (browser)** targets. The `#[kithara::test]` macro controls where tests run via flags:
+
+| Flag | Runs on native | Runs in browser (WASM) |
+|------|:-:|:-:|
+| `#[kithara::test(tokio, browser, ...)]` | yes | yes |
+| `#[kithara::test(wasm, ...)]` | yes | yes |
+| `#[kithara::test(native, ...)]` | yes | no |
+| `#[kithara::test(tokio, ...)]` (no flag) | yes | no |
+
+### Fixture Server
+
+Tests that need an HTTP server (HLS playlists, segments, ABR) use **fixture servers** with a cross-platform interface:
+
+- **Native**: in-process axum server (`TestServer`, `HlsTestServer`, `AbrTestServer`)
+- **WASM**: external `fixture_server` binary via HTTP session API
+
+Fixture types (`tests/tests/kithara_hls/fixture/`):
+
+| Fixture | Purpose |
+|---------|---------|
+| `TestServer` | Fixed 3-variant HLS content |
+| `HlsTestServer` | Configurable variants, segments, delays, encryption, HEAD mismatch |
+| `AbrTestServer` | ABR bitrate switching scenarios |
+
+The WASM path sends config to the fixture server via `POST /session/{type}`, receives a `base_url`, and uses it for all requests. Cleanup happens via `DELETE /session/{id}`.
+
+### Session Protocol
+
+Shared protocol types live in `kithara-test-utils/src/fixture_protocol.rs`:
+
+- `HlsSessionConfig`, `AbrSessionConfig`, `FixedHlsSessionConfig`
+- `DataMode` (TestPattern, SawWav, PerVariantPcm)
+- `InitMode` (None, WavHeader)
+- `DelayRule` — declarative delay rules replacing closure-based `segment_delay`
+- `SessionResponse` (session_id, base_url, total_bytes, init_len)
+
+Data generation functions (`generate_segment`, `expected_byte_at_test_pattern`, `create_pcm_segments`) are also in `fixture_protocol.rs` — shared between server and client for byte-level verification.
 
 ## Running Tests
 
@@ -35,6 +77,31 @@ cargo test -p kithara-integration-tests --test integration kithara_hls::basic_pl
 just test
 just test-doc
 just test-all
+```
+
+## WASM Tests
+
+WASM tests run via `wasm-bindgen-test` in headless Chrome. The `wasm_test_runner` binary auto-starts the fixture server before delegating to `wasm-bindgen-test-runner`.
+
+```bash
+# Recommended entrypoint (handles everything)
+bash scripts/ci/wasm-test.sh
+
+# Manual run (wasm_test_runner auto-starts fixture server)
+cargo +nightly test --target wasm32-unknown-unknown -p kithara-integration-tests
+```
+
+Test categories on WASM:
+
+- **`kithara_wasm/`** — WASM player unit tests (AudioWorklet, threading)
+- **`kithara_hls/`** — HLS integration tests with `browser` flag (fixture server)
+- **`kithara_file/live_stress_real_mp3`** — live stream tests with `browser` flag
+
+The fixture server is configured via `.cargo/config.toml`:
+
+```toml
+[target.wasm32-unknown-unknown]
+runner = ["cargo", "run", "--bin", "wasm_test_runner", "-p", "kithara-integration-tests", "--"]
 ```
 
 ## Performance Tests (`tests/perf`)
@@ -87,18 +154,6 @@ just bench-build
 RUN_BENCHMARKS=1 BENCH_CANDIDATE_NAME=local just bench-ci
 ```
 
-## WASM Stress Tests
-
-WASM tests live in `tests/tests/kithara_wasm/` and run via `wasm-bindgen-test` with a local HLS fixture server.
-
-Recommended entrypoint:
-
-```bash
-bash scripts/ci/wasm-test.sh
-```
-
-This script builds and runs `hls_fixture_server`, then executes wasm32 tests with required env and timeout settings.
-
 ## Adding New Tests
 
 Integration tests:
@@ -106,6 +161,9 @@ Integration tests:
 1. Add module/file under `tests/tests/` (group by crate/domain).
 2. Register module in `tests/tests/integration.rs` when needed.
 3. Prefer deterministic fixtures and local servers over external network.
+4. Use `#[kithara::test(tokio, browser, ...)]` for tests that need a server — they'll run on both native and WASM.
+5. Use `#[kithara::test(wasm, ...)]` for pure logic tests that can run on WASM.
+6. Use `#[kithara::test(native, ...)]` for tests that require filesystem or OS-specific features.
 
 Performance tests:
 
@@ -127,3 +185,5 @@ Benchmarks:
   include `--ignored`.
 - noisy perf results:
   use `--release`, `--test-threads=1`, and run on an idle machine.
+- WASM tests fail to connect:
+  fixture server starts automatically via `wasm_test_runner`. Set `FIXTURE_SERVER_URL` to override the default `http://127.0.0.1:3333`. Check that port 3333 is available.

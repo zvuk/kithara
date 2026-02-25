@@ -1,26 +1,34 @@
 //! ABR (Adaptive Bitrate) test server
 //!
 //! Provides `AbrTestServer` for testing throughput-based bitrate switching.
+//! On native: in-process axum server. On WASM: delegates to external fixture server.
 
-use std::time::Duration;
+// ── Native implementation ──────────────────────────────────────────
 
-use axum::{Router, routing::get};
-use kithara_test_utils::TestHttpServer;
-use url::Url;
+#[cfg(not(target_arch = "wasm32"))]
+mod native {
+    use std::time::Duration;
 
-use super::{HlsResult, crypto::init_data};
+    use axum::{Router, routing::get};
+    use kithara_test_utils::TestHttpServer;
+    use url::Url;
 
-/// ABR test server with configurable delays and bitrates
-pub(crate) struct AbrTestServer {
-    http: TestHttpServer,
-}
+    use super::super::{HlsResult, crypto::init_data};
 
-impl AbrTestServer {
-    pub(crate) async fn new(master_playlist: String, init: bool, segment0_delay: Duration) -> Self {
-        let master = master_playlist;
+    /// ABR test server with configurable delays and bitrates
+    pub(crate) struct AbrTestServer {
+        http: TestHttpServer,
+    }
 
-        let app =
-            Router::new()
+    impl AbrTestServer {
+        pub(crate) async fn new(
+            master_playlist: String,
+            init: bool,
+            segment0_delay: Duration,
+        ) -> Self {
+            let master = master_playlist;
+
+            let app = Router::new()
                 .route(
                     "/master.m3u8",
                     get(move || {
@@ -96,19 +104,123 @@ impl AbrTestServer {
                 .route("/init/v1.bin", get(|| async { init_data(1) }))
                 .route("/init/v2.bin", get(|| async { init_data(2) }));
 
-        let http = TestHttpServer::new(app).await;
+            let http = TestHttpServer::new(app).await;
 
-        Self { http }
+            Self { http }
+        }
+
+        #[expect(
+            clippy::result_large_err,
+            reason = "test-only code, ergonomics over size"
+        )]
+        pub(crate) fn url(&self, path: &str) -> HlsResult<Url> {
+            Ok(self.http.url(path))
+        }
     }
 
-    #[expect(
-        clippy::result_large_err,
-        reason = "test-only code, ergonomics over size"
-    )]
-    pub(crate) fn url(&self, path: &str) -> HlsResult<Url> {
-        Ok(self.http.url(path))
+    /// Generate media playlist for variant
+    fn media_playlist(variant: usize, init: bool) -> String {
+        let mut s = String::new();
+        s.push_str(
+            r#"#EXTM3U
+#EXT-X-VERSION:6
+#EXT-X-TARGETDURATION:4
+#EXT-X-MEDIA-SEQUENCE:0
+#EXT-X-PLAYLIST-TYPE:VOD
+"#,
+        );
+        if init {
+            s.push_str(&format!("#EXT-X-MAP:URI=\"init/v{}.bin\"\n", variant));
+        }
+        for i in 0..3 {
+            s.push_str("#EXTINF:4.0,\n");
+            s.push_str(&format!("seg/v{}_{}.bin\n", variant, i));
+        }
+        s.push_str("#EXT-X-ENDLIST\n");
+        s
+    }
+
+    /// Generate segment data with configurable delay and size
+    async fn segment_data(
+        variant: usize,
+        segment: usize,
+        delay: Duration,
+        total_len: usize,
+    ) -> Vec<u8> {
+        if delay != Duration::ZERO {
+            tokio::time::sleep(delay).await;
+        }
+
+        let mut data = Vec::new();
+        data.push(variant as u8);
+        data.extend(&(segment as u32).to_be_bytes());
+        let header_size = 1 + 4 + 4;
+        let data_len = total_len.saturating_sub(header_size);
+        data.extend(&(data_len as u32).to_be_bytes());
+        data.extend(std::iter::repeat_n(b'A', data_len));
+        data
     }
 }
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use native::AbrTestServer;
+
+// ── WASM implementation ────────────────────────────────────────────
+
+#[cfg(target_arch = "wasm32")]
+mod wasm {
+    use kithara_test_utils::{fixture_client, fixture_protocol::AbrSessionConfig};
+    use url::Url;
+
+    use super::super::HlsResult;
+
+    /// Remote ABR test server backed by fixture server session.
+    pub(crate) struct AbrTestServer {
+        session_id: String,
+        base_url: Url,
+    }
+
+    impl AbrTestServer {
+        pub(crate) async fn new(
+            master_playlist: String,
+            init: bool,
+            segment0_delay: std::time::Duration,
+        ) -> Self {
+            let config = AbrSessionConfig {
+                master_playlist,
+                has_init: init,
+                segment0_delay_ms: segment0_delay.as_millis() as u64,
+            };
+            let resp = fixture_client::create_abr_session(&config).await;
+            Self {
+                session_id: resp.session_id,
+                base_url: resp.base_url.parse().unwrap(),
+            }
+        }
+
+        #[expect(
+            clippy::result_large_err,
+            reason = "test-only code, ergonomics over size"
+        )]
+        pub(crate) fn url(&self, path: &str) -> HlsResult<Url> {
+            Ok(self.base_url.join(path).unwrap())
+        }
+    }
+
+    impl Drop for AbrTestServer {
+        fn drop(&mut self) {
+            let id = self.session_id.clone();
+            wasm_bindgen_futures::spawn_local(async move {
+                fixture_client::delete_session(&id).await;
+            });
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(crate) use wasm::AbrTestServer;
+
+// ── Shared helpers (cross-platform) ────────────────────────────────
 
 /// Generate master playlist with custom bitrates
 pub(crate) fn master_playlist(v0_bw: u64, v1_bw: u64, v2_bw: u64) -> String {
@@ -125,68 +237,13 @@ v2.m3u8
     )
 }
 
-/// Generate media playlist for variant
-pub(crate) fn media_playlist(variant: usize, init: bool) -> String {
-    let mut s = String::new();
-    s.push_str(
-        r#"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-"#,
-    );
-    if init {
-        s.push_str(&format!("#EXT-X-MAP:URI=\"init/v{}.bin\"\n", variant));
-    }
-    for i in 0..3 {
-        s.push_str("#EXTINF:4.0,\n");
-        s.push_str(&format!("seg/v{}_{}.bin\n", variant, i));
-    }
-    s.push_str("#EXT-X-ENDLIST\n");
-    s
-}
-
-/// Generate segment data with configurable delay and size
-pub(crate) async fn segment_data(
-    variant: usize,
-    segment: usize,
-    delay: Duration,
-    total_len: usize,
-) -> Vec<u8> {
-    if delay != Duration::ZERO {
-        tokio::time::sleep(delay).await;
-    }
-
-    // Binary format: [VARIANT:1byte][SEGMENT:4bytes][DATA_LEN:4bytes][DATA:DATA_LEN bytes]
-    let mut data = Vec::new();
-
-    // VARIANT (1 byte)
-    data.push(variant as u8);
-
-    // SEGMENT (4 bytes, big-endian)
-    data.extend(&(segment as u32).to_be_bytes());
-
-    // Calculate DATA_LEN (total_len - header size)
-    let header_size = 1 + 4 + 4; // variant + segment + data_len
-    let data_len = total_len.saturating_sub(header_size);
-
-    // DATA_LEN (4 bytes, big-endian)
-    data.extend(&(data_len as u32).to_be_bytes());
-
-    // DATA (padding with 'A')
-    data.extend(std::iter::repeat_n(b'A', data_len));
-
-    data
-}
-
 /// Fixture: default ABR test server
 #[kithara::fixture]
 pub(crate) async fn abr_server_default() -> AbrTestServer {
     AbrTestServer::new(
         master_playlist(256_000, 512_000, 1_024_000),
         false,
-        Duration::from_millis(1),
+        std::time::Duration::from_millis(1),
     )
     .await
 }

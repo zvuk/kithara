@@ -17,19 +17,17 @@ use std::{
     time::Duration,
 };
 
-use axum::{
-    Router,
-    http::{HeaderMap, StatusCode},
-    routing::get,
-};
+use fixture::scalable_server::{HlsTestServer, HlsTestServerConfig};
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::{TestHttpServer, cancel_token, debug_tracing_setup, temp_dir};
+use kithara_test_utils::{cancel_token, debug_tracing_setup, temp_dir};
 use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
+
+use super::fixture;
 
 // Constants
 
@@ -48,95 +46,6 @@ const HEAD_TOTAL: u64 = (HEAD_REPORTED_SIZE * NUM_SEGMENTS) as u64; // 597_600
 /// Actual total bytes that will be downloaded and cached.
 const ACTUAL_TOTAL: u64 = (ACTUAL_SEGMENT_SIZE * NUM_SEGMENTS) as u64; // 600_000
 
-// Test Server
-
-fn segment_data(variant: usize, segment: usize) -> Vec<u8> {
-    let prefix = format!("V{}-SEG-{}:", variant, segment);
-    let mut data = prefix.into_bytes();
-    data.extend(b"TEST_SEGMENT_DATA");
-    if data.len() < ACTUAL_SEGMENT_SIZE {
-        data.resize(ACTUAL_SEGMENT_SIZE, 0xFF);
-    }
-    data
-}
-
-fn media_playlist(variant: usize) -> String {
-    format!(
-        r#"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-TARGETDURATION:4
-#EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
-#EXTINF:4.0,
-seg/v{}_0.bin
-#EXTINF:4.0,
-seg/v{}_1.bin
-#EXTINF:4.0,
-seg/v{}_2.bin
-#EXT-X-ENDLIST
-"#,
-        variant, variant, variant
-    )
-}
-
-fn master_playlist() -> &'static str {
-    r#"#EXTM3U
-#EXT-X-VERSION:6
-#EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=854x480,CODECS="avc1.42c01e,mp4a.40.2"
-v0.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=2560000,RESOLUTION=1280x720,CODECS="avc1.42c01e,mp4a.40.2"
-v1.m3u8
-"#
-}
-
-/// HEAD handler: returns Content-Length smaller than actual body.
-///
-/// Simulates HTTP compression scenario where HEAD reports compressed size
-/// but GET body is auto-decompressed by the HTTP client.
-async fn segment_head_response() -> (StatusCode, HeaderMap) {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        "content-length",
-        HEAD_REPORTED_SIZE.to_string().parse().unwrap(),
-    );
-    (StatusCode::OK, headers)
-}
-
-/// Start a test HTTP server with mismatched HEAD/GET Content-Lengths.
-async fn start_mismatch_server() -> TestHttpServer {
-    let app = Router::new()
-        .route("/master.m3u8", get(|| async { master_playlist() }))
-        .route("/v0.m3u8", get(|| async { media_playlist(0) }))
-        .route("/v1.m3u8", get(|| async { media_playlist(1) }))
-        // GET returns ACTUAL_SEGMENT_SIZE bytes; HEAD returns HEAD_REPORTED_SIZE
-        .route(
-            "/seg/v0_0.bin",
-            get(|| async { segment_data(0, 0) }).head(segment_head_response),
-        )
-        .route(
-            "/seg/v0_1.bin",
-            get(|| async { segment_data(0, 1) }).head(segment_head_response),
-        )
-        .route(
-            "/seg/v0_2.bin",
-            get(|| async { segment_data(0, 2) }).head(segment_head_response),
-        )
-        .route(
-            "/seg/v1_0.bin",
-            get(|| async { segment_data(1, 0) }).head(segment_head_response),
-        )
-        .route(
-            "/seg/v1_1.bin",
-            get(|| async { segment_data(1, 1) }).head(segment_head_response),
-        )
-        .route(
-            "/seg/v1_2.bin",
-            get(|| async { segment_data(1, 2) }).head(segment_head_response),
-        );
-
-    TestHttpServer::new(app).await
-}
-
 // Tests
 
 /// Seek to a position between HEAD-reported total and actual total must succeed.
@@ -145,14 +54,22 @@ async fn start_mismatch_server() -> TestHttpServer {
 /// - HEAD total: `597_600` (3 x `199_200`)
 /// - Actual total: `600_000` (3 x `200_000`)
 /// - Seek to `598_000` is valid but fails if `expected_total_length` = HEAD total.
-#[kithara::test(tokio, timeout(Duration::from_secs(15)))]
+#[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn seek_beyond_head_total_within_actual_total(
     _debug_tracing_setup: (),
     temp_dir: TempDir,
     cancel_token: CancellationToken,
 ) {
-    let server = start_mismatch_server().await;
-    let url = server.url("/master.m3u8");
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        variant_count: 2,
+        segments_per_variant: NUM_SEGMENTS,
+        segment_size: ACTUAL_SEGMENT_SIZE,
+        head_reported_segment_size: Some(HEAD_REPORTED_SIZE),
+        ..Default::default()
+    })
+    .await;
+
+    let url = server.url("/master.m3u8").unwrap();
 
     let config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp_dir.path()))
@@ -164,7 +81,7 @@ async fn seek_beyond_head_total_within_actual_total(
 
     let mut stream = Stream::<Hls>::new(config).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Step 1: Read all data sequentially (downloads all 3 segments).
         let mut all_data = Vec::new();
         let mut buf = [0u8; 64 * 1024];
