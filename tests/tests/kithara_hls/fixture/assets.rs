@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 pub(crate) struct TestAssets {
     assets: AssetStore<DecryptContext>,
     #[cfg(not(target_arch = "wasm32"))]
-    _temp_dir: Arc<tempfile::TempDir>,
+    _temp_dir: Arc<kithara_test_utils::TestTempDir>,
 }
 
 impl TestAssets {
@@ -42,7 +42,7 @@ pub(crate) fn create_test_assets() -> TestAssets {
 pub(crate) fn create_test_assets_with_root(asset_root: &str) -> TestAssets {
     use kithara::assets::EvictConfig;
 
-    let temp_dir = tempfile::TempDir::new().unwrap();
+    let temp_dir = kithara_test_utils::TestTempDir::new();
     let temp_dir = Arc::new(temp_dir);
 
     let assets = AssetStoreBuilder::new()
@@ -101,6 +101,7 @@ pub(crate) fn net_fixture() -> HttpClient {
 }
 
 /// Fixture: both assets and network client
+#[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
 pub(crate) fn abr_cache_and_net() -> (TestAssets, HttpClient) {
     (create_test_assets(), create_test_net())

@@ -181,6 +181,7 @@ pub(crate) async fn test_server() -> TestServer {
 // ── Shared content generators (used by native server + tests) ──────
 
 /// Master playlist with standard bitrates
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn test_master_playlist() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
@@ -194,6 +195,7 @@ v2.m3u8
 }
 
 /// Master playlist with init segments
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn test_master_playlist_with_init() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
@@ -207,6 +209,7 @@ v2-init.m3u8
 }
 
 /// Media playlist for variant
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn test_media_playlist(variant: usize) -> String {
     format!(
         r#"#EXTM3U
@@ -227,6 +230,7 @@ seg/v{}_2.bin
 }
 
 /// Media playlist with init segment
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn test_media_playlist_with_init(variant: usize) -> String {
     format!(
         r#"#EXTM3U
@@ -251,6 +255,7 @@ seg/v{}_2.bin
 ///
 /// Returns data with format "V{variant}-SEG-{segment}:TEST_SEGMENT_DATA" = 26 bytes prefix,
 /// padded to ~200KB for realistic HLS testing.
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
     let prefix = format!("V{}-SEG-{}:", variant, segment);
     let mut data = prefix.into_bytes();
@@ -265,6 +270,7 @@ pub(crate) fn test_segment_data(variant: usize, segment: usize) -> Vec<u8> {
 }
 
 /// Master playlist with encrypted variant
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn test_master_playlist_encrypted() -> &'static str {
     r#"#EXTM3U
 #EXT-X-VERSION:6
@@ -274,6 +280,7 @@ v0-encrypted.m3u8
 }
 
 /// Media playlist with AES-128 encryption for testing
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn test_media_playlist_encrypted(_variant: usize) -> String {
     r#"#EXTM3U
 #EXT-X-VERSION:6

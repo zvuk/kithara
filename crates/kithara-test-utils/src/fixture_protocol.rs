@@ -75,6 +75,68 @@ pub struct AbrSessionConfig {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct FixedHlsSessionConfig;
 
+/// Configuration for an audio fixtures session.
+///
+/// Serves embedded audio files (silence.wav, test.mp3) for decode tests.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct AudioFixturesSessionConfig;
+
+/// Configuration for a file download test session.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FileSessionConfig {
+    /// Named files to serve, with their content.
+    pub files: Vec<FileEntry>,
+    /// If true, first sequential GET response closes after `close_after_bytes` bytes.
+    pub partial_close: Option<PartialCloseConfig>,
+}
+
+/// A file entry served by the file test session.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FileEntry {
+    /// Filename (path component, e.g. "audio.mp3")
+    pub name: String,
+    /// File content as bytes.
+    pub data: Vec<u8>,
+    /// Content-Type header.
+    pub content_type: String,
+}
+
+/// Configuration for partial close behavior.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct PartialCloseConfig {
+    /// Close the initial sequential stream after this many bytes.
+    pub close_after_bytes: usize,
+    /// Total advertised size (Content-Length in HEAD).
+    pub total_size: usize,
+}
+
+/// Configuration for an HTTP test session (generic endpoint testing).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct HttpTestSessionConfig {
+    /// Routes to register.
+    pub routes: Vec<HttpTestRoute>,
+}
+
+/// A single route in an HTTP test session.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct HttpTestRoute {
+    /// Path (e.g. "/test" -- served at /s/{id}/http/test).
+    pub path: String,
+    /// HTTP status code to return.
+    pub status: u16,
+    /// Response headers.
+    pub headers: Vec<(String, String)>,
+    /// Response body (empty if None).
+    pub body: Option<Vec<u8>>,
+    /// Delay before responding, in milliseconds.
+    pub delay_ms: Option<u64>,
+    /// Whether to support Range requests on this route.
+    pub support_range: bool,
+    /// Number of initial requests to fail with 500 before succeeding.
+    /// Used for retry testing.
+    pub fail_first_n: Option<usize>,
+}
+
 // ── Data Mode ──────────────────────────────────────────────────────
 
 /// How media segment data is generated.

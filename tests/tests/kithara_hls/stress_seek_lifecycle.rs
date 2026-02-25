@@ -22,8 +22,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_test_utils::{Xorshift64, fixture_protocol::DelayRule};
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -214,7 +213,7 @@ async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
     let url = server.url("/master.m3u8").expect("url");
     info!(%url, "HLS server ready");
 
-    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
     let mut store = StoreOptions::new(temp_dir.path());

@@ -12,10 +12,9 @@
 //! This test simulates the mismatch by having the server return
 //! smaller Content-Length for HEAD than the actual GET body.
 
-use std::{
-    io::{Read, Seek, SeekFrom},
-    time::Duration,
-};
+use std::io::{Read, Seek, SeekFrom};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 
 use fixture::scalable_server::{HlsTestServer, HlsTestServerConfig};
 use kithara::{
@@ -23,8 +22,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::{cancel_token, debug_tracing_setup, temp_dir};
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, cancel_token, debug_tracing_setup, temp_dir};
 use tokio_util::sync::CancellationToken;
 
 use super::fixture;
@@ -57,7 +55,7 @@ const ACTUAL_TOTAL: u64 = (ACTUAL_SEGMENT_SIZE * NUM_SEGMENTS) as u64; // 600_00
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn seek_beyond_head_total_within_actual_total(
     _debug_tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = HlsTestServer::new(HlsTestServerConfig {

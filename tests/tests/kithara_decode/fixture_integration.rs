@@ -3,6 +3,7 @@
 //! Tests that verify the audio fixtures work correctly and can be used
 //! by decode tests without external network access.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use super::fixture;
@@ -22,7 +23,7 @@ async fn test_audio_test_server_starts() {
     assert!(mp3_url.as_str().ends_with("/test.mp3"));
 }
 
-#[kithara::test(tokio, timeout(Duration::from_secs(5)))]
+#[kithara::test(native, tokio, timeout(Duration::from_secs(5)))]
 #[case("wav", "/silence.wav", "audio/wav", "WAV file")]
 #[case("mp3", "/test.mp3", "audio/mpeg", "MP3 file")]
 async fn test_audio_test_server_serves_format(

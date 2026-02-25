@@ -1,4 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
+
 //! TDD test: Writer stream end should NOT auto-commit resource.
 //!
 //! Writer yields `WriterItem::StreamEnded { total_bytes }` when the source stream ends.

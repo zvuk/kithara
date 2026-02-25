@@ -19,8 +19,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_test_utils::{Xorshift64, wav::create_saw_wav};
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, Xorshift64, wav::create_saw_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -111,7 +110,7 @@ async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
     info!(%url, segments = SEGMENT_COUNT, "HLS server ready");
 
     // Step 3: Create Audio<Stream<Hls>>
-    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
     let mut store = StoreOptions::new(temp_dir.path());

@@ -3,7 +3,8 @@
 //! Works on both native and WASM targets via `reqwest`.
 
 use crate::fixture_protocol::{
-    AbrSessionConfig, FixedHlsSessionConfig, HlsSessionConfig, SessionResponse,
+    AbrSessionConfig, AudioFixturesSessionConfig, FileSessionConfig, FixedHlsSessionConfig,
+    HlsSessionConfig, HttpTestSessionConfig, SessionResponse,
 };
 
 /// Get the fixture server base URL from environment or default.
@@ -74,6 +75,54 @@ pub async fn create_abr_session(config: &AbrSessionConfig) -> SessionResponse {
         .expect("fixture server: create ABR session")
         .error_for_status()
         .expect("fixture server: bad status for ABR session");
+    parse_response(resp).await
+}
+
+/// Create an audio fixtures session (serves silence.wav and test.mp3).
+pub async fn create_audio_fixtures_session() -> SessionResponse {
+    let base = fixture_server_url();
+    let body = serde_json::to_string(&AudioFixturesSessionConfig).unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/session/audio-fixtures"))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .expect("fixture server: create audio fixtures session")
+        .error_for_status()
+        .expect("fixture server: bad status for audio fixtures session");
+    parse_response(resp).await
+}
+
+/// Create an HTTP test session (generic endpoint testing).
+pub async fn create_http_test_session(config: &HttpTestSessionConfig) -> SessionResponse {
+    let base = fixture_server_url();
+    let body = serde_json::to_string(config).unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/session/http-test"))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .expect("fixture server: create HTTP test session")
+        .error_for_status()
+        .expect("fixture server: bad status for HTTP test session");
+    parse_response(resp).await
+}
+
+/// Create a file download test session.
+pub async fn create_file_session(config: &FileSessionConfig) -> SessionResponse {
+    let base = fixture_server_url();
+    let body = serde_json::to_string(config).unwrap();
+    let resp = reqwest::Client::new()
+        .post(format!("{base}/session/file"))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .await
+        .expect("fixture server: create file session")
+        .error_for_status()
+        .expect("fixture server: bad status for file session");
     parse_response(resp).await
 }
 

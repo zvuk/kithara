@@ -3,6 +3,7 @@
 //! Verifies that 2, 4, and 8 `Audio<Stream<File>>` instances can run
 //! concurrently on a shared `ThreadPool` and each reads PCM data to EOF.
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use kithara::{
@@ -12,7 +13,7 @@ use kithara::{
     platform::ThreadPool,
     stream::Stream,
 };
-use tempfile::TempDir;
+use kithara_test_utils::TestTempDir;
 use tracing::info;
 
 use crate::kithara_decode::fixture::AudioTestServer;
@@ -91,10 +92,10 @@ async fn two_file_instances() {
     let mut handles = Vec::new();
     let mut temps = Vec::new();
     for i in 0..2 {
-        let temp = TempDir::new().expect("temp dir");
+        let temp = TestTempDir::new();
         let audio = create_file_audio(server.mp3_url(), temp.path(), &pool).await;
         temps.push(temp);
-        handles.push(tokio::task::spawn_blocking(move || {
+        handles.push(kithara_platform::spawn_blocking(move || {
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
@@ -129,10 +130,10 @@ async fn four_file_instances() {
     let mut handles = Vec::new();
     let mut temps = Vec::new();
     for i in 0..4 {
-        let temp = TempDir::new().expect("temp dir");
+        let temp = TestTempDir::new();
         let audio = create_file_audio(server.mp3_url(), temp.path(), &pool).await;
         temps.push(temp);
-        handles.push(tokio::task::spawn_blocking(move || {
+        handles.push(kithara_platform::spawn_blocking(move || {
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");
@@ -167,10 +168,10 @@ async fn eight_file_instances() {
     let mut handles = Vec::new();
     let mut temps = Vec::new();
     for i in 0..8 {
-        let temp = TempDir::new().expect("temp dir");
+        let temp = TestTempDir::new();
         let audio = create_file_audio(server.mp3_url(), temp.path(), &pool).await;
         temps.push(temp);
-        handles.push(tokio::task::spawn_blocking(move || {
+        handles.push(kithara_platform::spawn_blocking(move || {
             let mut audio = audio;
             let total = read_to_eof(&mut audio);
             info!(instance = i, total_samples = total, "instance finished");

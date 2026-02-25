@@ -18,8 +18,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_test_utils::{Xorshift64, fixture_protocol::DelayRule};
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -209,7 +208,7 @@ async fn stress_seek_abr_audio() {
     info!(%url, "HLS server ready with 2 variants");
 
     // Create Audio<Stream<Hls>> with Auto ABR starting on V0
-    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
     let hls_config = HlsConfig::new(url)

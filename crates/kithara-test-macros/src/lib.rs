@@ -260,6 +260,20 @@ fn make_test_attrs(args: &TestArgs, is_async: bool) -> TokenStream2 {
     quote! { #native #wasm }
 }
 
+/// Emit a `const _: ()` block that tells `wasm-bindgen-test-runner` to use a
+/// dedicated Web Worker instead of Node.js. Multiple copies are harmless — the
+/// anonymous `const _` wrapper prevents name collisions, and the linker merges
+/// the `__wasm_bindgen_test_unstable` section entries.
+fn make_dedicated_worker_config() -> TokenStream2 {
+    quote! {
+        #[cfg(target_arch = "wasm32")]
+        const _: () = {
+            #[unsafe(link_section = "__wasm_bindgen_test_unstable")]
+            pub static __WBG_TEST_RUN_IN_DEDICATED_WORKER: [u8; 1] = [0x02u8];
+        };
+    }
+}
+
 fn wrap_with_timeout(body: &TokenStream2, timeout: &Option<Expr>, is_async: bool) -> TokenStream2 {
     let Some(dur) = timeout else {
         return quote! { { #body } };
@@ -430,6 +444,8 @@ fn emit_browser_test(
 ) -> TokenStream2 {
     let mut output = TokenStream2::new();
 
+    output.extend(make_dedicated_worker_config());
+
     // WASM side: always async, with ensure_thread_pool init
     let wasm_body = quote! {
         kithara_platform::ensure_thread_pool().await;
@@ -528,13 +544,17 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
     let ret_type = &func.sig.output;
     let body_stmts = &func.block.stmts;
 
-    // wasm-only: cfg(wasm32) + wasm_bindgen_test, no native counterpart
+    // wasm-only: cfg(wasm32) + wasm_bindgen_test, no native counterpart.
+    // Also emits `run_in_dedicated_worker` config so the test runner uses a
+    // browser-based Web Worker instead of Node.js (required by wasm-bindgen-rayon).
     if args.is_wasm_only {
+        let worker_config = make_dedicated_worker_config();
         if cases.is_empty() {
             let preamble = make_preamble(&params, None);
             let full = quote! { { #preamble #(#body_stmts)* } };
             let wrapped = finalize_body(&full, &args, fn_name, true);
             return Ok(quote! {
+                #worker_config
                 #(#remaining_attrs)*
                 #[cfg(target_arch = "wasm32")]
                 #[wasm_bindgen_test::wasm_bindgen_test]
@@ -542,6 +562,7 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
             });
         }
         let mut tests = TokenStream2::new();
+        tests.extend(worker_config);
         for (i, case) in cases.iter().enumerate() {
             let case_name = match &case.name {
                 Some(name) => format_ident!("{}_{}", fn_name, name),

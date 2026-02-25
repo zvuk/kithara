@@ -7,23 +7,30 @@
 //! 2. **Pipeline**: `Audio<Stream<Hls>>` with `ephemeral: true` produces valid audio
 //!    and leaves the temp directory empty (no files created on disk).
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::{sync::Arc, time::Duration};
 
+use kithara::{assets::AssetStoreBuilder, storage::ResourceExt};
+#[cfg(not(target_arch = "wasm32"))]
 use kithara::{
-    assets::{AssetStoreBuilder, StoreOptions},
+    assets::StoreOptions,
     audio::{Audio, AudioConfig},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
-    storage::ResourceExt,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_test_utils::TestTempDir;
+#[cfg(not(target_arch = "wasm32"))]
 use kithara_test_utils::wav::create_saw_wav;
-use tempfile::TempDir;
+#[cfg(not(target_arch = "wasm32"))]
 use tokio_util::sync::CancellationToken;
+#[cfg(not(target_arch = "wasm32"))]
 use tracing::info;
 
+#[cfg(not(target_arch = "wasm32"))]
 use super::fixture::{HlsTestServer, HlsTestServerConfig};
 
-#[kithara::test(wasm, timeout(Duration::from_secs(5)))]
+#[kithara::test(timeout(Duration::from_secs(5)))]
 fn ephemeral_backend_creates_mem_resource() {
     let backend = AssetStoreBuilder::new()
         .ephemeral(true)
@@ -42,7 +49,7 @@ fn ephemeral_backend_creates_mem_resource() {
 
 #[kithara::test(native, timeout(Duration::from_secs(5)))]
 fn disk_backend_creates_mmap_resource() {
-    let temp = TempDir::new().expect("temp dir");
+    let temp = TestTempDir::new();
     let backend = AssetStoreBuilder::new()
         .root_dir(temp.path())
         .asset_root(Some("test"))
@@ -57,15 +64,21 @@ fn disk_backend_creates_mmap_resource() {
     );
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 const SAMPLE_RATE: u32 = 44100;
+#[cfg(not(target_arch = "wasm32"))]
 const CHANNELS: u16 = 2;
+#[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_SIZE: usize = 200_000;
 /// Keep within default LRU cache capacity (5) to avoid auto-eviction of
 /// MemResources which would make `wait_range()` block forever.
+#[cfg(not(target_arch = "wasm32"))]
 const SEGMENT_COUNT: usize = 3;
+#[cfg(not(target_arch = "wasm32"))]
 const TOTAL_BYTES: usize = SEGMENT_COUNT * SEGMENT_SIZE;
 
 /// Recursively count files inside a directory tree.
+#[cfg(not(target_arch = "wasm32"))]
 fn count_files(dir: &std::path::Path) -> usize {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return 0;
@@ -111,7 +124,7 @@ async fn ephemeral_pipeline_no_disk_writes() {
     .await;
 
     let url = server.url("/master.m3u8").expect("url");
-    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
     // Create Audio pipeline with ephemeral=true

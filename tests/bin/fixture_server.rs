@@ -9,6 +9,8 @@
 //! - `POST /session/hls-fixed`     — create fixed HLS session (`TestServer`)
 //! - `POST /session/hls`           — create configurable HLS session (`HlsTestServer`)
 //! - `POST /session/abr`           — create ABR session (`AbrTestServer`)
+//! - `POST /session/audio-fixtures` — create audio fixtures session
+//! - `POST /session/file`          — create file download session
 //! - `DELETE /session/{id}`        — delete session
 //! - `GET  /s/{id}/master.m3u8`    — master playlist
 //! - `GET  /s/{id}/playlist/v{v}.m3u8` — media playlist
@@ -19,6 +21,9 @@
 //! - `GET  /s/{id}/key.bin`        — encryption key
 //! - `GET  /s/{id}/aes/key.bin`    — AES-128 key
 //! - `GET  /s/{id}/aes/seg0.bin`   — AES-128 encrypted segment
+//! - `GET  /s/{id}/audio/{filename}` — audio fixture file (silence.wav, test.mp3)
+//! - `GET  /s/{id}/file/{filename}` — file download with range support
+//! - `HEAD /s/{id}/file/{filename}` — file HEAD (Content-Length, Accept-Ranges)
 //!
 //! Static routes (backwards compatibility):
 //! - `GET  /master.m3u8`, `/master-jitter.m3u8`, `/playlist/{f}`, `/seg/{f}`
@@ -60,8 +65,9 @@ mod server {
         routing::{delete, get, post},
     };
     use kithara_test_utils::fixture_protocol::{
-        AbrSessionConfig, DataMode, EncryptionRequest, HlsSessionConfig, InitMode, PcmPattern,
-        SessionResponse, create_pcm_segments, create_wav_init_header, eval_delay, generate_segment,
+        AbrSessionConfig, DataMode, EncryptionRequest, FileSessionConfig, HlsSessionConfig,
+        HttpTestSessionConfig, InitMode, PcmPattern, SessionResponse, create_pcm_segments,
+        create_wav_init_header, eval_delay, generate_segment,
     };
     use tokio::{net::TcpListener, sync::RwLock};
     use tower_http::cors::CorsLayer;
@@ -72,6 +78,9 @@ mod server {
         FixedHls(FixedHlsData),
         Hls(Box<HlsData>),
         Abr(AbrData),
+        AudioFixtures(AudioFixturesData),
+        File(Box<FileData>),
+        HttpTest(Box<HttpTestData>),
     }
 
     struct Session {
@@ -96,6 +105,26 @@ mod server {
     /// Pre-generated data for an ABR session.
     struct AbrData {
         config: AbrSessionConfig,
+    }
+
+    /// Pre-loaded audio fixture data.
+    struct AudioFixturesData {
+        wav: &'static [u8],
+        mp3: &'static [u8],
+    }
+
+    /// Pre-loaded file data for download tests.
+    struct FileData {
+        config: FileSessionConfig,
+        /// Tracks how many sequential (non-range) GET requests have been made per file.
+        sequential_count: std::sync::atomic::AtomicUsize,
+    }
+
+    /// Data for generic HTTP test sessions.
+    struct HttpTestData {
+        config: HttpTestSessionConfig,
+        /// Per-route request counters (indexed by route path).
+        route_counts: HashMap<String, std::sync::atomic::AtomicUsize>,
     }
 
     type Sessions = Arc<RwLock<HashMap<String, Session>>>;
@@ -126,6 +155,9 @@ mod server {
     const JITTER_MIN_SEGMENT_SIZE: usize = 140_000;
     const JITTER_SIZE_SPAN: usize = 120_000;
     const SESSION_TTL_SECS: u64 = 120;
+
+    const SILENCE_WAV: &[u8] = include_bytes!("../tests/kithara_decode/fixtures/silence_1s.wav");
+    const TEST_MP3: &[u8] = include_bytes!("../tests/kithara_decode/fixtures/test.mp3");
 
     fn create_saw_wav(total_bytes: usize) -> Vec<u8> {
         kithara_test_utils::create_saw_wav(total_bytes)
@@ -635,6 +667,80 @@ seg/v{}_2.bin
         }))
     }
 
+    async fn create_audio_fixtures_session(
+        State(state): State<AppState>,
+    ) -> axum::Json<SessionResponse> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
+        let session = Session {
+            kind: SessionKind::AudioFixtures(AudioFixturesData {
+                wav: SILENCE_WAV,
+                mp3: TEST_MP3,
+            }),
+            created: Instant::now(),
+        };
+        state.sessions.write().await.insert(id.clone(), session);
+        axum::Json(SessionResponse {
+            session_id: id,
+            base_url,
+            total_bytes: 0,
+            init_len: 0,
+        })
+    }
+
+    async fn create_file_session(
+        State(state): State<AppState>,
+        body: String,
+    ) -> Result<axum::Json<SessionResponse>, StatusCode> {
+        let config: FileSessionConfig =
+            serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
+        let session = Session {
+            kind: SessionKind::File(Box::new(FileData {
+                config,
+                sequential_count: std::sync::atomic::AtomicUsize::new(0),
+            })),
+            created: Instant::now(),
+        };
+        state.sessions.write().await.insert(id.clone(), session);
+        Ok(axum::Json(SessionResponse {
+            session_id: id,
+            base_url,
+            total_bytes: 0,
+            init_len: 0,
+        }))
+    }
+
+    async fn create_http_test_session(
+        State(state): State<AppState>,
+        body: String,
+    ) -> Result<axum::Json<SessionResponse>, StatusCode> {
+        let config: HttpTestSessionConfig =
+            serde_json::from_str(&body).map_err(|_| StatusCode::BAD_REQUEST)?;
+        let id = uuid::Uuid::new_v4().to_string();
+        let base_url = format!("http://127.0.0.1:{}/s/{id}", state.port);
+        let route_counts = config
+            .routes
+            .iter()
+            .map(|r| (r.path.clone(), std::sync::atomic::AtomicUsize::new(0)))
+            .collect();
+        let session = Session {
+            kind: SessionKind::HttpTest(Box::new(HttpTestData {
+                config,
+                route_counts,
+            })),
+            created: Instant::now(),
+        };
+        state.sessions.write().await.insert(id.clone(), session);
+        Ok(axum::Json(SessionResponse {
+            session_id: id,
+            base_url,
+            total_bytes: 0,
+            init_len: 0,
+        }))
+    }
+
     async fn delete_session_handler(
         State(state): State<AppState>,
         Path(id): Path<String>,
@@ -659,6 +765,9 @@ seg/v{}_2.bin
             SessionKind::FixedHls(_) => Ok(fixed_master_playlist().to_string()),
             SessionKind::Hls(data) => Ok(hls_master_playlist(&data.config)),
             SessionKind::Abr(data) => Ok(data.config.master_playlist.clone()),
+            SessionKind::AudioFixtures(_) | SessionKind::File(_) | SessionKind::HttpTest(_) => {
+                Err(StatusCode::NOT_FOUND)
+            }
         }
     }
 
@@ -671,7 +780,11 @@ seg/v{}_2.bin
         let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
         match &session.kind {
             SessionKind::FixedHls(_) => Ok(fixed_master_playlist_with_init().to_string()),
-            SessionKind::Hls(_) | SessionKind::Abr(_) => Err(StatusCode::NOT_FOUND),
+            SessionKind::Hls(_)
+            | SessionKind::Abr(_)
+            | SessionKind::AudioFixtures(_)
+            | SessionKind::File(_)
+            | SessionKind::HttpTest(_) => Err(StatusCode::NOT_FOUND),
         }
     }
 
@@ -684,7 +797,11 @@ seg/v{}_2.bin
         let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
         match &session.kind {
             SessionKind::FixedHls(_) => Ok(fixed_master_playlist_encrypted().to_string()),
-            SessionKind::Hls(_) | SessionKind::Abr(_) => Err(StatusCode::NOT_FOUND),
+            SessionKind::Hls(_)
+            | SessionKind::Abr(_)
+            | SessionKind::AudioFixtures(_)
+            | SessionKind::File(_)
+            | SessionKind::HttpTest(_) => Err(StatusCode::NOT_FOUND),
         }
     }
 
@@ -697,7 +814,10 @@ seg/v{}_2.bin
         let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
         let variant = parse_variant_from_playlist(&filename).unwrap_or(0);
         match &session.kind {
-            SessionKind::FixedHls(_) => Err(StatusCode::NOT_FOUND),
+            SessionKind::FixedHls(_)
+            | SessionKind::AudioFixtures(_)
+            | SessionKind::File(_)
+            | SessionKind::HttpTest(_) => Err(StatusCode::NOT_FOUND),
             SessionKind::Hls(data) => Ok(hls_media_playlist(&data.config, variant)),
             SessionKind::Abr(data) => Ok(abr_media_playlist(variant, data.config.has_init)),
         }
@@ -740,7 +860,10 @@ seg/v{}_2.bin
                     .unwrap_or(0);
                 Ok(abr_media_playlist(variant, data.config.has_init))
             }
-            SessionKind::Hls(_) => Err(StatusCode::NOT_FOUND),
+            SessionKind::Hls(_)
+            | SessionKind::AudioFixtures(_)
+            | SessionKind::File(_)
+            | SessionKind::HttpTest(_) => Err(StatusCode::NOT_FOUND),
         }
     }
 
@@ -758,6 +881,9 @@ seg/v{}_2.bin
                 .head_reported_segment_size
                 .unwrap_or(data.config.segment_size),
             SessionKind::FixedHls(_) | SessionKind::Abr(_) => 200_000,
+            SessionKind::AudioFixtures(_) | SessionKind::File(_) | SessionKind::HttpTest(_) => {
+                return Err(StatusCode::NOT_FOUND);
+            }
         };
         Ok((StatusCode::OK, [(header::CONTENT_LENGTH, size.to_string())]))
     }
@@ -797,6 +923,9 @@ seg/v{}_2.bin
                 };
                 drop(sessions);
                 Ok(abr_segment_data(variant, segment, delay, size).await)
+            }
+            SessionKind::AudioFixtures(_) | SessionKind::File(_) | SessionKind::HttpTest(_) => {
+                Err(StatusCode::NOT_FOUND)
             }
         }
     }
@@ -839,6 +968,9 @@ seg/v{}_2.bin
                 .cloned()
                 .ok_or(StatusCode::NOT_FOUND),
             SessionKind::Abr(_) => Ok(abr_init_data(variant)),
+            SessionKind::AudioFixtures(_) | SessionKind::File(_) | SessionKind::HttpTest(_) => {
+                Err(StatusCode::NOT_FOUND)
+            }
         }
     }
 
@@ -852,7 +984,10 @@ seg/v{}_2.bin
         match &session.kind {
             SessionKind::FixedHls(_) => Ok(fixed_test_key_data()),
             SessionKind::Hls(data) => Ok(data.key.clone()),
-            SessionKind::Abr(_) => Err(StatusCode::NOT_FOUND),
+            SessionKind::Abr(_)
+            | SessionKind::AudioFixtures(_)
+            | SessionKind::File(_)
+            | SessionKind::HttpTest(_) => Err(StatusCode::NOT_FOUND),
         }
     }
 
@@ -865,7 +1000,11 @@ seg/v{}_2.bin
         let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
         match &session.kind {
             SessionKind::FixedHls(_) => Ok(fixed_aes128_key_bytes()),
-            SessionKind::Hls(_) | SessionKind::Abr(_) => Err(StatusCode::NOT_FOUND),
+            SessionKind::Hls(_)
+            | SessionKind::Abr(_)
+            | SessionKind::AudioFixtures(_)
+            | SessionKind::File(_)
+            | SessionKind::HttpTest(_) => Err(StatusCode::NOT_FOUND),
         }
     }
 
@@ -878,7 +1017,185 @@ seg/v{}_2.bin
         let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
         match &session.kind {
             SessionKind::FixedHls(_) => Ok(fixed_aes128_ciphertext()),
-            SessionKind::Hls(_) | SessionKind::Abr(_) => Err(StatusCode::NOT_FOUND),
+            SessionKind::Hls(_)
+            | SessionKind::Abr(_)
+            | SessionKind::AudioFixtures(_)
+            | SessionKind::File(_)
+            | SessionKind::HttpTest(_) => Err(StatusCode::NOT_FOUND),
+        }
+    }
+
+    // ── Audio fixtures route handler ─────────────────────────────────
+
+    #[expect(clippy::significant_drop_tightening)]
+    async fn session_audio_file(
+        State(state): State<AppState>,
+        Path((id, filename)): Path<(String, String)>,
+    ) -> Result<Response<Body>, StatusCode> {
+        let sessions = state.sessions.read().await;
+        let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+        let SessionKind::AudioFixtures(data) = &session.kind else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+        let (bytes, content_type) = match filename.as_str() {
+            "silence.wav" => (data.wav, "audio/wav"),
+            "test.mp3" => (data.mp3, "audio/mpeg"),
+            _ => return Err(StatusCode::NOT_FOUND),
+        };
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", content_type)
+            .header("Content-Length", bytes.len().to_string())
+            .body(Body::from(bytes.to_vec()))
+            .unwrap())
+    }
+
+    // ── File download route handlers ─────────────────────────────────
+
+    #[expect(clippy::significant_drop_tightening)]
+    async fn session_file_get(
+        State(state): State<AppState>,
+        Path((id, filename)): Path<(String, String)>,
+        headers: HeaderMap,
+    ) -> Result<Response<Body>, StatusCode> {
+        let sessions = state.sessions.read().await;
+        let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+        let SessionKind::File(data) = &session.kind else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+        let entry = data
+            .config
+            .files
+            .iter()
+            .find(|f| f.name == filename)
+            .ok_or(StatusCode::NOT_FOUND)?;
+
+        // Check for partial close on sequential (non-range) requests
+        if let Some(ref pc) = data.config.partial_close
+            && parse_range_header(&headers).is_none()
+        {
+            let count = data
+                .sequential_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if count == 0 {
+                // First sequential request: send partial data then close
+                let truncated = &entry.data[..pc.close_after_bytes.min(entry.data.len())];
+                return Ok(Response::builder()
+                    .status(StatusCode::OK)
+                    .header(header::CONTENT_TYPE, &entry.content_type)
+                    .header(header::CONTENT_LENGTH, pc.total_size.to_string())
+                    .header(header::ACCEPT_RANGES, "bytes")
+                    .body(Body::from(truncated.to_vec()))
+                    .unwrap());
+            }
+        }
+
+        // Normal request with range support
+        Ok(build_range_response(&entry.data, &headers, true))
+    }
+
+    #[expect(clippy::significant_drop_tightening)]
+    async fn session_file_head(
+        State(state): State<AppState>,
+        Path((id, filename)): Path<(String, String)>,
+    ) -> Result<Response<Body>, StatusCode> {
+        let sessions = state.sessions.read().await;
+        let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+        let SessionKind::File(data) = &session.kind else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+        let entry = data
+            .config
+            .files
+            .iter()
+            .find(|f| f.name == filename)
+            .ok_or(StatusCode::NOT_FOUND)?;
+
+        let size = data
+            .config
+            .partial_close
+            .as_ref()
+            .map_or(entry.data.len(), |pc| pc.total_size);
+
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, &entry.content_type)
+            .header(header::CONTENT_LENGTH, size.to_string())
+            .header(header::ACCEPT_RANGES, "bytes")
+            .body(Body::empty())
+            .unwrap())
+    }
+
+    // ── HTTP test route handler ─────────────────────────────────────
+
+    async fn session_http_test(
+        State(state): State<AppState>,
+        Path((id, path)): Path<(String, String)>,
+        headers: HeaderMap,
+        method: axum::http::Method,
+    ) -> Result<Response<Body>, StatusCode> {
+        let sessions = state.sessions.read().await;
+        let session = sessions.get(&id).ok_or(StatusCode::NOT_FOUND)?;
+        let SessionKind::HttpTest(data) = &session.kind else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+
+        let route_path = format!("/{path}");
+        let route = data
+            .config
+            .routes
+            .iter()
+            .find(|r| r.path == route_path)
+            .ok_or(StatusCode::NOT_FOUND)?;
+
+        // Track request count
+        let count = data
+            .route_counts
+            .get(&route_path)
+            .map_or(0, |c| c.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+
+        // Clone what we need before dropping the read lock
+        let route = route.clone();
+        drop(sessions);
+
+        // Handle fail_first_n (for retry tests)
+        if let Some(fail_n) = route.fail_first_n
+            && count < fail_n
+        {
+            return Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::empty())
+                .unwrap());
+        }
+
+        // Delay if configured
+        if let Some(delay_ms) = route.delay_ms
+            && delay_ms > 0
+        {
+            tokio::time::sleep(Duration::from_millis(delay_ms)).await;
+        }
+
+        let body_data = route.body.unwrap_or_default();
+
+        // Range support
+        if route.support_range && !body_data.is_empty() {
+            return Ok(build_range_response(
+                &body_data,
+                &headers,
+                method != axum::http::Method::HEAD,
+            ));
+        }
+
+        let status = StatusCode::from_u16(route.status).unwrap_or(StatusCode::OK);
+        let mut builder = Response::builder().status(status);
+        for (key, value) in &route.headers {
+            builder = builder.header(key.as_str(), value.as_str());
+        }
+        if method == axum::http::Method::HEAD {
+            builder = builder.header(header::CONTENT_LENGTH, body_data.len().to_string());
+            Ok(builder.body(Body::empty()).unwrap())
+        } else {
+            Ok(builder.body(Body::from(body_data)).unwrap())
         }
     }
 
@@ -1052,6 +1369,12 @@ seg/v{}_2.bin
             .route("/session/hls-fixed", post(create_fixed_hls_session))
             .route("/session/hls", post(create_hls_session))
             .route("/session/abr", post(create_abr_session))
+            .route(
+                "/session/audio-fixtures",
+                post(create_audio_fixtures_session),
+            )
+            .route("/session/file", post(create_file_session))
+            .route("/session/http-test", post(create_http_test_session))
             .route("/session/{id}", delete(delete_session_handler))
             // Session-based content routes
             .route("/s/{id}/master.m3u8", get(session_master))
@@ -1070,6 +1393,17 @@ seg/v{}_2.bin
             .route("/s/{id}/key.bin", get(session_key))
             .route("/s/{id}/aes/key.bin", get(session_aes_key))
             .route("/s/{id}/aes/seg0.bin", get(session_aes_seg))
+            .route("/s/{id}/audio/{filename}", get(session_audio_file))
+            .route(
+                "/s/{id}/file/{filename}",
+                get(session_file_get).head(session_file_head),
+            )
+            .route(
+                "/s/{id}/http/{*path}",
+                get(session_http_test)
+                    .head(session_http_test)
+                    .post(session_http_test),
+            )
             // Static routes (backwards compatibility for WASM stress tests)
             .route("/master.m3u8", get(static_master_uniform))
             .route("/master-jitter.m3u8", get(static_master_jitter))
@@ -1090,7 +1424,9 @@ seg/v{}_2.bin
         println!("Health: http://{addr}/health");
         println!("Static master (uniform): http://{addr}/master.m3u8");
         println!("Static master (jitter):  http://{addr}/master-jitter.m3u8");
-        println!("Session API: POST http://{addr}/session/hls-fixed | /session/hls | /session/abr");
+        println!(
+            "Session API: POST http://{addr}/session/hls-fixed | /session/hls | /session/abr | /session/audio-fixtures"
+        );
         println!("Press Ctrl+C to stop");
 
         axum::serve(listener, app)

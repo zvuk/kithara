@@ -15,8 +15,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::{Xorshift64, temp_dir};
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
 use tracing::info;
 
 const HLS_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
@@ -148,7 +147,7 @@ async fn next_chunk_with_timeout(
 )]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
-async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_dir: TempDir) {
+async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_dir: TestTempDir) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::INFO)

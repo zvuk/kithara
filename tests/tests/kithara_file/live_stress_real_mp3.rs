@@ -14,8 +14,7 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
-use kithara_test_utils::{Xorshift64, temp_dir};
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, Xorshift64, temp_dir};
 use tracing::info;
 
 const MP3_URL: &str = "https://stream.silvercomet.top/track.mp3";
@@ -116,7 +115,7 @@ async fn next_chunk_with_timeout(
 )]
 #[case::mmap(false)]
 #[case::ephemeral(true)]
-async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir: TempDir) {
+async fn live_stress_real_mp3_seek_read_cache(#[case] ephemeral: bool, temp_dir: TestTempDir) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::INFO)

@@ -34,7 +34,7 @@ const SEEK_ITERATIONS: usize = 1000;
 /// 5. Sample 1000 random seek positions in `(0, duration - chunk_duration)`
 /// 6. For each: seek → read → verify data (valid range, L==R channels)
 /// 7. Final: seek to `duration - chunk_duration`, read all → verify EOF
-#[kithara::test(tokio, timeout(Duration::from_secs(120)))]
+#[kithara::test(timeout(Duration::from_secs(120)))]
 async fn stress_random_seek_read_synthetic_wav() {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
@@ -93,7 +93,7 @@ async fn stress_random_seek_read_synthetic_wav() {
     info!(chunk_duration_secs, chunk_samples, "Read chunk size");
 
     // Steps 5-7: Run seek+read loop in blocking thread
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         let mut rng = Xorshift64::new(0xDEAD_BEEF_CAFE_1337);
         let mut buf = vec![0.0f32; chunk_samples];
 
@@ -237,9 +237,6 @@ async fn stress_random_seek_read_synthetic_wav() {
     })
     .await;
 
-    match result {
-        Ok(()) => info!("Stress test passed"),
-        Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
-        Err(e) => panic!("spawn_blocking failed: {e}"),
-    }
+    result.expect("spawn_blocking failed");
+    info!("Stress test passed");
 }

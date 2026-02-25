@@ -14,7 +14,10 @@ pub(crate) mod server;
 
 // Re-export commonly used types
 pub(crate) use assets::*;
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use crypto::*;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use crypto::{aes128_iv, aes128_plaintext_segment};
 // Common types
 use kithara::hls::HlsError;
 pub(crate) use scalable_server::*;

@@ -1,3 +1,4 @@
+#![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
 use std::time::Duration;
@@ -92,14 +93,14 @@ fn app() -> Router {
 #[kithara::test(tokio)]
 async fn audio_file_ephemeral_mp3_does_not_end_early() {
     let server = TestHttpServer::new(app()).await;
-    let temp_dir = tempfile::TempDir::new().unwrap();
+    let temp_dir = kithara_test_utils::TestTempDir::new();
 
     let file_config = FileConfig::new(server.url("/test.mp3").into())
         .with_store(StoreOptions::new(temp_dir.path()).with_ephemeral(true));
     let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
     let mut audio = Audio::<Stream<File>>::new(config).await.unwrap();
 
-    let (samples_read, position, eof) = tokio::task::spawn_blocking(move || {
+    let (samples_read, position, eof) = kithara_platform::spawn_blocking(move || {
         let mut total = 0usize;
         let mut buf = [0.0f32; 4096];
 

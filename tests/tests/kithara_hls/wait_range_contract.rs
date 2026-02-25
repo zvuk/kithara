@@ -5,18 +5,16 @@
 //! 1. Rapid seek burst never returns premature EOF.
 //! 2. After seek burst, sequential tail read is contiguous and exact.
 
-use std::{
-    io::{Read, Seek, SeekFrom},
-    time::Duration,
-};
+use std::io::{Read, Seek, SeekFrom};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 
 use kithara::{
     assets::StoreOptions,
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::Xorshift64;
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, Xorshift64};
 use tokio_util::sync::CancellationToken;
 
 use super::fixture::{HlsTestServer, HlsTestServerConfig};
@@ -31,7 +29,7 @@ const TAIL_CHUNK_SIZE: usize = 32 * 1024;
 #[case::disk(false)]
 #[case::ephemeral(true)]
 async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
-    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_dir = TestTempDir::new();
     let server = HlsTestServer::new(HlsTestServerConfig {
         segment_size: SEGMENT_SIZE,
         segments_per_variant: SEGMENT_COUNT,

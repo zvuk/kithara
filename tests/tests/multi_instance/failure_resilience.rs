@@ -13,8 +13,7 @@ use kithara::{
     platform::ThreadPool,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_test_utils::wav::create_test_wav;
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -114,16 +113,16 @@ async fn healthy_instances_survive_cancelled_peers() {
     let pool = ThreadPool::with_num_threads(4).expect("thread pool");
     let wav_data = generate_wav_data();
 
-    let mut handles: Vec<tokio::task::JoinHandle<Outcome>> = Vec::new();
+    let mut handles: Vec<kithara_platform::BlockingHandle<Outcome>> = Vec::new();
 
     // Healthy instances (0, 1)
     for i in 0..2 {
         let server = create_server(&wav_data).await;
-        let temp = TempDir::new().expect("temp dir");
+        let temp = TestTempDir::new();
         let cancel = CancellationToken::new();
         let audio = create_hls_audio(&server, temp.path(), &pool, cancel).await;
 
-        handles.push(tokio::task::spawn_blocking(move || {
+        handles.push(kithara_platform::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -142,7 +141,7 @@ async fn healthy_instances_survive_cancelled_peers() {
     // mid-stream. The audio pipeline should terminate cleanly.
     for i in 2..4 {
         let server = create_server(&wav_data).await;
-        let temp = TempDir::new().expect("temp dir");
+        let temp = TestTempDir::new();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
         let audio = create_hls_audio(&server, temp.path(), &pool, cancel).await;
@@ -153,7 +152,7 @@ async fn healthy_instances_survive_cancelled_peers() {
             cancel_clone.cancel();
         });
 
-        handles.push(tokio::task::spawn_blocking(move || {
+        handles.push(kithara_platform::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -220,16 +219,16 @@ async fn eight_instances_half_cancelled() {
     let pool = ThreadPool::with_num_threads(4).expect("thread pool");
     let wav_data = generate_wav_data();
 
-    let mut handles: Vec<tokio::task::JoinHandle<Outcome>> = Vec::new();
+    let mut handles: Vec<kithara_platform::BlockingHandle<Outcome>> = Vec::new();
 
     // 4 healthy instances
     for i in 0..4 {
         let server = create_server(&wav_data).await;
-        let temp = TempDir::new().expect("temp dir");
+        let temp = TestTempDir::new();
         let cancel = CancellationToken::new();
         let audio = create_hls_audio(&server, temp.path(), &pool, cancel).await;
 
-        handles.push(tokio::task::spawn_blocking(move || {
+        handles.push(kithara_platform::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;
@@ -246,7 +245,7 @@ async fn eight_instances_half_cancelled() {
     // 4 cancelled instances
     for i in 4..8 {
         let server = create_server(&wav_data).await;
-        let temp = TempDir::new().expect("temp dir");
+        let temp = TestTempDir::new();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
         let audio = create_hls_audio(&server, temp.path(), &pool, cancel).await;
@@ -258,7 +257,7 @@ async fn eight_instances_half_cancelled() {
             cancel_clone.cancel();
         });
 
-        handles.push(tokio::task::spawn_blocking(move || {
+        handles.push(kithara_platform::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             let mut audio = audio;

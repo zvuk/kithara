@@ -9,10 +9,9 @@
 //! 3. Seek returns data from correct variant
 //! 4. Multiple seeks maintain correct variant tracking
 
-use std::{
-    io::{Read, Seek, SeekFrom},
-    time::Duration,
-};
+use std::io::{Read, Seek, SeekFrom};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 
 use fixture::TestServer;
 use kithara::{
@@ -20,8 +19,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::{cancel_token, temp_dir, tracing_setup};
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, cancel_token, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -53,7 +51,7 @@ fn variant_from_data(data: &[u8]) -> Option<usize> {
 #[case(2)]
 async fn manual_variant_returns_correct_data(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
     #[case] variant: usize,
 ) {
@@ -98,7 +96,7 @@ async fn manual_variant_returns_correct_data(
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn sequential_read_across_segments_maintains_variant(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
@@ -172,7 +170,7 @@ async fn sequential_read_across_segments_maintains_variant(
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn after_seek_sequential_reads_maintain_variant(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
@@ -229,7 +227,7 @@ async fn after_seek_sequential_reads_maintain_variant(
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn multiple_seeks_maintain_correct_variant(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
@@ -326,7 +324,7 @@ async fn multiple_seeks_maintain_correct_variant(
 #[case(400_000)] // Start of segment 2
 async fn seek_to_segment_boundary_reads_correct_segment(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
     #[case] position: u64,
 ) {

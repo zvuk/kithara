@@ -2,7 +2,9 @@
 
 //! Diagnostic test for `sequential_read_across_segments_maintains_variant`
 
-use std::{io::Read, time::Duration};
+use std::io::Read;
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 
 use fixture::TestServer;
 use kithara::{
@@ -11,8 +13,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::{cancel_token, debug_tracing_setup, temp_dir};
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, cancel_token, debug_tracing_setup, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -22,7 +23,7 @@ use super::fixture;
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn debug_sequential_read(
     _debug_tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     info!("=== Starting debug_sequential_read test ===");

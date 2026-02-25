@@ -11,8 +11,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::temp_dir;
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::info;
 
 const HLS_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
@@ -29,7 +28,7 @@ const HLS_URL: &str = "https://stream.silvercomet.top/hls/master.m3u8";
     env(NO_PROXY = "stream.silvercomet.top"),
     soft_fail("connection", "timeout", "refused", "resolve", "dns", "network")
 )]
-async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TempDir) {
+async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)
@@ -182,7 +181,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TempDir) {
     env(NO_PROXY = "stream.silvercomet.top"),
     soft_fail("connection", "timeout", "refused", "resolve", "dns", "network")
 )]
-async fn seek_sequence_from_log_real_stream(temp_dir: TempDir) {
+async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
     let _ = tracing_subscriber::fmt()
         .with_test_writer()
         .with_max_level(tracing::Level::DEBUG)

@@ -20,8 +20,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_test_utils::{Xorshift64, fixture_protocol::DelayRule};
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
@@ -34,6 +33,7 @@ const SEGMENT_COUNT: usize = 50;
 const SEEK_ITERATIONS: usize = 200;
 const SAW_PERIOD: usize = 65536;
 const WARMUP_TIMEOUT_SECS: u64 = 30;
+#[cfg(not(target_arch = "wasm32"))]
 const TEST_TIMEOUT_SECS: u64 = 60;
 const POST_SWITCH_CHUNKS: usize = 50;
 const CHUNKS_PER_SEEK: usize = 5;
@@ -243,7 +243,7 @@ async fn stress_chunk_integrity(#[case] ephemeral: bool) {
     info!(%url, "HLS server ready with 2 variants");
 
     // Create Audio<Stream<Hls>> with Auto ABR starting on V0
-    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
     let mut store = StoreOptions::new(temp_dir.path());

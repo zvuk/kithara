@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
 use fixture::*;

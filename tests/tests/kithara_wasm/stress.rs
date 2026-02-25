@@ -19,13 +19,10 @@ use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
 use tracing::{info, warn};
 use url::Url;
 use wasm_bindgen_futures::JsFuture;
-use wasm_bindgen_test::wasm_bindgen_test_configure;
 
 mod kithara {
-    pub use kithara_test_macros::test;
+    pub(crate) use kithara_test_macros::test;
 }
-
-wasm_bindgen_test_configure!(run_in_dedicated_worker);
 
 /// Number of rayon worker threads for the thread pool.
 const THREAD_COUNT: usize = 2;

@@ -2,18 +2,22 @@
 //!
 //! Provides AES-128 encryption helpers for testing encrypted HLS content.
 
+#[cfg(not(target_arch = "wasm32"))]
 use aes::Aes128;
+#[cfg(not(target_arch = "wasm32"))]
 use cbc::{
     Encryptor,
     cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7},
 };
 
 /// Generate init segment data for variant
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn init_data(variant: usize) -> Vec<u8> {
     format!("V{}-INIT:", variant).into_bytes()
 }
 
 /// AES-128 encryption key bytes for testing
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn aes128_key_bytes() -> Vec<u8> {
     b"0123456789abcdef".to_vec()
 }
@@ -29,6 +33,7 @@ pub(crate) fn aes128_plaintext_segment() -> Vec<u8> {
 }
 
 /// Encrypted ciphertext using AES-128-CBC
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn aes128_ciphertext() -> Vec<u8> {
     let key = aes128_key_bytes();
     let iv = aes128_iv();
@@ -43,6 +48,7 @@ pub(crate) fn aes128_ciphertext() -> Vec<u8> {
 }
 
 /// Test init data with extended content
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn test_init_data(variant: usize) -> Vec<u8> {
     let prefix = format!("V{}-INIT:", variant);
     let mut data = prefix.into_bytes();
@@ -51,6 +57,7 @@ pub(crate) fn test_init_data(variant: usize) -> Vec<u8> {
 }
 
 /// Test encryption key data
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn test_key_data() -> Vec<u8> {
     b"TEST_KEY_DATA_123456".to_vec()
 }

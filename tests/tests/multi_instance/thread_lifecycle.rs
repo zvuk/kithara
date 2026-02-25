@@ -24,8 +24,7 @@ use kithara::{
     platform::ThreadPool,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_test_utils::wav::create_test_wav;
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -158,7 +157,7 @@ async fn file_threads_released_after_drop() {
 
     let pool = ThreadPool::with_num_threads(4).expect("thread pool");
     let server = AudioTestServer::new().await;
-    let temp = TempDir::new().expect("temp dir");
+    let temp = TestTempDir::new();
 
     // Create and partially read a File instance, then drop it.
     let file_config = FileConfig::new(server.mp3_url().into())
@@ -171,7 +170,7 @@ async fn file_threads_released_after_drop() {
         .await
         .expect("create audio");
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         read_partial_and_drop_file(audio, 10_000);
     })
     .await
@@ -207,7 +206,7 @@ async fn hls_threads_released_after_drop() {
     .await;
 
     let url = server.url("/master.m3u8").expect("url");
-    let temp = TempDir::new().expect("temp dir");
+    let temp = TestTempDir::new();
     let cancel = CancellationToken::new();
 
     let hls_config = HlsConfig::new(url)
@@ -227,7 +226,7 @@ async fn hls_threads_released_after_drop() {
         .await
         .expect("create audio");
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         let _server = server;
         let _temp = temp;
         read_partial_and_drop_hls(audio, 10_000);
@@ -256,7 +255,7 @@ async fn sequential_file_create_destroy_no_leak() {
     let server = AudioTestServer::new().await;
 
     for round in 0..10 {
-        let temp = TempDir::new().expect("temp dir");
+        let temp = TestTempDir::new();
         let file_config = FileConfig::new(server.mp3_url().into())
             .with_store(StoreOptions::new(temp.path()))
             .with_thread_pool(pool.clone());
@@ -267,7 +266,7 @@ async fn sequential_file_create_destroy_no_leak() {
             .await
             .expect("create audio");
 
-        tokio::task::spawn_blocking(move || {
+        kithara_platform::spawn_blocking(move || {
             let _temp = temp;
             read_partial_and_drop_file(audio, 5_000);
         })
@@ -308,7 +307,7 @@ async fn sequential_hls_create_destroy_no_leak() {
         .await;
 
         let url = server.url("/master.m3u8").expect("url");
-        let temp = TempDir::new().expect("temp dir");
+        let temp = TestTempDir::new();
         let cancel = CancellationToken::new();
 
         let hls_config = HlsConfig::new(url)
@@ -328,7 +327,7 @@ async fn sequential_hls_create_destroy_no_leak() {
             .await
             .expect("create audio");
 
-        tokio::task::spawn_blocking(move || {
+        kithara_platform::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
             read_partial_and_drop_hls(audio, 5_000);
@@ -362,7 +361,7 @@ async fn pool_recovers_after_saturation() {
     // Phase 1: saturate the pool with 2 instances (File + HLS)
     info!("phase 1: saturating pool");
 
-    let temp1 = TempDir::new().expect("temp dir");
+    let temp1 = TestTempDir::new();
     let file_config = FileConfig::new(server.mp3_url().into())
         .with_store(StoreOptions::new(temp1.path()))
         .with_thread_pool(pool.clone());
@@ -382,7 +381,7 @@ async fn pool_recovers_after_saturation() {
     })
     .await;
     let url = hls_server.url("/master.m3u8").expect("url");
-    let temp2 = TempDir::new().expect("temp dir");
+    let temp2 = TestTempDir::new();
     let cancel = CancellationToken::new();
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(temp2.path()))
@@ -401,11 +400,11 @@ async fn pool_recovers_after_saturation() {
         .expect("create hls audio");
 
     // Read partially from both, then drop.
-    let h1 = tokio::task::spawn_blocking(move || {
+    let h1 = kithara_platform::spawn_blocking(move || {
         let _temp = temp1;
         read_partial_and_drop_file(audio_file, 10_000);
     });
-    let h2 = tokio::task::spawn_blocking(move || {
+    let h2 = kithara_platform::spawn_blocking(move || {
         let _server = hls_server;
         let _temp = temp2;
         read_partial_and_drop_hls(audio_hls, 10_000);
@@ -423,7 +422,7 @@ async fn pool_recovers_after_saturation() {
     // Phase 3: create new instances on the recovered pool
     info!("phase 3: creating new instances on recovered pool");
 
-    let temp3 = TempDir::new().expect("temp dir");
+    let temp3 = TestTempDir::new();
     let file_config = FileConfig::new(server.mp3_url().into())
         .with_store(StoreOptions::new(temp3.path()))
         .with_thread_pool(pool.clone());
@@ -435,7 +434,7 @@ async fn pool_recovers_after_saturation() {
         .expect("create audio on recovered pool");
 
     // Read to EOF to prove the pool is fully functional.
-    let total = tokio::task::spawn_blocking(move || {
+    let total = kithara_platform::spawn_blocking(move || {
         let _temp = temp3;
         let mut buf = vec![0.0f32; 4096];
         let mut total = 0u64;

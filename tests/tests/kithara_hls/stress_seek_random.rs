@@ -7,10 +7,11 @@
 //! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
 //! No external network required.
 
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 use std::{
     io::{Read, Seek, SeekFrom},
     sync::Arc,
-    time::Duration,
 };
 
 use kithara::{
@@ -18,8 +19,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::Xorshift64;
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, Xorshift64};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -103,7 +103,7 @@ async fn stress_random_seek_read_hls(
     );
 
     // Step 2: Create Stream<Hls>
-    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_dir = TestTempDir::new();
     let cancel = CancellationToken::new();
 
     let config = HlsConfig::new(url)

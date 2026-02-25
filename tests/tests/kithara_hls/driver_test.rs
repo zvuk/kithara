@@ -15,8 +15,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::{cancel_token, temp_dir, tracing_setup};
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, cancel_token, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -37,7 +36,7 @@ use super::fixture::{
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn test_driver_seek_after_playlist_finished(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
@@ -102,7 +101,7 @@ async fn test_driver_seek_after_playlist_finished(
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
 async fn test_driver_abr_seek_backward(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = AbrTestServer::new(

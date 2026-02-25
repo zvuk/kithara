@@ -9,10 +9,9 @@
 //!
 //! Note: ABR is set to Manual(0) to fix variant and avoid switching during tests.
 
-use std::{
-    io::{Read, Seek, SeekFrom},
-    time::Duration,
-};
+use std::io::{Read, Seek, SeekFrom};
+#[cfg(not(target_arch = "wasm32"))]
+use std::time::Duration;
 
 use fixture::TestServer;
 use kithara::{
@@ -20,8 +19,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_test_utils::{cancel_token, temp_dir, tracing_setup};
-use tempfile::TempDir;
+use kithara_test_utils::{TestTempDir, cancel_token, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -41,7 +39,7 @@ const SEGMENT_SIZE: u64 = 200_000;
 #[case(400_000, b"V0-SEG-2:")] // Start of segment 2
 async fn hls_stream_seek_to_segment_start(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
     #[case] seek_pos: u64,
     #[case] expected_prefix: &[u8],
@@ -80,7 +78,7 @@ async fn hls_stream_seek_to_segment_start(
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn hls_stream_seek_current(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
@@ -122,7 +120,7 @@ async fn hls_stream_seek_current(
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn hls_stream_multiple_seeks(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
@@ -167,7 +165,7 @@ async fn hls_stream_multiple_seeks(
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn hls_stream_read_all_then_seek_back(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
@@ -227,7 +225,7 @@ async fn hls_stream_read_all_then_seek_back(
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn hls_with_manual_abr_uses_fixed_variant(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
@@ -260,7 +258,7 @@ async fn hls_with_manual_abr_uses_fixed_variant(
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(10)))]
 async fn hls_seek_across_all_segments_with_fixed_abr(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;
@@ -316,7 +314,7 @@ async fn hls_seek_across_all_segments_with_fixed_abr(
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
 async fn hls_seek_different_variants_return_different_data(
     _tracing_setup: (),
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     cancel_token: CancellationToken,
 ) {
     let server = TestServer::new().await;

@@ -1,10 +1,14 @@
 #![forbid(unsafe_code)]
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::assets::EvictConfig;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::internal::Assets;
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
-    internal::Assets,
+    assets::{AssetStore, AssetStoreBuilder, ResourceKey},
     storage::ResourceExt,
 };
 use kithara_test_utils::temp_dir;
@@ -17,15 +21,29 @@ fn read_bytes<R: ResourceExt>(res: &R, offset: u64, len: usize) -> Vec<u8> {
     buf
 }
 
-fn asset_store_with_root(temp_dir: &tempfile::TempDir, asset_root: &str) -> AssetStore {
-    AssetStoreBuilder::new()
-        .root_dir(temp_dir.path())
-        .asset_root(Some(asset_root))
-        .evict_config(EvictConfig {
-            max_assets: None,
-            max_bytes: None,
-        })
-        .build()
+fn asset_store_with_root(
+    temp_dir: &kithara_test_utils::TestTempDir,
+    asset_root: &str,
+) -> AssetStore {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        AssetStoreBuilder::new()
+            .root_dir(temp_dir.path())
+            .asset_root(Some(asset_root))
+            .evict_config(EvictConfig {
+                max_assets: None,
+                max_bytes: None,
+            })
+            .build()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = temp_dir;
+        AssetStoreBuilder::new()
+            .ephemeral(true)
+            .asset_root(Some(asset_root))
+            .build()
+    }
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -37,7 +55,7 @@ fn streaming_resource_complex_write_patterns(
     #[case] total_size: usize,
     #[case] chunk_size: usize,
     #[case] initial_offset: u64,
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let store = asset_store_with_root(&temp_dir, "streaming-complex");
 
@@ -63,13 +81,13 @@ fn streaming_resource_complex_write_patterns(
     res.commit(None).unwrap();
 }
 
-#[kithara::test(timeout(Duration::from_secs(10)))]
+#[kithara::test(native, timeout(Duration::from_secs(10)))]
 #[case(1, 100)] // Single concurrent write
 #[case(2, 50)] // Few concurrent writes (reduced to avoid timeout)
 fn streaming_resource_concurrent_writes(
     #[case] write_count: usize,
     #[case] chunk_size: usize,
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let store = asset_store_with_root(&temp_dir, "streaming-concurrent");
 
@@ -112,7 +130,7 @@ fn streaming_resource_concurrent_writes(
 fn streaming_resource_edge_case_reads(
     #[case] offset: u64,
     #[case] read_size: usize,
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let store = asset_store_with_root(&temp_dir, "streaming-edge-reads");
 
@@ -147,7 +165,7 @@ fn streaming_resource_edge_case_reads(
 #[case(vec![(0, 512), (1024, 512)])] // Smaller overlapping
 fn streaming_resource_multiple_range_operations(
     #[case] write_ranges: Vec<(usize, usize)>,
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let store = asset_store_with_root(&temp_dir, "streaming-multi-range");
 
@@ -182,7 +200,10 @@ fn streaming_resource_multiple_range_operations(
 #[kithara::test(timeout(Duration::from_secs(5)))]
 #[case(false)] // Without explicit commit
 #[case(true)] // With explicit commit
-fn streaming_resource_commit_behavior(#[case] explicit_commit: bool, temp_dir: tempfile::TempDir) {
+fn streaming_resource_commit_behavior(
+    #[case] explicit_commit: bool,
+    temp_dir: kithara_test_utils::TestTempDir,
+) {
     let store = asset_store_with_root(&temp_dir, "streaming-commit");
 
     let key = ResourceKey::new("commit.bin");
@@ -223,7 +244,7 @@ fn streaming_resource_commit_behavior(#[case] explicit_commit: bool, temp_dir: t
 #[case(16384)]
 fn streaming_resource_zero_length_operations(
     #[case] base_offset: u64,
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let store = asset_store_with_root(&temp_dir, "streaming-zero-length");
 

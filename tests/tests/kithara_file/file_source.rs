@@ -12,8 +12,7 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
-use kithara_test_utils::{TestHttpServer, temp_dir};
-use tempfile::TempDir;
+use kithara_test_utils::{TestHttpServer, TestTempDir, temp_dir};
 
 // Test Server Fixtures
 
@@ -96,7 +95,7 @@ async fn test_server() -> TestHttpServer {
 #[case(22, b"12345")]
 async fn stream_file_seek_start_reads_correct_bytes(
     #[future] test_server: TestHttpServer,
-    temp_dir: TempDir,
+    temp_dir: TestTempDir,
     #[case] seek_pos: u64,
     #[case] expected: &[u8],
 ) {
@@ -109,7 +108,7 @@ async fn stream_file_seek_start_reads_correct_bytes(
     let expected_len = expected.len();
     let expected_vec = expected.to_vec();
 
-    let result = tokio::task::spawn_blocking(move || {
+    let result = kithara_platform::spawn_blocking(move || {
         // Primer read: forces wait_range to block until download delivers data.
         // For a 27-byte file the entire payload arrives in one chunk,
         // so after this read all offsets are guaranteed available.
@@ -131,14 +130,17 @@ async fn stream_file_seek_start_reads_correct_bytes(
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
-async fn stream_file_seek_current_works(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
+async fn stream_file_seek_current_works(
+    #[future] test_server: TestHttpServer,
+    temp_dir: TestTempDir,
+) {
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
     let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Read first 5 bytes
         let mut buf = [0u8; 5];
         let n = stream.read(&mut buf).unwrap();
@@ -160,14 +162,14 @@ async fn stream_file_seek_current_works(#[future] test_server: TestHttpServer, t
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
-async fn stream_file_seek_end_works(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
+async fn stream_file_seek_end_works(#[future] test_server: TestHttpServer, temp_dir: TestTempDir) {
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
     let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Seek from end (-5 bytes)
         let pos = stream.seek(SeekFrom::End(-5)).unwrap();
         // Test data: b"ID3\x04\x00\x00\x00\x00\x00TestAudioData12345" = 27 bytes
@@ -184,14 +186,17 @@ async fn stream_file_seek_end_works(#[future] test_server: TestHttpServer, temp_
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
-async fn stream_file_seek_past_eof_fails(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
+async fn stream_file_seek_past_eof_fails(
+    #[future] test_server: TestHttpServer,
+    temp_dir: TestTempDir,
+) {
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
     let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Attempt to seek past EOF
         let result = stream.seek(SeekFrom::Start(1000));
         assert!(result.is_err());
@@ -202,14 +207,17 @@ async fn stream_file_seek_past_eof_fails(#[future] test_server: TestHttpServer, 
 }
 
 #[kithara::test(tokio, timeout(Duration::from_secs(10)))]
-async fn stream_file_multiple_seeks_work(#[future] test_server: TestHttpServer, temp_dir: TempDir) {
+async fn stream_file_multiple_seeks_work(
+    #[future] test_server: TestHttpServer,
+    temp_dir: TestTempDir,
+) {
     let server = test_server.await;
     let url = server.url("/audio.mp3");
 
     let config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp_dir.path()));
     let mut stream = Stream::<File>::new(config).await.unwrap();
 
-    tokio::task::spawn_blocking(move || {
+    kithara_platform::spawn_blocking(move || {
         // Read from start
         let mut buf = [0u8; 3];
         let n = stream.read(&mut buf).unwrap();

@@ -238,6 +238,7 @@ v2.m3u8
 }
 
 /// Fixture: default ABR test server
+#[cfg(not(target_arch = "wasm32"))]
 #[kithara::fixture]
 pub(crate) async fn abr_server_default() -> AbrTestServer {
     AbrTestServer::new(

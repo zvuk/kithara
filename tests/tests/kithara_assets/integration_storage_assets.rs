@@ -1,11 +1,15 @@
 #![forbid(unsafe_code)]
 
+#[cfg(not(target_arch = "wasm32"))]
 use std::time::Duration;
 
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::assets::EvictConfig;
+#[cfg(not(target_arch = "wasm32"))]
+use kithara::internal::Assets;
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
+    assets::{AssetStore, AssetStoreBuilder, ResourceKey},
     bufpool::byte_pool,
-    internal::Assets,
     storage::ResourceExt,
 };
 use kithara_test_utils::temp_dir;
@@ -35,6 +39,7 @@ struct PinsIndexFile {
     pinned: Vec<String>,
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn read_pins_file(root: &std::path::Path) -> Option<Vec<String>> {
     let path = root.join("_index").join("pins.bin");
     if !path.exists() {
@@ -47,18 +52,32 @@ fn read_pins_file(root: &std::path::Path) -> Option<Vec<String>> {
     Some(file.pinned)
 }
 
-fn asset_store_with_root(temp_dir: &tempfile::TempDir, asset_root: &str) -> AssetStore {
-    AssetStoreBuilder::new()
-        .root_dir(temp_dir.path())
-        .asset_root(Some(asset_root))
-        .evict_config(EvictConfig {
-            max_assets: None,
-            max_bytes: None,
-        })
-        .build()
+fn asset_store_with_root(
+    temp_dir: &kithara_test_utils::TestTempDir,
+    asset_root: &str,
+) -> AssetStore {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        AssetStoreBuilder::new()
+            .root_dir(temp_dir.path())
+            .asset_root(Some(asset_root))
+            .evict_config(EvictConfig {
+                max_assets: None,
+                max_bytes: None,
+            })
+            .build()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = temp_dir;
+        AssetStoreBuilder::new()
+            .ephemeral(true)
+            .asset_root(Some(asset_root))
+            .build()
+    }
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
 #[case("asset-mp3-001", "media/audio.mp3", 128 * 1024)]
 #[case("asset-mp3-002", "audio/song.mp3", 64 * 1024)]
 #[case("asset-mp3-003", "music/track.mp3", 256 * 1024)]
@@ -66,7 +85,7 @@ fn mp3_single_file_atomic_roundtrip_with_pins_persisted(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
     #[case] size: usize,
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
     let store = asset_store_with_root(&temp_dir, asset_root);
@@ -103,7 +122,7 @@ fn atomic_resource_persistence(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
     #[case] payload: &[u8],
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let store = asset_store_with_root(&temp_dir, asset_root);
     let key = ResourceKey::new(rel_path);
@@ -126,7 +145,7 @@ fn streaming_resource_persistence(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
     #[case] payload: &[u8],
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let store = asset_store_with_root(&temp_dir, asset_root);
     let key = ResourceKey::new(rel_path);
@@ -144,7 +163,7 @@ fn streaming_resource_persistence(
 }
 
 #[kithara::test(timeout(Duration::from_secs(5)))]
-fn mixed_resource_persistence_across_reopen(temp_dir: tempfile::TempDir) {
+fn mixed_resource_persistence_across_reopen(temp_dir: kithara_test_utils::TestTempDir) {
     let store = asset_store_with_root(&temp_dir, "mixed-asset");
 
     let atomic_key = ResourceKey::new("meta/index.json");
@@ -180,8 +199,10 @@ fn mixed_resource_persistence_across_reopen(temp_dir: tempfile::TempDir) {
     assert_eq!(&streaming_read, &streaming_payload[..]);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
-fn streaming_resource_concurrent_write_and_read_across_handles(temp_dir: tempfile::TempDir) {
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn streaming_resource_concurrent_write_and_read_across_handles(
+    temp_dir: kithara_test_utils::TestTempDir,
+) {
     let store = asset_store_with_root(&temp_dir, "concurrent-asset");
 
     let key = ResourceKey::new("media/concurrent.bin");
@@ -215,14 +236,14 @@ fn streaming_resource_concurrent_write_and_read_across_handles(temp_dir: tempfil
     assert_eq!(&data, &payload);
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
 #[case("asset-hls-123", 3)]
 #[case("asset-hls-456", 5)]
 #[case("asset-hls-789", 2)]
 fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
     #[case] asset_root: &str,
     #[case] segment_count: usize,
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let dir = temp_dir.path().to_path_buf();
     let store = asset_store_with_root(&temp_dir, asset_root);
@@ -298,7 +319,7 @@ fn hls_multi_file_streaming_and_atomic_roundtrip_with_pins_persisted(
 fn atomic_resource_roundtrip_with_different_paths(
     #[case] asset_root: &str,
     #[case] rel_path: &str,
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let store = asset_store_with_root(&temp_dir, asset_root);
 
@@ -322,7 +343,7 @@ fn streaming_resource_write_read_at_different_positions(
     #[case] offset: u64,
     #[case] size: usize,
     #[case] read_size: usize,
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let store = asset_store_with_root(&temp_dir, "streaming-test");
 
@@ -349,7 +370,7 @@ fn streaming_resource_write_read_at_different_positions(
 #[case(5)]
 fn multiple_resources_same_asset_root_independently_accessible(
     #[case] resource_count: usize,
-    temp_dir: tempfile::TempDir,
+    temp_dir: kithara_test_utils::TestTempDir,
 ) {
     let asset_root = "multi-resource-asset";
     let store = asset_store_with_root(&temp_dir, asset_root);
@@ -386,8 +407,8 @@ fn multiple_resources_same_asset_root_independently_accessible(
 
 /// Test that `delete_asset` only deletes the asset directory for the store's `asset_root`,
 /// leaving other assets in the same `root_dir` untouched.
-#[kithara::test(timeout(Duration::from_secs(5)))]
-fn delete_asset_only_removes_own_directory(temp_dir: tempfile::TempDir) {
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn delete_asset_only_removes_own_directory(temp_dir: kithara_test_utils::TestTempDir) {
     let root_path = temp_dir.path();
 
     // Create three separate assets in the same root_dir
@@ -454,8 +475,8 @@ fn delete_asset_only_removes_own_directory(temp_dir: tempfile::TempDir) {
 }
 
 /// Test sequential deletion of multiple assets in the same `root_dir`.
-#[kithara::test(timeout(Duration::from_secs(5)))]
-fn delete_assets_sequentially(temp_dir: tempfile::TempDir) {
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn delete_assets_sequentially(temp_dir: kithara_test_utils::TestTempDir) {
     let root_path = temp_dir.path();
 
     let asset_roots = ["seq-asset-1", "seq-asset-2", "seq-asset-3", "seq-asset-4"];
@@ -516,8 +537,8 @@ fn delete_assets_sequentially(temp_dir: tempfile::TempDir) {
 }
 
 /// Test that deleting a non-existent asset doesn't affect other assets.
-#[kithara::test(timeout(Duration::from_secs(5)))]
-fn delete_nonexistent_asset_is_idempotent(temp_dir: tempfile::TempDir) {
+#[kithara::test(native, timeout(Duration::from_secs(5)))]
+fn delete_nonexistent_asset_is_idempotent(temp_dir: kithara_test_utils::TestTempDir) {
     let root_path = temp_dir.path();
 
     // Create one asset

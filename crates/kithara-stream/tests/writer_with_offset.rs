@@ -1,4 +1,5 @@
 #![cfg(not(target_arch = "wasm32"))]
+
 //! Tests for `Writer::with_offset()` — range-request resume path and `OffsetOverflow` error.
 
 mod kithara {
