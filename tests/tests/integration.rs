@@ -12,7 +12,5 @@ mod kithara_hls;
 mod kithara_net;
 mod kithara_storage;
 mod kithara_stream;
-mod multi_instance;
-
-// WASM + native test modules (platform-gated internally)
 mod kithara_wasm;
+mod multi_instance;

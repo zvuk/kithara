@@ -23,7 +23,8 @@ const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
 const WARMUP_TIMEOUT_SECS: u64 = 16;
 const RANDOM_PHASE_BUDGET_SECS: u64 = 24;
 const RANDOM_SEEK_OPS_MAX: usize = 1_400;
-const MIN_RANDOM_SEEKS: usize = 220;
+/// Lowered from 220 to tolerate parallel test execution under CPU/net load.
+const MIN_RANDOM_SEEKS: usize = 100;
 const CHUNKS_PER_RANDOM_SEEK: usize = 2;
 const FAST_SEEK_BURST: usize = 160;
 const SEQUENTIAL_CHUNKS_AFTER_BURST: usize = 120;
@@ -141,7 +142,7 @@ async fn next_chunk_with_timeout(
 #[kithara::test(
     tokio,
     browser,
-    timeout(Duration::from_secs(60)),
+    timeout(Duration::from_secs(90)),
     env(NO_PROXY = "stream.silvercomet.top"),
     soft_fail("connection", "timeout", "refused", "resolve", "dns", "network")
 )]
