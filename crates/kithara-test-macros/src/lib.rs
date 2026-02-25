@@ -290,7 +290,11 @@ fn wrap_with_timeout(body: &TokenStream2, timeout: &Option<Expr>, is_async: bool
                         .expect("test timed out")
                 }
                 #[cfg(target_arch = "wasm32")]
-                { __body.await }
+                {
+                    kithara_platform::time::timeout(#dur, __body)
+                        .await
+                        .expect("test timed out")
+                }
             }
         }
     } else {
@@ -305,7 +309,9 @@ fn wrap_with_timeout(body: &TokenStream2, timeout: &Option<Expr>, is_async: bool
                     handle.join().ok();
                 }
                 #[cfg(target_arch = "wasm32")]
-                { __body() }
+                {
+                    __body();
+                }
             }
         }
     }
@@ -316,16 +322,20 @@ fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
     if env_vars.is_empty() {
         return quote! {};
     }
-    let stmts: Vec<_> = env_vars
-        .iter()
-        .map(|(key, value)| {
-            quote! {
+
+    let keys: Vec<_> = env_vars.iter().map(|(key, _)| key).collect();
+    let values: Vec<_> = env_vars.iter().map(|(_, value)| value).collect();
+
+    quote! {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            #(
                 // SAFETY: test sets env vars at start before spawning threads.
-                unsafe { std::env::set_var(#key, #value); }
-            }
-        })
-        .collect();
-    quote! { #(#stmts)* }
+                unsafe { std::env::set_var(#keys, #values); }
+            )*
+        }
+    }
+
 }
 
 /// Wrap body in `catch_unwind`; re-panic unless the message matches a pattern.

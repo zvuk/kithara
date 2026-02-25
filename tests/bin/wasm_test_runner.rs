@@ -54,7 +54,7 @@ async fn main() {
                 ready = true;
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            kithara_platform::time::sleep(std::time::Duration::from_millis(100)).await;
         }
         if !ready {
             let _ = child.kill();
@@ -65,8 +65,9 @@ async fn main() {
 
         // Run wasm-bindgen-test-runner and wait for it
         let status = std::process::Command::new("wasm-bindgen-test-runner")
-            .args(&args)
             .env("WASM_BINDGEN_USE_BROWSER", "1")
+            .env_remove("WASM_BINDGEN_USE_NO_MODULE")
+            .args(&args)
             .status()
             .expect("wasm-bindgen-test-runner not found in PATH");
 
@@ -80,8 +81,9 @@ async fn main() {
 
         // Delegate to wasm-bindgen-test-runner with all args forwarded
         let status = std::process::Command::new("wasm-bindgen-test-runner")
-            .args(&args)
             .env("WASM_BINDGEN_USE_BROWSER", "1")
+            .env_remove("WASM_BINDGEN_USE_NO_MODULE")
+            .args(&args)
             .status()
             .expect("wasm-bindgen-test-runner not found in PATH");
 
