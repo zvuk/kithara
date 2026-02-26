@@ -47,7 +47,7 @@ impl<N: Net> Net for DelayedNet<N> {
 
 pub(crate) fn success_stream() -> ByteStream {
     let stream = futures::stream::iter(vec![Ok::<_, NetError>(Bytes::from_static(b"success"))]);
-    Box::pin(stream)
+    ByteStream::without_headers(Box::pin(stream))
 }
 
 pub(crate) fn leaked<F>(f: F) -> &'static F

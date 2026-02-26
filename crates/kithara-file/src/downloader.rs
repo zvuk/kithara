@@ -197,10 +197,20 @@ impl FileDownloader {
         }
     }
 
+    /// Set a pre-opened Writer from an already-opened HTTP stream.
+    ///
+    /// Used by `File::create_remote()` to pass the streaming GET connection
+    /// directly to the downloader, avoiding a second HTTP request.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn with_initial_writer(mut self, writer: Writer) -> Self {
+        *self.writer.get_mut() = Some(writer);
+        self
+    }
+
     /// Create or return the sequential Writer.
     ///
-    /// On first call, opens an HTTP stream and wraps it in a Writer.
-    /// Matches the HLS pattern where I/O is deferred to the download loop.
+    /// When a pre-opened writer was set via `with_initial_writer()`, returns
+    /// it directly. Otherwise falls back to opening a new HTTP stream.
     async fn ensure_writer(&mut self) -> Result<&mut Writer, FileDownloadError> {
         let slot = self.writer.get_mut();
         if slot.is_none() {
@@ -210,9 +220,28 @@ impl FileDownloader {
                 .stream(self.io.url.clone(), self.io.headers.clone())
                 .await
             {
-                Ok(stream) => {
+                Ok(byte_stream) => {
+                    // Discover content-length from response headers if unknown
+                    // (fallback path — normally set by create_remote via
+                    // with_initial_writer before we reach here).
+                    if self.total.is_none()
+                        && let Some(cl) = byte_stream
+                            .headers
+                            .get("content-length")
+                            .or_else(|| byte_stream.headers.get("Content-Length"))
+                            .and_then(|v| v.parse::<u64>().ok())
+                    {
+                        tracing::debug!(
+                            content_length = cl,
+                            "discovered total from stream headers"
+                        );
+                        self.total = Some(cl);
+                        self.coverage.set_total_size(cl);
+                        self.progress.timeline().set_total_bytes(Some(cl));
+                    }
+
                     *slot = Some(Writer::new(
-                        stream,
+                        byte_stream,
                         self.res.clone(),
                         self.io.cancel.clone(),
                     ));
@@ -227,7 +256,8 @@ impl FileDownloader {
                 }
             }
         }
-        // writer was just set to Some in the if-block above.
+        // writer was just set to Some in the if-block above,
+        // or was pre-populated via with_initial_writer().
         slot.as_mut().ok_or_else(|| FileDownloadError {
             msg: "writer initialization failed".to_string(),
         })

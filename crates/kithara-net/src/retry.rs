@@ -224,7 +224,7 @@ mod tests {
     }
 
     fn empty_stream() -> ByteStream {
-        Box::pin(stream::empty())
+        ByteStream::without_headers(Box::pin(stream::empty()))
     }
 
     fn fast_retry_policy(max_retries: u32) -> RetryPolicy {

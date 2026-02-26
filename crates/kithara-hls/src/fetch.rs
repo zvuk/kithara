@@ -1018,7 +1018,7 @@ mod tests {
             Ok(Bytes::from(vec![0xFF; 1000])),
             Err(NetError::Timeout),
         ]);
-        Ok(Box::pin(stream) as ByteStream)
+        Ok(ByteStream::without_headers(Box::pin(stream)))
     }
 
     #[expect(
@@ -1034,7 +1034,7 @@ mod tests {
             return Err(NetError::Unimplemented);
         }
         let stream = stream::empty::<Result<Bytes, NetError>>();
-        Ok(Box::pin(stream) as ByteStream)
+        Ok(ByteStream::without_headers(Box::pin(stream)))
     }
 
     #[kithara::test(tokio)]

@@ -24,6 +24,7 @@ use axum::{
     routing::get,
 };
 use bytes::Bytes;
+use futures;
 use kithara::{
     assets::StoreOptions,
     file::{File, FileConfig, FileSrc},
@@ -115,7 +116,11 @@ async fn handle_request(
         }
     }
 
-    // Sequential request — only send partial data (simulates early close)
+    // Sequential request — advertise full Content-Length but only send
+    // partial data (simulates early stream close / connection drop).
+    // A real web server always reports the full file size in Content-Length;
+    // the client detects the mismatch when the stream ends prematurely.
+    // We use a streaming body so hyper doesn't override our Content-Length.
     tracing::warn!(
         "Server: sequential request - sends {}KB of {}KB",
         STREAM_CLOSES_AT / 1024,
@@ -123,16 +128,14 @@ async fn handle_request(
     );
 
     let chunk = Bytes::from(state.file_data[0..STREAM_CLOSES_AT].to_vec());
+    let body_stream = futures::stream::iter(vec![Ok::<_, std::io::Error>(chunk)]);
 
-    (
-        StatusCode::OK,
-        [
-            (header::CONTENT_LENGTH, STREAM_CLOSES_AT.to_string()),
-            (header::CONTENT_TYPE, "audio/mpeg".to_string()),
-        ],
-        Body::from(chunk),
-    )
-        .into_response()
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_LENGTH, TOTAL_SIZE.to_string())
+        .header(header::CONTENT_TYPE, "audio/mpeg")
+        .body(Body::from_stream(body_stream))
+        .expect("valid response")
 }
 
 /// Shared server setup for tests.

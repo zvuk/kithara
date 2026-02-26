@@ -10,6 +10,17 @@ use crate::{
     types::{Headers, NetOptions, RangeSpec},
 };
 
+/// Extract response headers into our [`Headers`] type.
+fn extract_headers(resp: &reqwest::Response) -> Headers {
+    let mut headers = Headers::new();
+    for (name, value) in resp.headers() {
+        if let Ok(v) = value.to_str() {
+            headers.insert(name.as_str(), v);
+        }
+    }
+    headers
+}
+
 #[derive(Clone, Debug)]
 pub struct HttpClient {
     inner: Client,
@@ -67,14 +78,15 @@ impl HttpClient {
         <Self as Net>::get_range(self, url, range, headers).await
     }
 
-    /// Convert a reqwest Response to a `ByteStream`.
+    /// Convert a reqwest Response to a [`ByteStream`](crate::ByteStream).
     ///
-    /// Uses `bytes_stream()` on both platforms:
-    /// - Native: streaming via tokio-util
-    /// - wasm32: streaming via wasm-streams (reqwest `stream` feature)
+    /// Extracts response headers and wraps the body in a `ByteStream` so
+    /// that callers can inspect metadata (e.g. `Content-Length`) without a
+    /// separate HEAD request.
     fn response_to_stream(resp: reqwest::Response) -> crate::ByteStream {
+        let headers = extract_headers(&resp);
         let stream = resp.bytes_stream().map_err(NetError::from);
-        Box::pin(stream)
+        crate::ByteStream::new(headers, Box::pin(stream))
     }
 }
 

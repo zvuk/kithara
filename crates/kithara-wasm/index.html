@@ -995,6 +995,13 @@
             uiRaf = requestAnimationFrame(updateUi);
         }
 
+        window.addEventListener('beforeunload', () => {
+            if (uiRaf) {
+                cancelAnimationFrame(uiRaf);
+                uiRaf = null;
+            }
+        });
+
         try {
             if (ensureRuntimeSupport()) {
                 wasm = await import('./kithara-wasm.js');

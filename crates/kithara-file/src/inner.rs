@@ -6,9 +6,11 @@ use std::sync::Arc;
 
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_events::{EventBus, FileEvent};
-use kithara_net::{HttpClient, Net};
+use kithara_net::HttpClient;
 use kithara_platform::ThreadPool;
 use kithara_storage::{ResourceExt, ResourceStatus};
+#[cfg(not(target_arch = "wasm32"))]
+use kithara_stream::Writer;
 use kithara_stream::{Backend, NullStreamContext, StreamContext, StreamType, Timeline};
 use tokio_util::sync::CancellationToken;
 
@@ -93,6 +95,12 @@ impl File {
     }
 
     /// Create a source for a remote file (HTTP/HTTPS).
+    ///
+    /// Avoids a HEAD request because it can hang in browser environments.
+    ///
+    /// On native targets we open a streaming GET and reuse it in the downloader
+    /// to avoid a second HTTP connection. On wasm32 we skip pre-open and let
+    /// the downloader open the stream inside its backend Worker.
     async fn create_remote(
         url: url::Url,
         config: FileConfig,
@@ -101,11 +109,20 @@ impl File {
         let asset_root = asset_root_for_url(&url, config.name.as_deref());
         let net_client = HttpClient::new(config.net.clone());
 
-        let response_headers = net_client.head(url.clone(), config.headers.clone()).await?;
-        let expected_len = response_headers
+        #[cfg(not(target_arch = "wasm32"))]
+        let byte_stream = net_client
+            .stream(url.clone(), config.headers.clone())
+            .await?;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        let expected_len = byte_stream
+            .headers
             .get("content-length")
-            .or_else(|| response_headers.get("Content-Length"))
+            .or_else(|| byte_stream.headers.get("Content-Length"))
             .and_then(|value| value.parse::<u64>().ok());
+
+        #[cfg(target_arch = "wasm32")]
+        let expected_len = None;
 
         let mut backend_builder = AssetStoreBuilder::new()
             .root_dir(&config.store.cache_dir)
@@ -142,7 +159,7 @@ impl File {
         // Determine if the resource is a complete cache or needs downloading.
         let is_partial = match state.res().status() {
             ResourceStatus::Committed { final_len } => {
-                // File on disk might be smaller than HEAD Content-Length → partial.
+                // File on disk might be smaller than expected Content-Length → partial.
                 state
                     .len()
                     .zip(final_len)
@@ -166,9 +183,7 @@ impl File {
                 state.res().reactivate().map_err(SourceError::Storage)?;
             }
 
-            // Create downloader with shared state for on-demand loading.
-            // For partial cache, downloader starts in on-demand-only mode
-            // (sequential stream from scratch, but partial data already on disk).
+            // Create downloader with shared state.
             let downloader = FileDownloader::new(
                 &net_client,
                 &state,
@@ -178,6 +193,16 @@ impl File {
                 shared.clone(),
                 &coverage_manager,
             );
+
+            #[cfg(not(target_arch = "wasm32"))]
+            let downloader = downloader.with_initial_writer(Writer::new(
+                byte_stream,
+                state.res().clone(),
+                cancel.clone(),
+            ));
+
+            #[cfg(target_arch = "wasm32")]
+            let downloader = downloader;
 
             // Spawn downloader on the thread pool.
             // Backend is stored in FileSource — dropping the source cancels the downloader.
