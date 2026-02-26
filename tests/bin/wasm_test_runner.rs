@@ -11,6 +11,54 @@
 fn main() {}
 
 #[cfg(not(target_arch = "wasm32"))]
+async fn run_wasm_bindgen_runner(
+    args: &[String],
+    runner_timeout_secs: u64,
+) -> std::process::ExitStatus {
+    let mut child = std::process::Command::new("wasm-bindgen-test-runner")
+        .env("WASM_BINDGEN_USE_BROWSER", "1")
+        .env_remove("WASM_BINDGEN_USE_NO_MODULE")
+        .args(args)
+        .spawn()
+        .expect("wasm-bindgen-test-runner not found in PATH");
+
+    if runner_timeout_secs == 0 {
+        return child
+            .wait()
+            .expect("failed waiting for wasm-bindgen-test-runner");
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(runner_timeout_secs);
+    loop {
+        if let Ok(Some(status)) = child.try_wait() {
+            return status;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!(
+                "wasm-bindgen-test-runner exceeded {runner_timeout_secs} seconds and was killed (likely browser/renderer hang). Override with WASM_TEST_RUNNER_TIMEOUT_SECS."
+            );
+        }
+        kithara_platform::time::sleep(kithara_platform::time::Duration::from_millis(250)).await;
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn default_runner_timeout_secs(args: &[String]) -> u64 {
+    if let Ok(raw) = std::env::var("WASM_TEST_RUNNER_TIMEOUT_SECS")
+        && let Ok(parsed) = raw.parse::<u64>()
+    {
+        return parsed;
+    }
+
+    // `cargo test ... <filter>` forwards `<wasm> <filter> [--options]`.
+    // For filtered runs, prefer a shorter default to fail fast on hangs.
+    let has_filter = args.get(1).is_some_and(|arg| !arg.starts_with('-'));
+    if has_filter { 180 } else { 1800 }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[tokio::main]
 async fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -18,7 +66,13 @@ async fn main() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(3333);
+    let fixture_startup_timeout_secs: u64 = std::env::var("FIXTURE_STARTUP_TIMEOUT_SECS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(30);
+    let runner_timeout_secs = default_runner_timeout_secs(&args);
     let health_url = format!("http://127.0.0.1:{port}/health");
+    eprintln!("wasm-bindgen watchdog timeout: {runner_timeout_secs}s");
 
     // Check if server is already running (developer started it manually)
     let already_running = reqwest::get(&health_url).await.is_ok();
@@ -47,9 +101,27 @@ async fn main() {
                 )
             });
 
-        // Wait for readiness (up to 10 seconds)
+        // Wait for readiness (default: up to 30 seconds; configurable via env).
         let mut ready = false;
-        for _ in 0..100 {
+        let max_attempts = fixture_startup_timeout_secs.saturating_mul(10).max(1);
+        for _ in 0..max_attempts {
+            if let Ok(Some(status)) = child.try_wait() {
+                let output = child.wait_with_output().ok();
+                let stdout = output
+                    .as_ref()
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "<empty>".to_string());
+                let stderr = output
+                    .as_ref()
+                    .map(|o| String::from_utf8_lossy(&o.stderr).trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "<empty>".to_string());
+                panic!(
+                    "fixture_server exited before becoming ready (status: {status})\nfixture_server stdout:\n{stdout}\nfixture_server stderr:\n{stderr}"
+                );
+            }
+
             if reqwest::get(&health_url).await.is_ok() {
                 ready = true;
                 break;
@@ -58,18 +130,26 @@ async fn main() {
         }
         if !ready {
             let _ = child.kill();
-            panic!("fixture server did not become ready within 10 seconds");
+            let output = child.wait_with_output().ok();
+            let stdout = output
+                .as_ref()
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "<empty>".to_string());
+            let stderr = output
+                .as_ref()
+                .map(|o| String::from_utf8_lossy(&o.stderr).trim().to_string())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "<empty>".to_string());
+            panic!(
+                "fixture server did not become ready within {fixture_startup_timeout_secs} seconds\nfixture_server stdout:\n{stdout}\nfixture_server stderr:\n{stderr}"
+            );
         }
 
         eprintln!("Fixture server started on port {port}");
 
-        // Run wasm-bindgen-test-runner and wait for it
-        let status = std::process::Command::new("wasm-bindgen-test-runner")
-            .env("WASM_BINDGEN_USE_BROWSER", "1")
-            .env_remove("WASM_BINDGEN_USE_NO_MODULE")
-            .args(&args)
-            .status()
-            .expect("wasm-bindgen-test-runner not found in PATH");
+        // Run wasm-bindgen-test-runner under a host-side watchdog timeout.
+        let status = run_wasm_bindgen_runner(&args, runner_timeout_secs).await;
 
         // Kill fixture server
         let _ = child.kill();
@@ -79,13 +159,8 @@ async fn main() {
     } else {
         eprintln!("Fixture server already running on port {port}");
 
-        // Delegate to wasm-bindgen-test-runner with all args forwarded
-        let status = std::process::Command::new("wasm-bindgen-test-runner")
-            .env("WASM_BINDGEN_USE_BROWSER", "1")
-            .env_remove("WASM_BINDGEN_USE_NO_MODULE")
-            .args(&args)
-            .status()
-            .expect("wasm-bindgen-test-runner not found in PATH");
+        // Delegate to wasm-bindgen-test-runner with all args forwarded.
+        let status = run_wasm_bindgen_runner(&args, runner_timeout_secs).await;
 
         std::process::exit(status.code().unwrap_or(1));
     }

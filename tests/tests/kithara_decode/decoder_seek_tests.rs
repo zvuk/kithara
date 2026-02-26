@@ -2,9 +2,7 @@
 //!
 //! Tests `Decoder<Stream<File>>` seek forward/backward with real audio.
 //! All `decoder.read()`/`seek()` calls run in `spawn_blocking` because
-//! the internal kanal channel uses blocking `recv()`.
-
-use kithara_platform::time::Duration;
+//! the internal ringbuf channel uses blocking `recv()`.
 
 use kithara::{
     assets::StoreOptions,
@@ -13,6 +11,7 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, temp_dir};
 
 use super::fixture::AudioTestServer;

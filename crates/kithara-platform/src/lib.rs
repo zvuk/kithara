@@ -2,11 +2,8 @@
 //!
 //! # Synchronization
 //!
-//! On native targets, re-exports [`parking_lot`] types directly.
-//!
-//! On `wasm32`, provides wrapper types that use `try_lock()` + spin loop
-//! instead of blocking `lock()`. This avoids `Atomics.wait()` panics on
-//! the browser main thread where `Atomics.wait` is forbidden.
+//! Re-exports [`wasm_safe_thread`] primitives (`Mutex`, `Condvar`, `RwLock`)
+//! that adapt their locking strategy to the platform.
 //!
 //! # Conditional trait bounds
 //!
@@ -32,24 +29,23 @@ pub mod time;
 pub mod internal;
 
 pub use blocking::{BlockingError, BlockingHandle, spawn_blocking};
-pub use maybe_send::{MaybeSend, MaybeSync};
+pub use maybe_send::{MaybeSend, MaybeSync, WasmSend};
 pub use pool::ThreadPool;
 pub use task::spawn_task;
 pub use thread::{Duration, JoinHandle, backoff, spawn, yield_now};
 pub use thread_pool_init::ensure_thread_pool;
+pub use wasm_safe_thread::{
+    Mutex,
+    condvar::Condvar,
+    guard::{Guard as MutexGuard, ReadGuard as RwLockReadGuard, WriteGuard as RwLockWriteGuard},
+    mpsc,
+    rwlock::RwLock,
+    yield_to_event_loop_async,
+};
 
-// On native: re-export parking_lot types directly (zero overhead).
 #[cfg(not(target_arch = "wasm32"))]
-mod native {
-    pub use parking_lot::{Condvar, Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+#[must_use]
+pub fn test_env_lock() -> &'static std::sync::Mutex<()> {
+    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
-
-#[cfg(not(target_arch = "wasm32"))]
-pub use native::*;
-
-// On wasm32: wrapper types using try_lock + spin loop.
-#[cfg(target_arch = "wasm32")]
-mod wasm;
-
-#[cfg(target_arch = "wasm32")]
-pub use wasm::*;

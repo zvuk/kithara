@@ -7,13 +7,28 @@
 //! Sources provide sync random-access via `wait_range()` and `read_at()`.
 //! Reader wraps this directly for `Read + Seek`.
 
-use std::{ops::Range, time::Duration};
+use std::ops::Range;
 
+use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 #[cfg(any(test, feature = "test-utils"))]
 use unimock::unimock;
 
 use crate::{Timeline, error::StreamResult, media::MediaInfo};
+
+/// Outcome of a `Source::read_at` call.
+///
+/// Distinguishes between normal data reads (including true EOF) and
+/// variant/format changes that require decoder recreation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadOutcome {
+    /// Read `n` bytes. `n == 0` means true end-of-stream.
+    Data(usize),
+    /// Variant/format change at this offset. Caller must recreate the
+    /// decoder and call `clear_variant_fence()` before reads succeed.
+    /// Zero bytes were read — fence fires BEFORE any data is touched.
+    VariantChange,
+}
 
 /// Time-first seek anchor resolved by a segmented source.
 ///
@@ -43,23 +58,27 @@ pub trait Source: Send + 'static {
 
     /// Wait for data in range to be available.
     ///
-    /// Blocks until data is available or EOF is reached.
-    /// Returns `WaitOutcome::Ready` when range is available,
-    /// `WaitOutcome::Eof` if EOF reached before range end.
+    /// `timeout` is the maximum wait time before returning an implementation-defined
+    /// non-ready outcome (typically [`WaitOutcome::Interrupted`]).
     ///
     /// # Errors
     ///
     /// Returns an error if the wait is cancelled or the underlying storage fails.
-    fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error>;
+    fn wait_range(
+        &mut self,
+        range: Range<u64>,
+        timeout: Duration,
+    ) -> StreamResult<WaitOutcome, Self::Error>;
 
     /// Read data at offset into buffer.
     ///
-    /// Returns number of bytes read. May return less than `buf.len()`.
+    /// Returns [`ReadOutcome::Data(n)`] with the number of bytes read (0 = true EOF),
+    /// or [`ReadOutcome::VariantChange`] when a variant fence blocks the read.
     ///
     /// # Errors
     ///
     /// Returns an error if the read fails or the source is in an invalid state.
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error>;
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error>;
 
     /// Total length if known.
     fn len(&self) -> Option<u64>;

@@ -52,7 +52,7 @@ impl Backend {
     /// A child cancellation token is created: dropping this Backend
     /// cancels the child (and thus the downloader) without affecting
     /// the parent token.
-    pub fn new<D: Downloader>(
+    pub fn new<D: Downloader + Send>(
         downloader: D,
         cancel: &CancellationToken,
         pool: &ThreadPool,
@@ -70,8 +70,14 @@ impl Backend {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = pool; // suppress unused warning
-            wasm_bindgen_futures::spawn_local(Self::run_downloader(downloader, task_cancel));
+            let _ = pool;
+            // Run downloader in a Web Worker to avoid blocking the main thread.
+            // thread::spawn creates a Worker; spawn_task queues the async task
+            // on the worker's JS event loop.
+            // task_begin/task_finished keep the Worker alive while async work runs.
+            let _ = kithara_platform::thread::spawn(move || {
+                kithara_platform::spawn_task(Self::run_downloader(downloader, task_cancel));
+            });
         }
 
         Self {
@@ -370,7 +376,7 @@ mod tests {
         }
 
         async fn poll_demand(&mut self) -> Option<u64> {
-            self.demand_queue.lock().pop()
+            self.demand_queue.lock_sync().pop()
         }
 
         async fn plan(&mut self) -> PlanOutcome<u64> {
@@ -436,7 +442,7 @@ mod tests {
         step_entered.notified().await;
 
         // Queue demand while step() is blocked (simulates reader seek).
-        demand_queue.lock().push(42);
+        demand_queue.lock_sync().push(42);
         demand_notify.notify_one();
 
         // Must resolve promptly — if step() blocks demand, the 2s timeout fires.

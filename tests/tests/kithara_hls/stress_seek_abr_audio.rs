@@ -19,7 +19,7 @@ use kithara::{
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_platform::time::Instant;
-use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
+use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -160,16 +160,8 @@ fn detect_direction(buf: &[f32], channels: usize) -> Direction {
 /// 2. ABR starts on V0, switches to V1 when V0 segments become slow
 /// 3. Verify switch happened via PCM direction change
 /// 4. 200 random seeks with direction + integrity checks
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(120)))]
-async fn stress_seek_abr_audio() {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(kithara_test_utils::rust_log_filter(
-            "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug",
-        ))
-        .try_init();
-
+#[kithara::test(native, tokio, timeout(Duration::from_secs(120)))]
+async fn stress_seek_abr_audio(_tracing_setup: ()) {
     // Generate WAV data for two variants
     let init_segment = Arc::new(create_wav_init_segment());
     let v0_pcm = Arc::new(create_pcm_segments(ascending_sample));

@@ -19,6 +19,7 @@ mod tracing_support;
 mod tui;
 
 use kithara::prelude::*;
+use kithara_assets::StoreOptions;
 use tracing::info;
 use url::Url;
 
@@ -39,6 +40,7 @@ async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
     let pool = ThreadPool::with_num_threads(2)?;
     let hls_config = HlsConfig::new(url)
         .with_thread_pool(pool)
+        .with_store(StoreOptions::default().with_ephemeral(true))
         .with_events(bus.clone())
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),

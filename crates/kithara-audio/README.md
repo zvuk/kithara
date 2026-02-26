@@ -13,7 +13,7 @@
 
 # kithara-audio
 
-Audio pipeline with decoding, effects chain, and sample rate conversion. Runs a dedicated OS thread for blocking decode/process work and bridges it to the caller via `kanal` channels. Provides `Audio<S>` as the main entry point; with `rodio` feature enabled, `Audio<S>` implements `rodio::Source` directly.
+Audio pipeline with decoding, effects chain, and sample rate conversion. Runs a dedicated OS thread for blocking decode/process work and bridges it to the caller via `ringbuf` lock-free ring buffers. Provides `Audio<S>` as the main entry point; with `rodio` feature enabled, `Audio<S>` implements `rodio::Source` directly.
 
 ## Usage
 
@@ -65,8 +65,8 @@ flowchart TB
     end
 
     subgraph "Channels"
-        PcmChan["kanal::bounded&lt;PcmChunk&gt;<br/><i>decode -> consumer</i>"]
-        CmdChan["kanal::bounded&lt;AudioCommand&gt;<br/><i>consumer -> worker</i>"]
+        PcmChan["ringbuf::HeapRb&lt;PcmChunk&gt;<br/><i>decode -> consumer</i>"]
+        CmdChan["ringbuf::HeapRb&lt;AudioCommand&gt;<br/><i>consumer -> worker</i>"]
         EventChan["EventBus&lt;Event&gt;<br/><i>all -> consumer</i>"]
     end
 
@@ -97,7 +97,7 @@ flowchart TB
 ```
 
 - **Stream backend thread** (`kithara-stream`): runs `Backend::run_downloader` via `handle.block_on()` -- async orchestration loop that plans, fetches (reqwest), and writes bytes to `StorageResource` through `Writer<E>`.
-- **Decode thread** (rayon): runs `run_audio_loop` -- drains seek commands, calls `Decoder::next_chunk`, applies effects (resampler), sends processed chunks through a bounded `kanal` channel with backpressure.
+- **Decode thread** (thread pool): runs `run_audio_loop` -- drains seek commands, calls `Decoder::next_chunk`, applies effects (resampler), sends processed chunks through a lock-free `ringbuf` ring buffer with backpressure.
 - **Events**: published to a unified `EventBus` (ABR switch, progress, decode).
 - **Epoch-based invalidation**: after seek, stale in-flight chunks are filtered by epoch counter (`Arc<AtomicU64>`).
 
@@ -112,7 +112,7 @@ flowchart LR
     DF["DecoderFactory<br/><i>Box&lt;dyn InnerDecoder&gt;</i>"]
     SAS["StreamAudioSource<br/><i>format change, effects</i>"]
     AW["AudioWorker<br/><i>blocking thread, commands</i>"]
-    KC["kanal channel<br/><i>bounded, backpressure</i>"]
+    KC["ringbuf<br/><i>lock-free, backpressure</i>"]
     A["Audio&lt;S&gt;<br/><i>PcmReader, Iterator, rodio::Source</i>"]
 
     ST --> DF --> SAS --> AW --> KC --> A

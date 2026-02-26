@@ -47,7 +47,7 @@ where
     A: Assets,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let size = self.cache.try_lock().map(|c| c.len());
+        let size = self.cache.try_lock().ok().map(|c| c.len());
         f.debug_struct("CachedAssets")
             .field("cache_size", &size)
             .finish_non_exhaustive()
@@ -145,7 +145,7 @@ where
         //
         // The inner chain (Processing → Evict → Disk) does not call back
         // into CachedAssets, so holding the lock is deadlock-free.
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.lock_sync();
 
         if let Some(CacheEntry::Resource(res)) = cache.get(&cache_key) {
             return Ok(res.clone());
@@ -170,7 +170,7 @@ where
             return self.inner.open_pins_index_resource();
         }
 
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.lock_sync();
 
         if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::PinsIndex) {
             return Ok(res.clone());
@@ -188,7 +188,7 @@ where
             return self.inner.open_lru_index_resource();
         }
 
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.lock_sync();
 
         if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::LruIndex) {
             return Ok(res.clone());
@@ -206,7 +206,7 @@ where
             return self.inner.open_coverage_index_resource();
         }
 
-        let mut cache = self.cache.lock();
+        let mut cache = self.cache.lock_sync();
 
         if let Some(CacheEntry::Index(res)) = cache.peek(&CacheKey::CoverageIndex) {
             return Ok(res.clone());
@@ -222,7 +222,7 @@ where
     fn delete_asset(&self) -> AssetsResult<()> {
         // Clear resource caches for this asset (keep index entries)
         {
-            let mut cache = self.cache.lock();
+            let mut cache = self.cache.lock_sync();
 
             // Collect keys to remove (LruCache doesn't have retain())
             let keys_to_remove: Vec<CacheKey<A::Context>> = cache
@@ -251,7 +251,7 @@ where
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
         // Remove from cache (all contexts)
         {
-            let mut cache = self.cache.lock();
+            let mut cache = self.cache.lock_sync();
             let cache_key = CacheKey::Resource(key.clone(), None);
             cache.pop(&cache_key);
         }
@@ -306,7 +306,7 @@ mod tests {
         }
 
         // Cache should have exactly 3 entries (capacity)
-        assert_eq!(cached.cache.lock().len(), 3);
+        assert_eq!(cached.cache.lock_sync().len(), 3);
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -343,7 +343,7 @@ mod tests {
             h.join().unwrap();
         }
 
-        assert_eq!(cached.cache.lock().len(), 4);
+        assert_eq!(cached.cache.lock_sync().len(), 4);
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -360,7 +360,7 @@ mod tests {
         }
 
         // Cache should be empty when disabled
-        assert_eq!(cached.cache.lock().len(), 0);
+        assert_eq!(cached.cache.lock_sync().len(), 0);
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

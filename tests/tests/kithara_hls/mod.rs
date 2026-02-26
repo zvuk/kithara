@@ -12,6 +12,7 @@ mod keys_integration;
 mod live_stress_real_stream;
 mod playlist_integration;
 mod seek_past_eof;
+mod seek_variant_switch_after_eof;
 mod smoke_test;
 mod source_seek;
 mod stress_chunk_integrity;

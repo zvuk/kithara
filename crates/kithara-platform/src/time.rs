@@ -5,12 +5,9 @@
 //! and `timeout` races the future against a `setTimeout`-based deadline.
 
 pub use std::time::Duration;
-#[cfg(not(target_arch = "wasm32"))]
-pub use std::time::Instant;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use tokio::time::sleep;
-#[cfg(target_arch = "wasm32")]
 pub use web_time::Instant;
 
 #[cfg(target_arch = "wasm32")]

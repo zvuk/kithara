@@ -9,7 +9,6 @@
 //! 3. Seek returns data from correct variant
 //! 4. Multiple seeks maintain correct variant tracking
 
-use kithara_platform::time::Duration;
 use std::io::{Read, Seek, SeekFrom};
 
 use fixture::TestServer;
@@ -18,6 +17,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use tracing::info;

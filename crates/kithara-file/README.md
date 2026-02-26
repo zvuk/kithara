@@ -74,7 +74,7 @@ flowchart LR
     StreamW --> Reader
     Decoder -- "Read + Seek" --> StreamW
     Decoder --> PCM
-    PCM -- "kanal channel" --> Audio
+    PCM -- "ringbuf" --> Audio
 
     style SR fill:#d4a574,color:#000
     style RS fill:#d4a574,color:#000

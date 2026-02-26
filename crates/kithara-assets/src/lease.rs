@@ -106,14 +106,14 @@ where
     }
 
     fn ensure_loaded_best_effort(&self) -> AssetsResult<()> {
-        let is_empty = self.pins.lock().is_empty();
+        let is_empty = self.pins.lock_sync().is_empty();
 
         if !is_empty {
             return Ok(());
         }
 
         let loaded = self.load_pins_best_effort()?;
-        let mut guard = self.pins.lock();
+        let mut guard = self.pins.lock_sync();
         for p in loaded {
             guard.insert(p);
         }
@@ -130,7 +130,7 @@ where
         if !self.enabled || !self.dirty.swap(false, Ordering::AcqRel) {
             return Ok(());
         }
-        let snapshot = self.pins.lock().clone();
+        let snapshot = self.pins.lock_sync().clone();
         self.persist_pins_best_effort(&snapshot)
     }
 
@@ -138,7 +138,7 @@ where
         self.ensure_loaded_best_effort()?;
 
         {
-            let mut pins = self.pins.lock();
+            let mut pins = self.pins.lock_sync();
             if pins.insert(asset_root.to_string()) {
                 self.dirty.store(true, Ordering::Release);
             }
@@ -161,7 +161,7 @@ where
                     tracing::trace!(asset_root = %ar, "LeaseGuard::drop - removing pin");
 
                     {
-                        let mut pins = owner.pins.lock();
+                        let mut pins = owner.pins.lock_sync();
                         if pins.remove(&ar) {
                             owner.dirty.store(true, Ordering::Release);
                         }
@@ -336,7 +336,7 @@ where
         }
         // Only persist on the last clone (all Arc fields share the same refcount via `pins`)
         if Arc::strong_count(&self.pins) == 1 && self.dirty.load(Ordering::Acquire) {
-            let snapshot = self.pins.lock().clone();
+            let snapshot = self.pins.lock_sync().clone();
             let _ = self.persist_pins_best_effort(&snapshot);
         }
     }
@@ -371,7 +371,6 @@ impl Drop for LeaseGuardInner {
 #[cfg(not(target_arch = "wasm32"))]
 mod tests {
     use kithara_platform::time::Duration;
-
     use kithara_test_utils::kithara;
 
     use super::*;
@@ -516,7 +515,7 @@ mod tests {
         let _res = lease.open_resource(&key).unwrap();
 
         // Pins should be empty when disabled
-        assert!(lease.pins.lock().is_empty(), "bypass should not pin");
+        assert!(lease.pins.lock_sync().is_empty(), "bypass should not pin");
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

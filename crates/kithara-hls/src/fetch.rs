@@ -342,7 +342,7 @@ impl<N: Net> FetchManager<N> {
         variant_id: VariantId,
     ) -> HlsResult<MediaPlaylist> {
         let cell = {
-            let mut guard = self.media.write();
+            let mut guard = self.media.lock_sync_write();
             guard
                 .entry(variant_id)
                 .or_insert_with(|| Arc::new(OnceCell::new()))
@@ -527,7 +527,7 @@ impl<N: Net> FetchManager<N> {
     /// Returns an error when playlist loading, URL resolution, fetch, or content-length detection fails.
     pub async fn load_init_segment(&self, variant: usize) -> HlsResult<SegmentMeta> {
         let cell = {
-            let mut guard = self.init_segments.write();
+            let mut guard = self.init_segments.lock_sync_write();
             guard
                 .entry(variant)
                 .or_insert_with(|| Arc::new(OnceCell::new()))
@@ -686,13 +686,13 @@ impl<N: Net> Loader for FetchManager<N> {
     }
 
     fn num_variants(&self) -> usize {
-        if let Some(cached) = *self.num_variants_cache.read() {
+        if let Some(cached) = *self.num_variants_cache.lock_sync_read() {
             return cached;
         }
 
         if let Some(variants) = self.master_variants() {
             let count = variants.len();
-            *self.num_variants_cache.write() = Some(count);
+            *self.num_variants_cache.lock_sync_write() = Some(count);
             return count;
         }
 

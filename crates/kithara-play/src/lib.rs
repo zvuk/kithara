@@ -1,8 +1,8 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::missing_errors_doc, clippy::ignored_unit_patterns)]
 
-#[cfg(all(target_arch = "wasm32", not(feature = "backend-cpal")))]
-compile_error!("kithara-play: wasm32 build requires `backend-cpal`");
+#[cfg(all(target_arch = "wasm32", not(feature = "backend-web-audio")))]
+compile_error!("kithara-play: wasm32 build requires `backend-web-audio`");
 
 #[cfg(all(target_arch = "wasm32", not(feature = "wasm-bindgen")))]
 compile_error!("kithara-play: wasm32 build requires `wasm-bindgen`");
@@ -21,6 +21,9 @@ pub mod internal;
 
 pub mod impls;
 pub mod traits;
+
+#[cfg(target_arch = "wasm32")]
+pub mod wasm_support;
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod mock;

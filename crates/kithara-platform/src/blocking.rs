@@ -2,8 +2,8 @@
 //! `.await` and `.is_finished()`.
 //!
 //! * **Native** — delegates to [`tokio::task::spawn_blocking`].
-//! * **WASM** — sends the closure to a rayon Web Worker and returns the
-//!   result through a [`futures::channel::oneshot`] channel.
+//! * **WASM** — sends the closure to a [`wasm_safe_thread`] Web Worker and
+//!   returns the result through a [`futures::channel::oneshot`] channel.
 
 use std::{
     future::Future,
@@ -61,7 +61,7 @@ where
     let (tx, rx) = futures::channel::oneshot::channel();
     let finished = Arc::new(AtomicBool::new(false));
     let finished2 = Arc::clone(&finished);
-    rayon::spawn(move || {
+    let _ = crate::thread::spawn(move || {
         let _ = tx.send(f());
         finished2.store(true, Ordering::Release);
     });

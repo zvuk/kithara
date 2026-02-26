@@ -6,10 +6,9 @@
     reason = "test mock code; values are small and positive by construction"
 )]
 
-use kithara_platform::time::Duration;
-
 use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
 use kithara_events::AudioEvent;
+use kithara_platform::time::Duration;
 use tokio::sync::broadcast;
 
 use crate::traits::PcmReader;

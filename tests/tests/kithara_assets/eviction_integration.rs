@@ -6,12 +6,11 @@
 //! Each `AssetStore` is scoped to a single `asset_root`, so eviction between assets
 //! requires creating multiple `AssetStore` instances with the same `root_dir`.
 
-use kithara_platform::time::Duration;
-
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
     storage::ResourceExt,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::temp_dir;
 
 #[derive(serde::Deserialize)]

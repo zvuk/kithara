@@ -87,7 +87,7 @@ impl Assets for MemAssetStore {
         _ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
         // Return existing resource if present.
-        if let Some(entry) = self.resources.read().get(key) {
+        if let Some(entry) = self.resources.lock_sync_read().get(key) {
             return Ok(StorageResource::Mem(entry.clone()));
         }
 
@@ -105,7 +105,9 @@ impl Assets for MemAssetStore {
             options.capacity = capacity;
         }
         let mem = Resource::open(self.cancel.clone(), options).map_err(AssetsError::Storage)?;
-        self.resources.write().insert(key.clone(), mem.clone());
+        self.resources
+            .lock_sync_write()
+            .insert(key.clone(), mem.clone());
         Ok(StorageResource::Mem(mem))
     }
 
@@ -122,12 +124,12 @@ impl Assets for MemAssetStore {
     }
 
     fn delete_asset(&self) -> AssetsResult<()> {
-        self.resources.write().clear();
+        self.resources.lock_sync_write().clear();
         Ok(())
     }
 
     fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        self.resources.write().remove(key);
+        self.resources.lock_sync_write().remove(key);
         Ok(())
     }
 }
@@ -214,9 +216,9 @@ mod tests {
             res.write_at(0, b"data").unwrap();
         }
 
-        assert_eq!(store.resources.read().len(), 3);
+        assert_eq!(store.resources.lock_sync_read().len(), 3);
         store.delete_asset().unwrap();
-        assert_eq!(store.resources.read().len(), 0);
+        assert_eq!(store.resources.lock_sync_read().len(), 0);
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]

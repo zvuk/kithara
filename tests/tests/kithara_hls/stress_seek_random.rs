@@ -7,9 +7,8 @@
 //! Deterministic [`Xorshift64`] PRNG guarantees reproducibility.
 //! No external network required.
 
-use kithara_platform::time::Duration;
 use std::{
-    io::{Read, Seek, SeekFrom},
+    io::{ErrorKind, Read, Seek, SeekFrom},
     sync::Arc,
 };
 
@@ -18,6 +17,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::{TestTempDir, Xorshift64};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -121,9 +121,19 @@ async fn stress_random_seek_read_hls(
 
         // Trigger initial download + verify first bytes
         let mut probe = [0u8; 64];
-        let n = stream.read(&mut probe).unwrap_or_else(|e| {
-            panic!("initial probe read failed: {e}");
-        });
+        let probe_deadline = Instant::now() + Duration::from_secs(5);
+        let n = loop {
+            match stream.read(&mut probe) {
+                Ok(0) if Instant::now() < probe_deadline => {
+                    kithara_platform::thread::backoff(Duration::from_millis(10));
+                }
+                Ok(n) => break n,
+                Err(e) if e.kind() == ErrorKind::Interrupted && Instant::now() < probe_deadline => {
+                    kithara_platform::thread::backoff(Duration::from_millis(10));
+                }
+                Err(e) => panic!("initial probe read failed: {e}"),
+            }
+        };
         assert!(n > 0, "probe read returned 0");
 
         if with_init {

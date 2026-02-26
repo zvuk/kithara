@@ -325,7 +325,6 @@ impl AbrController<ThroughputEstimator> {
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::Duration;
-
     use kithara_test_utils::kithara;
     use unimock::{MockFn, Unimock, matching};
 

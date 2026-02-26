@@ -1,6 +1,4 @@
 // StreamingResource tests (merged from edge cases)
-use kithara_platform::time::Duration;
-
 #[cfg(target_arch = "wasm32")]
 use kithara::storage::MemResource;
 #[cfg(not(target_arch = "wasm32"))]
@@ -8,7 +6,7 @@ use kithara::storage::Resource;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara::storage::{MmapOptions, MmapResource, OpenMode};
 use kithara::storage::{ResourceExt, ResourceStatus, StorageError, WaitOutcome};
-use kithara_platform::time::Instant;
+use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::{TestTempDir, cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 

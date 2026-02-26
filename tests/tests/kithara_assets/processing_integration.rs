@@ -8,8 +8,6 @@
 //! - Caching of processed resources (via `CachedAssets`)
 //! - Reads from disk after processing
 
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::time::Duration;
 use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
@@ -21,6 +19,7 @@ use kithara::{
     assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey},
     storage::ResourceExt,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::temp_dir;
 
 /// Context for test processing callback.

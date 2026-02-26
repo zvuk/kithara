@@ -126,12 +126,12 @@ impl PlayerImpl {
 
     /// Get the number of items in the queue (including consumed items).
     pub fn item_count(&self) -> usize {
-        self.items.lock().len()
+        self.items.lock_sync().len()
     }
 
     /// Append a resource at the end of the queue (or after a specific index).
     pub fn insert(&self, resource: Resource, after_index: Option<usize>) {
-        let mut items = self.items.lock();
+        let mut items = self.items.lock_sync();
         let pos = after_index.map_or(items.len(), |i| (i + 1).min(items.len()));
         items.insert(pos, Some(resource));
         debug!(count = items.len(), pos, "item inserted");
@@ -140,7 +140,7 @@ impl PlayerImpl {
     /// Remove item at index. Returns the removed resource, or `None` if out of bounds
     /// or already consumed.
     pub fn remove_at(&self, index: usize) -> Option<Resource> {
-        let mut items = self.items.lock();
+        let mut items = self.items.lock_sync();
         if index >= items.len() {
             return None;
         }
@@ -159,7 +159,7 @@ impl PlayerImpl {
 
     /// Remove all items from the queue.
     pub fn remove_all_items(&self) {
-        self.items.lock().clear();
+        self.items.lock_sync().clear();
         self.current_index.store(0, Ordering::Relaxed);
         self.set_status(PlayerStatus::Unknown);
         debug!("all items removed");
@@ -254,7 +254,7 @@ impl PlayerImpl {
     ///
     /// Does nothing if the current item is already the last one.
     pub fn advance_to_next_item(&self) {
-        let items = self.items.lock();
+        let items = self.items.lock_sync();
         let current = self.current_index.load(Ordering::Relaxed);
         if current + 1 < items.len() {
             self.current_index.store(current + 1, Ordering::Relaxed);
@@ -266,17 +266,17 @@ impl PlayerImpl {
 
     /// Get current player status.
     pub fn status(&self) -> PlayerStatus {
-        *self.status.lock()
+        *self.status.lock_sync()
     }
 
     /// Set action to perform when the current item ends.
     pub fn set_action_at_item_end(&self, action: ActionAtItemEnd) {
-        *self.action_at_item_end.lock() = action;
+        *self.action_at_item_end.lock_sync() = action;
     }
 
     /// Get action to perform when the current item ends.
     pub fn action_at_item_end(&self) -> ActionAtItemEnd {
-        *self.action_at_item_end.lock()
+        *self.action_at_item_end.lock_sync()
     }
 
     /// Set crossfade duration in seconds.
@@ -308,7 +308,7 @@ impl PlayerImpl {
 
     /// Seek active tracks to position in seconds.
     pub fn seek_seconds(&self, seconds: f64) -> Result<(), PlayError> {
-        let slot_id = *self.current_slot.lock();
+        let slot_id = *self.current_slot.lock_sync();
         let Some(slot_id) = slot_id else {
             return Err(PlayError::NotReady);
         };
@@ -328,21 +328,21 @@ impl PlayerImpl {
 
     /// Current playback position in seconds.
     pub fn position_seconds(&self) -> Option<f64> {
-        let slot_id = (*self.current_slot.lock())?;
+        let slot_id = (*self.current_slot.lock_sync())?;
         let state = self.engine.slot_shared_state(slot_id)?;
         Some(state.position.load(Ordering::Relaxed))
     }
 
     /// Current media duration in seconds.
     pub fn duration_seconds(&self) -> Option<f64> {
-        let slot_id = (*self.current_slot.lock())?;
+        let slot_id = (*self.current_slot.lock_sync())?;
         let state = self.engine.slot_shared_state(slot_id)?;
         Some(state.duration.load(Ordering::Relaxed))
     }
 
     /// Diagnostic: number of times the audio processor's `process()` has been called.
     pub fn process_count(&self) -> u64 {
-        let Some(slot_id) = *self.current_slot.lock() else {
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
             return 0;
         };
         let Some(state) = self.engine.slot_shared_state(slot_id) else {
@@ -353,7 +353,7 @@ impl PlayerImpl {
 
     /// Returns `true` if the player is in playing state.
     pub fn is_playing(&self) -> bool {
-        let Some(slot_id) = *self.current_slot.lock() else {
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
             return false;
         };
         let Some(state) = self.engine.slot_shared_state(slot_id) else {
@@ -369,7 +369,7 @@ impl PlayerImpl {
 
     /// Drain audio-thread notifications for the active slot.
     pub fn drain_notifications(&self) -> Vec<String> {
-        let Some(slot_id) = *self.current_slot.lock() else {
+        let Some(slot_id) = *self.current_slot.lock_sync() else {
             return Vec::new();
         };
         let Some(state) = self.engine.slot_shared_state(slot_id) else {
@@ -377,7 +377,7 @@ impl PlayerImpl {
         };
 
         let mut out = Vec::new();
-        while let Some(notification) = state.notification_rx.lock().try_pop() {
+        while let Some(notification) = state.notification_rx.lock_sync().try_pop() {
             out.push(format!("{notification:?}"));
         }
         out
@@ -390,13 +390,13 @@ impl PlayerImpl {
 
     /// Get EQ gain for a band in dB.
     pub fn eq_gain(&self, band: usize) -> Option<f32> {
-        let slot_id = (*self.current_slot.lock())?;
+        let slot_id = (*self.current_slot.lock_sync())?;
         self.engine.slot_eq(slot_id).and_then(|eq| eq.gain(band))
     }
 
     /// Set EQ gain for a band in dB.
     pub fn set_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        let slot_id = (*self.current_slot.lock())
+        let slot_id = (*self.current_slot.lock_sync())
             .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
         let eq = self
             .engine
@@ -408,7 +408,7 @@ impl PlayerImpl {
 
     /// Reset EQ gains to 0 dB for all bands.
     pub fn reset_eq(&self) -> Result<(), PlayError> {
-        let slot_id = (*self.current_slot.lock())
+        let slot_id = (*self.current_slot.lock_sync())
             .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
         let eq = self
             .engine
@@ -465,7 +465,7 @@ impl PlayerImpl {
 
     /// Internal: set status and emit event if changed.
     fn set_status(&self, new_status: PlayerStatus) {
-        let mut status = self.status.lock();
+        let mut status = self.status.lock_sync();
         if *status != new_status {
             *status = new_status;
             drop(status);
@@ -485,7 +485,7 @@ impl PlayerImpl {
 
     /// Ensure we have an active slot, allocating one if needed.
     fn ensure_slot(&self) -> Result<SlotId, PlayError> {
-        let mut slot = self.current_slot.lock();
+        let mut slot = self.current_slot.lock_sync();
         if let Some(id) = *slot {
             return Ok(id);
         }
@@ -498,7 +498,7 @@ impl PlayerImpl {
 
     /// Send a command to the current slot's processor.
     fn send_to_slot(&self, cmd: PlayerCmd) -> Result<(), PlayError> {
-        let slot_id = (*self.current_slot.lock())
+        let slot_id = (*self.current_slot.lock_sync())
             .ok_or_else(|| PlayError::Internal("no active slot".into()))?;
         self.engine.send_slot_cmd(slot_id, cmd)
     }
@@ -508,7 +508,7 @@ impl PlayerImpl {
     /// Takes the resource out of the queue (replacing with `None`), wraps it
     /// in [`PlayerResource`], and sends `LoadTrack` + `FadeIn` to the processor.
     fn load_current_item(&self) {
-        let mut items = self.items.lock();
+        let mut items = self.items.lock_sync();
         let index = self.current_index.load(Ordering::Relaxed);
         if index >= items.len() {
             return;
@@ -641,7 +641,7 @@ mod tests {
 
     #[kithara::test]
     fn player_session_ducking_roundtrip() {
-        let _lock = crate::impls::engine::ducking_test_lock().lock().unwrap();
+        let _lock = crate::impls::engine::ducking_test_lock().lock_sync();
         let player = PlayerImpl::new(PlayerConfig::default());
         player
             .set_session_ducking(SessionDuckingMode::Soft)

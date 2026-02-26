@@ -4,7 +4,6 @@
 //! concurrently on a shared `ThreadPool` and each reads PCM data to EOF.
 //! Tests both manual variant (no ABR) and auto ABR modes.
 
-use kithara_platform::time::Duration;
 use std::sync::Arc;
 
 use kithara::{
@@ -14,6 +13,7 @@ use kithara::{
     platform::ThreadPool,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;

@@ -85,7 +85,7 @@ flowchart LR
     StreamH --> HS
     Dec -- "Read + Seek" --> StreamH
     Dec --> PCM2
-    PCM2 -- "kanal channel" --> Audio2
+    PCM2 -- "ringbuf" --> Audio2
 
     style SI fill:#d4a574,color:#000
     style AB fill:#d4a574,color:#000

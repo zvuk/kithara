@@ -20,7 +20,7 @@ Platform-aware primitives for native and wasm32 targets. Provides synchronizatio
 ```rust
 use kithara_platform::{Condvar, Mutex};
 
-// Works on both native (parking_lot) and wasm32 (spin-loop fallback)
+// Works on both native and wasm32 via std::sync re-exports.
 let lock = Mutex::new(42);
 let guard = lock.lock();
 ```
@@ -29,9 +29,9 @@ let guard = lock.lock();
 
 <table>
 <tr><th>Type</th><th>Native</th><th>wasm32</th></tr>
-<tr><td><code>Mutex&lt;T&gt;</code></td><td><code>parking_lot::Mutex</code></td><td>Spin-loop <code>try_lock</code> wrapper</td></tr>
-<tr><td><code>RwLock&lt;T&gt;</code></td><td><code>parking_lot::RwLock</code></td><td>Spin-loop reader-writer lock</td></tr>
-<tr><td><code>Condvar</code></td><td><code>parking_lot::Condvar</code></td><td>Modified semantics for single-threaded wasm</td></tr>
+<tr><td><code>Mutex&lt;T&gt;</code></td><td><code>std::sync::Mutex</code></td><td><code>std::sync::Mutex</code></td></tr>
+<tr><td><code>RwLock&lt;T&gt;</code></td><td><code>std::sync::RwLock</code></td><td><code>std::sync::RwLock</code></td></tr>
+<tr><td><code>Condvar</code></td><td><code>std::sync::Condvar</code></td><td><code>std::sync::Condvar</code></td></tr>
 <tr><td><code>MaybeSend</code></td><td>= <code>Send</code></td><td>No-op (auto-implemented)</td></tr>
 <tr><td><code>MaybeSync</code></td><td>= <code>Sync</code></td><td>No-op (auto-implemented)</td></tr>
 <tr><td><code>ThreadPool</code></td><td>Rayon thread pool wrapper</td><td>Rayon wrapper (Web Workers via <code>wasm-bindgen-rayon</code>)</td></tr>

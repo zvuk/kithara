@@ -7,13 +7,12 @@
 //! Deterministic xorshift64 PRNG guarantees reproducibility.
 //! No network required.
 
-use kithara_platform::time::Duration;
-
 use kithara::{
     audio::{Audio, AudioConfig},
     file::{File, FileConfig, FileSrc},
     stream::Stream,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{Xorshift64, wav::create_test_wav};
 use tracing::info;
 

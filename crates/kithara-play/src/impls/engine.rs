@@ -148,7 +148,7 @@ impl EngineImpl {
     }
 
     fn ensure_player_id(&self) -> Result<PlayerId, PlayError> {
-        let mut player_id = self.player_id.lock();
+        let mut player_id = self.player_id.lock_sync();
         if let Some(id) = *player_id {
             return Ok(id);
         }
@@ -162,7 +162,7 @@ impl EngineImpl {
     }
 
     pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
-        let mut slot_handles = self.slot_handles.lock();
+        let mut slot_handles = self.slot_handles.lock_sync();
         let Some(handle) = slot_handles.iter_mut().find(|h| h.slot_id == slot) else {
             return Err(PlayError::Internal("slot handle not found".into()));
         };
@@ -174,7 +174,7 @@ impl EngineImpl {
 
     pub(crate) fn slot_eq(&self, slot: SlotId) -> Option<SharedEq> {
         self.slot_handles
-            .lock()
+            .lock_sync()
             .iter()
             .find(|h| h.slot_id == slot)
             .map(|h| h.eq.clone())
@@ -182,7 +182,7 @@ impl EngineImpl {
 
     pub(crate) fn slot_shared_state(&self, slot: SlotId) -> Option<Arc<SharedPlayerState>> {
         self.slot_handles
-            .lock()
+            .lock_sync()
             .iter()
             .find(|h| h.slot_id == slot)
             .map(|h| Arc::clone(&h.shared_state))
@@ -193,20 +193,20 @@ impl EngineImpl {
     }
 
     pub(crate) fn set_slot_volume(&self, slot: SlotId, volume: f32) -> Result<(), PlayError> {
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
         self.session
             .set_player_slot_volume(player_id, slot, volume.clamp(0.0, 1.0))
     }
 
     pub(crate) fn set_master_eq_gain(&self, band: usize, gain_db: f32) -> Result<(), PlayError> {
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
         self.session.set_player_eq_gain(player_id, band, gain_db)
     }
 }
 
 impl Drop for EngineImpl {
     fn drop(&mut self) {
-        let player_id = *self.player_id.lock();
+        let player_id = *self.player_id.lock_sync();
         if let Some(player_id) = player_id
             && let Err(err) = self.session.unregister_player(player_id)
         {
@@ -247,11 +247,11 @@ impl Engine for EngineImpl {
             return Err(PlayError::EngineNotRunning);
         }
 
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
         self.session.stop_player(player_id)?;
 
-        self.active_slots.lock().clear();
-        self.slot_handles.lock().clear();
+        self.active_slots.lock_sync().clear();
+        self.slot_handles.lock_sync().clear();
 
         self.running.store(false, Ordering::Release);
         info!(player_id, "engine stopped");
@@ -269,17 +269,17 @@ impl Engine for EngineImpl {
         }
 
         {
-            let slots = self.active_slots.lock();
+            let slots = self.active_slots.lock_sync();
             if slots.len() >= self.config.max_slots {
                 return Err(PlayError::ArenaFull);
             }
         }
 
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
         let (slot_id, cmd_tx, shared_state, eq) = self.session.allocate_slot(player_id)?;
 
-        self.active_slots.lock().push(slot_id);
-        self.slot_handles.lock().push(SlotHandle {
+        self.active_slots.lock_sync().push(slot_id);
+        self.slot_handles.lock_sync().push(SlotHandle {
             slot_id,
             cmd_tx,
             eq,
@@ -297,17 +297,17 @@ impl Engine for EngineImpl {
         }
 
         {
-            let slots = self.active_slots.lock();
+            let slots = self.active_slots.lock_sync();
             if !slots.contains(&slot) {
                 return Err(PlayError::SlotNotFound(slot));
             }
         }
 
-        let player_id = (*self.player_id.lock()).ok_or(PlayError::EngineNotRunning)?;
+        let player_id = (*self.player_id.lock_sync()).ok_or(PlayError::EngineNotRunning)?;
         self.session.release_slot(player_id, slot)?;
 
-        self.active_slots.lock().retain(|s| *s != slot);
-        self.slot_handles.lock().retain(|h| h.slot_id != slot);
+        self.active_slots.lock_sync().retain(|s| *s != slot);
+        self.slot_handles.lock_sync().retain(|h| h.slot_id != slot);
 
         debug!(?slot, player_id, "slot released");
         self.emit(EngineEvent::SlotReleased { slot });
@@ -315,11 +315,11 @@ impl Engine for EngineImpl {
     }
 
     fn active_slots(&self) -> Vec<SlotId> {
-        self.active_slots.lock().clone()
+        self.active_slots.lock_sync().clone()
     }
 
     fn slot_count(&self) -> usize {
-        self.active_slots.lock().len()
+        self.active_slots.lock_sync().len()
     }
 
     fn max_slots(&self) -> usize {
@@ -335,7 +335,7 @@ impl Engine for EngineImpl {
         self.master_volume.store(clamped, Ordering::Relaxed);
 
         if self.running.load(Ordering::Acquire)
-            && let Some(player_id) = *self.player_id.lock()
+            && let Some(player_id) = *self.player_id.lock_sync()
             && let Err(err) = self.session.set_player_master_volume(player_id, clamped)
         {
             warn!(
@@ -383,7 +383,7 @@ impl Engine for EngineImpl {
 }
 
 #[cfg(test)]
-pub(crate) fn ducking_test_lock() -> &'static std::sync::Mutex<()> {
-    static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-    LOCK.get_or_init(|| std::sync::Mutex::new(()))
+pub(crate) fn ducking_test_lock() -> &'static Mutex<()> {
+    static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
 }

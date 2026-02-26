@@ -7,9 +7,8 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use kithara_platform::time::Duration;
-
     use axum::{Router, routing::get};
+    use kithara_platform::time::Duration;
     use kithara_test_utils::TestHttpServer;
     use url::Url;
 

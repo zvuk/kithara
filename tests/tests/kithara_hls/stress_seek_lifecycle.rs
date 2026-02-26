@@ -158,6 +158,7 @@ fn read_with_retry(audio: &mut Audio<Stream<Hls>>, buf: &mut [f32]) -> (usize, u
 /// and full-track integrity verification after seek-to-zero.
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(300)))]
 #[case::ephemeral(true)]
+#[cfg(not(target_arch = "wasm32"))]
 #[case::mmap(false)]
 async fn stress_seek_lifecycle_with_zero_reset(#[case] ephemeral: bool) {
     let _ = tracing_subscriber::fmt()

@@ -1,9 +1,10 @@
 #![forbid(unsafe_code)]
 
+use std::ops::Range;
+
 use kithara_assets::{AssetStore, AssetStoreBuilder};
 use kithara_coverage::Coverage;
 use kithara_test_utils::kithara;
-use std::ops::Range;
 
 fn mark_coverage(backend: &AssetStore, key: &str, total_size: u64, covered: Range<u64>) {
     let manager = backend

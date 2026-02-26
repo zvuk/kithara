@@ -117,11 +117,11 @@ mod tests {
         let state = SharedPlayerState::new();
         let sent = state
             .notification_tx
-            .lock()
+            .lock_sync()
             .try_push(PlayerNotification::TrackLoaded(Arc::from("test.mp3")));
         assert!(sent.is_ok());
 
-        let received = state.notification_rx.lock().try_pop();
+        let received = state.notification_rx.lock_sync().try_pop();
         assert!(received.is_some());
         assert!(matches!(
             received.unwrap(),

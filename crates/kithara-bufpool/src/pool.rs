@@ -125,7 +125,7 @@ where
 
     /// Return a buffer to the pool.
     pub(crate) fn put(&self, value: T, shard_idx: usize) {
-        let mut shard = self.shards[shard_idx].lock();
+        let mut shard = self.shards[shard_idx].lock_sync();
         if !shard.try_put(value) {
             // Shard full or buffer rejected, drop it
         }
@@ -214,7 +214,7 @@ where
     {
         let shard_idx = self.shard_index();
         let mut value = {
-            let mut shard = self.shards[shard_idx].lock();
+            let mut shard = self.shards[shard_idx].lock_sync();
             shard.try_get()
         };
 
@@ -222,7 +222,7 @@ where
             // Try other shards before allocating
             for i in 1..SHARDS {
                 let idx = (shard_idx + i) % SHARDS;
-                let mut shard = self.shards[idx].lock();
+                let mut shard = self.shards[idx].lock_sync();
                 if let Some(v) = shard.try_get() {
                     value = Some(v);
                     break;
@@ -438,7 +438,7 @@ where
     {
         let shard_idx = self.0.shard_index();
         let mut value = {
-            let mut shard = self.0.shards[shard_idx].lock();
+            let mut shard = self.0.shards[shard_idx].lock_sync();
             shard.try_get()
         };
 
@@ -446,7 +446,7 @@ where
             // Try other shards before allocating
             for i in 1..SHARDS {
                 let idx = (shard_idx + i) % SHARDS;
-                let mut shard = self.0.shards[idx].lock();
+                let mut shard = self.0.shards[idx].lock_sync();
                 if let Some(v) = shard.try_get() {
                     value = Some(v);
                     break;

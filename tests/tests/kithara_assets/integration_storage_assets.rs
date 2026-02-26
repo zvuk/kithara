@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 
-use kithara::assets::EvictConfig;
 use kithara::{
-    assets::{AssetStore, AssetStoreBuilder, ResourceKey},
+    assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
     bufpool::byte_pool,
     storage::ResourceExt,
 };

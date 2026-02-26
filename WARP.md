@@ -55,7 +55,7 @@ kithara-file     kithara-hls
 ## Stack
 
 - `tokio` runtime
-- `kanal` channels
+- `ringbuf` lock-free channels
 - `reqwest` + `rustls`
 - `symphonia`
 - `hls_m3u8`

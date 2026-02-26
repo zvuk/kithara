@@ -7,13 +7,15 @@ use std::{
     sync::Arc,
 };
 
+use kithara_platform::time::Duration;
 mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NullStreamContext, Source, Stream, StreamContext, StreamResult, StreamType, Timeline,
+    NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult, StreamType,
+    Timeline,
 };
 
 struct TimelineSource {
@@ -30,22 +32,27 @@ impl TimelineSource {
 impl Source for TimelineSource {
     type Error = std::io::Error;
 
-    fn wait_range(&mut self, _range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
+    fn wait_range(
+        &mut self,
+        _range: Range<u64>,
+        timeout: Duration,
+    ) -> StreamResult<WaitOutcome, Self::Error> {
+        let _ = timeout;
         Ok(WaitOutcome::Ready)
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
         let Ok(start) = usize::try_from(offset) else {
-            return Ok(0);
+            return Ok(ReadOutcome::Data(0));
         };
         if start >= self.data.len() {
-            return Ok(0);
+            return Ok(ReadOutcome::Data(0));
         }
         let available = &self.data[start..];
         let n = available.len().min(buf.len());
         buf[..n].copy_from_slice(&available[..n]);
         self.timeline.set_byte_position(offset + n as u64);
-        Ok(n)
+        Ok(ReadOutcome::Data(n))
     }
 
     fn len(&self) -> Option<u64> {
@@ -131,7 +138,7 @@ fn read_must_succeed_while_flushing() {
         .expect("stream");
 
     // Simulate FLUSH_START — flushing is now true
-    let _epoch = timeline.initiate_seek(kithara_platform::time::Duration::from_secs(10));
+    let _epoch = timeline.initiate_seek(Duration::from_secs(10));
     assert!(
         timeline.is_flushing(),
         "flushing must be set after initiate_seek"

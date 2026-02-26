@@ -1,8 +1,7 @@
-use kithara_platform::time::Duration;
-
 #[cfg(feature = "hls")]
 use kithara::prelude::HlsEvent;
 use kithara::prelude::{AudioEvent, Event, FileEvent};
+use kithara_platform::time::Duration;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout},

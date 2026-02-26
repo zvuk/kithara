@@ -1,8 +1,6 @@
-use kithara_platform::time::Duration;
-
 use async_trait::async_trait;
 use bytes::Bytes;
-use kithara_platform::time::sleep;
+use kithara_platform::time::{Duration, sleep};
 use tokio_util::sync::CancellationToken;
 #[cfg(test)]
 use unimock::unimock;

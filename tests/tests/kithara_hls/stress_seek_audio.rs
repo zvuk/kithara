@@ -19,7 +19,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
-use kithara_test_utils::{TestTempDir, Xorshift64, wav::create_saw_wav};
+use kithara_test_utils::{TestTempDir, Xorshift64, tracing_setup, wav::create_saw_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -74,17 +74,10 @@ fn phase_distance(a: usize, b: usize) -> usize {
 ///    - Level 3: position (decoded phase ≈ expected phase)
 /// 6. Final seek near end → read to EOF
 #[kithara::test(tokio, browser, timeout(Duration::from_secs(120)))]
-#[case::mmap(false)]
 #[case::ephemeral(true)]
-async fn stress_seek_audio_hls_wav(#[case] ephemeral: bool) {
-    let _ = tracing_subscriber::fmt()
-        .with_test_writer()
-        .with_max_level(tracing::Level::DEBUG)
-        .with_env_filter(kithara_test_utils::rust_log_filter(
-            "kithara_audio=debug,kithara_decode=debug,kithara_hls=debug,kithara_stream=debug",
-        ))
-        .try_init();
-
+#[cfg(not(target_arch = "wasm32"))]
+#[case::mmap(false)]
+async fn stress_seek_audio_hls_wav(_tracing_setup: (), #[case] ephemeral: bool) {
     // Step 1: Generate WAV
     let wav_data = create_saw_wav(TOTAL_BYTES);
     let expected_dur = expected_duration_secs();

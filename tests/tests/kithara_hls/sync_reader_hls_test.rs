@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::fixture::abr::{AbrTestServer, master_playlist};
 
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(30)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(30)))]
 async fn test_sync_reader_reads_all_bytes_from_hls(temp_dir: TestTempDir) {
     // Create HLS server with 3 segments per variant
     let server = AbrTestServer::new(

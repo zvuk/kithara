@@ -1,5 +1,6 @@
 {
   "goog:chromeOptions": {
+    "w3c": false,
     "args": [
       "--headless=new",
       "--no-sandbox",

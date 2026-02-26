@@ -3,7 +3,6 @@
 //! Verifies that File and HLS `Audio` instances can coexist on the
 //! same shared `ThreadPool` and all read PCM data to EOF.
 
-use kithara_platform::time::Duration;
 use std::sync::Arc;
 
 use kithara::{
@@ -13,6 +12,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, wav::create_test_wav};
 use tokio_util::sync::CancellationToken;
 use tracing::info;

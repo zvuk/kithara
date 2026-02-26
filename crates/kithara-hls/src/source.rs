@@ -17,9 +17,14 @@ use kithara_abr::Variant;
 use kithara_assets::ResourceKey;
 use kithara_coverage::{Coverage, CoverageManager};
 use kithara_events::{EventBus, HlsEvent};
-use kithara_platform::{Condvar, Mutex, time::Duration};
+use kithara_platform::{
+    Condvar, Mutex,
+    time::{Duration, Instant},
+};
 use kithara_storage::{ResourceExt, StorageResource, WaitOutcome};
-use kithara_stream::{MediaInfo, Source, SourceSeekAnchor, StreamError, StreamResult, Timeline};
+use kithara_stream::{
+    MediaInfo, ReadOutcome, Source, SourceSeekAnchor, StreamError, StreamResult, Timeline,
+};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
@@ -131,7 +136,7 @@ const WAIT_RANGE_SLEEP_MS: u64 = 50;
 impl HlsSource {
     fn current_loaded_segment(&self) -> Option<LoadedSegment> {
         let reader_offset = self.shared.timeline.byte_position();
-        let segments = self.shared.segments.lock();
+        let segments = self.shared.segments.lock_sync();
         segments
             .find_at_offset(reader_offset)
             .or_else(|| segments.last())
@@ -151,7 +156,7 @@ impl HlsSource {
         self.playlist_state
             .segment_byte_offset(variant, segment_index)
             .or_else(|| {
-                let segments = self.shared.segments.lock();
+                let segments = self.shared.segments.lock_sync();
                 segments
                     .find_loaded_segment(variant, segment_index)
                     .map(|seg| seg.byte_offset)
@@ -337,11 +342,15 @@ impl Source for HlsSource {
         clippy::significant_drop_tightening,
         reason = "lock must be held for condvar wait"
     )]
-    fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, HlsError> {
+    fn wait_range(
+        &mut self,
+        range: Range<u64>,
+        _timeout: Duration,
+    ) -> StreamResult<WaitOutcome, HlsError> {
         let mut state = WaitRangeState::default();
 
         loop {
-            let mut segments = self.shared.segments.lock();
+            let mut segments = self.shared.segments.lock_sync();
             let context = self.build_wait_range_context(&segments, &range);
             state.reset_for_seek_epoch(context.seek_epoch);
 
@@ -370,13 +379,19 @@ impl Source for HlsSource {
                 state.clear_on_demand_requested();
             }
 
+            // A midstream variant switch drains all segment_requests.
+            // Clear `on_demand_pending` so we can re-push for the new variant.
+            if self.shared.had_midstream_switch.load(Ordering::Acquire) {
+                state.clear_on_demand_requested();
+            }
+
             drop(segments);
             self.request_on_demand_if_needed(range.start, context.seek_epoch, &mut state)?;
-            segments = self.shared.segments.lock();
+            segments = self.shared.segments.lock_sync();
 
-            self.shared
-                .condvar
-                .wait_for(&mut segments, Duration::from_millis(WAIT_RANGE_SLEEP_MS));
+            let deadline = Instant::now() + Duration::from_millis(WAIT_RANGE_SLEEP_MS);
+            let (_segments, _wait_result) =
+                self.shared.condvar.wait_sync_timeout(segments, deadline);
 
             if self.shared.timeline.is_flushing() {
                 return Ok(WaitOutcome::Interrupted);
@@ -384,14 +399,14 @@ impl Source for HlsSource {
         }
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, HlsError> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, HlsError> {
         let seg = {
-            let segments = self.shared.segments.lock();
+            let segments = self.shared.segments.lock_sync();
             segments.find_at_offset(offset).cloned()
         };
 
         let Some(seg) = seg else {
-            return Ok(0);
+            return Ok(ReadOutcome::Data(0));
         };
 
         let previous_hint = self.shared.current_segment_index.load(Ordering::Acquire) as usize;
@@ -420,7 +435,7 @@ impl Source for HlsSource {
             if self.can_cross_variant_without_reset(fence, seg.variant) {
                 self.variant_fence = Some(seg.variant);
             } else {
-                return Ok(0);
+                return Ok(ReadOutcome::VariantChange);
             }
         }
 
@@ -433,14 +448,14 @@ impl Source for HlsSource {
             self.shared.timeline.set_byte_position(new_pos);
             self.shared.reader_advanced.notify_one();
 
-            let total = self.shared.segments.lock().max_end_offset();
+            let total = self.shared.segments.lock_sync().max_end_offset();
             self.bus.publish(HlsEvent::ByteProgress {
                 position: new_pos,
                 total: Some(total),
             });
         }
 
-        Ok(bytes)
+        Ok(ReadOutcome::Data(bytes))
     }
 
     fn len(&self) -> Option<u64> {
@@ -453,7 +468,7 @@ impl Source for HlsSource {
         let has_hinted_variant = self
             .shared
             .segments
-            .lock()
+            .lock_sync()
             .first_segment_of_variant(hinted_variant)
             .is_some();
         let variant = match reader_variant {
@@ -478,7 +493,7 @@ impl Source for HlsSource {
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
         let current_variant = self.shared.abr_variant_index.load(Ordering::Acquire);
         {
-            let segments = self.shared.segments.lock();
+            let segments = self.shared.segments.lock_sync();
             // Decoder recreate needs init-bearing segment (ftyp/moov),
             // not just the first loaded segment of the variant.
             if let Some(seg) = segments.first_init_segment_of_variant(current_variant) {
@@ -537,7 +552,7 @@ impl Source for HlsSource {
             .store(false, Ordering::Release);
         while self.shared.segment_requests.pop().is_some() {}
         {
-            let mut segments = self.shared.segments.lock();
+            let mut segments = self.shared.segments.lock_sync();
             segments.clear();
         }
         self.shared

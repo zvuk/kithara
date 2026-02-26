@@ -17,11 +17,17 @@ where
     tokio::spawn(f);
 }
 
-/// On WASM, uses `wasm_bindgen_futures::spawn_local`.
+/// On WASM, uses `wasm_bindgen_futures::spawn_local` with
+/// `wasm_safe_thread::task_begin/task_finished` so Web Workers
+/// wait for the task to complete before shutting down.
 #[cfg(target_arch = "wasm32")]
 pub fn spawn_task<F>(f: F)
 where
     F: Future<Output = ()> + 'static,
 {
-    wasm_bindgen_futures::spawn_local(f);
+    wasm_safe_thread::task_begin();
+    wasm_bindgen_futures::spawn_local(async {
+        f.await;
+        wasm_safe_thread::task_finished();
+    });
 }

@@ -1,10 +1,10 @@
 #![forbid(unsafe_code)]
 
-use kithara_platform::time::Duration;
 use std::sync::Arc;
 
 use fixture::*;
 use kithara::{hls::HlsResult, internal::KeyManager};
+use kithara_platform::time::Duration;
 
 use super::fixture;
 

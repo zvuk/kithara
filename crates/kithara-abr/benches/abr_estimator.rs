@@ -1,13 +1,11 @@
 #![forbid(unsafe_code)]
 
-use kithara_platform::time::Duration;
-
 use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use kithara_abr::{
     AbrController, AbrMode, AbrOptions, ThroughputEstimator, ThroughputSample,
     ThroughputSampleSource, Variant,
 };
-use kithara_platform::time::Instant;
+use kithara_platform::time::{Duration, Instant};
 
 fn options() -> AbrOptions {
     AbrOptions {

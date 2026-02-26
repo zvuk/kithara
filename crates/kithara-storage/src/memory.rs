@@ -58,7 +58,7 @@ pub struct MemDriver {
 
 impl std::fmt::Debug for MemDriver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.state.lock();
+        let state = self.state.lock_sync();
         f.debug_struct("MemDriver")
             .field("capacity", &state.capacity)
             .field("window_start", &state.window_start)
@@ -116,7 +116,7 @@ impl Driver for MemDriver {
 impl DriverIo for MemDriver {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
-        let ring = self.state.lock();
+        let ring = self.state.lock_sync();
         let window_end = ring.window_start + ring.capacity as u64;
 
         // Check offset is within the valid window.
@@ -157,7 +157,7 @@ impl DriverIo for MemDriver {
             ));
         }
 
-        let mut ring = self.state.lock();
+        let mut ring = self.state.lock_sync();
         let mask = ring.capacity - 1;
 
         #[expect(clippy::cast_possible_truncation)] // bitmask index within capacity
@@ -201,12 +201,12 @@ impl DriverIo for MemDriver {
     }
 
     fn storage_len(&self) -> u64 {
-        let ring = self.state.lock();
+        let ring = self.state.lock_sync();
         ring.window_start + ring.capacity as u64
     }
 
     fn valid_window(&self) -> Option<Range<u64>> {
-        let ring = self.state.lock();
+        let ring = self.state.lock_sync();
         Some(ring.window_start..ring.window_start + ring.capacity as u64)
     }
 }
@@ -255,13 +255,12 @@ mod tests {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    use crate::StorageError;
-    #[cfg(not(target_arch = "wasm32"))]
     use kithara_platform::thread;
-    #[cfg(not(target_arch = "wasm32"))]
     use kithara_platform::time::Duration;
 
     use super::*;
+    #[cfg(not(target_arch = "wasm32"))]
+    use crate::StorageError;
     use crate::resource::{ResourceExt, ResourceStatus, WaitOutcome};
 
     fn create_resource() -> MemResource {

@@ -243,7 +243,7 @@ where
     }
 
     fn mark_seen(&self, asset_root: &str) -> bool {
-        let mut g = self.seen.lock();
+        let mut g = self.seen.lock_sync();
         g.insert(asset_root.to_string())
     }
 

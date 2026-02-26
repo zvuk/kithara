@@ -12,7 +12,6 @@
 //! This test simulates the mismatch by having the server return
 //! smaller Content-Length for HEAD than the actual GET body.
 
-use kithara_platform::time::Duration;
 use std::io::{Read, Seek, SeekFrom};
 
 use fixture::scalable_server::{HlsTestServer, HlsTestServerConfig};
@@ -21,6 +20,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, cancel_token, debug_tracing_setup, temp_dir};
 use tokio_util::sync::CancellationToken;
 

@@ -1,14 +1,12 @@
 #![forbid(unsafe_code)]
 
 #[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::time::Duration;
-
-#[cfg(not(target_arch = "wasm32"))]
 use kithara::assets::EvictConfig;
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, ResourceKey},
     storage::ResourceExt,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::temp_dir;
 
 /// Helper to read bytes from resource into a new Vec

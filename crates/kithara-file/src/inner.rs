@@ -100,6 +100,7 @@ impl File {
     ) -> Result<FileSource, SourceError> {
         let asset_root = asset_root_for_url(&url, config.name.as_deref());
         let net_client = HttpClient::new(config.net.clone());
+
         let response_headers = net_client.head(url.clone(), config.headers.clone()).await?;
         let expected_len = response_headers
             .get("content-length")
@@ -118,22 +119,21 @@ impl File {
         {
             backend_builder = backend_builder.mem_resource_capacity(capacity);
         }
-        let backend = backend_builder.build();
+        let backend = Arc::new(backend_builder.build());
 
         let coverage_manager = backend
             .open_coverage_manager()
             .map_err(SourceError::Assets)?;
 
         let state = FileStreamState::create(
-            Arc::new(backend),
-            &net_client,
+            &backend,
             url,
             cancel.clone(),
             config.bus.clone(),
             config.event_channel_capacity,
             config.headers.clone(),
-        )
-        .await?;
+            expected_len,
+        )?;
 
         let timeline = state.timeline();
         let progress = Arc::new(Progress::new(timeline));
@@ -171,14 +171,13 @@ impl File {
             // (sequential stream from scratch, but partial data already on disk).
             let downloader = FileDownloader::new(
                 &net_client,
-                state.clone(),
+                &state,
                 progress.clone(),
                 state.bus().clone(),
                 config.look_ahead_bytes,
                 shared.clone(),
-                coverage_manager,
-            )
-            .await;
+                &coverage_manager,
+            );
 
             // Spawn downloader on the thread pool.
             // Backend is stored in FileSource — dropping the source cancels the downloader.

@@ -1,7 +1,6 @@
-use kithara_platform::time::Duration;
-
 use async_trait::async_trait;
 use bytes::Bytes;
+use kithara_platform::time::Duration;
 use url::Url;
 
 use crate::{

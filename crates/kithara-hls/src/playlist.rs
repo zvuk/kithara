@@ -4,9 +4,7 @@
 //! master and media playlists, with per-variant size maps for byte-offset
 //! resolution. The `PlaylistAccess` trait provides a testable read interface.
 
-use kithara_platform::time::Duration;
-
-use kithara_platform::RwLock;
+use kithara_platform::{RwLock, time::Duration};
 use kithara_stream::{AudioCodec, ContainerFormat};
 use url::Url;
 
@@ -144,7 +142,7 @@ impl PlaylistState {
     /// Set the size map for a variant (after HEAD requests or first download).
     pub fn set_size_map(&self, variant: usize, size_map: VariantSizeMap) {
         if let Some(lock) = self.variants.get(variant) {
-            let mut state = lock.write();
+            let mut state = lock.lock_sync_write();
             state.size_map = Some(size_map);
         }
     }
@@ -161,7 +159,7 @@ impl PlaylistState {
         let Some(lock) = self.variants.get(variant) else {
             return;
         };
-        let mut state = lock.write();
+        let mut state = lock.lock_sync_write();
         let Some(ref mut size_map) = state.size_map else {
             return;
         };
@@ -192,7 +190,7 @@ impl PlaylistState {
         self.variants
             .iter()
             .map(|lock| {
-                let state = lock.read();
+                let state = lock.lock_sync_read();
                 state.segments.iter().fold(Duration::ZERO, |acc, segment| {
                     acc.saturating_add(segment.duration)
                 })
@@ -253,31 +251,31 @@ impl PlaylistAccess for PlaylistState {
 
     fn num_segments(&self, variant: usize) -> Option<usize> {
         let lock = self.variants.get(variant)?;
-        let state = lock.read();
+        let state = lock.lock_sync_read();
         Some(state.segments.len())
     }
 
     fn variant_codec(&self, variant: usize) -> Option<AudioCodec> {
         let lock = self.variants.get(variant)?;
-        let state = lock.read();
+        let state = lock.lock_sync_read();
         state.codec
     }
 
     fn variant_container(&self, variant: usize) -> Option<ContainerFormat> {
         let lock = self.variants.get(variant)?;
-        let state = lock.read();
+        let state = lock.lock_sync_read();
         state.container
     }
 
     fn segment_url(&self, variant: usize, index: usize) -> Option<Url> {
         let lock = self.variants.get(variant)?;
-        let state = lock.read();
+        let state = lock.lock_sync_read();
         state.segments.get(index).map(|s| s.url.clone())
     }
 
     fn init_url(&self, variant: usize) -> Option<Url> {
         let lock = self.variants.get(variant)?;
-        let state = lock.read();
+        let state = lock.lock_sync_read();
         state.init_url.clone()
     }
 
@@ -285,13 +283,13 @@ impl PlaylistAccess for PlaylistState {
         let Some(lock) = self.variants.get(variant) else {
             return false;
         };
-        let state = lock.read();
+        let state = lock.lock_sync_read();
         state.size_map.is_some()
     }
 
     fn total_variant_size(&self, variant: usize) -> Option<u64> {
         let lock = self.variants.get(variant)?;
-        let state = lock.read();
+        let state = lock.lock_sync_read();
         state.size_map.as_ref().map(|sm| sm.total)
     }
 
@@ -301,7 +299,7 @@ impl PlaylistAccess for PlaylistState {
     )]
     fn segment_byte_offset(&self, variant: usize, index: usize) -> Option<u64> {
         let lock = self.variants.get(variant)?;
-        let state = lock.read();
+        let state = lock.lock_sync_read();
         let size_map = state.size_map.as_ref()?;
         size_map.offsets.get(index).copied()
     }
@@ -312,7 +310,7 @@ impl PlaylistAccess for PlaylistState {
     )]
     fn find_segment_at_offset(&self, variant: usize, offset: u64) -> Option<usize> {
         let lock = self.variants.get(variant)?;
-        let state = lock.read();
+        let state = lock.lock_sync_read();
         let size_map = state.size_map.as_ref()?;
 
         if size_map.offsets.is_empty() || offset >= size_map.total {
@@ -341,7 +339,7 @@ impl PlaylistAccess for PlaylistState {
         target: Duration,
     ) -> Option<(usize, Duration, Duration)> {
         let lock = self.variants.get(variant)?;
-        let state = lock.read();
+        let state = lock.lock_sync_read();
         if state.segments.is_empty() {
             return None;
         }
@@ -365,7 +363,6 @@ impl PlaylistAccess for PlaylistState {
 #[cfg(test)]
 mod tests {
     use kithara_platform::time::Duration;
-
     use kithara_test_utils::kithara;
     use url::Url;
 

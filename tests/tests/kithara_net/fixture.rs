@@ -1,10 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_platform::time::Duration;
-
 use bytes::Bytes;
 use futures::StreamExt;
 use kithara::net::{ByteStream, Headers, Net, NetError, RangeSpec};
+use kithara_platform::time::Duration;
 use url::Url;
 
 pub(crate) struct DelayedNet<N> {

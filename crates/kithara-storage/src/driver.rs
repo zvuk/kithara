@@ -10,8 +10,6 @@
 use std::{fmt::Debug, ops::Range, path::Path, sync::Arc};
 
 use derivative::Derivative;
-#[cfg(target_arch = "wasm32")]
-use kithara_platform::thread;
 use kithara_platform::{Condvar, Mutex};
 use rangemap::RangeSet;
 use tokio_util::sync::CancellationToken;
@@ -162,7 +160,7 @@ pub struct Resource<D: DriverIo> {
 
 impl<D: DriverIo + Debug> Debug for Resource<D> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let state = self.inner.state.lock();
+        let state = self.inner.state.lock_sync();
         f.debug_struct("Resource")
             .field("driver", &self.inner.driver)
             .field("committed", &state.committed)
@@ -202,7 +200,7 @@ impl<D: DriverIo> Resource<D> {
             return Err(StorageError::Cancelled);
         }
         let failed = {
-            let state = self.inner.state.lock();
+            let state = self.inner.state.lock_sync();
             state.failed.clone()
         };
         if let Some(reason) = failed {
@@ -222,7 +220,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
         self.check_health()?;
 
         let effective_len = {
-            let final_len = self.inner.state.lock().final_len;
+            let final_len = self.inner.state.lock_sync().final_len;
             let storage_len = self.inner.driver.storage_len();
             let data_len = final_len.unwrap_or(storage_len);
             data_len.min(storage_len)
@@ -258,7 +256,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             })?;
 
         let committed = {
-            let state = self.inner.state.lock();
+            let state = self.inner.state.lock_sync();
             state.committed
         };
 
@@ -270,7 +268,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
 
         // Update common state and wake waiters.
         {
-            let mut state = self.inner.state.lock();
+            let mut state = self.inner.state.lock_sync();
             state.available.insert(range);
 
             // Invalidate evicted ranges for ring buffer drivers.
@@ -306,7 +304,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             }
 
             // Slow path: lock state and check coverage, wait if needed.
-            let state = self.inner.state.lock();
+            let state = self.inner.state.lock_sync();
 
             if self.inner.cancel.is_cancelled() {
                 return Err(StorageError::Cancelled);
@@ -336,21 +334,9 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                 "storage::wait_range spinning"
             );
 
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let mut state = state;
-                self.inner.condvar.wait_for(
-                    &mut state,
-                    kithara_platform::time::Duration::from_millis(50),
-                );
-            }
-
-            #[cfg(target_arch = "wasm32")]
-            {
-                drop(state);
-                thread::backoff(kithara_platform::time::Duration::from_millis(50));
-                continue;
-            }
+            let deadline = kithara_platform::time::Instant::now()
+                + kithara_platform::time::Duration::from_millis(50);
+            let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
         }
     }
 
@@ -362,7 +348,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
 
         // Update common state only on success.
         {
-            let mut state = self.inner.state.lock();
+            let mut state = self.inner.state.lock_sync();
             state.committed = true;
             state.final_len = final_len;
             if let Some(len) = final_len
@@ -377,7 +363,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
 
     fn fail(&self, reason: String) {
         {
-            let mut state = self.inner.state.lock();
+            let mut state = self.inner.state.lock_sync();
             state.failed = Some(reason);
         }
         self.inner.condvar.notify_all();
@@ -388,12 +374,12 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
     }
 
     fn len(&self) -> Option<u64> {
-        let state = self.inner.state.lock();
+        let state = self.inner.state.lock_sync();
         state.final_len
     }
 
     fn status(&self) -> ResourceStatus {
-        let state = self.inner.state.lock();
+        let state = self.inner.state.lock_sync();
         #[expect(clippy::option_if_let_else)] // three-way branch is clearer with if-let-else
         if let Some(ref reason) = state.failed {
             ResourceStatus::Failed(reason.clone())
@@ -414,7 +400,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
 
         // Update common state only on success.
         {
-            let mut state = self.inner.state.lock();
+            let mut state = self.inner.state.lock_sync();
             state.committed = false;
             state.final_len = None;
             // Keep available data as-is — existing bytes remain readable.

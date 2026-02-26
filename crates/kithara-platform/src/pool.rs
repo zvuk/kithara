@@ -1,103 +1,208 @@
 //! Shared thread pool for blocking work (decode, probe, I/O).
 //!
-//! Wraps [`rayon::ThreadPool`] to provide a consistent threading abstraction
-//! across all Kithara crates. Pass through configs to share a single pool
-//! across multiple stream instances.
+//! **Native**: workers are spawned once and reuse threads by waiting on a
+//! [`Condvar`]-guarded job queue. The global pool is lazily initialized via
+//! [`std::sync::OnceLock`].
 //!
-//! By default, the global rayon pool is used. Create a custom pool with
-//! [`ThreadPool::with_num_threads`] or [`ThreadPool::custom`] to control
-//! thread count and lifecycle.
+//! **WASM**: each [`spawn`](ThreadPool::spawn) call creates a fresh Web Worker
+//! via [`wasm_safe_thread::spawn`]. A persistent pool is not feasible because
+//! `Condvar::wait` / `Atomics.wait` is forbidden on the WASM main thread.
 //!
-//! # WASM support
+//! # Example
 //!
-//! Rayon supports WASM via `wasm-bindgen-rayon`, mapping pool threads
-//! to Web Workers. This makes `ThreadPool` portable across native and web.
+//! ```
+//! use kithara_platform::ThreadPool;
+//!
+//! let pool = ThreadPool::global();
+//! pool.spawn(|| { /* CPU work */ });
+//! ```
 
-use std::{fmt, io, sync::Arc};
+use std::{fmt, io};
 
 use futures::channel::oneshot;
-/// Shared thread pool for blocking/CPU-bound work.
-///
-/// Wraps an optional [`rayon::ThreadPool`]. When `None`, delegates to the
-/// global rayon pool.
-///
-/// # Cloning
-///
-/// Cloning is cheap (Arc increment). Multiple stream instances should share
-/// the same pool to avoid uncontrolled thread proliferation.
-///
-/// # Example
-///
-/// ```
-/// use kithara_platform::ThreadPool;
-///
-/// // Use global rayon pool (default)
-/// let pool = ThreadPool::global();
-///
-/// // Custom pool with 4 threads
-/// let pool = ThreadPool::with_num_threads(4).unwrap();
-///
-/// // Fire-and-forget
-/// pool.spawn(|| { /* CPU work */ });
-/// ```
-#[derive(Clone)]
-pub struct ThreadPool {
-    inner: Option<Arc<rayon::ThreadPool>>,
-}
 
-impl ThreadPool {
-    /// Use the global rayon thread pool.
-    ///
-    /// The global pool is created lazily on first use with `num_cpus` threads.
-    /// This is the default.
-    #[must_use]
-    pub fn global() -> Self {
-        Self { inner: None }
+// ── Native: real thread pool ────────────────────────────────────────
+
+#[cfg(not(target_arch = "wasm32"))]
+mod inner {
+    use std::{collections::VecDeque, io, sync::Arc};
+
+    use wasm_safe_thread::{Mutex, condvar::Condvar};
+
+    type Job = Box<dyn FnOnce() + Send + 'static>;
+
+    pub(super) struct PoolShared {
+        queue: Mutex<PoolQueue>,
+        condvar: Condvar,
+        pub(super) num_threads: usize,
     }
 
-    /// Wrap an existing [`rayon::ThreadPool`].
-    ///
-    /// When the last clone of `ThreadPool` is dropped and no tasks are running,
-    /// the underlying rayon pool is destroyed and its threads exit.
-    #[must_use]
-    pub fn custom(pool: rayon::ThreadPool) -> Self {
-        Self {
-            inner: Some(Arc::new(pool)),
+    struct PoolQueue {
+        jobs: VecDeque<Job>,
+    }
+
+    impl PoolShared {
+        pub(super) fn new(num_threads: usize) -> Arc<Self> {
+            let shared = Arc::new(Self {
+                queue: Mutex::new(PoolQueue {
+                    jobs: VecDeque::new(),
+                }),
+                condvar: Condvar::new(),
+                num_threads,
+            });
+
+            for _ in 0..num_threads {
+                let shared = Arc::clone(&shared);
+                let _ = crate::thread::spawn(move || {
+                    shared.worker_loop();
+                });
+            }
+
+            shared
+        }
+
+        fn worker_loop(&self) {
+            loop {
+                let job = {
+                    let mut queue = self.queue.lock_sync();
+                    loop {
+                        if let Some(job) = queue.jobs.pop_front() {
+                            break job;
+                        }
+                        queue = self.condvar.wait_sync(queue);
+                    }
+                };
+                job();
+            }
+        }
+
+        pub(super) fn submit(&self, job: Job) {
+            let mut queue = self.queue.lock_sync();
+            queue.jobs.push_back(job);
+            self.condvar.notify_one();
         }
     }
 
-    /// Create a pool with a specific number of threads.
+    #[derive(Clone)]
+    pub(super) struct ThreadPoolInner {
+        pub(super) shared: Arc<PoolShared>,
+    }
+
+    impl ThreadPoolInner {
+        pub(super) fn global() -> Self {
+            static POOL: std::sync::OnceLock<ThreadPoolInner> = std::sync::OnceLock::new();
+            POOL.get_or_init(|| {
+                let n = wasm_safe_thread::available_parallelism()
+                    .map(|n| n.get().min(8))
+                    .unwrap_or(4);
+                Self {
+                    shared: PoolShared::new(n),
+                }
+            })
+            .clone()
+        }
+
+        pub(super) fn with_num_threads(n: usize) -> Result<Self, io::Error> {
+            if n == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "thread pool requires at least 1 thread",
+                ));
+            }
+            Ok(Self {
+                shared: PoolShared::new(n),
+            })
+        }
+
+        pub(super) fn spawn<F: FnOnce() + Send + 'static>(&self, f: F) {
+            self.shared.submit(Box::new(f));
+        }
+
+        pub(super) fn num_threads(&self) -> usize {
+            self.shared.num_threads
+        }
+    }
+}
+
+// ── WASM: spawn-per-task ────────────────────────────────────────────
+
+#[cfg(target_arch = "wasm32")]
+mod inner {
+    use std::io;
+
+    #[derive(Clone)]
+    pub(super) struct ThreadPoolInner;
+
+    impl ThreadPoolInner {
+        pub(super) fn global() -> Self {
+            Self
+        }
+
+        pub(super) fn with_num_threads(_n: usize) -> Result<Self, io::Error> {
+            Ok(Self)
+        }
+
+        pub(super) fn spawn<F: FnOnce() + Send + 'static>(&self, f: F) {
+            let _ = crate::thread::spawn(f);
+        }
+
+        pub(super) fn num_threads(&self) -> usize {
+            wasm_safe_thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4)
+        }
+    }
+}
+
+/// Shared thread pool for blocking/CPU-bound work.
+///
+/// On native: wraps a fixed set of worker threads with a shared job queue.
+/// On WASM: spawns a fresh Web Worker per task (pool not feasible on main thread).
+///
+/// # Cloning
+///
+/// Cloning is cheap. Multiple stream instances should share the same pool.
+#[derive(Clone)]
+pub struct ThreadPool {
+    inner: inner::ThreadPoolInner,
+}
+
+impl ThreadPool {
+    /// Returns the global thread pool.
+    #[must_use]
+    pub fn global() -> Self {
+        Self {
+            inner: inner::ThreadPoolInner::global(),
+        }
+    }
+
+    /// Create a pool with a specific number of worker threads.
+    ///
+    /// On native, workers are spawned immediately.
+    /// On WASM, `n` is a hint (ignored — tasks spawn fresh workers).
     ///
     /// # Errors
     ///
-    /// Returns an error if the rayon pool cannot be created.
-    pub fn with_num_threads(n: usize) -> Result<Self, rayon::ThreadPoolBuildError> {
-        let pool = rayon::ThreadPoolBuilder::new().num_threads(n).build()?;
-        Ok(Self::custom(pool))
+    /// Returns an error on native if `n` is zero.
+    pub fn with_num_threads(n: usize) -> Result<Self, io::Error> {
+        Ok(Self {
+            inner: inner::ThreadPoolInner::with_num_threads(n)?,
+        })
     }
 
     /// Spawn a closure on the pool (fire-and-forget).
-    ///
-    /// The closure runs on a pool thread. Use [`spawn_async`](Self::spawn_async)
-    /// to get a future that resolves when the closure completes.
     pub fn spawn<F>(&self, f: F)
     where
         F: FnOnce() + Send + 'static,
     {
-        match self.inner {
-            Some(ref pool) => pool.spawn(f),
-            None => rayon::spawn(f),
-        }
+        self.inner.spawn(f);
     }
 
     /// Spawn on the pool and return a future that resolves when the closure completes.
     ///
-    /// Replaces `tokio::task::spawn_blocking` — offloads blocking work from
-    /// an async context to a rayon pool thread without tying up the tokio runtime.
-    ///
     /// # Errors
     ///
-    /// Returns an error if the pool thread panics.
+    /// Returns an error if the worker thread panics.
     pub async fn spawn_async<F, R>(&self, f: F) -> Result<R, io::Error>
     where
         F: FnOnce() -> R + Send + 'static,
@@ -110,6 +215,12 @@ impl ThreadPool {
         rx.await
             .map_err(|_| io::Error::other("thread pool task panicked"))
     }
+
+    /// Returns the number of worker threads in this pool.
+    #[must_use]
+    pub fn num_threads(&self) -> usize {
+        self.inner.num_threads()
+    }
 }
 
 impl Default for ThreadPool {
@@ -120,17 +231,9 @@ impl Default for ThreadPool {
 
 impl fmt::Debug for ThreadPool {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self.inner {
-            Some(ref pool) => f
-                .debug_struct("ThreadPool")
-                .field("kind", &"custom")
-                .field("num_threads", &pool.current_num_threads())
-                .finish(),
-            None => f
-                .debug_struct("ThreadPool")
-                .field("kind", &"global")
-                .finish(),
-        }
+        f.debug_struct("ThreadPool")
+            .field("num_threads", &self.num_threads())
+            .finish()
     }
 }
 
@@ -142,15 +245,16 @@ mod tests {
 
     use super::*;
 
-    // --- Rayon pool creation (works on WASM via wasm-bindgen-rayon) ---
-
     #[kithara::test(native)]
     fn test_custom_pool() {
         let pool = ThreadPool::with_num_threads(2).unwrap();
-        assert!(pool.inner.is_some());
+        assert_eq!(pool.num_threads(), 2);
     }
 
-    // --- Blocking tests (mpsc::recv uses Atomics.wait — forbidden on WASM main thread) ---
+    #[kithara::test(native)]
+    fn test_zero_threads_is_error() {
+        assert!(ThreadPool::with_num_threads(0).is_err());
+    }
 
     #[kithara::test(native)]
     fn test_spawn_completes() {
@@ -192,29 +296,21 @@ mod tests {
         assert_eq!(rx2.recv().unwrap(), 2);
     }
 
-    // --- Pure logic tests ---
-
     #[kithara::test(wasm)]
-    fn test_debug_global() {
+    fn test_debug_format() {
         let debug = format!("{:?}", ThreadPool::global());
-        assert!(debug.contains("global"));
-    }
-
-    #[kithara::test(native)]
-    fn test_debug_custom() {
-        let debug = format!("{:?}", ThreadPool::with_num_threads(3).unwrap());
-        assert!(debug.contains("custom"));
+        assert!(debug.contains("num_threads"));
     }
 
     #[kithara::test(wasm)]
     #[case::global(false)]
     #[case::default(true)]
-    fn test_default_and_global_are_global(#[case] default_ctor: bool) {
+    fn test_default_and_global(#[case] default_ctor: bool) {
         let pool = if default_ctor {
             ThreadPool::default()
         } else {
             ThreadPool::global()
         };
-        assert!(pool.inner.is_none());
+        assert!(pool.num_threads() > 0);
     }
 }

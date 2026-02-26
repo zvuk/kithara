@@ -1,10 +1,9 @@
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_platform::time::Duration;
-
 use bytes::Bytes;
 use kithara::net::{Net, NetError, NetExt};
 use kithara_net::mock::NetMock;
+use kithara_platform::time::Duration;
 use unimock::{MockFn, Unimock, matching};
 
 use super::fixture::{

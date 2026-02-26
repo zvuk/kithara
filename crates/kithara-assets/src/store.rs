@@ -8,10 +8,7 @@ use kithara_storage::StorageResource;
 use tokio_util::sync::CancellationToken;
 
 /// Default in-memory LRU cache capacity (enough for init + 2-3 media segments).
-const DEFAULT_CACHE_CAPACITY: NonZeroUsize = match NonZeroUsize::new(5) {
-    Some(v) => v,
-    None => unreachable!(),
-};
+const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::disk_store::DiskAssetStore;

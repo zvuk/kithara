@@ -8,7 +8,7 @@
 //!    and leaves the temp directory empty (no files created on disk).
 
 #[cfg(not(target_arch = "wasm32"))]
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
 use kithara::{assets::AssetStoreBuilder, storage::ResourceExt};
 #[cfg(not(target_arch = "wasm32"))]
@@ -18,6 +18,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_platform::Duration;
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_test_utils::TestTempDir;
 #[cfg(not(target_arch = "wasm32"))]

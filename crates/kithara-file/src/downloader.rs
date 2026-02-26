@@ -10,6 +10,7 @@ use kithara_assets::AssetResource;
 use kithara_coverage::{Coverage, CoverageManager, DiskCoverage};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, RangeSpec};
+use kithara_platform::WasmSend;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome, StepResult, Writer, WriterItem};
 use tokio_util::sync::CancellationToken;
@@ -116,9 +117,19 @@ enum FilePhase {
 /// - Sequential: initial download from start (streaming step mode)
 /// - `GapFilling`: fill holes via HTTP Range requests (batch mode)
 /// - Complete: all data downloaded
+///
+/// The sequential `Writer` is created lazily on the first `step()` call,
+/// matching the HLS pattern where I/O is deferred to the download loop.
+/// This keeps `FileDownloader` `Send` on WASM (no `!Send` JS objects
+/// in the struct) so the downloader can run in a Web Worker.
 pub(crate) struct FileDownloader {
     io: FileIo,
-    writer: Writer,
+    /// Sequential writer — created lazily on first `step()`.
+    /// Wrapped in `WasmSend` because `Writer` is `!Send` on WASM (contains
+    /// `JsValue`-backed response stream). The writer is always `None` when
+    /// the struct is moved to a Web Worker, and only populated inside the
+    /// worker via `ensure_writer()`.
+    writer: WasmSend<Option<Writer>>,
     res: AssetResource,
     progress: Arc<Progress>,
     bus: EventBus,
@@ -133,35 +144,20 @@ pub(crate) struct FileDownloader {
 }
 
 impl FileDownloader {
-    pub(crate) async fn new(
+    pub(crate) fn new(
         net_client: &HttpClient,
-        state: Arc<FileStreamState>,
+        state: &Arc<FileStreamState>,
         progress: Arc<Progress>,
         bus: EventBus,
         look_ahead_bytes: Option<u64>,
         shared: Arc<SharedFileState>,
-        coverage_manager: CoverageManager<StorageResource>,
+        coverage_manager: &CoverageManager<StorageResource>,
     ) -> Self {
         let url = state.url().clone();
         let total = state.len();
         let res = state.res().clone();
         let cancel = state.cancel().clone();
         let req_headers = state.headers().cloned();
-
-        let writer = match net_client.stream(url.clone(), req_headers.clone()).await {
-            Ok(stream) => Writer::new(stream, res.clone(), cancel.clone()),
-            Err(e) => {
-                tracing::warn!("failed to open stream: {}", e);
-                res.fail(e.to_string());
-                bus.publish(FileEvent::DownloadError {
-                    error: e.to_string(),
-                });
-                // Return a writer from an empty stream so step() returns error immediately
-                let empty = futures::stream::empty();
-                let boxed: kithara_net::ByteStream = Box::pin(empty);
-                Writer::new(boxed, state.res().clone(), CancellationToken::new())
-            }
-        };
 
         let mut coverage = coverage_manager.open_state(url.to_string());
         if let Some(size) = total {
@@ -189,7 +185,7 @@ impl FileDownloader {
 
         Self {
             io,
-            writer,
+            writer: WasmSend::new(None), // Created lazily on first step()
             res,
             progress,
             bus,
@@ -199,6 +195,42 @@ impl FileDownloader {
             coverage,
             phase: FilePhase::Sequential,
         }
+    }
+
+    /// Create or return the sequential Writer.
+    ///
+    /// On first call, opens an HTTP stream and wraps it in a Writer.
+    /// Matches the HLS pattern where I/O is deferred to the download loop.
+    async fn ensure_writer(&mut self) -> Result<&mut Writer, FileDownloadError> {
+        let slot = self.writer.get_mut();
+        if slot.is_none() {
+            match self
+                .io
+                .net_client
+                .stream(self.io.url.clone(), self.io.headers.clone())
+                .await
+            {
+                Ok(stream) => {
+                    *slot = Some(Writer::new(
+                        stream,
+                        self.res.clone(),
+                        self.io.cancel.clone(),
+                    ));
+                }
+                Err(e) => {
+                    tracing::warn!("failed to open stream: {}", e);
+                    self.res.fail(e.to_string());
+                    self.bus.publish(FileEvent::DownloadError {
+                        error: e.to_string(),
+                    });
+                    return Err(FileDownloadError { msg: e.to_string() });
+                }
+            }
+        }
+        // writer was just set to Some in the if-block above.
+        slot.as_mut().ok_or_else(|| FileDownloadError {
+            msg: "writer initialization failed".to_string(),
+        })
     }
 }
 
@@ -220,12 +252,8 @@ impl Downloader for FileDownloader {
         if matches!(self.phase, FilePhase::Sequential) {
             tracing::debug!("demand during sequential — switching to gap-filling");
             self.phase = FilePhase::GapFilling;
-            // Replace writer with an empty stream to drop the HTTP connection.
-            self.writer = Writer::new(
-                futures::stream::empty(),
-                self.res.clone(),
-                CancellationToken::new(),
-            );
+            // Drop the sequential writer to release the HTTP connection.
+            *self.writer.get_mut() = None;
         }
 
         tracing::debug!(
@@ -292,8 +320,11 @@ impl Downloader for FileDownloader {
             return Ok(StepResult::PhaseChange);
         }
 
+        // Lazily open the HTTP stream on first step.
+        let writer = self.ensure_writer().await?;
+
         // Sequential download continues.
-        let Some(result) = self.writer.next().await else {
+        let Some(result) = writer.next().await else {
             // Writer exhausted (empty stream case).
             self.phase = FilePhase::Complete;
             return Ok(StepResult::PhaseChange);
@@ -436,11 +467,12 @@ impl Downloader for FileDownloader {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use kithara_assets::{AssetStoreBuilder, ResourceKey};
     use kithara_net::{HttpClient, NetOptions};
     use kithara_stream::Timeline;
     use kithara_test_utils::kithara;
-    use std::sync::Arc;
     use tokio_util::sync::CancellationToken;
 
     use super::*;
@@ -466,10 +498,6 @@ mod tests {
 
         let total: u64 = 10_000;
 
-        // Pending stream simulates a stalled sequential download.
-        let stream = futures::stream::pending::<Result<bytes::Bytes, kithara_net::NetError>>();
-        let writer = Writer::new(stream, res.clone(), cancel.clone());
-
         let io = FileIo {
             net_client: HttpClient::new(NetOptions::default()),
             url: url.clone(),
@@ -484,9 +512,13 @@ mod tests {
         coverage.set_total_size(total);
         coverage.mark(0..1000); // Sequential downloaded first 1KB.
 
+        // Pending stream simulates a stalled sequential download.
+        let stream = futures::stream::pending::<Result<bytes::Bytes, kithara_net::NetError>>();
+        let writer = Writer::new(stream, res.clone(), cancel.clone());
+
         let mut dl = FileDownloader {
             io,
-            writer,
+            writer: WasmSend::new(Some(writer)),
             res,
             progress: Arc::new(Progress::new(Timeline::new())),
             bus: EventBus::new(16),

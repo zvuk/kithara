@@ -20,7 +20,8 @@ use kithara_decode::{
 use kithara_platform::{Mutex, thread};
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    AudioCodec, MediaInfo, Source, SourceSeekAnchor, Stream, StreamResult, StreamType, Timeline,
+    AudioCodec, MediaInfo, ReadOutcome, Source, SourceSeekAnchor, Stream, StreamResult, StreamType,
+    Timeline,
 };
 use kithara_test_utils::kithara;
 
@@ -71,7 +72,12 @@ impl TestSource {
 impl Source for TestSource {
     type Error = io::Error;
 
-    fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
+    fn wait_range(
+        &mut self,
+        range: Range<u64>,
+        timeout: Duration,
+    ) -> StreamResult<WaitOutcome, Self::Error> {
+        let _ = timeout;
         if self.timeline.is_flushing() {
             return Ok(WaitOutcome::Interrupted);
         }
@@ -88,11 +94,11 @@ impl Source for TestSource {
         Ok(WaitOutcome::Ready)
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
-        let mut state = self.state.lock();
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
+        let mut state = self.state.lock_sync();
         let offset_usize = offset as usize;
         if offset_usize >= state.data.len() {
-            return Ok(0);
+            return Ok(ReadOutcome::Data(0));
         }
 
         // Variant fence logic (mirrors HlsSource behavior).
@@ -110,7 +116,7 @@ impl Source for TestSource {
                 if let Some(fence) = state.variant_fence
                     && v != fence
                 {
-                    return Ok(0);
+                    return Ok(ReadOutcome::VariantChange);
                 }
             }
         }
@@ -129,34 +135,34 @@ impl Source for TestSource {
         let n = available.len().min(buf.len());
         buf[..n].copy_from_slice(&available[..n]);
 
-        Ok(n)
+        Ok(ReadOutcome::Data(n))
     }
 
     fn clear_variant_fence(&mut self) {
-        self.state.lock().variant_fence = None;
+        self.state.lock_sync().variant_fence = None;
     }
 
     fn len(&self) -> Option<u64> {
-        self.state.lock().len
+        self.state.lock_sync().len
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        self.state.lock().media_info.clone()
+        self.state.lock_sync().media_info.clone()
     }
 
     fn current_segment_range(&self) -> Option<Range<u64>> {
-        self.state.lock().segment_range.clone()
+        self.state.lock_sync().segment_range.clone()
     }
 
     fn format_change_segment_range(&self) -> Option<Range<u64>> {
-        self.state.lock().format_change_range.clone()
+        self.state.lock_sync().format_change_range.clone()
     }
 
     fn seek_time_anchor(
         &mut self,
         _position: Duration,
     ) -> StreamResult<Option<SourceSeekAnchor>, Self::Error> {
-        Ok(self.state.lock().seek_anchor)
+        Ok(self.state.lock_sync().seek_anchor)
     }
 
     fn timeline(&self) -> Timeline {
@@ -223,7 +229,7 @@ fn make_shared_stream(
 
 fn make_factory(decoders: Vec<Box<dyn InnerDecoder>>) -> DecoderFactory<TestStream> {
     let queue = Arc::new(Mutex::new(VecDeque::from(decoders)));
-    Box::new(move |_stream, _info, _offset| queue.lock().pop_front())
+    Box::new(move |_stream, _info, _offset| queue.lock_sync().pop_front())
 }
 
 /// Factory that records every `base_offset` it receives.
@@ -234,8 +240,8 @@ fn make_tracking_factory(
     let offsets: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
     let offsets_clone = Arc::clone(&offsets);
     let factory: DecoderFactory<TestStream> = Box::new(move |_stream, _info, offset| {
-        offsets_clone.lock().push(offset);
-        queue.lock().pop_front()
+        offsets_clone.lock_sync().push(offset);
+        queue.lock_sync().pop_front()
     });
     (factory, offsets)
 }
@@ -333,7 +339,7 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
     // This is what happens in production: the reader reads through
     // V3 segment 19 data before detect_format_change has a chance to run.
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
         // current_segment_range returns segment 20 — reader already past segment 19
         s.segment_range = Some(V3_SEGMENT_20_START..V3_SEGMENT_20_END);
@@ -350,7 +356,7 @@ fn apply_format_change_must_use_first_new_format_segment_offset() {
     }
 
     // Verify factory was called at the correct offset
-    let offsets = factory_offsets.lock();
+    let offsets = factory_offsets.lock_sync();
     assert_eq!(offsets.len(), 1, "Factory should have been called once");
 
     // FIX: code now uses format_change_segment_range() which returns the FIRST segment
@@ -399,7 +405,7 @@ fn format_change_recreates_decoder() {
 
     // Trigger format change
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
         s.segment_range = Some(1000..2000);
     }
@@ -484,7 +490,7 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v0_info());
         s.seek_anchor = Some(SourceSeekAnchor {
             byte_offset: 500,
@@ -505,7 +511,7 @@ fn seek_uses_segment_start_anchor_without_decoder_recreate() {
         "seek must not recreate decoder in anchor path"
     );
 
-    let created_offsets = offsets.lock();
+    let created_offsets = offsets.lock_sync();
     assert!(
         created_offsets.is_empty(),
         "decoder factory must not be used for anchor seek"
@@ -559,7 +565,7 @@ fn seek_anchor_recreates_decoder_when_codec_changes() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
         s.format_change_range = Some(120..980);
         s.seek_anchor = Some(SourceSeekAnchor {
@@ -581,7 +587,7 @@ fn seek_anchor_recreates_decoder_when_codec_changes() {
         "codec change on seek must recreate decoder at init-bearing format boundary"
     );
 
-    let created_offsets = offsets.lock();
+    let created_offsets = offsets.lock_sync();
     assert_eq!(created_offsets.as_slice(), &[120]);
 
     let recreated_seeks = recreated_seek_log.lock();
@@ -618,7 +624,7 @@ fn seek_anchor_codec_change_without_format_boundary_uses_anchor_offset() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
         s.format_change_range = None;
         s.seek_anchor = Some(SourceSeekAnchor {
@@ -640,7 +646,7 @@ fn seek_anchor_codec_change_without_format_boundary_uses_anchor_offset() {
         "when format boundary is unknown, seek anchor offset must be used"
     );
 
-    let created_offsets = offsets.lock();
+    let created_offsets = offsets.lock_sync();
     assert_eq!(created_offsets.as_slice(), &[500]);
 }
 
@@ -669,7 +675,7 @@ fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(aac_variant_info(1));
         s.seek_anchor = Some(SourceSeekAnchor {
             byte_offset: 500,
@@ -690,7 +696,7 @@ fn seek_anchor_keeps_decoder_when_variant_changes_with_same_codec() {
         "variant change with same codec must not recreate decoder"
     );
 
-    let created_offsets = offsets.lock();
+    let created_offsets = offsets.lock_sync();
     assert!(
         created_offsets.is_empty(),
         "variant-only seek must not create a replacement decoder"
@@ -735,7 +741,7 @@ fn seek_anchor_failure_falls_back_to_direct_seek_without_decoder_recreate() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.seek_anchor = Some(SourceSeekAnchor {
             byte_offset: 500,
             segment_start: Duration::from_secs(8),
@@ -748,7 +754,7 @@ fn seek_anchor_failure_falls_back_to_direct_seek_without_decoder_recreate() {
     let _seek_epoch = timeline(&source).initiate_seek(Duration::from_millis(8_250));
     apply_pending_seek(&mut source);
 
-    let created_offsets = offsets.lock();
+    let created_offsets = offsets.lock_sync();
     assert!(
         created_offsets.is_empty(),
         "anchor failure fallback should not recreate decoder when direct seek succeeds"
@@ -803,7 +809,7 @@ fn failed_seek_without_pending_format_change_does_not_recreate_decoder() {
 
     let _ = fetch_next(&mut source);
 
-    let offsets = factory_offsets.lock();
+    let offsets = factory_offsets.lock_sync();
     assert!(
         offsets.is_empty(),
         "decoder factory must not be called when no format change is pending"
@@ -842,7 +848,7 @@ fn seek_recovery_same_codec_without_init_range_uses_current_segment_offset() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
         s.segment_range = Some(2_152_2009..2_227_6140);
         s.format_change_range = None;
@@ -853,7 +859,7 @@ fn seek_recovery_same_codec_without_init_range_uses_current_segment_offset() {
         "seek recovery should recreate decoder"
     );
 
-    let offsets = factory_offsets.lock();
+    let offsets = factory_offsets.lock_sync();
     assert_eq!(
         offsets.as_slice(),
         &[2_152_2009],
@@ -896,7 +902,7 @@ fn seek_recovery_prefers_init_bearing_offset_when_available() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
         s.segment_range = Some(2_152_2009..2_227_6140);
         s.format_change_range = Some(0..664_488);
@@ -907,7 +913,7 @@ fn seek_recovery_prefers_init_bearing_offset_when_available() {
         "seek recovery should recreate decoder"
     );
 
-    let offsets = factory_offsets.lock();
+    let offsets = factory_offsets.lock_sync();
     assert_eq!(
         offsets.as_slice(),
         &[0],
@@ -937,7 +943,7 @@ fn seek_clears_variant_fence() {
     );
 
     {
-        let mut source_state = state.lock();
+        let mut source_state = state.lock_sync();
         source_state.variant_fence = Some(3);
     }
 
@@ -945,7 +951,7 @@ fn seek_clears_variant_fence() {
     apply_pending_seek(&mut source);
 
     assert!(
-        state.lock().variant_fence.is_none(),
+        state.lock_sync().variant_fence.is_none(),
         "seek must clear variant fence to allow cross-variant navigation"
     );
 }
@@ -996,7 +1002,7 @@ fn seek_during_pending_format_change_retries_on_new_decoder() {
 
     // Trigger format change (ABR switch V0→V3)
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v3_info());
         s.segment_range = Some(1000..2000);
     }
@@ -1064,7 +1070,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
         let factory_offsets: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
         let factory_offsets_clone = Arc::clone(&factory_offsets);
         let factory: DecoderFactory<TestStream> = Box::new(move |_stream, _info, offset| {
-            factory_offsets_clone.lock().push(offset);
+            factory_offsets_clone.lock_sync().push(offset);
             if offset == V3_SEGMENT_19_START {
                 // Correct offset — decoder would succeed
                 Some(infinite_inner_decoder_loose(v3_spec(), Arc::new(AtomicBool::new(false))).0)
@@ -1112,7 +1118,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
 
             // After 2s: ABR switch — media_info changes, reader past segment 19
             if !format_changed && start.elapsed() > Duration::from_secs(2) {
-                let mut s = state.lock();
+                let mut s = state.lock_sync();
                 s.media_info = Some(v3_info());
                 s.segment_range = Some(V3_SEGMENT_20_START..V3_SEGMENT_20_END);
                 // format_change_segment_range returns the FIRST V3 segment where init data lives
@@ -1161,7 +1167,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
 ///
 /// Layout: [V0: 0..1000] [V3: 1000..2000]
 /// - First read in V0 → fence auto-detects V0
-/// - Seek to V3 offset → read returns 0 (fence blocks)
+/// - Seek to V3 offset → read returns Err(Interrupted) (variant change fence)
 /// - `clear_variant_fence()` → read V3 → fence auto-detects V3
 #[kithara::test(timeout(Duration::from_secs(10)))]
 fn source_variant_fence_blocks_cross_variant_reads() {
@@ -1173,7 +1179,7 @@ fn source_variant_fence_blocks_cross_variant_reads() {
 
     // Set up variant map: [V0: 0..1000] [V3: 1000..2000]
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.variant_map = vec![(0..1000, 0), (1000..2000, 3)];
     }
 
@@ -1186,11 +1192,17 @@ fn source_variant_fence_blocks_cross_variant_reads() {
     assert_eq!(n, 100, "V0 read should succeed");
     assert!(buf[..n].iter().all(|&b| b == 0xAA), "Should be V0 data");
 
-    // Seek to V3 region — fence blocks
+    // Seek to V3 region — fence returns Err(Interrupted) for variant change
     shared.seek(SeekFrom::Start(1000)).unwrap();
     let mut buf = vec![0u8; 100];
-    let n = shared.read(&mut buf).unwrap();
-    assert_eq!(n, 0, "V3 read must be blocked by fence (V0)");
+    let err = shared
+        .read(&mut buf)
+        .expect_err("V3 read must be blocked by fence (V0)");
+    assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+    assert!(
+        err.to_string().contains("variant change"),
+        "error should mention variant change, got: {err}"
+    );
 
     // Clear fence → read V3
     clear_variant_fence(&shared);
@@ -1802,7 +1814,7 @@ fn abr_switch_must_not_lose_samples() {
     let source = TestSource::new(data, Some(total_bytes as u64));
     let state = source.state_handle();
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v1_info());
         s.format_change_range = Some(v0_bytes as u64..v1_first_seg_end as u64);
         s.variant_map = vec![
@@ -1993,7 +2005,7 @@ fn repeated_seek_after_eof_must_not_stop_on_transient_bitstream_error() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v0_info());
         s.seek_anchor = Some(SourceSeekAnchor {
             byte_offset: 500,
@@ -2047,7 +2059,7 @@ fn repeated_seek_after_eof_must_not_stop_on_transient_eof_after_seek() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v0_info());
         s.seek_anchor = Some(SourceSeekAnchor {
             byte_offset: 500,
@@ -2103,7 +2115,7 @@ fn repeated_seek_program_config_error_recovers_via_decoder_recreate() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v0_info());
         s.format_change_range = Some(0..51_258);
         s.seek_anchor = Some(SourceSeekAnchor {
@@ -2136,7 +2148,7 @@ fn repeated_seek_program_config_error_recovers_via_decoder_recreate() {
         "program-config decode failure after repeated seek must recover via decoder recreate"
     );
 
-    let offsets = created_offsets.lock();
+    let offsets = created_offsets.lock_sync();
     assert_eq!(
         offsets.as_slice(),
         &[0],
@@ -2165,7 +2177,7 @@ fn decoder_panic_in_next_chunk_is_converted_to_decode_error() {
         "decoder panic should surface as EOF fetch error"
     );
     assert!(
-        offsets.lock().is_empty(),
+        offsets.lock_sync().is_empty(),
         "panic conversion should not trigger decoder recreation by itself"
     );
 }
@@ -2191,7 +2203,7 @@ fn seek_recovery_uses_applied_target_even_if_timeline_target_changes() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v0_info());
         s.seek_anchor = Some(SourceSeekAnchor {
             byte_offset: 500,
@@ -2215,7 +2227,7 @@ fn seek_recovery_uses_applied_target_even_if_timeline_target_changes() {
         "recovery must use applied seek target and ignore unrelated timeline target updates"
     );
 
-    let offsets = created_offsets.lock();
+    let offsets = created_offsets.lock_sync();
     assert!(
         offsets.is_empty(),
         "transient post-seek error must recover without decoder recreate"
@@ -2243,7 +2255,7 @@ fn seek_skip_then_decode_error_still_recovers_as_post_seek_error() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(v0_info());
         s.seek_anchor = Some(SourceSeekAnchor {
             byte_offset: 500,
@@ -2264,7 +2276,7 @@ fn seek_skip_then_decode_error_still_recovers_as_post_seek_error() {
         "decode error after fully-skipped first chunk must still be treated as post-seek recoverable"
     );
 
-    let offsets = created_offsets.lock();
+    let offsets = created_offsets.lock_sync();
     assert!(
         offsets.is_empty(),
         "transient post-seek recovery should not recreate decoder"
@@ -2299,7 +2311,7 @@ fn stress_variant_only_seeks_do_not_recreate_decoder() {
     );
 
     {
-        let mut s = state.lock();
+        let mut s = state.lock_sync();
         s.media_info = Some(aac_variant_info(1));
         s.seek_anchor = Some(SourceSeekAnchor {
             byte_offset: 500,
@@ -2324,7 +2336,7 @@ fn stress_variant_only_seeks_do_not_recreate_decoder() {
         "variant-only seek stress must keep the original decoder base offset"
     );
 
-    let created_offsets = offsets.lock();
+    let created_offsets = offsets.lock_sync();
     assert!(
         created_offsets.is_empty(),
         "variant-only seek stress must not recreate decoder"

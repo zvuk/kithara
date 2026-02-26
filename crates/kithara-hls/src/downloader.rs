@@ -246,7 +246,7 @@ impl HlsDownloader {
         segment_index: usize,
     ) -> Option<(u64, u64)> {
         let loaded_offset = {
-            let segments = self.shared.segments.lock();
+            let segments = self.shared.segments.lock_sync();
             segments
                 .find_loaded_segment(variant, segment_index)
                 .map(|segment| segment.byte_offset)?
@@ -383,7 +383,7 @@ impl HlsDownloader {
             0
         };
 
-        let mut segments = shared.segments.lock();
+        let mut segments = shared.segments.lock_sync();
         let mut count = 0usize;
         let mut cumulative_offset = 0u64;
 
@@ -446,6 +446,31 @@ impl HlsDownloader {
     ///
     /// `is_variant_switch` / `is_midstream_switch` control init segment inclusion.
     fn commit_segment(&mut self, dl: HlsFetch, is_variant_switch: bool, is_midstream_switch: bool) {
+        // Skip duplicate commit: if this (variant, segment_index) is already
+        // in the download index at the SAME byte_offset, a demand or earlier
+        // batch already committed it. We check byte_offset because after a seek
+        // + variant switch, the same (variant, segment_index) may be loaded at
+        // a different cumulative offset — skipping that commit would create a
+        // hole visible to the reader.
+        {
+            let segments = self.shared.segments.lock_sync();
+            if let Some(existing) = segments.find_loaded_segment(dl.variant, dl.segment_index) {
+                let expected_offset = self
+                    .playlist_state
+                    .segment_byte_offset(dl.variant, dl.segment_index)
+                    .unwrap_or(existing.byte_offset);
+                if existing.byte_offset == expected_offset {
+                    debug!(
+                        variant = dl.variant,
+                        segment_index = dl.segment_index,
+                        byte_offset = existing.byte_offset,
+                        "commit_segment: skipping duplicate at correct offset"
+                    );
+                    return;
+                }
+            }
+        }
+
         self.record_throughput(dl.media.len, dl.duration, dl.media.duration);
 
         self.bus.publish(HlsEvent::SegmentComplete {
@@ -537,7 +562,7 @@ impl HlsDownloader {
             cov.mark(0..media_len);
         }
         {
-            let mut segments = self.shared.segments.lock();
+            let mut segments = self.shared.segments.lock_sync();
             if is_variant_switch {
                 segments.fence_at(byte_offset, dl.variant);
             }
@@ -581,6 +606,10 @@ impl HlsDownloader {
             .had_midstream_switch
             .store(true, Ordering::Release);
         while self.shared.segment_requests.pop().is_some() {}
+        // Wake blocked wait_range so it can re-push its on-demand request.
+        // The `had_midstream_switch` flag tells wait_range to clear
+        // `on_demand_pending`, allowing the re-push for the new variant.
+        self.shared.condvar.notify_all();
     }
 
     fn should_prepare_variant_totals(&self, is_variant_switch: bool) -> bool {
@@ -838,7 +867,7 @@ impl HlsDownloader {
         if self
             .shared
             .segments
-            .lock()
+            .lock_sync()
             .is_segment_loaded(variant, segment_index)
         {
             debug!(
@@ -997,9 +1026,11 @@ impl HlsDownloader {
         }
 
         let stream_end = self
-            .playlist_state
-            .total_variant_size(variant)
-            .unwrap_or_else(|| self.shared.segments.lock().max_end_offset());
+            .shared
+            .timeline
+            .total_bytes()
+            .or_else(|| self.playlist_state.total_variant_size(variant))
+            .unwrap_or_else(|| self.shared.segments.lock_sync().max_end_offset());
         let playback_at_end = stream_end == 0 || self.shared.timeline.byte_position() >= stream_end;
         if !playback_at_end {
             self.shared.timeline.set_eof(false);
@@ -1028,7 +1059,7 @@ impl HlsDownloader {
 
     fn rewind_to_first_missing_segment(&mut self, variant: usize, num_segments: usize) -> bool {
         let missing_segment = {
-            let segments = self.shared.segments.lock();
+            let segments = self.shared.segments.lock_sync();
             first_missing_segment(
                 &segments,
                 variant,
@@ -1123,7 +1154,7 @@ impl HlsDownloader {
         if self
             .shared
             .segments
-            .lock()
+            .lock_sync()
             .is_segment_loaded(variant, seg_idx)
         {
             self.current_segment_index = seg_idx + 1;
@@ -1269,7 +1300,7 @@ impl Downloader for HlsDownloader {
         };
 
         let reader_pos = self.shared.timeline.byte_position();
-        let downloaded = self.shared.segments.lock().max_end_offset();
+        let downloaded = self.shared.segments.lock_sync().max_end_offset();
 
         downloaded.saturating_sub(reader_pos) > limit
     }
@@ -1514,7 +1545,7 @@ mod tests {
         downloader.last_committed_variant = Some(0);
         downloader.current_segment_index = 2;
         {
-            let mut segments = downloader.shared.segments.lock();
+            let mut segments = downloader.shared.segments.lock_sync();
             let media_url = Url::parse("https://example.com/seg-0-1").expect("valid segment URL");
             segments.push(LoadedSegment {
                 variant: 0,
@@ -1584,7 +1615,7 @@ mod tests {
         downloader.shared.timeline.set_byte_position(0);
         downloader.shared.timeline.set_eof(false);
         {
-            let mut segments = downloader.shared.segments.lock();
+            let mut segments = downloader.shared.segments.lock_sync();
             let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
             segments.push(LoadedSegment {
                 variant: 0,
@@ -1643,7 +1674,7 @@ mod tests {
             .abr_variant_index
             .store(0, Ordering::Release);
         {
-            let mut segments = downloader.shared.segments.lock();
+            let mut segments = downloader.shared.segments.lock_sync();
             let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
             segments.push(LoadedSegment {
                 variant: 0,
@@ -1718,7 +1749,7 @@ mod tests {
             .abr_variant_index
             .store(1, Ordering::Release);
         {
-            let mut segments = downloader.shared.segments.lock();
+            let mut segments = downloader.shared.segments.lock_sync();
             let media_url = Url::parse("https://example.com/seg-0-0").expect("valid segment URL");
             segments.push(LoadedSegment {
                 variant: 0,
@@ -1784,7 +1815,7 @@ mod tests {
             .had_midstream_switch
             .store(true, Ordering::Release);
         {
-            let mut segments = downloader.shared.segments.lock();
+            let mut segments = downloader.shared.segments.lock_sync();
             let media_url = Url::parse("https://example.com/seg-1-0").expect("valid segment URL");
             segments.push(LoadedSegment {
                 variant: 1,
@@ -2074,7 +2105,7 @@ mod tests {
         );
 
         {
-            let mut segments = downloader.shared.segments.lock();
+            let mut segments = downloader.shared.segments.lock_sync();
             segments.push(LoadedSegment {
                 variant: 0,
                 segment_index: 1,
@@ -2180,5 +2211,75 @@ mod tests {
             HlsDownloader::populate_cached_segments(&shared, &fetch, 0, &coverage);
         assert_eq!(count_with_coverage, 1);
         assert_eq!(end_with_coverage, 100);
+    }
+
+    /// Regression test: `handle_midstream_switch` sets `had_midstream_switch`
+    /// flag and notifies condvar so the reader can re-push drained requests.
+    ///
+    /// Before the fix, `handle_midstream_switch` drained all segment requests
+    /// without waking the reader. The reader's `WaitRangeState` still believed
+    /// its request was pending (`on_demand_pending = true`) and would never
+    /// re-push, causing a deadlock.
+    ///
+    /// The fix adds `condvar.notify_all()` after draining and checks
+    /// `had_midstream_switch` in `wait_range` to clear the pending flag,
+    /// allowing the reader to re-push its on-demand request.
+    #[kithara::test(tokio)]
+    async fn handle_midstream_switch_notifies_condvar_for_repush() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![
+            make_variant_state_with_segments(0, Some(AudioCodec::AacLc), 3),
+            make_variant_state_with_segments(1, Some(AudioCodec::AacLc), 3),
+        ]));
+        let variants = parsed_variants(2);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+        let coverage = make_coverage_manager();
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            coverage,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        downloader.last_committed_variant = Some(0);
+        downloader.current_segment_index = 2;
+
+        use crate::source::SegmentRequest;
+        downloader.shared.segment_requests.push(SegmentRequest {
+            segment_index: 1,
+            variant: 1,
+            seek_epoch: 0,
+        });
+
+        // Before: had_midstream_switch is false.
+        assert!(
+            !downloader
+                .shared
+                .had_midstream_switch
+                .load(Ordering::Acquire)
+        );
+
+        downloader.handle_midstream_switch(true);
+
+        // After: all requests drained.
+        assert!(
+            downloader.shared.segment_requests.pop().is_none(),
+            "handle_midstream_switch must drain all requests"
+        );
+
+        // After: had_midstream_switch flag is set.
+        assert!(
+            downloader
+                .shared
+                .had_midstream_switch
+                .load(Ordering::Acquire),
+            "handle_midstream_switch must set had_midstream_switch flag"
+        );
     }
 }

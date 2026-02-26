@@ -3,8 +3,6 @@
 //! Verifies that 2, 4, and 8 `Audio<Stream<File>>` instances can run
 //! concurrently on a shared `ThreadPool` and each reads PCM data to EOF.
 
-use kithara_platform::time::Duration;
-
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
@@ -12,6 +10,7 @@ use kithara::{
     platform::ThreadPool,
     stream::Stream,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::TestTempDir;
 use tracing::info;
 

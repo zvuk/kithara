@@ -42,6 +42,7 @@ pub use wav::{create_saw_wav, create_test_wav};
 
 /// Get a `tracing` filter string for tests with wasm-safe fallback.
 #[inline]
+#[must_use]
 pub fn rust_log_filter(default: &str) -> String {
     #[cfg(not(target_arch = "wasm32"))]
     {

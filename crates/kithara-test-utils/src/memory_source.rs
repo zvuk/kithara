@@ -2,9 +2,11 @@
 
 use std::{ops::Range, sync::Arc};
 
+use kithara_platform::time::Duration;
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    MediaInfo, NullStreamContext, Source, Stream, StreamContext, StreamResult, StreamType, Timeline,
+    MediaInfo, NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult,
+    StreamType, Timeline,
 };
 
 /// Error type for memory-backed sources.
@@ -31,7 +33,12 @@ impl MemorySource {
 impl Source for MemorySource {
     type Error = MemorySourceError;
 
-    fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
+    fn wait_range(
+        &mut self,
+        range: Range<u64>,
+        timeout: Duration,
+    ) -> StreamResult<WaitOutcome, Self::Error> {
+        let _ = timeout;
         if range.start >= self.data.len() as u64 {
             Ok(WaitOutcome::Eof)
         } else {
@@ -39,15 +46,15 @@ impl Source for MemorySource {
         }
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
         let offset = offset as usize;
         if offset >= self.data.len() {
-            return Ok(0);
+            return Ok(ReadOutcome::Data(0));
         }
         let available = self.data.len() - offset;
         let n = buf.len().min(available);
         buf[..n].copy_from_slice(&self.data[offset..offset + n]);
-        Ok(n)
+        Ok(ReadOutcome::Data(n))
     }
 
     fn len(&self) -> Option<u64> {
@@ -82,7 +89,12 @@ impl UnknownLenSource {
 impl Source for UnknownLenSource {
     type Error = MemorySourceError;
 
-    fn wait_range(&mut self, range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
+    fn wait_range(
+        &mut self,
+        range: Range<u64>,
+        timeout: Duration,
+    ) -> StreamResult<WaitOutcome, Self::Error> {
+        let _ = timeout;
         if range.start >= self.data.len() as u64 {
             Ok(WaitOutcome::Eof)
         } else {
@@ -90,15 +102,15 @@ impl Source for UnknownLenSource {
         }
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
         let offset = offset as usize;
         if offset >= self.data.len() {
-            return Ok(0);
+            return Ok(ReadOutcome::Data(0));
         }
         let available = self.data.len() - offset;
         let n = buf.len().min(available);
         buf[..n].copy_from_slice(&self.data[offset..offset + n]);
-        Ok(n)
+        Ok(ReadOutcome::Data(n))
     }
 
     fn len(&self) -> Option<u64> {

@@ -96,7 +96,7 @@ Dependencies flow downward. Each layer depends only on layers below it.
 - DJ subsystem: `CrossfadeController`, `BpmAnalyzer`, `BpmSync`, `Equalizer`, `DjEffect`
 
 **`kithara-audio`** — Audio pipeline: OS thread worker, effects chain, resampling
-- `Audio<S>`: threaded decode + effects pipeline with backpressure via `kanal`
+- `Audio<S>`: threaded decode + effects pipeline with backpressure via `ringbuf`
 - `StreamAudioSource`: format change detection for ABR variant switches
 
 **`kithara-decode`** — Audio decoding via Symphonia
@@ -153,7 +153,7 @@ Protocol crates emit events via broadcast channel (`FileEvent`, `HlsEvent`). `De
 ## Stack alignment
 
 - `tokio` runtime
-- `kanal` channels
+- `ringbuf` lock-free channels
 - `reqwest` with `rustls`
 - `symphonia`
 - `hls_m3u8`

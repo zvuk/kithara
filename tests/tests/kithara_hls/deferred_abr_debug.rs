@@ -2,7 +2,6 @@
 
 //! Diagnostic test for `sequential_read_across_segments_maintains_variant`
 
-use kithara_platform::time::Duration;
 use std::io::Read;
 
 use fixture::TestServer;
@@ -12,6 +11,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, cancel_token, debug_tracing_setup, temp_dir};
 use tokio_util::sync::CancellationToken;
 use tracing::info;
@@ -19,7 +19,7 @@ use tracing::info;
 use super::fixture;
 
 /// Diagnostic version with detailed logging and safety limits
-#[kithara::test(tokio, browser, timeout(Duration::from_secs(15)))]
+#[kithara::test(tokio, native, timeout(Duration::from_secs(15)))]
 async fn debug_sequential_read(
     _debug_tracing_setup: (),
     temp_dir: TestTempDir,

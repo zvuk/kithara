@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 
-use kithara_platform::time::Duration;
-
 use kithara_decode::PcmSpec;
+use kithara_platform::time::Duration;
 
 use crate::{SeekEpoch, SeekTaskId};
 

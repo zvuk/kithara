@@ -131,7 +131,7 @@ impl PlayerTrack {
     ) {
         // Read data from resource inside a scoped lock
         let read_outcome = {
-            let Some(mut guard) = self.resource.try_lock() else {
+            let Some(mut guard) = self.resource.try_lock().ok() else {
                 return; // Can't lock, skip this cycle
             };
             match guard.read(scratch_bufs, range.clone()) {
@@ -187,7 +187,7 @@ impl PlayerTrack {
         }
         self.set_state(TrackState::Finished);
         notification_tx
-            .lock()
+            .lock_sync()
             .try_push(PlayerNotification::TrackPlaybackStopped(Arc::clone(
                 &self.src,
             )))
@@ -220,7 +220,7 @@ impl PlayerTrack {
             let threshold = (dur * DEFAULT_TRACK_END_THRESHOLD) - fade;
             if pos >= threshold.max(0.0) {
                 notification_tx
-                    .lock()
+                    .lock_sync()
                     .try_push(PlayerNotification::TrackAboutToEnd(Arc::clone(&self.src)))
                     .ok();
                 self.notified_about_to_end = true;
@@ -232,7 +232,7 @@ impl PlayerTrack {
             let threshold = dur - fade;
             if pos >= threshold.max(0.0)
                 && notification_tx
-                    .lock()
+                    .lock_sync()
                     .try_push(PlayerNotification::TrackRequested(Arc::clone(&self.src)))
                     .is_ok()
             {
@@ -265,7 +265,7 @@ impl PlayerTrack {
             TrackState::Finished => PlayerNotification::TrackPlaybackStopped(Arc::clone(&self.src)),
         };
 
-        if notification_tx.lock().try_push(notification).is_ok() {
+        if notification_tx.lock_sync().try_push(notification).is_ok() {
             self.state_dirty = false;
         }
     }
@@ -310,7 +310,7 @@ impl PlayerTrack {
 
     /// Seek the underlying resource.
     pub(crate) fn seek(&mut self, seconds: f64) {
-        if let Some(mut resource) = self.resource.try_lock() {
+        if let Ok(mut resource) = self.resource.try_lock() {
             resource.seek(seconds);
         }
     }
@@ -322,6 +322,7 @@ impl PlayerTrack {
     pub(crate) fn position(&self) -> f64 {
         self.resource
             .try_lock()
+            .ok()
             .map_or(self.observed_position, |resource| resource.position())
     }
 
@@ -332,6 +333,7 @@ impl PlayerTrack {
     pub(crate) fn duration(&self) -> f64 {
         self.resource
             .try_lock()
+            .ok()
             .map_or(self.observed_duration, |resource| resource.duration())
     }
 

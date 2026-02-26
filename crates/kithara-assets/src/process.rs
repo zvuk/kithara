@@ -79,7 +79,7 @@ where
         f.debug_struct("ProcessedResource")
             .field("inner", &self.inner)
             .field("ctx", &self.ctx)
-            .field("is_processed", &*self.processed.lock())
+            .field("is_processed", &*self.processed.lock_sync())
             .finish_non_exhaustive()
     }
 }
@@ -174,7 +174,7 @@ where
         // Process on commit (once) if ctx is present.
         // Use the actual processed length (may differ due to padding removal).
         let actual_len = {
-            let mut processed = self.processed.lock();
+            let mut processed = self.processed.lock_sync();
             if !*processed && self.ctx.is_some() {
                 if let Some(len) = final_len
                     && len > 0

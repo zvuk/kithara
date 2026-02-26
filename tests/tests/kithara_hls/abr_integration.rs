@@ -1,13 +1,10 @@
 #![forbid(unsafe_code)]
 
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::time::Duration;
-
 use kithara::{
     abr::{AbrController, AbrMode, AbrOptions, AbrReason, Variant},
     internal::{MasterPlaylist, parse_master_playlist},
 };
-use kithara_platform::time::Instant;
+use kithara_platform::time::{Duration, Instant};
 
 /// Convert HLS master playlist variants to ABR variant list (test helper).
 fn variants_from_master(master: &MasterPlaylist) -> Vec<Variant> {

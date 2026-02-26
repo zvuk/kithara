@@ -115,7 +115,7 @@ impl AudioNode for PlayerNode {
         cx: ConstructProcessorContext,
     ) -> impl AudioNodeProcessor {
         let sample_rate = cx.stream_info.sample_rate;
-        let cmd_rx = self.cmd_rx.lock().take().unwrap_or_else(|| {
+        let cmd_rx = self.cmd_rx.lock_sync().take().unwrap_or_else(|| {
             let (_, rx) = HeapRb::<PlayerCmd>::new(1).split();
             rx
         });
@@ -162,11 +162,8 @@ mod tests {
 
         // Verify the channel is connected
         tx.try_push(cmd).ok();
-        let received = node
-            .cmd_rx
-            .lock()
-            .as_mut()
-            .and_then(|cmd_rx| cmd_rx.try_pop());
+        let mut guard = node.cmd_rx.lock_sync();
+        let received = (*guard).as_mut().and_then(|cmd_rx| cmd_rx.try_pop());
         assert!(received.is_some());
     }
 

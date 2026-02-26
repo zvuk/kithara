@@ -1,12 +1,11 @@
 //! HLS playlist parsing and data types.
 
-use kithara_platform::time::Duration;
-
 use hls_m3u8::{
     Decryptable, MasterPlaylist as HlsMasterPlaylist, MediaPlaylist as HlsMediaPlaylist,
     tags::VariantStream as HlsVariantStreamTag, types::DecryptionKey as HlsDecryptionKey,
 };
 use kithara_abr::VariantInfo;
+use kithara_platform::time::Duration;
 use kithara_stream::{AudioCodec, ContainerFormat};
 
 use crate::HlsResult;

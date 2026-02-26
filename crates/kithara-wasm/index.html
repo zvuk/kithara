@@ -862,10 +862,6 @@
 
                     selectingTrack = true;
                     uiSuspended = true;
-                    if (uiRaf) {
-                        cancelAnimationFrame(uiRaf);
-                        uiRaf = null;
-                    }
                     setControlsEnabled(false);
                     statusEl.textContent = `Loading track ${i + 1}...`;
 
@@ -931,20 +927,20 @@
 
         function updateUi() {
             try {
+            // Always pump session commands — even during track loading —
+            // so Worker ↔ main-thread session calls can complete.
+            try {
+                player.tick();
+            } catch (err) {
+                const now = Date.now();
+                if (now - lastTickErrorAt > 1000) {
+                    lastTickErrorAt = now;
+                    log(`Tick failed: ${err}`, 'error');
+                }
+            }
             if (uiSuspended) {
                 uiRaf = requestAnimationFrame(updateUi);
                 return;
-            }
-            if (player.current_index() >= 0) {
-                try {
-                    player.tick();
-                } catch (err) {
-                    const now = Date.now();
-                    if (now - lastTickErrorAt > 1000) {
-                        lastTickErrorAt = now;
-                        log(`Tick failed: ${err}`, 'error');
-                    }
-                }
             }
             const eventsChunk = player.take_events();
             if (eventsChunk) {
@@ -1007,26 +1003,6 @@
 
                 const build = wasm.build_info();
                 buildInfoEl.textContent = `(${build})`;
-
-                if (typeof wasm.initThreadPool === 'function') {
-                    statusEl.textContent = 'Initializing thread pool...';
-                    const workerCount = Math.min(4, Math.max(2, navigator.hardwareConcurrency || 2));
-                    try {
-                        await wasm.initThreadPool(workerCount);
-                        log(`Thread pool initialized (${workerCount})`, 'info');
-                    } catch (err) {
-                        log(`Thread pool (${workerCount}) failed: ${err}`, 'error');
-                        const fallbackCount = 2;
-                        if (fallbackCount !== workerCount) {
-                            await wasm.initThreadPool(fallbackCount);
-                            log(`Thread pool initialized (${fallbackCount})`, 'info');
-                        } else {
-                            throw err;
-                        }
-                    }
-                } else {
-                    log('Thread pool disabled (single-thread wasm build)', 'info');
-                }
 
                 player = new wasm.WasmPlayer();
                 window.__player = player;

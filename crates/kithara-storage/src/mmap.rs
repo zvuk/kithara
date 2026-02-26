@@ -152,7 +152,7 @@ impl DriverIo for MmapDriver {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn read_at(&self, offset: u64, buf: &mut [u8], _effective_len: u64) -> StorageResult<usize> {
         {
-            let mmap_guard = self.mmap.lock();
+            let mmap_guard = self.mmap.lock_sync();
             if let Some(mmap) = mmap_guard.as_readable() {
                 mmap.read_into(offset, buf)?;
             }
@@ -163,7 +163,7 @@ impl DriverIo for MmapDriver {
     #[cfg_attr(feature = "perf", hotpath::measure)]
     fn write_at(&self, offset: u64, data: &[u8], committed: bool) -> StorageResult<()> {
         let end = offset + data.len() as u64;
-        let mut mmap_guard = self.mmap.lock();
+        let mut mmap_guard = self.mmap.lock_sync();
 
         // Handle writes when common state is committed.
         //
@@ -226,9 +226,8 @@ impl DriverIo for MmapDriver {
         Ok(())
     }
 
-    #[expect(clippy::significant_drop_tightening)] // lock guards mmap state transitions throughout
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
-        let mut mmap_guard = self.mmap.lock();
+        let mut mmap_guard = self.mmap.lock_sync();
 
         if let Some(len) = final_len {
             if len > 0 {
@@ -277,9 +276,8 @@ impl DriverIo for MmapDriver {
         Ok(())
     }
 
-    #[expect(clippy::significant_drop_tightening)] // lock guards mmap state transition
     fn reactivate(&self) -> StorageResult<()> {
-        let mut mmap_guard = self.mmap.lock();
+        let mut mmap_guard = self.mmap.lock_sync();
 
         match &*mmap_guard {
             MmapState::Active(_) => {}
@@ -300,7 +298,7 @@ impl DriverIo for MmapDriver {
     }
 
     fn storage_len(&self) -> u64 {
-        let mmap_guard = self.mmap.lock();
+        let mmap_guard = self.mmap.lock_sync();
         mmap_guard.len()
     }
 
@@ -331,9 +329,7 @@ mod tests {
         pub(crate) use kithara_test_macros::test;
     }
 
-    use kithara_platform::time::Duration;
-
-    use kithara_platform::thread;
+    use kithara_platform::{thread, time::Duration};
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 

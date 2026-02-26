@@ -134,6 +134,14 @@ impl DownloadState {
         self.rebuild_indexes();
     }
 
+    /// Check if a segment with the given variant and index is already loaded.
+    #[must_use]
+    pub fn contains_segment(&self, variant: usize, segment_index: usize) -> bool {
+        self.entries
+            .values()
+            .any(|seg| seg.variant == variant && seg.segment_index == segment_index)
+    }
+
     /// Find the segment containing the given byte offset (O(log n)).
     ///
     /// Uses `BTreeMap::range(..=offset)` to find the last entry at or before

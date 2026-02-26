@@ -1,75 +1,29 @@
 //! Thread-like primitives for sync code.
 //!
-//! This module provides a small compatibility layer used across the workspace.
-//! On native it reuses `std::thread`; on wasm it uses `rayon` work items and
-//! a synchronous result channel so caller code can keep the same patterns.
+//! Delegates to [`wasm_safe_thread`] for cross-platform threading.
+//! On native: uses OS threads. On WASM: uses Web Workers.
 
-#[cfg(not(target_arch = "wasm32"))]
-pub use std::thread::{JoinHandle, spawn, yield_now};
-#[cfg(not(target_arch = "wasm32"))]
 pub use std::time::Duration;
-#[cfg(target_arch = "wasm32")]
-use std::{
-    any::Any,
-    panic::{AssertUnwindSafe, catch_unwind},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-        mpsc,
-    },
-};
 
-#[cfg(target_arch = "wasm32")]
-use crate::time::Instant;
+pub use wasm_safe_thread::{JoinHandle, yield_now};
 
-#[cfg(target_arch = "wasm32")]
-pub type Duration = std::time::Duration;
-
-#[cfg(target_arch = "wasm32")]
-pub type Result<T> = std::result::Result<T, Box<dyn Any + Send + 'static>>;
-
-#[cfg(target_arch = "wasm32")]
-#[derive(Debug)]
-pub struct JoinHandle<T> {
-    receiver: mpsc::Receiver<Result<T>>,
-    finished: Arc<AtomicBool>,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl<T> JoinHandle<T> {
-    #[must_use]
-    pub fn is_finished(&self) -> bool {
-        self.finished.load(Ordering::Acquire)
-    }
-
-    pub fn join(self) -> Result<T> {
-        self.receiver
-            .recv()
-            .unwrap_or_else(|_| panic!("spawned task ended before sending completion result"))
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-pub fn yield_now() {
-    core::hint::spin_loop();
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-/// Blocking backoff for synchronous retry loops.
-pub fn backoff(duration: Duration) {
-    std::thread::sleep(duration);
-}
-
-#[cfg(target_arch = "wasm32")]
-/// Busy-wait backoff for synchronous retry loops on wasm.
+/// Spawn a new thread.
 ///
-/// Use `kithara_platform::time::sleep` in async code.
-pub fn backoff(duration: Duration) {
-    let end = Instant::now() + duration;
-    while Instant::now() < end {
-        yield_now();
-    }
+/// On WASM, uses [`wasm_safe_thread::Builder`] with an explicit `shim_name`
+/// so workers can locate the wasm-bindgen JS shim for `initSync`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn spawn<F, T>(f: F) -> JoinHandle<T>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    wasm_safe_thread::spawn(f)
 }
+
+/// The wasm-bindgen JS shim name (crate name with hyphens → underscores).
+/// Workers use this to locate the JS module for `initSync`.
+#[cfg(target_arch = "wasm32")]
+const SHIM_NAME: &str = "kithara-wasm";
 
 #[cfg(target_arch = "wasm32")]
 pub fn spawn<F, T>(f: F) -> JoinHandle<T>
@@ -77,18 +31,16 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    let (tx, rx) = mpsc::channel::<Result<T>>();
-    let finished = Arc::new(AtomicBool::new(false));
-    let finished2 = Arc::clone(&finished);
+    wasm_safe_thread::Builder::new()
+        .shim_name(SHIM_NAME.to_owned())
+        .spawn(f)
+        .expect("failed to spawn thread")
+}
 
-    rayon::spawn(move || {
-        let result = catch_unwind(AssertUnwindSafe(f));
-        let _ = tx.send(result);
-        finished2.store(true, Ordering::Release);
-    });
-
-    JoinHandle {
-        receiver: rx,
-        finished,
-    }
+/// Blocking backoff for synchronous retry loops.
+///
+/// Uses [`wasm_safe_thread::sleep`] which adapts to the platform:
+/// native uses `thread::sleep`, WASM uses an appropriate mechanism.
+pub fn backoff(duration: Duration) {
+    wasm_safe_thread::sleep(duration);
 }

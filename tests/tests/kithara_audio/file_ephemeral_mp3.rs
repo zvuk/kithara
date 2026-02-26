@@ -1,8 +1,6 @@
 #![cfg(not(target_arch = "wasm32"))]
 #![forbid(unsafe_code)]
 
-use kithara_platform::time::Duration;
-
 use axum::{
     Router,
     body::Body,
@@ -18,6 +16,7 @@ use kithara::{
     file::{File, FileConfig},
     stream::Stream,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::TestHttpServer;
 
 const TEST_MP3_BYTES: &[u8] = include_bytes!("../kithara_decode/fixtures/test.mp3");

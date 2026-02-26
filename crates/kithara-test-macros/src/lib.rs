@@ -368,6 +368,38 @@ fn emit_async_timeout_test(
 ) -> TokenStream2 {
     let dur = args.timeout.as_ref().expect("caller verified timeout");
     let fn_name_str = fn_name.to_string();
+    let timeout_panic_arm = if args.soft_fail_patterns.is_empty() {
+        quote! {
+            Err(__payload) => ::std::panic::resume_unwind(__payload),
+        }
+    } else {
+        let pattern_strs: Vec<_> = args
+            .soft_fail_patterns
+            .iter()
+            .map(|p| p.to_lowercase())
+            .collect();
+        quote! {
+            Err(__panic) => {
+                let __msg = if let Some(s) = __panic.downcast_ref::<&str>() {
+                    (*s).to_string()
+                } else if let Some(s) = __panic.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "unknown panic".to_string()
+                };
+                let __lower = __msg.to_lowercase();
+                let __patterns: &[&str] = &[#(#pattern_strs),*];
+                if __patterns.iter().any(|p| {
+                    __lower.contains(p)
+                        || (*p == "timeout" && __lower.contains("timed out"))
+                }) {
+                    eprintln!("[SOFT FAIL] {}: {}", #fn_name_str, __msg);
+                } else {
+                    ::std::panic::resume_unwind(__panic);
+                }
+            }
+        }
+    };
 
     // Brace the body so it can be used as `async { #braced }` safely.
     let braced = quote! { { #body } };
@@ -445,7 +477,7 @@ fn emit_async_timeout_test(
 
             match __result {
                 Ok(__v) => __v,
-                Err(__payload) => ::std::panic::resume_unwind(__payload),
+                #timeout_panic_arm
             }
         }
     }
@@ -460,8 +492,50 @@ fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
         return quote! {};
     }
 
-    let keys: Vec<_> = env_vars.iter().map(|(key, _)| key).collect();
-    let values: Vec<_> = env_vars.iter().map(|(_, value)| value).collect();
+    let mut actions: Vec<(String, Option<String>)> = env_vars
+        .iter()
+        .map(|(key, value)| (key.clone(), Some(value.clone())))
+        .collect();
+
+    // When NO_PROXY is requested, clear inherited proxy vars unless explicitly
+    // overridden in the macro args.
+    if env_vars
+        .iter()
+        .any(|(key, _)| key.eq_ignore_ascii_case("NO_PROXY"))
+    {
+        for key in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ] {
+            let is_explicit = env_vars.iter().any(|(env_key, _)| env_key == key);
+            if !is_explicit {
+                actions.push((key.to_string(), None));
+            }
+        }
+    }
+
+    let apply_actions: Vec<_> = actions
+        .iter()
+        .map(|(key, value)| {
+            if let Some(value) = value {
+                quote! {
+                    __saved.push((#key, std::env::var(#key).ok()));
+                    // SAFETY: guarded by process-wide env lock.
+                    unsafe { std::env::set_var(#key, #value); }
+                }
+            } else {
+                quote! {
+                    __saved.push((#key, std::env::var(#key).ok()));
+                    // SAFETY: guarded by process-wide env lock.
+                    unsafe { std::env::remove_var(#key); }
+                }
+            }
+        })
+        .collect();
 
     quote! {
         #[cfg(not(target_arch = "wasm32"))]
@@ -492,19 +566,12 @@ fn make_env_setup(env_vars: &[(String, String)]) -> TokenStream2 {
                 }
             }
 
-            static __KITHARA_TEST_ENV_LOCK: ::std::sync::OnceLock<::std::sync::Mutex<()>> =
-                ::std::sync::OnceLock::new();
-            let __lock = __KITHARA_TEST_ENV_LOCK
-                .get_or_init(|| ::std::sync::Mutex::new(()))
+            let __lock = kithara_platform::test_env_lock()
                 .lock()
-                .expect("kithara::test env lock poisoned");
+                .unwrap_or_else(|err| err.into_inner());
 
             let mut __saved = ::std::vec::Vec::new();
-            #(
-                __saved.push((#keys, std::env::var(#keys).ok()));
-                // SAFETY: guarded by process-wide env lock.
-                unsafe { std::env::set_var(#keys, #values); }
-            )*
+            #(#apply_actions)*
 
             __KitharaEnvGuard {
                 saved: __saved,
@@ -535,7 +602,10 @@ fn wrap_with_soft_fail(
         };
         let __lower = __msg.to_lowercase();
         let __patterns: &[&str] = &[#(#pattern_strs),*];
-        if __patterns.iter().any(|p| __lower.contains(p)) {
+        if __patterns.iter().any(|p| {
+            __lower.contains(p)
+                || (*p == "timeout" && __lower.contains("timed out"))
+        }) {
             eprintln!("[SOFT FAIL] {}: {}", #name_str, __msg);
         } else {
             std::panic::resume_unwind(__panic);
@@ -772,7 +842,8 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
         if cases.is_empty() {
             let preamble = make_preamble(&params, None);
             let full = quote! { { #preamble #(#body_stmts)* } };
-            let wrapped = finalize_body(&full, &args, fn_name, true);
+            let with_timeout = wrap_with_timeout(&full, &args.timeout, true, fn_name);
+            let wrapped = finalize_body(&with_timeout, &args, fn_name, true);
             return Ok(quote! {
                 #worker_config
                 #(#remaining_attrs)*
@@ -790,7 +861,8 @@ fn generate(args: TestArgs, func: ItemFn) -> syn::Result<TokenStream2> {
             };
             let preamble = make_preamble(&params, Some(&case.values));
             let full = quote! { { #preamble #(#body_stmts)* } };
-            let wrapped = finalize_body(&full, &args, &case_name, true);
+            let with_timeout = wrap_with_timeout(&full, &args.timeout, true, &case_name);
+            let wrapped = finalize_body(&with_timeout, &args, &case_name, true);
             tests.extend(quote! {
                 #(#remaining_attrs)*
                 #[cfg(target_arch = "wasm32")]

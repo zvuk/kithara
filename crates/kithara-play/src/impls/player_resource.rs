@@ -146,6 +146,14 @@ impl PlayerResource {
         } else if eof_reached {
             Err(PlayError::Internal("eof".into()))
         } else {
+            // Reader returned 0 frames but is not at EOF (e.g. async seek
+            // in progress). Zero-fill output so the audio thread outputs
+            // silence instead of replaying stale samples from a previous
+            // process() cycle.
+            let range_len = range.len();
+            for ch in output.iter_mut() {
+                ch[..range_len].fill(0.0);
+            }
             Ok(())
         }
     }
@@ -197,11 +205,10 @@ impl PlayerResource {
     reason = "test mock code; values are small and positive by construction"
 )]
 mod tests {
-    use kithara_platform::time::Duration;
-
     use kithara_audio::{PcmReader, mock::TestPcmReader};
     use kithara_decode::{DecodeResult, PcmSpec, TrackMetadata};
     use kithara_events::AudioEvent;
+    use kithara_platform::time::Duration;
     use kithara_test_utils::kithara;
     use tokio::sync::broadcast;
 
@@ -349,6 +356,38 @@ mod tests {
 
         let result = pr.read(&mut output, 0..128);
         assert!(result.is_ok());
+    }
+
+    /// When the reader returns 0 frames and is NOT at EOF (e.g. async seek
+    /// in progress), `read()` must zero-fill the output buffers. Otherwise
+    /// the caller's stale samples from the previous audio-thread cycle leak
+    /// through, heard as a looped/glitched frame during seek.
+    #[kithara::test(tokio)]
+    async fn resource_read_zeroes_output_when_no_data_available() {
+        let reader = PendingReader::new();
+        let resource = Resource::from_reader(reader);
+        let mut pr =
+            PlayerResource::new(resource, Arc::from("pending"), kithara_bufpool::pcm_pool());
+
+        // Fill output buffers with a sentinel value that simulates stale
+        // audio data left over from the previous process() cycle.
+        let mut left = vec![0.999f32; 128];
+        let mut right = vec![0.999f32; 128];
+
+        {
+            let mut output: Vec<&mut [f32]> = vec![&mut left, &mut right];
+            let result = pr.read(&mut output, 0..128);
+            assert!(result.is_ok(), "zero-read without EOF must not error");
+        }
+
+        // Output MUST be silence — the stale sentinel must not survive.
+        let max_left = left.iter().copied().fold(0.0f32, f32::max);
+        let max_right = right.iter().copied().fold(0.0f32, f32::max);
+        assert!(
+            max_left == 0.0 && max_right == 0.0,
+            "output must be silence when reader returns 0 frames, \
+             but got max_left={max_left} max_right={max_right}"
+        );
     }
 
     #[kithara::test(tokio)]

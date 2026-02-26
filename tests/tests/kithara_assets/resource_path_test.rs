@@ -1,12 +1,11 @@
 #![forbid(unsafe_code)]
 #![cfg(not(target_arch = "wasm32"))]
 
-use kithara_platform::time::Duration;
-
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
     storage::ResourceExt,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, temp_dir};
 
 // Test Fixtures

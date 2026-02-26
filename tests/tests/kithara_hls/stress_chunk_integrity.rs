@@ -13,8 +13,6 @@
 
 use std::{num::NonZeroUsize, sync::Arc};
 
-use kithara_platform::time::Duration;
-
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig, PcmReader},
@@ -22,6 +20,7 @@ use kithara::{
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, Xorshift64, fixture_protocol::DelayRule};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};

@@ -146,7 +146,7 @@ impl PlayerNodeProcessor {
             self.tracks.remove(idx);
             self.shared_state
                 .notification_tx
-                .lock()
+                .lock_sync()
                 .try_push(PlayerNotification::TrackUnloaded(Arc::clone(&src)))
                 .ok();
         }
@@ -165,7 +165,7 @@ impl PlayerNodeProcessor {
 
         self.shared_state
             .notification_tx
-            .lock()
+            .lock_sync()
             .try_push(PlayerNotification::TrackLoaded(src))
             .ok();
     }
@@ -176,7 +176,7 @@ impl PlayerNodeProcessor {
             self.tracks.remove(idx);
             self.shared_state
                 .notification_tx
-                .lock()
+                .lock_sync()
                 .try_push(PlayerNotification::TrackUnloaded(Arc::clone(src)))
                 .ok();
         }
@@ -243,7 +243,7 @@ impl PlayerNodeProcessor {
         if let (Some(old), Some(new)) = (old_track, new_track) {
             self.shared_state
                 .notification_tx
-                .lock()
+                .lock_sync()
                 .try_push(PlayerNotification::TrackChanged { old, new })
                 .ok();
         }
@@ -286,7 +286,7 @@ impl PlayerNodeProcessor {
                     self.tracks.remove(idx);
                     self.shared_state
                         .notification_tx
-                        .lock()
+                        .lock_sync()
                         .try_push(PlayerNotification::TrackUnloaded(key))
                         .ok();
                 }
@@ -345,7 +345,7 @@ impl PlayerNodeProcessor {
                 self.tracks_index.retain(|_, v| *v != *idx);
                 self.shared_state
                     .notification_tx
-                    .lock()
+                    .lock_sync()
                     .try_push(PlayerNotification::TrackUnloaded(src))
                     .ok();
             }
@@ -436,7 +436,7 @@ impl AudioNodeProcessor for PlayerNodeProcessor {
 
         // Update host_sample_rate for all active tracks
         for (_, track) in &self.tracks {
-            if let Some(resource) = track.resource().try_lock() {
+            if let Ok(resource) = track.resource().try_lock() {
                 resource.set_host_sample_rate(new_sr);
             }
         }
@@ -567,7 +567,9 @@ mod tests {
         if matches!(scenario, TrackCommandScenario::DuplicateLoad) {
             let mut loaded = 0usize;
             let mut unloaded = false;
-            while let Some(notification) = processor.shared_state.notification_rx.lock().try_pop() {
+            while let Some(notification) =
+                processor.shared_state.notification_rx.lock_sync().try_pop()
+            {
                 match notification {
                     PlayerNotification::TrackLoaded(_) => loaded += 1,
                     PlayerNotification::TrackUnloaded(_) => unloaded = true,
@@ -711,7 +713,7 @@ mod tests {
                 let ms = position.as_millis() as u64;
                 self.seek_log
                     .lock()
-                    .expect("seek log mutex poisoned")
+                    .unwrap_or_else(|err| err.into_inner())
                     .push(ms);
                 Ok(())
             }
@@ -809,7 +811,7 @@ mod tests {
 
         processor.drain_commands();
 
-        let seek_log = seek_log.lock().expect("seek log mutex poisoned");
+        let seek_log = seek_log.lock().unwrap_or_else(|err| err.into_inner());
         // FadeIn skips seek(0.0) because position is already at 0.
         // Only the last seek epoch passes → 30000ms.
         // Seeks with stale epochs (1, 2) are dropped.

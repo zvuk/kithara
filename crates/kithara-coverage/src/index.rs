@@ -112,7 +112,7 @@ impl<R: ResourceExt> CoverageIndex<R> {
     /// In-memory lookup (no disk I/O).
     pub fn get(&self, key: &str) -> Option<MemCoverage> {
         self.state
-            .read()
+            .lock_sync_read()
             .get(key)
             .map(CoverageData::to_mem_coverage)
     }
@@ -120,18 +120,18 @@ impl<R: ResourceExt> CoverageIndex<R> {
     /// Update in-memory entry (no flush).
     pub fn update(&self, key: &str, coverage: &MemCoverage) {
         self.state
-            .write()
+            .lock_sync_write()
             .insert(key.to_string(), CoverageData::from_mem_coverage(coverage));
     }
 
     /// Remove entry from in-memory state.
     pub fn remove(&self, key: &str) {
-        self.state.write().remove(key);
+        self.state.lock_sync_write().remove(key);
     }
 
     /// Flush all in-memory state to disk atomically.
     pub fn flush(&self) {
-        let entries: HashMap<String, CoverageData> = self.state.read().clone();
+        let entries: HashMap<String, CoverageData> = self.state.lock_sync_read().clone();
 
         let file = CoverageIndexFile {
             version: 1,

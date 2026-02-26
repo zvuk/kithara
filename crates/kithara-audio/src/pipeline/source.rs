@@ -42,49 +42,49 @@ impl<T: StreamType> SharedStream<T> {
     }
 
     fn position(&self) -> u64 {
-        self.inner.lock().position()
+        self.inner.lock_sync().position()
     }
 
     pub(crate) fn len(&self) -> Option<u64> {
-        self.inner.lock().len()
+        self.inner.lock_sync().len()
     }
 
     fn media_info(&self) -> Option<MediaInfo> {
-        self.inner.lock().media_info()
+        self.inner.lock_sync().media_info()
     }
 
     fn current_segment_range(&self) -> Option<std::ops::Range<u64>> {
-        self.inner.lock().current_segment_range()
+        self.inner.lock_sync().current_segment_range()
     }
 
     fn format_change_segment_range(&self) -> Option<std::ops::Range<u64>> {
-        self.inner.lock().format_change_segment_range()
+        self.inner.lock_sync().format_change_segment_range()
     }
 
     pub(crate) fn clear_variant_fence(&self) {
-        self.inner.lock().clear_variant_fence();
+        self.inner.lock_sync().clear_variant_fence();
     }
 
     pub(crate) fn set_seek_epoch(&self, seek_epoch: u64) {
-        self.inner.lock().set_seek_epoch(seek_epoch);
+        self.inner.lock_sync().set_seek_epoch(seek_epoch);
     }
 
     fn seek_time_anchor(
         &self,
         position: Duration,
     ) -> Result<Option<SourceSeekAnchor>, std::io::Error> {
-        self.inner.lock().seek_time_anchor(position)
+        self.inner.lock_sync().seek_time_anchor(position)
     }
 
     /// Build a `StreamContext` from the inner stream's source.
     pub(crate) fn build_stream_context(&self) -> Arc<dyn kithara_stream::StreamContext> {
-        let stream = self.inner.lock();
+        let stream = self.inner.lock_sync();
         T::build_stream_context(stream.source(), stream.timeline())
     }
 
     /// Get the shared timeline for flushing checks.
     pub(crate) fn timeline(&self) -> Timeline {
-        self.inner.lock().timeline()
+        self.inner.lock_sync().timeline()
     }
 
     /// Create a lock-free callback for waking blocked `wait_range()`.
@@ -95,7 +95,7 @@ impl<T: StreamType> SharedStream<T> {
     /// mutex, preventing deadlock when called from `Audio::seek()`
     /// while the worker holds the lock inside `read()`.
     pub(crate) fn make_notify_fn(&self) -> Option<Box<dyn Fn() + Send + Sync>> {
-        self.inner.lock().make_notify_fn()
+        self.inner.lock_sync().make_notify_fn()
     }
 }
 
@@ -109,13 +109,13 @@ impl<T: StreamType> Clone for SharedStream<T> {
 
 impl<T: StreamType> Read for SharedStream<T> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.inner.lock().read(buf)
+        self.inner.lock_sync().read(buf)
     }
 }
 
 impl<T: StreamType> Seek for SharedStream<T> {
     fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
-        self.inner.lock().seek(pos)
+        self.inner.lock_sync().seek(pos)
     }
 }
 
@@ -1018,9 +1018,9 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
                     return Ok(None);
                 }
                 Err(e) => {
-                    // Check if error is due to format boundary (variant fence EOF).
-                    // The fence causes Ok(0) from read_at(), which Symphonia may
-                    // surface as an error rather than clean EOF in some codecs.
+                    // Check if error is due to format boundary (variant fence).
+                    // The fence causes Err(Interrupted) from Stream::read(),
+                    // which Symphonia surfaces as a decode error.
                     //
                     // Only apply the format change if we're near the variant boundary.
                     // Far from it, the error is a genuine decode issue (e.g. corrupted
@@ -1056,31 +1056,24 @@ impl<T: StreamType> AudioWorkerSource for StreamAudioSource<T> {
             }
         }
         let current_epoch = self.epoch.load(Ordering::Acquire);
-        match FallibleIterator::next(self) {
-            Ok(Some(chunk)) => {
-                if self.pending_decode_started_epoch == Some(current_epoch) {
-                    let segment_range = self.shared_stream.current_segment_range();
-                    self.emit_seek_lifecycle(
-                        SeekLifecycleStage::DecodeStarted,
-                        current_epoch,
-                        current_epoch,
-                        chunk.meta.variant_index,
-                        chunk.meta.segment_index,
-                        segment_range.as_ref().map(|range| range.start),
-                        segment_range.as_ref().map(|range| range.end),
-                    );
-                    self.pending_decode_started_epoch = None;
-                }
-                Fetch::new(chunk, false, current_epoch)
+        if let Ok(Some(chunk)) = FallibleIterator::next(self) {
+            if self.pending_decode_started_epoch == Some(current_epoch) {
+                let segment_range = self.shared_stream.current_segment_range();
+                self.emit_seek_lifecycle(
+                    SeekLifecycleStage::DecodeStarted,
+                    current_epoch,
+                    current_epoch,
+                    chunk.meta.variant_index,
+                    chunk.meta.segment_index,
+                    segment_range.as_ref().map(|range| range.start),
+                    segment_range.as_ref().map(|range| range.end),
+                );
+                self.pending_decode_started_epoch = None;
             }
-            Ok(None) => {
-                self.emit_event(AudioEvent::EndOfStream);
-                Fetch::new(PcmChunk::default(), true, current_epoch)
-            }
-            Err(_) => {
-                self.emit_event(AudioEvent::EndOfStream);
-                Fetch::new(PcmChunk::default(), true, current_epoch)
-            }
+            Fetch::new(chunk, false, current_epoch)
+        } else {
+            self.emit_event(AudioEvent::EndOfStream);
+            Fetch::new(PcmChunk::default(), true, current_epoch)
         }
     }
 

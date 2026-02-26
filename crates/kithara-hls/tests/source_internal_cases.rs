@@ -22,7 +22,7 @@ use kithara_platform::{
 };
 use kithara_storage::{StorageResource, WaitOutcome};
 use kithara_stream::{AudioCodec, Source, StreamError, Timeline};
-use kithara_test_utils::kithara;
+use kithara_test_utils::{kithara, tracing_setup};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -180,7 +180,7 @@ async fn wait_range_and_take_request(
     mut source: HlsSource,
     range: Range<u64>,
 ) -> SegmentRequest {
-    let handle = spawn_blocking(move || source.wait_range(range));
+    let handle = spawn_blocking(move || source.wait_range(range, Duration::from_secs(1)));
 
     let deadline = Instant::now() + Duration::from_millis(300);
     let request = loop {
@@ -251,7 +251,7 @@ fn media_info_uses_reader_offset_variant_instead_of_last_loaded_segment() {
         Timeline::new(),
     ));
     {
-        let mut segments = shared.segments.lock();
+        let mut segments = shared.segments.lock_sync();
         segments.push(make_loaded_segment(0, 0, 0, 100));
         segments.push(make_loaded_segment(1, 0, 100, 100));
     }
@@ -301,7 +301,7 @@ fn current_segment_range_uses_reader_offset_not_last_segment() {
         Timeline::new(),
     ));
     {
-        let mut segments = shared.segments.lock();
+        let mut segments = shared.segments.lock_sync();
         segments.push(make_loaded_segment(0, 0, 0, 100));
         segments.push(make_loaded_segment(0, 1, 100, 100));
     }
@@ -340,7 +340,7 @@ fn format_change_segment_range_prefers_loaded_init_bearing_segment() {
         Timeline::new(),
     ));
     {
-        let mut segments = shared.segments.lock();
+        let mut segments = shared.segments.lock_sync();
         segments.push(LoadedSegment {
             variant: 1,
             segment_index: 1,
@@ -376,7 +376,7 @@ fn format_change_segment_range_falls_back_to_metadata_without_loaded_init() {
         Timeline::new(),
     ));
     {
-        let mut segments = shared.segments.lock();
+        let mut segments = shared.segments.lock_sync();
         segments.push(LoadedSegment {
             variant: 1,
             segment_index: 1,
@@ -404,7 +404,7 @@ fn set_seek_epoch_flushes_playback_segments() {
         Timeline::new(),
     ));
     {
-        let mut segments = shared.segments.lock();
+        let mut segments = shared.segments.lock_sync();
         segments.push(make_loaded_segment(0, 0, 0, 100));
         segments.push(make_loaded_segment(0, 1, 100, 100));
     }
@@ -425,7 +425,7 @@ fn set_seek_epoch_flushes_playback_segments() {
     assert_eq!(shared.timeline.download_position(), 0);
     assert_eq!(shared.current_segment_index.load(Ordering::Acquire), 0);
     assert!(!shared.had_midstream_switch.load(Ordering::Acquire));
-    assert_eq!(shared.segments.lock().num_entries(), 0);
+    assert_eq!(shared.segments.lock_sync().num_entries(), 0);
 }
 
 #[kithara::test]
@@ -708,13 +708,13 @@ fn range_ready_uses_coverage_for_disk_segments() {
     let segment = make_loaded_segment(0, 0, 0, 100);
     let segment_url = segment.media_url.clone();
     {
-        let mut segments = shared.segments.lock();
+        let mut segments = shared.segments.lock_sync();
         segments.push(segment);
     }
 
     let partial_mark = 0..40;
     set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&partial_mark));
-    let segments = shared.segments.lock();
+    let segments = shared.segments.lock_sync();
     assert!(
         !source_range_ready_from_segments(&source, &segments, &(0..80)),
         "incomplete coverage must not be treated as ready"
@@ -723,7 +723,7 @@ fn range_ready_uses_coverage_for_disk_segments() {
 
     let full_mark = 0..100;
     set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&full_mark));
-    let segments = shared.segments.lock();
+    let segments = shared.segments.lock_sync();
     assert!(
         source_range_ready_from_segments(&source, &segments, &(0..80)),
         "full coverage must be treated as ready"
@@ -738,11 +738,11 @@ fn range_ready_requires_coverage_metadata() {
     let source = make_test_source(Arc::clone(&shared), cancel);
 
     {
-        let mut segments = shared.segments.lock();
+        let mut segments = shared.segments.lock_sync();
         segments.push(make_loaded_segment(0, 0, 0, 100));
     }
 
-    let segments = shared.segments.lock();
+    let segments = shared.segments.lock_sync();
     assert!(
         !source_range_ready_from_segments(&source, &segments, &(0..80)),
         "segment without coverage metadata must not be treated as ready"
@@ -761,14 +761,14 @@ async fn wait_range_waits_until_coverage_is_complete() {
     let segment = make_loaded_segment(0, 0, 0, 100);
     let segment_url = segment.media_url.clone();
     {
-        let mut segments = shared.segments.lock();
+        let mut segments = shared.segments.lock_sync();
         segments.push(segment);
     }
     let initial_mark = 0..32;
     set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&initial_mark));
 
     let shared_for_task = Arc::clone(&shared);
-    let handle = spawn_blocking(move || source.wait_range(0..80));
+    let handle = spawn_blocking(move || source.wait_range(0..80, Duration::from_secs(1)));
 
     sleep(Duration::from_millis(120)).await;
     assert!(
@@ -797,7 +797,7 @@ async fn test_wait_range_unblocks_with_error(#[case] unblock: WaitRangeUnblock) 
     let shared2 = Arc::clone(&shared);
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    let handle = spawn_blocking(move || source.wait_range(0..1024));
+    let handle = spawn_blocking(move || source.wait_range(0..1024, Duration::from_secs(1)));
 
     // Give wait_range time to enter the loop
     sleep(Duration::from_millis(20)).await;
@@ -831,14 +831,14 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
     let coverage = source_coverage(&source);
 
-    let handle = spawn_blocking(move || source.wait_range(0..100));
+    let handle = spawn_blocking(move || source.wait_range(0..100, Duration::from_secs(1)));
 
     // Push a segment covering 0..100
     sleep(Duration::from_millis(20)).await;
     let segment = make_loaded_segment(0, 0, 0, 100);
     let segment_url = segment.media_url.clone();
     {
-        let mut segments = shared2.segments.lock();
+        let mut segments = shared2.segments.lock_sync();
         segments.push(segment);
     }
     let full_mark = 0..100;
@@ -863,7 +863,7 @@ fn test_wait_range_flushing_interrupts_without_requesting_segment() {
     let _epoch = shared.timeline.initiate_seek(Duration::from_millis(1));
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let result = source.wait_range(150..170);
+    let result = source.wait_range(150..170, Duration::from_secs(1));
     assert!(matches!(result, Ok(WaitOutcome::Interrupted)));
     assert!(
         shared.segment_requests.pop().is_none(),
@@ -884,7 +884,7 @@ fn test_wait_range_flushing_overrides_stale_eof() {
     let _ = shared.timeline.initiate_seek(Duration::ZERO);
     let mut source = make_test_source(Arc::clone(&shared), cancel);
 
-    let result = source.wait_range(total_bytes..total_bytes + 128);
+    let result = source.wait_range(total_bytes..total_bytes + 128, Duration::from_secs(1));
 
     assert!(
         shared.timeline.is_flushing(),
@@ -913,7 +913,7 @@ fn test_wait_range_stale_eof_overrides_multiple_initiate_seek_storm() {
     }
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let result = source.wait_range(total_bytes..total_bytes + 128);
+    let result = source.wait_range(total_bytes..total_bytes + 128, Duration::from_secs(1));
 
     assert!(
         shared.timeline.is_flushing(),
@@ -938,13 +938,14 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
     shared2.timeline.set_eof(true);
 
-    let handle = spawn_blocking(move || source.wait_range(3_488_300..3_489_324));
+    let handle =
+        spawn_blocking(move || source.wait_range(3_488_300..3_489_324, Duration::from_secs(1)));
 
     sleep(Duration::from_millis(20)).await;
     let segment = make_loaded_segment(0, 17, 3_400_000, 200_000);
     let segment_url = segment.media_url.clone();
     {
-        let mut segments = shared2.segments.lock();
+        let mut segments = shared2.segments.lock_sync();
         segments.push(segment);
     }
     let full_mark = 0..200_000;
@@ -975,7 +976,7 @@ async fn test_wait_range_eof_when_stopped_and_past_end() {
 
     // Push one segment
     {
-        let mut segments = shared2.segments.lock();
+        let mut segments = shared2.segments.lock_sync();
         segments.push(make_loaded_segment(0, 0, 0, 100));
     }
     // Mark eof + stopped
@@ -984,7 +985,7 @@ async fn test_wait_range_eof_when_stopped_and_past_end() {
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
 
-    let result = source.wait_range(100..200);
+    let result = source.wait_range(100..200, Duration::from_secs(1));
     assert!(matches!(result, Ok(WaitOutcome::Eof)));
 }
 
@@ -997,7 +998,7 @@ async fn test_wait_range_uses_active_variant_for_seek_request() {
 
     // Last pushed segment is from variant 1, but active playback variant is 0.
     {
-        let mut segments = shared.segments.lock();
+        let mut segments = shared.segments.lock_sync();
         segments.push(make_loaded_segment(1, 5, 500, 100));
     }
     shared.abr_variant_index.store(0, Ordering::Release);
@@ -1017,7 +1018,7 @@ async fn test_wait_range_requeues_request_after_seek_epoch_change() {
     shared.timeline.complete_seek(first_epoch);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
 
     let first_deadline = Instant::now() + Duration::from_millis(300);
     let first_request = loop {
@@ -1135,7 +1136,7 @@ async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
     let mut events = subscribe_source_events(&source);
 
-    let handle = spawn_blocking(move || source.wait_range(1024..2048));
+    let handle = spawn_blocking(move || source.wait_range(1024..2048, Duration::from_secs(1)));
     let mut saw_metadata_miss = false;
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline {
@@ -1166,14 +1167,15 @@ async fn test_wait_range_missing_metadata_fails_fast_with_diagnostic() {
 }
 
 #[kithara::test(browser)]
-async fn test_wait_range_stalled_on_demand_request_returns_interrupted() {
+async fn test_wait_range_stalled_on_demand_request_returns_interrupted(_tracing_setup: ()) {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     shared.abr_variant_index.store(0, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let handle = spawn_blocking(move || source.wait_range(150..170));
+    let mut events = subscribe_source_events(&source);
+    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let request = loop {
@@ -1188,10 +1190,18 @@ async fn test_wait_range_stalled_on_demand_request_returns_interrupted() {
     };
 
     let stalled_budget_deadline = Instant::now() + Duration::from_secs(2);
+    let mut last_watchdog = None;
     while !handle.is_finished() {
+        if let Ok(Ok(Event::Hls(HlsEvent::Error { error, .. }))) =
+            timeout(Duration::from_millis(1), events.recv()).await
+            && error.contains("loop_watchdog")
+        {
+            last_watchdog = Some(error);
+        }
         assert!(
             Instant::now() <= stalled_budget_deadline,
-            "wait_range should self-interrupt on stalled on-demand request"
+            "wait_range should self-interrupt on stalled on-demand request; last watchdog={:?}",
+            last_watchdog
         );
         sleep(Duration::from_millis(10)).await;
     }
@@ -1213,7 +1223,7 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
     let coverage = source_coverage(&source);
 
-    let handle = spawn_blocking(move || source.wait_range(150..170));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let request = loop {
@@ -1233,10 +1243,10 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
         let segment = make_loaded_segment(0, 1, 100, 100);
         let segment_url = segment.media_url.clone();
         {
-            let mut segments = shared.segments.lock();
+            let mut segments = shared.segments.lock_sync();
             segments.push(segment);
         }
-        let full_mark = 100..200;
+        let full_mark = 0..100;
         set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&full_mark));
     }
     shared.condvar.notify_all();
@@ -1256,7 +1266,7 @@ async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
     shared.abr_variant_index.store(0, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let handle = spawn_blocking(move || source.wait_range(150..170));
+    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
     let first_request = loop {

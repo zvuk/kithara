@@ -1,6 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
-use kithara_platform::time::Duration;
-
 #[cfg(target_arch = "wasm32")]
 use kithara::storage::MemResource;
 #[cfg(not(target_arch = "wasm32"))]
@@ -9,6 +6,7 @@ use kithara::{
     bufpool::byte_pool,
     storage::{ResourceExt, StorageError},
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, cancel_token, cancel_token_cancelled, temp_dir};
 use tokio_util::sync::CancellationToken;
 
@@ -187,7 +185,7 @@ fn atomic_resource_fail_propagation(temp_dir: TestTempDir, cancel_token: Cancell
     );
 }
 
-#[kithara::test(timeout(Duration::from_secs(5)))]
+#[kithara::test(native, browser, timeout(Duration::from_secs(5)))]
 fn atomic_resource_concurrent_writes(temp_dir: TestTempDir, cancel_token: CancellationToken) {
     let atomic = open_test_resource(&temp_dir, "concurrent.dat", cancel_token);
 

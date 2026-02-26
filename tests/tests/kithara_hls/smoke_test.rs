@@ -1,7 +1,5 @@
 #![forbid(unsafe_code)]
 
-use kithara_platform::time::Duration;
-
 use fixture::TestServer;
 use kithara::{
     assets::StoreOptions,
@@ -9,6 +7,7 @@ use kithara::{
     hls::{Hls, HlsConfig},
     stream::Stream,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{TestTempDir, temp_dir, tracing_setup};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;

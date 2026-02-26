@@ -1,7 +1,5 @@
-use kithara_platform::time::Duration;
-
 use derivative::Derivative;
-use kithara_platform::{MaybeSend, MaybeSync};
+use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 
 use crate::{error::PlayError, types::SlotId};
 

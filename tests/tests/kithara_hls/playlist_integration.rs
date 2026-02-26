@@ -1,9 +1,8 @@
 #![forbid(unsafe_code)]
 
-use kithara_platform::time::Duration;
-
 use fixture::*;
 use kithara::{hls::HlsResult, internal::VariantId};
+use kithara_platform::time::Duration;
 
 use super::fixture;
 

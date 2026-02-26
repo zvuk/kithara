@@ -19,4 +19,14 @@ sed -i '' \
     "s|module_or_path: '/kithara-wasm_bg.wasm'|module_or_path: './kithara-wasm_bg.wasm'|g" \
     "$DIR/index.html"
 
+# Polyfill TextDecoder/TextEncoder for AudioWorkletGlobalScope.
+# Some browsers don't expose TextDecoder in AudioWorklet, causing
+# wasm-bindgen's cachedTextDecoder to be undefined.
+JS="$DIR/kithara-wasm.js"
+if [ -f "$JS" ]; then
+    sed -i '' 's/^let cachedTextDecoder/if(typeof TextDecoder==="undefined"){globalThis.TextDecoder=class{constructor(){}decode(b){if(!b||!b.length)return"";let r="";for(let i=0;i<b.length;i++)r+=String.fromCharCode(b[i]);return r}};globalThis.TextEncoder=class{constructor(){}encode(s){const a=new Uint8Array(s.length);for(let i=0;i<s.length;i++)a[i]=s.charCodeAt(i);return a}encodeInto(s,d){const e=this.encode(s);d.set(e);return{read:s.length,written:e.length}}}}\
+let cachedTextDecoder/' "$JS"
+    echo "post-build: TextDecoder polyfill applied"
+fi
+
 echo "post-build: done"

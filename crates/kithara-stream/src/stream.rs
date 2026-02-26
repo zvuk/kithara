@@ -11,13 +11,17 @@ use std::{
     future::Future,
     io::{Read, Seek, SeekFrom},
     sync::Arc,
-    time::Duration,
 };
 
-use kithara_platform::{MaybeSend, MaybeSync, ThreadPool};
+use kithara_platform::{MaybeSend, MaybeSync, ThreadPool, time::Duration};
 use kithara_storage::WaitOutcome;
 
-use crate::{MediaInfo, SourceSeekAnchor, StreamContext, Timeline, source::Source};
+use crate::{
+    MediaInfo, SourceSeekAnchor, StreamContext, Timeline,
+    source::{ReadOutcome, Source},
+};
+
+const WAIT_RANGE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Defines a stream type and how to create it.
 ///
@@ -192,7 +196,7 @@ impl<T: StreamType> Read for Stream<T> {
         // Wait for data to be available (blocking)
         match self
             .source
-            .wait_range(range)
+            .wait_range(range, WAIT_RANGE_TIMEOUT)
             .map_err(|e| std::io::Error::other(e.to_string()))?
         {
             WaitOutcome::Ready => {}
@@ -208,14 +212,21 @@ impl<T: StreamType> Read for Stream<T> {
         // Read data directly from source.
         // No flushing check here: wait_range already handles interruption,
         // and the decoder must be able to read during apply_pending_seek().
-        let n = self
+        match self
             .source
             .read_at(pos, buf)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-
-        self.timeline
-            .set_byte_position(pos.saturating_add(n as u64));
-        Ok(n)
+            .map_err(|e| std::io::Error::other(e.to_string()))?
+        {
+            ReadOutcome::Data(n) => {
+                self.timeline
+                    .set_byte_position(pos.saturating_add(n as u64));
+                Ok(n)
+            }
+            ReadOutcome::VariantChange => Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "variant change: decoder recreation required",
+            )),
+        }
     }
 }
 

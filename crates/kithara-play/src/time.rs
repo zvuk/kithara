@@ -1,6 +1,5 @@
-use kithara_platform::time::Duration;
-
 use derivative::Derivative;
+use kithara_platform::time::Duration;
 
 #[derive(Clone, Copy, Debug, Derivative, PartialEq)]
 #[derivative(Default)]

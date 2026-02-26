@@ -38,13 +38,15 @@ use std::{
     sync::Arc,
 };
 
+use kithara_platform::time::Duration;
 mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
 use kithara_storage::WaitOutcome;
 use kithara_stream::{
-    NullStreamContext, Source, Stream, StreamContext, StreamResult, StreamType, Timeline,
+    NullStreamContext, ReadOutcome, Source, Stream, StreamContext, StreamResult, StreamType,
+    Timeline,
 };
 
 /// Minimal mock source with known length.
@@ -79,21 +81,26 @@ impl MockSource {
 impl Source for MockSource {
     type Error = std::io::Error;
 
-    fn wait_range(&mut self, _range: Range<u64>) -> StreamResult<WaitOutcome, Self::Error> {
+    fn wait_range(
+        &mut self,
+        _range: Range<u64>,
+        timeout: Duration,
+    ) -> StreamResult<WaitOutcome, Self::Error> {
+        let _ = timeout;
         Ok(WaitOutcome::Ready)
     }
 
-    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<usize, Self::Error> {
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> StreamResult<ReadOutcome, Self::Error> {
         let Ok(offset) = usize::try_from(offset) else {
-            return Ok(0);
+            return Ok(ReadOutcome::Data(0));
         };
         if offset >= self.data.len() {
-            return Ok(0);
+            return Ok(ReadOutcome::Data(0));
         }
         let available = &self.data[offset..];
         let n = buf.len().min(available.len());
         buf[..n].copy_from_slice(&available[..n]);
-        Ok(n)
+        Ok(ReadOutcome::Data(n))
     }
 
     fn len(&self) -> Option<u64> {

@@ -3,15 +3,13 @@
 //! Uses production HLS stream (requires network).
 //! Expected: FAILS — seek after ABR switch causes deadlock or audio death.
 
-use kithara_platform::time::Duration;
-
 use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
     stream::Stream,
 };
-use kithara_platform::time::Instant;
+use kithara_platform::time::{Duration, Instant};
 use kithara_test_utils::{TestTempDir, temp_dir};
 use tracing::info;
 

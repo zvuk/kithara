@@ -10,13 +10,12 @@
 //!
 //! These tests are currently ignored and need to be redesigned for the new architecture.
 
-use kithara_platform::time::Duration;
-
 use bytes::Bytes;
 use kithara::{
     assets::{AssetStore, AssetStoreBuilder, EvictConfig, ResourceKey},
     storage::ResourceExt,
 };
+use kithara_platform::time::Duration;
 use kithara_test_utils::{cancel_token, temp_dir};
 use tokio_util::sync::CancellationToken;
 

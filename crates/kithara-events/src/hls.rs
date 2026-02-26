@@ -1,8 +1,7 @@
 #![forbid(unsafe_code)]
 
-use kithara_platform::time::Duration;
-
 use kithara_abr::{AbrReason, VariantInfo};
+use kithara_platform::time::Duration;
 
 use crate::SeekEpoch;
 
