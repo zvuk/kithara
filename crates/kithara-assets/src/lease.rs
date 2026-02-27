@@ -201,16 +201,17 @@ where
     R: ResourceExt + Send + Sync + Clone + Debug + 'static,
     L: Send + Sync + Clone + 'static,
 {
-    fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize> {
-        self.inner.read_at(offset, buf)
-    }
-
-    fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()> {
-        self.inner.write_at(offset, data)
-    }
-
-    fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome> {
-        self.inner.wait_range(range)
+    delegate::delegate! {
+        to self.inner {
+            fn read_at(&self, offset: u64, buf: &mut [u8]) -> StorageResult<usize>;
+            fn write_at(&self, offset: u64, data: &[u8]) -> StorageResult<()>;
+            fn wait_range(&self, range: Range<u64>) -> StorageResult<WaitOutcome>;
+            fn fail(&self, reason: String);
+            fn path(&self) -> Option<&Path>;
+            fn len(&self) -> Option<u64>;
+            fn reactivate(&self) -> StorageResult<()>;
+            fn status(&self) -> ResourceStatus;
+        }
     }
 
     fn commit(&self, final_len: Option<u64>) -> StorageResult<()> {
@@ -226,26 +227,6 @@ where
         }
 
         Ok(())
-    }
-
-    fn fail(&self, reason: String) {
-        self.inner.fail(reason);
-    }
-
-    fn path(&self) -> Option<&Path> {
-        self.inner.path()
-    }
-
-    fn len(&self) -> Option<u64> {
-        self.inner.len()
-    }
-
-    fn reactivate(&self) -> StorageResult<()> {
-        self.inner.reactivate()
-    }
-
-    fn status(&self) -> ResourceStatus {
-        self.inner.status()
     }
 }
 
