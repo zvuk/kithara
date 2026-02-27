@@ -297,6 +297,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             return Ok(WaitOutcome::Ready);
         }
 
+        let mut stale = kithara_platform::StaleDetector::new("storage.wait_range", 200);
         loop {
             // Fast path: let the driver check without holding state lock.
             if self.inner.driver.try_fast_check(&range) {
@@ -334,6 +335,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                 "storage::wait_range spinning"
             );
 
+            stale.tick();
             let deadline = kithara_platform::time::Instant::now()
                 + kithara_platform::time::Duration::from_millis(50);
             let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
