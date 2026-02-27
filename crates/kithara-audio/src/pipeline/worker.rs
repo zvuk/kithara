@@ -191,6 +191,7 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     let mut at_eof = false;
     let mut preloaded = false;
     let mut chunks_sent = 0usize;
+    let mut stale = kithara_platform::StaleDetector::new("audio.worker", 64);
 
     loop {
         if cancel.is_cancelled() {
@@ -199,12 +200,14 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
         }
 
         if apply_pending_seek_if_flushing(&mut source, &mut at_eof) {
+            stale.reset();
             continue;
         }
 
         // Apply pending commands eagerly.
         if drain_commands(&mut source, &mut cmd_rx) {
             at_eof = false;
+            stale.reset();
         }
 
         if at_eof {
@@ -216,6 +219,7 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
             continue;
         }
 
+        stale.tick();
         debug!(chunks_sent, "worker: fetching next chunk");
         let fetch = source.fetch_next();
         let is_eof = fetch.is_eof();
@@ -223,6 +227,7 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
 
         match send_with_backpressure(&mut source, &mut cmd_rx, &mut data_tx, cancel, fetch) {
             Ok(true) => {
+                stale.reset();
                 mark_preload_progress(
                     &mut preloaded,
                     &mut chunks_sent,

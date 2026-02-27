@@ -950,7 +950,9 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
     type Error = DecodeError;
 
     fn next(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        let mut stale = kithara_platform::StaleDetector::new("decode.next", 200);
         loop {
+            stale.tick();
             self.detect_format_change();
 
             match self.decoder_next_chunk_safe() {
@@ -962,6 +964,7 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
                     if chunk.pcm.is_empty() {
                         continue;
                     }
+                    stale.reset();
                     self.pending_seek_recover_target = None;
                     self.pending_seek_recover_attempts = 0;
 
