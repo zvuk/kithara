@@ -13,6 +13,7 @@ workspace = true
 
 [features]
 internal = []
+stale-detector = []
 
 [dependencies]
 futures = { workspace = true }
@@ -28,6 +29,6 @@ wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 
 [dev-dependencies]
-kithara-platform = { path = ".", default-features = false, features = ["internal"] }
+kithara-platform = { path = ".", default-features = false, features = ["internal", "stale-detector"] }
 kithara-test-macros = { workspace = true }
 wasm-bindgen-test = { workspace = true }

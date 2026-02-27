@@ -30,6 +30,7 @@ unimock = { workspace = true, optional = true }
 perf = ["dep:hotpath", "hotpath/hotpath"]
 test-utils = ["unimock"]
 internal = []
+stale-detector = ["kithara-storage/stale-detector"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["full"] }

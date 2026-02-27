@@ -63,6 +63,7 @@ perf = [
     "kithara-hls/perf",
     "kithara-net/perf",
 ]
+stale-detector = ["kithara-audio/stale-detector"]
 full = ["file", "hls", "assets", "net", "bufpool"]
 internal = [
     "kithara-assets?/internal",
