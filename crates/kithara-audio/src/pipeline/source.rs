@@ -945,6 +945,67 @@ impl<T: StreamType> StreamAudioSource<T> {
     }
 }
 
+/// Whether the decode loop should continue or return.
+enum DecodeAction {
+    Continue,
+    Return(DecodeResult<Option<PcmChunk>>),
+}
+
+impl<T: StreamType> StreamAudioSource<T> {
+    /// Handle decoder EOF: try format change recovery, then true EOF.
+    fn handle_decode_eof(&mut self) -> DecodeAction {
+        let pos_at_eof = self.shared_stream.position();
+        self.detect_format_change();
+        if self.pending_format_change.is_some() {
+            debug!(
+                pos_at_eof,
+                chunks = self.chunks_decoded,
+                samples = self.total_samples,
+                "Decoder EOF at format boundary, recreating decoder"
+            );
+            if self.apply_format_change() {
+                reset_effects(&mut self.effects);
+                return DecodeAction::Continue;
+            }
+        }
+
+        if self.retry_decode_eof_after_seek() {
+            return DecodeAction::Continue;
+        }
+
+        debug!(
+            chunks = self.chunks_decoded,
+            samples = self.total_samples,
+            pos_at_eof,
+            "decode complete (true EOF)"
+        );
+
+        if let Some(flushed) = flush_effects(&mut self.effects) {
+            self.emit_event(AudioEvent::EndOfStream);
+            return DecodeAction::Return(Ok(Some(flushed)));
+        }
+
+        self.emit_event(AudioEvent::EndOfStream);
+        DecodeAction::Return(Ok(None))
+    }
+
+    /// Handle decode error: try format boundary recovery and post-seek retry.
+    fn handle_decode_error(&mut self, e: DecodeError) -> DecodeAction {
+        self.detect_format_change();
+        if self.try_recover_at_boundary() {
+            reset_effects(&mut self.effects);
+            return DecodeAction::Continue;
+        }
+
+        if self.retry_decode_error_after_seek() {
+            return DecodeAction::Continue;
+        }
+
+        warn!(?e, "decode error, signaling EOF");
+        DecodeAction::Return(Err(e))
+    }
+}
+
 impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
     type Item = PcmChunk;
     type Error = DecodeError;
@@ -985,63 +1046,18 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
                         None => continue,
                     }
                 }
-                Ok(None) => {
-                    let pos_at_eof = self.shared_stream.position();
-                    self.detect_format_change();
-                    if self.pending_format_change.is_some() {
-                        debug!(
-                            pos_at_eof,
-                            chunks = self.chunks_decoded,
-                            samples = self.total_samples,
-                            "Decoder EOF at format boundary, recreating decoder"
-                        );
-                        if self.apply_format_change() {
-                            reset_effects(&mut self.effects);
-                            continue;
-                        }
-                    }
-
-                    if self.retry_decode_eof_after_seek() {
-                        continue;
-                    }
-
-                    debug!(
-                        chunks = self.chunks_decoded,
-                        samples = self.total_samples,
-                        pos_at_eof,
-                        "decode complete (true EOF)"
-                    );
-
-                    if let Some(flushed) = flush_effects(&mut self.effects) {
-                        self.emit_event(AudioEvent::EndOfStream);
-                        return Ok(Some(flushed));
-                    }
-
-                    self.emit_event(AudioEvent::EndOfStream);
-                    return Ok(None);
+                Ok(None) => match self.handle_decode_eof() {
+                    DecodeAction::Continue => continue,
+                    DecodeAction::Return(result) => return result,
+                },
+                Err(e) if e.is_interrupted() => {
+                    trace!("decode interrupted by seek, retrying");
+                    continue;
                 }
-                Err(e) => {
-                    // Check if error is due to format boundary (variant fence).
-                    // The fence causes Err(Interrupted) from Stream::read(),
-                    // which Symphonia surfaces as a decode error.
-                    //
-                    // Only apply the format change if we're near the variant boundary.
-                    // Far from it, the error is a genuine decode issue (e.g. corrupted
-                    // DRM data), not fence-induced. Applying it prematurely would skip
-                    // large portions of the current variant's audio.
-                    self.detect_format_change();
-                    if self.try_recover_at_boundary() {
-                        reset_effects(&mut self.effects);
-                        continue;
-                    }
-
-                    if self.retry_decode_error_after_seek() {
-                        continue;
-                    }
-
-                    warn!(?e, "decode error, signaling EOF");
-                    return Err(e);
-                }
+                Err(e) => match self.handle_decode_error(e) {
+                    DecodeAction::Continue => continue,
+                    DecodeAction::Return(result) => return result,
+                },
             }
         }
     }

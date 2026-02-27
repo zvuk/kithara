@@ -414,7 +414,25 @@ impl SymphoniaInner {
     }
 
     /// Decode the next chunk of PCM data.
+    ///
+    /// Wraps the inner decode loop in `catch_unwind` to convert Symphonia
+    /// codec panics into `DecodeError::InvalidData` instead of aborting.
     fn next_chunk(&mut self) -> DecodeResult<Option<PcmChunk>> {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.next_chunk_impl())) {
+            Ok(result) => result,
+            Err(payload) => {
+                let msg = match payload.downcast::<String>() {
+                    Ok(s) => *s,
+                    Err(payload) => payload
+                        .downcast::<&str>()
+                        .map_or_else(|_| "unknown panic".to_string(), |s| (*s).to_string()),
+                };
+                Err(DecodeError::InvalidData(format!("symphonia panic: {msg}")))
+            }
+        }
+    }
+
+    fn next_chunk_impl(&mut self) -> DecodeResult<Option<PcmChunk>> {
         self.refresh_duration();
         loop {
             // Read next packet
