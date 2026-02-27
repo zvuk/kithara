@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-//! In-memory asset store for ephemeral (non-cacheable) content.
+//! In-memory asset store backend.
 
 use std::{
     collections::HashMap,
@@ -18,7 +18,7 @@ use crate::{
     key::ResourceKey,
 };
 
-/// In-memory [`Assets`] implementation for ephemeral content.
+/// In-memory [`Assets`] implementation.
 ///
 /// All resources are stored in a [`HashMap`] behind a [`RwLock`] keyed by
 /// [`ResourceKey`]. Nothing is persisted to disk. Index resources (pins, LRU,
