@@ -138,10 +138,6 @@ impl File {
         }
         let backend = Arc::new(backend_builder.build());
 
-        let coverage_manager = backend
-            .open_coverage_manager()
-            .map_err(SourceError::Assets)?;
-
         let state = FileStreamState::create(
             &backend,
             url,
@@ -191,7 +187,6 @@ impl File {
                 state.bus().clone(),
                 config.look_ahead_bytes,
                 shared.clone(),
-                &coverage_manager,
             );
 
             #[cfg(not(target_arch = "wasm32"))]
