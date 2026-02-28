@@ -245,16 +245,8 @@ where
     type Context = Ctx;
     type IndexRes = A::IndexRes;
 
-    fn supports_evict(&self) -> bool {
-        self.inner.supports_evict()
-    }
-
-    fn supports_lease(&self) -> bool {
-        self.inner.supports_lease()
-    }
-
-    fn supports_cache(&self) -> bool {
-        self.inner.supports_cache()
+    fn capabilities(&self) -> crate::base::Capabilities {
+        self.inner.capabilities()
     }
 
     fn root_dir(&self) -> &Path {

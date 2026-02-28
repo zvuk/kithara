@@ -48,7 +48,6 @@ where
     cfg: EvictConfig,
     seen: Arc<Mutex<HashSet<String>>>,
     cancel: CancellationToken,
-    enabled: bool,
     pool: BytePool,
 }
 
@@ -62,7 +61,6 @@ impl<A: Assets> std::fmt::Debug for EvictAssets<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("EvictAssets")
             .field("cfg", &self.cfg)
-            .field("enabled", &self.enabled)
             .finish_non_exhaustive()
     }
 }
@@ -73,13 +71,11 @@ where
 {
     /// Create a new eviction decorator.
     ///
-    /// When `enabled` is `false`, all eviction logic is bypassed and operations
-    /// delegate directly to the inner layer.
+    /// Activation is driven by [`Capabilities::EVICT`] on the inner store.
     pub(crate) fn new(
         inner: Arc<A>,
         cfg: EvictConfig,
         cancel: CancellationToken,
-        enabled: bool,
         pool: BytePool,
     ) -> Self {
         Self {
@@ -87,7 +83,6 @@ where
             cfg,
             seen: Arc::new(Mutex::new(HashSet::new())),
             cancel,
-            enabled,
             pool,
         }
     }
@@ -96,10 +91,10 @@ where
         &self.inner
     }
 
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn is_enabled(&self) -> bool {
-        self.enabled
+    fn is_active(&self) -> bool {
+        self.inner
+            .capabilities()
+            .contains(crate::base::Capabilities::EVICT)
     }
 
     /// Record asset size for byte-based eviction (best-effort).
@@ -108,7 +103,7 @@ where
     ///
     /// Returns `AssetsError` if the LRU index cannot be opened or updated.
     pub fn record_asset_bytes(&self, asset_root: &str, bytes: u64) -> AssetsResult<()> {
-        if !self.enabled {
+        if !self.is_active() {
             return Ok(());
         }
         tracing::debug!(asset_root = %asset_root, bytes, "Recording asset bytes");
@@ -120,7 +115,7 @@ where
 
     /// Check if byte limit is exceeded and run eviction if needed.
     pub fn check_and_evict_if_over_limit(&self) {
-        if !self.enabled || self.cancel.is_cancelled() || self.cfg.max_bytes.is_none() {
+        if !self.is_active() || self.cancel.is_cancelled() || self.cfg.max_bytes.is_none() {
             return;
         }
 
@@ -292,7 +287,7 @@ where
     }
 
     fn touch_and_maybe_evict(&self, asset_root: &str, bytes_hint: Option<u64>) {
-        if !self.enabled || self.cancel.is_cancelled() {
+        if !self.is_active() || self.cancel.is_cancelled() {
             return;
         }
 
@@ -322,16 +317,8 @@ where
     type Context = A::Context;
     type IndexRes = A::IndexRes;
 
-    fn supports_evict(&self) -> bool {
-        self.inner.supports_evict()
-    }
-
-    fn supports_lease(&self) -> bool {
-        self.inner.supports_lease()
-    }
-
-    fn supports_cache(&self) -> bool {
-        self.inner.supports_cache()
+    fn capabilities(&self) -> crate::base::Capabilities {
+        self.inner.capabilities()
     }
 
     fn root_dir(&self) -> &Path {

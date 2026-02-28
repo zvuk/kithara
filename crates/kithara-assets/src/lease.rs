@@ -40,7 +40,6 @@ where
     byte_recorder: Option<Arc<dyn ByteRecorder>>,
     cancel: CancellationToken,
     dirty: Arc<AtomicBool>,
-    enabled: bool,
     inner: Arc<A>,
     pins: Arc<Mutex<HashSet<String>>>,
     pool: BytePool,
@@ -55,26 +54,23 @@ where
             byte_recorder: None,
             cancel,
             dirty: Arc::new(AtomicBool::new(false)),
-            enabled: true,
             inner,
             pins: Arc::new(Mutex::new(HashSet::new())),
             pool,
         }
     }
 
-    /// Create with explicit enabled flag. When `false`, lease/pin logic is bypassed.
-    pub fn with_options(
+    /// Create with byte recorder for asset-size tracking.
+    pub fn with_byte_recorder(
         inner: Arc<A>,
         cancel: CancellationToken,
         byte_recorder: Option<Arc<dyn ByteRecorder>>,
-        enabled: bool,
         pool: BytePool,
     ) -> Self {
         Self {
             byte_recorder,
             cancel,
             dirty: Arc::new(AtomicBool::new(false)),
-            enabled,
             inner,
             pins: Arc::new(Mutex::new(HashSet::new())),
             pool,
@@ -85,10 +81,10 @@ where
         &self.inner
     }
 
-    #[cfg(test)]
-    #[must_use]
-    pub(crate) fn is_enabled(&self) -> bool {
-        self.enabled
+    fn is_active(&self) -> bool {
+        self.inner
+            .capabilities()
+            .contains(crate::base::Capabilities::LEASE)
     }
 
     fn open_index(&self) -> AssetsResult<PinsIndex<A::IndexRes>> {
@@ -127,7 +123,7 @@ where
     ///
     /// Returns `AssetsError` if the pin index cannot be opened or written to disk.
     pub fn flush_pins(&self) -> AssetsResult<()> {
-        if !self.enabled || !self.dirty.swap(false, Ordering::AcqRel) {
+        if !self.is_active() || !self.dirty.swap(false, Ordering::AcqRel) {
             return Ok(());
         }
         let snapshot = self.pins.lock_sync().clone();
@@ -240,16 +236,8 @@ where
     type Context = A::Context;
     type IndexRes = A::IndexRes;
 
-    fn supports_evict(&self) -> bool {
-        self.inner.supports_evict()
-    }
-
-    fn supports_lease(&self) -> bool {
-        self.inner.supports_lease()
-    }
-
-    fn supports_cache(&self) -> bool {
-        self.inner.supports_cache()
+    fn capabilities(&self) -> crate::base::Capabilities {
+        self.inner.capabilities()
     }
 
     fn root_dir(&self) -> &Path {
@@ -267,7 +255,7 @@ where
     ) -> AssetsResult<Self::Res> {
         let inner = self.inner.open_resource_with_ctx(key, ctx)?;
 
-        if !self.enabled {
+        if !self.is_active() {
             return Ok(LeaseResource {
                 inner,
                 _lease: LeaseGuard { inner: None },
@@ -310,7 +298,7 @@ where
     A: Assets,
 {
     fn drop(&mut self) {
-        if !self.enabled {
+        if !self.is_active() {
             return;
         }
         // Only persist on the last clone (all Arc fields share the same refcount via `pins`)
@@ -364,19 +352,10 @@ mod tests {
         LeaseAssets::new(disk, CancellationToken::new(), crate::byte_pool().clone())
     }
 
+    /// Bypass test: empty asset_root → capabilities lack LEASE.
     fn make_lease_disabled(dir: &Path) -> LeaseAssets<DiskAssetStore> {
-        let disk = Arc::new(DiskAssetStore::new(
-            dir,
-            "test_asset",
-            CancellationToken::new(),
-        ));
-        LeaseAssets::with_options(
-            disk,
-            CancellationToken::new(),
-            None,
-            false,
-            crate::byte_pool().clone(),
-        )
+        let disk = Arc::new(DiskAssetStore::new(dir, "", CancellationToken::new()));
+        LeaseAssets::new(disk, CancellationToken::new(), crate::byte_pool().clone())
     }
 
     fn load_persisted_pins(dir: &Path) -> HashSet<String> {
@@ -489,11 +468,13 @@ mod tests {
     fn bypass_does_not_pin() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease_disabled(dir.path());
-        let key = ResourceKey::new("audio.mp3");
+        let p = dir.path().join("audio.mp3");
+        std::fs::write(&p, b"data").unwrap();
+        let key = ResourceKey::absolute(&p);
 
         let _res = lease.open_resource(&key).unwrap();
 
-        // Pins should be empty when disabled
+        // Pins should be empty when capability absent
         assert!(lease.pins.lock_sync().is_empty(), "bypass should not pin");
     }
 
@@ -501,7 +482,9 @@ mod tests {
     fn bypass_flush_is_noop() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease_disabled(dir.path());
-        let key = ResourceKey::new("audio.mp3");
+        let p = dir.path().join("audio.mp3");
+        std::fs::write(&p, b"data").unwrap();
+        let key = ResourceKey::absolute(&p);
 
         let _res = lease.open_resource(&key).unwrap();
         lease.flush_pins().unwrap();
@@ -515,15 +498,16 @@ mod tests {
     fn bypass_still_returns_resources() {
         let dir = tempfile::tempdir().unwrap();
         let lease = make_lease_disabled(dir.path());
-        let key = ResourceKey::new("audio.mp3");
+        let p = dir.path().join("audio.mp3");
+        std::fs::write(&p, b"data").unwrap();
+        let key = ResourceKey::absolute(&p);
 
         let res = lease.open_resource(&key).unwrap();
 
-        // Resource should still be usable
-        res.write_at(0, b"hello").unwrap();
-        let mut buf = [0u8; 5];
+        // Resource should still be usable (read-only for absolute keys)
+        let mut buf = [0u8; 4];
         let n = res.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 5);
-        assert_eq!(&buf, b"hello");
+        assert_eq!(n, 4);
+        assert_eq!(&buf, b"data");
     }
 }

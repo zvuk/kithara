@@ -2495,6 +2495,7 @@ name = "kithara-assets"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "bitflags 2.11.0",
  "bytes",
  "delegate",
  "derive_setters",

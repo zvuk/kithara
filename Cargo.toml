@@ -202,6 +202,7 @@ async-trait = "0.1.89"
 
 # delegation
 delegate = "0.13"
+bitflags = "2.9"
 
 # storage (range maps + mmap)
 rangemap = { version = "1.7.1", features = ["serde1"] }

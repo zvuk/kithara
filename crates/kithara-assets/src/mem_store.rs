@@ -49,16 +49,9 @@ impl Assets for MemAssetStore {
     type Context = ();
     type IndexRes = MemResource;
 
-    fn supports_cache(&self) -> bool {
-        true
-    }
-
-    fn supports_evict(&self) -> bool {
-        false
-    }
-
-    fn supports_lease(&self) -> bool {
-        false
+    fn capabilities(&self) -> crate::base::Capabilities {
+        use crate::base::Capabilities;
+        Capabilities::CACHE | Capabilities::PROCESSING
     }
 
     fn root_dir(&self) -> &Path {
@@ -149,9 +142,13 @@ mod tests {
     }
 
     #[kithara::test]
-    fn mem_store_reports_unsupported_decorators() {
+    fn mem_store_capabilities() {
+        use crate::base::Capabilities;
         let store = make_mem_store();
-        assert!(!store.supports_evict());
-        assert!(!store.supports_lease());
+        let caps = store.capabilities();
+        assert!(caps.contains(Capabilities::CACHE));
+        assert!(caps.contains(Capabilities::PROCESSING));
+        assert!(!caps.contains(Capabilities::EVICT));
+        assert!(!caps.contains(Capabilities::LEASE));
     }
 }

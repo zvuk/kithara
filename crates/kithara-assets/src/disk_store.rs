@@ -104,22 +104,14 @@ impl Assets for DiskAssetStore {
     type Context = ();
     type IndexRes = MmapResource;
 
-    fn supports_evict(&self) -> bool {
-        // Local-file mode uses absolute keys with empty asset_root.
-        // Disable eviction/index writes for this mode.
-        !self.asset_root.is_empty()
-    }
-
-    fn supports_lease(&self) -> bool {
-        // Local-file mode uses absolute keys with empty asset_root.
-        // Disable pin persistence for this mode.
-        !self.asset_root.is_empty()
-    }
-
-    fn supports_cache(&self) -> bool {
-        // Local-file mode uses absolute keys with empty asset_root.
-        // Disable decorator cache to avoid pin/evict/index overhead for this mode.
-        !self.asset_root.is_empty()
+    fn capabilities(&self) -> crate::base::Capabilities {
+        use crate::base::Capabilities;
+        if self.asset_root.is_empty() {
+            // Local-file mode: absolute keys only, no decorators.
+            Capabilities::PROCESSING
+        } else {
+            Capabilities::all()
+        }
     }
 
     fn root_dir(&self) -> &Path {

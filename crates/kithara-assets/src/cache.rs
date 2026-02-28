@@ -5,7 +5,11 @@ use std::{num::NonZeroUsize, path::Path, sync::Arc};
 use kithara_platform::Mutex;
 use lru::LruCache;
 
-use crate::{base::Assets, error::AssetsResult, key::ResourceKey};
+use crate::{
+    base::{Assets, Capabilities},
+    error::AssetsResult,
+    key::ResourceKey,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 enum CacheKey<C> {
@@ -29,7 +33,8 @@ type Cache<R, C, I> = Mutex<LruCache<CacheKey<C>, CacheEntry<R, I>>>;
 /// - Same `(ResourceKey, Context)` returns the same resource handle.
 /// - Cache is process-scoped and not persisted.
 /// - LRU capacity is configurable (default: 5 entries).
-/// - When `enabled` is `false`, all operations delegate directly to the inner layer.
+/// - When the inner store lacks [`Capabilities::CACHE`], all operations
+///   delegate directly to the inner layer.
 #[derive(Clone)]
 pub struct CachedAssets<A>
 where
@@ -37,7 +42,6 @@ where
 {
     inner: Arc<A>,
     cache: Arc<Cache<A::Res, A::Context, A::IndexRes>>,
-    enabled: bool,
 }
 
 impl<A> std::fmt::Debug for CachedAssets<A>
@@ -60,18 +64,6 @@ where
         Self {
             inner,
             cache: Arc::new(Mutex::new(LruCache::new(capacity))),
-            enabled: true,
-        }
-    }
-
-    /// Create with explicit enabled flag.
-    ///
-    /// When `enabled` is `false`, all operations bypass the cache.
-    pub fn with_options(inner: Arc<A>, capacity: NonZeroUsize, enabled: bool) -> Self {
-        Self {
-            inner,
-            cache: Arc::new(Mutex::new(LruCache::new(capacity))),
-            enabled,
         }
     }
 
@@ -80,9 +72,8 @@ where
         &self.inner
     }
 
-    #[cfg(test)]
-    pub(crate) fn is_enabled(&self) -> bool {
-        self.enabled
+    fn is_active(&self) -> bool {
+        self.inner.capabilities().contains(Capabilities::CACHE)
     }
 }
 
@@ -94,16 +85,8 @@ where
     type Context = A::Context;
     type IndexRes = A::IndexRes;
 
-    fn supports_evict(&self) -> bool {
-        self.inner.supports_evict()
-    }
-
-    fn supports_lease(&self) -> bool {
-        self.inner.supports_lease()
-    }
-
-    fn supports_cache(&self) -> bool {
-        self.inner.supports_cache()
+    fn capabilities(&self) -> Capabilities {
+        self.inner.capabilities()
     }
 
     fn root_dir(&self) -> &Path {
@@ -119,7 +102,7 @@ where
         key: &ResourceKey,
         ctx: Option<Self::Context>,
     ) -> AssetsResult<Self::Res> {
-        if !self.enabled {
+        if !self.is_active() {
             return self.inner.open_resource_with_ctx(key, ctx);
         }
 
@@ -146,7 +129,7 @@ where
     }
 
     fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        if !self.enabled {
+        if !self.is_active() {
             return self.inner.open_pins_index_resource();
         }
 
@@ -164,7 +147,7 @@ where
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        if !self.enabled {
+        if !self.is_active() {
             return self.inner.open_lru_index_resource();
         }
 
@@ -243,13 +226,10 @@ mod tests {
         CachedAssets::new(disk, capacity)
     }
 
+    /// Bypass test: empty asset_root → capabilities lack CACHE.
     fn make_cached_disabled(dir: &Path) -> CachedAssets<DiskAssetStore> {
-        let disk = Arc::new(DiskAssetStore::new(
-            dir,
-            "test_asset",
-            CancellationToken::new(),
-        ));
-        CachedAssets::with_options(disk, NonZeroUsize::new(5).unwrap(), false)
+        let disk = Arc::new(DiskAssetStore::new(dir, "", CancellationToken::new()));
+        CachedAssets::new(disk, NonZeroUsize::new(5).unwrap())
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
@@ -313,15 +293,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let cached = make_cached_disabled(dir.path());
 
+        // absolute keys because asset_root is empty
         let keys: Vec<ResourceKey> = (0..3)
-            .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
+            .map(|i| {
+                let p = dir.path().join(format!("seg_{i}.m4s"));
+                std::fs::write(&p, b"data").unwrap();
+                ResourceKey::absolute(&p)
+            })
             .collect();
 
         for key in &keys {
             cached.open_resource(key).unwrap();
         }
 
-        // Cache should be empty when disabled
+        // Cache should be empty when capability absent
         assert_eq!(cached.cache.lock_sync().len(), 0);
     }
 
@@ -329,7 +314,9 @@ mod tests {
     fn bypass_still_returns_resources() {
         let dir = tempfile::tempdir().unwrap();
         let cached = make_cached_disabled(dir.path());
-        let key = ResourceKey::new("audio.mp3");
+        let p = dir.path().join("audio.mp3");
+        std::fs::write(&p, b"data").unwrap();
+        let key = ResourceKey::absolute(&p);
 
         let res1 = cached.open_resource(&key).unwrap();
         let res2 = cached.open_resource(&key).unwrap();
