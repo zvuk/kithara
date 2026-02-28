@@ -85,16 +85,12 @@ where
     type Context = A::Context;
     type IndexRes = A::IndexRes;
 
-    fn capabilities(&self) -> Capabilities {
-        self.inner.capabilities()
-    }
-
-    fn root_dir(&self) -> &Path {
-        self.inner.root_dir()
-    }
-
-    fn asset_root(&self) -> &str {
-        self.inner.asset_root()
+    delegate::delegate! {
+        to self.inner {
+            fn capabilities(&self) -> Capabilities;
+            fn root_dir(&self) -> &Path;
+            fn asset_root(&self) -> &str;
+        }
     }
 
     fn open_resource_with_ctx(

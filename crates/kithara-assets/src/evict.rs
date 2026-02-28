@@ -317,16 +317,16 @@ where
     type Context = A::Context;
     type IndexRes = A::IndexRes;
 
-    fn capabilities(&self) -> crate::base::Capabilities {
-        self.inner.capabilities()
-    }
-
-    fn root_dir(&self) -> &Path {
-        self.inner.root_dir()
-    }
-
-    fn asset_root(&self) -> &str {
-        self.inner.asset_root()
+    delegate::delegate! {
+        to self.inner {
+            fn capabilities(&self) -> crate::base::Capabilities;
+            fn root_dir(&self) -> &Path;
+            fn asset_root(&self) -> &str;
+            fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+            fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
+            fn delete_asset(&self) -> AssetsResult<()>;
+            fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()>;
+        }
     }
 
     fn open_resource_with_ctx(
@@ -336,22 +336,6 @@ where
     ) -> AssetsResult<Self::Res> {
         self.touch_and_maybe_evict(self.inner.asset_root(), None);
         self.inner.open_resource_with_ctx(key, ctx)
-    }
-
-    fn open_pins_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        self.inner.open_pins_index_resource()
-    }
-
-    fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        self.inner.open_lru_index_resource()
-    }
-
-    fn delete_asset(&self) -> AssetsResult<()> {
-        self.inner.delete_asset()
-    }
-
-    fn remove_resource(&self, key: &ResourceKey) -> AssetsResult<()> {
-        self.inner.remove_resource(key)
     }
 }
 
