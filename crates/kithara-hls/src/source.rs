@@ -299,7 +299,6 @@ impl Source for HlsSource {
         _timeout: Duration,
     ) -> StreamResult<WaitOutcome, HlsError> {
         let mut state = WaitRangeState::default();
-        let mut prev_total: u64 = 0;
 
         kithara_platform::hang_watchdog! {
             thread: "hls.wait_range";
@@ -309,16 +308,12 @@ impl Source for HlsSource {
                 let context = self.build_wait_range_context(&segments, &range);
                 state.reset_for_seek_epoch(context.seek_epoch);
 
-                // Reset hang detector only when data covering our range
-                // actually grows.  Plain `num_entries` would reset on any new
-                // segment, masking hangs where the *needed* segment is missing
-                // (e.g. evicted from ephemeral LRU cache).
-                if context.range_ready || segments.find_at_offset(range.start).is_some() {
-                    let total = context.total;
-                    if total > prev_total {
-                        prev_total = total;
-                        hang_reset!();
-                    }
+                // Reset hang detector only when data covering our range is
+                // available. Do NOT reset on total growth alone — a downloader
+                // re-downloading unrelated segments (e.g. segment 0 in a loop)
+                // must not mask a hang where the *needed* segment is missing.
+                if context.range_ready {
+                    hang_reset!();
                 }
 
                 match self.decide_wait_range(&range, &context) {

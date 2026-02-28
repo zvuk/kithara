@@ -1162,3 +1162,61 @@ async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
         .expect("wait_range task should not panic");
     assert!(matches!(result, Ok(WaitOutcome::Interrupted) | Err(_)));
 }
+
+/// Hang detector must fire when waited range has no loaded segments,
+/// even if total grows from entries at other offsets.
+///
+/// Scenario: reader waits for offset 2500 (beyond all loaded data).
+/// Background task pushes entries at 0..100, 100..200, ... every 200ms.
+/// `range_ready=false` throughout (no entry covers offset 2500).
+/// Expected: hang detector panics after 10s timeout.
+#[kithara::test(tokio, browser)]
+async fn hang_detector_fires_when_total_grows_but_range_not_ready() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps(); // 24 segs × 100 bytes = 2400 total per variant
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    shared.abr_variant_index.store(0, Ordering::Release);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+    // Background task: push entries at high offsets (10000+) that do NOT
+    // cover the waited range (100..200). This grows `total` but never
+    // satisfies `range_ready` for offset 100.
+    let bg_shared = Arc::clone(&shared);
+    let bg_cancel = cancel.clone();
+    let bg = tokio::spawn(async move {
+        for i in 0..100u64 {
+            if bg_cancel.is_cancelled() {
+                break;
+            }
+            let offset = 10_000 + i * 100;
+            let seg = make_loaded_segment(0, 100 + i as usize, offset, 100);
+            {
+                let mut segments = bg_shared.segments.lock_sync();
+                segments.push(seg);
+            }
+            bg_shared.condvar.notify_all();
+            sleep(Duration::from_millis(200)).await;
+        }
+    });
+
+    // wait_range for offset 100..200 — no entries cover this range.
+    // Background entries are at 10000+. total grows but range stays unready.
+    // Expected: hang detector fires after 10s.
+    let result = spawn_blocking(move || source.wait_range(100..200, Duration::from_secs(30))).await;
+
+    cancel.cancel();
+    bg.abort();
+
+    // BlockingError means the spawned thread panicked (hang detector fired).
+    // Ok(result) means wait_range returned normally — unexpected.
+    match result {
+        Err(_blocking_error) => {
+            // HangDetector panic was caught by spawn_blocking.
+            // This is the expected outcome — the detector fired.
+        }
+        Ok(inner) => {
+            panic!("wait_range should not return normally when range is never ready: {inner:?}");
+        }
+    }
+}
