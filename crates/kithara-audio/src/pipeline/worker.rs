@@ -191,7 +191,7 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     let mut at_eof = false;
     let mut preloaded = false;
     let mut chunks_sent = 0usize;
-    let mut stale = kithara_platform::StaleDetector::new("audio.worker", 64);
+    let mut stale = kithara_platform::StaleDetector::new("audio.worker", Duration::from_secs(10));
 
     loop {
         if cancel.is_cancelled() {

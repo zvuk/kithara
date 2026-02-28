@@ -297,7 +297,11 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             return Ok(WaitOutcome::Ready);
         }
 
-        let mut stale = kithara_platform::StaleDetector::new("storage.wait_range", 200);
+        let mut stale = kithara_platform::StaleDetector::new(
+            "storage.wait_range",
+            kithara_platform::time::Duration::from_secs(10),
+        );
+        let mut prev_available_len: u64 = 0;
         loop {
             // Fast path: let the driver check without holding state lock.
             if self.inner.driver.try_fast_check(&range) {
@@ -325,6 +329,13 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                     return Ok(WaitOutcome::Eof);
                 }
                 return Ok(WaitOutcome::Ready);
+            }
+
+            // Reset stale detector when download makes progress.
+            let current_available_len: u64 = state.available.iter().map(|r| r.end - r.start).sum();
+            if current_available_len > prev_available_len {
+                prev_available_len = current_available_len;
+                stale.reset();
             }
 
             debug!(
@@ -392,6 +403,28 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
         } else {
             ResourceStatus::Active
         }
+    }
+
+    fn contains_range(&self, range: Range<u64>) -> bool {
+        if range.is_empty() {
+            return true;
+        }
+        let state = self.inner.state.lock_sync();
+        range_covered_by(&state.available, &range)
+    }
+
+    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
+        let state = self.inner.state.lock_sync();
+        let total = state.final_len.unwrap_or(limit);
+        let upper = limit.min(total);
+        if from >= upper {
+            return None;
+        }
+        state
+            .available
+            .gaps(&(from..upper))
+            .next()
+            .map(|gap| gap.start..gap.end.min(upper))
     }
 
     fn reactivate(&self) -> StorageResult<()> {

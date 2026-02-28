@@ -211,6 +211,8 @@ where
             fn len(&self) -> Option<u64>;
             fn reactivate(&self) -> StorageResult<()>;
             fn status(&self) -> ResourceStatus;
+            fn contains_range(&self, range: Range<u64>) -> bool;
+            fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>>;
         }
     }
 

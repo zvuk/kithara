@@ -89,6 +89,10 @@ impl Backend {
         debug!("Downloader task started");
         let yield_interval = DEFAULT_YIELD_INTERVAL;
         let mut steps_since_yield: usize = 0;
+        let mut stale = kithara_platform::StaleDetector::new(
+            "stream.downloader",
+            kithara_platform::time::Duration::from_secs(30),
+        );
 
         loop {
             if cancel.is_cancelled() {
@@ -103,6 +107,7 @@ impl Backend {
                 return;
             }
 
+            stale.tick();
             let Ok(outcome) = Self::plan_next(&mut dl, &cancel).await else {
                 return;
             };
@@ -120,6 +125,7 @@ impl Backend {
                 LoopControl::Exit => return,
                 LoopControl::Restart => continue,
                 LoopControl::Proceed => {
+                    stale.reset();
                     steps_since_yield += 1;
                 }
             }

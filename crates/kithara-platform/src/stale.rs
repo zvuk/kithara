@@ -1,21 +1,27 @@
 //! Stale-loop detector for condvar wait loops.
 //!
-//! When enabled via `cfg(feature = "stale-detector")`, [`StaleDetector`] counts
-//! iterations in a condvar wait loop and panics if the threshold is exceeded,
-//! indicating a likely deadlock or hang.
+//! When enabled via `cfg(feature = "stale-detector")`, [`StaleDetector`] tracks
+//! wall-clock time since the last progress reset and panics if the timeout is
+//! exceeded, indicating a likely deadlock or hang.
 //!
 //! When the feature is disabled, all methods are no-ops and the struct is
 //! zero-sized — no runtime cost.
 
 /// Detects condvar wait loops that spin without progress.
 ///
-/// Call [`tick()`](Self::tick) once per condvar wake-up. After `threshold`
-/// ticks the detector panics with a diagnostic message naming the call site.
+/// Call [`tick()`](Self::tick) once per condvar wake-up. If wall-clock time
+/// since the last [`reset()`](Self::reset) exceeds `timeout`, the detector
+/// panics with a diagnostic message naming the call site.
+///
+/// Unlike a tick-counter approach, this is immune to spurious wake-ups:
+/// `condvar.wait_timeout(50ms)` may return instantly, but real time still
+/// advances at wall-clock rate.
 ///
 /// # Example
 ///
 /// ```ignore
-/// let mut stale = StaleDetector::new("storage.wait_range", 200);
+/// use std::time::Duration;
+/// let mut stale = StaleDetector::new("storage.wait_range", Duration::from_secs(5));
 /// loop {
 ///     // ... check condition ...
 ///     stale.tick();
@@ -25,8 +31,8 @@
 #[cfg(feature = "stale-detector")]
 pub struct StaleDetector {
     label: &'static str,
-    count: usize,
-    threshold: usize,
+    timeout: crate::time::Duration,
+    deadline: crate::time::Instant,
 }
 
 #[cfg(feature = "stale-detector")]
@@ -34,35 +40,34 @@ impl StaleDetector {
     /// Create a new detector.
     ///
     /// - `label`: human-readable name of the wait site (for panic messages).
-    /// - `threshold`: number of ticks before panic.
+    /// - `timeout`: wall-clock duration without progress before panic.
     #[must_use]
-    pub fn new(label: &'static str, threshold: usize) -> Self {
+    pub fn new(label: &'static str, timeout: crate::time::Duration) -> Self {
         Self {
             label,
-            count: 0,
-            threshold,
+            timeout,
+            deadline: crate::time::Instant::now() + timeout,
         }
     }
 
-    /// Record one condvar wake-up.
+    /// Check whether the timeout has been exceeded.
     ///
     /// # Panics
     ///
-    /// Panics if the tick count reaches `threshold`, indicating a likely
-    /// deadlock or stale wait loop.
+    /// Panics if wall-clock time since the last `reset()` (or construction)
+    /// exceeds the configured timeout.
     pub fn tick(&mut self) {
-        self.count += 1;
-        if self.count >= self.threshold {
+        if crate::time::Instant::now() >= self.deadline {
             panic!(
-                "[StaleDetector] `{}` exceeded {} ticks — likely deadlock or stale wait loop",
-                self.label, self.threshold,
+                "[StaleDetector] `{}` stale for {:?} — likely deadlock or stale wait loop",
+                self.label, self.timeout,
             );
         }
     }
 
-    /// Reset tick counter (e.g. after progress is made).
+    /// Reset the deadline (call when progress is observed).
     pub fn reset(&mut self) {
-        self.count = 0;
+        self.deadline = crate::time::Instant::now() + self.timeout;
     }
 }
 
@@ -74,7 +79,7 @@ pub struct StaleDetector;
 impl StaleDetector {
     #[inline(always)]
     #[must_use]
-    pub fn new(_label: &'static str, _threshold: usize) -> Self {
+    pub fn new(_label: &'static str, _timeout: crate::time::Duration) -> Self {
         Self
     }
 
@@ -88,11 +93,12 @@ impl StaleDetector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::time::Duration;
 
     #[test]
-    fn tick_below_threshold_does_not_panic() {
-        let mut sd = StaleDetector::new("test", 5);
-        for _ in 0..4 {
+    fn tick_within_timeout_does_not_panic() {
+        let mut sd = StaleDetector::new("test", Duration::from_secs(5));
+        for _ in 0..100 {
             sd.tick();
         }
     }
@@ -100,22 +106,20 @@ mod tests {
     #[cfg(feature = "stale-detector")]
     #[test]
     #[should_panic(expected = "StaleDetector")]
-    fn tick_at_threshold_panics() {
-        let mut sd = StaleDetector::new("test.wait", 3);
-        for _ in 0..3 {
-            sd.tick();
-        }
+    fn tick_after_timeout_panics() {
+        let mut sd = StaleDetector::new("test.wait", Duration::from_millis(1));
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        sd.tick();
     }
 
     #[cfg(feature = "stale-detector")]
     #[test]
-    fn reset_clears_counter() {
-        let mut sd = StaleDetector::new("test", 3);
-        sd.tick();
-        sd.tick();
+    fn reset_extends_deadline() {
+        let mut sd = StaleDetector::new("test", Duration::from_millis(50));
+        std::thread::sleep(std::time::Duration::from_millis(30));
         sd.reset();
-        // After reset, we can tick again without panic
-        sd.tick();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        // 60ms total, but only 30ms since reset — within 50ms timeout
         sd.tick();
     }
 }
