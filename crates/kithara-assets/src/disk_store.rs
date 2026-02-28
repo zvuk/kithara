@@ -67,10 +67,6 @@ impl DiskAssetStore {
         self.root_dir.join("_index").join("lru.bin")
     }
 
-    fn coverage_index_path(&self) -> PathBuf {
-        self.root_dir.join("_index").join("cov.bin")
-    }
-
     fn open_storage_resource(
         &self,
         key: &ResourceKey,
@@ -151,11 +147,6 @@ impl Assets for DiskAssetStore {
 
     fn open_lru_index_resource(&self) -> AssetsResult<MmapResource> {
         let path = self.lru_index_path();
-        self.open_index_resource(path)
-    }
-
-    fn open_coverage_index_resource(&self) -> AssetsResult<MmapResource> {
-        let path = self.coverage_index_path();
         self.open_index_resource(path)
     }
 

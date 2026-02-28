@@ -21,8 +21,8 @@ use crate::{
 /// In-memory [`Assets`] implementation.
 ///
 /// All resources are stored in a [`HashMap`] behind a [`RwLock`] keyed by
-/// [`ResourceKey`]. Nothing is persisted to disk. Index resources (pins, LRU,
-/// coverage) are backed by [`MemResource`] and are not persisted either.
+/// [`ResourceKey`]. Nothing is persisted to disk. Index resources (pins, LRU)
+/// are backed by [`MemResource`] and are not persisted either.
 ///
 /// Uses `kithara_platform::RwLock` which is WASM-safe (spin-loop instead of
 /// `Atomics.wait` on the browser main thread).
@@ -116,10 +116,6 @@ impl Assets for MemAssetStore {
     }
 
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes> {
-        Ok(MemResource::new(self.cancel.clone()))
-    }
-
-    fn open_coverage_index_resource(&self) -> AssetsResult<Self::IndexRes> {
         Ok(MemResource::new(self.cancel.clone()))
     }
 

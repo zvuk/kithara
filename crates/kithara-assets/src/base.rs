@@ -85,13 +85,6 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// Returns `AssetsError` if the index resource cannot be opened (I/O or storage error).
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
-    /// Open the resource used for persisting the coverage index.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the index resource cannot be opened (I/O or storage error).
-    fn open_coverage_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-
     /// Delete the entire asset (all resources under this store's `asset_root`).
     ///
     /// # Errors

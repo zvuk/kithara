@@ -2,10 +2,7 @@
 
 //! Unified asset store: disk or memory backend.
 
-use std::{fmt::Debug, hash::Hash, path::Path, sync::Arc};
-
-use kithara_coverage::{CoverageIndex, CoverageManager};
-use kithara_storage::StorageResource;
+use std::{fmt::Debug, hash::Hash, path::Path};
 
 #[cfg(not(target_arch = "wasm32"))]
 use crate::store::DiskStore;
@@ -35,31 +32,6 @@ impl<Ctx> AssetStore<Ctx>
 where
     Ctx: Clone + Hash + Eq + Send + Sync + Default + Debug + 'static,
 {
-    /// Open the shared coverage index handle.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if coverage index storage cannot be opened.
-    pub fn open_coverage_index_handle(&self) -> AssetsResult<Arc<CoverageIndex<StorageResource>>> {
-        let res: StorageResource = match self {
-            #[cfg(not(target_arch = "wasm32"))]
-            Self::Disk(store) => store.open_coverage_index_resource()?.into(),
-            Self::Mem(store) => store.open_coverage_index_resource()?.into(),
-        };
-        Ok(Arc::new(CoverageIndex::new(res)))
-    }
-
-    /// Open the coverage manager.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if coverage index storage cannot be opened.
-    pub fn open_coverage_manager(&self) -> AssetsResult<CoverageManager<StorageResource>> {
-        Ok(CoverageManager::from_index(
-            self.open_coverage_index_handle()?,
-        ))
-    }
-
     /// Open a resource by key (no processing context).
     ///
     /// # Errors

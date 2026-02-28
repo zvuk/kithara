@@ -56,7 +56,6 @@ pub use index::EvictConfig;
 pub use key::{ResourceKey, asset_root_for_url};
 #[doc(hidden)]
 pub use kithara_bufpool::{BytePool, byte_pool};
-pub use kithara_coverage::CoverageIndex;
 pub use process::ProcessChunkFn;
 pub use store::{AssetResource, AssetStoreBuilder, StoreOptions};
 pub use unified::AssetStore;

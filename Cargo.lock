@@ -2501,7 +2501,6 @@ dependencies = [
  "hex",
  "kithara-assets",
  "kithara-bufpool",
- "kithara-coverage",
  "kithara-platform",
  "kithara-storage",
  "kithara-test-utils",
@@ -2575,22 +2574,6 @@ dependencies = [
  "kithara-test-macros",
  "tokio",
  "unimock",
- "wasm-bindgen-test",
-]
-
-[[package]]
-name = "kithara-coverage"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "kithara-coverage",
- "kithara-platform",
- "kithara-storage",
- "kithara-test-utils",
- "rangemap",
- "serde",
- "tempfile",
- "tokio-util",
  "wasm-bindgen-test",
 ]
 
