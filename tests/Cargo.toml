@@ -11,7 +11,7 @@ workspace = true
 
 # Cross-platform dependencies (used by both native and WASM tests)
 [dependencies]
-kithara = { workspace = true, features = ["full", "test-utils", "internal", "stale-detector"] }
+kithara = { workspace = true, features = ["full", "test-utils", "internal"] }
 kithara-audio = { workspace = true, features = ["internal"] }
 kithara-test-utils = { workspace = true }
 kithara-wasm = { workspace = true }

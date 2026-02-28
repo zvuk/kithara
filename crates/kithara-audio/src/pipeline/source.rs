@@ -1011,54 +1011,56 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
     type Error = DecodeError;
 
     fn next(&mut self) -> DecodeResult<Option<PcmChunk>> {
-        let mut stale =
-            kithara_platform::StaleDetector::new("decode.next", Duration::from_secs(10));
-        loop {
-            stale.tick();
-            self.detect_format_change();
+        kithara_platform::hang_watchdog! {
+            thread: "decode.next";
+            timeout: Duration::from_secs(10);
+            loop {
+                hang_tick!();
+                self.detect_format_change();
 
-            match self.decoder_next_chunk_safe() {
-                Ok(Some(chunk)) => {
-                    let current_epoch = self.epoch.load(Ordering::Acquire);
-                    let Some(chunk) = self.apply_seek_skip(current_epoch, chunk) else {
+                match self.decoder_next_chunk_safe() {
+                    Ok(Some(chunk)) => {
+                        let current_epoch = self.epoch.load(Ordering::Acquire);
+                        let Some(chunk) = self.apply_seek_skip(current_epoch, chunk) else {
+                            continue;
+                        };
+                        if chunk.pcm.is_empty() {
+                            continue;
+                        }
+                        hang_reset!();
+                        self.pending_seek_recover_target = None;
+                        self.pending_seek_recover_attempts = 0;
+
+                        self.track_chunk(&chunk);
+                        self.detect_format_change();
+
+                        if self.chunks_decoded.is_multiple_of(100) {
+                            trace!(
+                                chunks = self.chunks_decoded,
+                                samples = self.total_samples,
+                                spec = ?chunk.spec(),
+                                "decode progress"
+                            );
+                        }
+
+                        match apply_effects(&mut self.effects, chunk) {
+                            Some(processed) => return Ok(Some(processed)),
+                            None => continue,
+                        }
+                    }
+                    Ok(None) => match self.handle_decode_eof() {
+                        DecodeAction::Continue => continue,
+                        DecodeAction::Return(result) => return result,
+                    },
+                    Err(e) if e.is_interrupted() => {
+                        trace!("decode interrupted by seek, retrying");
                         continue;
-                    };
-                    if chunk.pcm.is_empty() {
-                        continue;
                     }
-                    stale.reset();
-                    self.pending_seek_recover_target = None;
-                    self.pending_seek_recover_attempts = 0;
-
-                    self.track_chunk(&chunk);
-                    self.detect_format_change();
-
-                    if self.chunks_decoded.is_multiple_of(100) {
-                        trace!(
-                            chunks = self.chunks_decoded,
-                            samples = self.total_samples,
-                            spec = ?chunk.spec(),
-                            "decode progress"
-                        );
-                    }
-
-                    match apply_effects(&mut self.effects, chunk) {
-                        Some(processed) => return Ok(Some(processed)),
-                        None => continue,
-                    }
+                    Err(e) => match self.handle_decode_error(e) {
+                        DecodeAction::Continue => continue,
+                        DecodeAction::Return(result) => return result,
+                    },
                 }
-                Ok(None) => match self.handle_decode_eof() {
-                    DecodeAction::Continue => continue,
-                    DecodeAction::Return(result) => return result,
-                },
-                Err(e) if e.is_interrupted() => {
-                    trace!("decode interrupted by seek, retrying");
-                    continue;
-                }
-                Err(e) => match self.handle_decode_error(e) {
-                    DecodeAction::Continue => continue,
-                    DecodeAction::Return(result) => return result,
-                },
             }
         }
     }

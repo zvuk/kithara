@@ -47,8 +47,11 @@ perf = ["dep:hotpath", "hotpath/hotpath"]
 memprof = ["dep:hotpath", "hotpath/hotpath", "hotpath/hotpath-alloc"]
 # Enable Apple AudioToolbox hardware decoder (macOS/iOS)
 apple = ["kithara-decode/apple"]
-# Enable stale-loop detection in wait loops (panics on hang)
-stale-detector = ["kithara-platform/stale-detector", "kithara-stream/stale-detector"]
+# Disable hang-loop detection in wait loops (fallback to no-op detector)
+disable-hang-detector = [
+    "kithara-platform/disable-hang-detector",
+    "kithara-stream/disable-hang-detector",
+]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["full"] }

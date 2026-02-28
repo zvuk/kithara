@@ -299,69 +299,71 @@ impl Source for HlsSource {
         _timeout: Duration,
     ) -> StreamResult<WaitOutcome, HlsError> {
         let mut state = WaitRangeState::default();
-        let mut stale =
-            kithara_platform::StaleDetector::new("hls.wait_range", Duration::from_secs(10));
         let mut prev_total: u64 = 0;
 
-        loop {
-            let mut segments = self.shared.segments.lock_sync();
-            let context = self.build_wait_range_context(&segments, &range);
-            state.reset_for_seek_epoch(context.seek_epoch);
+        kithara_platform::hang_watchdog! {
+            thread: "hls.wait_range";
+            timeout: Duration::from_secs(10);
+            loop {
+                let mut segments = self.shared.segments.lock_sync();
+                let context = self.build_wait_range_context(&segments, &range);
+                state.reset_for_seek_epoch(context.seek_epoch);
 
-            // Reset stale detector only when data covering our range
-            // actually grows.  Plain `num_entries` would reset on any new
-            // segment, masking hangs where the *needed* segment is missing
-            // (e.g. evicted from ephemeral LRU cache).
-            if context.range_ready || segments.find_at_offset(range.start).is_some() {
-                let total = context.total;
-                if total > prev_total {
-                    prev_total = total;
-                    stale.reset();
+                // Reset hang detector only when data covering our range
+                // actually grows.  Plain `num_entries` would reset on any new
+                // segment, masking hangs where the *needed* segment is missing
+                // (e.g. evicted from ephemeral LRU cache).
+                if context.range_ready || segments.find_at_offset(range.start).is_some() {
+                    let total = context.total;
+                    if total > prev_total {
+                        prev_total = total;
+                        hang_reset!();
+                    }
                 }
-            }
 
-            match self.decide_wait_range(&range, &context) {
-                WaitRangeDecision::Cancelled => {
-                    return Err(StreamError::Source(HlsError::Cancelled));
+                match self.decide_wait_range(&range, &context) {
+                    WaitRangeDecision::Cancelled => {
+                        return Err(StreamError::Source(HlsError::Cancelled));
+                    }
+                    WaitRangeDecision::Continue => {
+                        debug!(
+                            range_start = range.start,
+                            range_end = range.end,
+                            eof = context.eof,
+                            total = context.total,
+                            expected_total = context.expected_total,
+                            num_entries = context.num_entries,
+                            range_ready = context.range_ready,
+                            "wait_range: spinning (condition not met)"
+                        );
+                    }
+                    WaitRangeDecision::Eof => return Ok(WaitOutcome::Eof),
+                    WaitRangeDecision::Interrupted => return Ok(WaitOutcome::Interrupted),
+                    WaitRangeDecision::Ready => return Ok(WaitOutcome::Ready),
                 }
-                WaitRangeDecision::Continue => {
-                    debug!(
-                        range_start = range.start,
-                        range_end = range.end,
-                        eof = context.eof,
-                        total = context.total,
-                        expected_total = context.expected_total,
-                        num_entries = context.num_entries,
-                        range_ready = context.range_ready,
-                        "wait_range: spinning (condition not met)"
-                    );
+
+                if context.eof && !context.range_ready {
+                    state.clear_on_demand_requested();
                 }
-                WaitRangeDecision::Eof => return Ok(WaitOutcome::Eof),
-                WaitRangeDecision::Interrupted => return Ok(WaitOutcome::Interrupted),
-                WaitRangeDecision::Ready => return Ok(WaitOutcome::Ready),
-            }
 
-            if context.eof && !context.range_ready {
-                state.clear_on_demand_requested();
-            }
+                // A midstream variant switch drains all segment_requests.
+                // Clear `on_demand_pending` so we can re-push for the new variant.
+                if self.shared.had_midstream_switch.load(Ordering::Acquire) {
+                    state.clear_on_demand_requested();
+                }
 
-            // A midstream variant switch drains all segment_requests.
-            // Clear `on_demand_pending` so we can re-push for the new variant.
-            if self.shared.had_midstream_switch.load(Ordering::Acquire) {
-                state.clear_on_demand_requested();
-            }
+                drop(segments);
+                self.request_on_demand_if_needed(range.start, context.seek_epoch, &mut state)?;
+                segments = self.shared.segments.lock_sync();
 
-            drop(segments);
-            self.request_on_demand_if_needed(range.start, context.seek_epoch, &mut state)?;
-            segments = self.shared.segments.lock_sync();
+                hang_tick!();
+                let deadline = Instant::now() + Duration::from_millis(WAIT_RANGE_SLEEP_MS);
+                let (_segments, _wait_result) =
+                    self.shared.condvar.wait_sync_timeout(segments, deadline);
 
-            stale.tick();
-            let deadline = Instant::now() + Duration::from_millis(WAIT_RANGE_SLEEP_MS);
-            let (_segments, _wait_result) =
-                self.shared.condvar.wait_sync_timeout(segments, deadline);
-
-            if self.shared.timeline.is_flushing() {
-                return Ok(WaitOutcome::Interrupted);
+                if self.shared.timeline.is_flushing() {
+                    return Ok(WaitOutcome::Interrupted);
+                }
             }
         }
     }

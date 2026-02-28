@@ -20,7 +20,6 @@
 mod blocking;
 mod maybe_send;
 mod pool;
-mod stale;
 mod task;
 pub mod thread;
 mod thread_pool_init;
@@ -30,9 +29,9 @@ pub mod time;
 pub mod internal;
 
 pub use blocking::{BlockingError, BlockingHandle, spawn_blocking};
+pub use kithara_hang_detector::{HangDetector, hang_watchdog};
 pub use maybe_send::{MaybeSend, MaybeSync, WasmSend};
 pub use pool::ThreadPool;
-pub use stale::StaleDetector;
 pub use task::spawn_task;
 pub use thread::{Duration, JoinHandle, backoff, spawn, yield_now};
 pub use thread_pool_init::ensure_thread_pool;

@@ -2659,6 +2659,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-hang-detector"
+version = "0.1.0"
+dependencies = [
+ "kithara-hang-detector",
+ "web-time",
+]
+
+[[package]]
 name = "kithara-hls"
 version = "0.1.0"
 dependencies = [
@@ -2782,6 +2790,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "js-sys",
+ "kithara-hang-detector",
  "kithara-platform",
  "kithara-test-macros",
  "tokio",

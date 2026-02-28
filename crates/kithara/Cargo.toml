@@ -52,7 +52,7 @@ test-utils = [
     "kithara-stream/test-utils",
     "kithara-play/test-utils",
 ]
-rodio = ["dep:rodio", "rodio/playback", "rodio/mp3", "rodio/mp4", "rodio/flac", "rodio/vorbis", "rodio/wav", "kithara-audio/rodio", "kithara-play/rodio", "stale-detector"]
+rodio = ["dep:rodio", "rodio/playback", "rodio/mp3", "rodio/mp4", "rodio/flac", "rodio/vorbis", "rodio/wav", "kithara-audio/rodio", "kithara-play/rodio"]
 perf = [
     "kithara-audio/perf",
     "kithara-decode/perf",
@@ -63,8 +63,11 @@ perf = [
     "kithara-hls/perf",
     "kithara-net/perf",
 ]
-stale-detector = ["kithara-audio/stale-detector", "kithara-hls?/stale-detector"]
-full = ["file", "hls", "assets", "net", "bufpool", "stale-detector"]
+disable-hang-detector = [
+    "kithara-audio/disable-hang-detector",
+    "kithara-hls?/disable-hang-detector",
+]
+full = ["file", "hls", "assets", "net", "bufpool"]
 internal = [
     "kithara-assets?/internal",
     "kithara-hls?/internal",
@@ -108,4 +111,4 @@ required-features = ["rodio"]
 
 [[example]]
 name = "player"
-required-features = ["file", "hls", "stale-detector"]
+required-features = ["file", "hls"]

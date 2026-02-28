@@ -1,0 +1,21 @@
+[package]
+name = "kithara-hang-detector"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Hang watchdog primitives and macros for loop progress detection"
+
+[lints]
+workspace = true
+
+[features]
+disable-hang-detector = []
+
+[dependencies]
+web-time = { workspace = true }
+
+[dev-dependencies]
+kithara-hang-detector = { path = "." }

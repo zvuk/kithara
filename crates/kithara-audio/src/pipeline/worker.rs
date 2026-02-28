@@ -191,63 +191,65 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
     let mut at_eof = false;
     let mut preloaded = false;
     let mut chunks_sent = 0usize;
-    let mut stale = kithara_platform::StaleDetector::new("audio.worker", Duration::from_secs(10));
-
-    loop {
-        if cancel.is_cancelled() {
-            trace!("audio worker cancelled");
-            return;
-        }
-
-        if apply_pending_seek_if_flushing(&mut source, &mut at_eof) {
-            stale.reset();
-            continue;
-        }
-
-        // Apply pending commands eagerly.
-        if drain_commands(&mut source, &mut cmd_rx) {
-            at_eof = false;
-            stale.reset();
-        }
-
-        if at_eof {
-            if let WorkerControl::Stop =
-                handle_eof_idle(&mut source, &mut cmd_rx, cancel, &mut at_eof)
-            {
+    kithara_platform::hang_watchdog! {
+        thread: "audio.worker";
+        timeout: Duration::from_secs(10);
+        loop {
+            if cancel.is_cancelled() {
+                trace!("audio worker cancelled");
                 return;
             }
-            continue;
-        }
 
-        stale.tick();
-        debug!(chunks_sent, "worker: fetching next chunk");
-        let fetch = source.fetch_next();
-        let is_eof = fetch.is_eof();
-        debug!(is_eof, chunks_sent, "worker: fetch_next returned");
-
-        match send_with_backpressure(&mut source, &mut cmd_rx, &mut data_tx, cancel, fetch) {
-            Ok(true) => {
-                stale.reset();
-                mark_preload_progress(
-                    &mut preloaded,
-                    &mut chunks_sent,
-                    preload_chunks,
-                    preload_notify,
-                );
-            }
-            Ok(false) => {
-                debug!("worker: backpressure or command, refetching");
+            if apply_pending_seek_if_flushing(&mut source, &mut at_eof) {
+                hang_reset!();
                 continue;
             }
-            Err(()) => {
-                debug!("worker: cancelled, stopping");
-                trace!("audio worker stopped (cancelled)");
-                return;
-            }
-        }
 
-        if is_eof {
-            mark_eof(&mut preloaded, preload_notify, &mut at_eof);
+            // Apply pending commands eagerly.
+            if drain_commands(&mut source, &mut cmd_rx) {
+                at_eof = false;
+                hang_reset!();
+            }
+
+            if at_eof {
+                if let WorkerControl::Stop =
+                    handle_eof_idle(&mut source, &mut cmd_rx, cancel, &mut at_eof)
+                {
+                    return;
+                }
+                continue;
+            }
+
+            hang_tick!();
+            debug!(chunks_sent, "worker: fetching next chunk");
+            let fetch = source.fetch_next();
+            let is_eof = fetch.is_eof();
+            debug!(is_eof, chunks_sent, "worker: fetch_next returned");
+
+            match send_with_backpressure(&mut source, &mut cmd_rx, &mut data_tx, cancel, fetch) {
+                Ok(true) => {
+                    hang_reset!();
+                    mark_preload_progress(
+                        &mut preloaded,
+                        &mut chunks_sent,
+                        preload_chunks,
+                        preload_notify,
+                    );
+                }
+                Ok(false) => {
+                    debug!("worker: backpressure or command, refetching");
+                    continue;
+                }
+                Err(()) => {
+                    debug!("worker: cancelled, stopping");
+                    trace!("audio worker stopped (cancelled)");
+                    return;
+                }
+            }
+
+            if is_eof {
+                mark_eof(&mut preloaded, preload_notify, &mut at_eof);
+            }
         }
     }
 }

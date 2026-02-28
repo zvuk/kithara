@@ -380,7 +380,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::key::ResourceKey;
+    use crate::{base::Assets, key::ResourceKey};
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
     fn builder_local_mode_decorators_inactive() {
