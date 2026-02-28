@@ -444,3 +444,74 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     events_task.abort();
     let _ = events_task.await;
 }
+
+/// Ephemeral playback with small LRU cache on a real HLS stream.
+///
+/// Reads audio chunks for 60 seconds. With a small cache, the downloader
+/// must handle eviction gracefully — no hot-spin, no infinite re-download,
+/// no hang detector panic.
+///
+/// RED before steps 4-6: downloader hot-spins on empty Batch(vec![]) at
+/// playlist tail, hang detector fires after 30s.
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(90)),
+    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top"),
+    soft_fail(
+        "connection",
+        "timeout",
+        "timed out",
+        "refused",
+        "resolve",
+        "dns",
+        "network"
+    )
+)]
+async fn live_ephemeral_small_cache_playback(temp_dir: TestTempDir) {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::INFO)
+        .with_env_filter(kithara_test_utils::rust_log_filter(
+            "kithara_audio=info,kithara_hls=info,kithara_stream=info",
+        ))
+        .try_init();
+
+    let url: url::Url = HLS_URL.parse().expect("valid URL");
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(true)
+        .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
+
+    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
+        mode: AbrMode::Auto(Some(0)),
+        ..AbrOptions::default()
+    });
+
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+        .await
+        .expect("audio creation");
+    audio.preload();
+
+    info!("Reading audio chunks for 60 seconds with small ephemeral cache");
+    let deadline = kithara_platform::time::Instant::now() + Duration::from_secs(60);
+    let mut chunks_read = 0usize;
+
+    while kithara_platform::time::Instant::now() < deadline {
+        let Some(_chunk) = next_chunk_with_timeout(
+            &mut audio,
+            Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
+            "ephemeral_small_cache",
+        )
+        .await
+        else {
+            break;
+        };
+        chunks_read += 1;
+    }
+
+    assert!(
+        chunks_read > 100,
+        "expected substantial audio output, got only {chunks_read} chunks"
+    );
+    info!(chunks_read, "Ephemeral small-cache playback completed");
+}

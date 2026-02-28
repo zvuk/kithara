@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashSet,
+    future::Future,
     sync::{Arc, atomic::Ordering},
     time::Duration,
 };
@@ -951,7 +952,7 @@ impl HlsDownloader {
     async fn plan_impl(&mut self) -> PlanOutcome<HlsPlan> {
         if self.shared.timeline.is_flushing() {
             yield_now().await;
-            return PlanOutcome::Batch(Vec::new());
+            return PlanOutcome::Idle;
         }
 
         let old_variant = self.abr.get_current_variant_index();
@@ -959,11 +960,11 @@ impl HlsDownloader {
         let variant = self.abr.get_current_variant_index();
 
         let Some(num_segments) = self.num_segments_for_plan(variant).await else {
-            return PlanOutcome::Batch(Vec::new());
+            return PlanOutcome::Idle;
         };
 
-        if self.handle_tail_state(variant, num_segments).await {
-            return PlanOutcome::Batch(Vec::new());
+        if self.handle_tail_state(variant, num_segments) {
+            return PlanOutcome::Idle;
         }
 
         self.publish_variant_applied(old_variant, variant, &decision);
@@ -1007,7 +1008,7 @@ impl HlsDownloader {
         }
     }
 
-    async fn handle_tail_state(&mut self, variant: usize, num_segments: usize) -> bool {
+    fn handle_tail_state(&mut self, variant: usize, num_segments: usize) -> bool {
         if self.current_segment_index < num_segments {
             return false;
         }
@@ -1016,7 +1017,6 @@ impl HlsDownloader {
         if timeline_seek_epoch != self.active_seek_epoch {
             self.shared.timeline.set_eof(false);
             self.shared.condvar.notify_all();
-            yield_now().await;
             return true;
         }
 
@@ -1046,7 +1046,6 @@ impl HlsDownloader {
         if !playback_at_end {
             self.shared.timeline.set_eof(false);
             self.shared.condvar.notify_all();
-            yield_now().await;
             return true;
         }
 
@@ -1322,6 +1321,10 @@ impl Downloader for HlsDownloader {
         }
         self.shared.reader_advanced.notified().await;
     }
+
+    fn wait_for_work(&self) -> impl Future<Output = ()> {
+        self.shared.reader_advanced.notified()
+    }
 }
 
 #[cfg(test)]
@@ -1572,7 +1575,7 @@ mod tests {
             .store(0, Ordering::Release);
         downloader.shared.timeline.set_eof(false);
         downloader.shared.timeline.set_byte_position(200);
-        assert!(downloader.handle_tail_state(1, 2).await);
+        assert!(downloader.handle_tail_state(1, 2));
         assert!(
             downloader.shared.timeline.eof(),
             "playlist should reach EOF when committed variant has no missing tail gaps"
@@ -1635,7 +1638,7 @@ mod tests {
             });
         }
 
-        assert!(downloader.handle_tail_state(0, 2).await);
+        assert!(downloader.handle_tail_state(0, 2));
         assert!(
             !downloader.shared.timeline.eof(),
             "downloader must not set eof while playback position is not at stream end"
@@ -1704,7 +1707,7 @@ mod tests {
 
         downloader.shared.timeline.set_eof(false);
         downloader.shared.timeline.set_byte_position(300);
-        assert!(downloader.handle_tail_state(1, 3).await);
+        assert!(downloader.handle_tail_state(1, 3));
         assert!(
             downloader.shared.timeline.eof(),
             "playlist should emit EOF when stale committed variant is unrelated to tail gaps"
@@ -1769,7 +1772,7 @@ mod tests {
 
         downloader.shared.timeline.set_eof(false);
         downloader.shared.timeline.set_byte_position(200);
-        assert!(downloader.handle_tail_state(1, 2).await);
+        assert!(downloader.handle_tail_state(1, 2));
         assert!(
             downloader.shared.timeline.eof(),
             "playlist should reach EOF when tail is committed on different variant"
@@ -1843,7 +1846,7 @@ mod tests {
         downloader.shared.timeline.set_eof(false);
         downloader.shared.timeline.set_byte_position(150);
 
-        assert!(downloader.handle_tail_state(1, 3).await);
+        assert!(downloader.handle_tail_state(1, 3));
         assert!(
             !downloader.shared.timeline.eof(),
             "tail handler must not force EOF while playback is not at stream end"
@@ -1882,7 +1885,7 @@ mod tests {
         assert!(downloader.shared.timeline.is_flushing());
 
         let outcome = Downloader::plan(&mut downloader).await;
-        assert!(matches!(outcome, PlanOutcome::Batch(_)));
+        assert!(matches!(outcome, PlanOutcome::Idle));
         assert!(
             !downloader.shared.timeline.eof(),
             "plan must not set EOF while seek flushing is active"
@@ -1926,7 +1929,7 @@ mod tests {
         );
 
         let outcome = Downloader::plan(&mut downloader).await;
-        assert!(matches!(outcome, PlanOutcome::Batch(_)));
+        assert!(matches!(outcome, PlanOutcome::Idle));
         assert!(
             !downloader.shared.timeline.eof(),
             "plan must not emit EOF while seek epoch is newer than downloader state"

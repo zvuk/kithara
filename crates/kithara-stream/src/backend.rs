@@ -117,6 +117,7 @@ impl Backend {
                         debug!("Downloader complete");
                         LoopControl::Exit
                     }
+                    PlanOutcome::Idle => Self::handle_idle(&mut dl, &cancel).await,
                 };
 
                 match control {
@@ -189,6 +190,18 @@ impl Backend {
                 Err(())
             }
             outcome = dl.plan() => Ok(outcome),
+        }
+    }
+
+    async fn handle_idle<D: Downloader>(dl: &mut D, cancel: &CancellationToken) -> LoopControl {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => LoopControl::Exit,
+            () = dl.wait_for_work() => {
+                // Yield to let other tasks run (e.g. TUI updates).
+                tokio::task::yield_now().await;
+                LoopControl::Proceed
+            }
         }
     }
 

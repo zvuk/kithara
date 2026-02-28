@@ -426,8 +426,10 @@ impl Source for HlsSource {
             .read_from_entry(&seg, offset, buf)
             .map_err(StreamError::Source)?
         else {
-            // Wake the downloader so it can re-fetch the evicted resource.
-            self.shared.reader_advanced.notify_one();
+            // Resource evicted. Push an on-demand request so the downloader
+            // re-fetches this segment even when it's at the tail (Idle state).
+            let seek_epoch = self.shared.timeline.seek_epoch();
+            self.push_segment_request(seg.variant, seg.segment_index, seek_epoch);
             return Ok(ReadOutcome::Retry);
         };
 

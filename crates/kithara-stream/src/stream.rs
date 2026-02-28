@@ -206,9 +206,7 @@ impl<T: StreamType> Read for Stream<T> {
                     .wait_range(range, WAIT_RANGE_TIMEOUT)
                     .map_err(|e| std::io::Error::other(e.to_string()))?
                 {
-                    WaitOutcome::Ready => {
-                        hang_reset!();
-                    }
+                    WaitOutcome::Ready => {}
                     WaitOutcome::Eof => return Ok(0),
                     WaitOutcome::Interrupted => {
                         return Err(std::io::Error::new(
@@ -227,6 +225,7 @@ impl<T: StreamType> Read for Stream<T> {
                     .map_err(|e| std::io::Error::other(e.to_string()))?
                 {
                     ReadOutcome::Data(n) => {
+                        hang_reset!();
                         self.timeline
                             .set_byte_position(pos.saturating_add(n as u64));
                         return Ok(n);
