@@ -5,7 +5,10 @@
 //! 1. Rapid seek burst never returns premature EOF.
 //! 2. After seek burst, sequential tail read is contiguous and exact.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::{
+    io::{Read, Seek, SeekFrom},
+    num::NonZeroUsize,
+};
 
 use kithara::{
     assets::StoreOptions,
@@ -38,7 +41,9 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     .await;
     let url = server.url("/master.m3u8").expect("url");
 
-    let store = StoreOptions::new(temp_dir.path()).with_ephemeral(ephemeral);
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(ephemeral)
+        .with_cache_capacity(NonZeroUsize::new(256).unwrap());
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(CancellationToken::new())

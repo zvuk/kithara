@@ -349,26 +349,15 @@ where
 
         // CachedAssets on top to cache LeaseResource with guards
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::with_options(Arc::new(lease), capacity, cache_enabled, false)
+        CachedAssets::with_options(Arc::new(lease), capacity, cache_enabled)
     }
 
     /// Build ephemeral (in-memory) asset store.
     ///
-    /// Uses `remove_on_evict=false` so that resources evicted from the LRU
-    /// cache remain in the underlying `DashMap`. This prevents data loss
-    /// when the number of resources exceeds cache capacity (e.g. HLS with
-    /// 37+ segments and default cache capacity of 5).
+    /// `MemAssetStore` is a stateless factory — each `open_resource` creates a
+    /// fresh `MemResource`. The `CachedAssets` LRU is the single owner: when a
+    /// handle is evicted its `Arc` ref-count drops and memory is freed.
     fn build_ephemeral(self) -> MemStore<Ctx> {
-        let root_dir = self.root_dir.unwrap_or_else(|| {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                std::env::temp_dir().join("kithara-ephemeral")
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                PathBuf::from("/kithara-ephemeral")
-            }
-        });
         let asset_root = self.asset_root.unwrap_or_default();
         let cancel = self.cancel.unwrap_or_default();
         let evict_cfg = self.evict_config.unwrap_or_default();
@@ -381,7 +370,6 @@ where
             asset_root,
             cancel.clone(),
             self.mem_resource_capacity,
-            root_dir,
         ));
         let cache_enabled = mem.supports_cache();
         let evict_enabled = self.evict_enabled && mem.supports_evict();
@@ -406,7 +394,7 @@ where
         let lease =
             LeaseAssets::with_options(processing, cancel, byte_recorder, lease_enabled, pool);
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::with_options(Arc::new(lease), capacity, cache_enabled, false)
+        CachedAssets::with_options(Arc::new(lease), capacity, cache_enabled)
     }
 }
 
@@ -590,15 +578,14 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn ephemeral_retains_data_after_cache_eviction() {
+    fn ephemeral_retains_data_within_cache_capacity() {
         let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
-            .cache_capacity(NonZeroUsize::new(3).unwrap())
+            .cache_capacity(NonZeroUsize::new(5).unwrap())
             .ephemeral(true)
             .build();
 
-        // Open 4 resources — first is evicted from LRU cache but data
-        // must persist in the underlying DashMap (remove_on_evict=false).
+        // Open 4 resources — all fit within cache capacity of 5.
         let keys: Vec<ResourceKey> = (0..4)
             .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
             .collect();
@@ -609,18 +596,42 @@ mod tests {
             res.commit(Some(4)).unwrap();
         }
 
-        // First resource was evicted from LRU cache, but re-opening
-        // must return the SAME committed resource with data intact.
+        // All resources are still in the LRU — re-opening returns the same handle.
         let reopened = backend.open_resource(&keys[0]).unwrap();
         assert_eq!(
             reopened.len(),
             Some(4),
-            "evicted resource must retain data in ephemeral mode"
+            "resource within cache capacity must retain data"
         );
-        let mut buf = [0u8; 4];
-        let n = reopened.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 4);
-        assert_eq!(&buf, b"data");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn ephemeral_evicts_data_beyond_cache_capacity() {
+        let backend = AssetStoreBuilder::new()
+            .asset_root(Some("test"))
+            .cache_capacity(NonZeroUsize::new(3).unwrap())
+            .ephemeral(true)
+            .build();
+
+        // Open 4 resources — first is evicted from LRU (capacity=3).
+        // MemAssetStore is stateless, so evicted data is gone.
+        let keys: Vec<ResourceKey> = (0..4)
+            .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
+            .collect();
+
+        for key in &keys {
+            let res = backend.open_resource(key).unwrap();
+            res.write_at(0, b"data").unwrap();
+            res.commit(Some(4)).unwrap();
+        }
+
+        // First resource was evicted from LRU — re-opening creates a fresh empty one.
+        let reopened = backend.open_resource(&keys[0]).unwrap();
+        assert_eq!(
+            reopened.len(),
+            None,
+            "evicted resource should be gone in ephemeral mode"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
