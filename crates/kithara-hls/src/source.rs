@@ -20,7 +20,7 @@ use kithara_platform::{
     Condvar, Mutex,
     time::{Duration, Instant},
 };
-use kithara_storage::{ResourceExt, StorageResource, WaitOutcome};
+use kithara_storage::{ResourceExt, ResourceStatus, StorageResource, WaitOutcome};
 use kithara_stream::{
     MediaInfo, ReadOutcome, Source, SourceSeekAnchor, StreamError, StreamResult, Timeline,
 };
@@ -203,21 +203,33 @@ impl HlsSource {
     }
 
     /// Read from a loaded segment.
+    ///
+    /// Returns `Ok(None)` when the resource was evicted from the LRU cache
+    /// between `wait_range` (metadata ready) and this read attempt.
+    /// The caller should convert this to `ReadOutcome::Retry`.
     fn read_from_entry(
         &self,
         seg: &LoadedSegment,
         offset: u64,
         buf: &mut [u8],
-    ) -> Result<usize, HlsError> {
+    ) -> Result<Option<usize>, HlsError> {
         let local_offset = offset - seg.byte_offset;
 
         if local_offset < seg.init_len {
             let Some(ref init_url) = seg.init_url else {
-                return Ok(0);
+                return Ok(Some(0));
             };
 
             let key = ResourceKey::from_url(init_url);
             let resource = self.fetch.backend().open_resource(&key)?;
+
+            // TOCTOU guard: after eviction open_resource creates a fresh
+            // empty (Active) resource. Committed means data is present.
+            if self.fetch.backend().is_ephemeral()
+                && matches!(resource.status(), ResourceStatus::Active)
+            {
+                return Ok(None);
+            }
 
             let read_end = (local_offset + buf.len() as u64).min(seg.init_len);
             resource.wait_range(local_offset..read_end)?;
@@ -232,31 +244,38 @@ impl HlsSource {
 
             if bytes_from_init < buf.len() && seg.media_len > 0 {
                 let remaining = &mut buf[bytes_from_init..];
-                let bytes_from_media = self.read_media_segment(seg, 0, remaining)?;
-                Ok(bytes_from_init + bytes_from_media)
+                Ok(self
+                    .read_media_segment_checked(seg, 0, remaining)?
+                    .map(|n| bytes_from_init + n))
             } else {
-                Ok(bytes_from_init)
+                Ok(Some(bytes_from_init))
             }
         } else {
             let media_offset = local_offset - seg.init_len;
-            self.read_media_segment(seg, media_offset, buf)
+            self.read_media_segment_checked(seg, media_offset, buf)
         }
     }
 
-    fn read_media_segment(
+    fn read_media_segment_checked(
         &self,
         seg: &LoadedSegment,
         media_offset: u64,
         buf: &mut [u8],
-    ) -> Result<usize, HlsError> {
+    ) -> Result<Option<usize>, HlsError> {
         let key = ResourceKey::from_url(&seg.media_url);
         let resource = self.fetch.backend().open_resource(&key)?;
+
+        if self.fetch.backend().is_ephemeral()
+            && matches!(resource.status(), ResourceStatus::Active)
+        {
+            return Ok(None);
+        }
 
         let read_end = (media_offset + buf.len() as u64).min(seg.media_len);
         resource.wait_range(media_offset..read_end)?;
 
         let bytes_read = resource.read_at(media_offset, buf)?;
-        Ok(bytes_read)
+        Ok(Some(bytes_read))
     }
 
     #[expect(
@@ -403,9 +422,14 @@ impl Source for HlsSource {
             }
         }
 
-        let bytes = self
+        let Some(bytes) = self
             .read_from_entry(&seg, offset, buf)
-            .map_err(StreamError::Source)?;
+            .map_err(StreamError::Source)?
+        else {
+            // Wake the downloader so it can re-fetch the evicted resource.
+            self.shared.reader_advanced.notify_one();
+            return Ok(ReadOutcome::Retry);
+        };
 
         if bytes > 0 {
             let new_pos = offset.saturating_add(bytes as u64);
