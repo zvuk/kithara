@@ -301,17 +301,23 @@ impl Source for HlsSource {
         let mut state = WaitRangeState::default();
         let mut stale =
             kithara_platform::StaleDetector::new("hls.wait_range", Duration::from_secs(10));
-        let mut prev_entries: usize = 0;
+        let mut prev_total: u64 = 0;
 
         loop {
             let mut segments = self.shared.segments.lock_sync();
             let context = self.build_wait_range_context(&segments, &range);
             state.reset_for_seek_epoch(context.seek_epoch);
 
-            // Reset stale detector when new segments arrive.
-            if context.num_entries > prev_entries {
-                prev_entries = context.num_entries;
-                stale.reset();
+            // Reset stale detector only when data covering our range
+            // actually grows.  Plain `num_entries` would reset on any new
+            // segment, masking hangs where the *needed* segment is missing
+            // (e.g. evicted from ephemeral LRU cache).
+            if context.range_ready || segments.find_at_offset(range.start).is_some() {
+                let total = context.total;
+                if total > prev_total {
+                    prev_total = total;
+                    stale.reset();
+                }
             }
 
             match self.decide_wait_range(&range, &context) {
