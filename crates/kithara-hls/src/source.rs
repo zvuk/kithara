@@ -278,21 +278,34 @@ impl HlsSource {
         Ok(Some(bytes_read))
     }
 
-    #[expect(
-        clippy::unused_self,
-        reason = "method API preserved for Source trait integration"
-    )]
     pub(crate) fn range_ready_from_segments(
         &self,
         segments: &DownloadState,
         range: &Range<u64>,
     ) -> bool {
-        // Segments in DownloadState are fully committed — no secondary check needed.
-        if segments.is_range_loaded(range) {
+        let Some(seg) = segments.find_at_offset(range.start) else {
+            return false;
+        };
+
+        // Disk-backed stores can reopen committed files after LRU eviction.
+        // Ephemeral stores lose data on eviction — metadata in DownloadState
+        // survives but bytes are gone. Verify LRU presence before claiming ready.
+        if !self.fetch.backend().is_ephemeral() {
             return true;
         }
 
-        segments.find_at_offset(range.start).is_some()
+        if seg.init_len > 0
+            && let Some(ref init_url) = seg.init_url
+            && !self
+                .fetch
+                .backend()
+                .has_resource(&ResourceKey::from_url(init_url))
+        {
+            return false;
+        }
+        self.fetch
+            .backend()
+            .has_resource(&ResourceKey::from_url(&seg.media_url))
     }
 
     fn push_segment_request(&self, variant: usize, segment_index: usize, seek_epoch: u64) {
@@ -635,6 +648,17 @@ pub(crate) fn build_pair(
         timeline,
         abr_variant_index,
     ));
+    // Segment-based throttle: only for ephemeral backends where LRU eviction
+    // destroys data. Disk backends don't need this — files survive eviction.
+    // Each fMP4 segment uses up to SLOTS_PER_SEGMENT LRU slots (init + media).
+    let look_ahead_segments = if fetch.backend().is_ephemeral() {
+        const SLOTS_PER_SEGMENT: usize = 2;
+        let cache_cap = config.store.effective_cache_capacity().get();
+        Some((cache_cap.saturating_sub(SLOTS_PER_SEGMENT) / SLOTS_PER_SEGMENT).max(1))
+    } else {
+        None
+    };
+
     let downloader = HlsDownloader {
         active_seek_epoch: 0,
         io: HlsIo::new(Arc::clone(&fetch)),
@@ -649,6 +673,7 @@ pub(crate) fn build_pair(
         shared: Arc::clone(&shared),
         bus: bus.clone(),
         look_ahead_bytes: config.look_ahead_bytes,
+        look_ahead_segments,
         prefetch_count: config.download_batch_size.max(1),
     };
 

@@ -49,6 +49,14 @@ fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
 /// Build a test-friendly `HlsSource` with an in-memory backend.
 pub fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> HlsSource {
     let fetch = make_test_fetch(cancel);
+    make_test_source_with_fetch(shared, fetch)
+}
+
+/// Build a test-friendly `HlsSource` with a given fetch manager.
+pub fn make_test_source_with_fetch(
+    shared: Arc<SharedSegments>,
+    fetch: Arc<DefaultFetchManager>,
+) -> HlsSource {
     let playlist_state = Arc::clone(&shared.playlist_state);
     HlsSource {
         fetch,
@@ -57,6 +65,47 @@ pub fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) 
         bus: EventBus::new(16),
         variant_fence: None,
         _backend: None,
+    }
+}
+
+/// Create test fetch manager (public for tests that need shared fetch).
+#[must_use]
+pub fn make_test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
+    make_test_fetch(cancel)
+}
+
+/// Write a dummy committed resource so `has_resource` returns true for
+/// the media URL of a `LoadedSegment`.
+///
+/// Ephemeral `range_ready_from_segments` verifies LRU presence — tests
+/// that push metadata must also populate the resource.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "test helper — segment lengths fit in usize"
+)]
+#[expect(clippy::missing_panics_doc, reason = "test-only helper")]
+pub fn commit_dummy_resource(source: &HlsSource, seg: &LoadedSegment) {
+    use kithara_assets::ResourceKey;
+    use kithara_storage::ResourceExt;
+
+    let backend = source.fetch.backend();
+    let media_key = ResourceKey::from_url(&seg.media_url);
+    let res = backend
+        .open_resource(&media_key)
+        .expect("open media resource");
+    res.write_at(0, &vec![0u8; seg.media_len as usize])
+        .expect("write media");
+    res.commit(None).expect("commit media");
+
+    if let Some(ref init_url) = seg.init_url {
+        let init_key = ResourceKey::from_url(init_url);
+        let init_res = backend
+            .open_resource(&init_key)
+            .expect("open init resource");
+        init_res
+            .write_at(0, &vec![0u8; seg.init_len as usize])
+            .expect("write init");
+        init_res.commit(None).expect("commit init");
     }
 }
 

@@ -171,8 +171,12 @@ pub(crate) struct HlsDownloader {
     pub(crate) abr: AbrController<ThroughputEstimator>,
     pub(crate) shared: Arc<SharedSegments>,
     pub(crate) bus: EventBus,
-    /// Backpressure threshold. None = no backpressure.
+    /// Backpressure threshold (bytes). None = no byte-based backpressure.
     pub(crate) look_ahead_bytes: Option<u64>,
+    /// Backpressure threshold (segments ahead of reader). None = no limit.
+    /// For ephemeral backends, derived from cache capacity to prevent
+    /// evicting segments the reader still needs.
+    pub(crate) look_ahead_segments: Option<usize>,
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
 }
@@ -253,6 +257,24 @@ impl HlsDownloader {
             .playlist_state
             .segment_byte_offset(variant, segment_index)?;
         (loaded_offset != expected_offset).then_some((loaded_offset, expected_offset))
+    }
+
+    /// Check whether a segment's init+media resources are still available.
+    ///
+    /// For disk backends this always returns `true` (files survive LRU eviction).
+    /// For ephemeral backends, verifies LRU presence via `has_resource` (peek).
+    fn segment_resources_available(&self, seg: &LoadedSegment) -> bool {
+        let backend = self.fetch.backend();
+        if !backend.is_ephemeral() {
+            return true;
+        }
+        if seg.init_len > 0
+            && let Some(ref init_url) = seg.init_url
+            && !backend.has_resource(&ResourceKey::from_url(init_url))
+        {
+            return false;
+        }
+        backend.has_resource(&ResourceKey::from_url(&seg.media_url))
     }
 
     /// Calculate size map for a variant via HEAD requests and store in `PlaylistState`.
@@ -847,41 +869,22 @@ impl HlsDownloader {
             return false;
         }
 
-        let segments = self.shared.segments.lock_sync();
-        if !segments.is_segment_loaded(variant, segment_index) {
+        let loaded_segment = {
+            let segments = self.shared.segments.lock_sync();
+            segments
+                .find_loaded_segment(variant, segment_index)
+                .cloned()
+        };
+        let Some(seg) = loaded_segment else {
             return false;
-        }
+        };
 
-        // Ephemeral: check that actual resources are still in LRU cache.
-        // Metadata (HashSet) survives eviction, but the reader needs both
-        // init and media resource files to actually read data.
-        if self.fetch.backend().is_ephemeral()
-            && let Some(seg) = segments.find_loaded_segment(variant, segment_index)
-        {
-            if seg.init_len > 0
-                && let Some(ref init_url) = seg.init_url
-                && !self
-                    .fetch
-                    .backend()
-                    .has_resource(&ResourceKey::from_url(init_url))
-            {
-                debug!(
-                    variant,
-                    segment_index, "init resource evicted, need re-download"
-                );
-                return false;
-            }
-            if !self
-                .fetch
-                .backend()
-                .has_resource(&ResourceKey::from_url(&seg.media_url))
-            {
-                debug!(
-                    variant,
-                    segment_index, "media resource evicted, need re-download"
-                );
-                return false;
-            }
+        if !self.segment_resources_available(&seg) {
+            debug!(
+                variant,
+                segment_index, "segment metadata present but resources evicted, need re-download"
+            );
+            return false;
         }
 
         debug!(
@@ -1110,7 +1113,11 @@ impl HlsDownloader {
         is_variant_switch: bool,
         is_midstream_switch: bool,
     ) -> (Vec<HlsPlan>, usize) {
-        let batch_end = (self.current_segment_index + self.prefetch_count).min(num_segments);
+        let mut batch_end = (self.current_segment_index + self.prefetch_count).min(num_segments);
+        if let Some(limit) = self.look_ahead_segments {
+            let reader_seg = self.shared.current_segment_index.load(Ordering::Acquire) as usize;
+            batch_end = batch_end.min(reader_seg.saturating_add(limit).saturating_add(1));
+        }
         let seek_epoch = self.shared.timeline.seek_epoch();
         let mut plans = Vec::new();
         let mut need_init = self.force_init_for_seek || is_variant_switch;
@@ -1161,14 +1168,21 @@ impl HlsDownloader {
             return false;
         }
 
-        if self
-            .shared
-            .segments
-            .lock_sync()
-            .is_segment_loaded(variant, seg_idx)
-        {
-            self.current_segment_index = seg_idx + 1;
-            return true;
+        let loaded_segment = {
+            let segments = self.shared.segments.lock_sync();
+            segments.find_loaded_segment(variant, seg_idx).cloned()
+        };
+        if let Some(seg) = loaded_segment {
+            if self.segment_resources_available(&seg) {
+                self.current_segment_index = seg_idx + 1;
+                return true;
+            }
+            debug!(
+                variant,
+                segment_index = seg_idx,
+                "segment in plan window lost resources, forcing refresh"
+            );
+            return false;
         }
 
         let had_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
@@ -1305,14 +1319,25 @@ impl Downloader for HlsDownloader {
         if self.shared.timeline.is_flushing() {
             return false;
         }
-        let Some(limit) = self.look_ahead_bytes else {
-            return false;
-        };
 
-        let reader_pos = self.shared.timeline.byte_position();
-        let downloaded = self.shared.segments.lock_sync().max_end_offset();
+        // Byte-based throttle
+        if let Some(limit) = self.look_ahead_bytes {
+            let reader_pos = self.shared.timeline.byte_position();
+            let downloaded = self.shared.segments.lock_sync().max_end_offset();
+            if downloaded.saturating_sub(reader_pos) > limit {
+                return true;
+            }
+        }
 
-        downloaded.saturating_sub(reader_pos) > limit
+        // Segment-based throttle (critical for ephemeral with small LRU cache)
+        if let Some(limit) = self.look_ahead_segments {
+            let reader_seg = self.shared.current_segment_index.load(Ordering::Acquire) as usize;
+            if self.current_segment_index > reader_seg + limit {
+                return true;
+            }
+        }
+
+        false
     }
 
     async fn wait_ready(&self) {

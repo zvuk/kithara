@@ -72,6 +72,12 @@ impl StoreOptions {
         }
     }
 
+    /// Effective LRU cache capacity (explicit or default).
+    #[must_use]
+    pub fn effective_cache_capacity(&self) -> NonZeroUsize {
+        self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY)
+    }
+
     /// Convert to internal `EvictConfig`.
     #[must_use]
     pub fn to_evict_config(&self) -> EvictConfig {

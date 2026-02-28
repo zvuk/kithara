@@ -9,7 +9,8 @@ use kithara_events::{Event, EventBus, HlsEvent};
 use kithara_hls::internal::{
     AbrMode, AbrOptions, DefaultFetchManager, DownloadState, FetchManager, HlsConfig, HlsError,
     HlsSource, LoadedSegment, PlaylistState, SegmentRequest, SegmentState, SharedSegments,
-    VariantId, VariantSizeMap, VariantState, VariantStream, build_source, make_test_source,
+    VariantId, VariantSizeMap, VariantState, VariantStream, build_source, commit_dummy_resource,
+    make_test_fetch_manager, make_test_source, make_test_source_with_fetch,
     set_source_variant_fence, source_can_cross_variant, source_range_ready_from_segments,
     source_variant_index_handle, subscribe_source_events,
 };
@@ -709,13 +710,17 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
     let ps = dummy_playlist_state();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
-    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+    let fetch = make_test_fetch_manager(cancel.clone());
+    // commit_source shares the same fetch backend for writing dummy resources.
+    let commit_source = make_test_source_with_fetch(Arc::clone(&shared), Arc::clone(&fetch));
+    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
 
     let handle = spawn_blocking(move || source.wait_range(0..100, Duration::from_secs(1)));
 
-    // Push a segment covering 0..100
+    // Push a segment covering 0..100 and commit its resource data
     sleep(Duration::from_millis(20)).await;
     let segment = make_loaded_segment(0, 0, 0, 100);
+    commit_dummy_resource(&commit_source, &segment);
     {
         let mut segments = shared2.segments.lock_sync();
         segments.push(segment);
@@ -809,7 +814,9 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     let ps = dummy_playlist_state();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
-    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+    let fetch = make_test_fetch_manager(cancel.clone());
+    let commit_source = make_test_source_with_fetch(Arc::clone(&shared), Arc::clone(&fetch));
+    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
 
     // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
     shared2.timeline.set_eof(true);
@@ -819,6 +826,7 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
 
     sleep(Duration::from_millis(20)).await;
     let segment = make_loaded_segment(0, 17, 3_400_000, 200_000);
+    commit_dummy_resource(&commit_source, &segment);
     {
         let mut segments = shared2.segments.lock_sync();
         segments.push(segment);

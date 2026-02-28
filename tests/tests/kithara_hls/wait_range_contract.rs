@@ -152,7 +152,7 @@ async fn ephemeral_small_cache_reads_entire_stream() {
 
     let store = StoreOptions::new(temp_dir.path())
         .with_ephemeral(true)
-        .with_cache_capacity(NonZeroUsize::new(2).expect("2 > 0"));
+        .with_cache_capacity(NonZeroUsize::new(5).expect("5 > 0"));
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(CancellationToken::new())

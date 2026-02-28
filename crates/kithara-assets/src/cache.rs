@@ -3,6 +3,7 @@
 use std::{num::NonZeroUsize, path::Path, sync::Arc};
 
 use kithara_platform::Mutex;
+use kithara_storage::{ResourceExt, ResourceStatus};
 use lru::LruCache;
 
 use crate::{
@@ -76,9 +77,10 @@ where
         self.inner.capabilities().contains(Capabilities::CACHE)
     }
 
-    /// Check whether a resource is currently in the LRU cache.
+    /// Check whether a committed resource is currently in the LRU cache.
     ///
     /// Uses `peek` (no LRU promotion) to avoid side effects.
+    /// Returns `false` for `Active` (empty) placeholders created after eviction.
     /// Returns `true` for non-cached backends (disk always has resources).
     #[must_use]
     pub fn has_resource(&self, key: &ResourceKey) -> bool {
@@ -86,7 +88,11 @@ where
             return true;
         }
         let cache_key = CacheKey::Resource(key.clone(), None);
-        self.cache.lock_sync().peek(&cache_key).is_some()
+        matches!(
+            self.cache.lock_sync().peek(&cache_key),
+            Some(CacheEntry::Resource(res))
+                if matches!(res.status(), ResourceStatus::Committed { .. })
+        )
     }
 }
 

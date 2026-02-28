@@ -515,3 +515,112 @@ async fn live_ephemeral_small_cache_playback(temp_dir: TestTempDir) {
     );
     info!(chunks_read, "Ephemeral small-cache playback completed");
 }
+
+/// Ephemeral playback with seeks on a real HLS stream.
+///
+/// Reads chunks, then seeks to random positions several times.
+/// After each seek, reads a few chunks to verify playback resumes.
+/// With a small LRU cache, seeks force re-download of evicted segments.
+///
+/// RED: seek invalidates the downloader position; with small cache the
+/// sought segment is often evicted → hang detector fires.
+#[kithara::test(
+    tokio,
+    browser,
+    timeout(Duration::from_secs(90)),
+    env(NO_PROXY = "127.0.0.1,localhost,stream.silvercomet.top"),
+    soft_fail(
+        "connection",
+        "timeout",
+        "timed out",
+        "refused",
+        "resolve",
+        "dns",
+        "network"
+    )
+)]
+async fn live_ephemeral_small_cache_seek_stress(temp_dir: TestTempDir) {
+    let _ = tracing_subscriber::fmt()
+        .with_test_writer()
+        .with_max_level(tracing::Level::INFO)
+        .with_env_filter(kithara_test_utils::rust_log_filter(
+            "kithara_audio=info,kithara_hls=info,kithara_stream=info",
+        ))
+        .try_init();
+
+    let url: url::Url = HLS_URL.parse().expect("valid URL");
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(true)
+        .with_cache_capacity(NonZeroUsize::new(4).expect("nonzero"));
+
+    let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {
+        mode: AbrMode::Auto(Some(0)),
+        ..AbrOptions::default()
+    });
+
+    let mut audio = Audio::<Stream<Hls>>::new(AudioConfig::<Hls>::new(hls_config))
+        .await
+        .expect("audio creation");
+    audio.preload();
+
+    // Warmup: read a few chunks so the stream is initialized
+    info!("Warmup: reading initial chunks");
+    for i in 0..20 {
+        let stage = format!("warmup_{i}");
+        if next_chunk_with_timeout(
+            &mut audio,
+            Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
+            &stage,
+        )
+        .await
+        .is_none()
+        {
+            break;
+        }
+    }
+
+    let duration_secs = audio.duration().map_or(220.0, |d| d.as_secs_f64());
+    let max_seek_secs = (duration_secs - 2.0).max(10.0);
+    let mut rng = Xorshift64::new(0xCA5E_5EE4_0001_0001);
+    let mut total_chunks = 0usize;
+    let mut seeks_done = 0usize;
+
+    info!("Seek stress: 10 random seeks with reads after each");
+    for seek_idx in 0..10 {
+        let pos_secs = rng.range_f64(1.0, max_seek_secs);
+        info!(seek_idx, pos_secs, "seeking");
+        audio
+            .seek(Duration::from_secs_f64(pos_secs))
+            .expect("seek must not fail");
+        audio.preload();
+        seeks_done += 1;
+
+        // Read a few chunks after each seek
+        for chunk_idx in 0..10 {
+            let stage = format!("seek_{seek_idx}_chunk_{chunk_idx}");
+            let Some(_chunk) = next_chunk_with_timeout(
+                &mut audio,
+                Duration::from_millis(NEXT_CHUNK_TIMEOUT_MS),
+                &stage,
+            )
+            .await
+            else {
+                break;
+            };
+            total_chunks += 1;
+        }
+    }
+
+    assert!(
+        seeks_done >= 5,
+        "expected at least 5 seeks, got {seeks_done}"
+    );
+    assert!(
+        total_chunks > 20,
+        "expected substantial audio after seeks, got only {total_chunks} chunks"
+    );
+    info!(
+        seeks_done,
+        total_chunks, "Ephemeral small-cache seek stress completed"
+    );
+}
