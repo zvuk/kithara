@@ -83,6 +83,20 @@ where
         matches!(self, Self::Mem(_))
     }
 
+    /// Check whether a resource is currently in the LRU cache.
+    ///
+    /// Both Disk and Mem backends use the same `CachedAssets` LRU layer.
+    /// Resources can be evicted from either (Mem loses data, Disk loses files
+    /// via the `EvictAssets` decorator). Uses LRU peek (no promotion).
+    #[must_use]
+    pub fn has_resource(&self, key: &ResourceKey) -> bool {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::Disk(s) => s.has_resource(key),
+            Self::Mem(s) => s.has_resource(key),
+        }
+    }
+
     /// Remove a single resource from the store.
     pub fn remove_resource(&self, key: &ResourceKey) {
         match self {

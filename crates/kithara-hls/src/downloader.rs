@@ -846,21 +846,50 @@ impl HlsDownloader {
             return false;
         }
 
-        if self
-            .shared
-            .segments
-            .lock_sync()
-            .is_segment_loaded(variant, segment_index)
-        {
-            debug!(
-                variant,
-                segment_index,
-                reason = loaded_reason,
-                "demand segment already loaded"
-            );
-            return true;
+        let segments = self.shared.segments.lock_sync();
+        if !segments.is_segment_loaded(variant, segment_index) {
+            return false;
         }
-        false
+
+        // Ephemeral: check that actual resources are still in LRU cache.
+        // Metadata (HashSet) survives eviction, but the reader needs both
+        // init and media resource files to actually read data.
+        if self.fetch.backend().is_ephemeral()
+            && let Some(seg) = segments.find_loaded_segment(variant, segment_index)
+        {
+            if seg.init_len > 0
+                && let Some(ref init_url) = seg.init_url
+                && !self
+                    .fetch
+                    .backend()
+                    .has_resource(&ResourceKey::from_url(init_url))
+            {
+                debug!(
+                    variant,
+                    segment_index, "init resource evicted, need re-download"
+                );
+                return false;
+            }
+            if !self
+                .fetch
+                .backend()
+                .has_resource(&ResourceKey::from_url(&seg.media_url))
+            {
+                debug!(
+                    variant,
+                    segment_index, "media resource evicted, need re-download"
+                );
+                return false;
+            }
+        }
+
+        debug!(
+            variant,
+            segment_index,
+            reason = loaded_reason,
+            "demand segment already loaded"
+        );
+        true
     }
 
     async fn prepare_variant_for_demand(
@@ -2149,6 +2178,101 @@ mod tests {
                 .had_midstream_switch
                 .load(Ordering::Acquire),
             "handle_midstream_switch must set had_midstream_switch flag"
+        );
+    }
+
+    /// `segment_loaded_for_demand` must detect evicted init resources in ephemeral mode.
+    ///
+    /// Without the fix, `segment_loaded_for_demand` only checks DownloadState metadata
+    /// (HashSet). When the init resource is evicted from LRU cache, it still returns
+    /// `true`, causing the downloader to skip re-download. Reader then blocks on
+    /// an empty MemResource forever.
+    #[kithara::test]
+    fn segment_loaded_for_demand_detects_evicted_init() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
+            0,
+            Some(AudioCodec::AacLc),
+            10,
+        )]));
+        let variants = parsed_variants(1);
+        // Use cache_capacity=5 (default for ephemeral in test_fetch_manager)
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        let init_url = Url::parse("https://example.com/init-0.mp4").expect("valid init URL");
+        let media_url = Url::parse("https://example.com/seg-0-0.m4s").expect("valid media URL");
+
+        // Write data to both init and media resources
+        {
+            let init_key = ResourceKey::from_url(&init_url);
+            let init_res = downloader
+                .fetch
+                .backend()
+                .open_resource(&init_key)
+                .expect("open init resource");
+            init_res.write_at(0, b"init_data").expect("write init");
+            init_res.commit(None).expect("commit init");
+
+            let media_key = ResourceKey::from_url(&media_url);
+            let media_res = downloader
+                .fetch
+                .backend()
+                .open_resource(&media_key)
+                .expect("open media resource");
+            media_res.write_at(0, b"media_data").expect("write media");
+            media_res.commit(None).expect("commit media");
+        }
+
+        // Register the segment in DownloadState
+        {
+            let mut segments = downloader.shared.segments.lock_sync();
+            segments.push(LoadedSegment {
+                variant: 0,
+                segment_index: 0,
+                byte_offset: 0,
+                init_len: 9,
+                media_len: 10,
+                init_url: Some(init_url),
+                media_url,
+            });
+        }
+
+        // Segment is loaded (metadata present)
+        assert!(
+            downloader.segment_loaded_for_demand(0, 0, "test_stale", "test_loaded"),
+            "segment must be loaded before eviction"
+        );
+
+        // Open enough other resources to evict init from LRU cache
+        for i in 1..20 {
+            let key = ResourceKey::new(format!("evict-{i}.m4s"));
+            let res = downloader
+                .fetch
+                .backend()
+                .open_resource(&key)
+                .expect("open evict resource");
+            res.write_at(0, b"x").expect("write");
+            res.commit(None).expect("commit");
+        }
+
+        // After eviction: segment metadata is still present,
+        // but init resource is gone from cache.
+        // segment_loaded_for_demand SHOULD return false (init evicted).
+        assert!(
+            !downloader.segment_loaded_for_demand(0, 0, "test_stale", "test_loaded"),
+            "segment_loaded_for_demand must return false when init resource is evicted"
         );
     }
 }
