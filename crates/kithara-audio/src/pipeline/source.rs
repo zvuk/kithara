@@ -626,12 +626,15 @@ impl<T: StreamType> StreamAudioSource<T> {
             .and_then(|info| info.variant_index);
         let target_variant = target_info.as_ref().and_then(|info| info.variant_index);
 
-        // Seek must only rebuild decoder on codec change.
-        // Variant-only seeks keep the current decoder state.
+        // Rebuild decoder when codec changes, or when decoder has a non-zero
+        // base_offset from a previous ABR switch. A stale base_offset causes
+        // seek-past-EOF because Symphonia adds base_offset to the seek position,
+        // which may exceed the current variant's total length.
         let codec_changed =
             matches!((current_codec, target_codec), (Some(from), Some(to)) if from != to);
         let variant_changed =
             matches!((current_variant, target_variant), (Some(from), Some(to)) if from != to);
+        let stale_base_offset = self.base_offset > 0;
         debug!(
             ?current_codec,
             ?target_codec,
@@ -639,9 +642,11 @@ impl<T: StreamType> StreamAudioSource<T> {
             ?target_variant,
             codec_changed,
             variant_changed,
+            stale_base_offset,
+            base_offset = self.base_offset,
             "seek anchor alignment: compare format"
         );
-        if !codec_changed {
+        if !codec_changed && !stale_base_offset {
             return true;
         }
 

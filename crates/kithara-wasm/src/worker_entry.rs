@@ -124,7 +124,13 @@ async fn handle_select_track(
 ) -> Result<(), String> {
     clog!("[WORKER] select_track: loading resource url={url}");
 
-    let config = ResourceConfig::new(url).map_err(|e| format!("invalid URL: {e}"))?;
+    let mut config = ResourceConfig::new(url).map_err(|e| format!("invalid URL: {e}"))?;
+    // WASM always uses ephemeral storage. Increase LRU cache capacity for
+    // smoother seek and ABR transitions (default 5 is too small for HLS with
+    // segment throttle).
+    if config.store.cache_capacity.is_none() {
+        config.store.cache_capacity = std::num::NonZeroUsize::new(64);
+    }
 
     let resource = Resource::new(config)
         .await
