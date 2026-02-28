@@ -15,7 +15,6 @@ use std::{
 use crossbeam_queue::SegQueue;
 use kithara_abr::Variant;
 use kithara_assets::ResourceKey;
-use kithara_coverage::{Coverage, CoverageManager};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_platform::{
     Condvar, Mutex,
@@ -123,7 +122,6 @@ pub struct HlsSource {
     pub(crate) shared: Arc<SharedSegments>,
     pub(crate) playlist_state: Arc<PlaylistState>,
     pub(crate) bus: EventBus,
-    pub(crate) coverage: CoverageManager<StorageResource>,
     /// Variant fence: auto-detected on first read, blocks cross-variant reads.
     pub(crate) variant_fence: Option<usize>,
     /// Downloader backend. Dropped with this source, cancelling the downloader.
@@ -261,68 +259,21 @@ impl HlsSource {
         Ok(bytes_read)
     }
 
-    fn request_media_range(seg: &LoadedSegment, range: &Range<u64>) -> Option<Range<u64>> {
-        let segment_start = seg.byte_offset;
-        let segment_end = seg.end_offset();
-        let request_start = range.start.max(segment_start);
-        let request_end = range.end.min(segment_end);
-        if request_start >= request_end {
-            return None;
-        }
-
-        let media_start = segment_start.saturating_add(seg.init_len);
-        if request_end <= media_start {
-            return None;
-        }
-
-        let local_start = request_start.saturating_sub(media_start);
-        let local_end = request_end.saturating_sub(media_start);
-        if local_start >= local_end {
-            return None;
-        }
-        Some(local_start..local_end)
-    }
-
-    fn media_range_covered_by_index(&self, seg: &LoadedSegment, range: Range<u64>) -> bool {
-        let cov = self.coverage.open_state(seg.media_url.to_string());
-        let Some(total) = cov.total_size() else {
-            return false;
-        };
-
-        let end = range.end.min(total);
-        if range.start >= end {
-            return true;
-        }
-
-        !cov.gaps()
-            .into_iter()
-            .any(|gap| gap.start < end && gap.end > range.start)
-    }
-
-    fn segment_ready_for_range(&self, seg: &LoadedSegment, range: &Range<u64>) -> bool {
-        let Some(media_range) = Self::request_media_range(seg, range) else {
-            return true;
-        };
-        self.media_range_covered_by_index(seg, media_range)
-    }
-
+    #[expect(
+        clippy::unused_self,
+        reason = "method API preserved for Source trait integration"
+    )]
     pub(crate) fn range_ready_from_segments(
         &self,
         segments: &DownloadState,
         range: &Range<u64>,
     ) -> bool {
-        let start_segment = segments.find_at_offset(range.start);
-        if let Some(seg) = start_segment
-            && !self.segment_ready_for_range(seg, range)
-        {
-            return false;
-        }
-
+        // Segments in DownloadState are fully committed — no secondary check needed.
         if segments.is_range_loaded(range) {
             return true;
         }
 
-        start_segment.is_some()
+        segments.find_at_offset(range.start).is_some()
     }
 
     fn push_segment_request(&self, variant: usize, segment_index: usize, seek_epoch: u64) {
@@ -630,7 +581,6 @@ pub(crate) fn build_pair(
     fetch: Arc<DefaultFetchManager>,
     variants: &[crate::parsing::VariantStream],
     config: &crate::config::HlsConfig,
-    coverage: CoverageManager<StorageResource>,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
 ) -> (HlsDownloader, HlsSource) {
@@ -656,8 +606,6 @@ pub(crate) fn build_pair(
         timeline,
         abr_variant_index,
     ));
-    let source_coverage = coverage.clone();
-
     let downloader = HlsDownloader {
         active_seek_epoch: 0,
         io: HlsIo::new(Arc::clone(&fetch)),
@@ -673,7 +621,6 @@ pub(crate) fn build_pair(
         bus: bus.clone(),
         look_ahead_bytes: config.look_ahead_bytes,
         prefetch_count: config.download_batch_size.max(1),
-        coverage,
     };
 
     let source = HlsSource {
@@ -681,7 +628,6 @@ pub(crate) fn build_pair(
         shared,
         playlist_state,
         bus,
-        coverage: source_coverage,
         variant_fence: None,
         _backend: None,
     };

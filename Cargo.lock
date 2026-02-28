@@ -2692,7 +2692,6 @@ dependencies = [
  "kithara-abr",
  "kithara-assets",
  "kithara-bufpool",
- "kithara-coverage",
  "kithara-drm",
  "kithara-events",
  "kithara-hls",

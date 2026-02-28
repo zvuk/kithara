@@ -10,11 +10,9 @@ use std::{
 
 pub use kithara_abr::{AbrMode, AbrOptions};
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
-use kithara_coverage::CoverageManager;
 use kithara_drm::DecryptContext;
 use kithara_events::{Event, EventBus};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_storage::StorageResource;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -49,22 +47,14 @@ fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
 }
 
 /// Build a test-friendly `HlsSource` with an in-memory backend.
-///
-/// # Panics
-/// Panics when the coverage manager cannot be opened from the ephemeral backend.
 pub fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> HlsSource {
     let fetch = make_test_fetch(cancel);
-    let coverage = fetch
-        .backend()
-        .open_coverage_manager()
-        .expect("coverage manager should open");
     let playlist_state = Arc::clone(&shared.playlist_state);
     HlsSource {
         fetch,
         shared,
         playlist_state,
         bus: EventBus::new(16),
-        coverage,
         variant_fence: None,
         _backend: None,
     }
@@ -75,21 +65,11 @@ pub fn build_source(
     fetch: Arc<DefaultFetchManager>,
     variants: &[VariantStream],
     config: &HlsConfig,
-    coverage: CoverageManager<StorageResource>,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
 ) -> HlsSource {
-    let (_downloader, source) = build_pair(fetch, variants, config, coverage, playlist_state, bus);
+    let (_downloader, source) = build_pair(fetch, variants, config, playlist_state, bus);
     source
-}
-
-pub fn set_source_coverage(source: &mut HlsSource, coverage: CoverageManager<StorageResource>) {
-    source.coverage = coverage;
-}
-
-#[must_use]
-pub fn source_coverage(source: &HlsSource) -> CoverageManager<StorageResource> {
-    source.coverage.clone()
 }
 
 pub fn set_source_variant_fence(source: &mut HlsSource, fence: Option<usize>) {

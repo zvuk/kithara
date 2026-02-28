@@ -11,7 +11,6 @@ use kithara_abr::{
     ThroughputSampleSource,
 };
 use kithara_assets::ResourceKey;
-use kithara_coverage::{Coverage, CoverageManager};
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
 use kithara_platform::time::Instant;
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
@@ -175,8 +174,6 @@ pub(crate) struct HlsDownloader {
     pub(crate) look_ahead_bytes: Option<u64>,
     /// Max segments to download in parallel per batch.
     pub(crate) prefetch_count: usize,
-    /// Coverage index for crash-safe segment tracking.
-    pub(crate) coverage: CoverageManager<StorageResource>,
 }
 
 impl HlsDownloader {
@@ -336,7 +333,6 @@ impl HlsDownloader {
         shared: &SharedSegments,
         fetch: &DefaultFetchManager,
         variant: usize,
-        coverage: &CoverageManager<StorageResource>,
     ) -> (usize, u64) {
         // Ephemeral backend has no persistent cache to scan.
         if fetch.backend().is_ephemeral() {
@@ -400,12 +396,6 @@ impl HlsDownloader {
             if let ResourceStatus::Committed { final_len } = resource.status() {
                 let media_len = final_len.unwrap_or(0);
                 if media_len == 0 {
-                    break;
-                }
-
-                // Validate against coverage if available.
-                let cov = coverage.open_state(segment_url.to_string());
-                if cov.total_size().is_none() || !cov.is_complete() {
                     break;
                 }
 
@@ -555,12 +545,6 @@ impl HlsDownloader {
             total: None,
         });
 
-        // Mark segment coverage for crash-safe tracking in coverage index.
-        {
-            let mut cov = self.coverage.open_state(media_url.to_string());
-            cov.set_total_size(media_len);
-            cov.mark(0..media_len);
-        }
         {
             let mut segments = self.shared.segments.lock_sync();
             if is_variant_switch {
@@ -569,8 +553,6 @@ impl HlsDownloader {
             segments.push(segment);
         }
         self.shared.condvar.notify_all();
-
-        // Coverage flush happens via Drop, or explicitly in commit().
     }
 
     /// Prepare variant for download: detect switches, calculate metadata, populate cache.
@@ -670,7 +652,7 @@ impl HlsDownloader {
         if is_variant_switch {
             return (0, 0);
         }
-        Self::populate_cached_segments(&self.shared, &self.fetch, variant, &self.coverage)
+        Self::populate_cached_segments(&self.shared, &self.fetch, variant)
     }
 
     fn apply_cached_segment_progress(
@@ -1322,7 +1304,6 @@ mod tests {
     };
 
     use kithara_assets::{AssetStoreBuilder, ProcessChunkFn, ResourceKey};
-    use kithara_coverage::{Coverage, CoverageManager};
     use kithara_drm::DecryptContext;
     use kithara_events::EventBus;
     use kithara_net::{HttpClient, NetOptions};
@@ -1440,16 +1421,6 @@ mod tests {
         Arc::new(FetchManager::new(backend, net, cancel))
     }
 
-    fn make_coverage_manager() -> CoverageManager<StorageResource> {
-        let backend = AssetStoreBuilder::new()
-            .ephemeral(true)
-            .cancel(CancellationToken::new())
-            .build();
-        backend
-            .open_coverage_manager()
-            .expect("coverage manager should open")
-    }
-
     #[kithara::test]
     fn cross_codec_switch_detects_incompatible_variants() {
         let playlist_state = Arc::new(PlaylistState::new(vec![
@@ -1532,12 +1503,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1596,12 +1566,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1657,12 +1626,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1732,12 +1700,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1794,12 +1761,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1869,12 +1835,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1908,12 +1873,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1953,12 +1917,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -1993,12 +1956,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -2037,12 +1999,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -2094,12 +2055,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
@@ -2121,96 +2081,6 @@ mod tests {
             downloader.loaded_segment_offset_mismatch(0, 1),
             Some((120, 100))
         );
-    }
-
-    #[kithara::test(native)]
-    fn populate_cached_segments_requires_coverage_metadata() {
-        let cancel = CancellationToken::new();
-        let temp_dir = TempDir::new().expect("temp dir");
-        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state_with_segments(
-            0,
-            Some(AudioCodec::AacLc),
-            2,
-        )]));
-        playlist_state.set_size_map(
-            0,
-            VariantSizeMap {
-                init_size: 0,
-                offsets: vec![0, 100],
-                segment_sizes: vec![100, 100],
-                total: 200,
-            },
-        );
-
-        let noop_drm: ProcessChunkFn<DecryptContext> =
-            Arc::new(|input, output, _ctx: &mut DecryptContext, _is_last| {
-                output[..input.len()].copy_from_slice(input);
-                Ok(input.len())
-            });
-        let backend = AssetStoreBuilder::new()
-            .root_dir(temp_dir.path())
-            .asset_root(Some("populate-cached-segments"))
-            .cancel(cancel.clone())
-            .process_fn(noop_drm)
-            .build();
-        let net = HttpClient::new(NetOptions::default());
-        let fetch = Arc::new(FetchManager::new(backend, net, cancel.clone()));
-        let shared = Arc::new(SharedSegments::new(
-            cancel,
-            Arc::clone(&playlist_state),
-            Timeline::new(),
-        ));
-        let coverage = fetch
-            .backend()
-            .open_coverage_manager()
-            .expect("coverage manager should open");
-
-        let segment_url = playlist_state.segment_url(0, 0).expect("segment URL");
-        let key = ResourceKey::from_url(&segment_url);
-        let resource = fetch
-            .backend()
-            .open_resource(&key)
-            .expect("segment resource should open");
-        resource
-            .write_at(0, &[0xAB; 100])
-            .expect("write segment bytes");
-        resource.commit(Some(100)).expect("commit segment bytes");
-
-        let (count_without_coverage, end_without_coverage) =
-            HlsDownloader::populate_cached_segments(&shared, &fetch, 0, &coverage);
-        assert_eq!(count_without_coverage, 0);
-        assert_eq!(end_without_coverage, 0);
-
-        {
-            let mut state = coverage.open_state(segment_url.to_string());
-            state.set_total_size(100);
-            state.mark(0..100);
-        }
-
-        assert!(matches!(
-            resource.status(),
-            ResourceStatus::Committed {
-                final_len: Some(100)
-            }
-        ));
-        let reopened = fetch
-            .backend()
-            .open_resource(&key)
-            .expect("segment resource should reopen");
-        assert!(matches!(
-            reopened.status(),
-            ResourceStatus::Committed {
-                final_len: Some(100)
-            }
-        ));
-        let state = coverage.open_state(segment_url.to_string());
-        assert_eq!(state.total_size(), Some(100));
-        assert!(state.is_complete());
-
-        let (count_with_coverage, end_with_coverage) =
-            HlsDownloader::populate_cached_segments(&shared, &fetch, 0, &coverage);
-        assert_eq!(count_with_coverage, 1);
-        assert_eq!(end_with_coverage, 100);
     }
 
     /// Regression test: `handle_midstream_switch` sets `had_midstream_switch`
@@ -2237,12 +2107,11 @@ mod tests {
             cancel: Some(cancel),
             ..HlsConfig::default()
         };
-        let coverage = make_coverage_manager();
+
         let (mut downloader, _source) = build_pair(
             fetch,
             &variants,
             &config,
-            coverage,
             Arc::clone(&playlist_state),
             EventBus::new(16),
         );
