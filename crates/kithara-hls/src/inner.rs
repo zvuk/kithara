@@ -2,7 +2,7 @@
 //!
 //! Provides `Hls` marker type implementing `StreamType` trait.
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn, asset_root_for_url};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
@@ -60,7 +60,14 @@ impl StreamType for Hls {
         if let Some(ref pool) = config.pool {
             builder = builder.pool(pool.clone());
         }
-        if let Some(cap) = config.store.cache_capacity {
+        // Ephemeral MemAssetStore is stateless — LRU is the sole owner of
+        // resource handles. Default capacity (5) is too low for HLS with
+        // many segments; evicted data is lost forever. Use 256 unless the
+        // caller provided an explicit capacity.
+        if config.store.ephemeral && config.store.cache_capacity.is_none() {
+            const EPHEMERAL_CACHE: NonZeroUsize = NonZeroUsize::new(256).unwrap();
+            builder = builder.cache_capacity(EPHEMERAL_CACHE);
+        } else if let Some(cap) = config.store.cache_capacity {
             builder = builder.cache_capacity(cap);
         }
         let backend: AssetStore<DecryptContext> = builder.build();
