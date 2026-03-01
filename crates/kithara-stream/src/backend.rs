@@ -52,6 +52,10 @@ impl Backend {
     /// A child cancellation token is created: dropping this Backend
     /// cancels the child (and thus the downloader) without affecting
     /// the parent token.
+    ///
+    /// # Panics
+    ///
+    /// Panics if creating the dedicated current-thread Tokio runtime fails.
     pub fn new<D: Downloader + Send>(
         downloader: D,
         cancel: &CancellationToken,
@@ -63,9 +67,25 @@ impl Backend {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let handle = tokio::runtime::Handle::current();
-            pool.spawn(move || {
-                handle.block_on(Self::run_downloader(downloader, task_cancel));
-            });
+            if matches!(
+                handle.runtime_flavor(),
+                tokio::runtime::RuntimeFlavor::CurrentThread
+            ) {
+                // `Handle::block_on` from a foreign thread can starve current-thread
+                // runtimes. Run downloader on a dedicated single-thread runtime
+                // inside the worker thread.
+                pool.spawn(move || {
+                    let rt = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("failed to build downloader runtime");
+                    rt.block_on(Self::run_downloader(downloader, task_cancel));
+                });
+            } else {
+                pool.spawn(move || {
+                    handle.block_on(Self::run_downloader(downloader, task_cancel));
+                });
+            }
         }
 
         #[cfg(target_arch = "wasm32")]

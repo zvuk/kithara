@@ -209,6 +209,12 @@ impl<T: StreamType> Read for Stream<T> {
                     WaitOutcome::Ready => {}
                     WaitOutcome::Eof => return Ok(0),
                     WaitOutcome::Interrupted => {
+                        if !self.timeline.is_flushing() {
+                            // Some sources use Interrupted as a recoverable
+                            // "retry wait_range" signal when seek is not active.
+                            hang_tick!();
+                            continue;
+                        }
                         return Err(std::io::Error::new(
                             std::io::ErrorKind::Interrupted,
                             "seek pending",
@@ -288,5 +294,133 @@ impl<T: StreamType> Seek for Stream<T> {
 
         self.timeline.set_byte_position(new_pos);
         Ok(new_pos)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::VecDeque, io, sync::Arc};
+
+    use kithara_storage::WaitOutcome;
+
+    use super::*;
+    use crate::{NullStreamContext, ReadOutcome, Source, StreamContext};
+
+    mod kithara {
+        pub(crate) use kithara_test_macros::test;
+    }
+
+    struct ScriptSource {
+        data: Vec<u8>,
+        reads: VecDeque<ReadOutcome>,
+        timeline: Timeline,
+        waits: VecDeque<WaitOutcome>,
+    }
+
+    impl ScriptSource {
+        fn new(
+            timeline: Timeline,
+            waits: impl IntoIterator<Item = WaitOutcome>,
+            reads: impl IntoIterator<Item = ReadOutcome>,
+            data: Vec<u8>,
+        ) -> Self {
+            Self {
+                data,
+                reads: reads.into_iter().collect(),
+                timeline,
+                waits: waits.into_iter().collect(),
+            }
+        }
+    }
+
+    impl Source for ScriptSource {
+        type Error = io::Error;
+
+        fn wait_range(
+            &mut self,
+            _range: std::ops::Range<u64>,
+            _timeout: Duration,
+        ) -> crate::StreamResult<WaitOutcome, Self::Error> {
+            Ok(self.waits.pop_front().unwrap_or(WaitOutcome::Ready))
+        }
+
+        fn read_at(
+            &mut self,
+            offset: u64,
+            buf: &mut [u8],
+        ) -> crate::StreamResult<ReadOutcome, Self::Error> {
+            let outcome = self.reads.pop_front().unwrap_or(ReadOutcome::Data(0));
+            if let ReadOutcome::Data(n) = outcome {
+                let start = offset as usize;
+                let end = (start + n).min(self.data.len());
+                let bytes = end.saturating_sub(start).min(buf.len());
+                if bytes > 0 {
+                    buf[..bytes].copy_from_slice(&self.data[start..start + bytes]);
+                }
+                return Ok(ReadOutcome::Data(bytes));
+            }
+            Ok(outcome)
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(self.data.len() as u64)
+        }
+
+        fn timeline(&self) -> Timeline {
+            self.timeline.clone()
+        }
+    }
+
+    struct DummyType;
+
+    impl StreamType for DummyType {
+        type Config = ();
+        type Error = io::Error;
+        type Events = ();
+        type Source = ScriptSource;
+
+        async fn create(_config: Self::Config) -> Result<Self::Source, Self::Error> {
+            Err(io::Error::other("not used in unit tests"))
+        }
+
+        fn build_stream_context(
+            _source: &Self::Source,
+            timeline: Timeline,
+        ) -> Arc<dyn StreamContext> {
+            Arc::new(NullStreamContext::new(timeline))
+        }
+    }
+
+    #[kithara::test]
+    fn read_retries_interrupted_when_not_flushing() {
+        let timeline = Timeline::new();
+        let source = ScriptSource::new(
+            timeline.clone(),
+            [WaitOutcome::Interrupted, WaitOutcome::Ready],
+            [ReadOutcome::Data(4)],
+            b"ABCD".to_vec(),
+        );
+        let mut stream = Stream::<DummyType> { source, timeline };
+        let mut buf = [0u8; 4];
+
+        let n = stream
+            .read(&mut buf)
+            .expect("read must succeed after retry");
+        assert_eq!(n, 4);
+        assert_eq!(&buf, b"ABCD");
+    }
+
+    #[kithara::test]
+    fn read_propagates_interrupted_when_flushing() {
+        let timeline = Timeline::new();
+        let _ = timeline.initiate_seek(Duration::from_millis(10));
+        let source = ScriptSource::new(timeline.clone(), [WaitOutcome::Interrupted], [], vec![]);
+        let mut stream = Stream::<DummyType> { source, timeline };
+        let mut buf = [0u8; 4];
+
+        let err = stream
+            .read(&mut buf)
+            .expect_err("flushing read must return interrupted");
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
     }
 }
