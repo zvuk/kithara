@@ -230,3 +230,88 @@ rules:
         - /crates/**/src/lib.rs
         - /crates/**/src/**/mod.rs
     pattern-regex: '(?m)^\\s*mod\\s+tests\\s*\\{'
+
+  - id: style.no-magic-numbers
+    languages:
+      - rust
+    message: "Magic number `$NUM` detected; extract it into a named constant."
+    severity: WARNING
+    paths:
+      include:
+        - /crates/**/src/**/*.rs
+    patterns:
+      - pattern-either:
+          - pattern-inside: |
+              fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(crate) async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) fn $F($...ARGS) -> $RET {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) async fn $F($...ARGS) {
+                  ...
+              }
+          - pattern-inside: |
+              pub(super) async fn $F($...ARGS) -> $RET {
+                  ...
+              }
+      - pattern: $NUM
+      - metavariable-regex:
+          metavariable: $NUM
+          regex: '^(?:-?(?:[2-9]|[1-9][0-9_]+|0x[0-9A-Fa-f_]+|0o[0-7_]+|0b[01_]+)(?:[iu](?:8|16|32|64|128|size))?|-?(?:[0-9][0-9_]*\.[0-9][0-9_]*(?:[eE][+-]?[0-9][0-9_]*)?)(?:f(?:32|64))?|-?(?:[0-9][0-9_]*[eE][+-]?[0-9][0-9_]*)(?:f(?:32|64))?)$'
+      - pattern-not: 0
+      - pattern-not: 1
+      - pattern-not: -1
+      - pattern-not: "0.0"
+      - pattern-not: "1.0"
+      - pattern-not: "-1.0"

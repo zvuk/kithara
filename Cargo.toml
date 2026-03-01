@@ -72,6 +72,7 @@ cast_precision_loss = "warn"
 derive_partial_eq_without_eq = "warn"
 significant_drop_tightening = "warn"
 cognitive_complexity = "warn"
+approx_constant = "warn"
 
 [workspace.metadata.kithara]
 # Single place to document workspace-wide tool expectations.
