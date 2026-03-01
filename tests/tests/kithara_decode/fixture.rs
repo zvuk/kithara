@@ -5,10 +5,10 @@
 
 /// A tiny WAV file (0.1 seconds of silence, 44.1kHz, stereo)
 /// This is a minimal valid WAV file for testing.
-const TINY_WAV_BYTES: &[u8] = include_bytes!("fixtures/silence_1s.wav");
+const TINY_WAV_BYTES: &[u8] = include_bytes!("../../../assets/silence_1s.wav");
 
 /// A test MP3 file (short audio clip)
-const TEST_MP3_BYTES: &[u8] = include_bytes!("fixtures/test.mp3");
+const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
 
 /// Embedded audio data for tests that don't need HTTP
 pub(crate) struct EmbeddedAudio {

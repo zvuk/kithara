@@ -34,7 +34,7 @@ use kithara_test_utils::TestHttpServer;
 use tokio::runtime::{Builder, Runtime};
 use url::Url;
 
-const TEST_MP3_BYTES: &[u8] = include_bytes!("../tests/kithara_decode/fixtures/test.mp3");
+const TEST_MP3_BYTES: &[u8] = include_bytes!("../../assets/test.mp3");
 const HLS_SEGMENT_COUNT: usize = 6;
 const HLS_SEGMENT_SIZE: usize = 96_000;
 const AUDIO_READ_TARGET_SAMPLES: usize = 32_768;

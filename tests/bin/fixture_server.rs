@@ -156,8 +156,8 @@ mod server {
     const JITTER_SIZE_SPAN: usize = 120_000;
     const SESSION_TTL_SECS: u64 = 120;
 
-    const SILENCE_WAV: &[u8] = include_bytes!("../tests/kithara_decode/fixtures/silence_1s.wav");
-    const TEST_MP3: &[u8] = include_bytes!("../tests/kithara_decode/fixtures/test.mp3");
+    const SILENCE_WAV: &[u8] = include_bytes!("../../assets/silence_1s.wav");
+    const TEST_MP3: &[u8] = include_bytes!("../../assets/test.mp3");
 
     fn create_saw_wav(total_bytes: usize) -> Vec<u8> {
         kithara_test_utils::create_saw_wav(total_bytes)

@@ -19,7 +19,7 @@ use kithara::{
 use kithara_platform::time::Duration;
 use kithara_test_utils::TestHttpServer;
 
-const TEST_MP3_BYTES: &[u8] = include_bytes!("../kithara_decode/fixtures/test.mp3");
+const TEST_MP3_BYTES: &[u8] = include_bytes!("../../../assets/test.mp3");
 
 #[expect(
     clippy::needless_pass_by_value,
