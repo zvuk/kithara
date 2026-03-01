@@ -12,9 +12,15 @@ rustflags = [
     "-C", "link-arg=--export=__tls_size",
     "-C", "link-arg=--export=__tls_align",
     "-C", "link-arg=--export=__tls_base",
+    # Nightly: immediate-abort replaces panic_immediate_abort cfg (removed in 1.95).
+    "-Z", "unstable-options",
+    "-C", "panic=immediate-abort",
 ]
 
 # Only takes effect with nightly cargo (ignored by stable).
 # Needed to rebuild std with shared-memory support for wasm32 + atomics.
 [unstable]
-build-std = ["std", "panic_abort"]
+build-std = ["std", "panic_abort", "core", "alloc"]
+# Empty: panic_immediate_abort cfg was removed in nightly 1.95+,
+# use -Cpanic=immediate-abort rustflag instead.
+build-std-features = []
