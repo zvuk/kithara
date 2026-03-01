@@ -169,8 +169,9 @@ async fn live_stress_real_stream_seek_read_cache(#[case] ephemeral: bool, temp_d
     let mut store = StoreOptions::new(temp_dir.path());
     if ephemeral {
         store.ephemeral = true;
-        store.cache_capacity = Some(NonZeroUsize::new(8).expect("nonzero"));
-        store.max_assets = Some(10);
+        // Large enough for most seeks to hit cache, small enough for
+        // eviction to exercise the Retry / re-download path.
+        store.cache_capacity = Some(NonZeroUsize::new(24).expect("nonzero"));
     }
 
     let hls_config = HlsConfig::new(url).with_store(store).with_abr(AbrOptions {

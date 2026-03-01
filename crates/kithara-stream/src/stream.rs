@@ -195,7 +195,7 @@ impl<T: StreamType> Read for Stream<T> {
         // wait_range so the downloader can re-fetch.
         kithara_platform::hang_watchdog! {
             thread: "stream.read";
-            timeout: Duration::from_secs(5);
+            timeout: Duration::from_secs(15);
             loop {
                 let pos = self.timeline.byte_position();
                 let range = pos..pos.saturating_add(buf.len() as u64);
