@@ -8,7 +8,7 @@ use firewheel::{
     FirewheelConfig, Volume, diff::Memo, node::NodeID, nodes::volume_pan::VolumePanNode,
 };
 use kithara_bufpool::PcmPool;
-use kithara_platform::{Mutex, ThreadPool, mpsc};
+use kithara_platform::{Mutex, ThreadPool, sync::mpsc};
 #[cfg(not(target_arch = "wasm32"))]
 use ringbuf::{
     HeapCons,
@@ -183,7 +183,7 @@ impl SessionClient {
                 Ok(()) => return Ok(()),
                 Err(returned) => {
                     pending = returned;
-                    kithara_platform::thread::backoff(Duration::from_micros(100));
+                    kithara_platform::thread::sleep(Duration::from_micros(100));
                 }
             }
         }
@@ -368,7 +368,7 @@ fn engine_thread(mut cmd_rx: HeapCons<CmdMsg>) {
             let _ = reply_tx.send_sync(reply);
             continue;
         }
-        kithara_platform::thread::backoff(Duration::from_micros(100));
+        kithara_platform::thread::sleep(Duration::from_micros(100));
     }
 }
 

@@ -161,6 +161,10 @@ impl EngineImpl {
         Ok(id)
     }
 
+    #[expect(
+        clippy::significant_drop_tightening,
+        reason = "guard must live through find + try_push for atomicity"
+    )]
     pub(crate) fn send_slot_cmd(&self, slot: SlotId, cmd: PlayerCmd) -> Result<(), PlayError> {
         let mut slot_handles = self.slot_handles.lock_sync();
         let Some(handle) = slot_handles.iter_mut().find(|h| h.slot_id == slot) else {

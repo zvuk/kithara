@@ -1020,6 +1020,7 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
             thread: "decode.next";
             loop {
                 hang_tick!();
+                kithara_platform::thread::yield_now();
                 self.detect_format_change();
 
                 match self.decoder_next_chunk_safe() {

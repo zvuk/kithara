@@ -300,7 +300,6 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
         let mut prev_available_len: u64 = 0;
         kithara_platform::hang_watchdog! {
             thread: "storage.wait_range";
-            timeout: kithara_platform::time::Duration::from_secs(10);
             loop {
                 // Fast path: let the driver check without holding state lock.
                 if self.inner.driver.try_fast_check(&range) {
@@ -347,6 +346,7 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
                 );
 
                 hang_tick!();
+                kithara_platform::thread::yield_now();
                 let deadline = kithara_platform::time::Instant::now()
                     + kithara_platform::time::Duration::from_millis(50);
                 let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
@@ -394,7 +394,6 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
 
     fn status(&self) -> ResourceStatus {
         let state = self.inner.state.lock_sync();
-        #[expect(clippy::option_if_let_else)] // three-way branch is clearer with if-let-else
         if let Some(ref reason) = state.failed {
             ResourceStatus::Failed(reason.clone())
         } else if state.committed {

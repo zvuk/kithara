@@ -130,6 +130,7 @@ futures = "0.3.31"
 
 # cross-platform threading (native + wasm32)
 wasm_safe_thread = "0.1.1"
+parking_lot = "0.12"
 
 # channels/buffers
 bytes = "1.11.1"

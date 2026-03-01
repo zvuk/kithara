@@ -542,8 +542,9 @@ impl<N: Net> FetchManager<N> {
         {
             debug!(variant, url = %meta.url, "init resource evicted, resetting cache");
             let new_cell = Arc::new(OnceCell::new());
-            let mut guard = self.init_segments.lock_sync_write();
-            guard.insert(variant, Arc::clone(&new_cell));
+            self.init_segments
+                .lock_sync_write()
+                .insert(variant, Arc::clone(&new_cell));
             cell = new_cell;
         }
 

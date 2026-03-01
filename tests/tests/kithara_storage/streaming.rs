@@ -71,7 +71,7 @@ fn assert_wait_times_out<T>(handle: &kithara_platform::thread::JoinHandle<T>, ti
         if handle.is_finished() {
             panic!("wait_range completed before expected timeout");
         }
-        kithara_platform::thread::backoff(Duration::from_millis(1));
+        kithara_platform::thread::sleep(Duration::from_millis(1));
     }
 }
 
@@ -82,7 +82,7 @@ fn assert_wait_finishes<T>(handle: &kithara_platform::thread::JoinHandle<T>, tim
         if handle.is_finished() {
             return;
         }
-        kithara_platform::thread::backoff(Duration::from_millis(1));
+        kithara_platform::thread::sleep(Duration::from_millis(1));
     }
     panic!("wait_range did not wake within expected timeout");
 }
@@ -291,7 +291,7 @@ fn streaming_resource_concurrent_wait_and_write() {
         let resource_clone = resource.clone();
         let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
 
-        kithara_platform::thread::backoff(Duration::from_millis(10));
+        kithara_platform::thread::sleep(Duration::from_millis(10));
 
         resource.write_at(0, b"0123456789").unwrap();
 
@@ -505,7 +505,7 @@ fn streaming_resource_cancel_during_wait() {
         let resource_clone = resource.clone();
         let wait_handle = kithara_platform::thread::spawn(move || resource_clone.wait_range(0..10));
 
-        kithara_platform::thread::backoff(Duration::from_millis(50));
+        kithara_platform::thread::sleep(Duration::from_millis(50));
         cancel_token.cancel();
 
         let wait_result = wait_handle.join().unwrap();
@@ -560,7 +560,7 @@ fn streaming_resource_concurrent_operations() {
 
         let resource_clone = resource.clone();
         let handle2 = kithara_platform::thread::spawn(move || {
-            kithara_platform::thread::backoff(Duration::from_millis(10));
+            kithara_platform::thread::sleep(Duration::from_millis(10));
             resource_clone.write_at(5, b"World")
         });
 

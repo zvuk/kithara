@@ -1159,7 +1159,7 @@ fn stress_rapid_seeks_during_abr_switch_must_not_kill_audio() {
         if Instant::now() > deadline {
             panic!("Test timed out after 30s — deadlock in seek/format-change interaction");
         }
-        thread::backoff(Duration::from_millis(50));
+        thread::sleep(Duration::from_millis(50));
     }
 }
 

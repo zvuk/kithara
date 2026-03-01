@@ -384,6 +384,7 @@ impl Source for HlsSource {
                 segments = self.shared.segments.lock_sync();
 
                 hang_tick!();
+                kithara_platform::thread::yield_now();
                 let deadline = Instant::now() + Duration::from_millis(WAIT_RANGE_SLEEP_MS);
                 let (_segments, _wait_result) =
                     self.shared.condvar.wait_sync_timeout(segments, deadline);

@@ -1,11 +1,34 @@
 //! Thread-like primitives for sync code.
 //!
-//! Delegates to [`wasm_safe_thread`] for cross-platform threading.
-//! On native: uses OS threads. On WASM: uses Web Workers.
+//! Delegates to platform-optimal backends:
+//! * **Native** — `std::thread` (OS threads).
+//! * **WASM** — `wasm_safe_thread` (Web Workers).
 
 pub use std::time::Duration;
 
-pub use wasm_safe_thread::{JoinHandle, yield_now};
+// ── yield_now ───────────────────────────────────────────────────────
+
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+pub fn yield_now() {
+    std::thread::yield_now();
+}
+
+#[cfg(target_arch = "wasm32")]
+#[inline]
+pub fn yield_now() {
+    wasm_safe_thread::yield_now();
+}
+
+// ── JoinHandle ──────────────────────────────────────────────────────
+
+#[cfg(not(target_arch = "wasm32"))]
+pub type JoinHandle<T> = std::thread::JoinHandle<T>;
+
+#[cfg(target_arch = "wasm32")]
+pub type JoinHandle<T> = wasm_safe_thread::JoinHandle<T>;
+
+// ── spawn ───────────────────────────────────────────────────────────
 
 /// Spawn a new thread.
 ///
@@ -17,7 +40,7 @@ where
     F: FnOnce() -> T + Send + 'static,
     T: Send + 'static,
 {
-    wasm_safe_thread::spawn(f)
+    std::thread::spawn(f)
 }
 
 /// The wasm-bindgen JS shim name (crate name with hyphens → underscores).
@@ -37,10 +60,59 @@ where
         .expect("failed to spawn thread")
 }
 
-/// Blocking backoff for synchronous retry loops.
-///
-/// Uses [`wasm_safe_thread::sleep`] which adapts to the platform:
-/// native uses `thread::sleep`, WASM uses an appropriate mechanism.
-pub fn backoff(duration: Duration) {
+// ── sleep ────────────────────────────────────────────────────────────
+
+/// Block the current thread for at least `duration`.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+pub fn sleep(duration: Duration) {
+    std::thread::sleep(duration);
+}
+
+#[cfg(target_arch = "wasm32")]
+#[inline]
+pub fn sleep(duration: Duration) {
     wasm_safe_thread::sleep(duration);
+}
+
+// ── current_thread_id ───────────────────────────────────────────────
+
+/// Hash of the current thread's ID, usable for shard indexing.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+#[must_use]
+pub fn current_thread_id() -> u64 {
+    use std::hash::{Hash, Hasher};
+    let id = std::thread::current().id();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    hasher.finish()
+}
+
+#[cfg(target_arch = "wasm32")]
+#[inline]
+#[must_use]
+pub fn current_thread_id() -> u64 {
+    use std::hash::{Hash, Hasher};
+    let id = wasm_safe_thread::current().id();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    id.hash(&mut hasher);
+    hasher.finish()
+}
+
+// ── available_parallelism ───────────────────────────────────────────
+
+/// Returns the number of hardware threads available.
+#[cfg(not(target_arch = "wasm32"))]
+#[inline]
+#[must_use]
+pub fn available_parallelism() -> Option<std::num::NonZeroUsize> {
+    std::thread::available_parallelism().ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+#[inline]
+#[must_use]
+pub fn available_parallelism() -> Option<std::num::NonZeroUsize> {
+    wasm_safe_thread::available_parallelism()
 }

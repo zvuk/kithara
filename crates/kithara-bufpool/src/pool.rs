@@ -108,18 +108,11 @@ where
         reason = "method on Pool for API consistency; may use self in future for per-pool salt"
     )]
     pub(crate) fn shard_index(&self) -> usize {
-        let thread_id = std::thread::current().id();
-        let hash = {
-            use std::hash::{Hash, Hasher};
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
-            thread_id.hash(&mut hasher);
-            hasher.finish()
-        };
         #[expect(
             clippy::cast_possible_truncation,
             reason = "modulo SHARDS guarantees result fits in usize"
         )]
-        let idx = (hash as usize) % SHARDS;
+        let idx = (kithara_platform::thread::current_thread_id() as usize) % SHARDS;
         idx
     }
 

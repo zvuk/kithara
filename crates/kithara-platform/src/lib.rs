@@ -2,8 +2,13 @@
 //!
 //! # Synchronization
 //!
-//! Re-exports [`wasm_safe_thread`] primitives (`Mutex`, `Condvar`, `RwLock`)
-//! that adapt their locking strategy to the platform.
+//! Re-exports [`sync`] primitives (`Mutex`, `Condvar`, `RwLock`, `mpsc`)
+//! backed by [`parking_lot`] / `std` on native and [`wasm_safe_thread`] on WASM.
+//!
+//! # Async tasks
+//!
+//! [`task`] module mirrors [`tokio::task`] layout: [`task::spawn`],
+//! [`task::spawn_blocking`], [`task::yield_now`].
 //!
 //! # Conditional trait bounds
 //!
@@ -17,10 +22,10 @@
 //! [`time::sleep`] delegates to `tokio::time::sleep` on native and to
 //! `setTimeout` on wasm32.
 
-mod blocking;
 mod maybe_send;
 mod pool;
-mod task;
+pub mod sync;
+pub mod task;
 pub mod thread;
 mod thread_pool_init;
 pub mod time;
@@ -28,21 +33,18 @@ pub mod time;
 #[cfg(feature = "internal")]
 pub mod internal;
 
-pub use blocking::{BlockingError, BlockingHandle, spawn_blocking};
 pub use kithara_hang_detector::{HangDetector, hang_watchdog};
 pub use maybe_send::{MaybeSend, MaybeSync, WasmSend};
 pub use pool::ThreadPool;
-pub use task::spawn_task;
-pub use thread::{Duration, JoinHandle, backoff, spawn, yield_now};
-pub use thread_pool_init::ensure_thread_pool;
-pub use wasm_safe_thread::{
-    Mutex,
-    condvar::Condvar,
-    guard::{Guard as MutexGuard, ReadGuard as RwLockReadGuard, WriteGuard as RwLockWriteGuard},
-    mpsc,
-    rwlock::RwLock,
-    yield_to_event_loop_async,
+pub use sync::{
+    Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    WaitTimeoutResult,
 };
+// Backward-compatible re-exports for the rename.
+pub use task::spawn as spawn_task;
+pub use task::{BlockingError, BlockingHandle, spawn_blocking, yield_now};
+pub use thread::{Duration, JoinHandle, sleep, spawn};
+pub use thread_pool_init::ensure_thread_pool;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[must_use]

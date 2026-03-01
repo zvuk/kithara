@@ -273,6 +273,7 @@ impl DriverIo for MmapDriver {
             }
         }
 
+        drop(mmap_guard);
         Ok(())
     }
 
@@ -290,6 +291,7 @@ impl DriverIo for MmapDriver {
             }
         }
 
+        drop(mmap_guard);
         Ok(())
     }
 
@@ -409,7 +411,7 @@ mod tests {
         let res2 = res.clone();
 
         let handle = thread::spawn(move || {
-            thread::backoff(Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(50));
             res2.write_at(0, b"delayed data").unwrap();
         });
 
@@ -437,7 +439,7 @@ mod tests {
         let res2 = res.clone();
 
         let handle = thread::spawn(move || {
-            thread::backoff(Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(50));
             res2.fail("test error".to_string());
         });
 
@@ -465,7 +467,7 @@ mod tests {
         let handle = thread::spawn({
             let cancel = cancel.clone();
             move || {
-                thread::backoff(Duration::from_millis(50));
+                thread::sleep(Duration::from_millis(50));
                 cancel.cancel();
             }
         });

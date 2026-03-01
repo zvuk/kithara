@@ -125,11 +125,11 @@ async fn stress_random_seek_read_hls(
         let n = loop {
             match stream.read(&mut probe) {
                 Ok(0) if Instant::now() < probe_deadline => {
-                    kithara_platform::thread::backoff(Duration::from_millis(10));
+                    kithara_platform::thread::sleep(Duration::from_millis(10));
                 }
                 Ok(n) => break n,
                 Err(e) if e.kind() == ErrorKind::Interrupted && Instant::now() < probe_deadline => {
-                    kithara_platform::thread::backoff(Duration::from_millis(10));
+                    kithara_platform::thread::sleep(Duration::from_millis(10));
                 }
                 Err(e) => panic!("initial probe read failed: {e}"),
             }

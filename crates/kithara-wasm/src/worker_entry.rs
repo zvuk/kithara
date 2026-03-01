@@ -32,7 +32,7 @@ const CROSSFADE_SECONDS: f32 = 5.0;
 /// Sets up an async event loop via [`kithara_platform::spawn_task`] and
 /// returns immediately — the Worker stays alive until the async task finishes.
 pub(crate) fn worker_main(
-    cmd_rx: kithara_platform::mpsc::Receiver<WorkerCmd>,
+    cmd_rx: kithara_platform::sync::mpsc::Receiver<WorkerCmd>,
     event_log: Arc<Mutex<Vec<String>>>,
 ) {
     clog!("[WORKER] engine worker started");

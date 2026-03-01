@@ -126,6 +126,7 @@ impl Backend {
                 }
 
                 hang_tick!();
+                kithara_platform::thread::yield_now();
                 let Ok(outcome) = Self::plan_next(&mut dl, &cancel).await else {
                     return;
                 };
@@ -152,7 +153,7 @@ impl Backend {
                 // 4. Periodic yield (only when not throttled — backpressure loop
                 //    already yields to runtime via wait_ready).
                 if !dl.should_throttle() && steps_since_yield >= yield_interval {
-                    tokio::task::yield_now().await;
+                    kithara_platform::yield_now().await;
                     steps_since_yield = 0;
                 }
             }
@@ -219,7 +220,7 @@ impl Backend {
             () = cancel.cancelled() => LoopControl::Exit,
             () = dl.wait_for_work() => {
                 // Yield to let other tasks run (e.g. TUI updates).
-                tokio::task::yield_now().await;
+                kithara_platform::yield_now().await;
                 LoopControl::Proceed
             }
         }
@@ -231,7 +232,7 @@ impl Backend {
         plans: Vec<D::Plan>,
     ) -> LoopControl {
         if plans.is_empty() {
-            tokio::task::yield_now().await;
+            kithara_platform::yield_now().await;
             return LoopControl::Restart;
         }
 

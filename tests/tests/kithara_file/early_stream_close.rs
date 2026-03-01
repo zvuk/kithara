@@ -271,7 +271,7 @@ async fn partial_cache_resume_works() {
         tracing::info!("Phase 1: read {} bytes", n);
 
         // Give sequential download time to finish (server sends 512KB quickly)
-        kithara_platform::thread::backoff(Duration::from_millis(500));
+        kithara_platform::thread::sleep(Duration::from_millis(500));
         // stream1 drops here
     });
 

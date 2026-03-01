@@ -17,14 +17,15 @@ disable-hang-detector = ["kithara-hang-detector/disable-hang-detector"]
 
 [dependencies]
 futures = { workspace = true }
-wasm_safe_thread = { workspace = true }
 web-time = { workspace = true }
 kithara-hang-detector = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+parking_lot = { workspace = true }
 tokio = { workspace = true, features = ["time", "sync", "rt"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm_safe_thread = { workspace = true }
 js-sys = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }

@@ -113,7 +113,7 @@ async fn stress_seek_during_abr_switch_real_decoder(temp_dir: TestTempDir) {
             }
 
             // Small pause between seeks (simulate real user interaction)
-            kithara_platform::thread::backoff(Duration::from_millis(50));
+            kithara_platform::thread::sleep(Duration::from_millis(50));
         }
 
         info!(
@@ -192,7 +192,7 @@ async fn seek_sequence_from_log_real_stream(temp_dir: TestTempDir) {
                 let n = audio.read(&mut buf);
                 samples_after_seek += n;
                 if n == 0 {
-                    kithara_platform::thread::backoff(Duration::from_millis(15));
+                    kithara_platform::thread::sleep(Duration::from_millis(15));
                 }
             }
 

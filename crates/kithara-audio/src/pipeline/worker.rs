@@ -106,7 +106,7 @@ fn send_with_backpressure<S: AudioWorkerSource>(
                 if source.timeline().is_flushing() {
                     return Ok(false);
                 }
-                kithara_platform::thread::backoff(BACKOFF_BUSY);
+                kithara_platform::thread::sleep(BACKOFF_BUSY);
             }
         }
     }
@@ -141,7 +141,7 @@ fn handle_eof_idle<S: AudioWorkerSource>(
         trace!("audio worker cancelled at EOF");
         return WorkerControl::Stop;
     }
-    kithara_platform::thread::backoff(BACKOFF_EOF);
+    kithara_platform::thread::sleep(BACKOFF_EOF);
     WorkerControl::Continue
 }
 
@@ -220,6 +220,7 @@ pub(super) fn run_audio_loop<S: AudioWorkerSource>(
             }
 
             hang_tick!();
+            kithara_platform::thread::yield_now();
             debug!(chunks_sent, "worker: fetching next chunk");
             let fetch = source.fetch_next();
             let is_eof = fetch.is_eof();

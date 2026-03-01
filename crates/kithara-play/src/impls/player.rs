@@ -137,6 +137,7 @@ impl PlayerImpl {
         let mut items = self.items.lock_sync();
         if index < items.len() {
             items[index] = Some(resource);
+            drop(items);
             debug!(index, "item replaced");
         }
     }

@@ -405,7 +405,7 @@ impl<S> Audio<S> {
             {
                 return RecvOutcome::Closed;
             }
-            kithara_platform::thread::backoff(RECV_BACKOFF);
+            kithara_platform::thread::sleep(RECV_BACKOFF);
         }
     }
 

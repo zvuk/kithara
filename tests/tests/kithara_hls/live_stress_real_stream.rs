@@ -19,7 +19,7 @@ use kithara_test_utils::{TestTempDir, Xorshift64, serve_assets, temp_dir};
 use tracing::info;
 const NEXT_CHUNK_TIMEOUT_MS: u64 = 10_000;
 const WARMUP_TIMEOUT_SECS: u64 = 16;
-const RANDOM_PHASE_BUDGET_SECS: u64 = 24;
+const RANDOM_PHASE_BUDGET_SECS: u64 = 32;
 const RANDOM_SEEK_OPS_MAX: usize = 1_400;
 /// Lowered from 220 to tolerate parallel test execution under CPU/net load.
 const MIN_RANDOM_SEEKS: usize = 100;

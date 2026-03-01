@@ -27,7 +27,7 @@ use futures::channel::oneshot;
 mod inner {
     use std::{collections::VecDeque, io, sync::Arc};
 
-    use wasm_safe_thread::{Mutex, condvar::Condvar};
+    use crate::sync::{Condvar, Mutex};
 
     type Job = Box<dyn FnOnce() + Send + 'static>;
 
@@ -77,8 +77,7 @@ mod inner {
         }
 
         pub(super) fn submit(&self, job: Job) {
-            let mut queue = self.queue.lock_sync();
-            queue.jobs.push_back(job);
+            self.queue.lock_sync().jobs.push_back(job);
             self.condvar.notify_one();
         }
     }
@@ -92,9 +91,7 @@ mod inner {
         pub(super) fn global() -> Self {
             static POOL: std::sync::OnceLock<ThreadPoolInner> = std::sync::OnceLock::new();
             POOL.get_or_init(|| {
-                let n = wasm_safe_thread::available_parallelism()
-                    .map(|n| n.get().min(8))
-                    .unwrap_or(4);
+                let n = crate::thread::available_parallelism().map_or(4, |n| n.get().min(8));
                 Self {
                     shared: PoolShared::new(n),
                 }
@@ -147,7 +144,7 @@ mod inner {
         }
 
         pub(super) fn num_threads(&self) -> usize {
-            wasm_safe_thread::available_parallelism()
+            crate::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(4)
         }

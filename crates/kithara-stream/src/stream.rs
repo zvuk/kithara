@@ -195,7 +195,6 @@ impl<T: StreamType> Read for Stream<T> {
         // wait_range so the downloader can re-fetch.
         kithara_platform::hang_watchdog! {
             thread: "stream.read";
-            timeout: Duration::from_secs(15);
             loop {
                 let pos = self.timeline.byte_position();
                 let range = pos..pos.saturating_add(buf.len() as u64);
@@ -213,6 +212,7 @@ impl<T: StreamType> Read for Stream<T> {
                             // Some sources use Interrupted as a recoverable
                             // "retry wait_range" signal when seek is not active.
                             hang_tick!();
+                            kithara_platform::thread::yield_now();
                             continue;
                         }
                         return Err(std::io::Error::new(
@@ -245,6 +245,7 @@ impl<T: StreamType> Read for Stream<T> {
                     ReadOutcome::Retry => {
                         // Resource evicted — go back to wait_range.
                         hang_tick!();
+                        kithara_platform::thread::yield_now();
                         continue;
                     }
                 }

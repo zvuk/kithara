@@ -67,7 +67,7 @@ impl CachedState {
 
 #[wasm_bindgen]
 pub struct WasmPlayer {
-    cmd_tx: kithara_platform::mpsc::Sender<WorkerCmd>,
+    cmd_tx: kithara_platform::sync::mpsc::Sender<WorkerCmd>,
     current_index: Mutex<Option<usize>>,
     event_log: Arc<Mutex<Vec<String>>>,
     playlist: Vec<String>,
@@ -86,7 +86,7 @@ impl WasmPlayer {
         wasm_support::init_worker_session();
 
         // 2. Create command channel.
-        let (cmd_tx, cmd_rx) = kithara_platform::mpsc::channel();
+        let (cmd_tx, cmd_rx) = kithara_platform::sync::mpsc::channel();
         let event_log = Arc::new(Mutex::new(Vec::new()));
 
         // 3. Spawn the engine Worker.

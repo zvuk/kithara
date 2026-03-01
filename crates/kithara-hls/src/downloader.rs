@@ -13,10 +13,9 @@ use kithara_abr::{
 };
 use kithara_assets::ResourceKey;
 use kithara_events::{EventBus, HlsEvent, SeekEpoch};
-use kithara_platform::time::Instant;
+use kithara_platform::{time::Instant, yield_now};
 use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome};
-use tokio::task::yield_now;
 use tracing::debug;
 use url::Url;
 

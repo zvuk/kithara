@@ -139,6 +139,7 @@ where
 
         let res = self.inner.open_resource_with_ctx(key, ctx)?;
         cache.push(cache_key, CacheEntry::Resource(res.clone()));
+        drop(cache);
 
         Ok(res)
     }
