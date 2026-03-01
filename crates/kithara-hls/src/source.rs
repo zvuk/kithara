@@ -132,6 +132,13 @@ const WAIT_RANGE_MAX_METADATA_MISS_SPINS: usize = 20;
 const WAIT_RANGE_SLEEP_MS: u64 = 50;
 
 impl HlsSource {
+    /// Single source of truth for current variant resolution.
+    /// Prefers `variant_fence` (set by `read_at`), falls back to ABR hint.
+    fn resolve_current_variant(&self) -> usize {
+        self.variant_fence
+            .unwrap_or_else(|| self.shared.abr_variant_index.load(Ordering::Acquire))
+    }
+
     fn current_loaded_segment(&self) -> Option<LoadedSegment> {
         let reader_offset = self.shared.timeline.byte_position();
         let segments = self.shared.segments.lock_sync();

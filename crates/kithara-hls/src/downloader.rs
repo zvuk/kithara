@@ -216,12 +216,12 @@ impl HlsDownloader {
         // Treat the target as committed so non-zero seek segments do not
         // go through synthetic variant-switch init insertion.
         self.last_committed_variant = Some(variant);
-        // Preserve total_bytes across seeks to avoid a race where the decoder
-        // thread recreates the decoder while total_bytes is transiently None.
-        // With None, the factory sets byte_len=0 → Symphonia sees byte_len()=None
-        // → computes a corrupt seek delta (reader_seek_overflow scenario).
+        // Update total_bytes for the target variant. If metadata isn't available
+        // yet, preserve existing value to avoid transient None in wait_range.
         let variant_total = self.playlist_state.total_variant_size(variant);
-        self.shared.timeline.set_total_bytes(variant_total);
+        self.shared
+            .timeline
+            .set_total_bytes(variant_total.or_else(|| self.shared.timeline.total_bytes()));
         self.shared
             .timeline
             .set_download_position(download_position);
@@ -459,33 +459,85 @@ impl HlsDownloader {
         (count, cumulative_offset)
     }
 
+    /// Check if this (variant, `segment_index`) is already committed at the correct offset.
+    ///
+    /// We check `byte_offset` because after a seek + variant switch, the same
+    /// (variant, `segment_index`) may be loaded at a different cumulative offset —
+    /// skipping that commit would create a hole visible to the reader.
+    fn is_duplicate_commit(&self, dl: &HlsFetch) -> bool {
+        let existing_offset = self
+            .shared
+            .segments
+            .lock_sync()
+            .find_loaded_segment(dl.variant, dl.segment_index)
+            .map(|s| s.byte_offset);
+
+        if let Some(byte_offset) = existing_offset {
+            let expected_offset = self
+                .playlist_state
+                .segment_byte_offset(dl.variant, dl.segment_index)
+                .unwrap_or(byte_offset);
+            if byte_offset == expected_offset {
+                debug!(
+                    variant = dl.variant,
+                    segment_index = dl.segment_index,
+                    byte_offset,
+                    "commit_segment: skipping duplicate at correct offset"
+                );
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Choose `byte_offset` for segment placement.
+    ///
+    /// After a midstream switch (or if one occurred earlier), use the cumulative
+    /// download position. Otherwise use metadata offset for correct positioning
+    /// of both sequential and on-demand (seek) loads.
+    fn resolve_byte_offset(&self, dl: &HlsFetch, is_midstream_switch: bool) -> u64 {
+        let had_midstream_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
+        let current_download = self.shared.timeline.download_position();
+        if is_midstream_switch || had_midstream_switch {
+            current_download
+        } else {
+            self.playlist_state
+                .segment_byte_offset(dl.variant, dl.segment_index)
+                .unwrap_or(current_download)
+        }
+    }
+
+    /// Reconcile metadata sizes and adjust timeline `total_bytes` if needed.
+    ///
+    /// Updates this segment's size in playlist metadata and recalculates
+    /// subsequent `byte_offsets` using the actual (possibly decrypted) size.
+    /// For non-DRM streams this is a no-op (actual == predicted). For DRM
+    /// streams, it corrects the drift from PKCS7 padding removal.
+    fn reconcile_total_bytes(&self, variant: usize, segment_index: usize, actual_size: u64) {
+        let pre_total = self.playlist_state.total_variant_size(variant);
+        self.playlist_state
+            .reconcile_segment_size(variant, segment_index, actual_size);
+        let post_total = self.playlist_state.total_variant_size(variant);
+
+        if let (Some(pre), Some(post)) = (pre_total, post_total)
+            && pre != post
+        {
+            let current = self.shared.timeline.total_bytes().unwrap_or(0);
+            let new_expected = if post > pre {
+                current.saturating_add(post - pre)
+            } else {
+                current.saturating_sub(pre - post)
+            };
+            self.shared.timeline.set_total_bytes(Some(new_expected));
+        }
+    }
+
     /// Commit a downloaded segment to the segment index.
     ///
     /// `is_variant_switch` / `is_midstream_switch` control init segment inclusion.
     fn commit_segment(&mut self, dl: HlsFetch, is_variant_switch: bool, is_midstream_switch: bool) {
-        // Skip duplicate commit: if this (variant, segment_index) is already
-        // in the download index at the SAME byte_offset, a demand or earlier
-        // batch already committed it. We check byte_offset because after a seek
-        // + variant switch, the same (variant, segment_index) may be loaded at
-        // a different cumulative offset — skipping that commit would create a
-        // hole visible to the reader.
-        {
-            let segments = self.shared.segments.lock_sync();
-            if let Some(existing) = segments.find_loaded_segment(dl.variant, dl.segment_index) {
-                let expected_offset = self
-                    .playlist_state
-                    .segment_byte_offset(dl.variant, dl.segment_index)
-                    .unwrap_or(existing.byte_offset);
-                if existing.byte_offset == expected_offset {
-                    debug!(
-                        variant = dl.variant,
-                        segment_index = dl.segment_index,
-                        byte_offset = existing.byte_offset,
-                        "commit_segment: skipping duplicate at correct offset"
-                    );
-                    return;
-                }
-            }
+        if self.is_duplicate_commit(&dl) {
+            return;
         }
 
         self.record_throughput(dl.media.len, dl.duration, dl.media.duration);
@@ -509,20 +561,7 @@ impl HlsDownloader {
             0
         };
 
-        let had_midstream_switch = self.shared.had_midstream_switch.load(Ordering::Acquire);
-        let current_download = self.shared.timeline.download_position();
-        let byte_offset = if is_midstream_switch || had_midstream_switch {
-            // Variant switch: always use cumulative offset.
-            current_download
-        } else {
-            // Use metadata offset for correct positioning of both sequential
-            // and on-demand (seek) loads. Metadata is kept in sync with actual
-            // sizes via reconcile_metadata() after each commit.
-            self.playlist_state
-                .segment_byte_offset(dl.variant, dl.segment_index)
-                .unwrap_or(current_download)
-        };
-
+        let byte_offset = self.resolve_byte_offset(&dl, is_midstream_switch);
         let media_len = dl.media.len;
         let actual_size = actual_init_len + media_len;
 
@@ -538,34 +577,11 @@ impl HlsDownloader {
         };
 
         let end = byte_offset + actual_size;
+        let current_download = self.shared.timeline.download_position();
         let next_download = current_download.max(end);
         self.shared.timeline.set_download_position(next_download);
 
-        // Reconcile metadata: update this segment's size and recalculate subsequent
-        // byte_offsets using the actual (possibly decrypted) size. For non-DRM streams
-        // this is a no-op (actual == predicted). For DRM streams, it corrects the drift
-        // from PKCS7 padding removal so future lookups use accurate offsets.
-        let pre_total = self.playlist_state.total_variant_size(dl.variant);
-        self.playlist_state
-            .reconcile_segment_size(dl.variant, dl.segment_index, actual_size);
-        let post_total = self.playlist_state.total_variant_size(dl.variant);
-
-        // Update timeline total_bytes if reconciliation changed the variant total.
-        // This handles cases where actual sizes differ from HEAD predictions:
-        // - Larger: HTTP auto-decompression returns more bytes than Content-Length
-        // - Smaller: DRM decryption removes PKCS7 padding
-        // Uses delta-based adjustment so midstream switch offsets are preserved.
-        if let (Some(pre), Some(post)) = (pre_total, post_total)
-            && pre != post
-        {
-            let current = self.shared.timeline.total_bytes().unwrap_or(0);
-            let new_expected = if post > pre {
-                current.saturating_add(post - pre)
-            } else {
-                current.saturating_sub(pre - post)
-            };
-            self.shared.timeline.set_total_bytes(Some(new_expected));
-        }
+        self.reconcile_total_bytes(dl.variant, dl.segment_index, actual_size);
 
         self.bus.publish(HlsEvent::DownloadProgress {
             offset: next_download,
@@ -2078,6 +2094,45 @@ mod tests {
         );
         assert_eq!(downloader.last_committed_variant, Some(1));
         assert_eq!(downloader.gap_scan_start_segment, 2);
+    }
+
+    /// Regression: `reset_for_seek_epoch` must not leave `total_bytes` as `None`.
+    /// Source's `wait_range` uses `total_bytes` for EOF detection. A transient
+    /// `None` between reset and variant total refresh causes premature EOF or
+    /// missed EOF detection.
+    #[kithara::test(tokio)]
+    async fn reset_for_seek_epoch_preserves_total_bytes() {
+        let cancel = CancellationToken::new();
+        let playlist_state = Arc::new(PlaylistState::new(vec![make_variant_state(
+            0,
+            Some(AudioCodec::AacLc),
+        )]));
+        let variants = parsed_variants(1);
+        let fetch = test_fetch_manager(cancel.clone());
+        let config = HlsConfig {
+            cancel: Some(cancel),
+            ..HlsConfig::default()
+        };
+
+        let (mut downloader, _source) = build_pair(
+            fetch,
+            &variants,
+            &config,
+            Arc::clone(&playlist_state),
+            EventBus::new(16),
+        );
+
+        // Establish total_bytes before seek.
+        downloader.shared.timeline.set_total_bytes(Some(2400));
+
+        // Seek reset must not clear total_bytes.
+        downloader.reset_for_seek_epoch(1, 0, 0);
+
+        assert!(
+            downloader.shared.timeline.total_bytes().is_some(),
+            "total_bytes must not be None after seek reset — \
+             source relies on it for EOF detection in wait_range"
+        );
     }
 
     #[kithara::test]
