@@ -375,7 +375,8 @@ impl Source for HlsSource {
 
                 // A midstream variant switch drains all segment_requests.
                 // Clear `on_demand_pending` so we can re-push for the new variant.
-                if self.shared.had_midstream_switch.load(Ordering::Acquire) {
+                // Use swap to consume the flag — prevents duplicate re-pushes.
+                if self.shared.had_midstream_switch.swap(false, Ordering::AcqRel) {
                     state.clear_on_demand_requested();
                 }
 

@@ -178,7 +178,9 @@ impl HlsSource {
         metadata_miss_count: &mut usize,
         max_metadata_miss_spins: usize,
     ) -> StreamResult<bool, HlsError> {
-        let current_variant = self.shared.abr_variant_index.load(Ordering::Acquire);
+        let current_variant = self
+            .variant_fence
+            .unwrap_or_else(|| self.shared.abr_variant_index.load(Ordering::Acquire));
         if let Some(segment_index) = self
             .playlist_state
             .find_segment_at_offset(current_variant, range_start)

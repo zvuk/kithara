@@ -217,7 +217,12 @@ impl HlsDownloader {
         // Treat the target as committed so non-zero seek segments do not
         // go through synthetic variant-switch init insertion.
         self.last_committed_variant = Some(variant);
-        self.shared.timeline.set_total_bytes(None);
+        // Preserve total_bytes across seeks to avoid a race where the decoder
+        // thread recreates the decoder while total_bytes is transiently None.
+        // With None, the factory sets byte_len=0 → Symphonia sees byte_len()=None
+        // → computes a corrupt seek delta (reader_seek_overflow scenario).
+        let variant_total = self.playlist_state.total_variant_size(variant);
+        self.shared.timeline.set_total_bytes(variant_total);
         self.shared
             .timeline
             .set_download_position(download_position);
