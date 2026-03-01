@@ -11,8 +11,8 @@ use kithara_hls::internal::{
     HlsSource, LoadedSegment, PlaylistState, SegmentRequest, SegmentState, SharedSegments,
     VariantId, VariantSizeMap, VariantState, VariantStream, build_source, commit_dummy_resource,
     make_test_fetch_manager, make_test_source, make_test_source_with_fetch,
-    set_source_variant_fence, source_can_cross_variant, source_range_ready_from_segments,
-    source_variant_index_handle, subscribe_source_events,
+    set_source_variant_fence, source_can_cross_variant, source_variant_index_handle,
+    subscribe_source_events,
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
@@ -885,6 +885,22 @@ async fn test_wait_range_uses_active_variant_for_seek_request() {
 }
 
 #[kithara::test(tokio, browser)]
+async fn test_wait_range_uses_variant_fence_when_abr_hint_changes() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+    // Playback is fenced to variant 0, but ABR hint moved to variant 1.
+    set_source_variant_fence(&mut source, Some(0));
+    shared.abr_variant_index.store(1, Ordering::Release);
+
+    let request = wait_range_and_take_request(Arc::clone(&shared), source, 150..170).await;
+    assert_eq!(request.variant, 0);
+    assert_eq!(request.segment_index, 1);
+}
+
+#[kithara::test(tokio, browser)]
 async fn test_wait_range_requeues_request_after_seek_epoch_change() {
     let cancel = CancellationToken::new();
     let ps = playlist_state_with_size_maps();
@@ -1050,7 +1066,6 @@ async fn test_wait_range_stalled_on_demand_request_returns_interrupted(_tracing_
     shared.abr_variant_index.store(0, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let mut events = subscribe_source_events(&source);
     let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
 
     let request_deadline = Instant::now() + Duration::from_secs(2);
@@ -1157,6 +1172,50 @@ async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
         assert!(
             shared.segment_requests.pop().is_none(),
             "wait_range should not duplicate on-demand requests while stalled"
+        );
+        shared.condvar.notify_all();
+        sleep(Duration::from_millis(10)).await;
+    }
+
+    cancel.cancel();
+    shared.condvar.notify_all();
+    let result = timeout(Duration::from_millis(500), handle)
+        .await
+        .expect("wait_range should exit after cancellation")
+        .expect("wait_range task should not panic");
+    assert!(matches!(result, Ok(WaitOutcome::Interrupted) | Err(_)));
+}
+
+#[kithara::test(tokio, browser)]
+async fn test_wait_range_midstream_switch_repush_is_not_duplicated() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps();
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    shared.abr_variant_index.store(0, Ordering::Release);
+    shared.had_midstream_switch.store(true, Ordering::Release);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+    let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
+
+    let request_deadline = Instant::now() + Duration::from_secs(2);
+    let first_request = loop {
+        if let Some(request) = shared.segment_requests.pop() {
+            break request;
+        }
+        sleep(Duration::from_millis(10)).await;
+        assert!(
+            Instant::now() <= request_deadline,
+            "expected an on-demand request before timeout"
+        );
+    };
+    assert_eq!(first_request.variant, 0);
+    assert_eq!(first_request.segment_index, 1);
+
+    let dedupe_deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() <= dedupe_deadline {
+        assert!(
+            shared.segment_requests.pop().is_none(),
+            "midstream-switch repush must happen once per switch generation"
         );
         shared.condvar.notify_all();
         sleep(Duration::from_millis(10)).await;
