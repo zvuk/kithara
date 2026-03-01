@@ -31,6 +31,7 @@ pub(crate) struct FileIo {
 /// Plan for downloading a file range.
 pub(crate) struct FilePlan {
     pub(crate) range: Range<u64>,
+    pub(crate) seek_epoch: u64,
 }
 
 /// Result of a file download operation.
@@ -38,7 +39,7 @@ pub(crate) enum FileFetch {
     /// A chunk was written during sequential streaming.
     Chunk { offset: u64, len: u64 },
     /// A range request completed.
-    RangeDone,
+    RangeDone { seek_epoch: u64 },
     /// Sequential stream ended.
     StreamEnded { total_bytes: u64 },
 }
@@ -64,6 +65,7 @@ impl DownloaderIo for FileIo {
 
     async fn fetch(&self, plan: Self::Plan) -> Result<Self::Fetch, Self::Error> {
         let range = plan.range;
+        let seek_epoch = plan.seek_epoch;
         let spec = RangeSpec::new(range.start, Some(range.end.saturating_sub(1)));
 
         match self
@@ -86,7 +88,7 @@ impl DownloaderIo for FileIo {
                     }
                 }
                 tracing::debug!(start = range.start, end = range.end, "range fetched");
-                Ok(FileFetch::RangeDone)
+                Ok(FileFetch::RangeDone { seek_epoch })
             }
             Err(e) => {
                 tracing::warn!(?e, "failed to start range request");
@@ -238,6 +240,85 @@ impl FileDownloader {
             msg: "writer initialization failed".to_string(),
         })
     }
+
+    fn fail_commit(&self, context: &'static str, error: &impl fmt::Display) {
+        tracing::error!(%error, context, "failed to commit resource");
+        let message = format!("commit failed: {error}");
+        self.res.fail(message.clone());
+        self.bus
+            .publish(FileEvent::DownloadError { error: message });
+    }
+
+    fn commit_complete(&mut self, total_bytes: u64) {
+        if let Err(e) = self.res.commit(Some(total_bytes)) {
+            self.fail_commit("stream ended", &e);
+            return;
+        }
+        self.bus
+            .publish(FileEvent::DownloadComplete { total_bytes });
+        self.phase = FilePhase::Complete;
+    }
+
+    fn commit_if_fully_downloaded(&mut self) {
+        let total = self.total.unwrap_or(0);
+        if total == 0 || self.res.next_gap(0, total).is_some() {
+            return;
+        }
+
+        if let Err(e) = self.res.commit(self.total) {
+            self.fail_commit("range done", &e);
+        } else if let Some(total_bytes) = self.total {
+            self.bus
+                .publish(FileEvent::DownloadComplete { total_bytes });
+        }
+        self.phase = FilePhase::Complete;
+    }
+
+    fn commit_chunk(&self, offset: u64, len: u64) {
+        let download_offset = offset + len;
+        // write_at already updates Resource.available — no coverage mark needed.
+        self.progress.set_download_pos(download_offset);
+        self.bus.publish(FileEvent::DownloadProgress {
+            offset: download_offset,
+            total: self.total,
+        });
+    }
+
+    fn commit_range_done(&mut self, seek_epoch: u64) {
+        let current_seek_epoch = self.progress.timeline().seek_epoch();
+        if seek_epoch < current_seek_epoch {
+            tracing::debug!(
+                seek_epoch,
+                current_seek_epoch,
+                "dropping stale range completion"
+            );
+            return;
+        }
+        self.commit_if_fully_downloaded();
+    }
+
+    fn commit_stream_ended(&mut self, total_bytes: u64) {
+        if self.total.is_none() {
+            self.total = Some(total_bytes);
+        }
+
+        let is_complete = self.total.is_none_or(|expected| total_bytes >= expected);
+        if is_complete {
+            self.commit_complete(total_bytes);
+            return;
+        }
+
+        tracing::warn!(
+            total_bytes,
+            expected = ?self.total,
+            "stream ended early — switching to gap-filling"
+        );
+        self.bus.publish(FileEvent::DownloadProgress {
+            offset: total_bytes,
+            total: self.total,
+        });
+        self.phase = FilePhase::GapFilling;
+    }
 }
 
 impl Downloader for FileDownloader {
@@ -250,8 +331,20 @@ impl Downloader for FileDownloader {
         &self.io
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn poll_demand(&mut self) -> Option<FilePlan> {
-        let range = self.shared.pop_range_request()?;
+        let request = self.shared.pop_range_request()?;
+        let current_seek_epoch = self.progress.timeline().seek_epoch();
+        if request.seek_epoch < current_seek_epoch {
+            tracing::debug!(
+                request_seek_epoch = request.seek_epoch,
+                current_seek_epoch,
+                start = request.range.start,
+                end = request.range.end,
+                "dropping stale on-demand request"
+            );
+            return None;
+        }
 
         // Cancel sequential download when demand arrives — bandwidth is better
         // spent on the data the reader actually needs (gap-filling).
@@ -263,13 +356,18 @@ impl Downloader for FileDownloader {
         }
 
         tracing::debug!(
-            start = range.start,
-            end = range.end,
+            start = request.range.start,
+            end = request.range.end,
+            seek_epoch = request.seek_epoch,
             "processing on-demand range request"
         );
-        Some(FilePlan { range })
+        Some(FilePlan {
+            range: request.range,
+            seek_epoch: request.seek_epoch,
+        })
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn plan(&mut self) -> PlanOutcome<FilePlan> {
         match self.phase {
             FilePhase::Sequential => PlanOutcome::Step,
@@ -286,8 +384,10 @@ impl Downloader for FileDownloader {
                         break;
                     };
                     let clamped_end = (gap.start + gap_chunk_size).min(gap.end);
+                    let seek_epoch = self.progress.timeline().seek_epoch();
                     plans.push(FilePlan {
                         range: gap.start..clamped_end,
+                        seek_epoch,
                     });
                     gap_cursor = clamped_end;
                 }
@@ -324,6 +424,7 @@ impl Downloader for FileDownloader {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     async fn step(&mut self) -> Result<StepResult<FileFetch>, FileDownloadError> {
         // If sequential ended, wait for on-demand or transition.
         if matches!(self.phase, FilePhase::GapFilling | FilePhase::Complete) {
@@ -367,68 +468,12 @@ impl Downloader for FileDownloader {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn commit(&mut self, fetch: FileFetch) {
         match fetch {
-            FileFetch::Chunk { offset, len } => {
-                let download_offset = offset + len;
-                // write_at already updates Resource.available — no coverage mark needed.
-                self.progress.set_download_pos(download_offset);
-                self.bus.publish(FileEvent::DownloadProgress {
-                    offset: download_offset,
-                    total: self.total,
-                });
-            }
-            FileFetch::RangeDone => {
-                // Check if gap-filling completed everything.
-                let total = self.total.unwrap_or(0);
-                if total > 0 && self.res.next_gap(0, total).is_none() {
-                    if let Err(e) = self.res.commit(self.total) {
-                        tracing::error!(?e, "failed to commit resource after range done");
-                        self.res.fail(format!("commit failed: {e}"));
-                        self.bus.publish(FileEvent::DownloadError {
-                            error: format!("commit failed: {e}"),
-                        });
-                    } else if let Some(total) = self.total {
-                        self.bus
-                            .publish(FileEvent::DownloadComplete { total_bytes: total });
-                    }
-                    self.phase = FilePhase::Complete;
-                }
-            }
-            FileFetch::StreamEnded { total_bytes } => {
-                if self.total.is_none() {
-                    self.total = Some(total_bytes);
-                }
-
-                let is_complete = self.total.is_none_or(|expected| total_bytes >= expected);
-
-                if is_complete {
-                    // Complete download — commit resource.
-                    if let Err(e) = self.res.commit(Some(total_bytes)) {
-                        tracing::error!(?e, "failed to commit resource");
-                        self.res.fail(format!("commit failed: {e}"));
-                        self.bus.publish(FileEvent::DownloadError {
-                            error: format!("commit failed: {e}"),
-                        });
-                    } else {
-                        self.bus
-                            .publish(FileEvent::DownloadComplete { total_bytes });
-                    }
-                    self.phase = FilePhase::Complete;
-                } else {
-                    // Partial download — switch to gap-filling.
-                    tracing::warn!(
-                        total_bytes,
-                        expected = ?self.total,
-                        "stream ended early — switching to gap-filling"
-                    );
-                    self.bus.publish(FileEvent::DownloadProgress {
-                        offset: total_bytes,
-                        total: self.total,
-                    });
-                    self.phase = FilePhase::GapFilling;
-                }
-            }
+            FileFetch::Chunk { offset, len } => self.commit_chunk(offset, len),
+            FileFetch::RangeDone { seek_epoch } => self.commit_range_done(seek_epoch),
+            FileFetch::StreamEnded { total_bytes } => self.commit_stream_ended(total_bytes),
         }
     }
 
@@ -449,6 +494,7 @@ impl Downloader for FileDownloader {
         download_pos.saturating_sub(reader_pos) > limit
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn wait_ready(&self) -> impl Future<Output = ()> {
         // Extract Arc references to avoid capturing &self (which is not Send
         // because Writer contains a non-Sync dyn Stream).
@@ -462,6 +508,7 @@ impl Downloader for FileDownloader {
         }
     }
 
+    #[cfg_attr(feature = "perf", hotpath::measure)]
     fn demand_signal(&self) -> impl Future<Output = ()> + use<> {
         let shared = Arc::clone(&self.shared);
         async move {
@@ -533,7 +580,7 @@ mod tests {
         };
 
         // Seek far ahead — queue on-demand range request.
-        shared.request_range(8000..9000);
+        shared.request_range(8000..9000, 0);
 
         // Downloader picks up the demand.
         let demand = dl.poll_demand().await;
