@@ -1018,7 +1018,6 @@ impl<T: StreamType> FallibleIterator for StreamAudioSource<T> {
     fn next(&mut self) -> DecodeResult<Option<PcmChunk>> {
         kithara_platform::hang_watchdog! {
             thread: "decode.next";
-            timeout: Duration::from_secs(10);
             loop {
                 hang_tick!();
                 self.detect_format_change();
