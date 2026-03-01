@@ -1,42 +1,32 @@
-//! Play audio from an HTTP file using rodio decoder.
-//!
-//! Demonstrates: `Stream::<File>::new()` → `rodio::Decoder` → playback.
+//! Play an HTTP audio file (rodio decoder).
 //!
 //! ```
 //! cargo run -p kithara --example file_rodio --features rodio [URL]
 //! ```
 
-use std::{env::args, error::Error};
-
-#[path = "common/events.rs"]
-mod events;
-#[path = "common/playback.rs"]
-mod playback;
-#[path = "common/tracing.rs"]
-mod tracing_support;
+use std::error::Error;
 
 use kithara::prelude::*;
-use rodio::Source as _;
-use tracing::info;
 use url::Url;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn Error + Send + Sync>> {
-    tracing_support::init_tracing(&["info"], false)?;
-
-    let url: Url = args()
+    let url: Url = std::env::args()
         .nth(1)
-        .unwrap_or_else(|| "https://stream.silvercomet.top/track.mp3".to_string())
+        .unwrap_or_else(|| "https://stream.silvercomet.top/track.mp3".into())
         .parse()?;
 
-    info!("Opening file: {url}");
-
-    let bus = EventBus::new(128);
-    let config = FileConfig::new(url.into()).with_events(bus.clone());
-    let stream = Stream::<File>::new(config).await?;
+    let stream = Stream::<File>::new(FileConfig::new(url.into())).await?;
     let decoder = rodio::Decoder::new(stream)?;
-    info!(duration = ?decoder.total_duration(), "Ready");
 
-    events::spawn_event_logger(bus.subscribe());
-    playback::play_until_end(decoder).await
+    tokio::task::spawn_blocking(move || {
+        let stream = rodio::OutputStreamBuilder::open_default_stream()?;
+        let sink = rodio::Sink::connect_new(stream.mixer());
+        sink.append(decoder);
+        sink.sleep_until_end();
+        Ok::<_, Box<dyn Error + Send + Sync>>(())
+    })
+    .await??;
+
+    Ok(())
 }
