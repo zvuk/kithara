@@ -13,7 +13,7 @@
 #[cfg(test)]
 use std::future::Future;
 
-use kithara_platform::ThreadPool;
+use kithara_platform::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
@@ -34,7 +34,7 @@ enum LoopControl {
 /// Source is owned by Reader and accessed directly (sync).
 ///
 /// Backend manages the downloader lifecycle:
-/// - On creation, spawns the downloader on the provided [`ThreadPool`].
+/// - On creation, spawns the downloader on a dedicated thread.
 /// - On drop, cancels the child token, causing the downloader loop to exit.
 ///
 /// Store the Backend alongside the Source to ensure the downloader is
@@ -43,10 +43,13 @@ pub struct Backend {
     /// Child token created from the caller's cancel token.
     /// Cancelled on drop to stop the downloader.
     cancel: CancellationToken,
+
+    /// Worker thread handle (joined on drop after cancellation).
+    _worker: Option<JoinHandle<()>>,
 }
 
 impl Backend {
-    /// Spawn a downloader task on the given thread pool.
+    /// Spawn a downloader task on a dedicated thread.
     ///
     /// The downloader runs in the background writing data to storage.
     /// A child cancellation token is created: dropping this Backend
@@ -56,16 +59,12 @@ impl Backend {
     /// # Panics
     ///
     /// Panics if creating the dedicated current-thread Tokio runtime fails.
-    pub fn new<D: Downloader + Send>(
-        downloader: D,
-        cancel: &CancellationToken,
-        pool: &ThreadPool,
-    ) -> Self {
+    pub fn new<D: Downloader + Send>(downloader: D, cancel: &CancellationToken) -> Self {
         let child_cancel = cancel.child_token();
         let task_cancel = child_cancel.clone();
 
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        let worker = {
             let handle = tokio::runtime::Handle::current();
             if matches!(
                 handle.runtime_flavor(),
@@ -74,34 +73,34 @@ impl Backend {
                 // `Handle::block_on` from a foreign thread can starve current-thread
                 // runtimes. Run downloader on a dedicated single-thread runtime
                 // inside the worker thread.
-                pool.spawn(move || {
+                kithara_platform::spawn(move || {
                     let rt = tokio::runtime::Builder::new_current_thread()
                         .enable_all()
                         .build()
                         .expect("failed to build downloader runtime");
                     rt.block_on(Self::run_downloader(downloader, task_cancel));
-                });
+                })
             } else {
-                pool.spawn(move || {
+                kithara_platform::spawn(move || {
                     handle.block_on(Self::run_downloader(downloader, task_cancel));
-                });
+                })
             }
-        }
+        };
 
         #[cfg(target_arch = "wasm32")]
-        {
-            let _ = pool;
+        let worker = {
             // Run downloader in a Web Worker to avoid blocking the main thread.
             // thread::spawn creates a Worker; spawn_task queues the async task
             // on the worker's JS event loop.
             // task_begin/task_finished keep the Worker alive while async work runs.
-            let _ = kithara_platform::thread::spawn(move || {
+            kithara_platform::thread::spawn(move || {
                 kithara_platform::spawn_task(Self::run_downloader(downloader, task_cancel));
-            });
-        }
+            })
+        };
 
         Self {
             cancel: child_cancel,
+            _worker: Some(worker),
         }
     }
 
@@ -359,7 +358,7 @@ mod tests {
 
     use std::{sync::Arc, time::Duration};
 
-    use kithara_platform::{Mutex, ThreadPool};
+    use kithara_platform::Mutex;
     use tokio::sync::Notify;
     use tokio_util::sync::CancellationToken;
 
@@ -474,8 +473,7 @@ mod tests {
         };
 
         let cancel = CancellationToken::new();
-        let pool = ThreadPool::global();
-        let _backend = Backend::new(downloader, &cancel, &pool);
+        let _backend = Backend::new(downloader, &cancel);
 
         // Wait for the downloader to enter step() (blocked on slow stream).
         step_entered.notified().await;

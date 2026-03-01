@@ -43,7 +43,7 @@ flowchart LR
         W["Writer<br/><i>byte pump</i>"]
     end
 
-    subgraph "Downloader (rayon)"
+    subgraph "Downloader (worker thread)"
         DL["HlsDownloader<br/><i>plan, commit</i>"]
         ABR["AbrController<br/><i>variant select</i>"]
     end
@@ -53,13 +53,13 @@ flowchart LR
         Proc["ProcessingAssets<br/><i>AES decrypt</i>"]
     end
 
-    subgraph "Sync (rayon thread)"
+    subgraph "Sync (worker thread)"
         HS["HlsSource<br/><i>Source impl</i>"]
         SI["DownloadState<br/><i>virtual stream</i>"]
         StreamH["Stream&lt;Hls&gt;"]
     end
 
-    subgraph "Decode (rayon thread)"
+    subgraph "Decode (worker thread)"
         Dec["Symphonia<br/><i>InnerDecoder</i>"]
         PCM2["PcmChunk"]
     end

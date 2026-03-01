@@ -1,8 +1,6 @@
 #![forbid(unsafe_code)]
 
 pub mod engine {
-    pub use kithara_platform::ThreadPool;
-
     pub use crate::{
         EngineConfig, EngineEvent, EngineImpl, PlayError, SessionDuckingMode, SlotId,
         traits::{dj::crossfade::CrossfadeConfig, engine::Engine},

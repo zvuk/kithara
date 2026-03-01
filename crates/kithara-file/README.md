@@ -46,13 +46,13 @@ flowchart LR
         RS["RangeSet&lt;u64&gt;<br/><i>available ranges</i>"]
     end
 
-    subgraph "Sync (rayon thread)"
+    subgraph "Sync (worker thread)"
         FS["FileSource<br/><i>Source impl</i>"]
         Reader["Reader&lt;FileSource&gt;<br/><i>Read + Seek</i>"]
         StreamW["Stream&lt;File&gt;"]
     end
 
-    subgraph "Decode (rayon thread)"
+    subgraph "Decode (worker thread)"
         Decoder["Symphonia<br/><i>InnerDecoder</i>"]
         PCM["PcmChunk<br/><i>f32 interleaved</i>"]
     end

@@ -14,7 +14,6 @@ use kithara_decode::DecodeError;
 use kithara_events::EventBus;
 #[cfg(any(feature = "file", feature = "hls"))]
 use kithara_net::{Headers, NetOptions};
-use kithara_platform::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -133,10 +132,6 @@ pub struct ResourceConfig {
     /// Storage configuration (cache directory, eviction limits).
     #[cfg(any(feature = "file", feature = "hls"))]
     pub store: StoreOptions,
-    /// Thread pool for background work (decode, probe, downloads).
-    ///
-    /// Shared across all components. When `None`, defaults to the global rayon pool.
-    pub thread_pool: Option<ThreadPool>,
 }
 
 impl ResourceConfig {
@@ -202,7 +197,6 @@ impl ResourceConfig {
             src,
             #[cfg(any(feature = "file", feature = "hls"))]
             store: StoreOptions::default(),
-            thread_pool: None,
         })
     }
 
@@ -245,10 +239,6 @@ impl ResourceConfig {
 
         if let Some(bytes) = self.look_ahead_bytes {
             file_config = file_config.with_look_ahead_bytes(bytes);
-        }
-
-        if let Some(pool) = self.thread_pool.clone() {
-            file_config = file_config.with_thread_pool(pool);
         }
 
         if let Some(headers) = self.headers {
@@ -310,10 +300,6 @@ impl ResourceConfig {
 
         if let Some(bytes) = self.look_ahead_bytes {
             hls_config = hls_config.with_look_ahead_bytes(bytes);
-        }
-
-        if let Some(pool) = self.thread_pool.clone() {
-            hls_config = hls_config.with_thread_pool(pool);
         }
 
         if let Some(headers) = self.headers {
@@ -442,7 +428,6 @@ mod tests {
             .with_events(bus)
             .with_hint("mp3")
             .with_name("test")
-            .with_thread_pool(ThreadPool::default())
             .with_preload_chunks(NonZeroUsize::new(5).expect("5 > 0"));
         assert!(config.bus.is_some());
         assert_eq!(config.hint.as_deref(), Some("mp3"));

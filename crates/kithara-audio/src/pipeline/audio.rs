@@ -13,7 +13,7 @@ use std::{
 use kithara_bufpool::{PcmPool, pcm_pool};
 use kithara_decode::{PcmChunk, PcmMeta, PcmSpec, TrackMetadata};
 use kithara_events::{AudioEvent, EventBus, SeekLifecycleStage};
-use kithara_platform::ThreadPool;
+use kithara_platform::JoinHandle;
 use kithara_stream::{
     EpochValidator, Fetch, MediaInfo, Stream, StreamContext, StreamType, Timeline,
 };
@@ -146,6 +146,9 @@ pub struct Audio<S> {
     /// Set during construction for sources with blocking condvar waits (HLS).
     /// Called from `seek()` after `initiate_seek()` for instant wakeup.
     notify_waiting: Option<Box<dyn Fn() + Send + Sync>>,
+
+    /// Worker thread handle (joined on drop after cancellation).
+    _worker: Option<JoinHandle<()>>,
 
     /// Marker for source type.
     _marker: std::marker::PhantomData<S>,
@@ -473,13 +476,6 @@ impl<T> Audio<Stream<T>>
 where
     T: StreamType<Events = EventBus>,
 {
-    fn resolve_thread_pool(
-        stream_config: &T::Config,
-        thread_pool: Option<ThreadPool>,
-    ) -> ThreadPool {
-        thread_pool.unwrap_or_else(|| T::thread_pool(stream_config))
-    }
-
     fn resolve_event_bus(stream_config: &T::Config, config_bus: Option<EventBus>) -> EventBus {
         T::event_bus(stream_config)
             .or(config_bus)
@@ -487,7 +483,6 @@ where
     }
 
     async fn create_stream_with_probe(
-        thread_pool: &ThreadPool,
         stream_config: T::Config,
         byte_pool: kithara_bufpool::BytePool,
     ) -> Result<Stream<T>, DecodeError> {
@@ -497,25 +492,21 @@ where
             .map_err(|e| DecodeError::Io(io::Error::other(e.to_string())))?;
         debug!("Audio::new — Stream created");
 
-        debug!("Audio::new — spawning probe task on thread pool...");
-        let stream = thread_pool
-            .spawn_async(move || {
-                let mut stream = stream;
-                let mut probe_buf = byte_pool.get_with(|b| b.resize(1024, 0));
-                let _ = stream.read(&mut probe_buf);
-                stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
-                Ok::<_, DecodeError>(stream)
-            })
-            .await
-            .map_err(|e| {
-                DecodeError::Io(io::Error::other(format!("probe task panicked: {e}")))
-            })??;
+        debug!("Audio::new — spawning probe task...");
+        let stream = kithara_platform::spawn_blocking(move || {
+            let mut stream = stream;
+            let mut probe_buf = byte_pool.get_with(|b| b.resize(1024, 0));
+            let _ = stream.read(&mut probe_buf);
+            stream.seek(SeekFrom::Start(0)).map_err(DecodeError::Io)?;
+            Ok::<_, DecodeError>(stream)
+        })
+        .await
+        .map_err(|e| DecodeError::Io(io::Error::other(format!("probe task panicked: {e}"))))??;
         debug!("Audio::new — probe task done");
         Ok(stream)
     }
 
     async fn create_initial_decoder(
-        thread_pool: &ThreadPool,
         shared_stream: SharedStream<T>,
         initial_media_info: Option<MediaInfo>,
         hint: Option<String>,
@@ -523,7 +514,7 @@ where
         prefer_hardware: bool,
         stream_ctx: Arc<dyn StreamContext>,
     ) -> Result<Box<dyn kithara_decode::InnerDecoder>, DecodeError> {
-        debug!("Audio::new — spawning decoder creation on thread pool...");
+        debug!("Audio::new — spawning decoder creation...");
         let byte_len_handle = Arc::new(AtomicU64::new(shared_stream.len().unwrap_or(0)));
         let decoder_config = kithara_decode::DecoderConfig {
             prefer_hardware,
@@ -535,26 +526,23 @@ where
         };
         let hint_for_decoder = hint;
         let initial_media_info_for_decoder = initial_media_info;
-        let decoder = thread_pool
-            .spawn_async(move || {
-                if let Some(ref info) = initial_media_info_for_decoder {
-                    kithara_decode::DecoderFactory::create_from_media_info(
-                        shared_stream,
-                        info,
-                        decoder_config,
-                    )
-                } else {
-                    kithara_decode::DecoderFactory::create_with_probe(
-                        shared_stream,
-                        hint_for_decoder.as_deref(),
-                        decoder_config,
-                    )
-                }
-            })
-            .await
-            .map_err(|e| {
-                DecodeError::Io(io::Error::other(format!("decoder task panicked: {e}")))
-            })??;
+        let decoder = kithara_platform::spawn_blocking(move || {
+            if let Some(ref info) = initial_media_info_for_decoder {
+                kithara_decode::DecoderFactory::create_from_media_info(
+                    shared_stream,
+                    info,
+                    decoder_config,
+                )
+            } else {
+                kithara_decode::DecoderFactory::create_with_probe(
+                    shared_stream,
+                    hint_for_decoder.as_deref(),
+                    decoder_config,
+                )
+            }
+        })
+        .await
+        .map_err(|e| DecodeError::Io(io::Error::other(format!("decoder task panicked: {e}"))))??;
         debug!("Audio::new — decoder created");
         Ok(decoder)
     }
@@ -621,15 +609,14 @@ where
     }
 
     fn spawn_worker(
-        thread_pool: &ThreadPool,
         audio_source: StreamAudioSource<T>,
         cmd_rx: HeapCons<AudioCommand>,
         data_tx: HeapProd<Fetch<PcmChunk>>,
         preload_notify: Arc<Notify>,
         preload_chunks: usize,
         worker_cancel: CancellationToken,
-    ) {
-        thread_pool.spawn(move || {
+    ) -> JoinHandle<()> {
+        kithara_platform::spawn(move || {
             run_audio_loop(
                 audio_source,
                 cmd_rx,
@@ -638,7 +625,7 @@ where
                 preload_chunks,
                 &worker_cancel,
             );
-        });
+        })
     }
 
     /// Create audio pipeline from `AudioConfig`.
@@ -673,15 +660,13 @@ where
             preload_chunks,
             resampler_quality,
             stream: stream_config,
-            thread_pool,
             bus: config_bus,
             effects: custom_effects,
         } = config;
 
-        let thread_pool = Self::resolve_thread_pool(&stream_config, thread_pool);
         let bus = Self::resolve_event_bus(&stream_config, config_bus);
         let byte_pool = byte_pool.unwrap_or_else(|| kithara_bufpool::byte_pool().clone());
-        let stream = Self::create_stream_with_probe(&thread_pool, stream_config, byte_pool).await?;
+        let stream = Self::create_stream_with_probe(stream_config, byte_pool).await?;
 
         let stream_media_info = stream.media_info();
         let initial_byte_len = stream.len().unwrap_or(0);
@@ -695,7 +680,6 @@ where
 
         let pool = pool.get_or_insert_with(|| pcm_pool().clone());
         let decoder = Self::create_initial_decoder(
-            &thread_pool,
             shared_stream.clone(),
             initial_media_info.clone(),
             hint.clone(),
@@ -754,8 +738,7 @@ where
         .with_emit(emit);
 
         let preload_notify = Arc::new(Notify::new());
-        Self::spawn_worker(
-            &thread_pool,
+        let worker = Self::spawn_worker(
             audio_source,
             cmd_rx,
             data_tx,
@@ -783,6 +766,7 @@ where
             preload_notify,
             preloaded: false,
             notify_waiting,
+            _worker: Some(worker),
             _marker: std::marker::PhantomData,
         })
     }

@@ -8,7 +8,6 @@ use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn, asset_root_f
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
 use kithara_events::{EventBus, HlsEvent};
 use kithara_net::HttpClient;
-use kithara_platform::ThreadPool;
 use kithara_stream::{StreamContext, StreamType, Timeline};
 
 use crate::{
@@ -29,10 +28,6 @@ impl StreamType for Hls {
     type Source = HlsSource;
     type Error = HlsError;
     type Events = EventBus;
-
-    fn thread_pool(config: &Self::Config) -> ThreadPool {
-        config.thread_pool.clone().unwrap_or_default()
-    }
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         config.bus.clone()
@@ -136,10 +131,9 @@ impl StreamType for Hls {
             bus,
         );
 
-        // Spawn downloader on the thread pool.
+        // Spawn downloader on a dedicated thread.
         // Backend is stored in HlsSource — dropping the source cancels the downloader.
-        let pool = config.thread_pool.clone().unwrap_or_default();
-        let backend = kithara_stream::Backend::new(downloader, &cancel, &pool);
+        let backend = kithara_stream::Backend::new(downloader, &cancel);
         source.set_backend(backend);
 
         Ok(source)

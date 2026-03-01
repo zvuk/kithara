@@ -118,8 +118,6 @@ pub mod prelude {
     pub use kithara_file::{File, FileConfig};
     #[cfg(feature = "hls")]
     pub use kithara_hls::{Hls, HlsConfig};
-    // Platform
-    pub use kithara_platform::ThreadPool;
     // Play
     pub use kithara_play::{
         EngineConfig, EngineImpl, PlayerConfig, PlayerImpl, Resource, ResourceConfig, ResourceSrc,

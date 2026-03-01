@@ -13,7 +13,7 @@ use std::{
     sync::Arc,
 };
 
-use kithara_platform::{MaybeSend, MaybeSync, ThreadPool, time::Duration};
+use kithara_platform::{MaybeSend, MaybeSync, time::Duration};
 use kithara_storage::WaitOutcome;
 
 use crate::{
@@ -43,15 +43,6 @@ pub trait StreamType: MaybeSend + 'static {
     ///
     /// May also start background tasks (downloader) internally.
     fn create(config: Self::Config) -> impl Future<Output = Result<Self::Source, Self::Error>>;
-
-    /// Extract the thread pool from config.
-    ///
-    /// Default returns the global rayon pool. Override for stream types
-    /// that store a custom pool in their config.
-    fn thread_pool(config: &Self::Config) -> ThreadPool {
-        let _ = config;
-        ThreadPool::default()
-    }
 
     /// Event bus type carried by the stream config.
     ///

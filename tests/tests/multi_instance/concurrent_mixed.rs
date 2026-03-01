@@ -1,7 +1,7 @@
 //! Mixed concurrent File + HLS instance tests.
 //!
-//! Verifies that File and HLS `Audio` instances can coexist on the
-//! same shared `ThreadPool` and all read PCM data to EOF.
+//! Verifies that File and HLS `Audio` instances can coexist and all
+//! read PCM data to EOF.
 
 use std::sync::Arc;
 
@@ -79,7 +79,7 @@ fn generate_wav_data() -> Arc<Vec<u8>> {
     Arc::new(create_test_wav(sample_count, SAMPLE_RATE, CHANNELS))
 }
 
-/// 2 File + 2 HLS instances on a shared pool.
+/// 2 File + 2 HLS instances running concurrently.
 #[kithara::test(tokio, timeout(Duration::from_secs(120)))]
 async fn mixed_two_file_two_hls() {
     let _ = tracing_subscriber::fmt()
@@ -87,8 +87,6 @@ async fn mixed_two_file_two_hls() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    // Each Audio instance uses 2 pool threads (downloader + audio_loop).
-    let pool = crate::multi_instance::test_thread_pool(10);
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;
 
@@ -102,14 +100,9 @@ async fn mixed_two_file_two_hls() {
     for i in 0..2 {
         let url = file_server.mp3_url();
         let temp = TestTempDir::new();
-        let pool = pool.clone();
 
-        let file_config = FileConfig::new(url.into())
-            .with_store(StoreOptions::new(temp.path()))
-            .with_thread_pool(pool.clone());
-        let config = AudioConfig::<File>::new(file_config)
-            .with_hint("mp3")
-            .with_thread_pool(pool);
+        let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp.path()));
+        let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
 
         let mut audio = Audio::<Stream<File>>::new(config)
             .await
@@ -145,16 +138,13 @@ async fn mixed_two_file_two_hls() {
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp.path()))
             .with_cancel(cancel)
-            .with_thread_pool(pool.clone())
             .with_abr(AbrOptions {
                 mode: AbrMode::Manual(0),
                 ..AbrOptions::default()
             });
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-        let config = AudioConfig::<Hls>::new(hls_config)
-            .with_media_info(wav_info)
-            .with_thread_pool(pool.clone());
+        let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
 
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await
@@ -191,7 +181,7 @@ async fn mixed_two_file_two_hls() {
     }
 }
 
-/// 4 File + 4 HLS instances (8 total) on a shared pool.
+/// 4 File + 4 HLS instances (8 total) running concurrently.
 #[kithara::test(tokio, timeout(Duration::from_secs(180)))]
 async fn mixed_four_file_four_hls() {
     let _ = tracing_subscriber::fmt()
@@ -199,8 +189,6 @@ async fn mixed_four_file_four_hls() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    // Each Audio instance uses 2 pool threads (downloader + audio_loop).
-    let pool = crate::multi_instance::test_thread_pool(18);
     let wav_data = generate_wav_data();
     let file_server = AudioTestServer::new().await;
 
@@ -214,14 +202,9 @@ async fn mixed_four_file_four_hls() {
     for i in 0..4 {
         let url = file_server.mp3_url();
         let temp = TestTempDir::new();
-        let pool = pool.clone();
 
-        let file_config = FileConfig::new(url.into())
-            .with_store(StoreOptions::new(temp.path()))
-            .with_thread_pool(pool.clone());
-        let config = AudioConfig::<File>::new(file_config)
-            .with_hint("mp3")
-            .with_thread_pool(pool);
+        let file_config = FileConfig::new(url.into()).with_store(StoreOptions::new(temp.path()));
+        let config = AudioConfig::<File>::new(file_config).with_hint("mp3");
 
         let mut audio = Audio::<Stream<File>>::new(config)
             .await
@@ -257,16 +240,13 @@ async fn mixed_four_file_four_hls() {
         let hls_config = HlsConfig::new(url)
             .with_store(StoreOptions::new(temp.path()))
             .with_cancel(cancel)
-            .with_thread_pool(pool.clone())
             .with_abr(AbrOptions {
                 mode: AbrMode::Manual(0),
                 ..AbrOptions::default()
             });
 
         let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-        let config = AudioConfig::<Hls>::new(hls_config)
-            .with_media_info(wav_info)
-            .with_thread_pool(pool.clone());
+        let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
 
         let mut audio = Audio::<Stream<Hls>>::new(config)
             .await

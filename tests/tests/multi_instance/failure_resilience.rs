@@ -1,8 +1,8 @@
 //! Failure resilience tests.
 //!
 //! Verifies that when some instances are cancelled mid-stream (simulating
-//! a network failure), other instances on the same shared `ThreadPool`
-//! continue to read PCM data to EOF without being affected.
+//! a network failure), other instances continue to read PCM data to EOF
+//! without being affected.
 
 use std::sync::Arc;
 
@@ -10,7 +10,6 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
-    platform::ThreadPool,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_platform::time::Duration;
@@ -75,7 +74,6 @@ async fn create_server(wav_data: &Arc<Vec<u8>>) -> HlsTestServer {
 async fn create_hls_audio(
     server: &HlsTestServer,
     cache_dir: &std::path::Path,
-    pool: &ThreadPool,
     cancel: CancellationToken,
 ) -> Audio<Stream<Hls>> {
     let url = server.url("/master.m3u8").expect("url");
@@ -83,16 +81,13 @@ async fn create_hls_audio(
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(cache_dir))
         .with_cancel(cancel)
-        .with_thread_pool(pool.clone())
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
         });
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_media_info(wav_info)
-        .with_thread_pool(pool.clone());
+    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
 
     Audio::<Stream<Hls>>::new(config)
         .await
@@ -111,7 +106,6 @@ async fn healthy_instances_survive_cancelled_peers() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let pool = crate::multi_instance::test_thread_pool(4);
     let wav_data = generate_wav_data();
 
     let mut handles: Vec<kithara_platform::BlockingHandle<Outcome>> = Vec::new();
@@ -121,7 +115,7 @@ async fn healthy_instances_survive_cancelled_peers() {
         let server = create_server(&wav_data).await;
         let temp = TestTempDir::new();
         let cancel = CancellationToken::new();
-        let audio = create_hls_audio(&server, temp.path(), &pool, cancel).await;
+        let audio = create_hls_audio(&server, temp.path(), cancel).await;
 
         handles.push(kithara_platform::spawn_blocking(move || {
             let _server = server;
@@ -145,7 +139,7 @@ async fn healthy_instances_survive_cancelled_peers() {
         let temp = TestTempDir::new();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
-        let audio = create_hls_audio(&server, temp.path(), &pool, cancel).await;
+        let audio = create_hls_audio(&server, temp.path(), cancel).await;
 
         // Fire the cancel after a short delay.
         kithara_platform::spawn_task(async move {
@@ -217,7 +211,6 @@ async fn eight_instances_half_cancelled() {
         .with_max_level(tracing::Level::INFO)
         .try_init();
 
-    let pool = crate::multi_instance::test_thread_pool(4);
     let wav_data = generate_wav_data();
 
     let mut handles: Vec<kithara_platform::BlockingHandle<Outcome>> = Vec::new();
@@ -227,7 +220,7 @@ async fn eight_instances_half_cancelled() {
         let server = create_server(&wav_data).await;
         let temp = TestTempDir::new();
         let cancel = CancellationToken::new();
-        let audio = create_hls_audio(&server, temp.path(), &pool, cancel).await;
+        let audio = create_hls_audio(&server, temp.path(), cancel).await;
 
         handles.push(kithara_platform::spawn_blocking(move || {
             let _server = server;
@@ -249,7 +242,7 @@ async fn eight_instances_half_cancelled() {
         let temp = TestTempDir::new();
         let cancel = CancellationToken::new();
         let cancel_clone = cancel.clone();
-        let audio = create_hls_audio(&server, temp.path(), &pool, cancel).await;
+        let audio = create_hls_audio(&server, temp.path(), cancel).await;
 
         // Stagger cancellation slightly to make it more realistic.
         let delay_ms = 200 + ((i - 4) as u64 * 100);

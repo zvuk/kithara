@@ -35,24 +35,15 @@ fn engine_config_defaults() {
 }
 
 #[kithara::test]
-fn engine_config_default_thread_pool_is_none() {
-    let config = EngineConfig::default();
-    assert!(config.thread_pool.is_none());
-}
-
-#[kithara::test]
 fn engine_config_builder() {
-    let pool = ThreadPool::global();
     let config = EngineConfig::default()
         .with_max_slots(8)
         .with_sample_rate(48000)
         .with_channels(1)
-        .with_eq_bands(5)
-        .with_thread_pool(pool);
+        .with_eq_bands(5);
     assert_eq!(config.max_slots, 8);
     assert_eq!(config.sample_rate, 48000);
     assert_eq!(config.channels, 1);
-    assert!(config.thread_pool.is_some());
     assert_eq!(config.eq_bands, 5);
 }
 
@@ -141,15 +132,6 @@ fn engine_cancel_crossfade_stub_returns_no_crossfade() {
     let engine = make_engine();
     let err = engine.cancel_crossfade().unwrap_err();
     assert!(matches!(err, PlayError::NoCrossfade));
-}
-
-#[kithara::test]
-fn engine_config_thread_pool_used_by_engine() {
-    let pool = ThreadPool::global();
-    let config = EngineConfig::default().with_thread_pool(pool);
-    // Engine should accept a custom thread pool without panicking.
-    let engine = EngineImpl::new(config);
-    assert!(!engine.is_running());
 }
 
 #[kithara::test]

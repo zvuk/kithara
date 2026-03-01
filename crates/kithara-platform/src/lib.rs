@@ -23,11 +23,9 @@
 //! `setTimeout` on wasm32.
 
 mod maybe_send;
-mod pool;
 pub mod sync;
 pub mod task;
 pub mod thread;
-mod thread_pool_init;
 pub mod time;
 
 #[cfg(feature = "internal")]
@@ -35,7 +33,6 @@ pub mod internal;
 
 pub use kithara_hang_detector::{HangDetector, hang_watchdog};
 pub use maybe_send::{MaybeSend, MaybeSync, WasmSend};
-pub use pool::ThreadPool;
 pub use sync::{
     Condvar, Mutex, MutexGuard, NotAvailable, RwLock, RwLockReadGuard, RwLockWriteGuard,
     WaitTimeoutResult,
@@ -44,7 +41,6 @@ pub use sync::{
 pub use task::spawn as spawn_task;
 pub use task::{BlockingError, BlockingHandle, spawn_blocking, yield_now};
 pub use thread::{Duration, JoinHandle, sleep, spawn};
-pub use thread_pool_init::ensure_thread_pool;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[must_use]

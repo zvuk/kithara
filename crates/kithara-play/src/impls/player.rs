@@ -12,7 +12,7 @@ use std::sync::{
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_platform::{Mutex, ThreadPool};
+use kithara_platform::Mutex;
 use portable_atomic::AtomicF32;
 use ringbuf::traits::Consumer;
 use tokio::sync::broadcast;
@@ -56,11 +56,6 @@ pub struct PlayerConfig {
     /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
     /// PCM pool is used.
     pub pcm_pool: Option<PcmPool>,
-    /// Thread pool for the engine thread and background work.
-    ///
-    /// Propagated to the underlying [`EngineImpl`]. When `None`, the global
-    /// rayon pool is used.
-    pub thread_pool: Option<ThreadPool>,
 }
 
 // -- PlayerImpl -------------------------------------------------------------------
@@ -101,7 +96,6 @@ impl PlayerImpl {
             eq_bands: config.eq_bands,
             max_slots: config.max_slots,
             pcm_pool: Some(resolved_pool.clone()),
-            thread_pool: config.thread_pool.clone(),
             ..EngineConfig::default()
         };
         let engine = EngineImpl::new(engine_config);
@@ -689,7 +683,6 @@ mod tests {
             eq_bands: 5,
             max_slots: 2,
             pcm_pool: None,
-            thread_pool: None,
         };
         let player = PlayerImpl::new(config);
         assert!((player.crossfade_duration() - 2.0).abs() < f32::EPSILON);
@@ -697,33 +690,15 @@ mod tests {
 
     #[kithara::test]
     fn player_config_builder() {
-        let pool = ThreadPool::global();
         let config = PlayerConfig::default()
             .with_max_slots(8)
             .with_default_rate(0.5)
             .with_crossfade_duration(2.5)
-            .with_eq_bands(5)
-            .with_thread_pool(pool);
+            .with_eq_bands(5);
         assert_eq!(config.max_slots, 8);
         assert!((config.default_rate - 0.5).abs() < f32::EPSILON);
         assert!((config.crossfade_duration - 2.5).abs() < f32::EPSILON);
         assert_eq!(config.eq_bands, 5);
-        assert!(config.thread_pool.is_some());
-    }
-
-    #[kithara::test]
-    fn player_config_default_thread_pool_is_none() {
-        let config = PlayerConfig::default();
-        assert!(config.thread_pool.is_none());
-    }
-
-    #[kithara::test]
-    fn player_propagates_thread_pool_to_engine() {
-        let pool = ThreadPool::global();
-        let config = PlayerConfig::default().with_thread_pool(pool);
-        // Should not panic — engine uses the player's thread pool.
-        let player = PlayerImpl::new(config);
-        assert!(!player.engine().is_running());
     }
 
     // -- Integration tests (player + resource + queue) ----------------------------

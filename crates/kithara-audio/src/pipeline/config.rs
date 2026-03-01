@@ -9,7 +9,6 @@ use derive_setters::Setters;
 use kithara_bufpool::{BytePool, PcmPool};
 use kithara_decode::PcmSpec;
 use kithara_events::EventBus;
-use kithara_platform::ThreadPool;
 use kithara_stream::StreamType;
 
 use crate::{
@@ -53,11 +52,6 @@ pub struct AudioConfig<T: StreamType> {
     pub resampler_quality: ResamplerQuality,
     /// Stream configuration (`HlsConfig`, `FileConfig`, etc.)
     pub stream: T::Config,
-    /// Thread pool for blocking work (decode, probe).
-    ///
-    /// When `None`, inherits from the stream config via `StreamType::thread_pool()`.
-    /// When `Some`, overrides the stream config pool.
-    pub thread_pool: Option<ThreadPool>,
     /// Unified event bus (optional — if not provided, one is created internally).
     #[setters(rename = "with_events")]
     pub bus: Option<EventBus>,
@@ -81,7 +75,6 @@ impl<T: StreamType> AudioConfig<T> {
             preload_chunks: DEFAULT_PRELOAD_CHUNKS,
             resampler_quality: ResamplerQuality::default(),
             stream,
-            thread_pool: None,
             bus: None,
             effects: Vec::new(),
         }

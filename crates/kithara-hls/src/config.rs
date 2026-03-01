@@ -8,7 +8,6 @@ use derive_setters::Setters;
 use kithara_assets::{BytePool, StoreOptions};
 use kithara_events::EventBus;
 use kithara_net::{Headers, NetOptions};
-use kithara_platform::ThreadPool;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -99,10 +98,6 @@ pub struct HlsConfig {
     pub pool: Option<BytePool>,
     /// Storage configuration.
     pub store: StoreOptions,
-    /// Thread pool for background work.
-    ///
-    /// Shared across all components. When `None`, defaults to the global rayon pool.
-    pub thread_pool: Option<ThreadPool>,
     /// Master playlist URL.
     #[derivative(Default(
         value = "Url::parse(\"http://localhost/stream.m3u8\").expect(\"valid default URL\")"

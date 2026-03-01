@@ -13,7 +13,7 @@ use std::sync::{
 use derivative::Derivative;
 use derive_setters::Setters;
 use kithara_bufpool::{PcmPool, pcm_pool};
-use kithara_platform::{Mutex, ThreadPool};
+use kithara_platform::Mutex;
 use portable_atomic::AtomicF32;
 use ringbuf::{HeapProd, traits::Producer};
 use tokio::sync::broadcast;
@@ -53,10 +53,6 @@ pub struct EngineConfig {
     /// Sample rate passed to the runtime backend as a hint. Default: 44100.
     #[derivative(Default(value = "44100"))]
     pub sample_rate: u32,
-    /// Thread pool for the session thread and background work.
-    ///
-    /// When `None`, the global rayon pool is used.
-    pub thread_pool: Option<ThreadPool>,
 }
 
 /// Handle for a slot, providing command channel and shared state.
@@ -111,7 +107,7 @@ impl EngineImpl {
             .pcm_pool
             .clone()
             .unwrap_or_else(|| pcm_pool().clone());
-        let session = session_client(config.thread_pool.clone());
+        let session = session_client();
 
         Self {
             config,
@@ -129,7 +125,7 @@ impl EngineImpl {
     /// Process-wide session ducking mode.
     #[must_use]
     pub fn session_ducking() -> SessionDuckingMode {
-        match session_client(None).ducking() {
+        match session_client().ducking() {
             Ok(mode) => mode,
             Err(err) => {
                 warn!(?err, "failed to query session ducking");
@@ -140,7 +136,7 @@ impl EngineImpl {
 
     /// Set process-wide session ducking mode.
     pub fn set_session_ducking(mode: SessionDuckingMode) -> Result<(), PlayError> {
-        session_client(None).set_ducking(mode)
+        session_client().set_ducking(mode)
     }
 
     fn emit(&self, event: EngineEvent) {

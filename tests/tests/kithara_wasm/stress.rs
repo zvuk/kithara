@@ -13,25 +13,18 @@ use kithara_assets::StoreOptions;
 use kithara_audio::{Audio, AudioConfig};
 use kithara_events::{AudioEvent, Event, EventBus, SeekLifecycleStage};
 use kithara_hls::{AbrMode, AbrOptions, Hls, HlsConfig};
-use kithara_platform::{
-    ThreadPool,
-    time::{Duration, Instant},
-};
+use kithara_platform::time::{Duration, Instant};
 use kithara_stream::{AudioCodec, ContainerFormat, MediaInfo, Stream};
 use tracing::{info, warn};
 use url::Url;
-use wasm_bindgen_futures::JsFuture;
-
 mod kithara {
     pub(crate) use kithara_test_macros::test;
 }
 
-/// Number of rayon worker threads for the thread pool.
-const THREAD_COUNT: usize = 2;
 const EVENT_BUS_CAPACITY: usize = 4096;
 const REAL_HLS_STREAM_URL: &str = "http://127.0.0.1:3333/hls/master.m3u8";
 
-/// Guard: `init_thread_pool` panics if called twice in the same page.
+/// Guard: init must only run once per page.
 static INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Get HLS test URL from compile-time env or fall back to default.
@@ -70,22 +63,17 @@ impl Xorshift64 {
     }
 }
 
-/// One-time initialization: panic hook, tracing, rayon thread pool.
+/// One-time initialization: panic hook + tracing.
 ///
 /// Idempotent — safe to call from every test. All tests share one page
-/// in `wasm_bindgen_test`, so `init_thread_pool` must only run once.
+/// in `wasm_bindgen_test`, so init must only run once.
 async fn init() {
     if INITIALIZED.swap(true, Ordering::SeqCst) {
         return;
     }
     console_error_panic_hook::set_once();
     tracing_wasm::set_as_global_default();
-
-    // Initialize rayon thread pool (Web Workers).
-    JsFuture::from(kithara_wasm::init_thread_pool(THREAD_COUNT))
-        .await
-        .unwrap();
-    info!("Rayon thread pool initialized with {THREAD_COUNT} workers");
+    info!("WASM test environment initialized");
 }
 
 /// Create an `Audio<Stream<Hls>>` pipeline in ephemeral mode.
@@ -94,11 +82,9 @@ async fn create_pipeline() -> Audio<Stream<Hls>> {
 }
 
 async fn create_pipeline_with_url(url: Url) -> Audio<Stream<Hls>> {
-    let pool = ThreadPool::global();
     let bus = EventBus::new(EVENT_BUS_CAPACITY);
 
     let hls_config = HlsConfig::new(url)
-        .with_thread_pool(pool)
         .with_events(bus)
         .with_store(StoreOptions::default().with_ephemeral(true))
         .with_abr(AbrOptions {

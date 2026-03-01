@@ -8,7 +8,7 @@ use firewheel::{
     FirewheelConfig, Volume, diff::Memo, node::NodeID, nodes::volume_pan::VolumePanNode,
 };
 use kithara_bufpool::PcmPool;
-use kithara_platform::{Mutex, ThreadPool, sync::mpsc};
+use kithara_platform::{Mutex, sync::mpsc};
 #[cfg(not(target_arch = "wasm32"))]
 use ringbuf::{
     HeapCons,
@@ -372,15 +372,14 @@ fn engine_thread(mut cmd_rx: HeapCons<CmdMsg>) {
     }
 }
 
-pub(crate) fn session_client(thread_pool: Option<ThreadPool>) -> Arc<SessionClient> {
+pub(crate) fn session_client() -> Arc<SessionClient> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         static SESSION_CLIENT: OnceLock<Arc<SessionClient>> = OnceLock::new();
         SESSION_CLIENT
             .get_or_init(|| {
                 let (cmd_tx, cmd_rx) = HeapRb::<CmdMsg>::new(64).split();
-                let pool = thread_pool.unwrap_or_default();
-                pool.spawn(move || engine_thread(cmd_rx));
+                let _ = kithara_platform::spawn(move || engine_thread(cmd_rx));
                 Arc::new(SessionClient {
                     cmd_tx: Mutex::new(cmd_tx),
                 })
@@ -395,7 +394,6 @@ pub(crate) fn session_client(thread_pool: Option<ThreadPool>) -> Arc<SessionClie
             if let Some(client) = cell.as_ref() {
                 return client.clone();
             }
-            let _ = thread_pool;
 
             // If the remote channel exists, we are on a Worker thread.
             let is_local = WORKER_CMD_TX.lock_sync().is_none();

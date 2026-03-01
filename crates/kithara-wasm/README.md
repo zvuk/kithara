@@ -37,7 +37,6 @@ await player.select_track(index); // starts playback with crossfade
 - `WasmPlayer::set_eq_gain(band, db)`, `reset_eq()`
 - `setup()`
 - `build_info()`
-- `init_thread_pool(n)` (feature `threads`)
 
 ## Architecture
 
@@ -49,7 +48,7 @@ await player.select_track(index); // starts playback with crossfade
 
 <table>
 <tr><th>Feature</th><th>Default</th><th>Enables</th></tr>
-<tr><td><code>threads</code></td><td>yes</td><td><code>wasm-bindgen-rayon</code> thread pool (requires <code>atomics</code> + <code>bulk-memory</code> target features)</td></tr>
+<tr><td><code>threads</code></td><td>yes</td><td>Web Worker thread pool (requires <code>atomics</code> + <code>bulk-memory</code> target features)</td></tr>
 <tr><td><code>internal</code></td><td>no</td><td>Internal-only exports for workspace testing/debug</td></tr>
 </table>
 

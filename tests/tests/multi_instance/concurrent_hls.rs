@@ -1,7 +1,7 @@
 //! Concurrent HLS instance tests.
 //!
 //! Verifies that 2, 4, and 8 `Audio<Stream<Hls>>` instances can run
-//! concurrently on a shared `ThreadPool` and each reads PCM data to EOF.
+//! concurrently and each reads PCM data to EOF.
 //! Tests both manual variant (no ABR) and auto ABR modes.
 
 use std::sync::Arc;
@@ -10,7 +10,6 @@ use kithara::{
     assets::StoreOptions,
     audio::{Audio, AudioConfig},
     hls::{AbrMode, AbrOptions, Hls, HlsConfig},
-    platform::ThreadPool,
     stream::{AudioCodec, ContainerFormat, MediaInfo, Stream},
 };
 use kithara_platform::time::Duration;
@@ -79,7 +78,6 @@ async fn create_hls_server_abr(wav_data: Arc<Vec<u8>>) -> HlsTestServer {
 async fn create_hls_audio(
     server: &HlsTestServer,
     cache_dir: &std::path::Path,
-    pool: &ThreadPool,
 ) -> Audio<Stream<Hls>> {
     let url = server.url("/master.m3u8").expect("url");
     let cancel = CancellationToken::new();
@@ -87,7 +85,6 @@ async fn create_hls_audio(
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(cache_dir))
         .with_cancel(cancel)
-        .with_thread_pool(pool.clone())
         .with_abr(AbrOptions {
             mode: AbrMode::Manual(0),
             ..AbrOptions::default()
@@ -95,9 +92,7 @@ async fn create_hls_audio(
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
 
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_media_info(wav_info)
-        .with_thread_pool(pool.clone());
+    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
 
     Audio::<Stream<Hls>>::new(config)
         .await
@@ -108,7 +103,6 @@ async fn create_hls_audio(
 async fn create_hls_audio_abr(
     server: &HlsTestServer,
     cache_dir: &std::path::Path,
-    pool: &ThreadPool,
 ) -> Audio<Stream<Hls>> {
     let url = server.url("/master.m3u8").expect("url");
     let cancel = CancellationToken::new();
@@ -116,7 +110,6 @@ async fn create_hls_audio_abr(
     let hls_config = HlsConfig::new(url)
         .with_store(StoreOptions::new(cache_dir))
         .with_cancel(cancel)
-        .with_thread_pool(pool.clone())
         .with_abr(AbrOptions {
             mode: AbrMode::Auto(Some(0)),
             ..AbrOptions::default()
@@ -124,9 +117,7 @@ async fn create_hls_audio_abr(
 
     let wav_info = MediaInfo::new(Some(AudioCodec::Pcm), Some(ContainerFormat::Wav));
 
-    let config = AudioConfig::<Hls>::new(hls_config)
-        .with_media_info(wav_info)
-        .with_thread_pool(pool.clone());
+    let config = AudioConfig::<Hls>::new(hls_config).with_media_info(wav_info);
 
     Audio::<Stream<Hls>>::new(config)
         .await
@@ -153,14 +144,13 @@ async fn two_hls_instances() {
         .try_init();
 
     let wav_data = generate_wav_data();
-    let pool = crate::multi_instance::test_thread_pool(4);
 
     // Each instance needs its own server (binds a random port) and cache dir.
     let mut handles = Vec::new();
     for i in 0..2 {
         let server = create_hls_server(Arc::clone(&wav_data)).await;
         let temp = TestTempDir::new();
-        let audio = create_hls_audio(&server, temp.path(), &pool).await;
+        let audio = create_hls_audio(&server, temp.path()).await;
         // Keep server and temp alive until reader finishes.
         handles.push(kithara_platform::spawn_blocking(move || {
             let _server = server;
@@ -192,13 +182,12 @@ async fn four_hls_instances() {
         .try_init();
 
     let wav_data = generate_wav_data();
-    let pool = crate::multi_instance::test_thread_pool(4);
 
     let mut handles = Vec::new();
     for i in 0..4 {
         let server = create_hls_server(Arc::clone(&wav_data)).await;
         let temp = TestTempDir::new();
-        let audio = create_hls_audio(&server, temp.path(), &pool).await;
+        let audio = create_hls_audio(&server, temp.path()).await;
         handles.push(kithara_platform::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
@@ -229,13 +218,12 @@ async fn eight_hls_instances() {
         .try_init();
 
     let wav_data = generate_wav_data();
-    let pool = crate::multi_instance::test_thread_pool(4);
 
     let mut handles = Vec::new();
     for i in 0..8 {
         let server = create_hls_server(Arc::clone(&wav_data)).await;
         let temp = TestTempDir::new();
-        let audio = create_hls_audio(&server, temp.path(), &pool).await;
+        let audio = create_hls_audio(&server, temp.path()).await;
         handles.push(kithara_platform::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;
@@ -266,13 +254,12 @@ async fn four_hls_instances_with_abr() {
         .try_init();
 
     let wav_data = generate_wav_data();
-    let pool = crate::multi_instance::test_thread_pool(4);
 
     let mut handles = Vec::new();
     for i in 0..4 {
         let server = create_hls_server_abr(Arc::clone(&wav_data)).await;
         let temp = TestTempDir::new();
-        let audio = create_hls_audio_abr(&server, temp.path(), &pool).await;
+        let audio = create_hls_audio_abr(&server, temp.path()).await;
         handles.push(kithara_platform::spawn_blocking(move || {
             let _server = server;
             let _temp = temp;

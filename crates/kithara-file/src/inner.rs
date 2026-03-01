@@ -7,7 +7,6 @@ use std::sync::Arc;
 use kithara_assets::{AssetStoreBuilder, asset_root_for_url};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::HttpClient;
-use kithara_platform::ThreadPool;
 use kithara_storage::{ResourceExt, ResourceStatus};
 #[cfg(not(target_arch = "wasm32"))]
 use kithara_stream::Writer;
@@ -29,10 +28,6 @@ impl StreamType for File {
     type Source = FileSource;
     type Error = SourceError;
     type Events = EventBus;
-
-    fn thread_pool(config: &Self::Config) -> ThreadPool {
-        config.thread_pool.clone().unwrap_or_default()
-    }
 
     fn event_bus(config: &Self::Config) -> Option<Self::Events> {
         config.bus.clone()
@@ -199,10 +194,9 @@ impl File {
             #[cfg(target_arch = "wasm32")]
             let downloader = downloader;
 
-            // Spawn downloader on the thread pool.
+            // Spawn downloader on a dedicated thread.
             // Backend is stored in FileSource — dropping the source cancels the downloader.
-            let pool = config.thread_pool.clone().unwrap_or_default();
-            let backend = Backend::new(downloader, &cancel, &pool);
+            let backend = Backend::new(downloader, &cancel);
 
             // Create source with shared state and backend for on-demand loading.
             let source = FileSource::with_shared(

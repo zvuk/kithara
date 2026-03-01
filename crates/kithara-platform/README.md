@@ -34,7 +34,6 @@ let guard = lock.lock();
 <tr><td><code>Condvar</code></td><td><code>std::sync::Condvar</code></td><td><code>std::sync::Condvar</code></td></tr>
 <tr><td><code>MaybeSend</code></td><td>= <code>Send</code></td><td>No-op (auto-implemented)</td></tr>
 <tr><td><code>MaybeSync</code></td><td>= <code>Sync</code></td><td>No-op (auto-implemented)</td></tr>
-<tr><td><code>ThreadPool</code></td><td>Rayon thread pool wrapper</td><td>Rayon wrapper (Web Workers via <code>wasm-bindgen-rayon</code>)</td></tr>
 </table>
 
 ## Time Utilities
