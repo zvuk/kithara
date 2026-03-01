@@ -132,7 +132,6 @@ flowchart LR
 - Leverages `AssetStore<DecryptContext>` (disk or ephemeral) for persistent segment storage.
 - `populate_cached_segments()` scans disk for committed segments on startup.
 - `#EXT-X-ALLOW-CACHE` is parsed into playlist metadata (`allow_cache`) for compatibility; current cache policy is not switched by this flag.
-- `CoverageIndex` tracks per-segment byte-range coverage for crash recovery.
 
 ## Seek and wait_range contract
 

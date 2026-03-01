@@ -5,7 +5,10 @@
 //! 1. Rapid seek burst never returns premature EOF.
 //! 2. After seek burst, sequential tail read is contiguous and exact.
 
-use std::io::{Read, Seek, SeekFrom};
+use std::{
+    io::{Read, Seek, SeekFrom},
+    num::NonZeroUsize,
+};
 
 use kithara::{
     assets::StoreOptions,
@@ -38,7 +41,9 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     .await;
     let url = server.url("/master.m3u8").expect("url");
 
-    let store = StoreOptions::new(temp_dir.path()).with_ephemeral(ephemeral);
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(ephemeral)
+        .with_cache_capacity(NonZeroUsize::new(256).unwrap());
     let config = HlsConfig::new(url)
         .with_store(store)
         .with_cancel(CancellationToken::new())
@@ -120,5 +125,66 @@ async fn seek_burst_then_tail_read_stays_contiguous(#[case] ephemeral: bool) {
     match result {
         Ok(()) => {}
         Err(e) => panic!("spawn_blocking failed: {e}"),
+    }
+}
+
+/// Ephemeral stream with small LRU cache must read the entire stream
+/// without deadlock or hang.
+///
+/// capacity=2 is the minimum for fMP4 segments with init+media resources.
+/// Without PlanOutcome::Idle + backfill guard + TOCTOU Retry:
+/// - downloader hot-spins on empty Batch → hang detector fires
+/// - or backfill rewind re-downloads evicted segments infinitely
+///
+/// This test is RED before steps 4-6 fixes.
+#[kithara::test(tokio, timeout(Duration::from_secs(90)))]
+#[cfg(not(target_arch = "wasm32"))]
+async fn ephemeral_small_cache_reads_entire_stream() {
+    let temp_dir = TestTempDir::new();
+    let server = HlsTestServer::new(HlsTestServerConfig {
+        segment_size: 20_000,
+        segments_per_variant: 10,
+        ..Default::default()
+    })
+    .await;
+    let url = server.url("/master.m3u8").expect("url");
+    let total_bytes = server.total_bytes();
+
+    let store = StoreOptions::new(temp_dir.path())
+        .with_ephemeral(true)
+        .with_cache_capacity(NonZeroUsize::new(5).expect("5 > 0"));
+    let config = HlsConfig::new(url)
+        .with_store(store)
+        .with_cancel(CancellationToken::new())
+        .with_abr(AbrOptions {
+            mode: AbrMode::Manual(0),
+            ..AbrOptions::default()
+        });
+    let mut stream = Stream::<Hls>::new(config).await.expect("create stream");
+
+    let result = kithara_platform::spawn_blocking(move || {
+        let mut buf = vec![0u8; 8192];
+        let mut total_read = 0u64;
+
+        loop {
+            let n = stream
+                .read(&mut buf)
+                .expect("read must not fail with small cache");
+            if n == 0 {
+                break;
+            }
+            total_read += n as u64;
+        }
+
+        assert_eq!(
+            total_read, total_bytes,
+            "must read entire stream with small ephemeral cache"
+        );
+    })
+    .await;
+
+    match result {
+        Ok(()) => {}
+        Err(e) => panic!("spawn_blocking failed (likely HangDetector panic): {e}"),
     }
 }

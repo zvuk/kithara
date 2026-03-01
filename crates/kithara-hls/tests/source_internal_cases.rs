@@ -1,28 +1,27 @@
 use std::{
     ops::Range,
-    slice,
     sync::{Arc, atomic::Ordering},
 };
 
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
-use kithara_coverage::{Coverage, CoverageManager};
 use kithara_drm::DecryptContext;
 use kithara_events::{Event, EventBus, HlsEvent};
 use kithara_hls::internal::{
     AbrMode, AbrOptions, DefaultFetchManager, DownloadState, FetchManager, HlsConfig, HlsError,
     HlsSource, LoadedSegment, PlaylistState, SegmentRequest, SegmentState, SharedSegments,
-    VariantId, VariantSizeMap, VariantState, VariantStream, build_source, make_test_source,
-    set_source_coverage, set_source_variant_fence, source_can_cross_variant, source_coverage,
-    source_range_ready_from_segments, source_variant_index_handle, subscribe_source_events,
+    VariantId, VariantSizeMap, VariantState, VariantStream, build_source, commit_dummy_resource,
+    make_test_fetch_manager, make_test_source, make_test_source_with_fetch,
+    set_source_variant_fence, source_can_cross_variant, source_range_ready_from_segments,
+    source_variant_index_handle, subscribe_source_events,
 };
 use kithara_net::{HttpClient, NetOptions};
 use kithara_platform::{
     spawn_blocking,
     time::{Duration, Instant, sleep, timeout},
 };
-use kithara_storage::{StorageResource, WaitOutcome};
+use kithara_storage::WaitOutcome;
 use kithara_stream::{AudioCodec, Source, StreamError, Timeline};
-use kithara_test_utils::{kithara, tracing_setup};
+use kithara_test_utils::kithara;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -53,30 +52,6 @@ fn make_loaded_segment(
         media_url: Url::parse("https://example.com/seg")
             .expect("test URL for media segment must be valid"),
     }
-}
-
-fn make_coverage_manager() -> CoverageManager<StorageResource> {
-    let backend = AssetStoreBuilder::new()
-        .ephemeral(true)
-        .cancel(CancellationToken::new())
-        .build();
-    backend
-        .open_coverage_manager()
-        .expect("coverage manager should open")
-}
-
-fn set_segment_coverage(
-    coverage: &CoverageManager<StorageResource>,
-    url: &Url,
-    total: u64,
-    marks: &[Range<u64>],
-) {
-    let mut cov = coverage.open_state(url.to_string());
-    cov.set_total_size(total);
-    for range in marks {
-        cov.mark(range.clone());
-    }
-    cov.flush();
 }
 
 fn make_variant_state_with_codec(
@@ -471,12 +446,10 @@ fn build_pair_seeds_timeline_total_duration_from_playlist() {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
-    let coverage = make_coverage_manager();
     let source = build_source(
         fetch,
         &variants,
         &config,
-        coverage,
         Arc::clone(&playlist_state),
         EventBus::new(16),
     );
@@ -504,12 +477,10 @@ fn build_pair_seeds_current_variant_from_abr_mode() {
         cancel: Some(cancel),
         ..HlsConfig::default()
     };
-    let coverage = make_coverage_manager();
     let source = build_source(
         fetch,
         &variants,
         &config,
-        coverage,
         Arc::clone(&playlist_state),
         EventBus::new(16),
     );
@@ -696,95 +667,6 @@ fn test_max_end_offset() {
     assert_eq!(state.max_end_offset(), 600);
 }
 
-#[kithara::test]
-fn range_ready_uses_coverage_for_disk_segments() {
-    let cancel = CancellationToken::new();
-    let ps = dummy_playlist_state();
-    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    let mut source = make_test_source(Arc::clone(&shared), cancel);
-    let coverage = make_coverage_manager();
-    set_source_coverage(&mut source, coverage.clone());
-
-    let segment = make_loaded_segment(0, 0, 0, 100);
-    let segment_url = segment.media_url.clone();
-    {
-        let mut segments = shared.segments.lock_sync();
-        segments.push(segment);
-    }
-
-    let partial_mark = 0..40;
-    set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&partial_mark));
-    let segments = shared.segments.lock_sync();
-    assert!(
-        !source_range_ready_from_segments(&source, &segments, &(0..80)),
-        "incomplete coverage must not be treated as ready"
-    );
-    drop(segments);
-
-    let full_mark = 0..100;
-    set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&full_mark));
-    let segments = shared.segments.lock_sync();
-    assert!(
-        source_range_ready_from_segments(&source, &segments, &(0..80)),
-        "full coverage must be treated as ready"
-    );
-}
-
-#[kithara::test]
-fn range_ready_requires_coverage_metadata() {
-    let cancel = CancellationToken::new();
-    let ps = dummy_playlist_state();
-    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    let source = make_test_source(Arc::clone(&shared), cancel);
-
-    {
-        let mut segments = shared.segments.lock_sync();
-        segments.push(make_loaded_segment(0, 0, 0, 100));
-    }
-
-    let segments = shared.segments.lock_sync();
-    assert!(
-        !source_range_ready_from_segments(&source, &segments, &(0..80)),
-        "segment without coverage metadata must not be treated as ready"
-    );
-}
-
-#[kithara::test(tokio, browser)]
-async fn wait_range_waits_until_coverage_is_complete() {
-    let cancel = CancellationToken::new();
-    let ps = dummy_playlist_state();
-    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
-    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let coverage = make_coverage_manager();
-    set_source_coverage(&mut source, coverage.clone());
-
-    let segment = make_loaded_segment(0, 0, 0, 100);
-    let segment_url = segment.media_url.clone();
-    {
-        let mut segments = shared.segments.lock_sync();
-        segments.push(segment);
-    }
-    let initial_mark = 0..32;
-    set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&initial_mark));
-
-    let shared_for_task = Arc::clone(&shared);
-    let handle = spawn_blocking(move || source.wait_range(0..80, Duration::from_secs(1)));
-
-    sleep(Duration::from_millis(120)).await;
-    assert!(
-        !handle.is_finished(),
-        "wait_range returned early even though coverage is incomplete"
-    );
-
-    cancel.cancel();
-    shared_for_task.condvar.notify_all();
-    let result = timeout(Duration::from_millis(300), handle)
-        .await
-        .expect("wait_range task should complete")
-        .expect("wait_range task should not panic");
-    assert!(result.is_err(), "wait_range should stop after cancellation");
-}
-
 // wait_range cancellation tests
 
 #[kithara::test(tokio, browser)]
@@ -828,21 +710,21 @@ async fn test_wait_range_returns_ready_when_data_pushed() {
     let ps = dummy_playlist_state();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
-    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let coverage = source_coverage(&source);
+    let fetch = make_test_fetch_manager(cancel.clone());
+    // commit_source shares the same fetch backend for writing dummy resources.
+    let commit_source = make_test_source_with_fetch(Arc::clone(&shared), Arc::clone(&fetch));
+    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
 
     let handle = spawn_blocking(move || source.wait_range(0..100, Duration::from_secs(1)));
 
-    // Push a segment covering 0..100
+    // Push a segment covering 0..100 and commit its resource data
     sleep(Duration::from_millis(20)).await;
     let segment = make_loaded_segment(0, 0, 0, 100);
-    let segment_url = segment.media_url.clone();
+    commit_dummy_resource(&commit_source, &segment);
     {
         let mut segments = shared2.segments.lock_sync();
         segments.push(segment);
     }
-    let full_mark = 0..100;
-    set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&full_mark));
     shared2.condvar.notify_all();
 
     let result = timeout(Duration::from_millis(200), handle)
@@ -932,8 +814,9 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
     let ps = dummy_playlist_state();
     let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
     let shared2 = Arc::clone(&shared);
-    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let coverage = source_coverage(&source);
+    let fetch = make_test_fetch_manager(cancel.clone());
+    let commit_source = make_test_source_with_fetch(Arc::clone(&shared), Arc::clone(&fetch));
+    let mut source = make_test_source_with_fetch(Arc::clone(&shared), fetch);
 
     // Reproduce seek reset window: EOF flag is stale, but loaded segment state is empty.
     shared2.timeline.set_eof(true);
@@ -943,18 +826,11 @@ async fn test_wait_range_transient_eof_with_zero_total_waits_for_data() {
 
     sleep(Duration::from_millis(20)).await;
     let segment = make_loaded_segment(0, 17, 3_400_000, 200_000);
-    let segment_url = segment.media_url.clone();
+    commit_dummy_resource(&commit_source, &segment);
     {
         let mut segments = shared2.segments.lock_sync();
         segments.push(segment);
     }
-    let full_mark = 0..200_000;
-    set_segment_coverage(
-        &coverage,
-        &segment_url,
-        200_000,
-        slice::from_ref(&full_mark),
-    );
     shared2.timeline.set_eof(false);
     shared2.condvar.notify_all();
 
@@ -1221,7 +1097,6 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
     shared.abr_variant_index.store(0, Ordering::Release);
 
     let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
-    let coverage = source_coverage(&source);
 
     let handle = spawn_blocking(move || source.wait_range(150..170, Duration::from_secs(1)));
 
@@ -1241,13 +1116,8 @@ async fn test_wait_range_stalled_on_demand_request_becomes_ready_when_segment_ar
 
     {
         let segment = make_loaded_segment(0, 1, 100, 100);
-        let segment_url = segment.media_url.clone();
-        {
-            let mut segments = shared.segments.lock_sync();
-            segments.push(segment);
-        }
-        let full_mark = 0..100;
-        set_segment_coverage(&coverage, &segment_url, 100, slice::from_ref(&full_mark));
+        let mut segments = shared.segments.lock_sync();
+        segments.push(segment);
     }
     shared.condvar.notify_all();
 
@@ -1299,4 +1169,62 @@ async fn test_wait_range_stalled_on_demand_request_is_not_duplicated() {
         .expect("wait_range should exit after cancellation")
         .expect("wait_range task should not panic");
     assert!(matches!(result, Ok(WaitOutcome::Interrupted) | Err(_)));
+}
+
+/// Hang detector must fire when waited range has no loaded segments,
+/// even if total grows from entries at other offsets.
+///
+/// Scenario: reader waits for offset 2500 (beyond all loaded data).
+/// Background task pushes entries at 0..100, 100..200, ... every 200ms.
+/// `range_ready=false` throughout (no entry covers offset 2500).
+/// Expected: hang detector panics after 10s timeout.
+#[kithara::test(tokio, browser)]
+async fn hang_detector_fires_when_total_grows_but_range_not_ready() {
+    let cancel = CancellationToken::new();
+    let ps = playlist_state_with_size_maps(); // 24 segs × 100 bytes = 2400 total per variant
+    let shared = Arc::new(SharedSegments::new(cancel.clone(), ps, Timeline::new()));
+    shared.abr_variant_index.store(0, Ordering::Release);
+
+    let mut source = make_test_source(Arc::clone(&shared), cancel.clone());
+
+    // Background task: push entries at high offsets (10000+) that do NOT
+    // cover the waited range (100..200). This grows `total` but never
+    // satisfies `range_ready` for offset 100.
+    let bg_shared = Arc::clone(&shared);
+    let bg_cancel = cancel.clone();
+    let bg = tokio::spawn(async move {
+        for i in 0..100u64 {
+            if bg_cancel.is_cancelled() {
+                break;
+            }
+            let offset = 10_000 + i * 100;
+            let seg = make_loaded_segment(0, 100 + i as usize, offset, 100);
+            {
+                let mut segments = bg_shared.segments.lock_sync();
+                segments.push(seg);
+            }
+            bg_shared.condvar.notify_all();
+            sleep(Duration::from_millis(200)).await;
+        }
+    });
+
+    // wait_range for offset 100..200 — no entries cover this range.
+    // Background entries are at 10000+. total grows but range stays unready.
+    // Expected: hang detector fires after 10s.
+    let result = spawn_blocking(move || source.wait_range(100..200, Duration::from_secs(30))).await;
+
+    cancel.cancel();
+    bg.abort();
+
+    // BlockingError means the spawned thread panicked (hang detector fired).
+    // Ok(result) means wait_range returned normally — unexpected.
+    match result {
+        Err(_blocking_error) => {
+            // HangDetector panic was caught by spawn_blocking.
+            // This is the expected outcome — the detector fired.
+        }
+        Ok(inner) => {
+            panic!("wait_range should not return normally when range is never ready: {inner:?}");
+        }
+    }
 }

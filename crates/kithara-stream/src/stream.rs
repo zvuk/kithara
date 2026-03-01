@@ -190,42 +190,59 @@ impl<T: StreamType> Read for Stream<T> {
             return Ok(0);
         }
 
-        let pos = self.timeline.byte_position();
-        let range = pos..pos.saturating_add(buf.len() as u64);
+        // Retry loop: ReadOutcome::Retry means a resource was evicted between
+        // wait_range (metadata ready) and read_at (actual I/O). Go back to
+        // wait_range so the downloader can re-fetch.
+        kithara_platform::hang_watchdog! {
+            thread: "stream.read";
+            timeout: Duration::from_secs(15);
+            loop {
+                let pos = self.timeline.byte_position();
+                let range = pos..pos.saturating_add(buf.len() as u64);
 
-        // Wait for data to be available (blocking)
-        match self
-            .source
-            .wait_range(range, WAIT_RANGE_TIMEOUT)
-            .map_err(|e| std::io::Error::other(e.to_string()))?
-        {
-            WaitOutcome::Ready => {}
-            WaitOutcome::Eof => return Ok(0),
-            WaitOutcome::Interrupted => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Interrupted,
-                    "seek pending",
-                ));
-            }
-        }
+                // Wait for data to be available (blocking)
+                match self
+                    .source
+                    .wait_range(range, WAIT_RANGE_TIMEOUT)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?
+                {
+                    WaitOutcome::Ready => {}
+                    WaitOutcome::Eof => return Ok(0),
+                    WaitOutcome::Interrupted => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "seek pending",
+                        ));
+                    }
+                }
 
-        // Read data directly from source.
-        // No flushing check here: wait_range already handles interruption,
-        // and the decoder must be able to read during apply_pending_seek().
-        match self
-            .source
-            .read_at(pos, buf)
-            .map_err(|e| std::io::Error::other(e.to_string()))?
-        {
-            ReadOutcome::Data(n) => {
-                self.timeline
-                    .set_byte_position(pos.saturating_add(n as u64));
-                Ok(n)
+                // Read data directly from source.
+                // No flushing check here: wait_range already handles interruption,
+                // and the decoder must be able to read during apply_pending_seek().
+                match self
+                    .source
+                    .read_at(pos, buf)
+                    .map_err(|e| std::io::Error::other(e.to_string()))?
+                {
+                    ReadOutcome::Data(n) => {
+                        hang_reset!();
+                        self.timeline
+                            .set_byte_position(pos.saturating_add(n as u64));
+                        return Ok(n);
+                    }
+                    ReadOutcome::VariantChange => {
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "variant change: decoder recreation required",
+                        ));
+                    }
+                    ReadOutcome::Retry => {
+                        // Resource evicted — go back to wait_range.
+                        hang_tick!();
+                        continue;
+                    }
+                }
             }
-            ReadOutcome::VariantChange => Err(std::io::Error::new(
-                std::io::ErrorKind::Interrupted,
-                "variant change: decoder recreation required",
-            )),
         }
     }
 }

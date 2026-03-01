@@ -15,11 +15,12 @@ internal = []  # Expose internal types for testing
 
 [dependencies]
 bincode = { workspace = true }
+bitflags = { workspace = true }
 bytes = { workspace = true }
+delegate = { workspace = true }
 derive_setters = { workspace = true }
 hex = { workspace = true }
 kithara-bufpool = { workspace = true }
-kithara-coverage = { workspace = true }
 kithara-storage = { workspace = true }
 lru = { workspace = true }
 kithara-platform = { workspace = true }

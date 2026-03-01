@@ -42,6 +42,14 @@ pub enum DecodeError {
     Backend(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
+impl DecodeError {
+    /// Returns `true` if the error is an [`Interrupted`](Self::Interrupted) variant.
+    #[must_use]
+    pub fn is_interrupted(&self) -> bool {
+        matches!(self, Self::Interrupted)
+    }
+}
+
 impl From<io::Error> for DecodeError {
     fn from(err: io::Error) -> Self {
         if err.kind() == io::ErrorKind::Interrupted {

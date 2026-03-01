@@ -23,6 +23,11 @@ pub enum PlanOutcome<P> {
     Step,
     /// Download complete — no more work.
     Complete,
+    /// Nothing to do right now — wait for external signal before re-planning.
+    ///
+    /// Used when all segments are loaded but playback hasn't reached the end,
+    /// or during flushing. Avoids hot-spinning on empty `Batch(vec![])`.
+    Idle,
 }
 
 /// Result of [`Downloader::step`] (streaming mode).
@@ -107,6 +112,14 @@ pub trait Downloader: MaybeSend + 'static {
     ///
     /// Default: never resolves (no demand signaling).
     fn demand_signal(&self) -> impl Future<Output = ()> + use<Self> {
+        std::future::pending()
+    }
+
+    /// Wait for external signal that new work may be available.
+    ///
+    /// Called by Backend when [`plan`](Self::plan) returns [`PlanOutcome::Idle`].
+    /// Default: pends forever (never woken if no external signals).
+    fn wait_for_work(&self) -> impl Future<Output = ()> {
         std::future::pending()
     }
 }

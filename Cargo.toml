@@ -11,12 +11,12 @@ members = [
     "crates/kithara-audio",
     "crates/kithara-decode",
     "crates/kithara-stream",
-    "crates/kithara-coverage",
     "crates/kithara-storage",
     "crates/kithara-assets",
     "crates/kithara-bufpool",
     "crates/kithara-wasm",
     "crates/kithara-platform",
+    "crates/kithara-hang-detector",
     "crates/kithara-play",
     "crates/kithara-test-utils",
     "crates/kithara-test-macros",
@@ -103,7 +103,6 @@ kithara-abr = { path = "crates/kithara-abr", version = "0.1.0" }
 kithara-assets = { path = "crates/kithara-assets", version = "0.1.0" }
 kithara-bufpool = { path = "crates/kithara-bufpool", version = "0.1.0" }
 kithara-audio = { path = "crates/kithara-audio", version = "0.1.0" }
-kithara-coverage = { path = "crates/kithara-coverage", version = "0.1.0" }
 kithara-decode = { path = "crates/kithara-decode", version = "0.1.0" }
 kithara-drm = { path = "crates/kithara-drm", version = "0.1.0" }
 kithara-events = { path = "crates/kithara-events", version = "0.1.0" }
@@ -111,6 +110,7 @@ kithara-file = { path = "crates/kithara-file", version = "0.1.0" }
 kithara-hls = { path = "crates/kithara-hls", version = "0.1.0" }
 kithara-net = { path = "crates/kithara-net", version = "0.1.0" }
 kithara-platform = { path = "crates/kithara-platform", version = "0.1.0" }
+kithara-hang-detector = { path = "crates/kithara-hang-detector", version = "0.1.0" }
 kithara-play = { path = "crates/kithara-play", version = "0.1.0", default-features = false }
 kithara-storage = { path = "crates/kithara-storage", version = "0.1.0" }
 kithara-stream = { path = "crates/kithara-stream", version = "0.1.0" }
@@ -201,6 +201,10 @@ tempfile = "3.25.0"
 
 # async traits
 async-trait = "0.1.89"
+
+# delegation
+delegate = "0.13"
+bitflags = "2.9"
 
 # storage (range maps + mmap)
 rangemap = { version = "1.7.1", features = ["serde1"] }

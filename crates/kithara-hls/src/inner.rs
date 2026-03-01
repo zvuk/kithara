@@ -2,7 +2,7 @@
 //!
 //! Provides `Hls` marker type implementing `StreamType` trait.
 
-use std::sync::Arc;
+use std::{num::NonZeroUsize, sync::Arc};
 
 use kithara_assets::{AssetStore, AssetStoreBuilder, ProcessChunkFn, asset_root_for_url};
 use kithara_drm::{DecryptContext, aes128_cbc_process_chunk};
@@ -123,11 +123,6 @@ impl StreamType for Hls {
             initial_variant,
         });
 
-        let coverage_manager = fetch_manager
-            .backend()
-            .open_coverage_manager()
-            .map_err(HlsError::Assets)?;
-
         // Create HlsDownloader + HlsSource pair
         let playlist_state = fetch_manager
             .playlist_state()
@@ -137,7 +132,6 @@ impl StreamType for Hls {
             Arc::clone(&fetch_manager),
             &master.variants,
             &config,
-            coverage_manager,
             playlist_state,
             bus,
         );

@@ -1191,6 +1191,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c87e182de0887fd5361989c677c4e8f5000cd9491d6d563161a8f3a5519fc7f"
 
 [[package]]
+name = "delegate"
+version = "0.13.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "780eb241654bf097afb00fc5f054a09b687dad862e485fdcf8399bb056565370"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "derivative"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2484,12 +2495,13 @@ name = "kithara-assets"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "bitflags 2.11.0",
  "bytes",
+ "delegate",
  "derive_setters",
  "hex",
  "kithara-assets",
  "kithara-bufpool",
- "kithara-coverage",
  "kithara-platform",
  "kithara-storage",
  "kithara-test-utils",
@@ -2567,22 +2579,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "kithara-coverage"
-version = "0.1.0"
-dependencies = [
- "bincode",
- "kithara-coverage",
- "kithara-platform",
- "kithara-storage",
- "kithara-test-utils",
- "rangemap",
- "serde",
- "tempfile",
- "tokio-util",
- "wasm-bindgen-test",
-]
-
-[[package]]
 name = "kithara-decode"
 version = "0.1.0"
 dependencies = [
@@ -2642,7 +2638,6 @@ dependencies = [
  "futures",
  "hotpath",
  "kithara-assets",
- "kithara-coverage",
  "kithara-events",
  "kithara-file",
  "kithara-net",
@@ -2664,6 +2659,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kithara-hang-detector"
+version = "0.1.0"
+dependencies = [
+ "kithara-hang-detector",
+ "web-time",
+]
+
+[[package]]
 name = "kithara-hls"
 version = "0.1.0"
 dependencies = [
@@ -2680,7 +2683,6 @@ dependencies = [
  "kithara-abr",
  "kithara-assets",
  "kithara-bufpool",
- "kithara-coverage",
  "kithara-drm",
  "kithara-events",
  "kithara-hls",
@@ -2788,6 +2790,7 @@ version = "0.1.0"
 dependencies = [
  "futures",
  "js-sys",
+ "kithara-hang-detector",
  "kithara-platform",
  "kithara-test-macros",
  "tokio",

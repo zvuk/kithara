@@ -29,6 +29,7 @@ pub mod time;
 pub mod internal;
 
 pub use blocking::{BlockingError, BlockingHandle, spawn_blocking};
+pub use kithara_hang_detector::{HangDetector, hang_watchdog};
 pub use maybe_send::{MaybeSend, MaybeSync, WasmSend};
 pub use pool::ThreadPool;
 pub use task::spawn_task;

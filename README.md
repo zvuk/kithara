@@ -44,7 +44,7 @@ flowchart LR
     pipeline["Pipeline<br/>audio + decode + events"]
     protocols["Protocols<br/>file + hls + abr + drm"]
     io["I/O<br/>stream + net"]
-    storage["Storage<br/>assets + storage + coverage + bufpool + platform"]
+    storage["Storage<br/>assets + storage + bufpool + platform"]
     wasm["Browser<br/>kithara-wasm"]
 
     facade --> pipeline --> protocols --> io --> storage
@@ -65,7 +65,7 @@ flowchart LR
 <tr><td><b>Pipeline</b></td><td><a href="crates/kithara-audio/README.md"><code>kithara-audio</code></a><br/><a href="crates/kithara-decode/README.md"><code>kithara-decode</code></a><br/><a href="crates/kithara-events/README.md"><code>kithara-events</code></a></td><td>Threaded decode + effects + resampling, event bus</td></tr>
 <tr><td><b>Protocols</b></td><td><a href="crates/kithara-file/README.md"><code>kithara-file</code></a><br/><a href="crates/kithara-hls/README.md"><code>kithara-hls</code></a><br/><a href="crates/kithara-abr/README.md"><code>kithara-abr</code></a><br/><a href="crates/kithara-drm/README.md"><code>kithara-drm</code></a></td><td>HTTP progressive, HLS VOD with ABR, AES-128 decryption</td></tr>
 <tr><td><b>I/O</b></td><td><a href="crates/kithara-stream/README.md"><code>kithara-stream</code></a><br/><a href="crates/kithara-net/README.md"><code>kithara-net</code></a></td><td>Async-to-sync bridge (<code>Read + Seek</code>), HTTP with retry</td></tr>
-<tr><td><b>Storage</b></td><td><a href="crates/kithara-assets/README.md"><code>kithara-assets</code></a><br/><a href="crates/kithara-storage/README.md"><code>kithara-storage</code></a><br/><a href="crates/kithara-coverage/README.md"><code>kithara-coverage</code></a></td><td>Disk cache with eviction, mmap/mem resources, byte-range coverage index</td></tr>
+<tr><td><b>Storage</b></td><td><a href="crates/kithara-assets/README.md"><code>kithara-assets</code></a><br/><a href="crates/kithara-storage/README.md"><code>kithara-storage</code></a></td><td>Disk cache with eviction, mmap/mem resources</td></tr>
 <tr><td><b>Primitives</b></td><td><a href="crates/kithara-bufpool/README.md"><code>kithara-bufpool</code></a><br/><a href="crates/kithara-platform/README.md"><code>kithara-platform</code></a></td><td>Zero-alloc buffer pool, cross-platform sync types</td></tr>
 <tr><td><b>Testing</b></td><td><a href="crates/kithara-test-utils/README.md"><code>kithara-test-utils</code></a></td><td>Shared fixtures and helpers for workspace tests</td></tr>
 <tr><td><b>Browser</b></td><td><a href="crates/kithara-wasm/README.md"><code>kithara-wasm</code></a></td><td>WASM bindings over the shared <code>kithara-play</code> pipeline</td></tr>

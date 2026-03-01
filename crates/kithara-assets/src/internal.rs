@@ -3,7 +3,6 @@
 use std::collections::HashSet;
 
 pub use kithara_bufpool::{BytePool, byte_pool};
-pub use kithara_coverage::DiskCoverage;
 use kithara_storage::ResourceExt;
 
 #[cfg(target_arch = "wasm32")]

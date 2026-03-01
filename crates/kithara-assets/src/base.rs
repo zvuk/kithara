@@ -4,6 +4,24 @@ use std::{fmt::Debug, hash::Hash, path::Path};
 
 use crate::{error::AssetsResult, key::ResourceKey};
 
+bitflags::bitflags! {
+    /// Decorator capabilities advertised by a base store.
+    ///
+    /// Decorators check the relevant bit before activating their logic;
+    /// when the bit is absent the decorator passes through to the inner layer.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Capabilities: u8 {
+        /// In-process LRU handle cache (`CachedAssets`).
+        const CACHE      = 0b0001;
+        /// LRU eviction with per-asset byte accounting (`EvictAssets`).
+        const EVICT      = 0b0010;
+        /// RAII pin/lease semantics (`LeaseAssets`).
+        const LEASE      = 0b0100;
+        /// Chunk-based processing on commit (`ProcessingAssets`).
+        const PROCESSING = 0b1000;
+    }
+}
+
 /// Explicit public contract for the assets abstraction.
 ///
 /// `kithara-assets` is about *assets* and their *resources*:
@@ -24,29 +42,13 @@ pub trait Assets: Clone + Send + Sync + 'static {
     /// Resource type for index persistence (pins, LRU).
     type IndexRes: kithara_storage::ResourceExt + Clone + Send + Sync + Debug + 'static;
 
-    /// Whether this backend supports eviction decorator semantics.
+    /// Decorator capabilities supported by this backend.
     ///
-    /// Backends that cannot persist or interpret eviction metadata should return `false`.
+    /// Decorators check the relevant [`Capabilities`] bit before activating.
+    /// The default returns all capabilities enabled.
     #[must_use]
-    fn supports_evict(&self) -> bool {
-        true
-    }
-
-    /// Whether this backend supports lease/pin decorator semantics.
-    ///
-    /// Backends that cannot persist or interpret pin metadata should return `false`.
-    #[must_use]
-    fn supports_lease(&self) -> bool {
-        true
-    }
-
-    /// Whether this backend supports in-process resource/index caching.
-    ///
-    /// Backends that already provide equivalent reuse semantics or where
-    /// caching is undesirable should return `false`.
-    #[must_use]
-    fn supports_cache(&self) -> bool {
-        true
+    fn capabilities(&self) -> Capabilities {
+        Capabilities::all()
     }
 
     /// Open a resource with optional context (main method).
@@ -84,13 +86,6 @@ pub trait Assets: Clone + Send + Sync + 'static {
     ///
     /// Returns `AssetsError` if the index resource cannot be opened (I/O or storage error).
     fn open_lru_index_resource(&self) -> AssetsResult<Self::IndexRes>;
-
-    /// Open the resource used for persisting the coverage index.
-    ///
-    /// # Errors
-    ///
-    /// Returns `AssetsError` if the index resource cannot be opened (I/O or storage error).
-    fn open_coverage_index_resource(&self) -> AssetsResult<Self::IndexRes>;
 
     /// Delete the entire asset (all resources under this store's `asset_root`).
     ///

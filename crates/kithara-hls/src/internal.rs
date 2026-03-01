@@ -10,11 +10,9 @@ use std::{
 
 pub use kithara_abr::{AbrMode, AbrOptions};
 use kithara_assets::{AssetStoreBuilder, ProcessChunkFn};
-use kithara_coverage::CoverageManager;
 use kithara_drm::DecryptContext;
 use kithara_events::{Event, EventBus};
 use kithara_net::{HttpClient, NetOptions};
-use kithara_storage::StorageResource;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
@@ -49,24 +47,65 @@ fn make_test_fetch(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
 }
 
 /// Build a test-friendly `HlsSource` with an in-memory backend.
-///
-/// # Panics
-/// Panics when the coverage manager cannot be opened from the ephemeral backend.
 pub fn make_test_source(shared: Arc<SharedSegments>, cancel: CancellationToken) -> HlsSource {
     let fetch = make_test_fetch(cancel);
-    let coverage = fetch
-        .backend()
-        .open_coverage_manager()
-        .expect("coverage manager should open");
+    make_test_source_with_fetch(shared, fetch)
+}
+
+/// Build a test-friendly `HlsSource` with a given fetch manager.
+pub fn make_test_source_with_fetch(
+    shared: Arc<SharedSegments>,
+    fetch: Arc<DefaultFetchManager>,
+) -> HlsSource {
     let playlist_state = Arc::clone(&shared.playlist_state);
     HlsSource {
         fetch,
         shared,
         playlist_state,
         bus: EventBus::new(16),
-        coverage,
         variant_fence: None,
         _backend: None,
+    }
+}
+
+/// Create test fetch manager (public for tests that need shared fetch).
+#[must_use]
+pub fn make_test_fetch_manager(cancel: CancellationToken) -> Arc<DefaultFetchManager> {
+    make_test_fetch(cancel)
+}
+
+/// Write a dummy committed resource so `has_resource` returns true for
+/// the media URL of a `LoadedSegment`.
+///
+/// Ephemeral `range_ready_from_segments` verifies LRU presence — tests
+/// that push metadata must also populate the resource.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "test helper — segment lengths fit in usize"
+)]
+#[expect(clippy::missing_panics_doc, reason = "test-only helper")]
+pub fn commit_dummy_resource(source: &HlsSource, seg: &LoadedSegment) {
+    use kithara_assets::ResourceKey;
+    use kithara_storage::ResourceExt;
+
+    let backend = source.fetch.backend();
+    let media_key = ResourceKey::from_url(&seg.media_url);
+    let res = backend
+        .open_resource(&media_key)
+        .expect("open media resource");
+    res.write_at(0, &vec![0u8; seg.media_len as usize])
+        .expect("write media");
+    res.commit(None).expect("commit media");
+
+    if let Some(ref init_url) = seg.init_url {
+        let init_key = ResourceKey::from_url(init_url);
+        let init_res = backend
+            .open_resource(&init_key)
+            .expect("open init resource");
+        init_res
+            .write_at(0, &vec![0u8; seg.init_len as usize])
+            .expect("write init");
+        init_res.commit(None).expect("commit init");
     }
 }
 
@@ -75,21 +114,11 @@ pub fn build_source(
     fetch: Arc<DefaultFetchManager>,
     variants: &[VariantStream],
     config: &HlsConfig,
-    coverage: CoverageManager<StorageResource>,
     playlist_state: Arc<PlaylistState>,
     bus: EventBus,
 ) -> HlsSource {
-    let (_downloader, source) = build_pair(fetch, variants, config, coverage, playlist_state, bus);
+    let (_downloader, source) = build_pair(fetch, variants, config, playlist_state, bus);
     source
-}
-
-pub fn set_source_coverage(source: &mut HlsSource, coverage: CoverageManager<StorageResource>) {
-    source.coverage = coverage;
-}
-
-#[must_use]
-pub fn source_coverage(source: &HlsSource) -> CoverageManager<StorageResource> {
-    source.coverage.clone()
 }
 
 pub fn set_source_variant_fence(source: &mut HlsSource, fence: Option<usize>) {

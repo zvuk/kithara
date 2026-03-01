@@ -15,6 +15,7 @@ default = []
 test-utils = ["unimock"]
 perf = ["dep:hotpath", "hotpath/hotpath"]
 internal = []
+disable-hang-detector = ["kithara-platform/disable-hang-detector"]
 
 [dependencies]
 derivative = { workspace = true }

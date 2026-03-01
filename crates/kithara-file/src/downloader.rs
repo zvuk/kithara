@@ -7,11 +7,10 @@ use std::{error::Error, fmt, future::Future, ops::Range, sync::Arc};
 
 use futures::StreamExt;
 use kithara_assets::AssetResource;
-use kithara_coverage::{Coverage, CoverageManager, DiskCoverage};
 use kithara_events::{EventBus, FileEvent};
 use kithara_net::{Headers, HttpClient, RangeSpec};
 use kithara_platform::WasmSend;
-use kithara_storage::{ResourceExt, ResourceStatus, StorageResource};
+use kithara_storage::ResourceExt;
 use kithara_stream::{Downloader, DownloaderIo, PlanOutcome, StepResult, Writer, WriterItem};
 use tokio_util::sync::CancellationToken;
 
@@ -39,7 +38,7 @@ pub(crate) enum FileFetch {
     /// A chunk was written during sequential streaming.
     Chunk { offset: u64, len: u64 },
     /// A range request completed.
-    RangeDone { range: Range<u64> },
+    RangeDone,
     /// Sequential stream ended.
     StreamEnded { total_bytes: u64 },
 }
@@ -87,9 +86,7 @@ impl DownloaderIo for FileIo {
                     }
                 }
                 tracing::debug!(start = range.start, end = range.end, "range fetched");
-                Ok(FileFetch::RangeDone {
-                    range: range.clone(),
-                })
+                Ok(FileFetch::RangeDone)
             }
             Err(e) => {
                 tracing::warn!(?e, "failed to start range request");
@@ -137,8 +134,6 @@ pub(crate) struct FileDownloader {
     /// Backpressure threshold. None = no backpressure.
     look_ahead_bytes: Option<u64>,
     shared: Arc<SharedFileState>,
-    /// Coverage tracker for downloaded ranges.
-    coverage: DiskCoverage<StorageResource>,
     /// Current download phase.
     phase: FilePhase,
 }
@@ -151,29 +146,12 @@ impl FileDownloader {
         bus: EventBus,
         look_ahead_bytes: Option<u64>,
         shared: Arc<SharedFileState>,
-        coverage_manager: &CoverageManager<StorageResource>,
     ) -> Self {
         let url = state.url().clone();
         let total = state.len();
         let res = state.res().clone();
         let cancel = state.cancel().clone();
         let req_headers = state.headers().cloned();
-
-        let mut coverage = coverage_manager.open_state(url.to_string());
-        if let Some(size) = total {
-            coverage.set_total_size(size);
-        }
-
-        // Bootstrap coverage only for fully committed resources.
-        // For active resources sparse write_at ranges may leave a head gap,
-        // and marking 0..len would hide that gap from wait_range/probe.
-        if matches!(res.status(), ResourceStatus::Committed { .. })
-            && let Some(len) = res.len()
-            && len > 0
-            && coverage.next_gap(len).is_some_and(|g| g.start == 0)
-        {
-            coverage.mark(0..len);
-        }
 
         let io = FileIo {
             net_client: net_client.clone(),
@@ -192,7 +170,6 @@ impl FileDownloader {
             total,
             look_ahead_bytes,
             shared,
-            coverage,
             phase: FilePhase::Sequential,
         }
     }
@@ -236,7 +213,6 @@ impl FileDownloader {
                             "discovered total from stream headers"
                         );
                         self.total = Some(cl);
-                        self.coverage.set_total_size(cl);
                         self.progress.timeline().set_total_bytes(Some(cl));
                     }
 
@@ -302,19 +278,23 @@ impl Downloader for FileDownloader {
                 let mut plans = Vec::new();
                 let gap_chunk_size: u64 = 2 * 1024 * 1024;
                 let gap_batch_size: usize = 4;
+                let total = self.total.unwrap_or(0);
 
+                let mut gap_cursor: u64 = 0;
                 for _ in 0..gap_batch_size {
-                    if let Some(gap) = self.coverage.next_gap(gap_chunk_size) {
-                        // Skip gaps that overlap with already-planned ranges.
-                        plans.push(FilePlan { range: gap });
-                    } else {
+                    let Some(gap) = self.res.next_gap(gap_cursor, total) else {
                         break;
-                    }
+                    };
+                    let clamped_end = (gap.start + gap_chunk_size).min(gap.end);
+                    plans.push(FilePlan {
+                        range: gap.start..clamped_end,
+                    });
+                    gap_cursor = clamped_end;
                 }
 
                 if plans.is_empty() {
                     // No more gaps — check if complete.
-                    if self.coverage.is_complete() {
+                    if self.res.next_gap(0, total).is_none() && total > 0 {
                         if let Err(e) = self.res.commit(self.total) {
                             tracing::error!(?e, "failed to commit resource after gap-filling");
                             self.res.fail(format!("commit failed: {e}"));
@@ -391,19 +371,17 @@ impl Downloader for FileDownloader {
         match fetch {
             FileFetch::Chunk { offset, len } => {
                 let download_offset = offset + len;
-                self.coverage.mark(offset..download_offset);
+                // write_at already updates Resource.available — no coverage mark needed.
                 self.progress.set_download_pos(download_offset);
                 self.bus.publish(FileEvent::DownloadProgress {
                     offset: download_offset,
                     total: self.total,
                 });
             }
-            FileFetch::RangeDone { range } => {
-                self.coverage.mark(range);
-                // Flush after each gap-fill batch for crash-safety.
-                self.coverage.flush();
+            FileFetch::RangeDone => {
                 // Check if gap-filling completed everything.
-                if self.coverage.is_complete() {
+                let total = self.total.unwrap_or(0);
+                if total > 0 && self.res.next_gap(0, total).is_none() {
                     if let Err(e) = self.res.commit(self.total) {
                         tracing::error!(?e, "failed to commit resource after range done");
                         self.res.fail(format!("commit failed: {e}"));
@@ -418,9 +396,8 @@ impl Downloader for FileDownloader {
                 }
             }
             FileFetch::StreamEnded { total_bytes } => {
-                // Update coverage total if not set.
-                if self.coverage.total_size().is_none() {
-                    self.coverage.set_total_size(total_bytes);
+                if self.total.is_none() {
+                    self.total = Some(total_bytes);
                 }
 
                 let is_complete = self.total.is_none_or(|expected| total_bytes >= expected);
@@ -440,8 +417,6 @@ impl Downloader for FileDownloader {
                     self.phase = FilePhase::Complete;
                 } else {
                     // Partial download — switch to gap-filling.
-                    // Flush coverage before phase change for crash-safety.
-                    self.coverage.flush();
                     tracing::warn!(
                         total_bytes,
                         expected = ?self.total,
@@ -537,10 +512,9 @@ mod tests {
         };
 
         let shared = Arc::new(SharedFileState::new());
-        let coverage_manager = store.open_coverage_manager().unwrap();
-        let mut coverage = coverage_manager.open_state(url.to_string());
-        coverage.set_total_size(total);
-        coverage.mark(0..1000); // Sequential downloaded first 1KB.
+
+        // Write first 1KB to simulate sequential download progress.
+        res.write_at(0, &[0u8; 1000]).unwrap();
 
         // Pending stream simulates a stalled sequential download.
         let stream = futures::stream::pending::<Result<bytes::Bytes, kithara_net::NetError>>();
@@ -555,7 +529,6 @@ mod tests {
             total: Some(total),
             look_ahead_bytes: None,
             shared: shared.clone(),
-            coverage,
             phase: FilePhase::Sequential,
         };
 

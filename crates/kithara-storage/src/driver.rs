@@ -297,46 +297,60 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
             return Ok(WaitOutcome::Ready);
         }
 
-        loop {
-            // Fast path: let the driver check without holding state lock.
-            if self.inner.driver.try_fast_check(&range) {
-                return Ok(WaitOutcome::Ready);
-            }
-
-            // Slow path: lock state and check coverage, wait if needed.
-            let state = self.inner.state.lock_sync();
-
-            if self.inner.cancel.is_cancelled() {
-                return Err(StorageError::Cancelled);
-            }
-
-            if let Some(ref reason) = state.failed {
-                return Err(StorageError::Failed(reason.clone()));
-            }
-
-            if range_covered_by(&state.available, &range) {
-                return Ok(WaitOutcome::Ready);
-            }
-
-            if state.committed {
-                let final_len = state.final_len.unwrap_or(0);
-                if range.start >= final_len {
-                    return Ok(WaitOutcome::Eof);
+        let mut prev_available_len: u64 = 0;
+        kithara_platform::hang_watchdog! {
+            thread: "storage.wait_range";
+            timeout: kithara_platform::time::Duration::from_secs(10);
+            loop {
+                // Fast path: let the driver check without holding state lock.
+                if self.inner.driver.try_fast_check(&range) {
+                    return Ok(WaitOutcome::Ready);
                 }
-                return Ok(WaitOutcome::Ready);
+
+                // Slow path: lock state and check coverage, wait if needed.
+                let state = self.inner.state.lock_sync();
+
+                if self.inner.cancel.is_cancelled() {
+                    return Err(StorageError::Cancelled);
+                }
+
+                if let Some(ref reason) = state.failed {
+                    return Err(StorageError::Failed(reason.clone()));
+                }
+
+                if range_covered_by(&state.available, &range) {
+                    return Ok(WaitOutcome::Ready);
+                }
+
+                if state.committed {
+                    let final_len = state.final_len.unwrap_or(0);
+                    if range.start >= final_len {
+                        return Ok(WaitOutcome::Eof);
+                    }
+                    return Ok(WaitOutcome::Ready);
+                }
+
+                // Reset hang detector when download makes progress.
+                let current_available_len: u64 =
+                    state.available.iter().map(|r| r.end - r.start).sum();
+                if current_available_len > prev_available_len {
+                    prev_available_len = current_available_len;
+                    hang_reset!();
+                }
+
+                debug!(
+                    range_start = range.start,
+                    range_end = range.end,
+                    committed = state.committed,
+                    final_len = ?state.final_len,
+                    "storage::wait_range spinning"
+                );
+
+                hang_tick!();
+                let deadline = kithara_platform::time::Instant::now()
+                    + kithara_platform::time::Duration::from_millis(50);
+                let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
             }
-
-            debug!(
-                range_start = range.start,
-                range_end = range.end,
-                committed = state.committed,
-                final_len = ?state.final_len,
-                "storage::wait_range spinning"
-            );
-
-            let deadline = kithara_platform::time::Instant::now()
-                + kithara_platform::time::Duration::from_millis(50);
-            let (_state, _wait_result) = self.inner.condvar.wait_sync_timeout(state, deadline);
         }
     }
 
@@ -390,6 +404,28 @@ impl<D: DriverIo> ResourceExt for Resource<D> {
         } else {
             ResourceStatus::Active
         }
+    }
+
+    fn contains_range(&self, range: Range<u64>) -> bool {
+        if range.is_empty() {
+            return true;
+        }
+        let state = self.inner.state.lock_sync();
+        range_covered_by(&state.available, &range)
+    }
+
+    fn next_gap(&self, from: u64, limit: u64) -> Option<Range<u64>> {
+        let state = self.inner.state.lock_sync();
+        let total = state.final_len.unwrap_or(limit);
+        let upper = limit.min(total);
+        if from >= upper {
+            return None;
+        }
+        state
+            .available
+            .gaps(&(from..upper))
+            .next()
+            .map(|gap| gap.start..gap.end.min(upper))
     }
 
     fn reactivate(&self) -> StorageResult<()> {

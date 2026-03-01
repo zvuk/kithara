@@ -89,46 +89,52 @@ impl Backend {
         debug!("Downloader task started");
         let yield_interval = DEFAULT_YIELD_INTERVAL;
         let mut steps_since_yield: usize = 0;
-
-        loop {
-            if cancel.is_cancelled() {
-                debug!("Downloader cancelled");
-                return;
-            }
-
-            if Self::wait_while_throttled(&mut dl, &cancel).await.is_err() {
-                return;
-            }
-            if Self::drain_demand_requests(&mut dl, &cancel).await.is_err() {
-                return;
-            }
-
-            let Ok(outcome) = Self::plan_next(&mut dl, &cancel).await else {
-                return;
-            };
-
-            let control = match outcome {
-                PlanOutcome::Batch(plans) => Self::handle_batch(&mut dl, &cancel, plans).await,
-                PlanOutcome::Step => Self::handle_step(&mut dl, &cancel).await,
-                PlanOutcome::Complete => {
-                    debug!("Downloader complete");
-                    LoopControl::Exit
+        kithara_platform::hang_watchdog! {
+            thread: "stream.downloader";
+            timeout: kithara_platform::time::Duration::from_secs(30);
+            loop {
+                if cancel.is_cancelled() {
+                    debug!("Downloader cancelled");
+                    return;
                 }
-            };
 
-            match control {
-                LoopControl::Exit => return,
-                LoopControl::Restart => continue,
-                LoopControl::Proceed => {
-                    steps_since_yield += 1;
+                if Self::wait_while_throttled(&mut dl, &cancel).await.is_err() {
+                    return;
                 }
-            }
+                if Self::drain_demand_requests(&mut dl, &cancel).await.is_err() {
+                    return;
+                }
 
-            // 4. Periodic yield (only when not throttled — backpressure loop
-            //    already yields to runtime via wait_ready).
-            if !dl.should_throttle() && steps_since_yield >= yield_interval {
-                tokio::task::yield_now().await;
-                steps_since_yield = 0;
+                hang_tick!();
+                let Ok(outcome) = Self::plan_next(&mut dl, &cancel).await else {
+                    return;
+                };
+
+                let control = match outcome {
+                    PlanOutcome::Batch(plans) => Self::handle_batch(&mut dl, &cancel, plans).await,
+                    PlanOutcome::Step => Self::handle_step(&mut dl, &cancel).await,
+                    PlanOutcome::Complete => {
+                        debug!("Downloader complete");
+                        LoopControl::Exit
+                    }
+                    PlanOutcome::Idle => Self::handle_idle(&mut dl, &cancel).await,
+                };
+
+                match control {
+                    LoopControl::Exit => return,
+                    LoopControl::Restart => continue,
+                    LoopControl::Proceed => {
+                        hang_reset!();
+                        steps_since_yield += 1;
+                    }
+                }
+
+                // 4. Periodic yield (only when not throttled — backpressure loop
+                //    already yields to runtime via wait_ready).
+                if !dl.should_throttle() && steps_since_yield >= yield_interval {
+                    tokio::task::yield_now().await;
+                    steps_since_yield = 0;
+                }
             }
         }
     }
@@ -184,6 +190,18 @@ impl Backend {
                 Err(())
             }
             outcome = dl.plan() => Ok(outcome),
+        }
+    }
+
+    async fn handle_idle<D: Downloader>(dl: &mut D, cancel: &CancellationToken) -> LoopControl {
+        tokio::select! {
+            biased;
+            () = cancel.cancelled() => LoopControl::Exit,
+            () = dl.wait_for_work() => {
+                // Yield to let other tasks run (e.g. TUI updates).
+                tokio::task::yield_now().await;
+                LoopControl::Proceed
+            }
         }
     }
 

@@ -288,6 +288,7 @@ where
     let mut playback = tokio::task::spawn_blocking(move || -> ExampleResult {
         let output = OutputStreamBuilder::open_default_stream()?;
         let sink = Sink::connect_new(output.mixer());
+        sink.set_volume(0.005);
         sink.append(source);
         let initial_total_duration = ui.total_duration;
         let mut ui_session = UiSession::new(ui, sink.volume()).ok();

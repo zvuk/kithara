@@ -140,6 +140,22 @@ pub trait ResourceExt: Send + Sync + 'static {
     /// cannot reopen for writing.
     fn reactivate(&self) -> StorageResult<()>;
 
+    /// Check if the given byte range is fully covered by available data (non-blocking).
+    ///
+    /// Returns `false` by default. Override for implementations that track
+    /// available byte ranges.
+    fn contains_range(&self, _range: Range<u64>) -> bool {
+        false
+    }
+
+    /// Find the first gap in available data starting from `from`, up to `limit`.
+    ///
+    /// Returns `None` by default (conservative: assumes no data available).
+    /// Override for implementations that track available byte ranges.
+    fn next_gap(&self, _from: u64, _limit: u64) -> Option<Range<u64>> {
+        None
+    }
+
     /// Read the entire resource contents into a caller-provided buffer.
     ///
     /// The buffer is resized to fit the data. Returns the number of bytes read.

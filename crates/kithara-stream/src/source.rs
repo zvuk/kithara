@@ -28,6 +28,9 @@ pub enum ReadOutcome {
     /// decoder and call `clear_variant_fence()` before reads succeed.
     /// Zero bytes were read — fence fires BEFORE any data is touched.
     VariantChange,
+    /// Resource was evicted between `wait_range` (metadata ready) and
+    /// `read_at` (actual I/O). Caller should retry from `wait_range`.
+    Retry,
 }
 
 /// Time-first seek anchor resolved by a segmented source.

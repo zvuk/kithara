@@ -63,6 +63,10 @@ perf = [
     "kithara-hls/perf",
     "kithara-net/perf",
 ]
+disable-hang-detector = [
+    "kithara-audio/disable-hang-detector",
+    "kithara-hls?/disable-hang-detector",
+]
 full = ["file", "hls", "assets", "net", "bufpool"]
 internal = [
     "kithara-assets?/internal",

@@ -526,13 +526,26 @@ impl<N: Net> FetchManager<N> {
     /// # Errors
     /// Returns an error when playlist loading, URL resolution, fetch, or content-length detection fails.
     pub async fn load_init_segment(&self, variant: usize) -> HlsResult<SegmentMeta> {
-        let cell = {
+        let mut cell = {
             let mut guard = self.init_segments.lock_sync_write();
             guard
                 .entry(variant)
                 .or_insert_with(|| Arc::new(OnceCell::new()))
                 .clone()
         };
+
+        // Ephemeral: cached init metadata may outlive the actual resource
+        // (evicted from LRU). Verify and re-fetch if needed.
+        if self.backend.is_ephemeral()
+            && let Some(meta) = cell.get()
+            && !self.backend.has_resource(&ResourceKey::from_url(&meta.url))
+        {
+            debug!(variant, url = %meta.url, "init resource evicted, resetting cache");
+            let new_cell = Arc::new(OnceCell::new());
+            let mut guard = self.init_segments.lock_sync_write();
+            guard.insert(variant, Arc::clone(&new_cell));
+            cell = new_cell;
+        }
 
         let meta = cell
             .get_or_try_init(|| self.fetch_init_segment(variant))

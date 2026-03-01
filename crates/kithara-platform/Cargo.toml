@@ -13,11 +13,13 @@ workspace = true
 
 [features]
 internal = []
+disable-hang-detector = ["kithara-hang-detector/disable-hang-detector"]
 
 [dependencies]
 futures = { workspace = true }
 wasm_safe_thread = { workspace = true }
 web-time = { workspace = true }
+kithara-hang-detector = { workspace = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["time", "sync", "rt"] }

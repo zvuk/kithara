@@ -14,7 +14,6 @@ workspace = true
 kithara-abr = { workspace = true }
 kithara-assets = { workspace = true }
 kithara-bufpool = { workspace = true }
-kithara-coverage = { workspace = true }
 kithara-events = { workspace = true, features = ["hls"] }
 kithara-drm = { workspace = true }
 kithara-net = { workspace = true }
@@ -41,6 +40,7 @@ hotpath = { workspace = true, optional = true }
 default = []
 perf = ["dep:hotpath", "hotpath/hotpath", "kithara-net/perf"]
 internal = []
+disable-hang-detector = ["kithara-platform/disable-hang-detector"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 tokio = { workspace = true, features = ["full"] }

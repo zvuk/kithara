@@ -885,11 +885,16 @@ impl<S: Send> PcmReader for Audio<S> {
     }
 
     fn next_chunk(&mut self) -> Option<PcmChunk> {
-        // Discard partially-consumed chunk
-        self.current_chunk = None;
+        // Reuse preloaded chunk if it hasn't been partially consumed
+        let chunk = if self.chunk_offset == 0 {
+            self.current_chunk.take()
+        } else {
+            self.current_chunk = None;
+            None
+        };
         self.chunk_offset = 0;
 
-        let chunk = self.recv_valid_chunk()?;
+        let chunk = chunk.or_else(|| self.recv_valid_chunk())?;
         self.spec = chunk.spec();
         self.timeline.advance_committed_samples(
             chunk.pcm.len() as u64,

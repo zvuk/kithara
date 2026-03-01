@@ -13,7 +13,6 @@ const DEFAULT_CACHE_CAPACITY: NonZeroUsize = NonZeroUsize::new(5).unwrap();
 #[cfg(not(target_arch = "wasm32"))]
 use crate::disk_store::DiskAssetStore;
 use crate::{
-    base::Assets,
     cache::CachedAssets,
     evict::EvictAssets,
     index::EvictConfig,
@@ -71,6 +70,12 @@ impl StoreOptions {
             max_assets: None,
             max_bytes: None,
         }
+    }
+
+    /// Effective LRU cache capacity (explicit or default).
+    #[must_use]
+    pub fn effective_cache_capacity(&self) -> NonZeroUsize {
+        self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY)
     }
 
     /// Convert to internal `EvictConfig`.
@@ -146,8 +151,6 @@ pub struct AssetStoreBuilder<Ctx: Clone + Hash + Eq + Send + Sync + 'static = ()
     cancel: Option<CancellationToken>,
     ephemeral: bool,
     evict_config: Option<EvictConfig>,
-    evict_enabled: bool,
-    lease_enabled: bool,
     mem_resource_capacity: Option<usize>,
     pool: Option<BytePool>,
     process_fn: Option<ProcessChunkFn<Ctx>>,
@@ -177,8 +180,6 @@ impl AssetStoreBuilder<()> {
             cancel: None,
             ephemeral: false,
             evict_config: None,
-            evict_enabled: true,
-            lease_enabled: true,
             mem_resource_capacity: None,
             pool: None,
             process_fn: Some(dummy_process),
@@ -264,28 +265,6 @@ where
         self
     }
 
-    /// Enable or disable the eviction layer.
-    ///
-    /// When disabled, `EvictAssets` delegates directly to the inner layer
-    /// (no LRU tracking, no eviction).
-    /// Default: `true`.
-    #[must_use]
-    pub fn evict_enabled(mut self, enabled: bool) -> Self {
-        self.evict_enabled = enabled;
-        self
-    }
-
-    /// Enable or disable the lease (pin) layer.
-    ///
-    /// When disabled, `LeaseAssets` delegates directly to the inner layer
-    /// (no pinning, no byte recording, no persistence).
-    /// Default: `true`.
-    #[must_use]
-    pub fn lease_enabled(mut self, enabled: bool) -> Self {
-        self.lease_enabled = enabled;
-        self
-    }
-
     /// Use ephemeral (in-memory) storage instead of disk.
     ///
     /// When `true`, `build()` returns `AssetStore::Mem` with auto-eviction
@@ -321,15 +300,12 @@ where
         let pool = self.pool.unwrap_or_else(|| byte_pool().clone());
 
         // Build decorator chain: Disk -> Evict -> Processing -> Lease -> Cached
+        // Each decorator checks `capabilities()` to decide whether to activate.
         let disk = Arc::new(DiskAssetStore::new(root_dir, asset_root, cancel.clone()));
-        let cache_enabled = disk.supports_cache();
-        let evict_enabled = self.evict_enabled && disk.supports_evict();
-        let lease_enabled = self.lease_enabled && disk.supports_lease();
         let evict = Arc::new(EvictAssets::new(
             disk,
             evict_cfg,
             cancel.clone(),
-            evict_enabled,
             pool.clone(),
         ));
         let processing = Arc::new(ProcessingAssets::new(
@@ -337,38 +313,19 @@ where
             process_fn,
             pool.clone(),
         ));
-
-        // LeaseAssets holds evict for byte recording
-        let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> = if lease_enabled {
-            Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>)
-        } else {
-            None
-        };
-        let lease =
-            LeaseAssets::with_options(processing, cancel, byte_recorder, lease_enabled, pool);
-
-        // CachedAssets on top to cache LeaseResource with guards
+        let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> =
+            Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>);
+        let lease = LeaseAssets::with_byte_recorder(processing, cancel, byte_recorder, pool);
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::with_options(Arc::new(lease), capacity, cache_enabled, false)
+        CachedAssets::new(Arc::new(lease), capacity)
     }
 
     /// Build ephemeral (in-memory) asset store.
     ///
-    /// Uses `remove_on_evict=false` so that resources evicted from the LRU
-    /// cache remain in the underlying `DashMap`. This prevents data loss
-    /// when the number of resources exceeds cache capacity (e.g. HLS with
-    /// 37+ segments and default cache capacity of 5).
+    /// `MemAssetStore` is a stateless factory — each `open_resource` creates a
+    /// fresh `MemResource`. The `CachedAssets` LRU is the single owner: when a
+    /// handle is evicted its `Arc` ref-count drops and memory is freed.
     fn build_ephemeral(self) -> MemStore<Ctx> {
-        let root_dir = self.root_dir.unwrap_or_else(|| {
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                std::env::temp_dir().join("kithara-ephemeral")
-            }
-            #[cfg(target_arch = "wasm32")]
-            {
-                PathBuf::from("/kithara-ephemeral")
-            }
-        });
         let asset_root = self.asset_root.unwrap_or_default();
         let cancel = self.cancel.unwrap_or_default();
         let evict_cfg = self.evict_config.unwrap_or_default();
@@ -381,16 +338,11 @@ where
             asset_root,
             cancel.clone(),
             self.mem_resource_capacity,
-            root_dir,
         ));
-        let cache_enabled = mem.supports_cache();
-        let evict_enabled = self.evict_enabled && mem.supports_evict();
-        let lease_enabled = self.lease_enabled && mem.supports_lease();
         let evict = Arc::new(EvictAssets::new(
             mem,
             evict_cfg,
             cancel.clone(),
-            evict_enabled,
             pool.clone(),
         ));
         let processing = Arc::new(ProcessingAssets::new(
@@ -398,15 +350,9 @@ where
             process_fn,
             pool.clone(),
         ));
-        let byte_recorder: Option<Arc<dyn crate::evict::ByteRecorder>> = if lease_enabled {
-            Some(Arc::clone(&evict) as Arc<dyn crate::evict::ByteRecorder>)
-        } else {
-            None
-        };
-        let lease =
-            LeaseAssets::with_options(processing, cancel, byte_recorder, lease_enabled, pool);
+        let lease = LeaseAssets::new(processing, cancel, pool);
         let capacity = self.cache_capacity.unwrap_or(DEFAULT_CACHE_CAPACITY);
-        CachedAssets::with_options(Arc::new(lease), capacity, cache_enabled, false)
+        CachedAssets::new(Arc::new(lease), capacity)
     }
 }
 
@@ -423,8 +369,6 @@ impl<OldCtx: Clone + Hash + Eq + Send + Sync + 'static> AssetStoreBuilder<OldCtx
             cancel: self.cancel,
             ephemeral: self.ephemeral,
             evict_config: self.evict_config,
-            evict_enabled: self.evict_enabled,
-            lease_enabled: self.lease_enabled,
             mem_resource_capacity: self.mem_resource_capacity,
             pool: self.pool,
             process_fn: Some(f),
@@ -442,24 +386,22 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use crate::key::ResourceKey;
+    use crate::{base::Assets, key::ResourceKey};
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
-    fn builder_all_decorators_disabled() {
+    fn builder_local_mode_decorators_inactive() {
         let dir = tempdir().unwrap();
+        let file_path = dir.path().join("test.bin");
+        std::fs::write(&file_path, b"data").unwrap();
+
+        // Empty asset_root → capabilities lack CACHE/EVICT/LEASE
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
-            .asset_root(Some("test_asset"))
-            .lease_enabled(false)
-            .evict_enabled(false)
+            .asset_root(None)
             .build();
 
-        let key = ResourceKey::new("test.bin");
+        let key = ResourceKey::absolute(&file_path);
         let res = store.open_resource(&key).unwrap();
-
-        // Resource should be fully functional
-        res.write_at(0, b"data").unwrap();
-        res.commit(Some(4)).unwrap();
 
         let mut buf = [0u8; 4];
         let n = res.read_at(0, &mut buf).unwrap();
@@ -494,8 +436,6 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(None)
-            .lease_enabled(false)
-            .evict_enabled(false)
             .build();
 
         let key = ResourceKey::absolute(&file_path);
@@ -513,8 +453,6 @@ mod tests {
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(None)
-            .lease_enabled(false)
-            .evict_enabled(false)
             .build();
 
         let key = ResourceKey::new("test.bin");
@@ -532,50 +470,40 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn ephemeral_auto_disables_unsupported_decorators() {
+    fn ephemeral_capabilities_lack_evict_and_lease() {
+        use crate::base::Capabilities;
         let store = AssetStoreBuilder::new()
             .asset_root(Some("test"))
             .build_ephemeral();
-
-        assert!(store.is_enabled());
-        let lease = store.inner();
-        assert!(!lease.is_enabled());
-
-        let evict = lease.inner().inner();
-        assert!(!evict.is_enabled());
+        let caps = store.capabilities();
+        assert!(caps.contains(Capabilities::CACHE));
+        assert!(caps.contains(Capabilities::PROCESSING));
+        assert!(!caps.contains(Capabilities::EVICT));
+        assert!(!caps.contains(Capabilities::LEASE));
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn disk_defaults_keep_decorators_enabled() {
+    fn disk_defaults_all_capabilities() {
+        use crate::base::Capabilities;
         let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(Some("test"))
             .build_disk();
-
-        assert!(store.is_enabled());
-        let lease = store.inner();
-        assert!(lease.is_enabled());
-
-        let evict = lease.inner().inner();
-        assert!(evict.is_enabled());
+        assert_eq!(store.capabilities(), Capabilities::all());
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn disk_local_mode_disables_cache_by_capability() {
+    fn disk_local_mode_only_processing() {
+        use crate::base::Capabilities;
         let dir = tempdir().unwrap();
         let store = AssetStoreBuilder::new()
             .root_dir(dir.path())
             .asset_root(None)
             .build_disk();
-
-        assert!(!store.is_enabled());
-        let lease = store.inner();
-        assert!(!lease.is_enabled());
-        let evict = lease.inner().inner();
-        assert!(!evict.is_enabled());
+        assert_eq!(store.capabilities(), Capabilities::PROCESSING);
     }
 
     #[kithara::test(native, timeout(Duration::from_secs(5)))]
@@ -590,15 +518,14 @@ mod tests {
     }
 
     #[kithara::test(timeout(Duration::from_secs(5)))]
-    fn ephemeral_retains_data_after_cache_eviction() {
+    fn ephemeral_retains_data_within_cache_capacity() {
         let backend = AssetStoreBuilder::new()
             .asset_root(Some("test"))
-            .cache_capacity(NonZeroUsize::new(3).unwrap())
+            .cache_capacity(NonZeroUsize::new(5).unwrap())
             .ephemeral(true)
             .build();
 
-        // Open 4 resources — first is evicted from LRU cache but data
-        // must persist in the underlying DashMap (remove_on_evict=false).
+        // Open 4 resources — all fit within cache capacity of 5.
         let keys: Vec<ResourceKey> = (0..4)
             .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
             .collect();
@@ -609,18 +536,42 @@ mod tests {
             res.commit(Some(4)).unwrap();
         }
 
-        // First resource was evicted from LRU cache, but re-opening
-        // must return the SAME committed resource with data intact.
+        // All resources are still in the LRU — re-opening returns the same handle.
         let reopened = backend.open_resource(&keys[0]).unwrap();
         assert_eq!(
             reopened.len(),
             Some(4),
-            "evicted resource must retain data in ephemeral mode"
+            "resource within cache capacity must retain data"
         );
-        let mut buf = [0u8; 4];
-        let n = reopened.read_at(0, &mut buf).unwrap();
-        assert_eq!(n, 4);
-        assert_eq!(&buf, b"data");
+    }
+
+    #[kithara::test(timeout(Duration::from_secs(5)))]
+    fn ephemeral_evicts_data_beyond_cache_capacity() {
+        let backend = AssetStoreBuilder::new()
+            .asset_root(Some("test"))
+            .cache_capacity(NonZeroUsize::new(3).unwrap())
+            .ephemeral(true)
+            .build();
+
+        // Open 4 resources — first is evicted from LRU (capacity=3).
+        // MemAssetStore is stateless, so evicted data is gone.
+        let keys: Vec<ResourceKey> = (0..4)
+            .map(|i| ResourceKey::new(format!("seg_{i}.m4s")))
+            .collect();
+
+        for key in &keys {
+            let res = backend.open_resource(key).unwrap();
+            res.write_at(0, b"data").unwrap();
+            res.commit(Some(4)).unwrap();
+        }
+
+        // First resource was evicted from LRU — re-opening creates a fresh empty one.
+        let reopened = backend.open_resource(&keys[0]).unwrap();
+        assert_eq!(
+            reopened.len(),
+            None,
+            "evicted resource should be gone in ephemeral mode"
+        );
     }
 
     #[cfg(not(target_arch = "wasm32"))]
